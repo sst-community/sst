@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,7 +66,7 @@ func (r *KvRoutesUpdate) Create(input *KvRoutesUpdateInputs, output *CreateResul
 
 	// append route if not exists
 	routes := existingRoutes
-	if !existsRoute(routes, input.Entry) {
+	if !slices.Contains(routes, input.Entry) {
 		routes = append(routes, input.Entry)
 	}
 
@@ -155,7 +156,7 @@ func (r *KvRoutesUpdate) Update(input *UpdateInput[KvRoutesUpdateInputs, KvRoute
 
 	// Remove the old entry and add new
 	entries := removeRoute(existingEntries, input.Olds.Entry)
-	if !existsRoute(entries, input.News.Entry) {
+	if !slices.Contains(entries, input.News.Entry) {
 		entries = append(entries, input.News.Entry)
 	}
 
@@ -416,15 +417,6 @@ func (r *KvRoutesUpdate) deleteKey(client *cloudfrontkeyvaluestore.Client, store
 	}
 
 	return nil
-}
-
-func existsRoute(entries []string, entry string) bool {
-	for _, e := range entries {
-		if e == entry {
-			return true
-		}
-	}
-	return false
 }
 
 func removeRoute(entries []string, entryToRemove string) []string {
