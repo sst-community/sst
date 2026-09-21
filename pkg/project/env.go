@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"runtime"
 
@@ -80,9 +81,7 @@ func AddDevEnv(env map[string]string, complete *CompleteEvent, name, app, stage 
 		}
 		env["SST_RESOURCE_App"] = fmt.Sprintf(`{"name": "%s", "stage": "%s" }`, app, stage)
 	}
-	for key, value := range dev.Environment {
-		env[key] = value
-	}
+	maps.Copy(env, dev.Environment)
 	if dev.Cloudflare != nil && dev.Cloudflare.Path != "" {
 		env["SST_WRANGLER_PATH"] = dev.Cloudflare.Path
 	}
