@@ -2921,6 +2921,7 @@ async function buildComponents() {
       "../platform/src/components/aws/function-v5.ts",
       "../platform/src/components/aws/mysql.ts",
       "../platform/src/components/aws/postgres.ts",
+      "../platform/src/components/aws/postgres-v5.ts",
       "../platform/src/components/aws/postgres-v1.ts",
       "../platform/src/components/aws/step-functions.ts",
       "../platform/src/components/aws/vector.ts",

@@ -143,6 +143,9 @@ the component reads its args.
   creates anything. Fields inside it can still be outputs. This is what lets parts be
   created directly instead of inside `.apply()`, and lets `nodes` hold resources, not
   outputs of resources.
+  The same goes for a list with a part per item, and for the field each part is
+  named after: `PostgresV5` takes the proxy's `credentials` and each `username` as
+  plain values, and the passwords as inputs.
 - **A part the user can switch off gets its own arg** (`publicAccessBlock: false`).
   `transform` changes a part; it doesn't remove one.
 - **For a resource the user already has, use `existing`**, not an arg of your own.
@@ -185,6 +188,11 @@ Everything above applies. The rest is specific to SST's own components in
 - **Don't edit any 4.x component file.** They keep merging cleanly from upstream.
 - **Redesign, don't translate.** A V5 component doesn't have to mirror the original's
   structure.
+- **Port what takes a component before the component itself.** 4.x components
+  recognise a `Vpc`, a `Router` or a `Cluster` with `instanceof`, so the V5 one can't
+  be passed to them. Port the components that take it first, and have each accept
+  both the original and the V5 one. The component that's taken goes last: an app
+  switches to it once everything it's passed to is V5.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **Reuse the original's arg types**: `interface QueueV5Args extends V5Args<QueueArgs,
   typeof parts> {}`. `Omit` and re-declare only what has to change. For an arg that has
@@ -313,6 +321,10 @@ await pulumi.expectTakeover(
   the component was.
 - When something is expected to change, use `pulumi.takesOver()` and assert exactly what:
   `changed.map((c) => [c.name, c.fields])`. Don't loosen the assertion.
+- The check compares each resource's inputs and the options that change what a deploy
+  does to it: `ignoreChanges`, `protect`, `retainOnDelete`, `deleteBeforeReplace`,
+  `replaceOnChanges` and its provider. A difference there is reported as a field named
+  `options.<name>`.
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
 - Give the mock extra `state` for outputs the code reads (see `apigatewayv2-v5.test.ts`).
@@ -355,6 +367,8 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
 The existing ports are the reference: `apigatewayv2-v5.ts` for routes, authorizers and a
 custom domain; `sns-topic-v5.ts` for named subscribers; `bucket-v5.ts` for one resource
 built from many notifications; `cognito-user-pool-v5.ts` for triggers and a linkable
-client; `redis-v5.ts` for dev mode and `get`; `dynamo-v5.ts` for required args next
-to `get`, and a static method replaced by `get`; `function-v5.ts` for a component 4.x
-built almost entirely inside `.apply()`, with parts that are created later.
+client; `redis-v5.ts` for dev mode and `get`; `postgres-v5.ts` for the same with an
+optional group of parts (the proxy) and a part per item in a list; `dynamo-v5.ts` for
+required args next to `get`, and a static method replaced by `get`; `function-v5.ts`
+for a component 4.x built almost entirely inside `.apply()`, with parts that are
+created later.
