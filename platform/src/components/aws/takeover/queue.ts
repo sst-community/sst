@@ -1,7 +1,7 @@
-import { takeover } from "../../takeover.js";
-import { hashStringToPrettyString, logicalName } from "../../naming.js";
-import { QueueV5 } from "../queue-v5.js";
-import { childOf } from "./helpers.js";
+import { takeover } from "../../takeover";
+import { hashStringToPrettyString, logicalName } from "../../naming";
+import { QueueV5 } from "../queue-v5";
+import { childOf } from "./helpers";
 
 // `Queue` keeps a subscription in a component of its own, next to the queue
 // and named after the queue's ARN. `QueueV5` keeps it inside the queue.

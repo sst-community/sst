@@ -1,6 +1,6 @@
-import { takeover } from "../../takeover.js";
-import { CognitoUserPoolV5 } from "../cognito-user-pool-v5.js";
-import { childOf } from "./helpers.js";
+import { takeover } from "../../takeover";
+import { CognitoUserPoolV5 } from "../cognito-user-pool-v5";
+import { childOf } from "./helpers";
 
 // `CognitoUserPool` keeps each identity provider in a component of its own.
 // That component isn't inside the user pool or named after it: it's next to

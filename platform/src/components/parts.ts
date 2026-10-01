@@ -1,5 +1,5 @@
 import type { Input, Output } from "@pulumi/pulumi";
-import type { Transform } from "./transform.js";
+import type { Transform } from "./transform";
 
 /**
  * The resources a component is made of, by name. Each one is the class of a

@@ -3,7 +3,7 @@ import { lambda, sns, sqs } from "@pulumi/aws";
 import { V5Args, component, deferred, many } from "../parts-component";
 import { withDefault } from "../args";
 import type { Input } from "../input";
-import { Function, FunctionArgs, FunctionArn } from "./function.js";
+import { Function, FunctionArgs, FunctionArn } from "./function";
 import { functionPart } from "./helpers/function-builder";
 import { invokePermissionArgs } from "./helpers/function-permission";
 import { sendPolicyArgs } from "./helpers/queue-policy";

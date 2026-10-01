@@ -1,5 +1,5 @@
 import { Input, Resource, interpolate } from "@pulumi/pulumi";
-import type { OldAddress } from "../../takeover.js";
+import type { OldAddress } from "../../takeover";
 
 /**
  * The old address of a resource that 4.x kept in a component of its own,

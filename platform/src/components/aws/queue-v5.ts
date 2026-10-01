@@ -5,11 +5,11 @@ import { ifSet, notAnOption, withDefault } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { toSeconds } from "../duration";
-import { Function, FunctionArgs, FunctionArn } from "./function.js";
+import { Function, FunctionArgs, FunctionArn } from "./function";
 import { parseQueueArn } from "./helpers/arn";
 import { batchSettings, filterCriteria } from "./helpers/event-source";
 import { functionPart } from "./helpers/function-builder";
-import { permission } from "./permission.js";
+import { permission } from "./permission";
 import type { QueueArgs, QueueSubscriberArgs } from "./queue";
 
 const parts = () => ({

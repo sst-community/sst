@@ -1,5 +1,5 @@
-import { takeover } from "../../takeover.js";
-import { FunctionV5 } from "../function-v5.js";
+import { takeover } from "../../takeover";
+import { FunctionV5 } from "../function-v5";
 
 takeover(FunctionV5, {
   from: "sst:aws:Function",

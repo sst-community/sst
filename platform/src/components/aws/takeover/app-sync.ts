@@ -1,7 +1,7 @@
-import { takeover } from "../../takeover.js";
-import { logicalName } from "../../naming.js";
-import { AppSyncV5 } from "../app-sync-v5.js";
-import { childOf } from "./helpers.js";
+import { takeover } from "../../takeover";
+import { logicalName } from "../../naming";
+import { AppSyncV5 } from "../app-sync-v5";
+import { childOf } from "./helpers";
 
 // `AppSync` keeps each data source, AppSync function and resolver in a
 // component of its own, next to the API. `AppSyncV5` keeps their resources

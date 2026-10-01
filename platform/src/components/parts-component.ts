@@ -5,9 +5,9 @@ import {
   type ResourceTransformationArgs,
   output,
 } from "@pulumi/pulumi";
-import { Component } from "./component.js";
-import { hashStringToPrettyString, logicalName } from "./naming.js";
-import { type Transform, transformPart } from "./transform.js";
+import { Component } from "./component";
+import { hashStringToPrettyString, logicalName } from "./naming";
+import { type Transform, transformPart } from "./transform";
 import {
   type CreatedKeys,
   type ManyKeys,
@@ -19,13 +19,13 @@ import {
   isDeferred,
   isMany,
   partClass,
-} from "./parts.js";
-import type { Permission } from "./aws/permission.js";
-import type { binding } from "./cloudflare/binding.js";
-import type { env } from "./linkable.js";
-import { aliasOf, takeoverOf } from "./takeover.js";
-import { VisibleError } from "./error.js";
-import { notAnOption } from "./args.js";
+} from "./parts";
+import type { Permission } from "./aws/permission";
+import type { binding } from "./cloudflare/binding";
+import type { env } from "./linkable";
+import { aliasOf, takeoverOf } from "./takeover";
+import { VisibleError } from "./error";
+import { notAnOption } from "./args";
 
 export {
   type ComponentArgs,
@@ -42,7 +42,7 @@ export {
   deferred,
   many,
   optional,
-} from "./parts.js";
+} from "./parts";
 
 /**
  * What a link grants besides its properties: an AWS permission from

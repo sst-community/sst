@@ -8,13 +8,13 @@ import {
 } from "@pulumi/pulumi";
 import { RandomPassword } from "@pulumi/random";
 import { elasticache, secretsmanager } from "@pulumi/aws";
-import { V5Args, component } from "../parts-component.js";
-import { ifSet, withDefault } from "../args.js";
-import { Input } from "../input.js";
-import { VisibleError } from "../error.js";
-import { DevCommand } from "../experimental/dev-command.js";
-import { Vpc } from "./vpc.js";
-import type { RedisArgs } from "./redis.js";
+import { V5Args, component } from "../parts-component";
+import { ifSet, withDefault } from "../args";
+import { Input } from "../input";
+import { VisibleError } from "../error";
+import { DevCommand } from "../experimental/dev-command";
+import { Vpc } from "./vpc";
+import type { RedisArgs } from "./redis";
 
 const parts = {
   /**

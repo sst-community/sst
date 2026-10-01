@@ -7,7 +7,7 @@ import {
   interpolate,
   rootStackResource,
 } from "@pulumi/pulumi";
-import type { Parts } from "./parts.js";
+import type { Parts } from "./parts";
 
 /**
  * Where a resource lived before, when that isn't where it lives now.

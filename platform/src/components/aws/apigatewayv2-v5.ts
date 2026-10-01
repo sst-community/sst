@@ -18,7 +18,7 @@ import { VisibleError } from "../error";
 import { toSeconds } from "../duration";
 import { physicalName } from "../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import { Function, FunctionArgs, FunctionArn } from "./function.js";
+import { Function, FunctionArgs, FunctionArn } from "./function";
 import { CustomDomainArgs, customDomain } from "./helpers/custom-domain";
 import { functionPart } from "./helpers/function-builder";
 import { invokePermissionArgs } from "./helpers/function-permission";

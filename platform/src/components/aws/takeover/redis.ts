@@ -1,5 +1,5 @@
-import { takeover } from "../../takeover.js";
-import { RedisV5 } from "../redis-v5.js";
+import { takeover } from "../../takeover";
+import { RedisV5 } from "../redis-v5";
 
 takeover(RedisV5, {
   from: "sst:aws:Redis",

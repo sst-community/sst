@@ -20,7 +20,7 @@ import type { Plain } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { toSeconds } from "../duration";
-import { Function } from "./function.js";
+import { Function } from "./function";
 import { functionPart } from "./helpers/function-builder";
 import { invokePermissionArgs } from "./helpers/function-permission";
 import { sendPolicyArgs } from "./helpers/queue-policy";

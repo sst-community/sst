@@ -12,7 +12,7 @@ import { withDefault } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import { Function } from "./function.js";
+import { Function } from "./function";
 import { parseDynamoArn } from "./helpers/arn";
 import { CustomDomainArgs, customDomain } from "./helpers/custom-domain";
 import { FunctionBuilder, functionPart } from "./helpers/function-builder";

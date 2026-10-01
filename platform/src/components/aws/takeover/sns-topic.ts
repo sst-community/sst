@@ -1,6 +1,6 @@
-import { takeover } from "../../takeover.js";
-import { SnsTopicV5 } from "../sns-topic-v5.js";
-import { childOf } from "./helpers.js";
+import { takeover } from "../../takeover";
+import { SnsTopicV5 } from "../sns-topic-v5";
+import { childOf } from "./helpers";
 
 // `SnsTopic` keeps each subscription in a component of its own, next to the
 // topic and named after the subscriber. `SnsTopicV5` keeps them inside the

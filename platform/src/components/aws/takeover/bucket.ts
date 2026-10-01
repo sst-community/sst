@@ -1,8 +1,8 @@
 import { interpolate } from "@pulumi/pulumi";
-import { takeover } from "../../takeover.js";
-import { hashStringToPrettyString, logicalName } from "../../naming.js";
-import { BucketV5 } from "../bucket-v5.js";
-import { childOf } from "./helpers.js";
+import { takeover } from "../../takeover";
+import { hashStringToPrettyString, logicalName } from "../../naming";
+import { BucketV5 } from "../bucket-v5";
+import { childOf } from "./helpers";
 
 // `Bucket` keeps what `notify()` creates in a component of its own, named
 // after the bucket. It's created with the bucket's own options, so it's next

@@ -1,8 +1,8 @@
-import { takeover } from "../../takeover.js";
-import { outputId } from "../../component.js";
-import { hashStringToPrettyString, logicalName } from "../../naming.js";
-import { ApiGatewayV2V5 } from "../apigatewayv2-v5.js";
-import { childOf } from "./helpers.js";
+import { takeover } from "../../takeover";
+import { outputId } from "../../component";
+import { hashStringToPrettyString, logicalName } from "../../naming";
+import { ApiGatewayV2V5 } from "../apigatewayv2-v5";
+import { childOf } from "./helpers";
 
 // `ApiGatewayV2` keeps each route in a component of its own, next to the API.
 // There are three kinds, one for each thing a route can send requests to.

@@ -3,8 +3,8 @@ import path from "path";
 import crypto from "crypto";
 import archiver from "archiver";
 import { glob } from "glob";
-import { VisibleError } from "../../error.js";
-import { rpc } from "../../rpc/rpc.js";
+import { VisibleError } from "../../error";
+import { rpc } from "../../rpc/rpc";
 
 /** What building a function gives: where its code is, and how it's called. */
 export interface FunctionBundle {

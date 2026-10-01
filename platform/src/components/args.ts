@@ -1,6 +1,6 @@
 import { type Unwrap, Output, output } from "@pulumi/pulumi";
-import type { Input } from "./input.js";
-import { VisibleError } from "./error.js";
+import type { Input } from "./input";
+import { VisibleError } from "./error";
 
 /**
  * The plain form of an arg that 4.x takes as an `Input`: the value itself,

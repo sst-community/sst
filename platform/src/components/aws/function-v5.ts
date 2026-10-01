@@ -24,24 +24,24 @@ import {
   types,
 } from "@pulumi/aws";
 import { Image } from "@pulumi/docker-build";
-import { V5Args, component, many, optional } from "../parts-component.js";
-import { Plain, ifSet, notAnOption, plain, withDefault } from "../args.js";
-import type { Input } from "../input.js";
-import { VisibleError } from "../error.js";
-import { Link } from "../link.js";
-import { logicalName, physicalName } from "../naming.js";
-import { toDays, toSeconds } from "../duration.js";
-import { toMBs } from "../size.js";
-import { rpc } from "../rpc/rpc.js";
-import { warnOnce } from "../../util/warn.js";
-import { Function, FunctionArgs } from "./function.js";
-import { Efs } from "./efs.js";
-import { Vpc } from "./vpc.js";
-import { RETENTION } from "./logging.js";
-import { Permission, permission } from "./permission.js";
-import { normalizeRouteArgs } from "./router.js";
-import { bootstrap } from "./helpers/bootstrap.js";
-import { splitQualifiedFunctionArn } from "./helpers/arn.js";
+import { V5Args, component, many, optional } from "../parts-component";
+import { Plain, ifSet, notAnOption, plain, withDefault } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { Link } from "../link";
+import { logicalName, physicalName } from "../naming";
+import { toDays, toSeconds } from "../duration";
+import { toMBs } from "../size";
+import { rpc } from "../rpc/rpc";
+import { warnOnce } from "../../util/warn";
+import { Function, FunctionArgs } from "./function";
+import { Efs } from "./efs";
+import { Vpc } from "./vpc";
+import { RETENTION } from "./logging";
+import { Permission, permission } from "./permission";
+import { normalizeRouteArgs } from "./router";
+import { bootstrap } from "./helpers/bootstrap";
+import { splitQualifiedFunctionArn } from "./helpers/arn";
 import {
   FunctionBundle,
   FunctionFile,
@@ -49,10 +49,10 @@ import {
   devBridgeBundle,
   injectHandler,
   zipCode,
-} from "./helpers/function-code.js";
-import { FunctionEnvironmentUpdate } from "./providers/function-environment-update.js";
-import { KvKeys } from "./providers/kv-keys.js";
-import { KvRoutesUpdate } from "./providers/kv-routes-update.js";
+} from "./helpers/function-code";
+import { FunctionEnvironmentUpdate } from "./providers/function-environment-update";
+import { KvKeys } from "./providers/kv-keys";
+import { KvRoutesUpdate } from "./providers/kv-routes-update";
 
 const parts = {
   /**
