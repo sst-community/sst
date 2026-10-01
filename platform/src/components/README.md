@@ -112,6 +112,11 @@ the component reads its args.
     defaults)`, or with an id for `many(deferred(sst.aws.FunctionV5))`. Its `nodes` entry is
     an `Output`. The user's `transform` for it takes the function's args, including the
     function's own `transform` and `existing`.
+  - `named(part, "Name")`: the resource is named `<ComponentName><Name>` in place of the
+    key. The key is what's written in `transform`, `existing` and `nodes`; the name is
+    how a deployed app knows the resource, so it's permanent. It wraps a class or
+    another marker: `named(optional(aws.ec2.SecurityGroup), "NatInstanceSecurityGroup")`.
+    Use it when the name a resource has to keep isn't the key you want.
 - **An SST component can be a part**, like `sst.aws.FunctionV5` or a certificate. If the
   component's own file imports yours, declare the parts in a function so they're read
   late: `component("acme:Uploads", () => ({ ... }))`.
@@ -175,8 +180,11 @@ the component reads its args.
   For another type, `sst.Component.naming("aws:athena/workgroup:Workgroup", { field:
   "name", max: 128 })`, or `false` to leave it to the provider. A resource that's looked
   up keeps the name it has.
-- **Renaming a part later.** `sst.takeover(Uploads, { from: "acme:Uploads", moved: {
-  newKey: "oldKey" } })` keeps the deployed resource when a part's key changes.
+- **Renaming a part later.** A part's key is in the name of its resource, so a new key
+  is a new resource. To change the key and keep what's deployed, declare the part with
+  the name it had: `files: sst.named(aws.s3.Bucket, "Bucket")`. Or give the resource its
+  new name and say where it was: `sst.takeover(Uploads, { from: "acme:Uploads", moved: {
+  files: "bucket" } })`.
 
 ---
 
@@ -295,9 +303,12 @@ takeover(ApiGatewayV2V5, {
   again, which changes nothing in AWS.
 - A part that gets a new name keeps its physical name: a generated name is never
   changed once it's deployed. A resource that's named with a `Name` tag is the
-  exception (a security group, a VPC endpoint, a subnet). Its tag is made from the new
-  name and updated in place. Say so in the "Switch from" section, as `DsqlV5` does for
-  the security group of its endpoints.
+  exception (a security group, a VPC endpoint, a subnet): the tag is made from the
+  logical name, so a new name updates it. Declare such a part with the name 4.x gave
+  it, `named(optional(ec2.SecurityGroup), "DsqlEndpointSecurityGroup")`, as `DsqlV5`
+  does. It then needs no entry in the takeover map. The name goes in the declaration
+  and not in the map because it has to outlive the map: once someone has switched, the
+  kept name is the one in their state.
 - Something 4.x created without the component's `provider` is replaced on switch when
   the component has one, because a part is always created with it. 4.x did this for
   what it created with no parent (the alias of a durable function's URL, AppSync's

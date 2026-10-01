@@ -17,10 +17,9 @@ import type { PartTransform, PartialArgs } from "./transform";
  * other, so the class may not exist yet when the file that declares the parts
  * loads.
  */
-export type Parts = Record<
-  string,
-  PartClass | DeferredPart | ManyPart | OptionalPart
->;
+export type Parts = Record<string, UnnamedPart | NamedPart>;
+
+type UnnamedPart = PartClass | DeferredPart | ManyPart | OptionalPart;
 
 export type PartClass = new (name: string, args: any, opts?: any) => any;
 
@@ -102,31 +101,78 @@ export function many<T extends PartClass | DeferredPart>(part: T): ManyPart<T> {
   return { many: part };
 }
 
-export type PartClassOf<T> =
-  T extends DeferredPart<infer C>
-    ? C
-    : T extends ManyPart<infer M>
-      ? PartClassOf<M>
-      : T extends OptionalPart<infer C>
-        ? C
-        : T extends PartClass
-          ? T
-          : never;
+/** A part declared with `named()`. */
+export interface NamedPart<T extends UnnamedPart = UnnamedPart> {
+  named: string;
+  part: T;
+}
 
-export function partClass(part: Parts[string]): PartClass {
-  if (typeof part === "function") return part;
-  if ("many" in part) return partClass(part.many);
-  return "optional" in part ? part.optional : part.deferred;
+/**
+ * Declare a part whose resource isn't named after its key. A resource is
+ * named after the component and the part, `MyQueue` and `policy` giving
+ * `MyQueuePolicy`, and that name is how a deployed app knows the resource.
+ * With `named()` the key can change, or differ from the name, and the
+ * resource stays the one that's deployed:
+ *
+ * ```ts
+ * const parts = {
+ *   // Named MyVpcNatInstanceSecurityGroup
+ *   natSecurityGroup: named(aws.ec2.SecurityGroup, "NatInstanceSecurityGroup"),
+ * };
+ * ```
+ *
+ * It wraps the other markers: `named(optional(aws.ec2.SecurityGroup), "...")`.
+ * For a `many()` part the id is added to the name, as it is to the key.
+ *
+ * The name is permanent. Changing it later renames the resource, which
+ * replaces it unless it's given an alias.
+ */
+export function named<T extends UnnamedPart>(part: T, name: string): NamedPart<T> {
+  return { named: name, part };
+}
+
+/** A part as it's declared, without the name `named()` gives it. */
+export type Unnamed<T> = T extends NamedPart<infer U> ? U : T;
+
+export type PartClassOf<T> =
+  T extends NamedPart<infer U>
+    ? PartClassOf<U>
+    : T extends DeferredPart<infer C>
+      ? C
+      : T extends ManyPart<infer M>
+        ? PartClassOf<M>
+        : T extends OptionalPart<infer C>
+          ? C
+          : T extends PartClass
+            ? T
+            : never;
+
+function unnamed(part: Parts[string]): UnnamedPart {
+  return typeof part !== "function" && "named" in part ? part.part : part;
+}
+
+export function partClass(part: Parts[string] | DeferredPart): PartClass {
+  const declared = unnamed(part);
+  if (typeof declared === "function") return declared;
+  if ("many" in declared) return partClass(declared.many);
+  return "optional" in declared ? declared.optional : declared.deferred;
 }
 
 /** Whether a part's resources are created later, or not at all. */
-export function isDeferred(part: Parts[string]): boolean {
-  if (typeof part === "function") return false;
-  return "many" in part ? isDeferred(part.many) : "deferred" in part;
+export function isDeferred(part: Parts[string] | DeferredPart): boolean {
+  const declared = unnamed(part);
+  if (typeof declared === "function") return false;
+  return "many" in declared ? isDeferred(declared.many) : "deferred" in declared;
 }
 
-export function isMany(part: Parts[string]): part is ManyPart {
-  return typeof part !== "function" && "many" in part;
+export function isMany(part: Parts[string]): boolean {
+  const declared = unnamed(part);
+  return typeof declared !== "function" && "many" in declared;
+}
+
+/** The name a part was given with `named()`, in place of its key. */
+export function nameGiven(part: Parts[string]): string | undefined {
+  return typeof part !== "function" && "named" in part ? part.named : undefined;
 }
 
 /** The args a part's resource is created with. */
@@ -149,7 +195,7 @@ export type ManyTransform<T> =
 
 /** The `transform` option for a component: one optional transform per part. */
 export type Transforms<P extends Parts> = {
-  [K in keyof P]?: P[K] extends ManyPart
+  [K in keyof P]?: Unnamed<P[K]> extends ManyPart
     ? ManyTransform<PartArgs<P[K]>>
     : PartTransform<PartArgs<P[K]>>;
 };
@@ -160,16 +206,16 @@ export type Transforms<P extends Parts> = {
  * by id.
  */
 export type Nodes<P extends Parts> = {
-  [K in keyof P]: P[K] extends DeferredPart<infer C>
+  [K in keyof P]: Unnamed<P[K]> extends DeferredPart<infer C>
     ? Output<InstanceType<C>>
-    : P[K] extends ManyPart<infer M>
+    : Unnamed<P[K]> extends ManyPart<infer M>
       ? Record<
           string,
           M extends DeferredPart<infer C>
             ? Output<InstanceType<C>>
             : InstanceType<PartClassOf<M>>
         >
-      : P[K] extends OptionalPart<infer C>
+      : Unnamed<P[K]> extends OptionalPart<infer C>
         ? InstanceType<C> | undefined
         : InstanceType<PartClassOf<P[K]>>;
 };
@@ -180,7 +226,7 @@ export type Nodes<P extends Parts> = {
  * it up by. A `many` part takes them by id.
  */
 export type Existing<P extends Parts> = {
-  [K in keyof P]?: P[K] extends ManyPart
+  [K in keyof P]?: Unnamed<P[K]> extends ManyPart
     ? Record<string, InstanceType<PartClassOf<P[K]>> | Input<string>>
     : InstanceType<PartClassOf<P[K]>> | Input<string>;
 };
@@ -235,7 +281,7 @@ export interface ComponentArgs<P extends Parts | (() => Parts)> {
 }
 
 export type ManyKeys<P extends Parts> = {
-  [K in keyof P]: P[K] extends ManyPart ? K : never;
+  [K in keyof P]: Unnamed<P[K]> extends ManyPart ? K : never;
 }[keyof P] &
   string;
 
@@ -246,7 +292,7 @@ export type SingleKeys<P extends Parts> = Exclude<keyof P & string, ManyKeys<P>>
  * with `functionPart()`, which makes its `nodes` entry an `Output`.
  */
 export type CreatedKeys<P extends Parts> = {
-  [K in keyof P]: P[K] extends DeferredPart | ManyPart<DeferredPart>
+  [K in keyof P]: Unnamed<P[K]> extends DeferredPart | ManyPart<DeferredPart>
     ? never
     : K;
 }[keyof P] &

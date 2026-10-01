@@ -248,16 +248,17 @@ describe("DsqlV5", () => {
       },
     });
 
-    // The security group of the endpoints is named after its part now, and
-    // a security group is named with a tag. That tag is updated in place;
-    // nothing else about it changes.
+    // A security group is named with a tag made from its logical name, so
+    // the endpoints' keeps the name `Dsql` gave it: its part is declared
+    // with that name, which isn't its key.
     pulumi.takeoverCases({
       original: () => Dsql,
       v5: () => DsqlV5,
-      changed: [["MyClusterDsqlEndpointSecurityGroup", ["tags"]]],
       check: () =>
-        expect(resource("MyClusterEndpointSecurityGroup").inputs.tags).toEqual({
-          Name: expect.stringMatching(/MyClusterEndpointSecurityGroup$/),
+        expect(
+          resource("MyClusterDsqlEndpointSecurityGroup").inputs.tags,
+        ).toEqual({
+          Name: expect.stringMatching(/MyClusterDsqlEndpointSecurityGroup$/),
         }),
       cases: {
         "a cluster in a Vpc": (Dsql, opts) => {
@@ -359,7 +360,6 @@ describe("DsqlV5", () => {
     it("keeps what it renames", async () => {
       const create = (Dsql: DsqlClass) => {
         new Dsql("MyCluster", { regions, backup: true });
-        new Dsql("Private", { vpc: new Vpc("MyVpc") });
       };
 
       create(Dsql);
@@ -370,7 +370,6 @@ describe("DsqlV5", () => {
           "MyClusterPeering1",
           "MyClusterPeering2",
           "MyClusterBackupVaultPeer",
-          "PrivateDsqlEndpointSecurityGroup",
         ]),
       );
 
@@ -382,7 +381,6 @@ describe("DsqlV5", () => {
           "MyClusterClusterPeering",
           "MyClusterPeerClusterPeering",
           "MyClusterPeerBackupVault",
-          "PrivateEndpointSecurityGroup",
         ]),
       );
       expect(
@@ -458,9 +456,9 @@ describe("DsqlV5", () => {
       vpcEndpointType: "Interface",
       subnetIds: ["MyVpcPrivateSubnet1_id", "MyVpcPrivateSubnet2_id"],
       privateDnsEnabled: true,
-      securityGroupIds: ["MyClusterEndpointSecurityGroup_id"],
+      securityGroupIds: ["MyClusterDsqlEndpointSecurityGroup_id"],
     });
-    expect(resource("MyClusterEndpointSecurityGroup").inputs).toMatchObject({
+    expect(resource("MyClusterDsqlEndpointSecurityGroup").inputs).toMatchObject({
       vpcId: "MyVpcVpc_id",
       ingress: [
         {
@@ -490,7 +488,7 @@ describe("DsqlV5", () => {
       "com.amazonaws.us-east-1.dsql",
     );
     expect(
-      resource("MyClusterEndpointSecurityGroup").inputs.ingress,
+      resource("MyClusterDsqlEndpointSecurityGroup").inputs.ingress,
     ).toMatchObject([{ fromPort: 443, toPort: 443 }]);
     // No endpoint to connect through, so connections use the public one
     expect(await pulumi.resolve(cluster.endpoint)).toBe(

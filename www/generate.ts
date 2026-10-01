@@ -1845,12 +1845,14 @@ function parseParts(file: string): Parts | undefined {
   }
 
   const parts = literal.properties.filter(ts.isPropertyAssignment).map((prop) => {
-    // `many(deferred(Function))`
+    // `many(deferred(Function))`, `named(optional(SecurityGroup), "Firewall")`
     const markers = new Set<string>();
     let value = prop.initializer;
     while (
       ts.isCallExpression(value) &&
-      ["optional", "many", "deferred"].includes(value.expression.getText())
+      ["optional", "many", "deferred", "named"].includes(
+        value.expression.getText()
+      )
     ) {
       markers.add(value.expression.getText());
       value = value.arguments[0];

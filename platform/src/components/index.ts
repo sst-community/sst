@@ -9,6 +9,7 @@ export {
   component,
   deferred,
   many,
+  named,
   optional,
   type ComponentArgs,
   type V5Args,

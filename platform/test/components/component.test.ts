@@ -16,11 +16,12 @@ describe("Component parts", () => {
   let component: Module["component"];
   let deferred: Module["deferred"];
   let many: Module["many"];
+  let named: Module["named"];
   let optional: Module["optional"];
 
   beforeAll(async () => {
     ({ Component, mergeArgs } = await import("../../src/components/component"));
-    ({ component, deferred, many, optional } = await import(
+    ({ component, deferred, many, named, optional } = await import(
       "../../src/components/parts-component"
     ));
   });
@@ -594,6 +595,151 @@ describe("Component parts", () => {
             transform: { queue: { delaySeconds: 5 } },
           }),
       ).toThrow(/given an existing "queue".*nothing to transform/);
+    });
+  });
+
+  // A part's key is what the user writes in `transform`, `existing` and
+  // `nodes`. Its name is what a deployed app knows the resource by. `named()`
+  // keeps the two apart.
+  describe("named parts", () => {
+    function defineNetwork() {
+      const parts = {
+        vpc: aws.ec2.Vpc,
+        natSecurityGroup: named(
+          optional(aws.ec2.SecurityGroup),
+          "NatInstanceSecurityGroup",
+        ),
+        publicSubnet: named(many(aws.ec2.Subnet), "Subnet"),
+        flowLog: named(aws.cloudwatch.LogGroup, "Logs"),
+      };
+      type Args = import("../../src/components/parts-component").ComponentArgs<
+        typeof parts
+      > & { nat?: boolean; zones?: string[] };
+      return class Network extends component("acme:Network", parts) {
+        constructor(name: string, args: Args = {}) {
+          super(name, args);
+          const vpc = this.part("vpc", { cidrBlock: "10.0.0.0/16" });
+          if (args.nat) this.part("natSecurityGroup", { vpcId: vpc.id });
+          for (const zone of args.zones ?? [])
+            this.part("publicSubnet", zone, { vpcId: vpc.id });
+          this.part("flowLog", {});
+        }
+      };
+    }
+
+    it("names the resource with the name, and everything else with the key", async () => {
+      const Network = defineNetwork();
+      const network = new Network("Net", {
+        nat: true,
+        zones: ["1", "2"],
+        transform: {
+          natSecurityGroup: { description: "custom" },
+          publicSubnet: (args, _opts, name, zone) => {
+            args.tags = { name, zone };
+          },
+        },
+      });
+      await pulumi.settle();
+
+      expect(pulumi.resources.map((r) => r.name).sort()).toEqual([
+        "Net",
+        "NetLogs",
+        "NetNatInstanceSecurityGroup",
+        "NetSubnet1",
+        "NetSubnet2",
+        "NetVpc",
+      ]);
+      expect(Object.keys(network.nodes)).toEqual([
+        "vpc",
+        "natSecurityGroup",
+        "publicSubnet",
+        "flowLog",
+      ]);
+      expect(network.nodes.natSecurityGroup).toBeInstanceOf(aws.ec2.SecurityGroup);
+      expect(network.nodes.flowLog).toBeInstanceOf(aws.cloudwatch.LogGroup);
+      expect(Object.keys(network.nodes.publicSubnet)).toEqual(["1", "2"]);
+
+      const resource = (name: string) =>
+        pulumi.resources.find((r) => r.name === name)!;
+      expect(resource("NetNatInstanceSecurityGroup").inputs.description).toBe(
+        "custom",
+      );
+      expect(resource("NetSubnet2").inputs.tags).toEqual({
+        name: "NetSubnet2",
+        zone: "2",
+      });
+      // A security group is named with a tag made from the resource's name
+      expect(resource("NetNatInstanceSecurityGroup").inputs.tags.Name).toMatch(
+        /NetNatInstanceSecurityGroup$/,
+      );
+    });
+
+    it("stays optional, and takes an existing resource by its key", async () => {
+      const mine = new aws.ec2.SecurityGroup("Mine", {});
+      await pulumi.settle();
+      pulumi.reset();
+
+      const Network = defineNetwork();
+      const without = new Network("A");
+      const given = new Network("B", {
+        nat: true,
+        existing: { natSecurityGroup: mine, flowLog: "/my/logs" },
+      });
+      await pulumi.settle();
+
+      expect(without.nodes.natSecurityGroup).toBeUndefined();
+      expect(given.nodes.natSecurityGroup).toBe(mine);
+      // Looked up under the part's name
+      expect(pulumi.resources.find((r) => r.kind === "read")).toMatchObject({
+        name: "BLogs",
+        options: { id: "/my/logs" },
+      });
+    });
+
+    it("matches one created without part() by the name", async () => {
+      const parts = {
+        group: named(aws.ec2.SecurityGroup, "Firewall"),
+        subnet: named(many(aws.ec2.Subnet), "PublicSubnet"),
+      };
+      class Loose extends component("acme:Loose", parts) {
+        constructor(name: string) {
+          super(name);
+          new aws.ec2.SecurityGroup(`${name}Firewall`, {}, { parent: this });
+          new aws.ec2.Subnet(
+            `${name}PublicSubnet7`,
+            { vpcId: "vpc-1" },
+            { parent: this },
+          );
+        }
+      }
+      const loose = new Loose("Net");
+      await pulumi.settle();
+
+      expect(loose.nodes.group).toBeInstanceOf(aws.ec2.SecurityGroup);
+      expect(Object.keys(loose.nodes.subnet)).toEqual(["7"]);
+    });
+
+    it("is typed like the part it wraps", () => {
+      const parts = {
+        group: named(optional(aws.ec2.SecurityGroup), "Firewall"),
+        subnet: named(many(aws.ec2.Subnet), "PublicSubnet"),
+        logs: named(aws.cloudwatch.LogGroup, "Logs"),
+      };
+      type Nodes = import("../../src/components/parts-component").Nodes<
+        typeof parts
+      >;
+      const nodes = {} as Nodes;
+      const group: aws.ec2.SecurityGroup | undefined = nodes.group;
+      const subnets: Record<string, aws.ec2.Subnet> = nodes.subnet;
+      const logs: aws.cloudwatch.LogGroup = nodes.logs;
+      // @ts-expect-error An optional part may be missing
+      const always: aws.ec2.SecurityGroup = nodes.group;
+      expect([group, subnets, logs, always]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
     });
   });
 

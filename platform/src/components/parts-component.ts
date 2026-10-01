@@ -19,6 +19,7 @@ import {
   type SingleKeys,
   isDeferred,
   isMany,
+  nameGiven,
   partClass,
 } from "./parts";
 import type { Permission } from "./aws/permission";
@@ -35,6 +36,7 @@ export {
   type Existing,
   type ManyPart,
   type ManyTransform,
+  type NamedPart,
   type Nodes,
   type OptionalPart,
   type PartArgs,
@@ -42,6 +44,7 @@ export {
   type Transforms,
   deferred,
   many,
+  named,
   optional,
 } from "./parts";
 export { type PartTransform, type PartialArgs } from "./transform";
@@ -233,8 +236,9 @@ export class PartsComponent<P extends Parts> extends Component {
    * Create one of this component's parts.
    *
    * The resource is named after the component and the part, `MyQueue` and
-   * `queue` giving `MyQueueQueue`. The user's `transform` for the part is
-   * applied to `args`, and the resource is added to `nodes`.
+   * `queue` giving `MyQueueQueue`, or after the name the part is declared
+   * with in `named()`. The user's `transform` for the part is applied to
+   * `args`, and the resource is added to `nodes`.
    *
    * A part declared with `many()` also takes an id, which is added to the
    * name: `this.part("subnet", "1", args)` creates `MyVpcSubnet1`.
@@ -451,7 +455,7 @@ export class PartsComponent<P extends Parts> extends Component {
   }
 
   // The part a child belongs to. One created some other way than `part()` is
-  // matched by its name: the component's name, the part's key, and for a
+  // matched by its name: the component's name, the part's own, and for a
   // `many` part its id.
   private findPart(child: ResourceTransformationArgs): PartRef | undefined {
     const isA = (key: string) =>
@@ -467,7 +471,7 @@ export class PartsComponent<P extends Parts> extends Component {
     let found: PartRef | undefined;
     let longest = 0;
     for (const [key, part] of Object.entries(this.partClasses)) {
-      const prefix = logicalName(key);
+      const prefix = this.partName(key);
       if (!isA(key)) continue;
       if (!isMany(part)) {
         if (suffix === prefix) return { key };
@@ -571,7 +575,7 @@ export class PartsComponent<P extends Parts> extends Component {
         `The "${this.componentName}" component creates several "${key}" parts, so each one needs an id.`,
       );
 
-    const name = `${this.componentName}${logicalName(key)}${id === undefined ? "" : idName(id)}`;
+    const name = `${this.componentName}${this.partName(key)}${id === undefined ? "" : idName(id)}`;
     const refs = this.partNames.get(name) ?? [];
     const other = refs.find((ref) => ref.key === key && ref.id !== id);
     if (other)
@@ -580,6 +584,12 @@ export class PartsComponent<P extends Parts> extends Component {
       );
     this.partNames.set(name, [...refs, id === undefined ? { key } : { key, id }]);
     return name;
+  }
+
+  // What a part adds to the component's name: its key, or the name it's
+  // declared with
+  private partName(key: string) {
+    return nameGiven(this.partClasses[key]) ?? logicalName(key);
   }
 
   private transformOf(key: string, id?: string): PartTransform<any> | undefined {

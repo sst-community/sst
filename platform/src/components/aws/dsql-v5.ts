@@ -1,6 +1,6 @@
 import { all, ComponentResourceOptions } from "@pulumi/pulumi";
 import { backup, dsql, ec2, iam, type Region } from "@pulumi/aws";
-import { ComponentArgs, component, optional } from "../parts-component";
+import { ComponentArgs, component, named, optional } from "../parts-component";
 import { plain, withDefault } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
@@ -35,7 +35,12 @@ const parts = {
   /**
    * The EC2 security group for the DSQL VPC endpoints.
    */
-  endpointSecurityGroup: optional(ec2.SecurityGroup),
+  // A security group is named with a tag made from its logical name, so it
+  // keeps the name it was first deployed with.
+  endpointSecurityGroup: named(
+    optional(ec2.SecurityGroup),
+    "DsqlEndpointSecurityGroup",
+  ),
   /**
    * The EC2 VPC endpoint for DSQL management operations.
    */
@@ -302,8 +307,6 @@ export interface DsqlV5Args extends ComponentArgs<typeof parts> {
  *   change only that one, use `transform.peerBackupVault`, which is applied after it.
  *   A function that told the two apart by name now gets `MyClusterPeerBackupVault` for
  *   the peer's.
- * - The security group of the VPC endpoints is named after `endpointSecurityGroup`, so
- *   its `Name` tag is updated when you switch. Nothing else about it changes.
  * - If you set `multiRegionProperties` on the cluster with an object in `transform`, it
  *   keeps its witness region.
  *
