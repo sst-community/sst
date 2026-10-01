@@ -30,12 +30,12 @@ import { DevCommand } from "../../experimental/dev-command";
 import type { Input } from "../../input";
 import { hashStringToPrettyString } from "../../naming";
 import { transformPart } from "../../transform";
-import { Alb } from "../alb";
+import { Alb as OriginalAlb } from "../alb";
 import type { Cluster as OriginalCluster } from "../cluster";
 import type { Efs as OriginalEfs } from "../efs";
 import { DnsValidatedCertificate } from "../dns-validated-certificate";
 import type { FargateContainerArgs } from "../fargate";
-import { type CustomDomainArgs, customDomain } from "../helpers/custom-domain";
+import type { CustomDomainArgs } from "../helpers/custom-domain";
 import {
   type Container,
   containerImage,
@@ -49,9 +49,16 @@ import {
   taskRoleArgs,
 } from "../helpers/fargate";
 import { listenerKey, targetKey } from "../helpers/load-balancer";
+import {
+  domainOf,
+  forbidden,
+  pointDomainAt,
+  securityGroupArgs,
+} from "../helpers/load-balancer-args";
 import { URL_UNAVAILABLE } from "../linkable";
 import type { ServiceArgs as OriginalServiceArgs } from "../service";
 import { Vpc } from "../vpc";
+import { Alb } from "./alb";
 import type { Cluster } from "./cluster";
 import type { Efs } from "./efs";
 
@@ -785,7 +792,7 @@ export interface ServiceAlbArgs {
    * }
    * ```
    */
-  instance: Alb;
+  instance: OriginalAlb | Alb;
   /**
    * The rules for routing traffic from the ALB to this service's containers.
    * Each rule must have explicit conditions and priority.
@@ -1698,26 +1705,10 @@ export class Service extends component("sst:aws:Service", parts) {
     const name = this.componentName;
     const { domain } = balancer;
 
-    const securityGroup = this.part("loadBalancerSecurityGroup", {
-      description: "Managed by SST",
-      vpcId: vpc.id,
-      egress: [
-        {
-          fromPort: 0,
-          toPort: 0,
-          protocol: "-1",
-          cidrBlocks: ["0.0.0.0/0"],
-        },
-      ],
-      ingress: [
-        {
-          fromPort: 0,
-          toPort: 0,
-          protocol: "-1",
-          cidrBlocks: ["0.0.0.0/0"],
-        },
-      ],
-    });
+    const securityGroup = this.part(
+      "loadBalancerSecurityGroup",
+      securityGroupArgs(vpc.id),
+    );
     const loadBalancer = this.part("loadBalancer", {
       internal: output(balancer.public).apply((v) => !v),
       loadBalancerType: balancer.type,
@@ -1770,17 +1761,7 @@ export class Service extends component("sst:aws:Service", parts) {
       listeners.set(id, [...(listeners.get(id) ?? []), rule]);
     }
     const actions = (rule?: InlineRule) => {
-      if (!rule)
-        return [
-          {
-            type: "fixed-response",
-            fixedResponse: {
-              statusCode: "403",
-              contentType: "text/plain",
-              messageBody: "Forbidden",
-            },
-          },
-        ];
+      if (!rule) return forbidden();
       if (rule.type === "redirect")
         return [
           {
@@ -1848,22 +1829,7 @@ export class Service extends component("sst:aws:Service", parts) {
       }
     }
 
-    // The domain and each of its aliases point at the load balancer
-    const dns = domain?.dns;
-    if (dns) {
-      const pointAt = (prefix: string, record: Input<string>) =>
-        dns.createAlias(
-          prefix,
-          {
-            name: record,
-            aliasName: loadBalancer.dnsName,
-            aliasZone: loadBalancer.zoneId,
-          },
-          this.delegateOpts(),
-        );
-      pointAt(name, domain.name);
-      for (const alias of domain.aliases) pointAt(`${name}${alias}`, alias);
-    }
+    if (domain) pointDomainAt(name, domain, loadBalancer, this.delegateOpts());
 
     return {
       arn: loadBalancer.arn,
@@ -2131,13 +2097,7 @@ function ownBalancer(
         `You must provide a custom domain for ${rule.listenProtocol.toUpperCase()} protocol.`,
       );
 
-  const custom = args.domain ? customDomain(args.domain, of) : undefined;
-  // The other names the load balancer answers to
-  const aliases =
-    (typeof args.domain === "object"
-      ? plainDeep(args.domain.aliases, `The domain's "aliases" in ${of}`)
-      : undefined) ?? [];
-  const domain = custom && { ...custom, aliases };
+  const domain = domainOf(args.domain, of);
 
   const health = Object.fromEntries(
     Object.entries(plain(args.health, `The "health" of ${of}`) ?? {}).map(
@@ -2265,7 +2225,7 @@ function sharedBalancer(
   args: ServiceAlbArgs,
   containers: Container[],
 ) {
-  if (!(args.instance instanceof Alb))
+  if (!(args.instance instanceof OriginalAlb || args.instance instanceof Alb))
     throw new VisibleError(
       `The "loadBalancer.instance" of the "${name}" service has to be an "Alb".`,
     );

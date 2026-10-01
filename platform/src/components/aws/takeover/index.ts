@@ -6,6 +6,7 @@
  * The V5 components don't know about any of this. When the 4.x components are
  * removed, this folder goes with them.
  */
+import "./alb";
 import "./apigatewayv2";
 import "./app-sync";
 import "./aurora";

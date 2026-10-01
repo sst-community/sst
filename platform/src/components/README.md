@@ -236,7 +236,7 @@ Everything above applies. The rest is specific to SST's own components in
   The V5 `Service` and `Task` take either `Cluster`. The arg is declared again in each
   (`cluster: OriginalCluster | Cluster`), and the V5 `Cluster` gives them the same
   `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Function`, `Service` and
-  `Task` take either `Efs` the same way.
+  `Task` take either `Efs` the same way, and the V5 `Service` either `Alb`.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **Reuse the original's arg types**: `interface QueueArgs extends
   V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
@@ -277,6 +277,7 @@ Everything above applies. The rest is specific to SST's own components in
 | Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
+| A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
@@ -531,8 +532,9 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
    by side, resource by resource: args, options, names, what's read back. Then read the
    generated page.
 
-The existing ports are the reference, all in `aws/v5/`: `apigatewayv2.ts` for routes,
-authorizers and a custom domain; `sns-topic.ts` for named subscribers; `bucket.ts` for
+The existing ports are the reference, all in `aws/v5/`: `alb.ts` for a custom domain
+with aliases, and a method that looks a part up when it's asked for (`getListener`);
+`apigatewayv2.ts` for routes, authorizers and a custom domain; `sns-topic.ts` for named subscribers; `bucket.ts` for
 one resource built from many notifications; `cognito-user-pool.ts` for triggers and a
 linkable client; `redis.ts` for dev mode and `get`; `postgres.ts` for the same with an
 optional group of parts (the proxy) and a part per item in a list; `aurora.ts` for a

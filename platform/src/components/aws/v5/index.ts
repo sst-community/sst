@@ -3,6 +3,7 @@
  * they're exported together as `sst.aws.v5`: `sst.aws.v5.Queue` next to
  * `sst.aws.Queue`.
  */
+export * from "./alb";
 export * from "./apigatewayv2";
 export * from "./app-sync";
 export * from "./aurora";
