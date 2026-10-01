@@ -72,6 +72,7 @@ const sidebar = [
       { label: "Custom Domains", slug: "docs/custom-domains" },
       { label: "Import Resources", slug: "docs/import-resources" },
       { label: "Set up a Monorepo", slug: "docs/set-up-a-monorepo" },
+      { label: "Write a Component", slug: "docs/write-a-component" },
       { label: "Configure a Router", slug: "docs/configure-a-router" },
       { label: "Share Across Stages", slug: "docs/share-across-stages" },
       { label: "Reference Resources", slug: "docs/reference-resources" },

@@ -11,6 +11,9 @@ This guide is for two readers:
   of it; the last sections are the rules and the checklist.
 
 This file ships with the CLI, so in an app it's at `.sst/platform/src/components/README.md`.
+The first half is also on the docs site as "Write a Component"
+(`www/src/content/docs/docs/write-a-component.mdx`). Keep the two in step, and what the
+page shows working is tested in `component.test.ts` under "the component in the docs".
 
 ## A component in one page
 

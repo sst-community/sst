@@ -743,6 +743,211 @@ describe("Component parts", () => {
     });
   });
 
+  // The component on the docs page "Write a Component". What the page says
+  // it does is checked here.
+  describe("the component in the docs", () => {
+    type ComponentArgs<P> =
+      import("../../src/components/parts-component").ComponentArgs<
+        P extends import("../../src/components/parts-component").Parts ? P : never
+      >;
+
+    function defineUploads(type = "docs:Uploads") {
+      const parts = {
+        bucket: aws.s3.Bucket,
+        audit: optional(aws.s3.Bucket),
+        reader: many(aws.iam.Role),
+      };
+      interface UploadsArgs extends ComponentArgs<typeof parts> {
+        teams: string[];
+        audit?: boolean;
+      }
+      return class Uploads extends component(type, parts) {
+        constructor(name: string, args: UploadsArgs, opts?: object) {
+          super(name, args, opts);
+          // @ts-ignore
+          if (global.$dev) {
+            this.runsLocally();
+            return;
+          }
+          this.part("bucket", { forceDestroy: true });
+          if (args.audit) this.part("audit", {});
+          for (const team of args.teams)
+            this.part("reader", team, {
+              assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
+                Service: "lambda.amazonaws.com",
+              }),
+            });
+        }
+
+        get name() {
+          return this.nodes.bucket.bucket;
+        }
+
+        static get(name: string, bucketName: string, opts?: object) {
+          return new Uploads(
+            name,
+            { teams: [], existing: { bucket: bucketName } },
+            opts,
+          );
+        }
+
+        link() {
+          return { properties: { name: this.name } };
+        }
+      };
+    }
+    const names = () => pulumi.resources.map((r) => r.name).sort();
+    const resource = (name: string) =>
+      pulumi.resources.find((r) => r.name === name)!;
+
+    it("names its resources after the component and its parts", async () => {
+      const Uploads = defineUploads();
+      const uploads = new Uploads("Docs", { teams: ["design", "legal"] });
+      await pulumi.settle();
+
+      expect(names()).toEqual([
+        "Docs",
+        "DocsBucket",
+        "DocsReaderDesign",
+        "DocsReaderLegal",
+      ]);
+      expect(uploads.nodes.bucket).toBeInstanceOf(aws.s3.Bucket);
+      expect(uploads.nodes.audit).toBeUndefined();
+      expect(uploads.nodes.reader.legal).toBeInstanceOf(aws.iam.Role);
+      expect("legal" in uploads.nodes.reader).toBe(true);
+      expect("sales" in uploads.nodes.reader).toBe(false);
+    });
+
+    it("is transformed with an object, or a function that's told which one", async () => {
+      const Uploads = defineUploads();
+      new Uploads("Docs", {
+        teams: ["design", "legal"],
+        transform: {
+          bucket: { tags: { team: "storage" } },
+          reader: (args, _opts, _name, team) => {
+            if (team === "legal") args.maxSessionDuration = 7200;
+          },
+        },
+      });
+      await pulumi.settle();
+
+      expect(resource("DocsBucket").inputs).toMatchObject({
+        forceDestroy: true,
+        tags: { team: "storage" },
+      });
+      expect(resource("DocsReaderLegal").inputs.maxSessionDuration).toBe(7200);
+      expect(
+        resource("DocsReaderDesign").inputs.maxSessionDuration,
+      ).toBeUndefined();
+    });
+
+    it("uses an existing resource, passed in or through get", async () => {
+      const Uploads = defineUploads();
+      new Uploads("Docs", {
+        teams: ["design"],
+        existing: { bucket: "my-existing-bucket" },
+      });
+      Uploads.get("Shared", "shared-bucket");
+      await pulumi.settle();
+
+      expect(
+        pulumi.resources
+          .filter((r) => r.kind === "read")
+          .map((r) => [r.name, r.options.id]),
+      ).toEqual([
+        ["DocsBucket", "my-existing-bucket"],
+        ["SharedBucket", "shared-bucket"],
+      ]);
+      expect(names()).toContain("DocsReaderDesign");
+    });
+
+    it("links, and explains a missing node in sst dev", async () => {
+      const Uploads = defineUploads();
+      const uploads = new Uploads("Docs", { teams: [] });
+      await pulumi.settle();
+      const link = (uploads as any).getSSTLink();
+      // The bucket's name in AWS: SST makes it from the app, the stage and
+      // the resource's name
+      expect(await pulumi.resolve(link.properties)).toEqual({
+        name: expect.stringMatching(/^app-test-docsbucket-/),
+      });
+
+      // @ts-ignore
+      global.$dev = true;
+      try {
+        const local = new Uploads("Local", { teams: ["design"] });
+        await pulumi.settle();
+        expect(names()).not.toContain("LocalBucket");
+        expect(() => local.nodes.bucket).toThrow(/runs locally/);
+      } finally {
+        // @ts-ignore
+        global.$dev = false;
+      }
+    });
+
+    it("takes another component as a part", async () => {
+      const { CronV2V5 } = await import("../../src/components/aws/cron-v2-v5");
+      const parts = { table: aws.dynamodb.Table, cleanup: CronV2V5 };
+      class Sessions extends component("docs:Sessions", parts) {
+        constructor(name: string, args: ComponentArgs<typeof parts> = {}) {
+          super(name, args);
+          this.part("table", { hashKey: "id" });
+          this.part("cleanup", {
+            function: "arn:aws:lambda:us-east-1:123456789012:function:cleanup",
+            schedule: "rate(1 day)",
+          });
+        }
+      }
+      const sessions = new Sessions("Logins", {
+        transform: { cleanup: { timezone: "America/New_York" } },
+      });
+      await pulumi.settle();
+
+      expect(sessions.nodes.cleanup).toBeInstanceOf(CronV2V5);
+      expect(resource("LoginsCleanup").type).toBe("sst:aws:CronV2V5");
+      expect(resource("LoginsCleanupSchedule").inputs).toMatchObject({
+        scheduleExpression: "rate(1 day)",
+        scheduleExpressionTimezone: "America/New_York",
+      });
+    });
+
+    it("keeps a renamed part's resource with named(), or with takeover()", async () => {
+      const { takeover } = await import("../../src/components/takeover");
+      const Before = defineUploads("docs:Renamed");
+      // The same component with its bucket under the key `files`
+      const define = <F extends import("../../src/components/parts-component").Parts[string]>(
+        files: F,
+      ) =>
+        class Uploads extends component("docs:Renamed", { files }) {
+          constructor(name: string) {
+            super(name, {});
+            (this as any).part("files", { forceDestroy: true });
+          }
+        };
+
+      // Declared with the name it had: nothing changes
+      const Named = define(named(aws.s3.Bucket, "Bucket"));
+      expect(
+        await pulumi.takesOver(
+          () => new Before("Docs", { teams: [] }),
+          () => new Named("Docs"),
+        ),
+      ).toEqual({ unclaimed: [], changed: [] });
+      expect(names()).toEqual(["Docs", "DocsBucket"]);
+
+      // Given its new name, and told where it was: the resource is kept
+      const Moved = define(aws.s3.Bucket);
+      takeover(Moved, { from: "docs:Renamed", moved: { files: "bucket" } });
+      expect(
+        await pulumi.takesOver(
+          () => new Before("Docs", { teams: [] }),
+          () => new Moved("Docs"),
+        ),
+      ).toEqual({ unclaimed: [], changed: [] });
+      expect(names()).toEqual(["Docs", "DocsFiles"]);
+    });
+  });
+
   describe("link()", () => {
     let Link: typeof import("../../src/components/link").Link;
     let Linkable: typeof import("../../src/components/linkable").Linkable;

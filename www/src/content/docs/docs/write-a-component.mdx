@@ -1,0 +1,352 @@
+---
+title: Write a Component
+description: Build your own component from parts, with the same transform, nodes and linking as the built-in ones.
+---
+
+A component is a class that creates a few resources that belong together. You can write your own in your `sst.config.ts`, and use it the way you use the [built-in ones](/docs/components/).
+
+You build it from **parts**: a list of the resources it creates. From that one list your component gets:
+
+- A typed [`transform`](/docs/components/#transform) for each resource.
+- `nodes`, with each resource it created.
+- `existing`, to use a resource you already have in place of one it would create.
+- Resource names made from the component's name.
+- A check that it creates nothing outside the list.
+
+The V5 components, like [`QueueV5`](/docs/component/aws/queue-v5/), are built the same way.
+
+---
+
+## A component
+
+Here's a component that creates a bucket for uploads, an optional second bucket for an audit trail, and a role for each team that reads from it.
+
+```ts title="sst.config.ts"
+const parts = {
+  bucket: aws.s3.Bucket,
+  // Only created when it's asked for
+  audit: sst.optional(aws.s3.Bucket),
+  // One per team
+  reader: sst.many(aws.iam.Role),
+};
+
+interface UploadsArgs extends sst.ComponentArgs<typeof parts> {
+  teams: string[];
+  audit?: boolean;
+}
+
+class Uploads extends sst.component("acme:Uploads", parts) {
+  constructor(name: string, args: UploadsArgs, opts?: $util.ComponentResourceOptions) {
+    super(name, args, opts);
+
+    this.part("bucket", { forceDestroy: true });
+    if (args.audit) this.part("audit", {});
+    for (const team of args.teams)
+      this.part("reader", team, {
+        assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
+          Service: "lambda.amazonaws.com",
+        }),
+      });
+  }
+
+  get name() {
+    return this.nodes.bucket.bucket;
+  }
+}
+```
+
+There are four things to it.
+
+1. Declare the `parts`: a key for each resource, and its class.
+2. Extend `sst.component(type, parts)`. The type is `<package>:<Name>`, and it's how your app's state knows the component.
+3. Call `super(name, args, opts)` with the args as they are.
+4. Create each resource with `this.part(key, args)`.
+
+---
+
+## Use it
+
+It's used like any other component.
+
+```ts title="sst.config.ts"
+const uploads = new Uploads("Docs", {
+  teams: ["design", "legal"],
+});
+```
+
+This creates a bucket named `DocsBucket` and two roles, `DocsReaderDesign` and `DocsReaderLegal`. And whoever uses the component can change how each one is created.
+
+---
+
+#### Transform
+
+An object is merged into the args the component sets, nested objects included. A function can change the args and the resource options.
+
+```ts title="sst.config.ts"
+new Uploads("Docs", {
+  teams: ["design", "legal"],
+  transform: {
+    bucket: { tags: { team: "storage" } },
+    reader: (args, opts, name, team) => {
+      if (team === "legal") args.maxSessionDuration = 7200;
+    },
+  },
+});
+```
+
+For a part there are several of, the function is also given which one it's looking at.
+
+`$transform(Uploads, (args) => { ... })` works too. It runs before the component reads its args.
+
+---
+
+#### Existing
+
+Pass a resource you already have, or the ID to look it up by, and the component uses it in place of creating one.
+
+```ts title="sst.config.ts"
+new Uploads("Docs", {
+  teams: ["design"],
+  existing: { bucket: "my-existing-bucket" },
+});
+```
+
+---
+
+#### Nodes
+
+```ts title="sst.config.ts"
+uploads.nodes.bucket;       // the aws.s3.Bucket
+uploads.nodes.audit;        // undefined when it wasn't created
+uploads.nodes.reader.legal; // by ID
+```
+
+:::note
+A `transform` or `existing` key that isn't one of the parts is an error. The message lists the parts the component has.
+:::
+
+---
+
+## Parts
+
+A part's resource is named after the component and the part's key. So `Docs` and `bucket` give `DocsBucket`.
+
+Every resource the component creates has to be a part. A resource created directly under the component that isn't in the list is an error. That's what keeps `transform` and `nodes` complete.
+
+A part is declared with its class, or with one of these.
+
+---
+
+#### `sst.optional`
+
+A part that's only sometimes created. Its entry in `nodes` may be `undefined`.
+
+```ts
+audit: sst.optional(aws.s3.Bucket)
+```
+
+---
+
+#### `sst.many`
+
+Several of one kind. Each is created with an ID, which is added to its name.
+
+```ts
+reader: sst.many(aws.iam.Role)
+```
+
+```ts
+this.part("reader", "legal", { ... }); // DocsReaderLegal
+```
+
+An ID can be any string, like the route `GET /users/{id}`. To check whether one exists, use `id in this.nodes.reader`.
+
+---
+
+#### `sst.deferred`
+
+A function that's built later, or not at all when it's given as an ARN. Create it with `sst.aws.functionPart`.
+
+```ts
+handler: sst.deferred(sst.aws.FunctionV5)
+```
+
+```ts
+sst.aws.functionPart(this, "handler", args.handler, { timeout: "30 seconds" });
+```
+
+Its entry in `nodes` is an `Output`. For a function per item, use `sst.many(sst.deferred(sst.aws.FunctionV5))` and pass an ID.
+
+---
+
+#### `sst.named`
+
+A part whose resource isn't named after its key. It wraps a class or one of the above.
+
+```ts
+audit: sst.named(sst.optional(aws.s3.Bucket), "Trail") // DocsTrail
+```
+
+The key is what's written in `transform`, `existing` and `nodes`. The name is how your deployed app knows the resource, so don't change it once it's deployed.
+
+---
+
+### Another component as a part
+
+A part can be another component, like a [`FunctionV5`](/docs/component/aws/function-v5/) or a component of your own.
+
+```ts
+const parts = {
+  table: aws.dynamodb.Table,
+  cleanup: sst.aws.CronV2V5,
+};
+```
+
+---
+
+### Create a part later
+
+Create a part inside an `.apply()` when whether it exists depends on something that's only known on deploy, like another component's output. Declare it with `sst.optional` or `sst.many`. It's added to `nodes` when it's created.
+
+Do this only when an arg can't decide it.
+
+---
+
+### Resources something else creates
+
+Sometimes another function creates resources under your component, like a DNS adapter creating records. Give it `this.delegateOpts()` as its options.
+
+```ts
+dns.createAlias(name, record, this.delegateOpts());
+```
+
+These aren't parts. They're configured through whatever creates them, so they have no `transform` and aren't in `nodes`.
+
+---
+
+## Args
+
+Your args extend `sst.ComponentArgs<typeof parts>`, which adds `transform` and `existing`.
+
+---
+
+#### Plain values decide what's created
+
+If whether a part exists depends on an arg, take that arg as a plain value and not as an [`Output`](/docs/components/#outputs). The component has to know before it creates anything.
+
+```ts
+interface UploadsArgs extends sst.ComponentArgs<typeof parts> {
+  // Decides how many roles there are
+  teams: string[];
+  // Doesn't, so it can be an output
+  retention?: $util.Input<number>;
+}
+```
+
+The same goes for a list with a part per item, and for the field each part is named after. This is what lets `nodes` hold resources and not outputs of resources.
+
+---
+
+#### Switch a part off
+
+Give a part someone can do without an arg of its own, like `audit: false`. A `transform` changes a part; it doesn't remove one.
+
+---
+
+#### Reference what's deployed
+
+A static `get` is one line with `existing`.
+
+```ts
+static get(name: string, bucketName: string, opts?: $util.ComponentResourceOptions) {
+  return new Uploads(name, { teams: [], existing: { bucket: bucketName } }, opts);
+}
+```
+
+In the constructor, `this.part()` returns the existing resource in place of creating one. When your component has more to do for a resource it didn't create, `this.existingPart("bucket")` returns it, or `undefined`.
+
+---
+
+## Link it
+
+Define `link()` to make your component [linkable](/docs/linking/).
+
+```ts title="sst.config.ts"
+class Uploads extends sst.component("acme:Uploads", parts) {
+  // ...
+
+  link() {
+    return {
+      properties: { name: this.name },
+      include: [
+        sst.aws.permission({
+          actions: ["s3:GetObject"],
+          resources: [$interpolate`${this.nodes.bucket.arn}/*`],
+        }),
+      ],
+    };
+  }
+}
+```
+
+The `properties` are readable at runtime as `Resource.Docs.name`. And `include` is what a function that links it is granted: AWS permissions with `sst.aws.permission()`, Cloudflare bindings with `sst.cloudflare.binding()`, and environment variables with `sst.env()`.
+
+```ts title="sst.config.ts"
+new sst.aws.FunctionV5("Api", {
+  handler: "src/api.handler",
+  link: [uploads],
+});
+```
+
+---
+
+## Dev mode
+
+If your component runs something locally in `sst dev` and deploys nothing, say so in one place in the constructor. Call `this.runsLocally()` and return before creating any parts.
+
+```ts
+if ($dev) {
+  this.runsLocally();
+  return;
+}
+```
+
+Reading `nodes` then explains why the resource isn't there.
+
+---
+
+## Names in your provider
+
+SST gives the resources of the types its own components use a name made from your app, stage and the resource's name. For another type, say which field holds the name.
+
+```ts title="sst.config.ts"
+sst.Component.naming("aws:athena/workgroup:Workgroup", { field: "name", max: 128 });
+```
+
+Or pass `false` to leave the name to the provider. A resource that's looked up keeps the name it has.
+
+---
+
+## Rename a part
+
+A part's key is in the name of its resource. So a new key is a new resource, and the old one is removed.
+
+To change a key and keep what's deployed, declare the part with the name it had.
+
+```ts del={2} ins={3}
+const parts = {
+  bucket: aws.s3.Bucket,
+  files: sst.named(aws.s3.Bucket, "Bucket"),
+};
+```
+
+Or give the resource its new name, and say where it was.
+
+```ts title="sst.config.ts"
+sst.takeover(Uploads, {
+  from: "acme:Uploads",
+  moved: { files: "bucket" },
+});
+```
+
+The same call lets a new component take over from another one. Give it the other component's type in `from`, and keep the name you gave the component.
