@@ -143,7 +143,11 @@ export function mockPulumi(input?: MockInput) {
         };
       },
       call(args: pulumi.runtime.MockCallArgs) {
-        return input?.call?.(args) ?? lookups[args.token]?.(args.inputs) ?? args.inputs;
+        return (
+          input?.call?.(args) ??
+          lookups[args.token]?.(args.inputs) ??
+          args.inputs
+        );
       },
     },
     "project",
@@ -274,6 +278,34 @@ export function mockPulumi(input?: MockInput) {
         pulumi.all([value]).apply(([v]) => done(v)),
       );
     },
+    /**
+     * Whether a resource depends on another, directly or through what it
+     * depends on. A deploy removes resources in the reverse of that order,
+     * so it's also whether the first is removed before the second.
+     *
+     * @param from The name of the resource.
+     * @param to The name of what it should depend on, or a pattern for it.
+     */
+    dependsOn(from: string, to: string | RegExp) {
+      const start = resources.find((r) => r.name === from);
+      if (!start) throw new Error(`Nothing named "${from}" was created`);
+      const seen = new Set<string>();
+      const reaches = (r: RecordedResource | undefined): boolean =>
+        ((r?.options.dependencies ?? []) as string[]).some((dependency) => {
+          if (seen.has(dependency)) return false;
+          seen.add(dependency);
+          const name = nameOf(dependency);
+          return (
+            (typeof to === "string" ? name === to : to.test(name)) ||
+            reaches(
+              resources.find(
+                (r) => urn(r.type, r.name, r.parent) === dependency,
+              ),
+            )
+          );
+        });
+      return reaches(start);
+    },
     /** The recorded graph in a stable order, ready to compare. */
     graph() {
       return resources
@@ -314,6 +346,8 @@ export function mockPulumi(input?: MockInput) {
      *
      * A resource claimed this way is kept on deploy. One that isn't claimed
      * is deleted, and one whose inputs changed is updated or replaced.
+     * `unordered` lists what the original removed in order and this doesn't:
+     * "MyService before MyNamespace".
      *
      * @param original The `graph()` of what's deployed: taken a moment ago,
      * or saved to a file and read back.
@@ -362,9 +396,12 @@ export function mockPulumi(input?: MockInput) {
         );
         if (claimants.length > 1)
           throw new Error(
-            `${before.name} is claimed by ${claimants.map((r) => r.name).join(" and ")}`,
+            `${before.name} is claimed by ${claimants
+              .map((r) => r.name)
+              .join(" and ")}`,
           );
-        if (claimants.length === 0) unclaimed.push(`${before.type}::${before.name}`);
+        if (claimants.length === 0)
+          unclaimed.push(`${before.type}::${before.name}`);
         else pairs.push([before, claimants[0]]);
       }
 
@@ -385,7 +422,9 @@ export function mockPulumi(input?: MockInput) {
         )
         .filter(
           ([now, before]) =>
-            typeof now === "string" && typeof before === "string" && now !== before,
+            typeof now === "string" &&
+            typeof before === "string" &&
+            now !== before,
         )
         .sort((a, b) => b[0].length - a[0].length);
       // A resource can't read its own id or ARN, so its own name in its
@@ -397,7 +436,10 @@ export function mockPulumi(input?: MockInput) {
           .reduce(
             (v, [now, before]) =>
               v.replace(new RegExp(`\\b${now}(?=\\b|_)`, "g"), before),
-            keptValues.reduce((v, [now, before]) => v.split(now).join(before), value),
+            keptValues.reduce(
+              (v, [now, before]) => v.split(now).join(before),
+              value,
+            ),
           );
       // An input the resource ignores changes to, like a generated name,
       // keeps its deployed value.
@@ -435,7 +477,9 @@ export function mockPulumi(input?: MockInput) {
             },
           };
         })
-        .filter((pair) => JSON.stringify(pair.original) !== JSON.stringify(pair.now))
+        .filter(
+          (pair) => JSON.stringify(pair.original) !== JSON.stringify(pair.now),
+        )
         // Which inputs differ, to say what a deploy would update
         .map((pair) => ({
           ...pair,
@@ -446,7 +490,48 @@ export function mockPulumi(input?: MockInput) {
           ),
         }));
 
-      return { unclaimed, changed };
+      // A deploy removes resources in the reverse of the order they depend
+      // on each other, so a dependency is also a promise about teardown:
+      // what depends on a resource is removed before it. Each one the
+      // original graph had has to be there now, directly or through
+      // something in between. Without it the two are removed in any order,
+      // and AWS refuses to delete what's still in use.
+      const dependsOn = (graph: RecordedResource[]) => {
+        const byUrn = new Map(
+          graph.map((r) => [urn(r.type, r.name, r.parent), r] as const),
+        );
+        return (from: RecordedResource, to: RecordedResource) => {
+          const target = urn(to.type, to.name, to.parent);
+          const seen = new Set<RecordedResource>();
+          const reaches = (r: RecordedResource | undefined): boolean => {
+            if (!r || seen.has(r)) return false;
+            seen.add(r);
+            return ((r.options.dependencies ?? []) as string[]).some(
+              (dependency) =>
+                dependency === target || reaches(byUrn.get(dependency)),
+            );
+          };
+          return reaches(from);
+        };
+      };
+      const before = new Map(
+        pairs.map(([before, now]) => [
+          urn(before.type, before.name, before.parent),
+          now,
+        ]),
+      );
+      const ordered = dependsOn(resources);
+      const unordered = pairs.flatMap(([original, now]) =>
+        ((original.options.dependencies ?? []) as string[])
+          .map((dependency) => before.get(dependency))
+          .filter(
+            (dependency): dependency is RecordedResource =>
+              !!dependency && dependency !== now && !ordered(now, dependency),
+          )
+          .map((dependency) => `${now.name} before ${dependency.name}`),
+      );
+
+      return { unclaimed, changed, unordered };
     },
   };
 }

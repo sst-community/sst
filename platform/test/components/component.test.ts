@@ -972,7 +972,7 @@ describe("Component parts", () => {
           () => new Before("Docs", { teams: [] }),
           () => new Named("Docs"),
         ),
-      ).toEqual({ unclaimed: [], changed: [] });
+      ).toEqual({ unclaimed: [], changed: [], unordered: [] });
       expect(names()).toEqual(["Docs", "DocsBucket"]);
 
       // Given its new name, and told where it was: the resource is kept
@@ -983,7 +983,7 @@ describe("Component parts", () => {
           () => new Before("Docs", { teams: [] }),
           () => new Moved("Docs"),
         ),
-      ).toEqual({ unclaimed: [], changed: [] });
+      ).toEqual({ unclaimed: [], changed: [], unordered: [] });
       expect(names()).toEqual(["Docs", "DocsFiles"]);
     });
 
@@ -1008,7 +1008,7 @@ describe("Component parts", () => {
           () => new Before("Docs", { teams: ["legal"] }),
           () => new After("Docs", { teams: ["legal"] }),
         ),
-      ).toEqual({ unclaimed: [], changed: [] });
+      ).toEqual({ unclaimed: [], changed: [], unordered: [] });
       // A class that extends it takes over the same way
       class Extended extends After {}
       expect(
@@ -1016,7 +1016,7 @@ describe("Component parts", () => {
           () => new Before("Docs", { teams: ["legal"] }),
           () => new Extended("Docs", { teams: ["legal"] }),
         ),
-      ).toEqual({ unclaimed: [], changed: [] });
+      ).toEqual({ unclaimed: [], changed: [], unordered: [] });
     });
   });
 

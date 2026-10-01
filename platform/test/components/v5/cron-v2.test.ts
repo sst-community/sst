@@ -343,7 +343,11 @@ describe("CronV2", () => {
         "MyCronJobFunctionLogGroup",
         "MyCronJobFunctionRole",
       ]);
-      expect(pulumi.takeover(original)).toEqual({ unclaimed: [], changed: [] });
+      expect(pulumi.takeover(original)).toEqual({
+        unclaimed: [],
+        changed: [],
+        unordered: [],
+      });
     });
 
   });

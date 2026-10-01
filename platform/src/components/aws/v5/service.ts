@@ -1236,6 +1236,9 @@ export interface ServiceArgs
  * - If you set part of the ECS service's `networkConfiguration` or
  *   `deploymentCircuitBreaker`, of a target group's `healthCheck`, or of the task
  *   definition's `runtimePlatform`, with an object in `transform`, the rest of it is kept.
+ * - The service's load balancer is removed before its certificate. `sst.aws.Service`
+ *   left the two in no order, so removing it could fail on a certificate that was still
+ *   in use. Deploy once after you switch for this to take effect.
  *
  * One thing changes on the first deploy, and nothing in AWS: what `sst dev` runs for each
  * container is kept inside the service now, so it's listed as removed and created again.
@@ -1583,13 +1586,28 @@ export class Service extends component("sst:aws:Service", parts) {
       "loadBalancerSecurityGroup",
       securityGroupArgs(vpc.id),
     );
-    const loadBalancer = this.part("loadBalancer", {
-      internal: output(balancer.public).apply((v) => !v),
-      loadBalancerType: balancer.type,
-      subnets: vpc.loadBalancerSubnets(balancer.public),
-      securityGroups: [securityGroup.id],
-      enableCrossZoneLoadBalancing: true,
-    });
+    const certificate =
+      domain && !domain.cert
+        ? this.part("certificate", {
+            domainName: domain.name,
+            alternativeNames: domain.aliases,
+            dns: domain.dns!,
+          })
+        : undefined;
+    const certificateArn = domain && (domain.cert ?? certificate!.arn);
+    const loadBalancer = this.part(
+      "loadBalancer",
+      {
+        internal: output(balancer.public).apply((v) => !v),
+        loadBalancerType: balancer.type,
+        subnets: vpc.loadBalancerSubnets(balancer.public),
+        securityGroups: [securityGroup.id],
+        enableCrossZoneLoadBalancing: true,
+      },
+      // The load balancer is what holds on to the certificate, so it's
+      // removed first. Its listeners are given the certificate, but it isn't.
+      { dependsOn: certificate },
+    );
 
     const targets = new Map<string, Target>();
     for (const rule of balancer.rules) {
@@ -1617,15 +1635,6 @@ export class Service extends component("sst:aws:Service", parts) {
         }),
       });
     }
-
-    const certificateArn =
-      domain &&
-      (domain.cert ??
-        this.part("certificate", {
-          domainName: domain.name,
-          alternativeNames: domain.aliases,
-          dns: domain.dns!,
-        }).arn);
 
     // Rules that listen on the same port are rules of one listener
     const routes: Routing["routes"] = [];
@@ -1841,8 +1850,12 @@ export class Service extends component("sst:aws:Service", parts) {
           )
         : vpc.isSstVpc
           ? output(create(vpc.cloudmapNamespaceId.apply((id) => id!)))
-          : vpc.cloudmapNamespaceId.apply((id) =>
-              id ? create(id) : undefined,
+          : // Given the output, not the id it holds: the output is what says
+            // the namespace has to be there, and is removed after
+            vpc.cloudmapNamespaceId.apply((id) =>
+              id
+                ? create(vpc.cloudmapNamespaceId.apply((id) => id!))
+                : undefined,
             );
 
     part.defer(() =>

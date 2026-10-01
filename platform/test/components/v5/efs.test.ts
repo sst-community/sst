@@ -314,6 +314,18 @@ describe("Efs", () => {
       expect(names()).not.toContain("MyEfsVpc");
     });
 
+    // A subnet can't be deleted while a mount target is in it. A mount target
+    // is given its subnet's id as a plain value, and still depends on the
+    // subnets: through its security group, which is given the VPC they're in.
+    it("removes a mount target before the subnet it's in", async () => {
+      const vpc = new Vpc("MyVpc");
+      new Efs("MyEfs", { vpc });
+      await pulumi.settle();
+
+      const target = pulumi.resources.find((r) => r.type === MOUNT_TARGET)!;
+      expect(pulumi.dependsOn(target.name, /^MyVpcPrivateSubnet/)).toBe(true);
+    });
+
     // What mounts the file system reads the access point, and has to find
     // the mount targets there
     it("makes the access point wait for the mount targets", async () => {

@@ -354,6 +354,21 @@ describe("Alb", () => {
       });
     });
 
+    // The load balancer is what holds on to the certificate, and nothing it's
+    // given says so (anomalyco/sst#6934). The 4.x Alb leaves the two in no
+    // order, and removing it can fail on a certificate that's still in use.
+    it("removes the load balancer before its certificate", async () => {
+      const args = { vpc: customVpc, domain: "example.com", listeners: https };
+      new Alb("MyAlb", args);
+      new OriginalAlb("Theirs", args);
+      await pulumi.settle();
+
+      expect(pulumi.dependsOn("MyAlbLoadBalancer", /^MyAlbCertificate/)).toBe(
+        true,
+      );
+      expect(pulumi.dependsOn("TheirsLoadBalancer", /^TheirsSsl/)).toBe(false);
+    });
+
     it("gives its https listeners the certificate of its domain", async () => {
       const alb = new Alb("MyAlb", {
         vpc: customVpc,

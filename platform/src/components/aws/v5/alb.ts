@@ -111,6 +111,9 @@ export interface AlbArgs
  *   `HTTPS443`.
  * - A `domain` with `dns: false` and no `cert` is refused. There's nothing to validate
  *   a certificate with.
+ * - The load balancer is removed before its certificate. `sst.aws.Alb` left the two in
+ *   no order, so removing it could fail on a certificate that was still in use. Deploy
+ *   once after you switch for this to take effect.
  */
 export class Alb extends component("sst:aws:Alb", parts) {
   // What the services on the load balancer and what links to it read
@@ -161,22 +164,29 @@ export class Alb extends component("sst:aws:Alb", parts) {
 
     const securityGroup = this.part("securityGroup", securityGroupArgs(vpcId));
 
-    const certificateArn =
-      domain &&
-      (domain.cert ??
-        this.part("certificate", {
-          domainName: domain.name,
-          alternativeNames: domain.aliases,
-          dns: domain.dns!,
-        }).arn);
+    const certificate =
+      domain && !domain.cert
+        ? this.part("certificate", {
+            domainName: domain.name,
+            alternativeNames: domain.aliases,
+            dns: domain.dns!,
+          })
+        : undefined;
+    const certificateArn = domain && (domain.cert ?? certificate!.arn);
 
-    const loadBalancer = this.part("loadBalancer", {
-      internal: isPublic.apply((v) => !v),
-      loadBalancerType: "application",
-      subnets,
-      securityGroups: [securityGroup.id],
-      enableCrossZoneLoadBalancing: true,
-    });
+    const loadBalancer = this.part(
+      "loadBalancer",
+      {
+        internal: isPublic.apply((v) => !v),
+        loadBalancerType: "application",
+        subnets,
+        securityGroups: [securityGroup.id],
+        enableCrossZoneLoadBalancing: true,
+      },
+      // The load balancer is what holds on to the certificate, so it's
+      // removed first. Its listeners are given the certificate, but it isn't.
+      { dependsOn: certificate },
+    );
 
     // Each listener refuses what none of its rules match. The services on the
     // load balancer add the rules.

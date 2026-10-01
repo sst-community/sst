@@ -269,6 +269,7 @@ describe("Postgres", () => {
       expect(pulumi.takeover(original)).toEqual({
         unclaimed: [VERSION],
         changed: [],
+        unordered: [],
       });
     });
   });

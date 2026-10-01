@@ -197,8 +197,9 @@ the component reads its args.
 - **Testing.** `mock()` from `.sst/platform/src/testing` stands in for the engine and
   gives a test the globals a config has. Create the component, `await app.settle()`, and
   read `app.resources`. `app.takeover(saved)` checks a change against a saved
-  `app.graph()`: what a deploy would remove, and what it would update. It works with
-  vitest and with `bun test`. The docs page has the examples.
+  `app.graph()`: what a deploy would remove, what it would update, and what it would
+  no longer remove in order. It works with vitest and with `bun test`. The docs page
+  has the examples.
 - **Renaming a part later.** A part's key is in the name of its resource, so a new key
   is a new resource. To change the key and keep what's deployed, declare the part with
   the name it had: `files: sst.named(aws.s3.Bucket, "Bucket")`. Or give the resource its
@@ -237,12 +238,12 @@ Everything above applies. The rest is specific to SST's own components in
   (`cluster: OriginalCluster | Cluster`), and the V5 `Cluster` gives them the same
   `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Function`, `Service` and
   `Task` take either `Efs` the same way, and the V5 `Service` either `Alb`.
-- **No `registerVersion`.** Keep any tags the original writes at the same value.
   For a `Vpc`, the two kinds are already one thing to a V5 component: it wraps the
   original's args in `TakesVpc<>`, which gives `vpc` the type `AnyVpc` in place of the
   4.x `Vpc`, and it checks with `isVpc()`, not `instanceof` (all three are in
   `helpers/vpc.ts`). When `Vpc` is ported, the V5 one is added to `AnyVpc` and
   `isVpc()`, and every V5 component takes it.
+- **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **Reuse the original's arg types**: `interface QueueArgs extends
   V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
   change. For an arg that has to become a plain value, write
@@ -284,8 +285,8 @@ Everything above applies. The rest is specific to SST's own components in
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
-| A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
 | A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)` in `helpers/vpc.ts` |
+| A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
@@ -418,6 +419,18 @@ takeover(ApiGatewayV2, {
   account in every role because a check never passes; the V5 one writes the same
   policy, with a comment. Changing it is a decision of its own, not a side effect of a port.
 
+A resource that's created inside `.apply()` has to be given the output, not the
+value the callback was called with: the output is what says the resource depends on
+where the value came from, so that it's removed first. The V5 `Service` creates its
+Cloud Map service inside `.apply()` for a VPC given by its ids, and gives it the
+namespace id as the output.
+
+Where the resource that holds on to another isn't given anything of it, say so with
+`dependsOn`. A load balancer holds on to its certificate, but only its listeners are
+given it, so the V5 `Alb` and `Service` make the load balancer depend on the
+certificate. The 4.x ones don't, and removing them can fail on a certificate that's
+still in use.
+
 Also check for an **ordering guarantee** the original makes with an
 `x.apply(() => resource)` wrapper, and keep it. The 4.x `Bucket` makes everything that
 reads `bucket.name` wait for the bucket policy; the V5 one keeps that in its getters.
@@ -477,7 +490,20 @@ describe("takes over a deployed Queue", () => {
   `v5` in place of `create`.
 - Wrappers whose names aren't worth writing out can be counted: give the mock a
   `wrappers` pattern and the case a `wrappers` number (see `v5/apigatewayv2.test.ts`).
-- For a one-off, `pulumi.takesOver(original, v5)` returns `{ unclaimed, changed }`.
+- For a one-off, `pulumi.takesOver(original, v5)` returns `{ unclaimed, changed,
+  unordered }`.
+- **Teardown order is checked too.** A deploy removes resources in the reverse of the
+  order they depend on each other, and AWS refuses to delete what's still in use. So
+  every dependency the original has is expected of the V5 component, directly or
+  through something in between. One that's missing is listed in `unordered`:
+  "MyServiceCloudmapService before MyVpcCloudmapNamespace". Fix the component. Where the
+  original's dependency is one nothing in AWS needs, name it in the suite's
+  `needlessOrder`, with the reason next to it.
+- A dependency is only there to lose when the case has both resources. Give ids from
+  resources in the app, not just literal ones: a cluster whose VPC is given by the ids
+  of a `Vpc` (see `v5/service.test.ts`).
+- `pulumi.dependsOn(name, other)` says whether one resource is removed before another,
+  for an order the component promises (see "when it's removed" in `v5/service.test.ts`).
 - The check compares each resource's inputs and the options that change what a deploy
   does to it: `ignoreChanges`, `protect`, `retainOnDelete`, `deleteBeforeReplace`,
   `replaceOnChanges` and its provider. A difference there is reported as a field named

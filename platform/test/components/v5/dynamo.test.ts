@@ -336,6 +336,7 @@ describe("Dynamo", () => {
       ).toEqual({
         unclaimed: [`${WRAPPER}::OrdersSubscriberIndexer`],
         changed: [],
+        unordered: [],
       });
       expect(
         resource("ExternalOrdersEventSourceMappingIndexer").inputs.eventSourceArn,

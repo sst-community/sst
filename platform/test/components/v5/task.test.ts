@@ -593,7 +593,11 @@ describe("Task", () => {
         "MyTaskTaskDefinition",
         "MyTaskTaskRole",
       ]);
-      expect(pulumi.takeover(original)).toEqual({ unclaimed: [], changed: [] });
+      expect(pulumi.takeover(original)).toEqual({
+        unclaimed: [],
+        changed: [],
+        unordered: [],
+      });
     });
 
   });

@@ -116,6 +116,7 @@ describe("mock()", () => {
       expect(app.takeover(deployed)).toEqual({
         unclaimed: ["aws:s3/bucket:Bucket::DocsBucket"],
         changed: [],
+        unordered: [],
       });
     });
 
@@ -125,7 +126,7 @@ describe("mock()", () => {
       app.reset();
       new Kept("Docs");
       await app.settle();
-      expect(app.takeover(deployed)).toEqual({ unclaimed: [], changed: [] });
+      expect(app.takeover(deployed)).toEqual({ unclaimed: [], changed: [], unordered: [] });
     });
 
     it("says which inputs changed", async () => {

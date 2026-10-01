@@ -42,6 +42,11 @@ export interface TakeoverCase<C> {
   wrappers?: Expected<number>;
   /** What a deploy updates in this case: a resource and its fields. */
   changed?: Expected<[name: string, fields: string[]][]>;
+  /**
+   * What the original removed in order and the V5 component doesn't, in this
+   * case: "MyService before MyNamespace". It should be nothing.
+   */
+  unordered?: Expected<string[]>;
   /** Anything else to check, once the V5 component is deployed. */
   check?: (way: TakeoverWay) => unknown;
 }
@@ -58,6 +63,12 @@ export interface TakeoverCases<A, B> {
   unclaimed?: Expected<string[]>;
   /** What a deploy updates in every case: a resource and its fields. */
   changed?: Expected<[name: string, fields: string[]][]>;
+  /**
+   * Orderings the original has that nothing in AWS needs, so they aren't
+   * expected of the V5 component: a route's function removed before its API.
+   * Say why next to it.
+   */
+  needlessOrder?: RegExp;
   cases: Record<string, Create<A | B> | TakeoverCase<A | B>>;
   /** Anything else to check in every case. */
   check?: (way: TakeoverWay) => unknown;
@@ -87,7 +98,8 @@ export function mockPulumi(input?: MockInput) {
      * component, and with a provider of its own. Each time the original is
      * deployed, then the V5 component, and everything the original created
      * has to be kept as it is: the same inputs, the same options, and for a
-     * component the same registered outputs.
+     * component the same registered outputs. What the original removed in
+     * order has to be removed in order still.
      *
      * A case says what's expected to go (`unclaimed`) or be updated
      * (`changed`) when it isn't nothing.
@@ -173,6 +185,9 @@ export function mockPulumi(input?: MockInput) {
                     .sort(),
                   wrappers: result.unclaimed.filter(isWrapper).length,
                   changed: result.changed.map((c) => [c.name, c.fields]),
+                  unordered: result.unordered.filter(
+                    (order) => !suite.needlessOrder?.test(order),
+                  ),
                 },
                 // Shown when it fails: what each changed resource had and has
                 JSON.stringify(result.changed, null, 2),
@@ -182,6 +197,7 @@ export function mockPulumi(input?: MockInput) {
                 ].sort(),
                 wrappers: wrappers ?? 0,
                 changed: expected(test.changed ?? suite.changed) ?? [],
+                unordered: expected(test.unordered) ?? [],
               });
               await suite.check?.(way);
               await test.check?.(way);

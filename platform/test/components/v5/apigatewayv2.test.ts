@@ -4,7 +4,8 @@ import { mockPulumi } from "../../helpers/graph";
 const pulumi = mockPulumi({
   // What the 4.x component wraps things in. They have nothing in AWS behind
   // them, and they go when the V5 component takes over.
-  wrappers: /^sst:aws:ApiGatewayV2(LambdaRoute|UrlRoute|PrivateRoute|Authorizer)::MyApi/,
+  wrappers:
+    /^sst:aws:ApiGatewayV2(LambdaRoute|UrlRoute|PrivateRoute|Authorizer)::MyApi/,
   state: (args) => {
     switch (args.type) {
       case "aws:apigatewayv2/api:Api":
@@ -55,7 +56,9 @@ describe("ApiGatewayV2", () => {
     ({ Linkable } = await import("../../../src/components/linkable"));
     cloudflare = await import("../../../src/components/cloudflare/dns");
     vercel = await import("../../../src/components/vercel/dns");
-    ({ ApiGatewayV2: OriginalApiGatewayV2 } = await import("../../../src/components/aws/apigatewayv2"));
+    ({ ApiGatewayV2: OriginalApiGatewayV2 } = await import(
+      "../../../src/components/aws/apigatewayv2"
+    ));
     ({ ApiGatewayV2 } = await import(
       "../../../src/components/aws/v5/apigatewayv2"
     ));
@@ -92,6 +95,10 @@ describe("ApiGatewayV2", () => {
     pulumi.takeoverCases({
       original: () => OriginalApiGatewayV2,
       v5: () => ApiGatewayV2,
+      // The 4.x API's route and authorizer functions depend on the API.
+      // Nothing needs that: what joins a function to the API, its integration
+      // and its permission, depends on both and is removed before either.
+      needlessOrder: /Function before MyApiApi$/,
       cases: {
         "default API": (Api, opts) => new Api("MyApi", {}, opts),
         "cors, access log and transforms": (Api, opts) =>
@@ -354,7 +361,9 @@ describe("ApiGatewayV2", () => {
     const api = new ApiGatewayV2("MyApi");
     expect(() =>
       api.route("GET /", FUNCTION_ARN, { transform: { route: {} } } as any),
-    ).toThrow(/"transform" isn't an option here. Use the "transform" of "MyApi": its "handler", "integration" and "route" apply to every route/);
+    ).toThrow(
+      /"transform" isn't an option here. Use the "transform" of "MyApi": its "handler", "integration" and "route" apply to every route/,
+    );
     expect(
       () =>
         new ApiGatewayV2("Other", {
@@ -384,7 +393,9 @@ describe("ApiGatewayV2", () => {
     });
     await pulumi.settle();
 
-    expect(await pulumi.resolve(authorizer.id)).toBe("MyApiAuthorizerTokens_id");
+    expect(await pulumi.resolve(authorizer.id)).toBe(
+      "MyApiAuthorizerTokens_id",
+    );
     expect(api.nodes.authorizer.tokens).toBe(authorizer);
   });
 

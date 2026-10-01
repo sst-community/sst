@@ -463,8 +463,14 @@ test("keeps what's deployed", async () => {
   new Uploads("Docs", { teams: ["design"] });
   await app.settle();
 
-  expect(app.takeover(deployed)).toEqual({ unclaimed: [], changed: [] });
+  expect(app.takeover(deployed)).toEqual({
+    unclaimed: [],
+    changed: [],
+    unordered: [],
+  });
 });
 ```
 
 Here `unclaimed` are the resources a deploy would remove. And `changed` are the ones it would update, with the inputs that are different. A part that's [renamed](#rename-a-part) with `sst.named` or `sst.takeover` passes this.
+
+And `unordered` are the resources that were removed in order before, and aren't now. Resources are removed in the reverse of the order they depend on each other. So if a database no longer depends on its subnet group, the two are removed in any order, and AWS refuses to delete a subnet group that's still in use.

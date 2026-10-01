@@ -162,6 +162,9 @@ describe("Service", () => {
       original: () => OriginalService,
       v5: () => Service,
       unclaimed: [`${DEV_COMMAND}::MyServiceDev`],
+      // The 4.x Service's load balancer depends on the ECS cluster, which it
+      // has nothing to do with
+      needlessOrder: /^MyServiceLoadBalancer before MyClusterCluster$/,
       // What the CLI shows as the service's URL, `_hint`, is compared with
       // the rest. The cases with a load balancer check that there is one.
       check: () => expect(resource("MyServiceService").type).toBe(SERVICE),
@@ -755,6 +758,39 @@ describe("Service", () => {
             );
           },
         },
+        // The namespace is in the app, so the Cloud Map service has to be
+        // removed before it
+        "a VPC given by the ids of a Vpc in the app": {
+          create: (Service, opts) => {
+            const vpc = new Vpc("MyVpc");
+            const cluster = new ClusterClass("MyCluster", {
+              vpc: {
+                id: vpc.id,
+                securityGroups: vpc.securityGroups,
+                containerSubnets: vpc.privateSubnets,
+                loadBalancerSubnets: vpc.publicSubnets,
+                cloudmapNamespaceId: vpc.nodes.cloudmapNamespace.id,
+                cloudmapNamespaceName: vpc.nodes.cloudmapNamespace.name,
+              },
+            });
+            new Service(
+              "MyService",
+              {
+                cluster,
+                image: "nginx:latest",
+                loadBalancer: { rules: [{ listen: "80/http" }] },
+              },
+              opts,
+            );
+          },
+          check: () =>
+            expect(
+              pulumi.dependsOn(
+                "MyServiceCloudmapService",
+                "MyVpcCloudmapNamespace",
+              ),
+            ).toBe(true),
+        },
         "a VPC of your own": {
           create: (Service, opts) => {
             new Service(
@@ -1234,6 +1270,7 @@ describe("Service", () => {
       original: () => OriginalService,
       v5: () => Service,
       unclaimed: [`${DEV_COMMAND}::MyServiceDev`],
+      needlessOrder: /^MyServiceLoadBalancer before MyClusterCluster$/,
       cases: {
         "a service with a command to run": {
           create: (Service, opts) => {
@@ -1832,6 +1869,49 @@ describe("Service", () => {
     expect(await pulumi.resolve(service.nodes.cloudmapService.id)).toBe(
       "srv-1",
     );
+  });
+
+  // What a deploy removes first. AWS refuses to delete what's still in use.
+  describe("when it's removed", () => {
+    // The load balancer is what holds on to the certificate, and nothing
+    // it's given says so (anomalyco/sst#6934)
+    it("removes its load balancer before the certificate", async () => {
+      new Service("MyService", {
+        cluster: cluster(),
+        image: "nginx:latest",
+        loadBalancer: {
+          domain: "example.com",
+          rules: [{ listen: "443/https", forward: "8080/http" }],
+        },
+      });
+      await pulumi.settle();
+
+      expect(
+        pulumi.dependsOn("MyServiceLoadBalancer", /^MyServiceCertificate/),
+      ).toBe(true);
+    });
+
+    it("removes its Cloud Map service before the namespace", async () => {
+      new Service("MyService", { cluster: cluster(), image: "nginx:latest" });
+      await pulumi.settle();
+
+      expect(
+        pulumi.dependsOn("MyServiceCloudmapService", "MyVpcCloudmapNamespace"),
+      ).toBe(true);
+    });
+
+    it("removes the ECS service before the listeners its target groups are on", async () => {
+      new Service("MyService", {
+        cluster: cluster(),
+        image: "nginx:latest",
+        loadBalancer: { rules: [{ listen: "80/http", forward: "8080/http" }] },
+      });
+      await pulumi.settle();
+
+      expect(
+        pulumi.dependsOn("MyServiceService", "MyServiceListenerHTTP80"),
+      ).toBe(true);
+    });
   });
 
   describe("what it's given", () => {

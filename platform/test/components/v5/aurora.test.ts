@@ -369,7 +369,11 @@ describe("Aurora", () => {
           "MyDatabaseProxySecretVersionMetabase",
         ]),
       );
-      expect(pulumi.takeover(original)).toEqual({ unclaimed: [], changed: [] });
+      expect(pulumi.takeover(original)).toEqual({
+        unclaimed: [],
+        changed: [],
+        unordered: [],
+      });
     });
   });
 
