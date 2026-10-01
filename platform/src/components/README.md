@@ -229,10 +229,13 @@ Everything above applies. The rest is specific to SST's own components in
 - **Redesign, don't translate.** A V5 component doesn't have to mirror the original's
   structure.
 - **Port what takes a component before the component itself.** 4.x components
-  recognise a `Vpc`, a `Router` or a `Cluster` with `instanceof`, so the V5 one can't
-  be passed to them. Port the components that take it first, and have each accept
-  both the original and the V5 one. The component that's taken goes last: an app
-  switches to it once everything it's passed to is V5.
+  recognise a `Vpc` or a `Router` with `instanceof`, and are typed for the 4.x
+  `Cluster`, so the V5 one can't be passed to them. Port the components that take it
+  first, and have each accept both the original and the V5 one. The component that's
+  taken goes last: an app switches to it once everything it's passed to is V5.
+  The V5 `Service` and `Task` take either `Cluster`. The arg is declared again in each
+  (`cluster: OriginalCluster | Cluster`), and the V5 `Cluster` gives them the same
+  `nodes.cluster` and `vpc` to read as the 4.x one.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **Reuse the original's arg types**: `interface QueueArgs extends
   V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
@@ -256,7 +259,9 @@ Everything above applies. The rest is specific to SST's own components in
   rejects the old option with a message.
 - A deprecated overload isn't carried over (`subscribe(handler)` with no name). Throw
   an error that shows the call to write instead; without one the user gets whatever
-  the shifted arguments happen to fail on.
+  the shifted arguments happen to fail on. The same goes for a deprecated method: the
+  V5 `Cluster` has `addService` and `addTask` only to say what to write, marked
+  `@internal` so they stay off its page.
 - A static method that adds something to a resource outside the app (`Dynamo.subscribe`
   with a stream ARN) becomes `get(...)` and the ordinary method. The takeover map can
   still find what the static method created: see `takeover/dynamo.ts`.
@@ -525,7 +530,8 @@ one resource built from many notifications; `cognito-user-pool.ts` for triggers 
 linkable client; `redis.ts` for dev mode and `get`; `postgres.ts` for the same with an
 optional group of parts (the proxy) and a part per item in a list; `aurora.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
-than one part; `dsql.ts` for parts in another region, and features that each add a
+than one part; `cluster.ts` for the smallest one: nothing moved, so no takeover map,
+and a `get` that takes args next to the id; `dsql.ts` for parts in another region, and features that each add a
 group of parts; `task.ts` for parts per item of a plain list (containers), a part
 that's built later, a stub in `sst dev`, and outputs the CLI reads; `service.ts` for
 groups of parts that depend on an arg (a load balancer of its own, or one it

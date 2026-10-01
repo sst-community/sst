@@ -10,6 +10,7 @@ import { V5Args, component, many, optional } from "../../parts-component";
 import { notAnOption, plain, withDefault } from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
+import type { Cluster as OriginalCluster } from "../cluster";
 import type { FargateContainerArgs } from "../fargate";
 import { Function as OriginalFunction } from "../function";
 import {
@@ -27,6 +28,7 @@ import {
 import { permission } from "../permission";
 import { Vpc } from "../vpc";
 import type { TaskArgs as OriginalTaskArgs } from "../task";
+import type { Cluster } from "./cluster";
 
 const parts = {
   /**
@@ -70,9 +72,29 @@ export interface TaskContainerArgs
 
 export interface TaskArgs
   extends V5Args<
-    Omit<OriginalTaskArgs, "containers" | "taskRole" | "executionRole">,
+    Omit<
+      OriginalTaskArgs,
+      "cluster" | "containers" | "taskRole" | "executionRole"
+    >,
     typeof parts
   > {
+  /**
+   * The ECS Cluster to run the task in. Create one in your app, if you haven't already.
+   *
+   * ```js title="sst.config.ts"
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const myCluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   cluster: myCluster
+   * }
+   * ```
+   */
+  cluster: OriginalCluster | Cluster;
   /**
    * The containers to run in the task.
    *
@@ -145,7 +167,7 @@ export interface TaskArgs
  *
  * ```ts title="sst.config.ts"
  * const vpc = new sst.aws.Vpc("MyVpc");
- * const cluster = new sst.aws.Cluster("MyCluster", { vpc });
+ * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
  * ```
  *
  * Add the task to it.
@@ -518,7 +540,7 @@ export class Task extends component("sst:aws:Task", parts) {
    * @internal
    */
   public get cluster() {
-    return this.run.cluster.nodes.cluster.arn;
+    return output(this.run.cluster.nodes.cluster.arn);
   }
 
   /**

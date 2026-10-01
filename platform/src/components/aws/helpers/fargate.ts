@@ -28,7 +28,7 @@ import { physicalName } from "../../naming";
 import type { ManyPart, Parts, PartsComponent } from "../../parts-component";
 import { toGBs, toMBs } from "../../size";
 import { transformPart } from "../../transform";
-import type { Cluster } from "../cluster";
+import type { Cluster as OriginalCluster } from "../cluster";
 import { Efs } from "../efs";
 import {
   type FargateBaseArgs,
@@ -38,6 +38,7 @@ import {
 } from "../fargate";
 import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
+import type { Cluster } from "../v5/cluster";
 import type { ServiceArgs } from "../service";
 import { bootstrap } from "./bootstrap";
 import { imageBuilder } from "./container-builder";
@@ -281,7 +282,7 @@ export function executionRoleArgs(
  */
 export function logGroupArgs(
   container: Container,
-  cluster: Cluster,
+  cluster: OriginalCluster | Cluster,
   name: string,
 ): cloudwatch.LogGroupArgs {
   const logging = all([container.logging, cluster.nodes.cluster.name]).apply(
@@ -426,7 +427,7 @@ function ignoreSstDirectory(contextPath: string, dockerfile: string) {
 export function taskDefinitionArgs(task: {
   /** The component's name. */
   name: string;
-  cluster: Cluster;
+  cluster: OriginalCluster | Cluster;
   region: Output<string>;
   link: FargateBaseArgs["link"];
   /** Each container, with the image it runs and the log group it writes to. */

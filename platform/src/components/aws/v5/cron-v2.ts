@@ -81,7 +81,8 @@ export interface CronV2Args
    * For example, let's say you have a task.
    *
    * ```js title="sst.config.ts"
-   * const cluster = new sst.aws.Cluster("MyCluster");
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
    * const task = new sst.aws.v5.Task("MyTask", { cluster });
    * ```
    *
@@ -121,8 +122,9 @@ export interface CronV2Args
  *
  * Create a container task and pass in a `schedule` and a `task` that'll be executed.
  *
- * ```ts title="sst.config.ts" {5}
- * const cluster = new sst.aws.Cluster("MyCluster");
+ * ```ts title="sst.config.ts" {6}
+ * const vpc = new sst.aws.Vpc("MyVpc");
+ * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
  * const task = new sst.aws.v5.Task("MyTask", { cluster });
  *
  * new sst.aws.v5.CronV2("MyCronJob", {

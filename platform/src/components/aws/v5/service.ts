@@ -31,6 +31,7 @@ import type { Input } from "../../input";
 import { hashStringToPrettyString } from "../../naming";
 import { transformPart } from "../../transform";
 import { Alb } from "../alb";
+import type { Cluster as OriginalCluster } from "../cluster";
 import { DnsValidatedCertificate } from "../dns-validated-certificate";
 import type { FargateContainerArgs } from "../fargate";
 import { type CustomDomainArgs, customDomain } from "../helpers/custom-domain";
@@ -50,6 +51,7 @@ import { listenerKey, targetKey } from "../helpers/load-balancer";
 import { URL_UNAVAILABLE } from "../linkable";
 import type { ServiceArgs as OriginalServiceArgs } from "../service";
 import { Vpc } from "../vpc";
+import type { Cluster } from "./cluster";
 
 const parts = () => ({
   /**
@@ -793,6 +795,7 @@ export interface ServiceArgs
   extends V5Args<
     Omit<
       OriginalServiceArgs,
+      | "cluster"
       | "containers"
       | "taskRole"
       | "executionRole"
@@ -802,6 +805,23 @@ export interface ServiceArgs
     >,
     typeof parts
   > {
+  /**
+   * The ECS Cluster to run the service in. Create one in your app, if you haven't already.
+   *
+   * ```js title="sst.config.ts"
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const myCluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   cluster: myCluster
+   * }
+   * ```
+   */
+  cluster: OriginalCluster | Cluster;
   /**
    * Configure a load balancer to route traffic to the containers.
    *
@@ -1037,7 +1057,7 @@ export interface ServiceArgs
  *
  * ```ts title="sst.config.ts"
  * const vpc = new sst.aws.Vpc("MyVpc");
- * const cluster = new sst.aws.Cluster("MyCluster", { vpc });
+ * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
  * ```
  *
  * Add the service to it.
