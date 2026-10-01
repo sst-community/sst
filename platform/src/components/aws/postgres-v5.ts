@@ -1,5 +1,4 @@
 import {
-  all,
   ComponentResourceOptions,
   interpolate,
   jsonStringify,
@@ -12,8 +11,15 @@ import { V5Args, component, many, optional } from "../parts-component";
 import { plain, withDefault } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
-import { type SizeGbTb, toGBs } from "../size";
 import { DevCommand } from "../experimental/dev-command";
+import {
+  maxStorage,
+  proxyArgs,
+  proxyCredentials,
+  proxyRoleArgs,
+  replicaArgs,
+  storedPassword,
+} from "./helpers/rds";
 import { RdsRoleLookup } from "./providers/rds-role-lookup";
 import { Vpc } from "./vpc";
 import { Vpc as VpcV1 } from "./vpc-v1";
@@ -326,18 +332,6 @@ export class PostgresV5 extends component("sst:aws:PostgresV5", parts) {
     const engineVersion = withDefault(args.version, "17");
     const instanceType = withDefault(args.instance, "t4g.micro");
     const blueGreen = withDefault(args.blueGreen, false);
-    const storage = withDefault<SizeGbTb, number>(args.storage, "20 GB", (v) => {
-      const size = toGBs(v);
-      if (size < 20)
-        throw new VisibleError(
-          `Storage must be at least 20 GB for the ${name} Postgres database.`,
-        );
-      if (size > 65536)
-        throw new VisibleError(
-          `Storage cannot be greater than 65536 GB (64 TB) for the ${name} Postgres database.`,
-        );
-      return size;
-    });
     const vpc =
       args.vpc instanceof Vpc
         ? output({ subnets: args.vpc.privateSubnets })
@@ -396,10 +390,10 @@ export class PostgresV5 extends component("sst:aws:PostgresV5", parts) {
         storageEncrypted: true,
         storageType: "gp3",
         allocatedStorage: 20,
-        // Blue/green deployments require maxAllocatedStorage to be at least
-        // 10% higher than allocatedStorage for autoscaling headroom.
-        maxAllocatedStorage: all([storage, blueGreen]).apply(([s, bg]) =>
-          bg ? Math.max(s, 22) : s,
+        maxAllocatedStorage: maxStorage(
+          args.storage,
+          blueGreen,
+          `${name} Postgres`,
         ),
         multiAz: withDefault(args.multiAz, false),
         backupRetentionPeriod: 7,
@@ -416,29 +410,9 @@ export class PostgresV5 extends component("sst:aws:PostgresV5", parts) {
     );
 
     for (let i = 0; i < replicas; i++) {
-      this.part(
-        "replica",
-        `${i}`,
-        {
-          replicateSourceDb: instance.identifier,
-          dbName: interpolate`${instance.dbName}_replica${i}`,
-          dbSubnetGroupName: instance.dbSubnetGroupName,
-          availabilityZone: instance.availabilityZone,
-          engine: instance.engine,
-          engineVersion: instance.engineVersion,
-          instanceClass: instance.instanceClass,
-          username: instance.username,
-          password: instance.password.apply((v) => v!),
-          parameterGroupName: instance.parameterGroupName,
-          applyImmediately: true,
-          skipFinalSnapshot: true,
-          storageEncrypted: instance.storageEncrypted.apply((v) => v!),
-          storageType: instance.storageType,
-          allocatedStorage: instance.allocatedStorage,
-          maxAllocatedStorage: instance.maxAllocatedStorage.apply((v) => v!),
-        },
-        { ignoreChanges: pinned("engineVersion") },
-      );
+      this.part("replica", `${i}`, replicaArgs(instance, i), {
+        ignoreChanges: pinned("engineVersion"),
+      });
     }
 
     this.connection = connectTo(
@@ -448,73 +422,34 @@ export class PostgresV5 extends component("sst:aws:PostgresV5", parts) {
     );
 
     function createProxy(proxy: PostgresV5ProxyArgs) {
-      const credentials =
-        plain(
-          proxy.credentials,
-          `The "proxy.credentials" of the "${name}" database`,
-        ) ?? [];
-
       // A secret for each additional user the proxy can connect as
-      const secrets = credentials.map((credential) => {
-        const user = plain(
-          credential.username,
-          `The "username" in the "proxy.credentials" of the "${name}" database`,
-        );
-        const secret = self.part("proxySecret", user, {
-          recoveryWindowInDays: 0,
-        });
-        self.part("proxySecretVersion", user, {
-          secretId: secret.id,
-          secretString: jsonStringify({
-            username: user,
-            password: credential.password,
-          }),
-        });
-        return secret;
-      });
+      const secrets = proxyCredentials(proxy.credentials, name).map(
+        ({ username, password }) => {
+          const secret = self.part("proxySecret", username, {
+            recoveryWindowInDays: 0,
+          });
+          self.part("proxySecretVersion", username, {
+            secretId: secret.id,
+            secretString: jsonStringify({ username, password }),
+          });
+          return secret;
+        },
+      );
+      // The proxy can connect as the master user and as each of those
+      const logins = [secret, ...secrets];
 
-      const role = self.part("proxyRole", {
-        assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
-          Service: "rds.amazonaws.com",
-        }),
-        inlinePolicies: [
-          {
-            name: "inline",
-            policy: iam.getPolicyDocumentOutput({
-              statements: [
-                {
-                  actions: ["secretsmanager:GetSecretValue"],
-                  resources: [secret.arn, ...secrets.map((s) => s.arn)],
-                },
-              ],
-            }).json,
-          },
-        ],
-      });
-
+      const role = self.part("proxyRole", proxyRoleArgs(logins));
       const lookup = self.part("proxyRoleLookup", {
         name: "AWSServiceRoleForRDS",
       });
-
       const rdsProxy = self.part(
         "proxy",
-        {
-          engineFamily: "POSTGRESQL",
-          auths: [secret, ...secrets].map((secret) => ({
-            authScheme: "SECRETS",
-            iamAuth: "DISABLED",
-            secretArn: secret.arn,
-          })),
-          roleArn: role.arn,
-          vpcSubnetIds: vpc.subnets,
-        },
+        proxyArgs("POSTGRESQL", logins, role, vpc.subnets),
         { dependsOn: [lookup] },
       );
-
       const targetGroup = self.part("proxyTargetGroup", {
         dbProxyName: rdsProxy.name,
       });
-
       self.part("proxyTarget", {
         dbProxyName: rdsProxy.name,
         targetGroupName: targetGroup.name,
@@ -546,16 +481,12 @@ export class PostgresV5 extends component("sst:aws:PostgresV5", parts) {
     // A database created by `Postgres` or `PostgresV5` is tagged with the
     // secret that holds its password.
     function passwordOf(instance: rds.Instance) {
-      const secretId = instance.tagsAll.apply((tags) => {
-        if (!tags?.["sst:lookup:password"])
-          throw new VisibleError(
-            `Failed to get password for Postgres ${name}.`,
-          );
-        return tags["sst:lookup:password"];
-      });
-      return secretsmanager
-        .getSecretVersionOutput({ secretId }, { parent: self })
-        .secretString.apply((v) => JSON.parse(v).password as string);
+      return storedPassword(
+        instance,
+        "sst:lookup:password",
+        `Failed to get password for Postgres ${name}.`,
+        self,
+      );
     }
 
     function runLocally(dev: NonNullable<PostgresV5Args["dev"]>): Connection {
