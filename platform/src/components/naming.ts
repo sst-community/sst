@@ -1,4 +1,16 @@
 import crypto from "crypto";
+import {
+  output,
+  type ResourceTransformationArgs,
+  type ResourceTransformationResult,
+} from "@pulumi/pulumi";
+import { VisibleError } from "./error.js";
+import {
+  NAMING_RULES,
+  UNPREFIXED_TYPES,
+  type BuiltInNamingRule,
+  type NamingRule,
+} from "./naming-rules.js";
 
 export function logicalName(name: string) {
   name = name.replace(/[^a-zA-Z0-9]/g, "");
@@ -71,3 +83,107 @@ export function hashStringToPrettyString(str: string, length: number) {
 }
 
 export const PRETTY_CHARS = "abcdefhkmnorstuvwxz";
+
+const CustomNamingRules = new Map<string, NamingRule>();
+
+export function registerNamingRule(type: string, rule: NamingRule) {
+  CustomNamingRules.set(type, rule);
+}
+
+/**
+ * Checks the logical name of a resource created inside a component, and gives
+ * it a physical name prefixed with the app and stage.
+ *
+ * @param component The type and name of the component.
+ * @param args The resource being created inside it.
+ */
+export function nameResource(
+  component: { type: string; name: string },
+  args: ResourceTransformationArgs,
+): ResourceTransformationResult | undefined {
+  const { type, name } = component;
+
+  // Ensure component names do not contain spaces
+  if (name.includes(" "))
+    throw new Error(
+      `Invalid component name "${name}" (${args.type}). Component names cannot contain spaces.`,
+    );
+
+  // Ensure names are prefixed with parent's name
+  if (
+    args.type !== type &&
+    // @ts-expect-error
+    !args.name.startsWith(args.opts.parent!.__name)
+  ) {
+    throw new Error(
+      `In "${name}" component, the logical name of "${args.name}" (${
+        args.type
+      }) is not prefixed with parent's name ${
+        // @ts-expect-error
+        args.opts.parent!.__name
+      }`,
+    );
+  }
+
+  // Ensure physical names are prefixed with app/stage
+  // note: We are setting the default names here instead of inline when creating
+  //       the resource is b/c the physical name is inferred from the logical name.
+  //       And it's convenient to access the logical name here.
+  if (args.type.startsWith("sst:")) return;
+  if (UNPREFIXED_TYPES.has(args.type)) return;
+  // A resource that's looked up has the name it has
+  if (args.opts.id !== undefined) return;
+
+  const custom = CustomNamingRules.get(args.type);
+  if (custom === false) return;
+  const rule: BuiltInNamingRule | undefined = custom
+    ? [custom.field, custom.max, custom]
+    : NAMING_RULES[args.type];
+  if (!rule) {
+    // Built-in components have to say how each of their resources is named.
+    // Other components can use resource types SST doesn't know; those are
+    // left to the provider's own naming.
+    if (!type.startsWith("sst:")) return;
+    throw new VisibleError(
+      `In "${name}" component, the physical name of "${args.name}" (${args.type}) is not prefixed`,
+    );
+  }
+
+  // name is already set
+  const [nameField, length, options = {}] = rule;
+  if (args.props[nameField] && args.props[nameField] !== "") return;
+
+  // Handle prefix field is tags
+  if (nameField === "tags") {
+    return {
+      props: {
+        ...args.props,
+        tags: {
+          // @ts-expect-error
+          ...args.tags,
+          Name: prefixName(length, args.name),
+        },
+      },
+      opts: args.opts,
+    };
+  }
+
+  // Handle prefix field is name
+  const suffix = options.suffix ? options.suffix(args.props) : output("");
+  return {
+    props: {
+      ...args.props,
+      [nameField]: suffix.apply((suffix) => {
+        let v = options.lower
+          ? physicalName(length, args.name, suffix).toLowerCase()
+          : physicalName(length, args.name, suffix);
+        if (options.replace) v = options.replace(v);
+        return v;
+      }),
+    },
+    opts: {
+      ...args.opts,
+      ignoreChanges: [...(args.opts.ignoreChanges ?? []), nameField],
+    },
+  };
+}

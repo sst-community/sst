@@ -8,11 +8,17 @@ import {
   Input,
   all,
   Output,
+  ResourceTransformationArgs,
 } from "@pulumi/pulumi";
-import { prefixName, physicalName } from "./naming.js";
+import { nameResource, registerNamingRule } from "./naming.js";
+import type { NamingRule } from "./naming-rules.js";
+import { takeoverOf } from "./takeover.js";
 import { VisibleError } from "./error.js";
 import path from "path";
 import { statSync } from "fs";
+
+export { type Transform, transform, mergeArgs } from "./transform.js";
+export type { NamingRule } from "./naming-rules.js";
 
 // Previously, `this.api.id` was used as the ID. `this.api.id` was of type Output<string>
 // the value evaluates to the mistake id.
@@ -27,30 +33,18 @@ export type Prettify<T> = {
   [K in keyof T]: T[K];
 } & {};
 
-export type Transform<T> =
-  | Partial<T>
-  | ((args: T, opts: $util.CustomResourceOptions, name: string) => undefined);
-
-export function transform<T extends object>(
-  transform: Transform<T> | undefined,
-  name: string,
-  args: T,
-  opts: $util.CustomResourceOptions,
-) {
-  // Case: transform is a function
-  if (typeof transform === "function") {
-    transform(args, opts, name);
-    return [name, args, opts] as const;
-  }
-
-  // Case: no transform
-  // Case: transform is an argument
-  return [name, { ...args, ...transform }, opts] as const;
-}
-
+/**
+ * The class every component extends. It names the component's resources and
+ * applies `$transform`.
+ *
+ * To write a component, extend what `component()` returns instead. It adds
+ * parts to this class.
+ */
 export class Component extends ComponentResource {
-  private componentType: string;
-  private componentName: string;
+  /** @internal */
+  protected readonly componentType: string;
+  /** The name the component was created with. */
+  protected readonly componentName: string;
 
   constructor(
     type: string,
@@ -62,345 +56,22 @@ export class Component extends ComponentResource {
     for (const transform of transforms) {
       transform({ name, props: args, opts });
     }
+
+    // `this` is not available to the transformations below until `super`
+    // returns, so they reach the component through this variable.
+    let self: Component | undefined;
+
     super(type, name, {}, {
+      ...opts,
+      // A deployed component this one takes over from becomes this one.
+      // Pulumi carries the alias over to its children.
+      aliases: [
+        ...(opts?.aliases ?? []),
+        ...[takeoverOf(type)?.from ?? []].flat().map((type) => ({ type })),
+      ],
       transformations: [
         // Ensure logical and physical names are prefixed
-        (args) => {
-          // Ensure component names do not contain spaces
-          if (name.includes(" "))
-            throw new Error(
-              `Invalid component name "${name}" (${args.type}). Component names cannot contain spaces.`,
-            );
-
-          // Ensure names are prefixed with parent's name
-          if (
-            args.type !== type &&
-            // @ts-expect-error
-            !args.name.startsWith(args.opts.parent!.__name)
-          ) {
-            throw new Error(
-              `In "${name}" component, the logical name of "${args.name}" (${
-                args.type
-              }) is not prefixed with parent's name ${
-                // @ts-expect-error
-                args.opts.parent!.__name
-              }`,
-            );
-          }
-
-          // Ensure physical names are prefixed with app/stage
-          // note: We are setting the default names here instead of inline when creating
-          //       the resource is b/c the physical name is inferred from the logical name.
-          //       And it's convenient to access the logical name here.
-          if (args.type.startsWith("sst:")) return;
-          if (
-            [
-              // resources manually named
-              "aws:cloudwatch/logGroup:LogGroup",
-              "aws:ecs/service:Service",
-              "aws:ecs/taskDefinition:TaskDefinition",
-              "aws:lb/targetGroup:TargetGroup",
-              "aws:servicediscovery/privateDnsNamespace:PrivateDnsNamespace",
-              "aws:servicediscovery/service:Service",
-              // resources not prefixed
-              "pulumi-nodejs:dynamic:Resource",
-              "random:index/randomId:RandomId",
-              "random:index/randomPassword:RandomPassword",
-              "command:local:Command",
-              "tls:index/privateKey:PrivateKey",
-              "aws:acm/certificate:Certificate",
-              "aws:acm/certificateValidation:CertificateValidation",
-              "aws:apigateway/basePathMapping:BasePathMapping",
-              "aws:apigateway/deployment:Deployment",
-              "aws:apigateway/domainName:DomainName",
-              "aws:apigateway/integration:Integration",
-              "aws:apigateway/integrationResponse:IntegrationResponse",
-              "aws:apigateway/method:Method",
-              "aws:apigateway/methodResponse:MethodResponse",
-              "aws:apigateway/resource:Resource",
-              "aws:apigateway/response:Response",
-              "aws:apigateway/stage:Stage",
-              "aws:apigateway/usagePlanKey:UsagePlanKey",
-              "aws:apigatewayv2/apiMapping:ApiMapping",
-              "aws:apigatewayv2/domainName:DomainName",
-              "aws:apigatewayv2/integration:Integration",
-              "aws:apigatewayv2/route:Route",
-              "aws:apigatewayv2/stage:Stage",
-              "aws:appautoscaling/target:Target",
-              "aws:appsync/dataSource:DataSource",
-              "aws:appsync/domainName:DomainName",
-              "aws:appsync/domainNameApiAssociation:DomainNameApiAssociation",
-              "aws:appsync/function:Function",
-              "aws:appsync/resolver:Resolver",
-              "aws:ec2/routeTableAssociation:RouteTableAssociation",
-              "aws:ec2/eipAssociation:EipAssociation",
-              "aws:ecs/clusterCapacityProviders:ClusterCapacityProviders",
-              "aws:efs/fileSystem:FileSystem",
-              "aws:efs/mountTarget:MountTarget",
-              "aws:efs/accessPoint:AccessPoint",
-              "aws:iam/accessKey:AccessKey",
-              "aws:iam/instanceProfile:InstanceProfile",
-              "aws:iam/policy:Policy",
-              "aws:iam/userPolicy:UserPolicy",
-              "aws:cloudfront/cachePolicy:CachePolicy",
-              "aws:cloudfront/distribution:Distribution",
-              "aws:cognito/identityPoolRoleAttachment:IdentityPoolRoleAttachment",
-              "aws:cognito/identityProvider:IdentityProvider",
-              "aws:cognito/userPoolClient:UserPoolClient",
-              "aws:lambda/eventSourceMapping:EventSourceMapping",
-              "aws:lambda/functionEventInvokeConfig:FunctionEventInvokeConfig",
-              "aws:lambda/functionUrl:FunctionUrl",
-              "aws:lambda/invocation:Invocation",
-              "aws:lambda/permission:Permission",
-              "aws:lambda/provisionedConcurrencyConfig:ProvisionedConcurrencyConfig",
-              "aws:lb/listener:Listener",
-              "aws:lb/listenerRule:ListenerRule",
-              "aws:opensearch/domainPolicy:DomainPolicy",
-              "aws:rds/proxyDefaultTargetGroup:ProxyDefaultTargetGroup",
-              "aws:rds/proxyTarget:ProxyTarget",
-              "aws:route53/record:Record",
-              "aws:s3/bucketCorsConfigurationV2:BucketCorsConfigurationV2",
-              "aws:s3/bucketCorsConfiguration:BucketCorsConfiguration",
-              "aws:s3/bucketNotification:BucketNotification",
-              "aws:s3/bucketObject:BucketObject",
-              "aws:s3/bucketObjectv2:BucketObjectv2",
-              "aws:s3/bucketPolicy:BucketPolicy",
-              "aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock",
-              "aws:s3/bucketVersioningV2:BucketVersioningV2",
-              "aws:s3/bucketLifecycleConfigurationV2:BucketLifecycleConfigurationV2",
-              "aws:s3/bucketLifecycleConfiguration:BucketLifecycleConfiguration",
-              "aws:s3/bucketWebsiteConfigurationV2:BucketWebsiteConfigurationV2",
-              "aws:s3/bucketVersioning:BucketVersioning",
-              "aws:s3/bucketWebsiteConfiguration:BucketWebsiteConfiguration",
-              "aws:secretsmanager/secretVersion:SecretVersion",
-              "aws:wafv2/webAclLoggingConfiguration:WebAclLoggingConfiguration",
-              "aws:ses/domainIdentityVerification:DomainIdentityVerification",
-              "aws:sesv2/configurationSetEventDestination:ConfigurationSetEventDestination",
-              "aws:sesv2/emailIdentity:EmailIdentity",
-              "aws:sesv2/emailIdentityMailFromAttributes:EmailIdentityMailFromAttributes",
-              "aws:sns/topicPolicy:TopicPolicy",
-              "aws:sns/topicSubscription:TopicSubscription",
-              "aws:sqs/queuePolicy:QueuePolicy",
-              "aws:ssm/parameter:Parameter",
-              "cloudflare:index/dnsRecord:DnsRecord",
-              "cloudflare:index/pageRule:PageRule",
-              "cloudflare:index/workersCronTrigger:WorkersCronTrigger",
-              "cloudflare:index/workersCustomDomain:WorkersCustomDomain",
-              "cloudflare:index/queueConsumer:QueueConsumer",
-              "docker-build:index:Image",
-              "vercel:index/dnsRecord:DnsRecord",
-              "aws:dsql/clusterPeering:ClusterPeering"
-            ].includes(args.type)
-          )
-            return;
-
-          const namingRules: Record<
-            string,
-            [
-              string,
-              number,
-              {
-                lower?: boolean;
-                replace?: (name: string) => string;
-                suffix?: () => Output<string>;
-              }?,
-            ]
-          > = {
-            "aws:apigateway/apiKey:ApiKey": ["name", 1024],
-            "aws:apigateway/authorizer:Authorizer": ["name", 128],
-            "aws:apigateway/restApi:RestApi": ["name", 128],
-            "aws:apigateway/usagePlan:UsagePlan": ["name", 65536], // no length limit
-            "aws:apigatewayv2/api:Api": ["name", 128],
-            "aws:apigatewayv2/authorizer:Authorizer": ["name", 128],
-            "aws:apigatewayv2/vpcLink:VpcLink": ["name", 128],
-            "aws:appautoscaling/policy:Policy": ["name", 255],
-            "aws:appsync/graphQLApi:GraphQLApi": ["name", 65536],
-            "aws:cloudwatch/eventBus:EventBus": ["name", 256],
-            "aws:cloudwatch/eventTarget:EventTarget": ["targetId", 64],
-            "aws:cloudwatch/eventRule:EventRule": ["name", 64],
-            "aws:cloudfront/function:Function": ["name", 64],
-            "aws:cloudfront/keyValueStore:KeyValueStore": ["name", 64],
-            "aws:cognito/identityPool:IdentityPool": ["identityPoolName", 128],
-            "aws:cognito/userPool:UserPool": ["name", 128],
-            "aws:cognito/userPoolDomain:UserPoolDomain": [
-              "domain",
-              63,
-              { lower: true },
-            ],
-            "aws:dynamodb/table:Table": ["name", 255],
-            "aws:dsql/cluster:Cluster": ["tags", 255],
-            "aws:ec2/keyPair:KeyPair": ["keyName", 255],
-            "aws:ec2/eip:Eip": ["tags", 255],
-            "aws:ec2/instance:Instance": ["tags", 255],
-            "aws:ec2/internetGateway:InternetGateway": ["tags", 255],
-            "aws:ec2/natGateway:NatGateway": ["tags", 255],
-            "aws:ec2/routeTable:RouteTable": ["tags", 255],
-            "aws:ec2/securityGroup:SecurityGroup": ["tags", 255],
-            "aws:ec2/defaultSecurityGroup:DefaultSecurityGroup": ["tags", 255],
-            "aws:ec2/subnet:Subnet": ["tags", 255],
-            "aws:ec2/vpc:Vpc": ["tags", 255],
-            "aws:ec2/vpcEndpoint:VpcEndpoint": ["tags", 255],
-            "aws:ecs/cluster:Cluster": ["name", 255],
-            "aws:elasticache/parameterGroup:ParameterGroup": [
-              "name",
-              255,
-              { lower: true },
-            ],
-            "aws:elasticache/replicationGroup:ReplicationGroup": [
-              "replicationGroupId",
-              40,
-              { lower: true, replace: (name) => name.replaceAll(/-+/g, "-") },
-            ],
-            "aws:elasticache/subnetGroup:SubnetGroup": [
-              "name",
-              255,
-              { lower: true },
-            ],
-            "aws:iam/role:Role": ["name", 64],
-            "aws:iam/user:User": ["name", 64],
-            "aws:iot/authorizer:Authorizer": ["name", 128],
-            "aws:iot/topicRule:TopicRule": [
-              "name",
-              128,
-              { replace: (name) => name.replaceAll("-", "_") },
-            ],
-            "aws:kinesis/stream:Stream": ["name", 255],
-            // AWS Load Balancer name allows 32 chars, but an 8 char suffix
-            // ie. "-1234567" is automatically added
-            "aws:lb/loadBalancer:LoadBalancer": ["name", 24],
-            "aws:lambda/function:Function": ["name", 64],
-            "aws:opensearch/domain:Domain": ["domainName", 28, { lower: true }],
-            "aws:rds/cluster:Cluster": [
-              "clusterIdentifier",
-              63,
-              { lower: true },
-            ],
-            "aws:rds/clusterInstance:ClusterInstance": [
-              "identifier",
-              63,
-              { lower: true },
-            ],
-            "aws:rds/instance:Instance": ["identifier", 63, { lower: true }],
-            "aws:rds/proxy:Proxy": ["name", 60, { lower: true }],
-            "aws:rds/clusterParameterGroup:ClusterParameterGroup": [
-              "name",
-              255,
-              { lower: true },
-            ],
-            "aws:rds/parameterGroup:ParameterGroup": [
-              "name",
-              255,
-              { lower: true },
-            ],
-            "aws:rds/subnetGroup:SubnetGroup": ["name", 255, { lower: true }],
-            "aws:s3/bucket:Bucket": ["bucket", 63, { lower: true }],
-            "aws:secretsmanager/secret:Secret": ["name", 512],
-            "aws:sesv2/configurationSet:ConfigurationSet": [
-              "configurationSetName",
-              64,
-              { lower: true },
-            ],
-            "aws:scheduler/schedule:Schedule": ["name", 64],
-            "aws:sfn/stateMachine:StateMachine": ["name", 80],
-            "aws:sns/topic:Topic": [
-              "name",
-              256,
-              {
-                suffix: () =>
-                  output(args.props.fifoTopic).apply((fifo) =>
-                    fifo ? ".fifo" : "",
-                  ),
-              },
-            ],
-            "aws:sqs/queue:Queue": [
-              "name",
-              80,
-              {
-                suffix: () =>
-                  output(args.props.fifoQueue).apply((fifo) =>
-                    fifo ? ".fifo" : "",
-                  ),
-              },
-            ],
-            "aws:wafv2/webAcl:WebAcl": ["name", 64],
-            "cloudflare:index/d1Database:D1Database": [
-              "name",
-              64,
-              { lower: true },
-            ],
-            "cloudflare:index/r2Bucket:R2Bucket": ["name", 64, { lower: true }],
-            "aws:backup/vault:Vault": ["name", 50],
-            "aws:backup/plan:Plan": ["name", 50],
-            "aws:backup/selection:Selection": ["name", 50],
-            "cloudflare:index/workersScript:WorkersScript": [
-              "scriptName",
-              64,
-              { lower: true },
-            ],
-            "cloudflare:index/queue:Queue": ["queueName", 64, { lower: true }],
-            "cloudflare:index/workersKvNamespace:WorkersKvNamespace": [
-              "title",
-              64,
-              { lower: true },
-            ],
-            "cloudflare:index/hyperdriveConfig:HyperdriveConfig": [
-              "name",
-              64,
-              { lower: true },
-            ],
-            "cloudflare:index/workflow:Workflow": [
-              "workflowName",
-              64,
-              { lower: true },
-            ],
-          };
-
-          const rule = namingRules[args.type];
-          if (!rule)
-            throw new VisibleError(
-              `In "${name}" component, the physical name of "${args.name}" (${args.type}) is not prefixed`,
-            );
-
-          // name is already set
-          const nameField = rule[0];
-          const length = rule[1];
-          const options = rule[2];
-          if (args.props[nameField] && args.props[nameField] !== "") return;
-
-          // Handle prefix field is tags
-          if (nameField === "tags") {
-            return {
-              props: {
-                ...args.props,
-                tags: {
-                  // @ts-expect-error
-                  ...args.tags,
-                  Name: prefixName(length, args.name),
-                },
-              },
-              opts: args.opts,
-            };
-          }
-
-          // Handle prefix field is name
-          const suffix = options?.suffix ? options.suffix() : output("");
-          return {
-            props: {
-              ...args.props,
-              [nameField]: suffix.apply((suffix) => {
-                let v = options?.lower
-                  ? physicalName(length, args.name, suffix).toLowerCase()
-                  : physicalName(length, args.name, suffix);
-                if (options?.replace) v = options.replace(v);
-                return v;
-              }),
-            },
-            opts: {
-              ...args.opts,
-              ignoreChanges: [...(args.opts.ignoreChanges ?? []), nameField],
-            },
-          };
-        },
+        (args) => nameResource({ type, name }, args),
         // Set child resources `retainOnDelete` if set on component
         (args) => ({
           props: args.props,
@@ -409,13 +80,42 @@ export class Component extends ComponentResource {
             retainOnDelete: args.opts.retainOnDelete ?? opts?.retainOnDelete,
           },
         }),
+        // Tell the component about each resource created directly under it
+        (args) => {
+          if (self && args.opts.parent === self) self.childCreated?.(args);
+          return undefined;
+        },
         ...(opts?.transformations ?? []),
       ],
-      ...opts,
     });
 
+    self = this;
     this.componentType = type;
     this.componentName = name;
+  }
+
+  /**
+   * Called for each resource created directly under this component.
+   *
+   * @internal
+   */
+  protected childCreated?(child: ResourceTransformationArgs): void;
+
+  /**
+   * Say how resources of a type get their physical name when they are created
+   * inside a component. SST already knows the types its own components use.
+   *
+   * @example
+   * ```ts
+   * sst.Component.naming("aws:kms/alias:Alias", false);
+   * sst.Component.naming("aws:athena/workgroup:Workgroup", {
+   *   field: "name",
+   *   max: 128,
+   * });
+   * ```
+   */
+  public static naming(type: string, rule: NamingRule) {
+    registerNamingRule(type, rule);
   }
 
   /** @internal */
@@ -468,7 +168,8 @@ export function $transform<T, Args, Options>(
 ) {
   // @ts-expect-error
   const type = resource.__pulumiType;
-  if (type.startsWith("sst:")) {
+  // A component is given its args before it creates anything
+  if (type.startsWith("sst:") || resource.prototype instanceof Component) {
     let transforms = ComponentTransforms.get(type);
     if (!transforms) {
       transforms = [];

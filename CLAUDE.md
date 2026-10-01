@@ -28,3 +28,7 @@
 4. Verify with `curl` or AWS CLI
 5. Don't clean up unless told to
 6. `sst dev --mode=basic` for dev mode
+
+## V5 components
+
+`platform/src/components/README.md` is the guide to writing a V5 component and to porting a 4.x one: parts, args, takeover maps, tests and a checklist. Read it before touching a `*-v5.ts` file. Don't edit 4.x component files.

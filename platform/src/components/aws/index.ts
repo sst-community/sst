@@ -45,7 +45,8 @@ export * from "./vector.js";
 export * from "./vpc.js";
 export * from "./workflow.js";
 export { linkable } from "./linkable.js";
-export { permission } from "./permission.js";
+export { permission, iamStatements } from "./permission.js";
+export { functionPart } from "./helpers/function-builder.js";
 export { iamEdit } from "./iam-edit.js";
 
 // internal components
