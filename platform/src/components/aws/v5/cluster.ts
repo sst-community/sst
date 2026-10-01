@@ -2,7 +2,7 @@ import { ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { ecs } from "@pulumi/aws";
 import { V5Args, component } from "../../parts-component";
 import { VisibleError } from "../../error";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import { Vpc as VpcV1 } from "../vpc-v1";
 import type {
   Cluster as OriginalCluster,
@@ -24,7 +24,7 @@ const parts = {
 };
 
 export interface ClusterArgs
-  extends V5Args<OriginalClusterArgs, typeof parts> {}
+  extends V5Args<TakesVpc<OriginalClusterArgs>, typeof parts> {}
 
 /**
  * The `Cluster` component lets you create an [ECS cluster](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/clusters.html)
@@ -205,7 +205,7 @@ function networkOf(
       `You are using the "Vpc.v1" component. Please migrate to the latest "Vpc" component.`,
     );
 
-  if (vpc instanceof Vpc) return vpc;
+  if (isVpc(vpc)) return vpc;
 
   return output(vpc).apply((vpc) => {
     if (vpc.containerSubnets && vpc.serviceSubnets)

@@ -17,7 +17,7 @@ import {
 } from "../helpers/arn";
 import { useProvider } from "../helpers/provider";
 import { permission } from "../permission";
-import { Vpc } from "../vpc";
+import { type AnyVpc, isVpc } from "../helpers/vpc";
 
 const parts = {
   /**
@@ -199,10 +199,10 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   vpc?:
-    | Vpc
+    | AnyVpc
     | {
         /** The VPC to create the endpoints in. */
-        instance: Vpc;
+        instance: AnyVpc;
         endpoints?: {
           /**
            * Endpoint for control plane ops (create, get, update, delete clusters).
@@ -407,8 +407,8 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
     }
 
     if (vpc) {
-      const instance = vpc instanceof Vpc ? vpc : vpc.instance;
-      const endpoints = vpc instanceof Vpc ? undefined : vpc.endpoints;
+      const instance = isVpc(vpc) ? vpc : vpc.instance;
+      const endpoints = isVpc(vpc) ? undefined : vpc.endpoints;
       const what = `of the "vpc.endpoints" of the "${name}" DSQL cluster`;
       const management =
         plain(endpoints?.management, `The "management" ${what}`) ?? false;

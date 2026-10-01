@@ -5,11 +5,60 @@ import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type SizeGbTb, toGBs } from "../../size";
 
-/** A user the proxy can connect to the database as, besides the master user. */
-export interface ProxyCredential {
-  username: string;
-  password: Input<string>;
+/**
+ * An RDS Proxy in front of the database.
+ */
+export interface ProxyArgs {
+  /**
+   * Additional credentials the proxy can use to connect to the database. You don't
+   * need to specify the master user credentials as they are always added by default.
+   *
+   * :::note
+   * This component will not create the database users listed here. You need to
+   * create them manually in the database.
+   * :::
+   *
+   * The list and each username have to be plain values. A password can be an output.
+   *
+   * @example
+   * ```js
+   * {
+   *   credentials: [
+   *     {
+   *       username: "metabase",
+   *       password: "Passw0rd!"
+   *     }
+   *   ]
+   * }
+   * ```
+   *
+   * You can use a [`Secret`](/docs/component/secret) to manage the password.
+   *
+   * ```js
+   * {
+   *   credentials: [
+   *     {
+   *       username: "metabase",
+   *       password: new sst.Secret("MyDBPassword").value
+   *     }
+   *   ]
+   * }
+   * ```
+   */
+  credentials?: {
+    /**
+     * The username of the user.
+     */
+    username: string;
+    /**
+     * The password of the user.
+     */
+    password: Input<string>;
+  }[];
 }
+
+/** A user the proxy can connect to the database as, besides the master user. */
+export type ProxyCredential = NonNullable<ProxyArgs["credentials"]>[number];
 
 /**
  * How far a database's storage can grow, in GB, from its `storage` arg.

@@ -9,20 +9,20 @@ import { RandomPassword } from "@pulumi/random";
 import { iam, rds, secretsmanager } from "@pulumi/aws";
 import { V5Args, component, many, optional } from "../../parts-component";
 import { plain, withDefault } from "../../args";
-import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { DevCommand } from "../../experimental/dev-command";
 import {
   credentialsSecretOf,
   maxStorage,
   proxyArgs,
+  type ProxyArgs,
   proxyCredentials,
   proxyRoleArgs,
   replicaArgs,
   storedPassword,
 } from "../helpers/rds";
 import { RdsRoleLookup } from "../providers/rds-role-lookup";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import { Vpc as VpcV1 } from "../vpc-v1";
 import type { MysqlArgs as OriginalMysqlArgs, MysqlGetArgs } from "../mysql";
 
@@ -85,57 +85,11 @@ const parts = {
   proxyTarget: optional(rds.ProxyTarget),
 };
 
-export interface MysqlProxyArgs {
-  /**
-   * Additional credentials the proxy can use to connect to the database. You don't
-   * need to specify the master user credentials as they are always added by default.
-   *
-   * :::note
-   * This component will not create the MySQL users listed here. You need to
-   * create them manually in the database.
-   * :::
-   *
-   * The list and each username have to be plain values. A password can be an output.
-   *
-   * @example
-   * ```js
-   * {
-   *   credentials: [
-   *     {
-   *       username: "metabase",
-   *       password: "Passw0rd!"
-   *     }
-   *   ]
-   * }
-   * ```
-   *
-   * You can use a `Secret` to manage the password.
-   *
-   * ```js
-   * {
-   *   credentials: [
-   *     {
-   *       username: "metabase",
-   *       password: new sst.Secret("MyDBPassword").value
-   *     }
-   *   ]
-   * }
-   * ```
-   */
-  credentials?: {
-    /**
-     * The username of the user.
-     */
-    username: string;
-    /**
-     * The password of the user.
-     */
-    password: Input<string>;
-  }[];
-}
-
 export interface MysqlArgs
-  extends V5Args<Omit<OriginalMysqlArgs, "proxy" | "replicas">, typeof parts> {
+  extends V5Args<
+    TakesVpc<Omit<OriginalMysqlArgs, "proxy" | "replicas">>,
+    typeof parts
+  > {
   /**
    * Enable [RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html) for the database.
    *
@@ -149,7 +103,7 @@ export interface MysqlArgs
    * }
    * ```
    */
-  proxy?: boolean | MysqlProxyArgs;
+  proxy?: boolean | ProxyArgs;
   /**
    * @internal
    */
@@ -292,11 +246,7 @@ interface Connection {
 export class Mysql extends component("sst:aws:Mysql", parts) {
   private connection: Connection;
 
-  constructor(
-    name: string,
-    args: MysqlArgs,
-    opts?: ComponentResourceOptions,
-  ) {
+  constructor(name: string, args: MysqlArgs, opts?: ComponentResourceOptions) {
     super(name, args, opts);
 
     const self = this;
@@ -335,10 +285,9 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
     const engineVersion = withDefault(args.version, "8.0.40");
     const instanceType = withDefault(args.instance, "t4g.micro");
     const blueGreen = withDefault(args.blueGreen, false);
-    const vpc =
-      args.vpc instanceof Vpc
-        ? output({ subnets: args.vpc.privateSubnets })
-        : output(args.vpc);
+    const vpc = isVpc(args.vpc)
+      ? output({ subnets: args.vpc.privateSubnets })
+      : output(args.vpc);
     // An engine version the user didn't choose isn't moved once it's deployed
     const pinned = (field: string) => (args.version ? [] : [field]);
 
@@ -424,7 +373,7 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
       proxy ? createProxy(proxy === true ? {} : proxy) : undefined,
     );
 
-    function createProxy(proxy: MysqlProxyArgs) {
+    function createProxy(proxy: ProxyArgs) {
       // A secret for each additional user the proxy can connect as
       const secrets = proxyCredentials(proxy.credentials, name).map(
         ({ username, password }) => {

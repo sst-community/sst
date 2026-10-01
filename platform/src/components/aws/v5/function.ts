@@ -39,7 +39,7 @@ import {
   FunctionArgs as OriginalFunctionArgs,
 } from "../function";
 import { Efs as OriginalEfs } from "../efs";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import { Efs } from "./efs";
 import { RETENTION } from "../logging";
 import { Permission, permission } from "../permission";
@@ -54,9 +54,7 @@ import {
   injectHandler,
   zipCode,
 } from "../helpers/function-code";
-import {
-  FunctionEnvironmentUpdate,
-} from "../providers/function-environment-update";
+import { FunctionEnvironmentUpdate } from "../providers/function-environment-update";
 import { KvKeys } from "../providers/kv-keys";
 import { KvRoutesUpdate } from "../providers/kv-routes-update";
 
@@ -130,15 +128,17 @@ const parts = {
   environmentUpdate: optional(FunctionEnvironmentUpdate),
 };
 
-type Logging = Exclude<Plain<OriginalFunctionArgs["logging"]>, false | undefined>;
+type Logging = Exclude<
+  Plain<OriginalFunctionArgs["logging"]>,
+  false | undefined
+>;
 type Url = Exclude<Plain<OriginalFunctionArgs["url"]>, boolean | undefined>;
 type Python = NonNullable<Plain<OriginalFunctionArgs["python"]>>;
 type Concurrency = NonNullable<Plain<OriginalFunctionArgs["concurrency"]>>;
 
 export interface FunctionLoggingArgs extends Omit<Logging, "logGroup"> {}
 
-export interface FunctionUrlArgs
-  extends Omit<Url, "route" | "authorization"> {
+export interface FunctionUrlArgs extends Omit<Url, "route" | "authorization"> {
   /**
    * The authorization used for the function URL. Supports [IAM authorization](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html).
    *
@@ -218,16 +218,18 @@ export interface FunctionConcurrencyArgs
 
 export interface FunctionArgs
   extends V5Args<
-    Omit<
-      OriginalFunctionArgs,
-      | "live"
-      | "dev"
-      | "role"
-      | "logging"
-      | "url"
-      | "python"
-      | "concurrency"
-      | "volume"
+    TakesVpc<
+      Omit<
+        OriginalFunctionArgs,
+        | "live"
+        | "dev"
+        | "role"
+        | "logging"
+        | "url"
+        | "python"
+        | "concurrency"
+        | "volume"
+      >
     >,
     typeof parts
   > {
@@ -408,7 +410,7 @@ export interface FunctionArgs
  * to the resources and allow you to access it in your handler.
  *
  * ```ts {5} title="sst.config.ts"
- * const bucket = new sst.aws.Bucket("MyBucket");
+ * const bucket = new sst.aws.v5.Bucket("MyBucket");
  *
  * new sst.aws.v5.Function("MyFunction", {
  *   handler: "src/lambda.handler",
@@ -866,7 +868,7 @@ export class Function extends component("sst:aws:Function", parts) {
     function normalizeVpc() {
       if (!args.vpc) return;
 
-      if (args.vpc instanceof Vpc) {
+      if (isVpc(args.vpc)) {
         const result = {
           privateSubnets: args.vpc.privateSubnets,
           securityGroups: args.vpc.securityGroups,
@@ -1112,7 +1114,9 @@ export class Function extends component("sst:aws:Function", parts) {
               "sourcemap",
               `${index}`,
               {
-                key: interpolate`sourcemap/${ownLogGroup.arn}/${zip.hash}.${path.basename(file)}`,
+                key: interpolate`sourcemap/${ownLogGroup.arn}/${
+                  zip.hash
+                }.${path.basename(file)}`,
                 bucket: assetBucket,
                 source: new asset.FileAsset(file),
               },
@@ -1296,7 +1300,9 @@ export class Function extends component("sst:aws:Function", parts) {
         namespace: route.routerKvNamespace,
         key: "routes",
         entry: route.apply((route) =>
-          ["url", routeNamespace, route.hostPattern, route.pathPrefix].join(","),
+          ["url", routeNamespace, route.hostPattern, route.pathPrefix].join(
+            ",",
+          ),
         ),
       });
       return route.routerUrl;

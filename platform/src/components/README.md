@@ -238,13 +238,19 @@ Everything above applies. The rest is specific to SST's own components in
   `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Function`, `Service` and
   `Task` take either `Efs` the same way, and the V5 `Service` either `Alb`.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
+  For a `Vpc`, the two kinds are already one thing to a V5 component: it wraps the
+  original's args in `TakesVpc<>`, which gives `vpc` the type `AnyVpc` in place of the
+  4.x `Vpc`, and it checks with `isVpc()`, not `instanceof` (all three are in
+  `helpers/vpc.ts`). When `Vpc` is ported, the V5 one is added to `AnyVpc` and
+  `isVpc()`, and every V5 component takes it.
 - **Reuse the original's arg types**: `interface QueueArgs extends
   V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
   change. For an arg that has to become a plain value, write
   `cors?: Plain<OriginalBucketArgs["cors"]>` (`Plain` is in `args.ts`): the docs generator follows it back to the original's docs.
-  An arg's docs come with it, examples included. Re-declare an arg whose example names
-  the original (`new sst.aws.Queue("MyQueue", { dlq })`), so the V5 page doesn't tell
-  people to create the 4.x component.
+  An arg's docs come with it, examples included. Where an example creates a component
+  that has a V5 form (`new sst.aws.Queue("MyQueue", { dlq })`, `sst.aws.Vpc.get(...)`),
+  the docs generator writes the V5 one on the V5 page. So declare an arg again only
+  when its type changes, or when what its docs say no longer holds.
 
 ### What becomes a part, and what stays a component
 
@@ -279,6 +285,7 @@ Everything above applies. The rest is specific to SST's own components in
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
 | A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
+| A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)` in `helpers/vpc.ts` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
@@ -296,8 +303,19 @@ the limit on how many builds run at once, so the image is created when its turn 
 It gets the part's name, transform and old address from `component.partHandle(key, id)`,
 the way `functionPart()` does. Reach for that only when `this.part()` can't do it.
 
-The types in a component's args stay in the component's file. The docs generator
-renders an args type it finds there, and fails on one that's declared in a helper.
+Args that several components take are declared once, in a helper. The docs generator
+reads every file in `aws/helpers/`, and a helper file gets no page of its own:
+
+- An interface the components' args extend, for args they share. `FargateArgs` in
+  `helpers/fargate.ts` is the `cluster` and `volumes` of a task and a service. Its
+  args show on each page as the component's own.
+- A named type the args use. `ContainerArgs` in `helpers/fargate.ts` and `ProxyArgs` in
+  `helpers/rds.ts` get a section on each page that uses them, as if the page's file
+  declared them.
+- A name for a type, like `AnyVpc`. A page shows what it stands for.
+
+Write a helper's doc comments for any page: don't name a component in them. The
+comment on an interface that's only extended isn't shown.
 
 ### Taking over what 4.x deployed
 
@@ -526,8 +544,8 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
 7. `cd www && bun ./generate.ts components` generates the page. The docs generator and
    the sidebar find every file in `aws/v5/`, so there's nothing to add to either.
    It fails when the page has `sst.aws.<Name>` outside the "Switch from" section, other
-   than as a link to its page: an inherited arg whose examples create the original is
-   the usual cause, and the arg is declared again with examples of its own.
+   than as a link to its page. An inherited example that creates the original is
+   rewritten for you; what's left is prose that names it, in an arg's docs or your own.
 8. Typecheck, run the tests, and `bun run build:cli` from the repo root.
 9. Review before calling it done. Read the original's constructor and the new one side
    by side, resource by resource: args, options, names, what's read back. Then read the

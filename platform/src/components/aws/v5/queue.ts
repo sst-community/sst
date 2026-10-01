@@ -38,54 +38,7 @@ const parts = () => ({
   eventSourceMapping: optional(lambda.EventSourceMapping),
 });
 
-export interface QueueArgs
-  extends V5Args<Omit<OriginalQueueArgs, "dlq">, typeof parts> {
-  /**
-   * Optionally add a dead-letter queue or DLQ for this queue.
-   *
-   * A dead-letter queue is used to store messages that can't be processed successfully by the
-   * subscriber function after the `retry` limit is reached.
-   *
-   * This takes either the ARN of the dead-letter queue or an object to configure how the
-   * dead-letter queue is used.
-   *
-   * @example
-   * For example, here's how you can create a dead-letter queue and link it to the main queue.
-   *
-   * ```ts title="sst.config.ts" {4}
-   * const deadLetterQueue = new sst.aws.v5.Queue("MyDLQ");
-   *
-   * new sst.aws.v5.Queue("MyQueue", {
-   *   dlq: deadLetterQueue.arn,
-   * });
-   * ```
-   *
-   * By default, the main queue will retry processing the message 3 times before sending it to the dead-letter queue. You can customize this.
-   *
-   * ```ts title="sst.config.ts" {3}
-   * new sst.aws.v5.Queue("MyQueue", {
-   *   dlq: {
-   *     retry: 5,
-   *     queue: deadLetterQueue.arn,
-   *   }
-   * });
-   * ```
-   */
-  dlq?: Input<
-    | string
-    | {
-        /**
-         * The ARN of the dead-letter queue.
-         */
-        queue: Input<string>;
-        /**
-         * The number of times the main queue will retry the message before sending it to the dead-letter queue.
-         * @default `3`
-         */
-        retry: Input<number>;
-      }
-  >;
-}
+export interface QueueArgs extends V5Args<OriginalQueueArgs, typeof parts> {}
 
 export interface QueueSubscriberArgs
   extends Omit<OriginalQueueSubscriberArgs, "transform"> {}

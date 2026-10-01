@@ -9,7 +9,7 @@ import { V5Args, component, many } from "../../parts-component";
 import { withDefault } from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import type { EfsArgs as OriginalEfsArgs } from "../efs";
 
 const parts = {
@@ -32,7 +32,8 @@ const parts = {
   accessPoint: efs.AccessPoint,
 };
 
-export interface EfsArgs extends V5Args<OriginalEfsArgs, typeof parts> {}
+export interface EfsArgs
+  extends V5Args<TakesVpc<OriginalEfsArgs>, typeof parts> {}
 
 /**
  * The `Efs` component lets you add [Amazon Elastic File System (EFS)](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html) to your app.
@@ -203,7 +204,7 @@ export class Efs extends component("sst:aws:Efs", parts) {
     // Where the mount targets go: the private subnets of a `Vpc`, or the
     // subnets that were given
     function network() {
-      if (args.vpc instanceof Vpc)
+      if (isVpc(args.vpc))
         return output({
           id: args.vpc.id,
           subnets: args.vpc.privateSubnets,

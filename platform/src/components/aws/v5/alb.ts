@@ -17,7 +17,7 @@ import {
   pointDomainAt,
   securityGroupArgs,
 } from "../helpers/load-balancer-args";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import type { AlbArgs as OriginalAlbArgs } from "../alb";
 
 const parts = () => ({
@@ -41,7 +41,8 @@ const parts = () => ({
   listener: many(lb.Listener),
 });
 
-export interface AlbArgs extends V5Args<OriginalAlbArgs, typeof parts> {}
+export interface AlbArgs
+  extends V5Args<TakesVpc<OriginalAlbArgs>, typeof parts> {}
 
 /**
  * The `Alb` component lets you create a standalone Application Load Balancer that can be
@@ -146,14 +147,13 @@ export class Alb extends component("sst:aws:Alb", parts) {
 
     // In the public subnets, or in the private ones when it's internal
     const isPublic = withDefault(args.public, true);
-    const vpc =
-      args.vpc instanceof Vpc
-        ? {
-            id: args.vpc.id,
-            publicSubnets: output(args.vpc.publicSubnets),
-            privateSubnets: output(args.vpc.privateSubnets),
-          }
-        : output(args.vpc);
+    const vpc = isVpc(args.vpc)
+      ? {
+          id: args.vpc.id,
+          publicSubnets: output(args.vpc.publicSubnets),
+          privateSubnets: output(args.vpc.privateSubnets),
+        }
+      : output(args.vpc);
     const vpcId = output(vpc.id);
     const subnets = isPublic.apply((isPublic) =>
       isPublic ? vpc.publicSubnets : vpc.privateSubnets,

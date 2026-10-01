@@ -24,13 +24,14 @@ import { DevCommand } from "../../experimental/dev-command";
 import {
   credentialsSecretOf,
   proxyArgs,
+  type ProxyArgs,
   proxyCredentials,
   proxyRoleArgs,
   storedPassword,
 } from "../helpers/rds";
 import { permission } from "../permission";
 import { RdsRoleLookup } from "../providers/rds-role-lookup";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import type { AuroraArgs as OriginalAuroraArgs } from "../aurora";
 
 const parts = {
@@ -101,64 +102,11 @@ const parts = {
   proxyTarget: optional(rds.ProxyTarget),
 };
 
-export interface AuroraProxyArgs {
-  /**
-   * Add extra credentials the proxy can use to connect to the database.
-   *
-   * Your app will use the master `username` and `password`. So you don't need to specify
-   * them here.
-   *
-   * These credentials are for any other services that need to connect to your database
-   * directly.
-   *
-   * :::tip
-   * You need to create these credentials manually in the database.
-   * :::
-   *
-   * These credentials are not automatically created. You'll need to create these
-   * credentials manually in the database.
-   *
-   * The list and each username have to be plain values. A password can be an output.
-   *
-   * @example
-   * ```js
-   * {
-   *   credentials: [
-   *     {
-   *       username: "metabase",
-   *       password: "Passw0rd!"
-   *     }
-   *   ]
-   * }
-   * ```
-   *
-   * You can use a [`Secret`](/docs/component/secret) to manage the password.
-   *
-   * ```js
-   * {
-   *   credentials: [
-   *     {
-   *       username: "metabase",
-   *       password: (new sst.Secret("MyDBPassword")).value
-   *     }
-   *   ]
-   * }
-   * ```
-   */
-  credentials?: {
-    /**
-     * The username of the user.
-     */
-    username: string;
-    /**
-     * The password of the user.
-     */
-    password: Input<string>;
-  }[];
-}
-
 export interface AuroraArgs
-  extends V5Args<Omit<OriginalAuroraArgs, "proxy" | "replicas">, typeof parts> {
+  extends V5Args<
+    TakesVpc<Omit<OriginalAuroraArgs, "proxy" | "replicas">>,
+    typeof parts
+  > {
   /**
    * The number of read-only Aurora replicas to create.
    *
@@ -198,7 +146,7 @@ export interface AuroraArgs
    * }
    * ```
    */
-  proxy?: boolean | AuroraProxyArgs;
+  proxy?: boolean | ProxyArgs;
 }
 
 /** What the rest of the app reads from the database, deployed or local. */
@@ -413,11 +361,7 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
 export class Aurora extends component("sst:aws:Aurora", parts) {
   private connection: Connection;
 
-  constructor(
-    name: string,
-    args: AuroraArgs,
-    opts?: ComponentResourceOptions,
-  ) {
+  constructor(name: string, args: AuroraArgs, opts?: ComponentResourceOptions) {
     super(name, args, opts);
 
     const self = this;
@@ -477,13 +421,12 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
         pauseAfter: pauses ? scaling?.pauseAfter ?? "5 minutes" : undefined,
       };
     });
-    const vpc =
-      args.vpc instanceof Vpc
-        ? output({
-            subnets: args.vpc.privateSubnets,
-            securityGroups: args.vpc.securityGroups,
-          })
-        : output(args.vpc);
+    const vpc = isVpc(args.vpc)
+      ? output({
+          subnets: args.vpc.privateSubnets,
+          securityGroups: args.vpc.securityGroups,
+        })
+      : output(args.vpc);
     // An engine version the user didn't choose isn't moved once it's deployed
     const pinned = (field: string) => (args.version ? [] : [field]);
     const parameterGroupOpts = {
@@ -606,7 +549,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       output(rdsProxy),
     );
 
-    function createProxy(proxy: AuroraProxyArgs) {
+    function createProxy(proxy: ProxyArgs) {
       // A secret for each additional user the proxy can connect as
       const secrets = proxyCredentials(proxy.credentials, name).map(
         ({ username, password }) => {
@@ -681,9 +624,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
         cluster,
         instance,
         secret,
-        args.password
-          ? output(args.password)
-          : storedPassword(secret.id, self),
+        args.password ? output(args.password) : storedPassword(secret.id, self),
         proxy
           ? output(proxy)
           : cluster.tagsAll.apply((tags) =>
@@ -909,10 +850,6 @@ Listening on "${local.host}:${local.port}"...`,
     id: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Aurora(
-      name,
-      { existing: { cluster: id } } as AuroraArgs,
-      opts,
-    );
+    return new Aurora(name, { existing: { cluster: id } } as AuroraArgs, opts);
   }
 }

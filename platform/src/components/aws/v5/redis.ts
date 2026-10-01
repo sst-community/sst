@@ -13,7 +13,7 @@ import { ifSet, withDefault } from "../../args";
 import { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { DevCommand } from "../../experimental/dev-command";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import type { RedisArgs as OriginalRedisArgs } from "../redis";
 
 const parts = {
@@ -43,7 +43,8 @@ const parts = {
   cluster: elasticache.ReplicationGroup,
 };
 
-export interface RedisArgs extends V5Args<OriginalRedisArgs, typeof parts> {}
+export interface RedisArgs
+  extends V5Args<TakesVpc<OriginalRedisArgs>, typeof parts> {}
 
 /** What the rest of the app reads from the cluster, deployed or local. */
 interface Connection {
@@ -145,13 +146,12 @@ export class Redis extends component("sst:aws:Redis", parts) {
       if (v === undefined) return { nodes: nodes || 1 };
       return v;
     });
-    const vpc =
-      args.vpc instanceof Vpc
-        ? output({
-            subnets: args.vpc.privateSubnets,
-            securityGroups: args.vpc.securityGroups,
-          })
-        : output(args.vpc);
+    const vpc = isVpc(args.vpc)
+      ? output({
+          subnets: args.vpc.privateSubnets,
+          securityGroups: args.vpc.securityGroups,
+        })
+      : output(args.vpc);
 
     const authToken = this.part("authToken", {
       length: 32,

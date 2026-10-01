@@ -31,13 +31,12 @@ import type { Input } from "../../input";
 import { hashStringToPrettyString } from "../../naming";
 import { transformPart } from "../../transform";
 import { Alb as OriginalAlb } from "../alb";
-import type { Cluster as OriginalCluster } from "../cluster";
-import type { Efs as OriginalEfs } from "../efs";
 import { DnsValidatedCertificate } from "../dns-validated-certificate";
-import type { FargateContainerArgs } from "../fargate";
 import type { CustomDomainArgs } from "../helpers/custom-domain";
 import {
   type Container,
+  type ContainerArgs,
+  type FargateArgs,
   containerImage,
   containersOf,
   cpuOf,
@@ -60,8 +59,6 @@ import {
 import { URL_UNAVAILABLE } from "../linkable";
 import type { ServiceArgs as OriginalServiceArgs } from "../service";
 import { Alb } from "./alb";
-import type { Cluster } from "./cluster";
-import type { Efs } from "./efs";
 
 const parts = () => ({
   /**
@@ -160,15 +157,7 @@ const parts = () => ({
 type Port = `${number}/${"http" | "https" | "tcp" | "udp" | "tcp_udp" | "tls"}`;
 type AlbPort = `${number}/${"http" | "https"}`;
 
-export interface ServiceContainerArgs
-  extends Omit<FargateContainerArgs, "name" | "volumes"> {
-  /**
-   * The name of the container.
-   *
-   * This is used as the `--name` option in the Docker run command. It has to be a plain
-   * value: the container's log group and image are named after it.
-   */
-  name: string;
+export interface ServiceContainerArgs extends ContainerArgs {
   /**
    * Configure the health check for the container. Same as the top-level
    * [`health`](#health).
@@ -195,11 +184,6 @@ export interface ServiceContainerArgs
      */
     directory?: Input<string>;
   };
-  /**
-   * Mount Amazon EFS file systems into the container. Same as the top-level
-   * [`volumes`](#volumes).
-   */
-  volumes?: ServiceArgs["volumes"];
 }
 
 export interface ServiceDomainArgs extends CustomDomainArgs {
@@ -808,36 +792,20 @@ export interface ServiceAlbArgs {
 
 export interface ServiceArgs
   extends V5Args<
-    Omit<
-      OriginalServiceArgs,
-      | "cluster"
-      | "containers"
-      | "volumes"
-      | "taskRole"
-      | "executionRole"
-      | "public"
-      | "loadBalancer"
-      | "scaling"
+      Omit<
+        OriginalServiceArgs,
+        | "cluster"
+        | "containers"
+        | "volumes"
+        | "taskRole"
+        | "executionRole"
+        | "public"
+        | "loadBalancer"
+        | "scaling"
+      >,
+      typeof parts
     >,
-    typeof parts
-  > {
-  /**
-   * The ECS Cluster to run the service in. Create one in your app, if you haven't already.
-   *
-   * ```js title="sst.config.ts"
-   * const vpc = new sst.aws.Vpc("MyVpc");
-   * const myCluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
-   * ```
-   *
-   * And pass it in.
-   *
-   * ```js
-   * {
-   *   cluster: myCluster
-   * }
-   * ```
-   */
-  cluster: OriginalCluster | Cluster;
+    FargateArgs {
   /**
    * Configure a load balancer to route traffic to the containers.
    *
@@ -1055,69 +1023,6 @@ export interface ServiceArgs
    * container can be an output.
    */
   containers?: ServiceContainerArgs[];
-  /**
-   * Mount Amazon EFS file systems into the container.
-   *
-   * @example
-   * Create an EFS file system.
-   *
-   * ```ts title="sst.config.ts"
-   * const vpc = new sst.aws.Vpc("MyVpc");
-   * const fileSystem = new sst.aws.v5.Efs("MyFileSystem", { vpc });
-   * ```
-   *
-   * And pass it in.
-   *
-   * ```js
-   * {
-   *   volumes: [
-   *     {
-   *       efs: fileSystem,
-   *       path: "/mnt/efs"
-   *     }
-   *   ]
-   * }
-   * ```
-   *
-   * Or pass in a the EFS file system ID.
-   *
-   * ```js
-   * {
-   *   volumes: [
-   *     {
-   *       efs: {
-   *         fileSystem: "fs-12345678",
-   *         accessPoint: "fsap-12345678"
-   *       },
-   *       path: "/mnt/efs"
-   *     }
-   *   ]
-   * }
-   * ```
-   */
-  volumes?: Input<{
-    /**
-     * The Amazon EFS file system to mount.
-     */
-    efs: Input<
-      | OriginalEfs
-      | Efs
-      | {
-          /**
-           * The ID of the EFS file system.
-           */
-          fileSystem: Input<string>;
-          /**
-           * The ID of the EFS access point.
-           */
-          accessPoint: Input<string>;
-        }
-    >;
-    /**
-     * The path to mount the volume.
-     */
-    path: Input<string>;
-  }>[];
 }
 
 /**

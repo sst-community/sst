@@ -49,6 +49,18 @@ const externalTypeDocLinks = new Map<string, string>([
 ]);
 // The source files that get a doc page
 const documentedSources = new Set<string>();
+// The helper files hold arg types that several V5 components share. They're
+// read so a page can show those types, and get no page of their own.
+const HELPERS = "platform/src/components/aws/helpers/";
+// The V5 components, by class name, and the source file of the page that's
+// being written
+const v5Classes = new Set<string>();
+let currentPage = "";
+// The interfaces from helper files that each page shows
+const sharedInterfaces = new Map<
+  TypeDoc.DeclarationReflection,
+  TypeDoc.DeclarationReflection[]
+>();
 // The parts of each V5 component, by source file
 const partsBySource = new Map<string, Parts | undefined>();
 function useLinkHashes(module: TypeDoc.DeclarationReflection) {
@@ -66,11 +78,17 @@ if (!cmd || cmd === "components") {
     buildSdk(),
   ]);
 
-  for (const component of components)
-    documentedSources.add(component.sources![0].fileName);
+  for (const component of components) {
+    const sourceFile = component.sources![0].fileName;
+    if (isHelperSource(sourceFile)) continue;
+    documentedSources.add(sourceFile);
+    if (isV5Source(sourceFile)) v5Classes.add(useClassName(component));
+  }
 
   for (const component of components) {
     const sourceFile = component.sources![0].fileName;
+    if (isHelperSource(sourceFile)) continue;
+    currentPage = sourceFile;
     // Skip - generated into the global-config doc
     if (sourceFile.endsWith("/aws/iam-edit.ts")) continue;
     else if (sourceFile === "platform/src/global-config.d.ts") {
@@ -1117,9 +1135,38 @@ function renderType(
     return `${renderSomeType(type.objectType)}<code class="symbol">[</code>${renderSomeType(type.indexType)}<code class="symbol">]</code>`;
   }
   function renderUnionType(type: TypeDoc.UnionType) {
-    return type.types
+    return useUnionMembers(type)
       .map((t) => renderSomeType(t))
       .join(`<code class="symbol"> | </code>`);
+  }
+  // On a V5 page, an arg that takes a component or the settings in its place
+  // lists the component first: `Vpc | Object`. An arg whose type is worked
+  // out from the original's has its members in the order the compiler made
+  // them, which isn't the order they're written in.
+  function useUnionMembers(type: TypeDoc.UnionType) {
+    if (!isV5Source(module.sources?.[0]?.fileName ?? "")) return type.types;
+    const isComponent = (member: TypeDoc.SomeType) => {
+      if (member.type !== "reference") return false;
+      const target = member.reflection as
+        | TypeDoc.DeclarationReflection
+        | undefined;
+      const file = target?.sources?.[0]?.fileName ?? "";
+      return (
+        (target?.kind === TypeDoc.ReflectionKind.Class &&
+          documentedSources.has(file)) ||
+        (target?.kind === TypeDoc.ReflectionKind.TypeAlias &&
+          isHelperSource(file))
+      );
+    };
+    const isSettings = (member: TypeDoc.SomeType): boolean =>
+      member.type === "reflection" ||
+      (member.type === "reference" &&
+        member.name === "Input" &&
+        !!member.typeArguments?.[0] &&
+        isSettings(member.typeArguments[0]));
+    const others = type.types.filter((member) => !isComponent(member));
+    if (!others.every(isSettings)) return type.types;
+    return [...type.types.filter(isComponent), ...others];
   }
   function renderArrayType(type: TypeDoc.ArrayType) {
     return type.elementType.type === "union"
@@ -1225,6 +1272,15 @@ function renderType(
       (type.reflection as TypeDoc.DeclarationReflection)?.sources?.[0].fileName ||
       // Some local helper types only carry a ReflectionSymbolId target.
       ((type as any)._target?.fileName as string | undefined);
+    // A name a helper file gives a type, like "either kind of `Vpc`": what
+    // it stands for
+    const alias = type.reflection as TypeDoc.DeclarationReflection | undefined;
+    if (
+      alias?.kind === TypeDoc.ReflectionKind.TypeAlias &&
+      alias.type &&
+      isHelperSource(fileName ?? "")
+    )
+      return renderSomeType(alias.type);
     // A V5 component has the name of the one it replaces, and so do its
     // types, so a name alone doesn't say it's this doc's
     const moduleFile = module.sources?.[0]?.fileName ?? "";
@@ -1266,9 +1322,12 @@ function renderType(
         documentedSources.has(
           fileName.replace(/\/([\w-]+\.ts)$/, "/v5/$1")
         );
+      // The type's own name: a helper file may import it under another
+      const declared =
+        (type.reflection as TypeDoc.DeclarationReflection)?.name ?? type.name;
       const name = replaced
-        ? `sst.${fileName.split("/").slice(3, -1).join(".")}.${type.name}`
-        : type.name;
+        ? `sst.${fileName.split("/").slice(3, -1).join(".")}.${declared}`
+        : declared;
       return `[<code class="type">${name}</code>](${docLink}${docHash})`;
     }
 
@@ -1697,6 +1756,9 @@ function renderConstructor(module: TypeDoc.DeclarationReflection) {
 
 // A V5 component is in its provider's `v5` folder, and is `sst.aws.v5.Queue`
 // next to the `sst.aws.Queue` it replaces
+function isHelperSource(fileName: string) {
+  return fileName.startsWith(HELPERS);
+}
 function isV5Source(fileName: string) {
   return /^platform\/src\/components\/\w+\/v5\//.test(fileName);
 }
@@ -2338,9 +2400,8 @@ function renderInterfacesAtH2Level(
     lines.push(``, `## ${int.name}`);
 
     // description
-    if (int.comment?.summary) {
-      lines.push(``, renderTdComment(int.comment?.summary!));
-    }
+    const summary = useInterfaceSummary(int);
+    if (summary) lines.push(``, renderTdComment(summary));
     lines.push(...renderInterfaceInheritedApiSummary(int));
 
     // props
@@ -2524,7 +2585,7 @@ function renderDescription(
   opts?: { indent: true }
 ) {
   if (!prop.comment?.summary) return [];
-  const str = renderTdComment(prop.comment?.summary);
+  const str = useV5Names(prop, renderTdComment(prop.comment?.summary));
   return opts?.indent
     ? [
         str
@@ -2612,7 +2673,20 @@ function renderExamples(
 ) {
   return (prop.comment?.blockTags ?? [])
     .filter((tag) => tag.tag === "@example")
-    .flatMap((tag) => renderTdComment(tag.content));
+    .flatMap((tag) => useV5Names(prop, renderTdComment(tag.content)));
+}
+
+// On a V5 page, an arg the component takes from the original comes with the
+// original's docs. Where those create a component that has a V5 form, the
+// page shows the V5 one: `new sst.aws.v5.Bucket(...)`. Docs written for the
+// V5 component, in its file or a helper, are left as they are.
+function useV5Names(prop: TypeDoc.Reflection, text: string) {
+  const file = (prop as TypeDoc.DeclarationReflection).sources?.[0]?.fileName;
+  if (!isV5Source(currentPage) || !file || isV5Source(file) || isHelperSource(file))
+    return text;
+  return text.replace(/\bsst\.aws\.(\w+)(?=\(|\.get\()/g, (match, name) =>
+    v5Classes.has(name) ? `sst.aws.v5.${name}` : match
+  );
 }
 
 function renderSignature(signature: TypeDoc.SignatureReflection) {
@@ -2686,7 +2760,73 @@ function useModuleComment(module: TypeDoc.DeclarationReflection) {
   return comment;
 }
 function useModuleInterfaces(module: TypeDoc.DeclarationReflection) {
-  return module.getChildrenByKind(TypeDoc.ReflectionKind.Interface);
+  const own = module.getChildrenByKind(TypeDoc.ReflectionKind.Interface);
+  if (!sharedInterfaces.has(module))
+    sharedInterfaces.set(module, useHelperInterfaces(module, own));
+  return [...own, ...sharedInterfaces.get(module)!];
+}
+// The interfaces a page shows that are declared in a helper file: the ones
+// its own interfaces and its class's methods name as the type of something.
+// They're rendered as if the page's file declared them.
+function useHelperInterfaces(
+  module: TypeDoc.DeclarationReflection,
+  own: TypeDoc.DeclarationReflection[]
+) {
+  const found = new Set<TypeDoc.DeclarationReflection>();
+  const seen = new Set<unknown>();
+
+  const walkReflection = (reflection?: TypeDoc.DeclarationReflection) => {
+    if (!reflection || seen.has(reflection)) return;
+    seen.add(reflection);
+    walkType(reflection.type);
+    reflection.children?.forEach(walkReflection);
+    for (const signature of reflection.signatures ?? []) {
+      signature.parameters?.forEach((parameter) => walkType(parameter.type));
+      walkType(signature.type);
+    }
+  };
+  const walkType = (type?: TypeDoc.SomeType) => {
+    if (!type || seen.has(type)) return;
+    seen.add(type);
+    switch (type.type) {
+      case "reference": {
+        type.typeArguments?.forEach(walkType);
+        const target = type.reflection as
+          | TypeDoc.DeclarationReflection
+          | undefined;
+        if (
+          target?.kind === TypeDoc.ReflectionKind.Interface &&
+          isHelperSource(target.sources?.[0]?.fileName ?? "")
+        ) {
+          found.add(target);
+          walkReflection(target);
+        }
+        return;
+      }
+      case "union":
+      case "intersection":
+        return type.types.forEach(walkType);
+      case "array":
+        return walkType(type.elementType);
+      case "tuple":
+        return type.elements.forEach(walkType);
+      case "optional":
+      case "rest":
+        return walkType(type.elementType);
+      case "namedTupleMember":
+        return walkType(type.element);
+      case "indexedAccess":
+        return walkType(type.objectType);
+      case "reflection":
+        return walkReflection(type.declaration);
+    }
+  };
+
+  own.forEach(walkReflection);
+  module
+    .getChildrenByKind(TypeDoc.ReflectionKind.Class)
+    .forEach(walkReflection);
+  return [...found];
 }
 function useModuleFunctions(module: TypeDoc.DeclarationReflection) {
   return module
@@ -2785,6 +2925,25 @@ function useClassGetters(module: TypeDoc.DeclarationReflection) {
   return (useClass(module).children ?? []).filter(
     (c) => c.kind === TypeDoc.ReflectionKind.Accessor && c.flags.isPublic
   );
+}
+// An interface with no comment of its own is given the comment of the one it
+// extends. When that one is in a helper file, the comment is about the
+// helper, not about what the page's interface is for.
+function useInterfaceSummary(int: TypeDoc.DeclarationReflection) {
+  const summary = int.comment?.summary;
+  if (!summary) return undefined;
+
+  const text = (parts: TypeDoc.CommentDisplayPart[]) =>
+    parts.map((part) => part.text).join("");
+  const fromHelper = (int.extendedTypes ?? []).some((type) => {
+    if (type.type !== "reference") return false;
+    const base = type.reflection as TypeDoc.DeclarationReflection | undefined;
+    return (
+      isHelperSource(base?.sources?.[0]?.fileName ?? "") &&
+      text(base?.comment?.summary ?? []) === text(summary)
+    );
+  });
+  return fromHelper ? undefined : summary;
 }
 function useInterfaceProps(i: TypeDoc.DeclarationReflection) {
   if (!i.children?.length) throw new Error(`Interface ${i.name} has no props`);
@@ -3127,6 +3286,12 @@ async function buildComponents() {
       "../platform/src/components/cloudflare/binding.ts",
       "../platform/src/components/cloudflare/dns.ts",
       "../platform/src/components/vercel/dns.ts",
+      // The arg types V5 components share. Last, so that reading them
+      // doesn't change the order the types of the pages above are read in.
+      ...fs
+        .readdirSync(`../${HELPERS}`)
+        .filter((file) => file.endsWith(".ts"))
+        .map((file) => `../${HELPERS}${file}`),
     ],
     tsconfig: "../platform/tsconfig.json",
   });

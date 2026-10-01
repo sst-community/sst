@@ -26,11 +26,9 @@ import { Function } from "./function";
 import { CustomDomainArgs, customDomain } from "../helpers/custom-domain";
 import { functionPart } from "../helpers/function-part";
 import { invokePermissionArgs } from "../helpers/function-permission";
-import type {
-  ApiGatewayV2DomainArgs as OriginalApiGatewayV2DomainArgs,
-} from "../helpers/apigatewayv2-domain";
+import type { ApiGatewayV2DomainArgs as OriginalApiGatewayV2DomainArgs } from "../helpers/apigatewayv2-domain";
 import { RETENTION } from "../logging";
-import { Vpc } from "../vpc";
+import { type TakesVpc, isVpc } from "../helpers/vpc";
 import type {
   ApiGatewayV2Args as OriginalApiGatewayV2Args,
   ApiGatewayV2AuthorizerArgs as OriginalApiGatewayV2AuthorizerArgs,
@@ -103,7 +101,10 @@ export interface ApiGatewayV2DomainArgs
     Pick<CustomDomainArgs, "dns"> {}
 
 export interface ApiGatewayV2Args
-  extends V5Args<Omit<OriginalApiGatewayV2Args, "domain">, typeof parts> {
+  extends V5Args<
+    TakesVpc<Omit<OriginalApiGatewayV2Args, "domain">>,
+    typeof parts
+  > {
   /**
    * Set a custom domain for your HTTP API.
    *
@@ -275,13 +276,12 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
         `In the "${name}" API, "transform.route" changes each route's API Gateway route, so it has no "handler" or "args". To change the routes' functions, use "transform.handler".`,
       );
 
-    const vpc =
-      args.vpc instanceof Vpc
-        ? {
-            subnets: args.vpc.publicSubnets,
-            securityGroups: args.vpc.securityGroups,
-          }
-        : args.vpc && output(args.vpc);
+    const vpc = isVpc(args.vpc)
+      ? {
+          subnets: args.vpc.publicSubnets,
+          securityGroups: args.vpc.securityGroups,
+        }
+      : args.vpc && output(args.vpc);
     if (vpc)
       this.part("vpcLink", {
         securityGroupIds: vpc.securityGroups,
@@ -700,9 +700,15 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     }
 
     const settings = output(args.lambda!);
-    const fn = functionPart(this, "authorizerFunction", name, settings.function, {
-      description: `${this.componentName} authorizer`,
-    });
+    const fn = functionPart(
+      this,
+      "authorizerFunction",
+      name,
+      settings.function,
+      {
+        description: `${this.componentName} authorizer`,
+      },
+    );
     const authorizer = this.part("authorizer", name, {
       apiId: api.id,
       authorizerType: "REQUEST",
@@ -795,7 +801,10 @@ function corsConfiguration(cors: Cors | undefined) {
       };
 }
 
-type Auth = Exclude<$util.Unwrap<OriginalApiGatewayV2RouteArgs["auth"]>, undefined>;
+type Auth = Exclude<
+  $util.Unwrap<OriginalApiGatewayV2RouteArgs["auth"]>,
+  undefined
+>;
 
 // How a route is authorized, in the terms API Gateway takes
 function authorization(auth: Auth | undefined): {

@@ -39,11 +39,11 @@ import {
 import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
 import type { Cluster } from "../v5/cluster";
-import { Vpc } from "../vpc";
 import { Efs } from "../v5/efs";
 import type { ServiceArgs } from "../service";
 import { bootstrap } from "./bootstrap";
 import { imageBuilder } from "./container-builder";
+import { isVpc } from "./vpc";
 
 /** Where a task or service runs: the VPC of its cluster. */
 export type Network = {
@@ -67,7 +67,7 @@ export function networkOf(cluster: OriginalCluster | Cluster): Network {
   const ids = (list: Input<Input<string>[]> | undefined) =>
     output(list ?? []) as Output<string[]>;
 
-  if (cluster.vpc instanceof Vpc) {
+  if (isVpc(cluster.vpc)) {
     const vpc = cluster.vpc;
     return {
       isSstVpc: true,
@@ -99,25 +99,116 @@ export function networkOf(cluster: OriginalCluster | Cluster): Network {
 }
 
 /**
- * The file systems a container mounts. Each is given as an `Efs`, the 4.x one
- * or the V5 one, or as the ids of a file system and one of its access points.
+ * What a V5 task and a V5 service take that the 4.x ones don't: either kind
+ * of cluster, and either kind of file system.
  */
-type Volumes = Input<{
-  efs: Input<
-    | OriginalEfs
-    | Efs
-    | { fileSystem: Input<string>; accessPoint: Input<string> }
-  >;
-  path: Input<string>;
-}>[];
+export interface FargateArgs {
+  /**
+   * The ECS Cluster to use. Create one in your app, if you haven't already.
+   *
+   * ```js title="sst.config.ts"
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const myCluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   cluster: myCluster
+   * }
+   * ```
+   */
+  cluster: OriginalCluster | Cluster;
+  /**
+   * Mount Amazon EFS file systems into the container.
+   *
+   * @example
+   * Create an EFS file system.
+   *
+   * ```ts title="sst.config.ts"
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const fileSystem = new sst.aws.v5.Efs("MyFileSystem", { vpc });
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   volumes: [
+   *     {
+   *       efs: fileSystem,
+   *       path: "/mnt/efs"
+   *     }
+   *   ]
+   * }
+   * ```
+   *
+   * Or pass in a the EFS file system ID.
+   *
+   * ```js
+   * {
+   *   volumes: [
+   *     {
+   *       efs: {
+   *         fileSystem: "fs-12345678",
+   *         accessPoint: "fsap-12345678"
+   *       },
+   *       path: "/mnt/efs"
+   *     }
+   *   ]
+   * }
+   * ```
+   */
+  volumes?: Input<{
+    /**
+     * The Amazon EFS file system to mount.
+     */
+    efs: Input<
+      | OriginalEfs
+      | Efs
+      | {
+          /**
+           * The ID of the EFS file system.
+           */
+          fileSystem: Input<string>;
+          /**
+           * The ID of the EFS access point.
+           */
+          accessPoint: Input<string>;
+        }
+    >;
+    /**
+     * The path to mount the volume.
+     */
+    path: Input<string>;
+  }>[];
+}
 
 /**
- * A container of a task or service. The name is a plain value: the
- * container's log group and image are named after it.
+ * A container of the task or service.
  */
-export type Container = Omit<FargateContainerArgs, "name" | "volumes"> & {
+export interface ContainerArgs
+  extends Omit<FargateContainerArgs, "name" | "volumes"> {
+  /**
+   * The name of the container.
+   *
+   * This is used as the `--name` option in the Docker run command. It has to be a plain
+   * value: the container's log group and image are named after it.
+   */
   name: string;
-  volumes?: Volumes;
+  /**
+   * Mount Amazon EFS file systems into the container. Same as the top-level
+   * [`volumes`](#volumes).
+   */
+  volumes?: FargateArgs["volumes"];
+}
+
+/**
+ * A container as the helpers here read it: a task's, or a service's with its
+ * health check and what `sst dev` runs.
+ */
+export type Container = ContainerArgs & {
   health?: ServiceArgs["health"];
   dev?: ServiceArgs["dev"];
 };
@@ -134,7 +225,7 @@ type ContainersArgs = Pick<
   | "entrypoint"
 > & {
   containers?: Container[];
-  volumes?: Volumes;
+  volumes?: FargateArgs["volumes"];
   health?: ServiceArgs["health"];
   dev?: ServiceArgs["dev"];
 };
