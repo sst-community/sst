@@ -1,5 +1,6 @@
 import {
   type ComponentResourceOptions,
+  type Input,
   type Inputs,
   type Output,
   type ResourceTransformationArgs,
@@ -300,6 +301,38 @@ export class PartsComponent<P extends Parts> extends Component {
   }
 
   /**
+   * Look up the resource of a part by its id, in place of creating it. This
+   * is for a component that references something already deployed and works
+   * out the ids of its other parts itself: from a tag, or a data source.
+   *
+   * @example
+   * ```ts
+   * const cluster = this.existingPart("cluster");
+   * if (cluster) this.lookupPart("secret", cluster.tags.apply((tags) => tags.secret));
+   * ```
+   *
+   * @param key The part to look up.
+   * @param resourceId The id the resource is looked up by.
+   */
+  protected lookupPart<K extends SingleKeys<P> & CreatedKeys<P>>(
+    key: K,
+    resourceId: Input<string>,
+    opts?: $util.CustomResourceOptions,
+  ): InstanceType<PartClassOf<P[K]>>;
+  protected lookupPart<K extends ManyKeys<P> & CreatedKeys<P>>(
+    key: K,
+    id: string,
+    resourceId: Input<string>,
+    opts?: $util.CustomResourceOptions,
+  ): InstanceType<PartClassOf<P[K]>>;
+  protected lookupPart(key: string, ...rest: any[]) {
+    const [id, resourceId, opts] = isMany(this.partClasses[key])
+      ? rest
+      : [undefined, ...rest];
+    return this.lookUp(key, id, resourceId, opts);
+  }
+
+  /**
    * Say that this component isn't deployed in `sst dev` because it runs
    * locally there. Reading `nodes` then explains why a resource is missing.
    *
@@ -493,12 +526,23 @@ export class PartsComponent<P extends Parts> extends Component {
       return existing;
     }
 
-    const lookup = cls as unknown as { get?: Function };
+    return this.lookUp(key, id, existing, opts);
+  }
+
+  private lookUp(
+    key: string,
+    id: string | undefined,
+    resourceId: unknown,
+    opts?: $util.CustomResourceOptions,
+  ) {
+    const lookup = partClass(this.partClasses[key]) as unknown as {
+      get?: Function;
+    };
     if (typeof lookup.get !== "function")
       throw new VisibleError(
         `The "${this.componentName}" component can't look up its "${key}" by id. Pass the resource itself in "existing".`,
       );
-    return lookup.get(this.nameOf(key, id), existing, undefined, {
+    return lookup.get(this.nameOf(key, id), resourceId, undefined, {
       ...opts,
       parent: this,
     });

@@ -135,6 +135,7 @@ const sidebar = [
             items: [
               "docs/component/aws/apigatewayv2-v5",
               "docs/component/aws/app-sync-v5",
+              "docs/component/aws/aurora-v5",
               "docs/component/aws/bucket-v5",
               "docs/component/aws/cognito-user-pool-v5",
               "docs/component/aws/cognito-user-pool-client-v5",

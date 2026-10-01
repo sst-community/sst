@@ -123,6 +123,10 @@ the component reads its args.
 - **`this.existingPart(key)`** returns the resource the user passed in `existing`, when
   the component has to do something different for a resource it didn't create.
   `this.part()` already returns it instead of creating one.
+- **`this.lookupPart(key, [id], resourceId)`** looks a part's resource up in place of
+  creating it, when the component references something that's already deployed and
+  works out the ids of its other parts itself: from a tag, or a data source. `AuroraV5`
+  is given a cluster and finds its instance, secret and proxy this way.
 - **`this.assertNew(what, key, id, args, transforms?)`** goes at the top of a method that
   adds a named thing (`addRoute`, `subscribe`). It rejects a name that's taken and a
   `transform` passed to the method, with a message that points at the component's own
@@ -377,7 +381,9 @@ The existing ports are the reference: `apigatewayv2-v5.ts` for routes, authorize
 custom domain; `sns-topic-v5.ts` for named subscribers; `bucket-v5.ts` for one resource
 built from many notifications; `cognito-user-pool-v5.ts` for triggers and a linkable
 client; `redis-v5.ts` for dev mode and `get`; `postgres-v5.ts` for the same with an
-optional group of parts (the proxy) and a part per item in a list; `dynamo-v5.ts` for
+optional group of parts (the proxy) and a part per item in a list; `aurora-v5.ts` for a
+`get` that finds the rest of what it references, and a transform that applies to more
+than one part; `dynamo-v5.ts` for
 required args next to `get`, and a static method replaced by `get`; `function-v5.ts`
 for a component 4.x built almost entirely inside `.apply()`, with parts that are
 created later.

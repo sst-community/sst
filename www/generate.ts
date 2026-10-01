@@ -2157,10 +2157,14 @@ function renderCloudflareBindings(module: TypeDoc.DeclarationReflection) {
   );
   if (!include) return lines;
 
-  // Filter out `getSSTLink().include[].type` is `cloudflare.binding`
+  // Filter out `getSSTLink().include[].type` is `cloudflare.binding`.
+  // An include list that isn't written out in place has no members to look
+  // through here, and isn't a Cloudflare binding.
   const includeArrayType = include.type as TypeDoc.ArrayType;
-  const includeType = includeArrayType.elementType as TypeDoc.ReflectionType;
-  const isCloudflareBinding = includeType.declaration.children?.some(
+  const includeType = includeArrayType.elementType as
+    | TypeDoc.ReflectionType
+    | undefined;
+  const isCloudflareBinding = includeType?.declaration?.children?.some(
     (c) =>
       c.name === "type" &&
       (c.type as TypeDoc.LiteralType)?.value === "cloudflare.binding"
@@ -2896,6 +2900,7 @@ async function buildComponents() {
       "../platform/src/components/aws/app-sync-v5.ts",
       "../platform/src/components/aws/auth.ts",
       "../platform/src/components/aws/aurora.ts",
+      "../platform/src/components/aws/aurora-v5.ts",
       "../platform/src/components/aws/bucket.ts",
       "../platform/src/components/aws/bucket-notification.ts",
       "../platform/src/components/aws/bucket-v5.ts",

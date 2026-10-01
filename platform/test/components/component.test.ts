@@ -512,6 +512,51 @@ describe("Component parts", () => {
       expect(pulumi.resources.filter((r) => r.kind === "register").length).toBe(1);
     });
 
+    // A component that references something already deployed finds the ids
+    // of its other parts itself: here, from the queue it's given.
+    it("looks a part up by an id the component works out", async () => {
+      const parts = {
+        queue: aws.sqs.Queue,
+        deadLetters: optional(aws.sqs.Queue),
+        alarm: many(aws.cloudwatch.MetricAlarm),
+      };
+      class Inbox extends component("acme:Inbox", parts) {
+        constructor(
+          name: string,
+          args: import("../../src/components/parts-component").ComponentArgs<
+            typeof parts
+          >,
+        ) {
+          super(name, args);
+          const queue = this.existingPart("queue")!;
+          this.lookupPart(
+            "deadLetters",
+            queue.id.apply((id) => `${id}-dead-letters`),
+          );
+          this.lookupPart("alarm", "depth", "depth-alarm");
+        }
+      }
+
+      const inbox = new Inbox("A", {
+        existing: { queue: "https://sqs.example.com/123/mine" },
+      });
+      await pulumi.settle();
+
+      expect(
+        pulumi.resources
+          .filter((r) => r.kind === "read")
+          .map((r) => [r.name, r.options.id])
+          .sort(),
+      ).toEqual([
+        ["AAlarmDepth", "depth-alarm"],
+        ["ADeadLetters", "https://sqs.example.com/123/mine-dead-letters"],
+        ["AQueue", "https://sqs.example.com/123/mine"],
+      ]);
+      expect(pulumi.resources.filter((r) => r.kind === "register").length).toBe(1);
+      expect(inbox.nodes.deadLetters).toBeInstanceOf(aws.sqs.Queue);
+      expect(Object.keys(inbox.nodes.alarm)).toEqual(["depth"]);
+    });
+
     it("takes existing resources for a many part by id", async () => {
       const mine = new aws.cloudwatch.MetricAlarm("Mine", {
         comparisonOperator: "GreaterThanThreshold",

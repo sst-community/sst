@@ -13,6 +13,7 @@ import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { DevCommand } from "../experimental/dev-command";
 import {
+  credentialsSecretOf,
   maxStorage,
   proxyArgs,
   proxyCredentials,
@@ -482,9 +483,11 @@ export class PostgresV5 extends component("sst:aws:PostgresV5", parts) {
     // secret that holds its password.
     function passwordOf(instance: rds.Instance) {
       return storedPassword(
-        instance,
-        "sst:lookup:password",
-        `Failed to get password for Postgres ${name}.`,
+        credentialsSecretOf(
+          instance,
+          "sst:lookup:password",
+          `Failed to get password for Postgres ${name}.`,
+        ),
         self,
       );
     }

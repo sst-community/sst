@@ -13,6 +13,7 @@ import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { DevCommand } from "../experimental/dev-command";
 import {
+  credentialsSecretOf,
   maxStorage,
   proxyArgs,
   proxyCredentials,
@@ -481,9 +482,11 @@ export class MysqlV5 extends component("sst:aws:MysqlV5", parts) {
     // that holds its password.
     function passwordOf(instance: rds.Instance) {
       return storedPassword(
-        instance,
-        "sst:ref:password",
-        `Failed to get password for MySQL ${name}.`,
+        credentialsSecretOf(
+          instance,
+          "sst:ref:password",
+          `Failed to get password for MySQL ${name}.`,
+        ),
         self,
       );
     }

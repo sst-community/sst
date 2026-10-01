@@ -115,7 +115,7 @@ export function proxyRoleArgs(secrets: secretsmanager.Secret[]): iam.RoleArgs {
  * secrets.
  */
 export function proxyArgs(
-  engineFamily: "POSTGRESQL" | "MYSQL",
+  engineFamily: Input<"POSTGRESQL" | "MYSQL">,
   secrets: secretsmanager.Secret[],
   role: iam.Role,
   subnets: Input<Input<string>[]>,
@@ -133,23 +133,30 @@ export function proxyArgs(
 }
 
 /**
- * The master user's password of a database SST created, read from the secret
- * that one of the database's tags names.
+ * The id of the secret that holds the master user's credentials of a
+ * database SST created. One of the database's tags names it.
  *
  * @param tag The tag that holds the secret's id.
  * @param notFound The error for a database that doesn't have the tag.
- * @param parent The component that's reading it.
  */
-export function storedPassword(
+export function credentialsSecretOf(
   database: { tagsAll: Output<Record<string, string>> },
   tag: string,
   notFound: string,
-  parent: Resource,
 ) {
-  const secretId = database.tagsAll.apply((tags) => {
+  return database.tagsAll.apply((tags) => {
     if (!tags?.[tag]) throw new VisibleError(notFound);
     return tags[tag];
   });
+}
+
+/**
+ * The master user's password, read from the secret that holds the database's
+ * credentials.
+ *
+ * @param parent The component that's reading it.
+ */
+export function storedPassword(secretId: Input<string>, parent: Resource) {
   return secretsmanager
     .getSecretVersionOutput({ secretId }, { parent })
     .secretString.apply((v) => JSON.parse(v).password as string);

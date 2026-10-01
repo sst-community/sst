@@ -7,6 +7,7 @@
  */
 import "./apigatewayv2";
 import "./app-sync";
+import "./aurora";
 import "./bucket";
 import "./cognito-user-pool";
 import "./cognito-user-pool-client";
