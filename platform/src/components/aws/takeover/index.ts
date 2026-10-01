@@ -20,3 +20,4 @@ import "./postgres";
 import "./queue";
 import "./redis";
 import "./sns-topic";
+import "./task";

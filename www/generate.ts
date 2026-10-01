@@ -2963,6 +2963,7 @@ async function buildComponents() {
       "../platform/src/components/aws/svelte-kit.ts",
       "../platform/src/components/aws/tan-stack-start.ts",
       "../platform/src/components/aws/task.ts",
+      "../platform/src/components/aws/task-v5.ts",
       "../platform/src/components/aws/vpc.ts",
       "../platform/src/components/aws/vpc-v1.ts",
       "../platform/src/components/aws/workflow.ts",

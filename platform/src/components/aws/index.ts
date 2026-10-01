@@ -53,6 +53,7 @@ export * from "./solid-start.js";
 export * from "./step-functions.js";
 export * from "./tan-stack-start.js";
 export * from "./task.js";
+export * from "./task-v5.js";
 export * from "./nuxt.js";
 export * from "./static-site.js";
 export * from "./svelte-kit.js";

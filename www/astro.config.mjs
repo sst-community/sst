@@ -148,6 +148,7 @@ const sidebar = [
               "docs/component/aws/queue-v5",
               "docs/component/aws/redis-v5",
               "docs/component/aws/sns-topic-v5",
+              "docs/component/aws/task-v5",
             ],
           },
           {

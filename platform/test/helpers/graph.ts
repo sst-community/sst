@@ -183,11 +183,28 @@ export function mockPulumi(input?: {
     return readResource(req, callback);
   };
 
+  // What a component registers as its outputs, by its URN. The CLI reads
+  // some of them, like the command `sst dev` runs for a task.
+  const registered = new Map<string, Record<string, any>>();
+  const registerResourceOutputs = monitor.registerResourceOutputs.bind(monitor);
+  monitor.registerResourceOutputs = (req: any, callback: any) => {
+    registered.set(req.getUrn(), req.getOutputs()?.toJavaScript() ?? {});
+    return registerResourceOutputs(req, callback);
+  };
+
   return {
     resources,
     /** Empties the list, so each test sees only its own resources. */
     reset() {
       resources.length = 0;
+      registered.clear();
+    },
+    /** The outputs a component registered, by the component's name. */
+    outputsOf(name: string) {
+      const component = resources.find((r) => r.name === name && !r.custom);
+      return component
+        ? registered.get(urn(component.type, component.name, component.parent))
+        : undefined;
     },
     /**
      * Lets pending `.apply()` chains and registrations finish: waits until

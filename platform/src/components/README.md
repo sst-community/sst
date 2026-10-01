@@ -234,6 +234,7 @@ Everything above applies. The rest is specific to SST's own components in
 | A custom domain (`name`, `dns`, `cert`) | `customDomain()` and `CustomDomainArgs` in `helpers/custom-domain.ts` |
 | Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
+| A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
@@ -244,6 +245,11 @@ A helper returns the args of a part, or checks an arg. The component still creat
 each part with `this.part()`, so its constructor reads as the list of what it creates.
 `PostgresV5` and `MysqlV5` are the same component but for a handful of settings, and
 share everything else this way.
+
+One helper creates a part itself: `containerImage()` builds a container's image behind
+the limit on how many builds run at once, so the image is created when its turn comes.
+It gets the part's name, transform and old address from `component.partHandle(key, id)`,
+the way `functionPart()` does. Reach for that only when `this.part()` can't do it.
 
 The types in a component's args stay in the component's file. The docs generator
 renders an args type it finds there, and fails on one that's declared in a helper.
@@ -361,6 +367,13 @@ await pulumi.expectTakeover(
 - A provider made with `useProvider()` is registered once in a process, so only the
   first test that needs it has it in its graph. Leave providers out of what you compare
   (see `dsql-v5.test.ts`).
+- A secret input is recorded as an object with the value under `value`. A value made
+  from a secret is a secret too, so a port that reads something next to a secret (a
+  task's volumes next to its built image) can turn a plain input into one. The check
+  reports that as a change to the field.
+- `pulumi.outputsOf(name)` is what a component registered as its outputs. The CLI reads
+  some of them (`_task`, `_dev`, `_tunnel`), so compare them between the original and
+  the port (see `task-v5.test.ts`).
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
 - A 4.x component that's passed in can be the real one: a `Vpc`, `Cluster` and `Task`
@@ -414,7 +427,8 @@ client; `redis-v5.ts` for dev mode and `get`; `postgres-v5.ts` for the same with
 optional group of parts (the proxy) and a part per item in a list; `aurora-v5.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
 than one part; `dsql-v5.ts` for parts in another region, and features that each add a
-group of parts; `cron-v2-v5.ts` for a function the component may be given or may
+group of parts; `task-v5.ts` for parts per item of a plain list (containers), a part
+that's built later, a stub in `sst dev`, and outputs the CLI reads; `cron-v2-v5.ts` for a function the component may be given or may
 create, next to another component it's given (a `Task`); `dynamo-v5.ts` for
 required args next to `get`, and a static method replaced by `get`; `function-v5.ts`
 for a component 4.x built almost entirely inside `.apply()`, with parts that are

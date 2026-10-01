@@ -8,6 +8,7 @@ import type { Function, FunctionArgs, FunctionArn } from "./function";
 import { FunctionV5, type FunctionV5Args } from "./function-v5";
 import { functionPart } from "./helpers/function-part";
 import type { Task } from "./task";
+import type { TaskV5 } from "./task-v5";
 import type { Workflow } from "./workflow";
 import type { CronV2Args } from "./cron-v2";
 
@@ -77,7 +78,7 @@ export interface CronV2V5Args
    *
    * ```js title="sst.config.ts"
    * const cluster = new sst.aws.Cluster("MyCluster");
-   * const task = new sst.aws.Task("MyTask", { cluster });
+   * const task = new sst.aws.TaskV5("MyTask", { cluster });
    * ```
    *
    * You can then pass in the task to the cron job.
@@ -89,7 +90,7 @@ export interface CronV2V5Args
    * });
    * ```
    */
-  task?: Task;
+  task?: Task | TaskV5;
 }
 
 /**
@@ -118,7 +119,7 @@ export interface CronV2V5Args
  *
  * ```ts title="sst.config.ts" {5}
  * const cluster = new sst.aws.Cluster("MyCluster");
- * const task = new sst.aws.Task("MyTask", { cluster });
+ * const task = new sst.aws.TaskV5("MyTask", { cluster });
  *
  * new sst.aws.CronV2V5("MyCronJob", {
  *   task,
@@ -288,7 +289,7 @@ export class CronV2V5 extends component("sst:aws:CronV2V5", parts) {
             // A task's containers are given the event in `SST_EVENT`
             input: all([event, task!.containers]).apply(([event, containers]) =>
               JSON.stringify({
-                containerOverrides: containers.map((name) => ({
+                containerOverrides: containers.map((name: string) => ({
                   name,
                   environment: [
                     { name: "SST_EVENT", value: JSON.stringify(event) },
