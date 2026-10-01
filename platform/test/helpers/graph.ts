@@ -131,6 +131,12 @@ export function mockPulumi(input?: {
   // The mocks above are not told about a resource's parent or options, so
   // read them off the registration request itself.
   const monitor = (pulumi.runtime as any).getMonitor() as any;
+  // Pulumi's mock makes a resource's URN from its type and its parent's. The
+  // engine uses the type of every component it's inside, and so does what
+  // works out old addresses here. Without this, what's inside a component
+  // inside a component inside a component has a parent nothing answers to.
+  monitor.newUrn = (parent: string, type: string, name: string) =>
+    urn(type, name, parent);
   const registerResource = monitor.registerResource.bind(monitor);
   monitor.registerResource = (req: any, callback: any) => {
     resources.push({
