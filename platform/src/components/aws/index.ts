@@ -32,6 +32,7 @@ export * from "./app-sync-v5.js";
 export * from "./bucket-v5.js";
 export * from "./cognito-user-pool-v5.js";
 export * from "./cognito-user-pool-client-v5.js";
+export * from "./function-v5.js";
 export * from "./queue-v5.js";
 export * from "./realtime.js";
 export * from "./react.js";

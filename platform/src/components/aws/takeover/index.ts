@@ -10,6 +10,7 @@ import "./app-sync.js";
 import "./bucket.js";
 import "./cognito-user-pool.js";
 import "./cognito-user-pool-client.js";
+import "./function.js";
 import "./queue.js";
 import "./redis.js";
 import "./sns-topic.js";
