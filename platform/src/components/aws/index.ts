@@ -28,6 +28,7 @@ export * from "./open-search.js";
 export * from "./postgres.js";
 export * from "./postgres-v5.js";
 export * from "./mysql.js";
+export * from "./mysql-v5.js";
 export * from "./queue.js";
 export * from "./apigatewayv2-v5.js";
 export * from "./app-sync-v5.js";

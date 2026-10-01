@@ -227,10 +227,19 @@ Everything above applies. The rest is specific to SST's own components in
 | A custom domain (`name`, `dns`, `cert`) | `customDomain()` and `CustomDomainArgs` in `helpers/custom-domain.ts` |
 | Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
+| An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
 | An arg that must not be an output | `plain(value, what)` in `args.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |
+
+A helper returns the args of a part, or checks an arg. The component still creates
+each part with `this.part()`, so its constructor reads as the list of what it creates.
+`PostgresV5` and `MysqlV5` are the same component but for a handful of settings, and
+share everything else this way.
+
+The types in a component's args stay in the component's file. The docs generator
+renders an args type it finds there, and fails on one that's declared in a helper.
 
 ### Taking over what 4.x deployed
 

@@ -12,6 +12,7 @@ import "./cognito-user-pool";
 import "./cognito-user-pool-client";
 import "./dynamo";
 import "./function";
+import "./mysql";
 import "./postgres";
 import "./queue";
 import "./redis";
