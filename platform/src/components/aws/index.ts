@@ -17,6 +17,7 @@ export * from "./cron.js";
 export * from "./cron-v2.js";
 export * from "./dns.js";
 export * from "./dsql.js";
+export * from "./dsql-v5.js";
 export * from "./dynamo.js";
 export * from "./dynamo-v5.js";
 export * from "./efs.js";

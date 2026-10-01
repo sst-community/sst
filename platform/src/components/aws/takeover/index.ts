@@ -11,6 +11,7 @@ import "./aurora";
 import "./bucket";
 import "./cognito-user-pool";
 import "./cognito-user-pool-client";
+import "./dsql";
 import "./dynamo";
 import "./function";
 import "./mysql";

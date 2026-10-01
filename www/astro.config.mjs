@@ -139,6 +139,7 @@ const sidebar = [
               "docs/component/aws/bucket-v5",
               "docs/component/aws/cognito-user-pool-v5",
               "docs/component/aws/cognito-user-pool-client-v5",
+              "docs/component/aws/dsql-v5",
               "docs/component/aws/dynamo-v5",
               "docs/component/aws/function-v5",
               "docs/component/aws/mysql-v5",

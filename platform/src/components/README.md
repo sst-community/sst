@@ -284,6 +284,11 @@ takeover(ApiGatewayV2V5, {
 - A resource 4.x **looked up** outside the component (`Bucket.get`) can't be carried
   over, because a lookup takes no old address. It's dropped from state and looked up
   again, which changes nothing in AWS.
+- A part that gets a new name keeps its physical name: a generated name is never
+  changed once it's deployed. A resource that's named with a `Name` tag is the
+  exception (a security group, a VPC endpoint, a subnet). Its tag is made from the new
+  name and updated in place. Say so in the "Switch from" section, as `DsqlV5` does for
+  the security group of its endpoints.
 - A function's `description` usually changes, because 4.x named the wrapper in it. That's
   an in-place update. So does anything else made from the function's name when a
   function part gets a new one: a URL behind a `Router` is registered under a key made
@@ -342,6 +347,9 @@ await pulumi.expectTakeover(
   a renamed resource's new name as its old one wherever another resource refers to it.
   It doesn't in the resource's own inputs: its own name there is the name SST gave it,
   like a `Name` tag, and a new one is a change.
+- A provider made with `useProvider()` is registered once in a process, so only the
+  first test that needs it has it in its graph. Leave providers out of what you compare
+  (see `dsql-v5.test.ts`).
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
 - Give the mock extra `state` for outputs the code reads (see `apigatewayv2-v5.test.ts`).
@@ -387,7 +395,8 @@ built from many notifications; `cognito-user-pool-v5.ts` for triggers and a link
 client; `redis-v5.ts` for dev mode and `get`; `postgres-v5.ts` for the same with an
 optional group of parts (the proxy) and a part per item in a list; `aurora-v5.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
-than one part; `dynamo-v5.ts` for
+than one part; `dsql-v5.ts` for parts in another region, and features that each add a
+group of parts; `dynamo-v5.ts` for
 required args next to `get`, and a static method replaced by `get`; `function-v5.ts`
 for a component 4.x built almost entirely inside `.apply()`, with parts that are
 created later.
