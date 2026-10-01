@@ -222,6 +222,11 @@ export interface AppSyncV5ResolverArgs
  * - The `transform` of a data source, function or resolver becomes the API's `transform`
  *   for `dataSource`, `serviceRole`, `dataSourceFunction`, `function` and `resolver`.
  * - `domain` and `domain.dns` have to be plain values, not outputs.
+ * - A function created for a Lambda data source, and the association of a custom domain
+ *   with the API, are created with the API's `provider`. `AppSync` created both with your
+ *   app's provider, whatever the API was given. If your API has a `provider` and either of
+ *   these, they're replaced on switch: remove the data source or the domain and deploy
+ *   before you switch, then add it back.
  * - An object in `transform` is merged into the defaults, nested objects included, where
  *   `AppSync` replaced a nested object whole. To replace one, use a function.
  * - `$transform(sst.aws.AppSync, ...)` doesn't apply to it. Write one for

@@ -48,8 +48,10 @@ type PostgresClass =
 describe("PostgresV5", () => {
   let Postgres: typeof import("../../src/components/aws/postgres").Postgres;
   let PostgresV5: typeof import("../../src/components/aws/postgres-v5").PostgresV5;
+  let Vpc: typeof import("../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
+    Vpc = (await import("../../src/components/aws/vpc")).Vpc;
     Postgres = (await import("../../src/components/aws/postgres")).Postgres;
     PostgresV5 = (await import("../../src/components/aws/postgres-v5"))
       .PostgresV5;
@@ -72,206 +74,166 @@ describe("PostgresV5", () => {
   // that goes is the version marker Postgres writes, which has nothing in AWS
   // behind it.
   describe("takes over a deployed Postgres", () => {
-    const cases: Record<string, (Postgres: PostgresClass) => void> = {
-      "default database": (Postgres) => {
-        new Postgres("MyDatabase", { vpc });
-      },
-      "every setting": (Postgres) => {
-        new Postgres("MyDatabase", {
-          vpc,
-          version: "16.4",
-          username: "admin",
-          password: "Passw0rd!",
-          database: "acme",
-          instance: "m7g.xlarge",
-          storage: "100 GB",
-          multiAz: true,
-          blueGreen: true,
-        });
-      },
-      "storage in terabytes": (Postgres) => {
-        new Postgres("MyDatabase", { vpc, storage: "2 TB" });
-      },
-      "blue/green with the smallest storage": (Postgres) => {
-        new Postgres("MyDatabase", { vpc, blueGreen: true });
-      },
-      "settings given as outputs": (Postgres) => {
-        new Postgres("MyDatabase", {
-          vpc: output({ subnets: [output("subnet-1"), "subnet-2"] }),
-          version: output("15"),
-          username: output("admin"),
-          password: output("Passw0rd!"),
-          database: output("acme"),
-          instance: output("t4g.small"),
-          storage: output("50 GB" as const),
-          multiAz: output(true),
-          blueGreen: output(false),
-        });
-      },
-      "a proxy": (Postgres) => {
-        new Postgres("MyDatabase", { vpc, proxy: true });
-      },
-      "a proxy with additional credentials": (Postgres) => {
-        new Postgres("MyDatabase", {
-          vpc,
-          proxy: {
-            credentials: [
-              { username: "metabase", password: "Passw0rd!" },
-              { username: "app_user", password: output("S3cret") },
-              { username: "Reporting", password: "Passw0rd!" },
-            ],
-          },
-        });
-      },
-      "a proxy with no additional credentials": (Postgres) => {
-        new Postgres("MyDatabase", { vpc, proxy: {} });
-      },
-      "read replicas": (Postgres) => {
-        new Postgres("MyDatabase", { vpc, replicas: 2 });
-      },
-      "read replicas with a chosen version": (Postgres) => {
-        new Postgres("MyDatabase", { vpc, replicas: 1, version: "17.2" });
-      },
-      transforms: (Postgres) => {
-        new Postgres("MyDatabase", {
-          vpc,
-          proxy: true,
-          transform: {
-            subnetGroup: { description: "custom" },
-            parameterGroup: (args) => {
-              args.description = "tuned";
+    pulumi.takeoverCases({
+      original: () => Postgres,
+      v5: () => PostgresV5,
+      unclaimed: [VERSION],
+      check: () => expect(resource("MyDatabaseInstance").type).toBe(INSTANCE),
+      cases: {
+        "default database": (Postgres, opts) => {
+          new Postgres("MyDatabase", { vpc }, opts);
+        },
+        "every setting": (Postgres, opts) => {
+          new Postgres(
+            "MyDatabase",
+            {
+              vpc,
+              version: "16.4",
+              username: "admin",
+              password: "Passw0rd!",
+              database: "acme",
+              instance: "m7g.xlarge",
+              storage: "100 GB",
+              multiAz: true,
+              blueGreen: true,
             },
-            instance: (args, opts) => {
-              args.backupRetentionPeriod = 30;
-              args.identifier = "custom-identifier";
-              opts.protect = true;
+            opts,
+          );
+        },
+        "storage in terabytes": (Postgres, opts) => {
+          new Postgres("MyDatabase", { vpc, storage: "2 TB" }, opts);
+        },
+        "blue/green with the smallest storage": (Postgres, opts) => {
+          new Postgres("MyDatabase", { vpc, blueGreen: true }, opts);
+        },
+        "settings given as outputs": (Postgres, opts) => {
+          new Postgres(
+            "MyDatabase",
+            {
+              vpc: output({ subnets: [output("subnet-1"), "subnet-2"] }),
+              version: output("15"),
+              username: output("admin"),
+              password: output("Passw0rd!"),
+              database: output("acme"),
+              instance: output("t4g.small"),
+              storage: output("50 GB" as const),
+              multiAz: output(true),
+              blueGreen: output(false),
             },
-            proxy: { idleClientTimeout: 600, requireTls: true },
+            opts,
+          );
+        },
+        "a proxy": (Postgres, opts) => {
+          new Postgres("MyDatabase", { vpc, proxy: true }, opts);
+        },
+        "a proxy with additional credentials": (Postgres, opts) => {
+          new Postgres(
+            "MyDatabase",
+            {
+              vpc,
+              proxy: {
+                credentials: [
+                  { username: "metabase", password: "Passw0rd!" },
+                  { username: "app_user", password: output("S3cret") },
+                  { username: "Reporting", password: "Passw0rd!" },
+                ],
+              },
+            },
+            opts,
+          );
+        },
+        "a proxy with no additional credentials": (Postgres, opts) => {
+          new Postgres("MyDatabase", { vpc, proxy: {} }, opts);
+        },
+        "read replicas": (Postgres, opts) => {
+          new Postgres("MyDatabase", { vpc, replicas: 2 }, opts);
+        },
+        "read replicas with a chosen version": (Postgres, opts) => {
+          new Postgres(
+            "MyDatabase",
+            { vpc, replicas: 1, version: "17.2" },
+            opts,
+          );
+        },
+        transforms: (Postgres, opts) => {
+          new Postgres(
+            "MyDatabase",
+            {
+              vpc,
+              proxy: true,
+              transform: {
+                subnetGroup: { description: "custom" },
+                parameterGroup: (args) => {
+                  args.description = "tuned";
+                },
+                instance: (args, opts) => {
+                  args.backupRetentionPeriod = 30;
+                  args.identifier = "custom-identifier";
+                  opts.protect = true;
+                },
+                proxy: { idleClientTimeout: 600, requireTls: true },
+              },
+            },
+            opts,
+          );
+        },
+        "dev args outside of sst dev": (Postgres, opts) => {
+          new Postgres(
+            "MyDatabase",
+            {
+              vpc,
+              dev: { username: "postgres", password: "password", port: 5433 },
+            },
+            opts,
+          );
+        },
+        "a database referenced with get": (Postgres, opts) => {
+          Postgres.get("MyDatabase", { id: "app-dev-mydatabase" }, opts);
+        },
+        "a database and proxy referenced with get": (Postgres, opts) => {
+          Postgres.get(
+            "MyDatabase",
+            {
+              id: "app-dev-mydatabase",
+              proxyId: "app-dev-mydatabase-proxy",
+            },
+            opts,
+          );
+        },
+        "a database in the private subnets of a Vpc": {
+          create: (Postgres, opts) => {
+            new Postgres(
+              "MyDatabase",
+              { vpc: new Vpc("MyVpc"), proxy: true },
+              opts,
+            );
           },
-        });
-      },
-      "dev args outside of sst dev": (Postgres) => {
-        new Postgres("MyDatabase", {
-          vpc,
-          dev: { username: "postgres", password: "password", port: 5433 },
-        });
-      },
-      "a database referenced with get": (Postgres) => {
-        Postgres.get("MyDatabase", { id: "app-dev-mydatabase" });
-      },
-      "a database and proxy referenced with get": (Postgres) => {
-        Postgres.get("MyDatabase", {
-          id: "app-dev-mydatabase",
-          proxyId: "app-dev-mydatabase-proxy",
-        });
-      },
-    };
-
-    for (const [name, create] of Object.entries(cases)) {
-      it(name, async () => {
-        expect(
-          await pulumi.takesOver(
-            () => create(Postgres),
-            () => create(PostgresV5),
-          ),
-        ).toEqual({ unclaimed: [VERSION], changed: [] });
-        expect(resource("MyDatabaseInstance").type).toBe(INSTANCE);
-      });
-    }
-
-    // PostgresV5 merges an object transform into the defaults. Postgres replaced
-    // a nested object whole, so tags set this way took the place of the ones
-    // SST sets. Those come back: the one thing that changes.
-    it("an object transform that sets tags", async () => {
-      const create = (Postgres: PostgresClass) => () =>
-        new Postgres("MyDatabase", {
-          vpc,
-          transform: { instance: { tags: { team: "data" } } },
-        });
-
-      const result = await pulumi.takesOver(create(Postgres), create(PostgresV5));
-      expect(result.unclaimed).toEqual([VERSION]);
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyDatabaseInstance", ["tags"]],
-      ]);
-      expect(result.changed[0].original.tags).toEqual({ team: "data" });
-      expect(resource("MyDatabaseInstance").inputs.tags).toEqual({
-        team: "data",
-        "sst:component-version": "2",
-        "sst:lookup:password": "MyDatabaseSecret_id",
-      });
-    });
-
-    it("a database in the private subnets of a Vpc", async () => {
-      const { Vpc } = await import("../../src/components/aws/vpc");
-      const create = (Postgres: PostgresClass) => () =>
-        new Postgres("MyDatabase", { vpc: new Vpc("MyVpc"), proxy: true });
-
-      const result = await pulumi.takesOver(create(Postgres), create(PostgresV5));
-      expect(result).toEqual({ unclaimed: [VERSION], changed: [] });
-      expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual([
-        "MyVpcPrivateSubnet1_id",
-        "MyVpcPrivateSubnet2_id",
-      ]);
-    });
-
-    it("a database inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      class Storage extends ComponentResource {
-        constructor(name: string) {
-          super("test:Storage", name);
-        }
-      }
-      const create = (Postgres: PostgresClass) => () =>
-        new Postgres(
-          "MyDatabase",
-          {
-            vpc,
-            replicas: 1,
-            proxy: { credentials: [{ username: "metabase", password: "x" }] },
+          check: () =>
+            expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual([
+              "MyVpcPrivateSubnet1_id",
+              "MyVpcPrivateSubnet2_id",
+            ]),
+        },
+        // PostgresV5 merges an object transform into the defaults. Postgres
+        // replaced a nested object whole, so tags set this way took the place
+        // of the ones SST sets. Those come back: the one thing that changes.
+        "an object transform that sets tags": {
+          create: (Postgres, opts) => {
+            new Postgres(
+              "MyDatabase",
+              { vpc, transform: { instance: { tags: { team: "data" } } } },
+              opts,
+            );
           },
-          { parent: new Storage("Storage") },
-        );
-
-      expect(
-        await pulumi.takesOver(create(Postgres), create(PostgresV5)),
-      ).toEqual({ unclaimed: [VERSION], changed: [] });
-      expect(resource("MyDatabaseInstance").parent).toMatch(
-        /::test:Storage\$sst:aws:PostgresV5::MyDatabase$/,
-      );
-    });
-
-    it("a database deployed with another provider", async () => {
-      const { Provider } = await import("@pulumi/aws");
-      const create = (Postgres: PostgresClass) => () =>
-        new Postgres(
-          "MyDatabase",
-          { vpc, proxy: true },
-          { provider: new Provider("West", { region: "us-west-2" }) },
-        );
-      const custom = () =>
-        pulumi.resources
-          .filter((r) => r.custom && r.type.startsWith("aws:"))
-          .map((r) => r.options.provider as string);
-
-      create(Postgres)();
-      await pulumi.settle();
-      const providers = custom();
-      expect(providers.length).toBeGreaterThan(8);
-      expect(new Set(providers).size).toBe(1);
-      expect(providers[0]).toMatch(/::West::/);
-      const before = pulumi
-        .graph()
-        .filter((r) => !r.type.startsWith("pulumi:providers:"));
-
-      pulumi.reset();
-      create(PostgresV5)();
-      await pulumi.settle();
-      expect(pulumi.takeover(before)).toEqual({
-        unclaimed: [VERSION],
-        changed: [],
-      });
-      expect(custom()).toEqual(providers.map(() => providers[0]));
+          changed: [["MyDatabaseInstance", ["tags"]]],
+          check: () =>
+            expect(resource("MyDatabaseInstance").inputs.tags).toEqual({
+              team: "data",
+              "sst:component-version": "2",
+              "sst:lookup:password": "MyDatabaseSecret_id",
+            }),
+        },
+      },
     });
 
     it("keeps the secrets under their new names", async () => {

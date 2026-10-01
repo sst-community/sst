@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { mockPulumi } from "../helpers/graph";
 
 const pulumi = mockPulumi({
@@ -52,11 +53,20 @@ const google = {
   attributes: { email: "email", username: "sub" },
 } as const;
 
+type PoolClass =
+  | typeof import("../../src/components/aws/cognito-user-pool").CognitoUserPool
+  | typeof import("../../src/components/aws/cognito-user-pool-v5").CognitoUserPoolV5;
+
 describe("CognitoUserPoolV5", () => {
   let CognitoUserPool: typeof import("../../src/components/aws/cognito-user-pool").CognitoUserPool;
   let CognitoUserPoolV5: typeof import("../../src/components/aws/cognito-user-pool-v5").CognitoUserPoolV5;
 
+  let cloudflare: typeof import("../../src/components/cloudflare/dns");
+  let vercel: typeof import("../../src/components/vercel/dns");
+
   beforeAll(async () => {
+    cloudflare = await import("../../src/components/cloudflare/dns");
+    vercel = await import("../../src/components/vercel/dns");
     ({ CognitoUserPool } = await import(
       "../../src/components/aws/cognito-user-pool"
     ));
@@ -73,31 +83,15 @@ describe("CognitoUserPoolV5", () => {
   const registered = (type: string) =>
     pulumi.resources.filter((r) => r.type === type);
 
-  // The same, for args both components take as they are. The user pool has
-  // to be there, so the comparison isn't an empty one.
-  async function expectSameArgs(args: any) {
-    await pulumi.expectTakeover(
-      () => new CognitoUserPool("MyUserPool", args),
-      () => new CognitoUserPoolV5("MyUserPool", args),
-    );
-    expect(registered(POOL).map((r) => r.name)).toEqual(["MyUserPoolUserPool"]);
-  }
-
   describe("takes over a deployed CognitoUserPool", () => {
-    it("default user pool", async () => {
-      await expectSameArgs(undefined);
-      await expectSameArgs({});
-    });
-
-    it("usernames and aliases", async () => {
-      await expectSameArgs({ usernames: ["email"] });
-      await expectSameArgs({ usernames: ["phone", "email"] });
-      await expectSameArgs({ aliases: ["preferred_username", "email"] });
-      await expectSameArgs({ aliases: ["phone"] });
-    });
-
-    it("mfa, sms and software tokens", async () => {
-      await expectSameArgs({
+    // Args both components take as they are
+    const sameArgs: Record<string, any> = {
+      "default user pool": {},
+      "email as the username": { usernames: ["email"] },
+      "phone and email as the username": { usernames: ["phone", "email"] },
+      "aliases": { aliases: ["preferred_username", "email"] },
+      "phone as an alias": { aliases: ["phone"] },
+      "mfa, sms and software tokens": {
         mfa: "on",
         softwareToken: true,
         sms: {
@@ -106,131 +100,33 @@ describe("CognitoUserPoolV5", () => {
           snsRegion: "us-east-1",
         },
         smsAuthenticationMessage: "Your authentication code is {####}",
-      });
-      await expectSameArgs({ mfa: "optional", softwareToken: false });
-    });
-
-    it("advanced security and the verification message", async () => {
-      await expectSameArgs({ advancedSecurity: "enforced" });
-      await expectSameArgs({
+      },
+      "optional mfa without software tokens": {
+        mfa: "optional",
+        softwareToken: false,
+      },
+      "advanced security": { advancedSecurity: "enforced" },
+      "advanced security and the verification subject": {
         advancedSecurity: "audit",
         verify: { emailSubject: "Verify your new Awesome account" },
-      });
-      await expectSameArgs({
+      },
+      "verification messages": {
         verify: {
           emailMessage: "Email code {####}",
           smsMessage: "SMS code {####}",
         },
-      });
-    });
-
-    it("triggers given as ARNs", async () => {
-      await expectSameArgs({
-        triggers: {
-          kmsKey: KMS_KEY_ARN,
-          customEmailSender: FUNCTION_ARN,
-          customSmsSender: `${FUNCTION_ARN}:live`,
-          preSignUp: FUNCTION_ARN,
-          postConfirmation: FUNCTION_ARN,
-          preTokenGeneration: FUNCTION_ARN,
-          preTokenGenerationVersion: "v2",
-        },
-      });
-      // The user pool is told about each one, and may invoke each one
-      expect(Object.keys(registered(POOL)[0].inputs.lambdaConfig)).toEqual([
-        "customEmailSender",
-        "customSmsSender",
-        "kmsKeyId",
-        "postConfirmation",
-        "preSignUp",
-        "preTokenGenerationConfig",
-      ]);
-      expect(registered(PERMISSION).map((r) => r.name).sort()).toEqual([
-        "MyUserPoolPermissionCustomEmailSender",
-        "MyUserPoolPermissionCustomSmsSender",
-        "MyUserPoolPermissionPostConfirmation",
-        "MyUserPoolPermissionPreSignUp",
-        "MyUserPoolPermissionPreTokenGeneration",
-      ]);
-
-      await expectSameArgs({ triggers: { preTokenGeneration: FUNCTION_ARN } });
-      await expectSameArgs({ triggers: {} });
-    });
-
-    it("triggers given as handlers", async () => {
-      const args = {
-        triggers: {
-          preAuthentication: "src/preAuthentication.handler",
-          postAuthentication: { handler: "src/postAuthentication.handler" },
-        },
-      };
-      await expectSameArgs(args);
-      // The functions are inside the user pool, and the user pool can
-      // invoke them
-      expect(
-        registered("sst:aws:FunctionV5")
-          .map((r) => [r.name, r.parent.split("::").at(-1)])
-          .sort(),
-      ).toEqual([
-        ["MyUserPoolTriggerPostAuthentication", "MyUserPool"],
-        ["MyUserPoolTriggerPreAuthentication", "MyUserPool"],
-      ]);
-      expect(registered("aws:lambda/permission:Permission").length).toBe(2);
-    });
-
-    it("a prefix domain", async () => {
-      await expectSameArgs({ domain: { prefix: "my-app-dev" } });
-      expect(
-        registered("aws:cognito/userPoolDomain:UserPoolDomain")[0].inputs,
-      ).toEqual({ domain: "my-app-dev", userPoolId: "MyUserPoolUserPool_id" });
-    });
-
-    it("a custom domain on Route 53", async () => {
-      await expectSameArgs({ domain: "auth.example.com" });
-      // The certificate, its record and the alias records are all there
-      const types = pulumi.resources.map((r) => r.type);
-      expect(types).toContain("sst:aws:Certificate");
-      expect(types).toContain("aws:cognito/userPoolDomain:UserPoolDomain");
-      expect(
-        types.filter((type) => type === "aws:route53/record:Record").length,
-      ).toBe(3);
-      // The certificate is still made in us-east-1
-      expect(
-        registered("aws:acm/certificate:Certificate")[0].options.provider,
-      ).toContain("AwsProvider.sst.us-east-1");
-    });
-
-    it("a custom domain with its own certificate", async () => {
-      await expectSameArgs({
+      },
+      "one trigger given as an ARN": {
+        triggers: { preTokenGeneration: FUNCTION_ARN },
+      },
+      "no triggers": { triggers: {} },
+      "a custom domain with its own certificate and no DNS": {
         domain: { name: "auth.example.com", dns: false, cert: CERT_ARN },
-      });
-      await expectSameArgs({
+      },
+      "a custom domain with its own certificate": {
         domain: { name: "auth.example.com", cert: CERT_ARN },
-      });
-    });
-
-    it("a custom domain on Cloudflare or Vercel", async () => {
-      const cloudflare = await import("../../src/components/cloudflare/dns");
-      const vercel = await import("../../src/components/vercel/dns");
-      for (const dns of [
-        () => cloudflare.dns({ zone: "zone-1" }),
-        () => vercel.dns({ domain: "example.com" }),
-      ]) {
-        await pulumi.expectTakeover(
-          () =>
-            new CognitoUserPool("MyUserPool", {
-              domain: { name: "auth.example.com", dns: dns() },
-            }),
-          () =>
-            new CognitoUserPoolV5("MyUserPool", {
-              domain: { name: "auth.example.com", dns: dns() },
-            }),
-        );
-      }
-    });
-
-    it("transforms", async () => {
-      await expectSameArgs({
+      },
+      transforms: {
         domain: { prefix: "my-app-dev" },
         transform: {
           userPool: { deletionProtection: "ACTIVE" },
@@ -238,109 +134,226 @@ describe("CognitoUserPoolV5", () => {
             args.managedLoginVersion = 2;
           },
         },
-      });
-    });
+      },
+    };
+    const pool =
+      (args: any) => (Pool: PoolClass, opts?: ComponentResourceOptions) =>
+        new Pool("MyUserPool", args, opts);
+    const oidc = {
+      type: "oidc",
+      details: { client_id: "id", oidc_issuer: "https://github.com/" },
+    } as const;
 
-    it("clients", async () => {
-      await pulumi.expectTakeover(
-        () => {
-          const pool = new CognitoUserPool("MyUserPool");
-          pool.addClient("Web");
-          pool.addClient("Mobile", {
-            providers: ["COGNITO", "Google"],
-            callbackUrls: ["https://app.example.com/callback"],
-            transform: { client: { generateSecret: true } },
-          });
+    pulumi.takeoverCases({
+      original: () => CognitoUserPool,
+      v5: () => CognitoUserPoolV5,
+      // The user pool has to be there, so the comparison isn't an empty one
+      check: () =>
+        expect(registered(POOL).map((r) => r.name)).toEqual([
+          "MyUserPoolUserPool",
+        ]),
+      cases: {
+        ...Object.fromEntries(
+          Object.entries(sameArgs).map(([name, args]) => [name, pool(args)]),
+        ),
+        "no args": pool(undefined),
+        "triggers given as ARNs": {
+          create: pool({
+            triggers: {
+              kmsKey: KMS_KEY_ARN,
+              customEmailSender: FUNCTION_ARN,
+              customSmsSender: `${FUNCTION_ARN}:live`,
+              preSignUp: FUNCTION_ARN,
+              postConfirmation: FUNCTION_ARN,
+              preTokenGeneration: FUNCTION_ARN,
+              preTokenGenerationVersion: "v2",
+            },
+          }),
+          // The user pool is told about each one, and may invoke each one
+          check: () => {
+            expect(
+              Object.keys(registered(POOL)[0].inputs.lambdaConfig),
+            ).toEqual([
+              "customEmailSender",
+              "customSmsSender",
+              "kmsKeyId",
+              "postConfirmation",
+              "preSignUp",
+              "preTokenGenerationConfig",
+            ]);
+            expect(
+              registered(PERMISSION)
+                .map((r) => r.name)
+                .sort(),
+            ).toEqual([
+              "MyUserPoolPermissionCustomEmailSender",
+              "MyUserPoolPermissionCustomSmsSender",
+              "MyUserPoolPermissionPostConfirmation",
+              "MyUserPoolPermissionPreSignUp",
+              "MyUserPoolPermissionPreTokenGeneration",
+            ]);
+          },
         },
-        () => {
-          const pool = new CognitoUserPoolV5("MyUserPool");
-          pool.addClient("Web");
-          pool.addClient("Mobile", {
-            providers: ["COGNITO", "Google"],
-            callbackUrls: ["https://app.example.com/callback"],
-            transform: { client: { generateSecret: true } },
-          });
+        "triggers given as handlers": {
+          create: pool({
+            triggers: {
+              preAuthentication: "src/preAuthentication.handler",
+              postAuthentication: { handler: "src/postAuthentication.handler" },
+            },
+          }),
+          // The functions are inside the user pool, and the user pool can
+          // invoke them
+          check: () => {
+            expect(
+              registered("sst:aws:FunctionV5")
+                .map((r) => [r.name, r.parent.split("::").at(-1)])
+                .sort(),
+            ).toEqual([
+              ["MyUserPoolTriggerPostAuthentication", "MyUserPool"],
+              ["MyUserPoolTriggerPreAuthentication", "MyUserPool"],
+            ]);
+            expect(registered(PERMISSION).length).toBe(2);
+          },
         },
-      );
-      // A client stays a component of its own, named after the client
-      expect(registered(CLIENT).map((r) => r.name)).toEqual([
-        "WebClient",
-        "MobileClient",
-      ]);
-      expect(registered(CLIENT)[1].inputs.generateSecret).toBe(true);
-    });
-
-    it("identity providers, and a client that uses one", async () => {
-      const oidc = {
-        type: "oidc",
-        details: { client_id: "id", oidc_issuer: "https://github.com/" },
-      } as const;
-      await pulumi.expectTakeover(
-        () => {
-          const pool = new CognitoUserPool("MyUserPool");
-          const provider = pool.addIdentityProvider("Google", google);
-          pool.addIdentityProvider("GitHub", oidc);
-          pool.addClient("Web", { providers: [provider.providerName] });
+        "a prefix domain": {
+          create: pool({ domain: { prefix: "my-app-dev" } }),
+          check: () =>
+            expect(
+              registered("aws:cognito/userPoolDomain:UserPoolDomain")[0].inputs,
+            ).toEqual({
+              domain: "my-app-dev",
+              userPoolId: "MyUserPoolUserPool_id",
+            }),
         },
-        () => {
-          const pool = new CognitoUserPoolV5("MyUserPool");
-          const provider = pool.addIdentityProvider("Google", google);
-          pool.addIdentityProvider("GitHub", oidc);
-          pool.addClient("Web", { providers: [provider.providerName] });
+        "a custom domain on Route 53": {
+          create: pool({ domain: "auth.example.com" }),
+          check: () => {
+            // The certificate, its record and the alias records are all there
+            const types = pulumi.resources.map((r) => r.type);
+            expect(types).toContain("sst:aws:Certificate");
+            expect(types).toContain(
+              "aws:cognito/userPoolDomain:UserPoolDomain",
+            );
+            expect(
+              types.filter((type) => type === "aws:route53/record:Record")
+                .length,
+            ).toBe(3);
+            // The certificate is still made in us-east-1
+            expect(
+              registered("aws:acm/certificate:Certificate")[0].options.provider,
+            ).toContain("AwsProvider.sst.us-east-1");
+          },
         },
-        2,
-      );
-      expect(registered(PROVIDER).length).toBe(2);
-      expect(registered(CLIENT)[0].inputs.supportedIdentityProviders).toEqual([
-        "Google",
-      ]);
-    });
-
-    it("a provider's transform, set on the user pool", async () => {
-      const identityProvider = { idpIdentifiers: ["google"] };
-      await pulumi.expectTakeover(
-        () => {
-          const pool = new CognitoUserPool("MyUserPool");
-          pool.addIdentityProvider("Google", {
-            ...google,
-            transform: { identityProvider },
-          });
+        "a custom domain on Cloudflare": (Pool, opts) =>
+          new Pool(
+            "MyUserPool",
+            {
+              domain: {
+                name: "auth.example.com",
+                dns: cloudflare.dns({ zone: "zone-1" }),
+              },
+            },
+            opts,
+          ),
+        "a custom domain on Vercel": (Pool, opts) =>
+          new Pool(
+            "MyUserPool",
+            {
+              domain: {
+                name: "auth.example.com",
+                dns: vercel.dns({ domain: "example.com" }),
+              },
+            },
+            opts,
+          ),
+        clients: {
+          create: (Pool, opts) => {
+            const pool = new Pool("MyUserPool", {}, opts);
+            pool.addClient("Web");
+            pool.addClient("Mobile", {
+              providers: ["COGNITO", "Google"],
+              callbackUrls: ["https://app.example.com/callback"],
+              transform: { client: { generateSecret: true } },
+            });
+          },
+          // A client stays a component of its own, named after the client
+          check: () => {
+            expect(registered(CLIENT).map((r) => r.name)).toEqual([
+              "WebClient",
+              "MobileClient",
+            ]);
+            expect(registered(CLIENT)[1].inputs.generateSecret).toBe(true);
+          },
         },
-        () => {
-          const pool = new CognitoUserPoolV5("MyUserPool", {
-            transform: { identityProvider },
-          });
-          pool.addIdentityProvider("Google", google);
+        "identity providers, and a client that uses one": {
+          create: (Pool, opts) => {
+            const pool = new Pool("MyUserPool", {}, opts);
+            const provider = pool.addIdentityProvider("Google", google);
+            pool.addIdentityProvider("GitHub", oidc);
+            pool.addClient("Web", { providers: [provider.providerName] });
+          },
+          wrappers: 2,
+          check: () => {
+            expect(registered(PROVIDER).length).toBe(2);
+            expect(
+              registered(CLIENT)[0].inputs.supportedIdentityProviders,
+            ).toEqual(["Google"]);
+          },
         },
-        1,
-      );
-    });
-
-    // The user pool itself is NOT carried over, and this says so rather than
-    // hiding it. `CognitoUserPool.get` looks the user pool up at the top of
-    // the app, outside the component. `CognitoUserPoolV5.get` looks it up
-    // inside the component, and a looked-up part can't be given the address
-    // it had before. A lookup owns nothing in AWS: the old one is forgotten
-    // and the same user pool is looked up again. The client is carried over.
-    it("a user pool referenced with get, and what's added to it", async () => {
-      const result = await pulumi.takesOver(
-        () => {
-          const pool = CognitoUserPool.get("MyUserPool", "us-east-1_abc");
-          pool.addClient("Web");
+        "a provider's transform, set on the user pool": {
+          original: (opts) =>
+            new CognitoUserPool("MyUserPool", {}, opts).addIdentityProvider(
+              "Google",
+              {
+                ...google,
+                transform: { identityProvider: { idpIdentifiers: ["google"] } },
+              },
+            ),
+          v5: (opts) =>
+            new CognitoUserPoolV5(
+              "MyUserPool",
+              {
+                transform: { identityProvider: { idpIdentifiers: ["google"] } },
+              },
+              opts,
+            ).addIdentityProvider("Google", google),
+          wrappers: 1,
         },
-        () => {
-          const pool = CognitoUserPoolV5.get("MyUserPool", "us-east-1_abc");
-          pool.addClient("Web");
+        // The user pool itself is NOT carried over, and this says so rather
+        // than hiding it. `CognitoUserPool.get` looks the user pool up outside
+        // the component. `CognitoUserPoolV5.get` looks it up inside the
+        // component, and a looked-up part can't be given the address it had
+        // before. A lookup owns nothing in AWS: the old one is forgotten and
+        // the same user pool is looked up again. The client is carried over.
+        "a user pool referenced with get, and what's added to it": {
+          create: (Pool, opts) =>
+            Pool.get("MyUserPool", "us-east-1_abc", opts).addClient("Web"),
+          // `CognitoUserPool.get` gives its options to the user pool it
+          // looks up and not to the component, which is at the top of the app
+          // wherever it's asked to be, and has nothing in AWS behind it.
+          unclaimed: (way) => [
+            `${POOL}::MyUserPoolUserPool`,
+            ...(way === "inside another component"
+              ? ["sst:aws:CognitoUserPool::MyUserPool"]
+              : []),
+          ],
+          // For the same reason it creates the client with the app's
+          // provider. CognitoUserPoolV5 creates it with the one the user pool
+          // is looked up with, which replaces it.
+          changed: (way) =>
+            way === "with another provider"
+              ? [["WebClient", ["options.provider"]]]
+              : [],
+          check: () => {
+            expect(registered(POOL).map((r) => [r.kind, r.options.id])).toEqual(
+              [["read", "us-east-1_abc"]],
+            );
+            expect(registered(CLIENT)[0].inputs.userPoolId).toBe(
+              "us-east-1_abc",
+            );
+          },
         },
-      );
-      expect(result).toEqual({
-        unclaimed: [`${POOL}::MyUserPoolUserPool`],
-        changed: [],
-      });
-      expect(registered(POOL).map((r) => [r.kind, r.options.id])).toEqual([
-        ["read", "us-east-1_abc"],
-      ]);
-      expect(registered(CLIENT)[0].inputs.userPoolId).toBe("us-east-1_abc");
+      },
     });
   });
 

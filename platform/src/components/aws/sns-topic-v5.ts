@@ -83,8 +83,12 @@ export interface SnsTopicV5SubscriberArgs
  * const topic = new sst.aws.SnsTopicV5("MyTopic");
  * ```
  *
- * Two things work differently:
+ * A few things work differently:
  *
+ * - A queue subscriber is created with the topic's `provider`. `SnsTopic` created it with
+ *   your app's provider, whatever the topic was given. If your topic has a `provider` and
+ *   a queue subscribed to it, the subscription and the queue's policy are replaced on
+ *   switch: remove the subscriber and deploy before you switch, then add it back.
  * - An object in `transform` is merged into the defaults, nested objects included, where
  *   `SnsTopic` replaced a nested object whole. To replace one, use a function.
  * - `$transform(sst.aws.SnsTopic, ...)` doesn't apply to it. Write one for

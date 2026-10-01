@@ -263,6 +263,11 @@ export interface CognitoUserPoolV5IdentityProviderArgs
  * - An identity provider's own `transform` becomes the user pool's
  *   `transform.identityProvider`.
  * - `domain`, `domain.dns` and `triggers` have to be plain values, not outputs.
+ * - `get` gives its options to the component, so a `provider` or `parent` you pass it
+ *   applies to what you add to the user pool too. `CognitoUserPool.get` gave them to the
+ *   user pool it looked up and to nothing else. If you pass `get` a `provider` and add a
+ *   client to that user pool, the client is replaced on switch, to be created with that
+ *   provider, and gets a new ID.
  * - An object in `transform` is merged into the defaults, nested objects included, where
  *   `CognitoUserPool` replaced a nested object whole. To replace one, use a function.
  * - `$transform(sst.aws.CognitoUserPool, ...)` doesn't apply to it. Write one for

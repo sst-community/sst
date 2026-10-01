@@ -74,213 +74,241 @@ describe("CronV2V5", () => {
       cluster: new Cluster("MyCluster", { vpc: new Vpc("MyVpc") }),
       image: "nginx:latest",
     });
-  const takesOver = async (original: () => void, v5: () => void) => {
-    const result = await pulumi.takesOver(original, v5);
-    return {
-      unclaimed: result.unclaimed,
-      changed: result.changed.map((c) => [c.name, c.fields]),
-    };
-  };
 
   // Each case deploys a CronV2, then the same thing as a CronV2V5. Everything
   // the CronV2 created has to be kept by the CronV2V5, with the same inputs.
   describe("takes over a deployed CronV2", () => {
-    const cases: Record<string, (Cron: CronClass) => void> = {
-      "a function from a handler": (Cron) => {
-        new Cron("MyCronJob", {
-          function: "src/cron.handler",
-          schedule: "rate(1 minute)",
-        });
-      },
-      "a function from its args": (Cron) => {
-        new Cron("MyCronJob", {
-          function: {
-            handler: "src/cron.handler",
-            timeout: "60 seconds",
-            environment: { STAGE: "test" },
-          },
-          schedule: "cron(15 10 * * ? *)",
-        });
-      },
-      "a function given as an output": (Cron) => {
-        new Cron("MyCronJob", {
-          function: output({ handler: "src/cron.handler", memory: "512 MB" as const }),
-          schedule: output("rate(5 minutes)" as const),
-        });
-      },
-      "a function given as an arn": (Cron) => {
-        new Cron("MyCronJob", {
-          function: FUNCTION_ARN,
-          schedule: "rate(1 minute)",
-        });
-      },
-      "a version of a function given as an arn": (Cron) => {
-        new Cron("MyCronJob", {
-          function: `${FUNCTION_ARN}:live`,
-          schedule: "rate(1 minute)",
-        });
-      },
-      "a function elsewhere in the app": (Cron) => {
-        new Cron("MyCronJob", {
-          function: new Function("MyFunction", { handler: "src/cron.handler" }),
-          schedule: "rate(1 minute)",
-        });
-      },
-      "a workflow": (Cron) => {
-        new Cron("MyCronJob", {
-          function: new Workflow("MyWorkflow", { handler: "src/workflow.handler" }),
-          schedule: "rate(1 hour)",
-        });
-      },
-      "every schedule setting": (Cron) => {
-        new Cron("MyCronJob", {
-          function: "src/cron.handler",
-          schedule: "cron(15 10 * * ? *)",
-          timezone: "America/New_York",
-          enabled: false,
-          retries: 3,
-          dlq: DLQ_ARN,
-          event: { foo: "bar", nested: { n: 1 } },
-        });
-      },
-      "settings given as outputs": (Cron) => {
-        new Cron("MyCronJob", {
-          function: "src/cron.handler",
-          schedule: output("at(2025-06-01T10:00:00)" as const),
-          timezone: output("Europe/Berlin"),
-          enabled: output(true),
-          retries: output(5),
-          dlq: output(DLQ_ARN),
-          event: output({ foo: output("bar") }),
-        });
-      },
-      "a task": (Cron) => {
-        new Cron("MyCronJob", { task: task(), schedule: "rate(1 day)" });
-      },
-      "a task with an event, retries and a dead-letter queue": (Cron) => {
-        new Cron("MyCronJob", {
-          task: task(),
-          schedule: "rate(1 day)",
-          event: { foo: "bar" },
-          retries: 2,
-          dlq: DLQ_ARN,
-          enabled: false,
-        });
-      },
-      transforms: (Cron) => {
-        new Cron("MyCronJob", {
-          function: "src/cron.handler",
-          schedule: "rate(1 minute)",
-          transform: {
-            schedule: { description: "Nightly cleanup", groupName: "jobs" },
-            role: (args, opts) => {
-              args.description = "Runs the cleanup";
-              opts.protect = true;
-            },
-          },
-        });
-      },
-      "a schedule transform as a function": (Cron) => {
-        new Cron("MyCronJob", {
-          task: task(),
-          schedule: "rate(1 day)",
-          transform: {
-            schedule: (args, opts) => {
-              args.flexibleTimeWindow = {
-                mode: "FLEXIBLE",
-                maximumWindowInMinutes: 15,
-              };
-              opts.retainOnDelete = true;
-            },
-          },
-        });
-      },
-    };
-
-    for (const [name, create] of Object.entries(cases)) {
-      it(name, async () => {
-        expect(
-          await takesOver(
-            () => create(CronV2),
-            () => create(CronV2V5),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
+    pulumi.takeoverCases({
+      original: () => CronV2,
+      v5: () => CronV2V5,
+      check: () => {
         expect(resource("MyCronJobSchedule").type).toBe(SCHEDULE);
         expect(resource("MyCronJobRole").type).toBe("aws:iam/role:Role");
-      });
-    }
-
-    it("the deprecated job, written as function", async () => {
-      expect(
-        await takesOver(
-          () =>
-            new CronV2("MyCronJob", {
-              job: { handler: "src/cron.handler", timeout: "30 seconds" },
+      },
+      cases: {
+        "a function from a handler": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: "src/cron.handler",
               schedule: "rate(1 minute)",
-            }),
-          () =>
-            new CronV2V5("MyCronJob", {
-              function: { handler: "src/cron.handler", timeout: "30 seconds" },
+            },
+            opts,
+          );
+        },
+        "a function from its args": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: {
+                handler: "src/cron.handler",
+                timeout: "60 seconds",
+                environment: { STAGE: "test" },
+              },
+              schedule: "cron(15 10 * * ? *)",
+            },
+            opts,
+          );
+        },
+        "a function given as an output": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: output({
+                handler: "src/cron.handler",
+                memory: "512 MB" as const,
+              }),
+              schedule: output("rate(5 minutes)" as const),
+            },
+            opts,
+          );
+        },
+        "a function given as an arn": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: FUNCTION_ARN,
               schedule: "rate(1 minute)",
+            },
+            opts,
+          );
+        },
+        "a version of a function given as an arn": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: `${FUNCTION_ARN}:live`,
+              schedule: "rate(1 minute)",
+            },
+            opts,
+          );
+        },
+        "a function elsewhere in the app": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: new Function("MyFunction", {
+                handler: "src/cron.handler",
+              }),
+              schedule: "rate(1 minute)",
+            },
+            opts,
+          );
+        },
+        "a workflow": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: new Workflow("MyWorkflow", {
+                handler: "src/workflow.handler",
+              }),
+              schedule: "rate(1 hour)",
+            },
+            opts,
+          );
+        },
+        "every schedule setting": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: "src/cron.handler",
+              schedule: "cron(15 10 * * ? *)",
+              timezone: "America/New_York",
+              enabled: false,
+              retries: 3,
+              dlq: DLQ_ARN,
+              event: { foo: "bar", nested: { n: 1 } },
+            },
+            opts,
+          );
+        },
+        "settings given as outputs": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: "src/cron.handler",
+              schedule: output("at(2025-06-01T10:00:00)" as const),
+              timezone: output("Europe/Berlin"),
+              enabled: output(true),
+              retries: output(5),
+              dlq: output(DLQ_ARN),
+              event: output({ foo: output("bar") }),
+            },
+            opts,
+          );
+        },
+        "a task": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            { task: task(), schedule: "rate(1 day)" },
+            opts,
+          );
+        },
+        "a task with an event, retries and a dead-letter queue": (
+          Cron,
+          opts,
+        ) => {
+          new Cron(
+            "MyCronJob",
+            {
+              task: task(),
+              schedule: "rate(1 day)",
+              event: { foo: "bar" },
+              retries: 2,
+              dlq: DLQ_ARN,
+              enabled: false,
+            },
+            opts,
+          );
+        },
+        transforms: (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: "src/cron.handler",
+              schedule: "rate(1 minute)",
+              transform: {
+                schedule: { description: "Nightly cleanup", groupName: "jobs" },
+                role: (args, opts) => {
+                  args.description = "Runs the cleanup";
+                  opts.protect = true;
+                },
+              },
+            },
+            opts,
+          );
+        },
+        "a schedule transform as a function": (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              task: task(),
+              schedule: "rate(1 day)",
+              transform: {
+                schedule: (args, opts) => {
+                  args.flexibleTimeWindow = {
+                    mode: "FLEXIBLE",
+                    maximumWindowInMinutes: 15,
+                  };
+                  opts.retainOnDelete = true;
+                },
+              },
+            },
+            opts,
+          );
+        },
+        "the deprecated job, written as function": {
+          original: (opts) =>
+            new CronV2(
+              "MyCronJob",
+              {
+                job: { handler: "src/cron.handler", timeout: "30 seconds" },
+                schedule: "rate(1 minute)",
+              },
+              opts,
+            ),
+          v5: (opts) =>
+            new CronV2V5(
+              "MyCronJob",
+              {
+                function: {
+                  handler: "src/cron.handler",
+                  timeout: "30 seconds",
+                },
+                schedule: "rate(1 minute)",
+              },
+              opts,
+            ),
+        },
+        // CronV2V5 merges an object transform into the defaults. CronV2
+        // replaced a nested object whole, which left the schedule with no
+        // target.
+        "an object transform that sets part of the target": {
+          create: (Cron, opts) => {
+            new Cron(
+              "MyCronJob",
+              {
+                function: FUNCTION_ARN,
+                schedule: "rate(1 minute)",
+                transform: {
+                  schedule: {
+                    target: { input: '{"from":"transform"}' } as any,
+                  },
+                },
+              },
+              opts,
+            );
+          },
+          changed: [["MyCronJobSchedule", ["target"]]],
+          check: () =>
+            expect(resource("MyCronJobSchedule").inputs.target).toEqual({
+              arn: FUNCTION_ARN,
+              roleArn: "arn:aws:mock:us-east-1:123456789012:MyCronJobRole",
+              input: '{"from":"transform"}',
+              retryPolicy: { maximumRetryAttempts: 0 },
             }),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-    });
-
-    it("a cron job inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      class Jobs extends ComponentResource {
-        constructor(name: string) {
-          super("test:Jobs", name);
-        }
-      }
-      const create = (Cron: CronClass) => () =>
-        new Cron(
-          "MyCronJob",
-          { function: "src/cron.handler", schedule: "rate(1 minute)" },
-          { parent: new Jobs("Jobs") },
-        );
-
-      expect(await takesOver(create(CronV2), create(CronV2V5))).toEqual({
-        unclaimed: [],
-        changed: [],
-      });
-      expect(resource("MyCronJobSchedule").parent).toMatch(
-        /::test:Jobs\$sst:aws:CronV2V5::MyCronJob$/,
-      );
-      expect(resource("MyCronJobFunctionFunction").parent).toMatch(
-        /::test:Jobs\$sst:aws:CronV2V5\$sst:aws:FunctionV5::MyCronJobFunction$/,
-      );
-    });
-
-    it("a cron job deployed with another provider", async () => {
-      const { Provider } = await import("@pulumi/aws");
-      const create = (Cron: CronClass) => () =>
-        new Cron(
-          "MyCronJob",
-          { function: "src/cron.handler", schedule: "rate(1 minute)" },
-          { provider: new Provider("West", { region: "us-west-2" }) },
-        );
-      const providers = () =>
-        pulumi.resources
-          .filter((r) => r.custom && r.type.startsWith("aws:"))
-          .map((r) => r.options.provider as string);
-
-      create(CronV2)();
-      await pulumi.settle();
-      const original = providers();
-      expect(original.length).toBeGreaterThan(4);
-      expect(new Set(original).size).toBe(1);
-      expect(original[0]).toMatch(/::West::/);
-      const before = pulumi
-        .graph()
-        .filter((r) => !r.type.startsWith("pulumi:providers:"));
-
-      pulumi.reset();
-      create(CronV2V5)();
-      await pulumi.settle();
-      expect(pulumi.takeover(before)).toEqual({ unclaimed: [], changed: [] });
-      expect(providers()).toEqual(original);
+        },
+      },
     });
 
     // The function is named after its part now. What it's made of follows
@@ -317,29 +345,6 @@ describe("CronV2V5", () => {
       expect(pulumi.takeover(original)).toEqual({ unclaimed: [], changed: [] });
     });
 
-    // CronV2V5 merges an object transform into the defaults. CronV2 replaced
-    // a nested object whole, which left the schedule with no target.
-    it("an object transform that sets part of the target", async () => {
-      const create = (Cron: CronClass) => () =>
-        new Cron("MyCronJob", {
-          function: FUNCTION_ARN,
-          schedule: "rate(1 minute)",
-          transform: {
-            schedule: { target: { input: '{"from":"transform"}' } as any },
-          },
-        });
-
-      expect(await takesOver(create(CronV2), create(CronV2V5))).toEqual({
-        unclaimed: [],
-        changed: [["MyCronJobSchedule", ["target"]]],
-      });
-      expect(resource("MyCronJobSchedule").inputs.target).toEqual({
-        arn: FUNCTION_ARN,
-        roleArn: "arn:aws:mock:us-east-1:123456789012:MyCronJobRole",
-        input: '{"from":"transform"}',
-        retryPolicy: { maximumRetryAttempts: 0 },
-      });
-    });
   });
 
   it("invokes a function on a schedule", async () => {

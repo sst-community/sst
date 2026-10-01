@@ -406,6 +406,10 @@ export interface FunctionV5Args
  *   or its name.
  * - `live: false` becomes `dev: false`, and `url.route` becomes `url.router`.
  * - `nodes.function` and `nodes.logGroup` are the resources themselves, not outputs.
+ * - The alias the URL of a durable function points at is created with the function's
+ *   `provider`. `Function` created it with your app's provider, whatever the function was
+ *   given. If a durable function has a `url` and a `provider`, the alias is replaced on
+ *   switch, and the URL with it.
  * - An object in `transform` is merged into the defaults, so
  *   `transform: { function: { environment: { variables: { A: "1" } } } }` adds a
  *   variable where it used to replace them all.
@@ -647,6 +651,29 @@ export class FunctionV5 extends component("sst:aws:FunctionV5", parts) {
       });
 
     this.registerOutputs({
+      // What's run locally in `sst dev`
+      _live: dev
+        ? unsecret(
+            all([
+              links,
+              args.handler,
+              args.bundle,
+              args.runtime,
+              nodejs,
+              copyFiles,
+            ]).apply(
+              ([links, handler, bundle, runtime, nodejs, copyFiles]) => ({
+                functionID: name,
+                links,
+                handler,
+                bundle,
+                runtime: runtime || "nodejs24.x",
+                copyFiles,
+                properties: nodejs,
+              }),
+            ),
+          )
+        : undefined,
       _metadata: {
         handler: args.handler,
         internal: args._skipMetadata,

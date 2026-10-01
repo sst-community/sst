@@ -2,7 +2,11 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import * as aws from "@pulumi/aws";
-import { ComponentResource, output } from "@pulumi/pulumi";
+import {
+  ComponentResource,
+  type ComponentResourceOptions,
+  output,
+} from "@pulumi/pulumi";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mockPulumi } from "../helpers/graph";
 
@@ -41,6 +45,9 @@ const pulumi = mockPulumi({
   sourcemaps: (id) => (id === "Mapped" ? SOURCEMAPS : []),
 });
 
+type FunctionClass =
+  | typeof import("../../src/components/aws/function").Function
+  | typeof import("../../src/components/aws/function-v5").FunctionV5;
 type FunctionArgs = import("../../src/components/aws/function").FunctionArgs;
 type FunctionV5Args =
   import("../../src/components/aws/function-v5").FunctionV5Args;
@@ -68,8 +75,10 @@ describe("FunctionV5", () => {
   let Function: typeof import("../../src/components/aws/function").Function;
   let FunctionV5: typeof import("../../src/components/aws/function-v5").FunctionV5;
   let permission: typeof import("../../src/components/aws/permission").permission;
+  let Linkable: typeof import("../../src/components/linkable").Linkable;
 
   beforeAll(async () => {
+    ({ Linkable } = await import("../../src/components/linkable"));
     Function = (await import("../../src/components/aws/function")).Function;
     FunctionV5 = (await import("../../src/components/aws/function-v5"))
       .FunctionV5;
@@ -182,96 +191,114 @@ describe("FunctionV5", () => {
       }),
     };
 
-    for (const [name, args] of Object.entries(sameArgs)) {
-      it(name, async () => {
-        await pulumi.expectTakeover(
-          () => new Function("MyFunction", args()),
-          () => new FunctionV5("MyFunction", args()),
-        );
-      });
-    }
+    const fn =
+      (args: () => FunctionArgs & FunctionV5Args, name = "MyFunction") =>
+      (Function: FunctionClass, opts?: ComponentResourceOptions) =>
+        new Function(name, args(), opts);
 
-    it("linked resources and copied files", async () => {
-      const { Linkable } = await import("../../src/components/linkable");
-      const args = () => ({
-        handler,
-        link: [
-          new Linkable("MyLink", {
-            properties: { value: "linked" },
-            include: [
-              permission({ actions: ["sqs:SendMessage"], resources: ["*"] }),
-              { type: "environment" as const, env: { LINKED: "yes" } },
+    pulumi.takeoverCases({
+      original: () => Function,
+      v5: () => FunctionV5,
+      cases: {
+        ...Object.fromEntries(
+          Object.entries(sameArgs).map(([name, args]) => [name, fn(args)]),
+        ),
+        // Function creates the alias a durable function's URL points at with
+        // no parent, so with the app's provider whatever the function is
+        // given. FunctionV5 creates it inside the function, with the
+        // function's provider, which replaces it.
+        "a durable function with a url": {
+          create: fn(sameArgs["a durable function with a url"]),
+          changed: (way) =>
+            way === "with another provider"
+              ? [["MyFunctionDurable", ["options.provider"]]]
+              : [],
+        },
+        "linked resources and copied files": {
+          create: fn(() => ({
+            handler,
+            link: [
+              new Linkable("MyLink", {
+                properties: { value: "linked" },
+                include: [
+                  permission({
+                    actions: ["sqs:SendMessage"],
+                    resources: ["*"],
+                  }),
+                  { type: "environment" as const, env: { LINKED: "yes" } },
+                ],
+              }),
             ],
+            copyFiles: [{ from: maps, to: "maps" }],
+          })),
+          check: () => {
+            const role = pulumi.resources.find((r) => r.type === ROLE)!;
+            expect(role.inputs.inlinePolicies[0].policy).toContain(
+              "sqs:SendMessage",
+            );
+            const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
+            expect(fn.inputs.environment.variables.LINKED).toBe("yes");
+          },
+        },
+        "source maps": {
+          create: fn(() => ({ handler }), "Mapped"),
+          check: () =>
+            expect(
+              pulumi.resources
+                .filter((r) => r.name.startsWith("MappedSourcemap"))
+                .map((r) => [r.name, r.options.retainOnDelete]),
+            ).toEqual([
+              ["MappedSourcemap0", true],
+              ["MappedSourcemap1", true],
+            ]),
+        },
+        "environment variables added later": (Function, opts) =>
+          new Function("MyFunction", { handler }, opts).addEnvironment({
+            A: "1",
           }),
-        ],
-        copyFiles: [{ from: maps, to: "maps" }],
-      });
-      await pulumi.expectTakeover(
-        () => new Function("MyFunction", args()),
-        () => new FunctionV5("MyFunction", args()),
-      );
-      const role = pulumi.resources.find((r) => r.type === ROLE)!;
-      expect(role.inputs.inlinePolicies[0].policy).toContain("sqs:SendMessage");
-      const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
-      expect(fn.inputs.environment.variables.LINKED).toBe("yes");
-    });
-
-    it("source maps", async () => {
-      await pulumi.expectTakeover(
-        () => new Function("Mapped", { handler }),
-        () => new FunctionV5("Mapped", { handler }),
-      );
-      expect(
-        pulumi.resources
-          .filter((r) => r.name.startsWith("MappedSourcemap"))
-          .map((r) => [r.name, r.options.retainOnDelete]),
-      ).toEqual([
-        ["MappedSourcemap0", true],
-        ["MappedSourcemap1", true],
-      ]);
-    });
-
-    it("environment variables added later", async () => {
-      await pulumi.expectTakeover(
-        () => new Function("MyFunction", { handler }).addEnvironment({ A: "1" }),
-        () =>
-          new FunctionV5("MyFunction", { handler }).addEnvironment({ A: "1" }),
-      );
-    });
-
-    // `Function` takes the role's ARN and a log group's name. `FunctionV5`
-    // takes both in `existing`.
-    it("a role and a log group the user has", async () => {
-      await pulumi.expectTakeover(
-        () =>
-          new Function("MyFunction", {
-            handler,
-            role: ROLE_ARN,
-            logging: { logGroup: "/my/logs", format: "json" },
-          }),
-        () =>
-          new FunctionV5("MyFunction", {
-            handler,
-            logging: { format: "json" },
-            existing: { role: "my-role", logGroup: "/my/logs" },
-          }),
-      );
-      const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
-      expect(fn.inputs.role).toBe(ROLE_ARN);
-      expect(fn.inputs.loggingConfig).toEqual({
-        logFormat: "JSON",
-        logGroup: "/my/logs",
-      });
-      // Looked up, not created
-      expect(
-        pulumi
-          .graph()
-          .filter((r) => r.type === ROLE || r.type === LOG_GROUP)
-          .map((r) => [r.name, r.kind, r.options.id]),
-      ).toEqual([
-        ["MyFunctionLogGroup", "read", "/my/logs"],
-        ["MyFunctionRole", "read", "my-role"],
-      ]);
+        // `Function` takes the role's ARN and a log group's name. `FunctionV5`
+        // takes both in `existing`.
+        "a role and a log group the user has": {
+          original: (opts) =>
+            new Function(
+              "MyFunction",
+              {
+                handler,
+                role: ROLE_ARN,
+                logging: { logGroup: "/my/logs", format: "json" },
+              },
+              opts,
+            ),
+          v5: (opts) =>
+            new FunctionV5(
+              "MyFunction",
+              {
+                handler,
+                logging: { format: "json" },
+                existing: { role: "my-role", logGroup: "/my/logs" },
+              },
+              opts,
+            ),
+          check: () => {
+            const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
+            expect(fn.inputs.role).toBe(ROLE_ARN);
+            expect(fn.inputs.loggingConfig).toEqual({
+              logFormat: "JSON",
+              logGroup: "/my/logs",
+            });
+            // Looked up, not created
+            expect(
+              pulumi
+                .graph()
+                .filter((r) => r.type === ROLE || r.type === LOG_GROUP)
+                .map((r) => [r.name, r.kind, r.options.id]),
+            ).toEqual([
+              ["MyFunctionLogGroup", "read", "/my/logs"],
+              ["MyFunctionRole", "read", "my-role"],
+            ]);
+          },
+        },
+      },
     });
 
     describe("in sst dev", () => {
@@ -301,18 +328,24 @@ describe("FunctionV5", () => {
         "a function that isn't live": () => ({ handler, dev: false }),
       };
 
-      for (const [name, args] of Object.entries(dev)) {
-        it(name, async () => {
-          await pulumi.expectTakeover(
-            () => new Function("MyFunction", args()),
-            () => {
-              // The stub's code is uploaded once for the app
-              Function.reset();
-              new FunctionV5("MyFunction", args());
+      pulumi.takeoverCases({
+        original: () => Function,
+        v5: () => FunctionV5,
+        cases: Object.fromEntries(
+          Object.entries(dev).map(([name, args]) => [
+            name,
+            {
+              original: (opts?: ComponentResourceOptions) =>
+                new Function("MyFunction", args(), opts),
+              v5: (opts?: ComponentResourceOptions) => {
+                // The stub's code is uploaded once for the app
+                Function.reset();
+                new FunctionV5("MyFunction", args(), opts);
+              },
             },
-          );
-        });
-      }
+          ]),
+        ),
+      });
 
       it("deploys the stub, and shares its code with Function", async () => {
         new Function("Old", { handler });

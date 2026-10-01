@@ -1,8 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../helpers/graph";
+import { type ComponentResourceOptions, output } from "@pulumi/pulumi";
+import { mockPulumi, type TakeoverWay } from "../helpers/graph";
 
 const TABLE = "aws:dynamodb/table:Table";
+// What Dynamo wraps each subscription in: nothing in AWS behind it
 const WRAPPER = "sst:aws:DynamoLambdaSubscriber";
 const FUNCTION_ARN =
   "arn:aws:lambda:us-east-1:123456789012:function:my-subscriber";
@@ -10,8 +11,6 @@ const streamArn = (table: string) =>
   `arn:aws:dynamodb:us-east-1:123456789012:table/${table}/stream/2024-02-25T23:17:55.264`;
 
 const pulumi = mockPulumi({
-  // What Dynamo wraps each subscription in: nothing in AWS behind it
-  wrappers: /^sst:aws:DynamoLambdaSubscriber::/,
   state: (args) => {
     if (args.type !== TABLE) return {};
     // A table that's looked up has the name it has, and here a stream
@@ -21,6 +20,9 @@ const pulumi = mockPulumi({
   },
 });
 
+type DynamoClass =
+  | typeof import("../../src/components/aws/dynamo").Dynamo
+  | typeof import("../../src/components/aws/dynamo-v5").DynamoV5;
 type DynamoArgs = import("../../src/components/aws/dynamo").DynamoArgs;
 type DynamoV5Args = import("../../src/components/aws/dynamo-v5").DynamoV5Args;
 
@@ -153,236 +155,187 @@ describe("DynamoV5", () => {
       },
     };
 
-    for (const [name, args] of Object.entries(sameArgs)) {
-      it(name, async () => {
-        expect(
-          await pulumi.takesOver(
-            () => new Dynamo("MyTable", args),
-            () => new DynamoV5("MyTable", args),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
-        expect(resource("MyTableTable")).toMatchObject({
-          kind: "register",
-          type: TABLE,
-        });
-      });
-    }
+    const filters = {
+      filters: [{ dynamodb: { Keys: { CustomerName: { S: ["AnyCompany"] } } } }],
+    };
+    const subscriber = {
+      handler: "src/indexer.handler",
+      timeout: "60 seconds" as const,
+      environment: { MODE: "index" },
+    };
+    // A subscriber's function is kept. Its description is updated: it names
+    // the table now, where it named the subscriber component.
+    const described: [string, string[]][] = [
+      ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
+    ];
 
-    // Dynamo looks the table up at the top of the app. DynamoV5 looks the
-    // same table up inside it, which this can't match: a lookup has no
-    // aliases. Nothing is deployed for a lookup, so nothing is deleted.
-    it("a table referenced with get", async () => {
-      expect(
-        await pulumi.takesOver(
-          () => Dynamo.get("MyTable", "app-dev-mytable"),
-          () => DynamoV5.get("MyTable", "app-dev-mytable"),
-        ),
-      ).toEqual({ unclaimed: [`${TABLE}::MyTableTable`], changed: [] });
-      expect(resource("MyTableTable")).toMatchObject({
-        kind: "read",
-        options: { id: "app-dev-mytable" },
-      });
-    });
+    // `Dynamo.get` gives its options to the table it looks up and not to the
+    // component, which is at the top of the app wherever it's asked to be.
+    // `DynamoV5.get` puts the component where it's asked to, so the old one,
+    // which has nothing in AWS behind it, goes.
+    const leftAtTheTop = (way: TakeoverWay) =>
+      way === "inside another component" ? ["sst:aws:Dynamo::MyTable"] : [];
 
-    // A Dynamo keeps each subscription in a component at the top of the app.
-    // A DynamoV5 keeps them inside, so those components go, and what was in
-    // them is kept.
-    it("subscribers given as function arns", async () => {
-      const filters = {
-        filters: [{ dynamodb: { Keys: { CustomerName: { S: ["AnyCompany"] } } } }],
-      };
-      const result = await pulumi.takesOver(
-        () => {
-          const table = new Dynamo("MyTable", streaming);
-          table.subscribe("Indexer", FUNCTION_ARN, {
-            ...filters,
-            transform: { eventSourceMapping: { batchSize: 5 } },
-          });
-          table.subscribe("Auditor", FUNCTION_ARN);
-        },
-        () =>
-          new DynamoV5("MyTable", {
-            ...streaming,
-            transform: {
-              eventSourceMapping: (args, _opts, _name, subscriber) => {
-                if (subscriber === "Indexer") args.batchSize = 5;
-              },
+    pulumi.takeoverCases({
+      original: () => Dynamo,
+      v5: () => DynamoV5,
+      cases: {
+        ...Object.fromEntries(
+          Object.entries(sameArgs).map(([name, args]) => [
+            name,
+            {
+              create: (Dynamo: DynamoClass, opts?: ComponentResourceOptions) =>
+                new Dynamo("MyTable", args, opts),
+              check: () =>
+                expect(resource("MyTableTable")).toMatchObject({
+                  kind: "register",
+                  type: TABLE,
+                }),
             },
-          })
-            .subscribe("Indexer", FUNCTION_ARN, filters)
-            .subscribe("Auditor", FUNCTION_ARN),
-      );
-
-      expect(result).toEqual({
-        unclaimed: [
-          `${WRAPPER}::MyTableSubscriberAuditor`,
-          `${WRAPPER}::MyTableSubscriberIndexer`,
-        ],
-        changed: [],
-      });
-      expect(resource("MyTableEventSourceMappingIndexer").inputs).toEqual({
-        eventSourceArn: streamArn("MyTableTable"),
-        functionName: FUNCTION_ARN,
-        filterCriteria: {
-          filters: [{ pattern: JSON.stringify(filters.filters[0]) }],
+          ]),
+        ),
+        // Dynamo looks the table up beside the component. DynamoV5 looks the
+        // same table up inside it, which this can't match: a lookup has no
+        // aliases. Nothing is deployed for a lookup, so nothing is deleted.
+        "a table referenced with get": {
+          create: (Dynamo, opts) =>
+            Dynamo.get("MyTable", "app-dev-mytable", opts),
+          unclaimed: (way) => [`${TABLE}::MyTableTable`, ...leftAtTheTop(way)],
+          check: () =>
+            expect(resource("MyTableTable")).toMatchObject({
+              kind: "read",
+              options: { id: "app-dev-mytable" },
+            }),
         },
-        startingPosition: "LATEST",
-        batchSize: 5,
-      });
-    });
-
-    it("a subscriber created from a handler", async () => {
-      const result = await pulumi.takesOver(
-        () =>
-          new Dynamo("MyTable", streaming).subscribe(
-            "Indexer",
-            "src/indexer.handler",
-          ),
-        () =>
-          new DynamoV5("MyTable", streaming).subscribe(
-            "Indexer",
-            "src/indexer.handler",
-          ),
-      );
-
-      expect(result.unclaimed).toEqual([`${WRAPPER}::MyTableSubscriberIndexer`]);
-      // The function is kept. Its description is updated: it names the table
-      // now, where it named the subscriber component.
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
-      ]);
-      // The function and what it's made of are now inside the table
-      expect(
-        pulumi.resources
-          .filter((r) => r.name.startsWith("MyTableSubscriberIndexer"))
-          .map((r) => r.name)
-          .sort(),
-      ).toEqual([
-        "MyTableSubscriberIndexer",
-        "MyTableSubscriberIndexerCode",
-        "MyTableSubscriberIndexerFunction",
-        "MyTableSubscriberIndexerLogGroup",
-        "MyTableSubscriberIndexerRole",
-      ]);
-    });
-
-    it("a subscriber created from function args", async () => {
-      const subscriber = {
-        handler: "src/indexer.handler",
-        timeout: "60 seconds" as const,
-        environment: { MODE: "index" },
-      };
-      const result = await pulumi.takesOver(
-        () => new Dynamo("MyTable", streaming).subscribe("Indexer", subscriber),
-        () => new DynamoV5("MyTable", streaming).subscribe("Indexer", subscriber),
-      );
-
-      expect(result.unclaimed).toEqual([`${WRAPPER}::MyTableSubscriberIndexer`]);
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
-      ]);
-      expect(resource("MyTableSubscriberIndexerFunction").inputs.timeout).toBe(60);
-    });
-
-    it("a subscriber of a table referenced with get", async () => {
-      const result = await pulumi.takesOver(
-        () => Dynamo.get("MyTable", "orders").subscribe("Indexer", FUNCTION_ARN),
-        () => DynamoV5.get("MyTable", "orders").subscribe("Indexer", FUNCTION_ARN),
-      );
-
-      expect(result).toEqual({
-        // The lookup, as above
-        unclaimed: [
-          `${TABLE}::MyTableTable`,
-          `${WRAPPER}::MyTableSubscriberIndexer`,
-        ],
-        changed: [],
-      });
-    });
-
-    // Dynamo creates a subscriber's component at the top of the app, wherever
-    // the table is. DynamoV5 keeps the subscriber inside the table.
-    it("a subscriber of a table inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      class Storage extends ComponentResource {
-        constructor(name: string) {
-          super("test:Storage", name);
-        }
-      }
-      const result = await pulumi.takesOver(
-        () =>
-          new Dynamo("MyTable", streaming, {
-            parent: new Storage("Storage"),
-          }).subscribe("Indexer", "src/indexer.handler"),
-        () =>
-          new DynamoV5("MyTable", streaming, {
-            parent: new Storage("Storage"),
-          }).subscribe("Indexer", "src/indexer.handler"),
-      );
-
-      expect(result.unclaimed).toEqual([`${WRAPPER}::MyTableSubscriberIndexer`]);
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
-      ]);
-      expect(resource("MyTableEventSourceMappingIndexer").parent).toMatch(
-        /\$sst:aws:DynamoV5::MyTable$/,
-      );
-    });
-
-    // A table created with a provider, for another region or account, gives
-    // it to its subscribers. Dynamo passes it to each subscriber's component.
-    it("a table and subscriber deployed with another provider", async () => {
-      const { Provider } = await import("@pulumi/aws");
-      const providerOf = (name: string) =>
-        resource(name).options.provider as string;
-
-      new Dynamo("MyTable", streaming, {
-        provider: new Provider("West", { region: "us-west-2" }),
-      }).subscribe("Indexer", "src/indexer.handler");
-      await pulumi.settle();
-      const west = providerOf("MyTableTable");
-      expect(west).toMatch(/::West::/);
-      expect([
-        providerOf("MyTableSubscriberIndexerEventSourceMapping"),
-        providerOf("MyTableSubscriberIndexerFunctionFunction"),
-        providerOf("MyTableSubscriberIndexerFunctionRole"),
-      ]).toEqual([west, west, west]);
-      const before = pulumi
-        .graph()
-        .filter((r) => !r.type.startsWith("pulumi:providers:"));
-
-      pulumi.reset();
-      new DynamoV5("MyTable", streaming, {
-        provider: new Provider("West", { region: "us-west-2" }),
-      }).subscribe("Indexer", "src/indexer.handler");
-      await pulumi.settle();
-
-      const result = pulumi.takeover(before);
-      expect(result.unclaimed).toEqual([`${WRAPPER}::MyTableSubscriberIndexer`]);
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
-      ]);
-      expect([
-        providerOf("MyTableTable"),
-        providerOf("MyTableEventSourceMappingIndexer"),
-        providerOf("MyTableSubscriberIndexerFunction"),
-        providerOf("MyTableSubscriberIndexerRole"),
-      ]).toEqual([west, west, west, west]);
+        // A Dynamo keeps each subscription in a component at the top of the
+        // app, wherever the table is. A DynamoV5 keeps them inside, so those
+        // components go, and what was in them is kept.
+        "subscribers given as function arns": {
+          original: (opts) => {
+            const table = new Dynamo("MyTable", streaming, opts);
+            table.subscribe("Indexer", FUNCTION_ARN, {
+              ...filters,
+              transform: { eventSourceMapping: { batchSize: 5 } },
+            });
+            table.subscribe("Auditor", FUNCTION_ARN);
+          },
+          v5: (opts) =>
+            new DynamoV5(
+              "MyTable",
+              {
+                ...streaming,
+                transform: {
+                  eventSourceMapping: (args, _opts, _name, subscriber) => {
+                    if (subscriber === "Indexer") args.batchSize = 5;
+                  },
+                },
+              },
+              opts,
+            )
+              .subscribe("Indexer", FUNCTION_ARN, filters)
+              .subscribe("Auditor", FUNCTION_ARN),
+          unclaimed: [
+            `${WRAPPER}::MyTableSubscriberAuditor`,
+            `${WRAPPER}::MyTableSubscriberIndexer`,
+          ],
+          check: () =>
+            expect(resource("MyTableEventSourceMappingIndexer").inputs).toEqual(
+              {
+                eventSourceArn: streamArn("MyTableTable"),
+                functionName: FUNCTION_ARN,
+                filterCriteria: {
+                  filters: [{ pattern: JSON.stringify(filters.filters[0]) }],
+                },
+                startingPosition: "LATEST",
+                batchSize: 5,
+              },
+            ),
+        },
+        "a subscriber created from a handler": {
+          create: (Dynamo, opts) =>
+            new Dynamo("MyTable", streaming, opts).subscribe(
+              "Indexer",
+              "src/indexer.handler",
+            ),
+          unclaimed: [`${WRAPPER}::MyTableSubscriberIndexer`],
+          changed: described,
+          check: () => {
+            // The function and what it's made of are now inside the table
+            expect(
+              pulumi.resources
+                .filter((r) => r.name.startsWith("MyTableSubscriberIndexer"))
+                .map((r) => r.name)
+                .sort(),
+            ).toEqual([
+              "MyTableSubscriberIndexer",
+              "MyTableSubscriberIndexerCode",
+              "MyTableSubscriberIndexerFunction",
+              "MyTableSubscriberIndexerLogGroup",
+              "MyTableSubscriberIndexerRole",
+            ]);
+            expect(resource("MyTableEventSourceMappingIndexer").parent).toMatch(
+              /sst:aws:DynamoV5::MyTable$/,
+            );
+          },
+        },
+        "a subscriber created from function args": {
+          create: (Dynamo, opts) =>
+            new Dynamo("MyTable", streaming, opts).subscribe(
+              "Indexer",
+              subscriber,
+            ),
+          unclaimed: [`${WRAPPER}::MyTableSubscriberIndexer`],
+          changed: described,
+          check: () =>
+            expect(
+              resource("MyTableSubscriberIndexerFunction").inputs.timeout,
+            ).toBe(60),
+        },
+        "a subscriber of a table referenced with get": {
+          create: (Dynamo, opts) =>
+            Dynamo.get("MyTable", "orders", opts).subscribe(
+              "Indexer",
+              FUNCTION_ARN,
+            ),
+          // The lookup, as above
+          unclaimed: (way) => [
+            `${TABLE}::MyTableTable`,
+            `${WRAPPER}::MyTableSubscriberIndexer`,
+            ...leftAtTheTop(way),
+          ],
+          // Dynamo doesn't give the subscriber the provider, so it's created
+          // with the app's. DynamoV5 creates it with the one the table is
+          // looked up with, which replaces the event source mapping.
+          changed: (way) =>
+            way === "with another provider"
+              ? [
+                  [
+                    "MyTableSubscriberIndexerEventSourceMapping",
+                    ["options.provider"],
+                  ],
+                ]
+              : [],
+        },
+      },
     });
 
     // The static `subscribe` only has a stream ARN, so it names the
     // subscriber's component after the table in it. A DynamoV5 that
     // references that table takes the subscriber over, whatever it's called.
     it("a subscriber added with the static subscribe", async () => {
-      await pulumi.expectTakeover(
-        () => Dynamo.subscribe("Indexer", streamArn("orders"), FUNCTION_ARN),
-        () =>
-          DynamoV5.get("ExternalOrders", "orders").subscribe(
-            "Indexer",
-            FUNCTION_ARN,
-          ),
-        1,
-      );
+      expect(
+        await pulumi.takesOver(
+          () => Dynamo.subscribe("Indexer", streamArn("orders"), FUNCTION_ARN),
+          () =>
+            DynamoV5.get("ExternalOrders", "orders").subscribe(
+              "Indexer",
+              FUNCTION_ARN,
+            ),
+        ),
+      ).toEqual({
+        unclaimed: [`${WRAPPER}::OrdersSubscriberIndexer`],
+        changed: [],
+      });
       expect(
         resource("ExternalOrdersEventSourceMappingIndexer").inputs.eventSourceArn,
       ).toBe(streamArn("orders"));

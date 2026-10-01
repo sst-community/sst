@@ -284,6 +284,11 @@ export interface BucketV5NotifyArgs {
  * - The `transform` of `notify` becomes the bucket's `transform.notification`.
  * - `subscribe`, `subscribeQueue` and `subscribeTopic` are gone. Use `notify`, which keeps
  *   the subscriber you had.
+ * - `get` gives its options to the component, so a `provider` or `parent` you pass it
+ *   applies to the bucket's notifications too. `Bucket.get` gave them to the bucket it
+ *   looked up and to nothing else. If you pass `get` a `provider` and call `notify` on that
+ *   bucket, its notifications are replaced on switch, to be created with that provider:
+ *   remove them and deploy before you switch, then add them back.
  * - An object in `transform` is merged into the defaults, nested objects included, where
  *   `Bucket` replaced a nested object whole. To replace one, use a function.
  * - `$transform(sst.aws.Bucket, ...)` doesn't apply to it. Write one for

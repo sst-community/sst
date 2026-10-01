@@ -8,9 +8,14 @@ import { childOf } from "./helpers";
 // after the bucket. It's created with the bucket's own options, so it's next
 // to the bucket wherever the bucket is. `BucketV5` keeps it inside the bucket,
 // with each notification's resources under the notification's name.
+//
+// A bucket referenced with `Bucket.get` isn't given the options `get` is
+// given, so its notifications are at the top of the app whatever those say.
 const NOTIFICATION = "sst:aws:BucketNotification";
-const notified = (bucket: BucketV5, name: string, child: string) =>
-  childOf(NOTIFICATION, `${name}Notifications`, child, bucket);
+const notified = (bucket: BucketV5, name: string, child: string) => [
+  childOf(NOTIFICATION, `${name}Notifications`, child, bucket),
+  childOf(NOTIFICATION, `${name}Notifications`, child),
+];
 
 // The deprecated `subscribe()`, `subscribeQueue()` and `subscribeTopic()`
 // keep theirs in a subscriber component at the top of the app, named after
@@ -40,31 +45,31 @@ takeover(BucketV5, {
   from: "sst:aws:Bucket",
   moved: {
     notification: (bucket, { name }) => [
-      notified(bucket, name, "Notification"),
+      ...notified(bucket, name, "Notification"),
       ...SUBSCRIBERS.map((type) =>
         childOf(type, subscriber(bucket, name), "Notification"),
       ),
     ],
     subscriber: (bucket, { name, id }) => [
-      notified(bucket, name, `Notification${id}`),
+      ...notified(bucket, name, `Notification${id}`),
       ...(first(bucket.nodes.subscriber)
         ? [childOf(FUNCTION, subscriber(bucket, name), "Function")]
         : []),
     ],
     permission: (bucket, { name, id }) => [
-      notified(bucket, name, `Notification${id}Permission`),
+      ...notified(bucket, name, `Notification${id}Permission`),
       ...(first(bucket.nodes.permission)
         ? [childOf(FUNCTION, subscriber(bucket, name), "Permission")]
         : []),
     ],
     queuePolicy: (bucket, { name, id }) => [
-      notified(bucket, name, `Notification${id}Policy`),
+      ...notified(bucket, name, `Notification${id}Policy`),
       ...(first(bucket.nodes.queuePolicy)
         ? [subscriberPolicy(bucket, name)]
         : []),
     ],
     topicPolicy: (bucket, { name, id }) => [
-      notified(bucket, name, `Notification${id}Policy`),
+      ...notified(bucket, name, `Notification${id}Policy`),
       ...(first(bucket.nodes.topicPolicy)
         ? [subscriberPolicy(bucket, name)]
         : []),

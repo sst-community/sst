@@ -3,7 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import * as pulumi from "@pulumi/pulumi";
-import { expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { rpc } from "../../src/components/rpc/rpc";
 
 /**
@@ -22,6 +22,70 @@ export interface RecordedResource {
   custom: boolean;
   inputs: Record<string, any>;
   options: Record<string, any>;
+  /** What a component registered as its outputs. The CLI reads some of them. */
+  outputs?: Record<string, any>;
+}
+
+/** The ways a takeover case is run. */
+export type TakeoverWay =
+  | "as it is"
+  | "inside another component"
+  | "with another provider";
+
+type Create<C> = (
+  Component: C,
+  opts?: pulumi.ComponentResourceOptions,
+) => unknown;
+
+// What's expected, the same every way a case is run, or by the way
+type Expected<T> = T | ((way: TakeoverWay) => T);
+
+export interface TakeoverCase<C> {
+  /**
+   * Creates the component from the class it's given: the original, then the
+   * V5 one. It has to pass `opts` on to the component.
+   */
+  create?: Create<C>;
+  /** Creates the original, when the two aren't written the same way. */
+  original?: (opts?: pulumi.ComponentResourceOptions) => unknown;
+  /** Creates the V5 component, when the two aren't written the same way. */
+  v5?: (opts?: pulumi.ComponentResourceOptions) => unknown;
+  /** What goes in this case, in place of what goes in every case. */
+  unclaimed?: Expected<string[]>;
+  /**
+   * How many of the components the original wraps things in go. They're
+   * matched by the mock's `wrappers` pattern, and counted where their names
+   * aren't worth writing out. Without this, they're listed in `unclaimed`.
+   */
+  wrappers?: Expected<number>;
+  /** What a deploy updates in this case: a resource and its fields. */
+  changed?: Expected<[name: string, fields: string[]][]>;
+  /** Anything else to check, once the V5 component is deployed. */
+  check?: (way: TakeoverWay) => unknown;
+}
+
+export interface TakeoverCases<A, B> {
+  /** The original component's class. A function, as it's loaded late. */
+  original: () => A;
+  /** The V5 component's class. */
+  v5: () => B;
+  /**
+   * What the original created that goes on switch, in every case: things
+   * with nothing in AWS behind them, like its version marker.
+   */
+  unclaimed?: Expected<string[]>;
+  /** What a deploy updates in every case: a resource and its fields. */
+  changed?: Expected<[name: string, fields: string[]][]>;
+  cases: Record<string, Create<A | B> | TakeoverCase<A | B>>;
+  /** Anything else to check in every case. */
+  check?: (way: TakeoverWay) => unknown;
+}
+
+// What a case's component is created inside, for "inside another component"
+class Parent extends pulumi.ComponentResource {
+  constructor(name: string) {
+    super("test:Parent", name);
+  }
 }
 
 // Suppress Pulumi "Trace events are unavailable" errors in test environment
@@ -35,7 +99,8 @@ export function mockPulumi(input?: {
   stage?: string;
   /**
    * The components the original wraps things in, which go when the V5
-   * component takes over: they have nothing in AWS behind them.
+   * component takes over: they have nothing in AWS behind them. A takeover
+   * case says how many of them go with `wrappers`.
    */
   wrappers?: RegExp;
   /** Extra state for a resource, on top of its inputs. */
@@ -46,6 +111,8 @@ export function mockPulumi(input?: {
   sourcemaps?: (functionID: string) => string[];
 }) {
   const resources: RecordedResource[] = [];
+  // Counts what's sent to the engine, to tell when a deploy has gone quiet
+  let activity = 0;
 
   // Generated names end in random characters. A deployed resource keeps the
   // name it has, so give every run the same ones.
@@ -143,6 +210,7 @@ export function mockPulumi(input?: {
     urn(type, name, parent);
   const registerResource = monitor.registerResource.bind(monitor);
   monitor.registerResource = (req: any, callback: any) => {
+    activity++;
     resources.push({
       kind: "register",
       type: req.getType(),
@@ -164,6 +232,8 @@ export function mockPulumi(input?: {
         importId: req.getImportid(),
         deletedWith: req.getDeletedwith(),
         provider: req.getProvider(),
+        // A component is given its providers by package
+        providers: Object.fromEntries(req.getProvidersMap().toArray()),
         dependencies: [...req.getDependenciesList()].sort(),
       }),
     });
@@ -171,6 +241,7 @@ export function mockPulumi(input?: {
   };
   const readResource = monitor.readResource.bind(monitor);
   monitor.readResource = (req: any, callback: any) => {
+    activity++;
     resources.push({
       kind: "read",
       type: req.getType(),
@@ -188,9 +259,23 @@ export function mockPulumi(input?: {
   const registered = new Map<string, Record<string, any>>();
   const registerResourceOutputs = monitor.registerResourceOutputs.bind(monitor);
   monitor.registerResourceOutputs = (req: any, callback: any) => {
+    activity++;
     registered.set(req.getUrn(), req.getOutputs()?.toJavaScript() ?? {});
     return registerResourceOutputs(req, callback);
   };
+
+  const outputsOf = (r: RecordedResource): Record<string, any> =>
+    registered.get(urn(r.type, r.name, r.parent)) ?? {};
+  // What a deploy leaves in the state. Some things are created once per app,
+  // by whatever needs them first, so only the first of two deploys creates
+  // them: the key functions encrypt their links with, and a provider for
+  // another region.
+  const deployed = (graph: RecordedResource[]) =>
+    graph.filter(
+      (r) =>
+        r.name !== "LambdaEncryptionKey" &&
+        !r.type.startsWith("pulumi:providers:"),
+    );
 
   return {
     resources,
@@ -208,8 +293,8 @@ export function mockPulumi(input?: {
     },
     /**
      * Lets pending `.apply()` chains and registrations finish: waits until
-     * nothing new has been registered for a few rounds, and nothing is being
-     * read or written on disk.
+     * nothing new has been registered for a few rounds, resources or a
+     * component's outputs, and nothing is being read or written on disk.
      */
     async settle() {
       // A function's code is zipped on disk, which takes real time, and more
@@ -223,8 +308,8 @@ export function mockPulumi(input?: {
         for (let i = 0; i < 50; i++)
           await new Promise((resolve) => setImmediate(resolve));
         await new Promise((resolve) => setTimeout(resolve, 2));
-        quiet = resources.length === seen && !onDisk() ? quiet + 1 : 0;
-        seen = resources.length;
+        quiet = activity === seen && !onDisk() ? quiet + 1 : 0;
+        seen = activity;
       }
     },
     /** The value of an output, or of anything holding outputs. */
@@ -236,7 +321,11 @@ export function mockPulumi(input?: {
     /** The recorded graph in a stable order, ready to compare. */
     graph() {
       return resources
-        .map((r) => ({ ...r, inputs: stable(r.inputs) }))
+        .map((r) => ({
+          ...r,
+          inputs: stable(r.inputs),
+          ...(r.custom ? {} : { outputs: outputsOf(r) }),
+        }))
         .sort((a, b) =>
           `${a.type}::${a.name}`.localeCompare(`${b.type}::${b.name}`),
         );
@@ -249,40 +338,125 @@ export function mockPulumi(input?: {
      * @param v5 Creates the same thing with the V5 component.
      */
     async takesOver(original: () => unknown, v5: () => unknown) {
-      resources.length = 0;
+      this.reset();
       original();
       await this.settle();
-      // Some things are created once per app, by whatever needs them first,
-      // so only the first of the two runs creates them: the key functions
-      // encrypt their links with, and a provider for another region.
-      const before = this.graph().filter(
-        (r) =>
-          r.name !== "LambdaEncryptionKey" &&
-          !r.type.startsWith("pulumi:providers:"),
-      );
+      const before = deployed(this.graph());
       if (before.length === 0) throw new Error("The original created nothing");
 
-      resources.length = 0;
+      this.reset();
       v5();
       await this.settle();
       return this.takeover(before);
     },
     /**
-     * Deploys an original component, then the V5 component that replaces it,
-     * and expects everything the original created to be kept with the same
-     * inputs. The only things that may go are the given number of wrapper
-     * components, matched by the `wrappers` pattern.
+     * The standard takeover tests for a V5 component. Call it inside a
+     * `describe`. Each case is run three ways: as it is, inside another
+     * component, and with a provider of its own. Each time the original is
+     * deployed, then the V5 component, and everything the original created
+     * has to be kept as it is: the same inputs, the same options, and for a
+     * component the same registered outputs.
+     *
+     * A case says what's expected to go (`unclaimed`) or be updated
+     * (`changed`) when it isn't nothing.
      */
-    async expectTakeover(
-      original: () => unknown,
-      v5: () => unknown,
-      wrappers = 0,
-    ) {
-      const result = await this.takesOver(original, v5);
-      expect(result.changed).toEqual([]);
-      const isWrapper = (r: string) => input?.wrappers?.test(r) ?? false;
-      expect(result.unclaimed.filter((r) => !isWrapper(r))).toEqual([]);
-      expect(result.unclaimed.length).toBe(wrappers);
+    takeoverCases<A, B>(suite: TakeoverCases<A, B>) {
+      const mock = this;
+      // The options each way gives the component, new for each of the two
+      // deploys, and whether a resource was created with them.
+      const ways: Record<
+        TakeoverWay,
+        () => Promise<{
+          opts: () => pulumi.ComponentResourceOptions | undefined;
+          given: (r: RecordedResource) => boolean;
+        }>
+      > = {
+        "as it is": async () => ({ opts: () => undefined, given: () => true }),
+        "inside another component": async () => ({
+          opts: () => ({ parent: new Parent("Parent") }),
+          given: (r) => r.parent.endsWith("::test:Parent::Parent"),
+        }),
+        "with another provider": async () => {
+          const { Provider } = await import("@pulumi/aws");
+          return {
+            opts: () => ({
+              provider: new Provider("West", { region: "us-west-2" }),
+            }),
+            given: (r) =>
+              [r.options.provider, ...Object.values(r.options.providers ?? {})]
+                .filter(Boolean)
+                .some((ref: string) => ref.includes("::West::")),
+          };
+        },
+      };
+
+      for (const [name, given] of Object.entries(suite.cases)) {
+        const test: TakeoverCase<A | B> =
+          typeof given === "function" ? { create: given } : given;
+        describe(name, () => {
+          for (const way of Object.keys(ways) as TakeoverWay[]) {
+            it(way, async () => {
+              const { opts, given } = await ways[way]();
+              const expected = <T>(value: Expected<T> | undefined) =>
+                typeof value === "function"
+                  ? (value as (way: TakeoverWay) => T)(way)
+                  : value;
+              const deploy = async (
+                Component: A | B,
+                written: TakeoverCase<A | B>["original"],
+                // Whether the component itself has to be given the options
+                strict: boolean,
+              ) => {
+                mock.reset();
+                if (written) written(opts());
+                else if (test.create) test.create(Component, opts());
+                else throw new Error(`The "${name}" case creates nothing`);
+                await mock.settle();
+                // The options have to reach the V5 component itself, and
+                // not something else the case creates. An original is only
+                // asked to use them: some pass them to what they look up, and
+                // a static method creates no component at all.
+                const type = (Component as any).__pulumiType;
+                const own = resources.filter((r) => r.type === type);
+                if (!(strict ? own : resources).some(given))
+                  throw new Error(
+                    `The "${name}" case has to pass its options on to the component`,
+                  );
+              };
+
+              await deploy(suite.original(), test.original, false);
+              const before = deployed(mock.graph());
+              if (before.length === 0)
+                throw new Error("The original created nothing");
+
+              await deploy(suite.v5(), test.v5, true);
+              const result = mock.takeover(before);
+              const wrappers = expected(test.wrappers);
+              const isWrapper = (r: string) =>
+                wrappers !== undefined && (input?.wrappers?.test(r) ?? false);
+              expect(
+                {
+                  unclaimed: result.unclaimed
+                    .filter((r) => !isWrapper(r))
+                    .sort(),
+                  wrappers: result.unclaimed.filter(isWrapper).length,
+                  changed: result.changed.map((c) => [c.name, c.fields]),
+                },
+                // Shown when it fails: what each changed resource had and has
+                JSON.stringify(result.changed, null, 2),
+              ).toEqual({
+                unclaimed: [
+                  ...(expected(test.unclaimed ?? suite.unclaimed) ?? []),
+                ].sort(),
+                wrappers: wrappers ?? 0,
+                changed: expected(test.changed ?? suite.changed) ?? [],
+              });
+              await suite.check?.(way);
+              await test.check?.(way);
+            });
+          }
+        });
+      }
     },
     /**
      * Checks that what's registered now takes over from an original graph:
@@ -393,12 +567,22 @@ export function mockPulumi(input?: {
               now: { kind: now.kind, id: now.options.id },
             };
           const ignore: string[] = now.options.ignoreChanges ?? [];
+          // What a component registers as its outputs is kept in the state
+          // too, and the CLI reads it
+          const registers = !before.custom || !now.custom;
           return {
             name: before.name,
-            original: { ...stable(kept(before, ignore)), ...deployOptions(before) },
+            original: {
+              ...stable(kept(before, ignore)),
+              ...deployOptions(before),
+              ...(registers ? { outputs: stable(before.outputs ?? {}) } : {}),
+            },
             now: {
               ...stable(kept(now, ignore), asOriginal(now.name)),
               ...deployOptions(now),
+              ...(registers
+                ? { outputs: stable(outputsOf(now), asOriginal(now.name)) }
+                : {}),
             },
           };
         })
@@ -481,7 +665,11 @@ function typeOf(urn: string) {
 function compact(options: Record<string, any>) {
   return Object.fromEntries(
     Object.entries(options).filter(([, v]) =>
-      Array.isArray(v) ? v.length > 0 : v !== "" && v !== false && v != null,
+      Array.isArray(v)
+        ? v.length > 0
+        : v && typeof v === "object"
+          ? Object.keys(v).length > 0
+          : v !== "" && v !== false && v != null,
     ),
   );
 }

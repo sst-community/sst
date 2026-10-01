@@ -298,6 +298,14 @@ takeover(ApiGatewayV2V5, {
   exception (a security group, a VPC endpoint, a subnet). Its tag is made from the new
   name and updated in place. Say so in the "Switch from" section, as `DsqlV5` does for
   the security group of its endpoints.
+- Something 4.x created without the component's `provider` is replaced on switch when
+  the component has one, because a part is always created with it. 4.x did this for
+  what it created with no parent (the alias of a durable function's URL, AppSync's
+  domain association), for a wrapper it forgot to give the provider (`SnsTopic`'s queue
+  subscribers), and for what's added to a component from a `get` that gave its options
+  to the lookup alone (`Bucket.get`, `Dynamo.get`, `CognitoUserPool.get`). A port can't
+  avoid it. The "with another provider" way of a takeover case finds it: expect it in
+  the case, and say so in the "Switch from" section.
 - An object in `transform` is merged into the defaults, nested objects included; 4.x
   replaced a nested object whole. So a config that sets a nested default this way
   (`transform: { instance: { tags: { team: "data" } } }`) deploys something different
@@ -333,47 +341,70 @@ Also check for an **ordering guarantee** the original makes with an
 ### Tests
 
 `platform/test/helpers/graph.ts` mocks Pulumi and records every resource a component
-registers. A port has a test file with two kinds of tests:
+registers. A port's test file starts with its takeover cases, then tests the component's
+own behaviour:
 
 ```ts
-const pulumi = mockPulumi({
-  // What 4.x wraps things in: nothing in AWS behind them, gone after takeover
-  wrappers: /^sst:aws:QueueLambdaSubscriber::/,
-});
+const pulumi = mockPulumi();
 
-// Deploys the original, then the V5 component, and expects everything kept with the
-// same inputs, apart from one wrapper.
-await pulumi.expectTakeover(
-  () => new Queue("MyQueue").subscribe(FUNCTION_ARN),
-  () => new QueueV5("MyQueue").subscribe(FUNCTION_ARN),
-  1,
-);
+describe("takes over a deployed Queue", () => {
+  pulumi.takeoverCases({
+    original: () => Queue,
+    v5: () => QueueV5,
+    cases: {
+      // Written once, for both: it's given the original, then the V5 component
+      "fifo queue": (Queue, opts) => new Queue("MyQueue", { fifo: true }, opts),
+      "a subscriber created from a handler": {
+        create: (Queue, opts) =>
+          new Queue("MyQueue", {}, opts).subscribe("src/subscriber.handler"),
+        // What goes: the wrapper, which has nothing in AWS behind it
+        unclaimed: ["sst:aws:QueueLambdaSubscriber::MyQueueSubscriberVkxuom"],
+        // What a deploy updates: a resource and its fields
+        changed: [["MyQueueSubscriberVkxuomFunctionFunction", ["description"]]],
+        // Anything else to assert, once the V5 component is deployed
+        check: () => expect(names()).toContain("MyQueueSubscriberFunction"),
+      },
+    },
+  });
+});
 ```
 
-- Cover every realistic combination of args, and every kind of thing the component adds.
-- Include the component inside another component (`{ parent }`) and with a `provider`.
-  4.x often created a wrapper at the top of the app with only the provider, wherever
-  the component was.
-- When something is expected to change, use `pulumi.takesOver()` and assert exactly what:
-  `changed.map((c) => [c.name, c.fields])`. Don't loosen the assertion.
+- Each case deploys the original, then the V5 component, and expects everything the
+  original created to be kept as it is. It's run three ways: as it is, inside another
+  component, and with a `provider` of its own. So a case has to pass its `opts` on to
+  the component, and fails when it doesn't.
+- The second and third way are where 4.x and a port differ most. 4.x often created a
+  wrapper at the top of the app wherever the component was, gave a wrapper the provider
+  but not the parent, or created something with no parent at all, so with the app's
+  provider.
+- Cover every realistic combination of args, and every kind of thing the component adds,
+  `get` and what's added to a component from `get` included.
+- A case says what's expected to go (`unclaimed`) or be updated (`changed`) when it isn't
+  nothing, the same for every case or by the way it's run (`(way) => [...]`). Don't
+  loosen it. Where the two components aren't written the same way, give `original` and
+  `v5` in place of `create`.
+- Wrappers whose names aren't worth writing out can be counted: give the mock a
+  `wrappers` pattern and the case a `wrappers` number (see `apigatewayv2-v5.test.ts`).
+- For a one-off, `pulumi.takesOver(original, v5)` returns `{ unclaimed, changed }`.
 - The check compares each resource's inputs and the options that change what a deploy
   does to it: `ignoreChanges`, `protect`, `retainOnDelete`, `deleteBeforeReplace`,
   `replaceOnChanges` and its provider. A difference there is reported as a field named
-  `options.<name>`.
+  `options.<name>`. For a component it compares what's registered as its outputs
+  (`outputs`): the CLI reads some of them (`_task`, `_dev`, `_tunnel`).
 - A resource's ids and ARNs are made from its name under the mock, so the check reads
   a renamed resource's new name as its old one wherever another resource refers to it.
   It doesn't in the resource's own inputs: its own name there is the name SST gave it,
   like a `Name` tag, and a new one is a change.
 - A provider made with `useProvider()` is registered once in a process, so only the
-  first test that needs it has it in its graph. Leave providers out of what you compare
-  (see `dsql-v5.test.ts`).
+  first test that needs it has it in its graph. The check leaves providers themselves
+  out of what it compares.
 - A secret input is recorded as an object with the value under `value`. A value made
   from a secret is a secret too, so a port that reads something next to a secret (a
   task's volumes next to its built image) can turn a plain input into one. The check
   reports that as a change to the field.
-- `pulumi.outputsOf(name)` is what a component registered as its outputs. The CLI reads
-  some of them (`_task`, `_dev`, `_tunnel`), so compare them between the original and
-  the port (see `task-v5.test.ts`).
+- `pulumi.outputsOf(name)` is what a component registered as its outputs. The takeover
+  check passes when neither side registers anything, so assert that the output the CLI
+  reads is there (see `task-v5.test.ts`).
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
 - A 4.x component that's passed in can be the real one: a `Vpc`, `Cluster` and `Task`
@@ -407,7 +438,8 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
    finds some components by type, and the V5 type has to be added next to it.
 3. Write `aws/takeover/<name>.ts` and import it from `aws/takeover/index.ts`.
 4. Export the component from `aws/index.ts`.
-5. Write `test/components/<name>-v5.test.ts`: takeover cases, then behaviour.
+5. Write `test/components/<name>-v5.test.ts`: takeover cases with
+   `pulumi.takeoverCases()`, then behaviour.
 6. Write the class doc, including a "Switch from `<Name>`" section that lists what's
    written differently and what changes on deploy, including the two notes every port
    has: object transforms are merged, and `$transform` for the original doesn't apply.

@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { output } from "@pulumi/pulumi";
+import { type ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { mockPulumi } from "../helpers/graph";
 
 const CLUSTER = "aws:rds/cluster:Cluster";
@@ -55,8 +55,10 @@ type AuroraClass =
 describe("AuroraV5", () => {
   let Aurora: typeof import("../../src/components/aws/aurora").Aurora;
   let AuroraV5: typeof import("../../src/components/aws/aurora-v5").AuroraV5;
+  let Vpc: typeof import("../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
+    Vpc = (await import("../../src/components/aws/vpc")).Vpc;
     Aurora = (await import("../../src/components/aws/aurora")).Aurora;
     AuroraV5 = (await import("../../src/components/aws/aurora-v5")).AuroraV5;
     await import("../../src/components/aws/takeover/aurora");
@@ -76,270 +78,261 @@ describe("AuroraV5", () => {
   // Everything the Aurora created has to be kept by the AuroraV5, with the
   // same inputs: a cluster that's replaced loses its data.
   describe("takes over a deployed Aurora", () => {
-    const cases: Record<string, (Aurora: AuroraClass) => void> = {
-      "postgres cluster": (Aurora) => {
-        new Aurora("MyDatabase", { engine: "postgres", vpc });
-      },
-      "mysql cluster": (Aurora) => {
-        new Aurora("MyDatabase", { engine: "mysql", vpc });
-      },
-      "every postgres setting": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc,
-          version: "16.4",
-          username: "admin",
-          password: "Passw0rd!",
-          database: "acme",
-          scaling: { min: "2 ACU", max: "128 ACU" },
-          dataApi: true,
-        });
-      },
-      "mysql version 3": (Aurora) => {
-        new Aurora("MyDatabase", { engine: "mysql", vpc, version: "3.05.2" });
-      },
-      "mysql version 2": (Aurora) => {
-        new Aurora("MyDatabase", { engine: "mysql", vpc, version: "2.12.0" });
-      },
-      "scaling that pauses after a while": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc,
-          scaling: { min: "0 ACU", max: "8 ACU", pauseAfter: "20 minutes" },
-        });
-      },
-      "scaling with only a minimum": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc,
-          scaling: { min: "0.5 ACU" },
-        });
-      },
-      "settings given as outputs": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: output("mysql" as const),
-          vpc: output({ subnets: [output("subnet-1")], securityGroups: ["sg-1"] }),
-          version: output("3.08.0"),
-          username: output("admin"),
-          password: output("Passw0rd!"),
-          database: output("acme"),
-          scaling: output({ min: output("1 ACU" as const), max: "2 ACU" as const }),
-          dataApi: output(true),
-        });
-      },
-      "read replicas": (Aurora) => {
-        new Aurora("MyDatabase", { engine: "postgres", vpc, replicas: 2 });
-      },
-      "read replicas with a chosen version": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc,
-          replicas: 1,
-          version: "17.3",
-        });
-      },
-      "a proxy": (Aurora) => {
-        new Aurora("MyDatabase", { engine: "postgres", vpc, proxy: true });
-      },
-      "a mysql proxy with additional credentials": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "mysql",
-          vpc,
-          replicas: 1,
-          proxy: {
-            credentials: [
-              { username: "metabase", password: "Passw0rd!" },
-              { username: "app_user", password: output("S3cret") },
-            ],
-          },
-        });
-      },
-      "a proxy with no additional credentials": (Aurora) => {
-        new Aurora("MyDatabase", { engine: "postgres", vpc, proxy: {} });
-      },
-      // Aurora applies the instance's transform to each replica as well
-      transforms: (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc,
-          proxy: true,
-          replicas: 2,
-          transform: {
-            subnetGroup: { description: "custom" },
-            clusterParameterGroup: {
-              parameters: [{ name: "rds.force_ssl", value: "1" }],
-            },
-            instanceParameterGroup: (args) => {
-              args.description = "tuned";
-            },
-            cluster: (args, opts) => {
-              args.backupRetentionPeriod = 30;
-              args.clusterIdentifier = "custom-identifier";
-              opts.protect = true;
-            },
-            instance: { performanceInsightsEnabled: true },
-            proxy: { idleClientTimeout: 600 },
-          },
-        });
-      },
-      "an instance transform as a function": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc,
-          replicas: 2,
-          transform: {
-            instance: (args, opts, name) => {
-              args.monitoringInterval = name.endsWith("Instance") ? 60 : 30;
-              opts.protect = true;
-            },
-          },
-        });
-      },
-      "dev args outside of sst dev": (Aurora) => {
-        new Aurora("MyDatabase", {
-          engine: "mysql",
-          vpc,
-          dev: { username: "root", password: "password" },
-        });
-      },
-    };
-
-    for (const [name, create] of Object.entries(cases)) {
-      it(name, async () => {
-        expect(
-          await pulumi.takesOver(
-            () => create(Aurora),
-            () => create(AuroraV5),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
+    pulumi.takeoverCases({
+      original: () => Aurora,
+      v5: () => AuroraV5,
+      check: () => {
         expect(resource("MyDatabaseCluster").type).toBe(CLUSTER);
         expect(resource("MyDatabaseInstance").type).toBe(INSTANCE);
-      });
-    }
-
-    // Aurora looks the cluster's secret up under the name it creates it
-    // with, "ProxySecret". AuroraV5 looks the same secret up as "Secret",
-    // which this can't match: a lookup has no aliases. Nothing is deployed
-    // for a lookup, so nothing is deleted.
-    for (const id of ["app-dev-mydatabase", "app-dev-proxied"]) {
-      it(`a cluster referenced with get (${id})`, async () => {
-        expect(
-          await pulumi.takesOver(
-            () => Aurora.get("MyDatabase", id),
-            () => AuroraV5.get("MyDatabase", id),
-          ),
-        ).toEqual({
-          unclaimed: [`${SECRET}::MyDatabaseProxySecret`],
-          changed: [],
-        });
-        expect(resource("MyDatabaseSecret")).toMatchObject({
-          kind: "read",
-          options: { id: "shared-secret" },
-        });
-      });
-    }
-
-    // AuroraV5 merges an object transform into the defaults. Aurora replaced
-    // a nested object whole, so tags set this way took the place of the ones
-    // SST sets. Those come back: the one thing that changes.
-    it("an object transform that sets tags", async () => {
-      const create = (Aurora: AuroraClass) => () =>
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc,
-          transform: { cluster: { tags: { team: "data" } } },
-        });
-
-      const result = await pulumi.takesOver(create(Aurora), create(AuroraV5));
-      expect(result.unclaimed).toEqual([]);
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyDatabaseCluster", ["tags"]],
-      ]);
-      expect(result.changed[0].original.tags).toEqual({ team: "data" });
-      expect(resource("MyDatabaseCluster").inputs.tags).toEqual({
-        team: "data",
-        "sst:ref:password": "MyDatabaseSecret_id",
-      });
-    });
-
-    it("a cluster in the private subnets of a Vpc", async () => {
-      const { Vpc } = await import("../../src/components/aws/vpc");
-      const create = (Aurora: AuroraClass) => () =>
-        new Aurora("MyDatabase", {
-          engine: "postgres",
-          vpc: new Vpc("MyVpc"),
-          proxy: true,
-        });
-
-      expect(await pulumi.takesOver(create(Aurora), create(AuroraV5))).toEqual({
-        unclaimed: [],
-        changed: [],
-      });
-      expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual([
-        "MyVpcPrivateSubnet1_id",
-        "MyVpcPrivateSubnet2_id",
-      ]);
-      expect(resource("MyDatabaseCluster").inputs.vpcSecurityGroupIds).toEqual([
-        "MyVpcSecurityGroup_id",
-      ]);
-    });
-
-    it("a cluster inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      class Storage extends ComponentResource {
-        constructor(name: string) {
-          super("test:Storage", name);
-        }
-      }
-      const create = (Aurora: AuroraClass) => () =>
-        new Aurora(
-          "MyDatabase",
-          {
-            engine: "postgres",
-            vpc,
-            replicas: 1,
-            proxy: { credentials: [{ username: "metabase", password: "x" }] },
+      },
+      cases: {
+        "postgres cluster": (Aurora, opts) => {
+          new Aurora("MyDatabase", { engine: "postgres", vpc }, opts);
+        },
+        "mysql cluster": (Aurora, opts) => {
+          new Aurora("MyDatabase", { engine: "mysql", vpc }, opts);
+        },
+        "every postgres setting": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "postgres",
+              vpc,
+              version: "16.4",
+              username: "admin",
+              password: "Passw0rd!",
+              database: "acme",
+              scaling: { min: "2 ACU", max: "128 ACU" },
+              dataApi: true,
+            },
+            opts,
+          );
+        },
+        "mysql version 3": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            { engine: "mysql", vpc, version: "3.05.2" },
+            opts,
+          );
+        },
+        "mysql version 2": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            { engine: "mysql", vpc, version: "2.12.0" },
+            opts,
+          );
+        },
+        "scaling that pauses after a while": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "postgres",
+              vpc,
+              scaling: { min: "0 ACU", max: "8 ACU", pauseAfter: "20 minutes" },
+            },
+            opts,
+          );
+        },
+        "scaling with only a minimum": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "postgres",
+              vpc,
+              scaling: { min: "0.5 ACU" },
+            },
+            opts,
+          );
+        },
+        "settings given as outputs": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: output("mysql" as const),
+              vpc: output({
+                subnets: [output("subnet-1")],
+                securityGroups: ["sg-1"],
+              }),
+              version: output("3.08.0"),
+              username: output("admin"),
+              password: output("Passw0rd!"),
+              database: output("acme"),
+              scaling: output({
+                min: output("1 ACU" as const),
+                max: "2 ACU" as const,
+              }),
+              dataApi: output(true),
+            },
+            opts,
+          );
+        },
+        "read replicas": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            { engine: "postgres", vpc, replicas: 2 },
+            opts,
+          );
+        },
+        "read replicas with a chosen version": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "postgres",
+              vpc,
+              replicas: 1,
+              version: "17.3",
+            },
+            opts,
+          );
+        },
+        "a proxy": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            { engine: "postgres", vpc, proxy: true },
+            opts,
+          );
+        },
+        "a mysql proxy with additional credentials": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "mysql",
+              vpc,
+              replicas: 1,
+              proxy: {
+                credentials: [
+                  { username: "metabase", password: "Passw0rd!" },
+                  { username: "app_user", password: output("S3cret") },
+                ],
+              },
+            },
+            opts,
+          );
+        },
+        "a proxy with no additional credentials": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            { engine: "postgres", vpc, proxy: {} },
+            opts,
+          );
+        },
+        // Aurora applies the instance's transform to each replica as well
+        transforms: (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "postgres",
+              vpc,
+              proxy: true,
+              replicas: 2,
+              transform: {
+                subnetGroup: { description: "custom" },
+                clusterParameterGroup: {
+                  parameters: [{ name: "rds.force_ssl", value: "1" }],
+                },
+                instanceParameterGroup: (args) => {
+                  args.description = "tuned";
+                },
+                cluster: (args, opts) => {
+                  args.backupRetentionPeriod = 30;
+                  args.clusterIdentifier = "custom-identifier";
+                  opts.protect = true;
+                },
+                instance: { performanceInsightsEnabled: true },
+                proxy: { idleClientTimeout: 600 },
+              },
+            },
+            opts,
+          );
+        },
+        "an instance transform as a function": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "postgres",
+              vpc,
+              replicas: 2,
+              transform: {
+                instance: (args, opts, name) => {
+                  args.monitoringInterval = name.endsWith("Instance") ? 60 : 30;
+                  opts.protect = true;
+                },
+              },
+            },
+            opts,
+          );
+        },
+        "dev args outside of sst dev": (Aurora, opts) => {
+          new Aurora(
+            "MyDatabase",
+            {
+              engine: "mysql",
+              vpc,
+              dev: { username: "root", password: "password" },
+            },
+            opts,
+          );
+        },
+        "a cluster in the private subnets of a Vpc": {
+          create: (Aurora, opts) => {
+            new Aurora(
+              "MyDatabase",
+              { engine: "postgres", vpc: new Vpc("MyVpc"), proxy: true },
+              opts,
+            );
           },
-          { parent: new Storage("Storage") },
-        );
-
-      expect(await pulumi.takesOver(create(Aurora), create(AuroraV5))).toEqual({
-        unclaimed: [],
-        changed: [],
-      });
-      expect(resource("MyDatabaseCluster").parent).toMatch(
-        /::test:Storage\$sst:aws:AuroraV5::MyDatabase$/,
-      );
-    });
-
-    it("a cluster deployed with another provider", async () => {
-      const { Provider } = await import("@pulumi/aws");
-      const create = (Aurora: AuroraClass) => () =>
-        new Aurora(
-          "MyDatabase",
-          { engine: "postgres", vpc, proxy: true, replicas: 1 },
-          { provider: new Provider("West", { region: "us-west-2" }) },
-        );
-      const custom = () =>
-        pulumi.resources
-          .filter((r) => r.custom && r.type.startsWith("aws:"))
-          .map((r) => r.options.provider as string);
-
-      create(Aurora)();
-      await pulumi.settle();
-      const providers = custom();
-      expect(providers.length).toBeGreaterThan(10);
-      expect(new Set(providers).size).toBe(1);
-      expect(providers[0]).toMatch(/::West::/);
-      const before = pulumi
-        .graph()
-        .filter((r) => !r.type.startsWith("pulumi:providers:"));
-
-      pulumi.reset();
-      create(AuroraV5)();
-      await pulumi.settle();
-      expect(pulumi.takeover(before)).toEqual({ unclaimed: [], changed: [] });
-      expect(custom()).toEqual(providers.map(() => providers[0]));
+          check: () => {
+            expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual([
+              "MyVpcPrivateSubnet1_id",
+              "MyVpcPrivateSubnet2_id",
+            ]);
+            expect(
+              resource("MyDatabaseCluster").inputs.vpcSecurityGroupIds,
+            ).toEqual(["MyVpcSecurityGroup_id"]);
+          },
+        },
+        // AuroraV5 merges an object transform into the defaults. Aurora
+        // replaced a nested object whole, so tags set this way took the place
+        // of the ones SST sets. Those come back: the one thing that changes.
+        "an object transform that sets tags": {
+          create: (Aurora, opts) => {
+            new Aurora(
+              "MyDatabase",
+              {
+                engine: "postgres",
+                vpc,
+                transform: { cluster: { tags: { team: "data" } } },
+              },
+              opts,
+            );
+          },
+          changed: [["MyDatabaseCluster", ["tags"]]],
+          check: () =>
+            expect(resource("MyDatabaseCluster").inputs.tags).toEqual({
+              team: "data",
+              "sst:ref:password": "MyDatabaseSecret_id",
+            }),
+        },
+        // Aurora looks the cluster's secret up under the name it creates it
+        // with, "ProxySecret". AuroraV5 looks the same secret up as "Secret",
+        // which this can't match: a lookup has no aliases. Nothing is deployed
+        // for a lookup, so nothing is deleted.
+        ...Object.fromEntries(
+          ["app-dev-mydatabase", "app-dev-proxied"].map((id) => [
+            `a cluster referenced with get (${id})`,
+            {
+              create: (Aurora: AuroraClass, opts?: ComponentResourceOptions) =>
+                Aurora.get("MyDatabase", id, opts),
+              unclaimed: [`${SECRET}::MyDatabaseProxySecret`],
+              check: () =>
+                expect(resource("MyDatabaseSecret")).toMatchObject({
+                  kind: "read",
+                  options: { id: "shared-secret" },
+                }),
+            },
+          ]),
+        ),
+      },
     });
 
     it("keeps what it renames", async () => {

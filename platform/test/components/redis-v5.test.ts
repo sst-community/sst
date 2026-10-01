@@ -49,62 +49,65 @@ describe("RedisV5", () => {
   // The one thing that goes is the version marker Redis writes, which has
   // nothing in AWS behind it.
   describe("takes over a deployed Redis", () => {
-    const cases: Record<string, (Redis: RedisClass) => void> = {
-      "default cluster": (Redis) => {
-        new Redis("MyRedis", { vpc });
-      },
-      "valkey without cluster mode": (Redis) => {
-        new Redis("MyRedis", {
-          vpc,
-          engine: "valkey",
-          version: "8.0",
-          instance: "r6gd.large",
-          cluster: false,
-          parameters: { "maxmemory-policy": "noeviction" },
-        });
-      },
-      "cluster mode with three nodes": (Redis) => {
-        new Redis("MyRedis", { vpc, cluster: { nodes: 3 } });
-      },
-      "nodes without cluster": (Redis) => {
-        new Redis("MyRedis", { vpc, nodes: 2 });
-      },
-      transforms: (Redis) => {
-        new Redis("MyRedis", {
-          vpc,
-          transform: {
-            subnetGroup: { description: "custom" },
-            parameterGroup: (args) => {
-              args.description = "tuned";
+    pulumi.takeoverCases({
+      original: () => Redis,
+      v5: () => RedisV5,
+      unclaimed: ["sst:sst:Version::MyRedisVersion"],
+      cases: {
+        "default cluster": (Redis, opts) => {
+          new Redis("MyRedis", { vpc }, opts);
+        },
+        "valkey without cluster mode": (Redis, opts) => {
+          new Redis(
+            "MyRedis",
+            {
+              vpc,
+              engine: "valkey",
+              version: "8.0",
+              instance: "r6gd.large",
+              cluster: false,
+              parameters: { "maxmemory-policy": "noeviction" },
             },
-            cluster: (args, opts) => {
-              args.snapshotRetentionLimit = 7;
-              opts.protect = true;
+            opts,
+          );
+        },
+        "cluster mode with three nodes": (Redis, opts) => {
+          new Redis("MyRedis", { vpc, cluster: { nodes: 3 } }, opts);
+        },
+        "nodes without cluster": (Redis, opts) => {
+          new Redis("MyRedis", { vpc, nodes: 2 }, opts);
+        },
+        transforms: (Redis, opts) => {
+          new Redis(
+            "MyRedis",
+            {
+              vpc,
+              transform: {
+                subnetGroup: { description: "custom" },
+                parameterGroup: (args) => {
+                  args.description = "tuned";
+                },
+                cluster: (args, opts) => {
+                  args.snapshotRetentionLimit = 7;
+                  opts.protect = true;
+                },
+              },
             },
-          },
-        });
+            opts,
+          );
+        },
+        "dev args outside of sst dev": (Redis, opts) => {
+          new Redis(
+            "MyRedis",
+            { vpc, dev: { host: "localhost", port: 6380 } },
+            opts,
+          );
+        },
+        "a cluster referenced with get": (Redis, opts) => {
+          Redis.get("MyRedis", "app-dev-myredis", opts);
+        },
       },
-      "dev args outside of sst dev": (Redis) => {
-        new Redis("MyRedis", { vpc, dev: { host: "localhost", port: 6380 } });
-      },
-      "a cluster referenced with get": (Redis) => {
-        Redis.get("MyRedis", "app-dev-myredis");
-      },
-    };
-
-    for (const [name, create] of Object.entries(cases)) {
-      it(name, async () => {
-        expect(
-          await pulumi.takesOver(
-            () => create(Redis),
-            () => create(RedisV5),
-          ),
-        ).toEqual({
-          unclaimed: ["sst:sst:Version::MyRedisVersion"],
-          changed: [],
-        });
-      });
-    }
+    });
 
     it("keeps the secret under its new name", async () => {
       new Redis("MyRedis", { vpc });

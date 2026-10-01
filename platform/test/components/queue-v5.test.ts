@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { mockPulumi } from "../helpers/graph";
 
 const pulumi = mockPulumi();
@@ -7,6 +8,9 @@ const FUNCTION_ARN =
   "arn:aws:lambda:us-east-1:123456789012:function:my-subscriber";
 const QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789012/existing";
 
+type QueueClass =
+  | typeof import("../../src/components/aws/queue").Queue
+  | typeof import("../../src/components/aws/queue-v5").QueueV5;
 type QueueArgs = import("../../src/components/aws/queue").QueueArgs;
 type QueueV5Args = import("../../src/components/aws/queue-v5").QueueV5Args;
 
@@ -56,78 +60,71 @@ describe("QueueV5", () => {
       },
     };
 
-    for (const [name, args] of Object.entries(sameArgs)) {
-      it(name, async () => {
-        expect(
-          await pulumi.takesOver(
-            () => new Queue("MyQueue", args),
-            () => new QueueV5("MyQueue", args),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
-      });
-    }
-
-    it("a queue referenced with get", async () => {
-      expect(
-        await pulumi.takesOver(
-          () => Queue.get("MyQueue", QUEUE_URL),
-          () => QueueV5.get("MyQueue", QUEUE_URL),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-    });
-
     // A Queue keeps its subscription in a component next to it. A QueueV5
     // keeps it inside, so that component goes, and what was in it is kept.
-    it("a subscriber given as a function arn", async () => {
-      const subscription = {
-        filters: [{ body: { type: ["order"] } }],
-        batch: { size: 5, window: "20 seconds" as const, partialResponses: true },
-      };
-      const result = await pulumi.takesOver(
-        () =>
-          new Queue("MyQueue").subscribe(FUNCTION_ARN, {
-            ...subscription,
-            transform: { eventSourceMapping: { enabled: false } },
-          }),
-        () =>
-          new QueueV5("MyQueue", {
-            transform: { eventSourceMapping: { enabled: false } },
-          }).subscribe(FUNCTION_ARN, subscription),
-      );
+    const WRAPPER = "sst:aws:QueueLambdaSubscriber::MyQueueSubscriberVkxuom";
+    const subscription = {
+      filters: [{ body: { type: ["order"] } }],
+      batch: { size: 5, window: "20 seconds" as const, partialResponses: true },
+    };
 
-      expect(result.changed).toEqual([]);
-      expect(result.unclaimed).toEqual([
-        "sst:aws:QueueLambdaSubscriber::MyQueueSubscriberVkxuom",
-      ]);
-    });
-
-    it("a subscriber created from a handler", async () => {
-      const result = await pulumi.takesOver(
-        () => new Queue("MyQueue").subscribe("src/subscriber.handler"),
-        () => new QueueV5("MyQueue").subscribe("src/subscriber.handler"),
-      );
-
-      expect(result.unclaimed).toEqual([
-        "sst:aws:QueueLambdaSubscriber::MyQueueSubscriberVkxuom",
-      ]);
-      // The function is kept. Its description is updated: it names the queue
-      // now, where it named the subscriber component.
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyQueueSubscriberVkxuomFunctionFunction", ["description"]],
-      ]);
-      // The function and what it's made of are now inside the queue
-      expect(
-        pulumi.resources
-          .filter((r) => r.name.startsWith("MyQueueSubscriber"))
-          .map((r) => r.name)
-          .sort(),
-      ).toEqual([
-        "MyQueueSubscriber",
-        "MyQueueSubscriberCode",
-        "MyQueueSubscriberFunction",
-        "MyQueueSubscriberLogGroup",
-        "MyQueueSubscriberRole",
-      ]);
+    pulumi.takeoverCases({
+      original: () => Queue,
+      v5: () => QueueV5,
+      cases: {
+        ...Object.fromEntries(
+          Object.entries(sameArgs).map(([name, args]) => [
+            name,
+            (Queue: QueueClass, opts?: ComponentResourceOptions) =>
+              new Queue("MyQueue", args, opts),
+          ]),
+        ),
+        "a queue referenced with get": (Queue, opts) =>
+          Queue.get("MyQueue", QUEUE_URL, opts),
+        "a subscriber given as a function arn": {
+          original: (opts) =>
+            new Queue("MyQueue", {}, opts).subscribe(FUNCTION_ARN, {
+              ...subscription,
+              transform: { eventSourceMapping: { enabled: false } },
+            }),
+          v5: (opts) =>
+            new QueueV5(
+              "MyQueue",
+              { transform: { eventSourceMapping: { enabled: false } } },
+              opts,
+            ).subscribe(FUNCTION_ARN, subscription),
+          unclaimed: [WRAPPER],
+        },
+        "a subscriber created from a handler": {
+          create: (Queue, opts) =>
+            new Queue("MyQueue", {}, opts).subscribe("src/subscriber.handler"),
+          unclaimed: [WRAPPER],
+          // The function is kept. Its description is updated: it names the
+          // queue now, where it named the subscriber component.
+          changed: [
+            ["MyQueueSubscriberVkxuomFunctionFunction", ["description"]],
+          ],
+          // The function and what it's made of are now inside the queue
+          check: () =>
+            expect(
+              pulumi.resources
+                .filter((r) => r.name.startsWith("MyQueueSubscriber"))
+                .map((r) => r.name)
+                .sort(),
+            ).toEqual([
+              "MyQueueSubscriber",
+              "MyQueueSubscriberCode",
+              "MyQueueSubscriberFunction",
+              "MyQueueSubscriberLogGroup",
+              "MyQueueSubscriberRole",
+            ]),
+        },
+        "a subscriber of a queue referenced with get": {
+          create: (Queue, opts) =>
+            Queue.get("MyQueue", QUEUE_URL, opts).subscribe(FUNCTION_ARN),
+          unclaimed: [WRAPPER],
+        },
+      },
     });
   });
 

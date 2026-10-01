@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mockPulumi } from "../helpers/graph";
+import { mockPulumi, type TakeoverWay } from "../helpers/graph";
 
 const pulumi = mockPulumi({
   // What the 4.x component wraps things in. They have nothing in AWS behind
@@ -54,17 +54,18 @@ const CODE = `
   export function response(ctx) { return ctx.result; }
 `;
 
-// AppSync created these two with no parent, and a takeover map can't give an
-// old address without one. They are not taken over: a deploy creates them
-// again and deletes these.
-
 describe("AppSyncV5", () => {
   let AppSync: typeof import("../../src/components/aws/app-sync").AppSync;
   let AppSyncV5: typeof import("../../src/components/aws/app-sync-v5").AppSyncV5;
   let dir: string;
   let schema: string;
 
+  let cloudflare: typeof import("../../src/components/cloudflare/dns");
+  let vercel: typeof import("../../src/components/vercel/dns");
+
   beforeAll(async () => {
+    cloudflare = await import("../../src/components/cloudflare/dns");
+    vercel = await import("../../src/components/vercel/dns");
     ({ AppSync } = await import("../../src/components/aws/app-sync"));
     ({ AppSyncV5 } = await import("../../src/components/aws/app-sync-v5"));
     await import("../../src/components/aws/takeover/app-sync");
@@ -84,340 +85,389 @@ describe("AppSyncV5", () => {
   }
 
   describe("takes over a deployed AppSync", () => {
-    it("default API with a schema", async () => {
-      await pulumi.expectTakeover(
-        () => new AppSync("MyApi", { schema }),
-        () => new AppSyncV5("MyApi", { schema }),
-      );
-      expect(
-        registered("aws:appsync/graphQLApi:GraphQLApi")[0].inputs,
-      ).toMatchObject({
-        authenticationType: "API_KEY",
-        schema: "type Query {\n  user: String\n}\n",
-      });
-    });
+    const sources = [
+      { name: "lambdaDS", lambda: FUNCTION_ARN },
+      { name: "dynamoDS", dynamodb: TABLE_ARN },
+      {
+        name: "elasticDS",
+        elasticSearch: "arn:aws:es:us-east-1:123456789012:domain/search",
+      },
+      {
+        name: "openDS",
+        openSearch: "arn:aws:opensearch:us-east-1:123456789012:domain/open",
+      },
+      {
+        name: "eventsDS",
+        eventBridge: "arn:aws:events:us-east-1:123456789012:event-bus/bus",
+      },
+      { name: "httpDS", http: "https://api.example.com" },
+      {
+        name: "rdsDS",
+        rds: {
+          cluster: "arn:aws:rds:us-east-1:123456789012:cluster:db",
+          credentials: "arn:aws:secretsmanager:us-east-1:123456789012:secret:db",
+        },
+      },
+      { name: "noneDS" },
+    ];
+    const dynamoDS = { name: "dynamoDS", dynamodb: TABLE_ARN };
+    const sourceTransform = {
+      dataSource: { description: "Users" },
+      serviceRole: { path: "/appsync/" },
+    };
+    const withCode = { name: "getUser", dataSource: "dynamoDS", code: CODE };
+    const withTemplates = {
+      name: "listUsers",
+      dataSource: "dynamoDS",
+      requestMappingTemplate: `{ "version": "2018-05-29", "operation": "Scan" }`,
+      responseMappingTemplate: `$utils.toJson($context.result.items)`,
+    };
+    const templates = {
+      requestTemplate: `{ "version": "2017-02-28", "operation": "Scan" }`,
+      responseTemplate: `$utils.toJson($context.result.items)`,
+    };
 
-    it("the API's transform", async () => {
-      const args = () => ({
-        schema,
-        transform: {
-          api: (args: any): undefined => {
-            args.authenticationType = "AWS_IAM";
-            args.xrayEnabled = true;
+    // AppSync creates the association of a custom domain, and the function of
+    // a Lambda data source, at the top of the app, so with the app's provider
+    // whatever the API is given. AppSyncV5 creates them inside the API, with
+    // the API's provider, which replaces them.
+    const withTheProvider =
+      (...names: string[]) =>
+      (way: TakeoverWay): [string, string[]][] =>
+        way === "with another provider"
+          ? names.map((name) => [name, ["options.provider"]])
+          : [];
+    const association = withTheProvider("MyApiDomainAssociation");
+
+    pulumi.takeoverCases({
+      original: () => AppSync,
+      v5: () => AppSyncV5,
+      cases: {
+        "default API with a schema": {
+          create: (AppSync, opts) => new AppSync("MyApi", { schema }, opts),
+          check: () =>
+            expect(
+              registered("aws:appsync/graphQLApi:GraphQLApi")[0].inputs,
+            ).toMatchObject({
+              authenticationType: "API_KEY",
+              schema: "type Query {\n  user: String\n}\n",
+            }),
+        },
+        "the API's transform": {
+          create: (AppSync, opts) =>
+            new AppSync(
+              "MyApi",
+              {
+                schema,
+                transform: {
+                  api: (args: any): undefined => {
+                    args.authenticationType = "AWS_IAM";
+                    args.xrayEnabled = true;
+                  },
+                },
+              },
+              opts,
+            ),
+          check: () =>
+            expect(
+              registered("aws:appsync/graphQLApi:GraphQLApi")[0].inputs
+                .xrayEnabled,
+            ).toBe(true),
+        },
+        "data sources of every kind": {
+          create: (AppSync, opts) => {
+            const api = new AppSync("MyApi", { schema }, opts);
+            for (const source of sources) api.addDataSource(source);
+          },
+          wrappers: sources.length,
+          // What was compared: each data source, and a role for the five
+          // that need one, with a policy for its source.
+          check: () => {
+            const dataSources = Object.fromEntries(
+              registered("aws:appsync/dataSource:DataSource").map((r) => [
+                r.inputs.name,
+                r.inputs,
+              ]),
+            );
+            expect(
+              sources.map((source) => dataSources[source.name].type),
+            ).toEqual([
+              "AWS_LAMBDA",
+              "AMAZON_DYNAMODB",
+              "AMAZON_ELASTICSEARCH",
+              "AMAZON_OPENSEARCH_SERVICE",
+              "AMAZON_EVENTBRIDGE",
+              "HTTP",
+              "RELATIONAL_DATABASE",
+              "NONE",
+            ]);
+            expect(dataSources.dynamoDS.dynamodbConfig).toEqual({
+              tableName: "my-table",
+            });
+            expect(dataSources.lambdaDS.lambdaConfig).toEqual({
+              functionArn: FUNCTION_ARN,
+            });
+            const roles = registered("aws:iam/role:Role");
+            expect(roles.map((r) => r.name).sort()).toEqual([
+              "MyApiServiceRoleDynamoDS",
+              "MyApiServiceRoleElasticDS",
+              "MyApiServiceRoleEventsDS",
+              "MyApiServiceRoleLambdaDS",
+              "MyApiServiceRoleOpenDS",
+            ]);
+            const dynamo = roles.find(
+              (r) => r.name === "MyApiServiceRoleDynamoDS",
+            )!;
+            expect(JSON.parse(dynamo.inputs.inlinePolicies[0].policy)).toEqual({
+              statements: [{ actions: ["dynamodb:*"], resources: [TABLE_ARN] }],
+            });
           },
         },
-      });
-      await pulumi.expectTakeover(
-        () => new AppSync("MyApi", args()),
-        () => new AppSyncV5("MyApi", args()),
-      );
-      expect(
-        registered("aws:appsync/graphQLApi:GraphQLApi")[0].inputs.xrayEnabled,
-      ).toBe(true);
-    });
-
-    it("data sources of every kind", async () => {
-      const sources = [
-        { name: "lambdaDS", lambda: FUNCTION_ARN },
-        { name: "dynamoDS", dynamodb: TABLE_ARN },
-        {
-          name: "elasticDS",
-          elasticSearch: "arn:aws:es:us-east-1:123456789012:domain/search",
+        "a data source's transform, set on the API": {
+          original: (opts) =>
+            new AppSync("MyApi", { schema }, opts).addDataSource({
+              ...dynamoDS,
+              transform: sourceTransform,
+            }),
+          v5: (opts) =>
+            new AppSyncV5(
+              "MyApi",
+              { schema, transform: sourceTransform },
+              opts,
+            ).addDataSource(dynamoDS),
+          wrappers: 1,
+          check: () =>
+            expect(registered("aws:iam/role:Role")[0].inputs.path).toBe(
+              "/appsync/",
+            ),
         },
-        {
-          name: "openDS",
-          openSearch: "arn:aws:opensearch:us-east-1:123456789012:domain/open",
-        },
-        {
-          name: "eventsDS",
-          eventBridge: "arn:aws:events:us-east-1:123456789012:event-bus/bus",
-        },
-        { name: "httpDS", http: "https://api.example.com" },
-        {
-          name: "rdsDS",
-          rds: {
-            cluster: "arn:aws:rds:us-east-1:123456789012:cluster:db",
-            credentials:
-              "arn:aws:secretsmanager:us-east-1:123456789012:secret:db",
+        "AppSync functions": {
+          original: (opts) => {
+            const api = new AppSync("MyApi", { schema }, opts);
+            const ds = api.addDataSource(dynamoDS);
+            api.addFunction({ ...withCode, dataSource: ds.name });
+            api.addFunction({
+              ...withTemplates,
+              transform: { function: { maxBatchSize: 10 } },
+            });
           },
-        },
-        { name: "noneDS" },
-      ];
-      await pulumi.expectTakeover(
-        () => {
-          const api = new AppSync("MyApi", { schema });
-          for (const source of sources) api.addDataSource(source);
-        },
-        () => {
-          const api = new AppSyncV5("MyApi", { schema });
-          for (const source of sources) api.addDataSource(source);
-        },
-        sources.length,
-      );
-
-      // What was compared: each data source, and a role for the five that
-      // need one, with a policy for its source.
-      const dataSources = Object.fromEntries(
-        registered("aws:appsync/dataSource:DataSource").map((r) => [
-          r.inputs.name,
-          r.inputs,
-        ]),
-      );
-      expect(
-        sources.map((source) => dataSources[source.name].type),
-      ).toEqual([
-        "AWS_LAMBDA",
-        "AMAZON_DYNAMODB",
-        "AMAZON_ELASTICSEARCH",
-        "AMAZON_OPENSEARCH_SERVICE",
-        "AMAZON_EVENTBRIDGE",
-        "HTTP",
-        "RELATIONAL_DATABASE",
-        "NONE",
-      ]);
-      expect(dataSources.dynamoDS.dynamodbConfig).toEqual({
-        tableName: "my-table",
-      });
-      expect(dataSources.lambdaDS.lambdaConfig).toEqual({
-        functionArn: FUNCTION_ARN,
-      });
-      const roles = registered("aws:iam/role:Role");
-      expect(roles.map((r) => r.name).sort()).toEqual([
-        "MyApiServiceRoleDynamoDS",
-        "MyApiServiceRoleElasticDS",
-        "MyApiServiceRoleEventsDS",
-        "MyApiServiceRoleLambdaDS",
-        "MyApiServiceRoleOpenDS",
-      ]);
-      const dynamo = roles.find((r) => r.name === "MyApiServiceRoleDynamoDS")!;
-      expect(JSON.parse(dynamo.inputs.inlinePolicies[0].policy)).toEqual({
-        statements: [{ actions: ["dynamodb:*"], resources: [TABLE_ARN] }],
-      });
-    });
-
-    it("a data source's transform, set on the API", async () => {
-      const dataSource = { description: "Users" };
-      const serviceRole = { path: "/appsync/" };
-      const source = { name: "dynamoDS", dynamodb: TABLE_ARN };
-      await pulumi.expectTakeover(
-        () =>
-          new AppSync("MyApi", { schema }).addDataSource({
-            ...source,
-            transform: { dataSource, serviceRole },
-          }),
-        () =>
-          new AppSyncV5("MyApi", {
-            schema,
-            transform: { dataSource, serviceRole },
-          }).addDataSource(source),
-        1,
-      );
-      expect(registered("aws:iam/role:Role")[0].inputs.path).toBe("/appsync/");
-    });
-
-    it("AppSync functions", async () => {
-      const withCode = { name: "getUser", dataSource: "dynamoDS", code: CODE };
-      const withTemplates = {
-        name: "listUsers",
-        dataSource: "dynamoDS",
-        requestMappingTemplate: `{ "version": "2018-05-29", "operation": "Scan" }`,
-        responseMappingTemplate: `$utils.toJson($context.result.items)`,
-      };
-      const fn = { maxBatchSize: 10 };
-      await pulumi.expectTakeover(
-        () => {
-          const api = new AppSync("MyApi", { schema });
-          const ds = api.addDataSource({ name: "dynamoDS", dynamodb: TABLE_ARN });
-          api.addFunction({ ...withCode, dataSource: ds.name });
-          api.addFunction({ ...withTemplates, transform: { function: fn } });
-        },
-        () => {
-          const api = new AppSyncV5("MyApi", {
-            schema,
-            transform: {
-              function: (args, _opts, _name, id) => {
-                if (id === "listUsers") args.maxBatchSize = 10;
+          v5: (opts) => {
+            const api = new AppSyncV5(
+              "MyApi",
+              {
+                schema,
+                transform: {
+                  function: (args, _opts, _name, id) => {
+                    if (id === "listUsers") args.maxBatchSize = 10;
+                  },
+                },
               },
-            },
-          });
-          const ds = api.addDataSource({ name: "dynamoDS", dynamodb: TABLE_ARN });
-          api.addFunction({ ...withCode, dataSource: ds.name });
-          api.addFunction(withTemplates);
+              opts,
+            );
+            const ds = api.addDataSource(dynamoDS);
+            api.addFunction({ ...withCode, dataSource: ds.name });
+            api.addFunction(withTemplates);
+          },
+          wrappers: 3,
+          check: () =>
+            expect(
+              registered("aws:appsync/function:Function")
+                .map((r) => [
+                  r.inputs.name,
+                  r.inputs.runtime?.name,
+                  r.inputs.maxBatchSize,
+                ])
+                .sort(),
+            ).toEqual([
+              ["getUser", "APPSYNC_JS", undefined],
+              ["listUsers", undefined, 10],
+            ]),
         },
-        3,
-      );
-      expect(
-        registered("aws:appsync/function:Function")
-          .map((r) => [
-            r.inputs.name,
-            r.inputs.runtime?.name,
-            r.inputs.maxBatchSize,
-          ])
-          .sort(),
-      ).toEqual([
-        ["getUser", "APPSYNC_JS", undefined],
-        ["listUsers", undefined, 10],
-      ]);
-    });
-
-    it("unit and pipeline resolvers", async () => {
-      const templates = {
-        requestTemplate: `{ "version": "2017-02-28", "operation": "Scan" }`,
-        responseTemplate: `$utils.toJson($context.result.items)`,
-      };
-      const resolver = { cachingConfig: { ttl: 60 } };
-      await pulumi.expectTakeover(
-        () => {
-          const api = new AppSync("MyApi", { schema });
-          const ds = api.addDataSource({ name: "dynamoDS", dynamodb: TABLE_ARN });
-          const fn = api.addFunction({ name: "getUser", dataSource: ds.name });
-          api.addResolver("Query user", { dataSource: ds.name, ...templates });
-          api.addResolver("Query  users", { dataSource: "dynamoDS", code: CODE });
-          api.addResolver("Mutation createUser", {
-            kind: "pipeline",
-            functions: [fn.nodes.function.functionId],
-            code: CODE,
-            transform: { resolver },
-          });
-        },
-        () => {
-          const api = new AppSyncV5("MyApi", {
-            schema,
-            transform: {
-              resolver: (args, _opts, _name, operation) => {
-                if (operation === "Mutation createUser")
-                  args.cachingConfig = { ttl: 60 };
-              },
-            },
-          });
-          const ds = api.addDataSource({ name: "dynamoDS", dynamodb: TABLE_ARN });
-          api.addFunction({ name: "getUser", dataSource: ds.name });
-          api
-            .addResolver("Query user", { dataSource: ds.name, ...templates })
-            .addResolver("Query  users", { dataSource: "dynamoDS", code: CODE })
-            .addResolver("Mutation createUser", {
-              kind: "pipeline",
-              functions: ["getUser"],
+        "unit and pipeline resolvers": {
+          original: (opts) => {
+            const api = new AppSync("MyApi", { schema }, opts);
+            const ds = api.addDataSource(dynamoDS);
+            const fn = api.addFunction({
+              name: "getUser",
+              dataSource: ds.name,
+            });
+            api.addResolver("Query user", {
+              dataSource: ds.name,
+              ...templates,
+            });
+            api.addResolver("Query  users", {
+              dataSource: "dynamoDS",
               code: CODE,
             });
+            api.addResolver("Mutation createUser", {
+              kind: "pipeline",
+              functions: [fn.nodes.function.functionId],
+              code: CODE,
+              transform: { resolver: { cachingConfig: { ttl: 60 } } },
+            });
+          },
+          v5: (opts) => {
+            const api = new AppSyncV5(
+              "MyApi",
+              {
+                schema,
+                transform: {
+                  resolver: (args, _opts, _name, operation) => {
+                    if (operation === "Mutation createUser")
+                      args.cachingConfig = { ttl: 60 };
+                  },
+                },
+              },
+              opts,
+            );
+            const ds = api.addDataSource(dynamoDS);
+            api.addFunction({ name: "getUser", dataSource: ds.name });
+            api
+              .addResolver("Query user", { dataSource: ds.name, ...templates })
+              .addResolver("Query  users", {
+                dataSource: "dynamoDS",
+                code: CODE,
+              })
+              .addResolver("Mutation createUser", {
+                kind: "pipeline",
+                functions: ["getUser"],
+                code: CODE,
+              });
+          },
+          wrappers: 5,
+          check: () =>
+            expect(
+              registered("aws:appsync/resolver:Resolver")
+                .map((r) => [
+                  r.inputs.type,
+                  r.inputs.field,
+                  r.inputs.kind,
+                  r.inputs.dataSource,
+                  r.inputs.pipelineConfig,
+                ])
+                .sort(),
+            ).toEqual([
+              [
+                "Mutation",
+                "createUser",
+                "PIPELINE",
+                undefined,
+                { functions: ["MyApiFunctionGetUser_fid"] },
+              ],
+              ["Query", "user", "UNIT", "dynamoDS", undefined],
+              ["Query", "users", "UNIT", "dynamoDS", undefined],
+            ]),
         },
-        5,
-      );
-      expect(
-        registered("aws:appsync/resolver:Resolver")
-          .map((r) => [
-            r.inputs.type,
-            r.inputs.field,
-            r.inputs.kind,
-            r.inputs.dataSource,
-            r.inputs.pipelineConfig,
-          ])
-          .sort(),
-      ).toEqual([
-        [
-          "Mutation",
-          "createUser",
-          "PIPELINE",
-          undefined,
-          { functions: ["MyApiFunctionGetUser_fid"] },
-        ],
-        ["Query", "user", "UNIT", "dynamoDS", undefined],
-        ["Query", "users", "UNIT", "dynamoDS", undefined],
-      ]);
-    });
-
-    it("a pipeline resolver given function ids", async () => {
-      await pulumi.expectTakeover(
-        () => {
-          const api = new AppSync("MyApi", { schema });
-          const fn = api.addFunction({ name: "getUser", dataSource: "none" });
-          api.addResolver("Query user", {
-            kind: "pipeline",
-            functions: [fn.nodes.function.functionId, "external-id"],
-          });
+        "a pipeline resolver given function ids": {
+          original: (opts) => {
+            const api = new AppSync("MyApi", { schema }, opts);
+            const fn = api.addFunction({ name: "getUser", dataSource: "none" });
+            api.addResolver("Query user", {
+              kind: "pipeline",
+              functions: [fn.nodes.function.functionId, "external-id"],
+            });
+          },
+          v5: (opts) => {
+            const api = new AppSyncV5("MyApi", { schema }, opts);
+            const fn = api.addFunction({ name: "getUser", dataSource: "none" });
+            api.addResolver("Query user", {
+              kind: "pipeline",
+              functions: [fn.functionId, "external-id"],
+            });
+          },
+          wrappers: 2,
         },
-        () => {
-          const api = new AppSyncV5("MyApi", { schema });
-          const fn = api.addFunction({ name: "getUser", dataSource: "none" });
-          api.addResolver("Query user", {
-            kind: "pipeline",
-            functions: [fn.functionId, "external-id"],
-          });
-        },
-        2,
-      );
-    });
-
-    it("a custom domain with its own certificate", async () => {
-      const args = () => ({
-        schema,
-        domain: { name: "api.example.com", dns: false, cert: CERT_ARN } as const,
-        transform: { domainName: { description: "GraphQL" } },
-      });
-      await pulumi.expectTakeover(
-        () => new AppSync("MyApi", args()),
-        () => new AppSyncV5("MyApi", args()),
-      );
-      expect(
-        registered("aws:appsync/domainName:DomainName")[0].inputs,
-      ).toEqual({
-        certificateArn: CERT_ARN,
-        description: "GraphQL",
-        domainName: "api.example.com",
-      });
-    });
-
-    it("a custom domain on Route 53", async () => {
-      await pulumi.expectTakeover(
-        () => new AppSync("MyApi", { schema, domain: "api.example.com" }),
-        () => new AppSyncV5("MyApi", { schema, domain: "api.example.com" }),
-      );
-      // The certificate, its records and the alias records are all there
-      const types = pulumi.resources.map((r) => r.type);
-      expect(types).toContain("sst:aws:Certificate");
-      expect(registered("aws:route53/record:Record").length).toBe(3);
-      // The certificate is created in us-east-1
-      expect(
-        registered("aws:acm/certificate:Certificate")[0].options.provider,
-      ).toMatch(/AwsProvider\.sst\.us-east-1/);
-    });
-
-    it("a custom domain on Cloudflare or Vercel", async () => {
-      const cloudflare = await import("../../src/components/cloudflare/dns");
-      const vercel = await import("../../src/components/vercel/dns");
-      for (const dns of [
-        () => cloudflare.dns({ zone: "zone-1" }),
-        () => vercel.dns({ domain: "example.com" }),
-      ]) {
-        await pulumi.expectTakeover(
-          () =>
-            new AppSync("MyApi", {
-              schema,
-              domain: { name: "api.example.com", dns: dns() },
+        "a custom domain with its own certificate": {
+          create: (AppSync, opts) =>
+            new AppSync(
+              "MyApi",
+              {
+                schema,
+                domain: {
+                  name: "api.example.com",
+                  dns: false,
+                  cert: CERT_ARN,
+                } as const,
+                transform: { domainName: { description: "GraphQL" } },
+              },
+              opts,
+            ),
+          changed: association,
+          check: () =>
+            expect(
+              registered("aws:appsync/domainName:DomainName")[0].inputs,
+            ).toEqual({
+              certificateArn: CERT_ARN,
+              description: "GraphQL",
+              domainName: "api.example.com",
             }),
-          () =>
-            new AppSyncV5("MyApi", {
-              schema,
-              domain: { name: "api.example.com", dns: dns() },
+        },
+        "a custom domain on Route 53": {
+          create: (AppSync, opts) =>
+            new AppSync("MyApi", { schema, domain: "api.example.com" }, opts),
+          changed: association,
+          check: () => {
+            // The certificate, its records and the alias records are all there
+            const types = pulumi.resources.map((r) => r.type);
+            expect(types).toContain("sst:aws:Certificate");
+            expect(registered("aws:route53/record:Record").length).toBe(3);
+            // The certificate is created in us-east-1
+            expect(
+              registered("aws:acm/certificate:Certificate")[0].options.provider,
+            ).toMatch(/AwsProvider\.sst\.us-east-1/);
+          },
+        },
+        "a custom domain on Cloudflare": {
+          create: (AppSync, opts) =>
+            new AppSync(
+              "MyApi",
+              {
+                schema,
+                domain: {
+                  name: "api.example.com",
+                  dns: cloudflare.dns({ zone: "zone-1" }),
+                },
+              },
+              opts,
+            ),
+          changed: association,
+        },
+        "a custom domain on Vercel": {
+          create: (AppSync, opts) =>
+            new AppSync(
+              "MyApi",
+              {
+                schema,
+                domain: {
+                  name: "api.example.com",
+                  dns: vercel.dns({ domain: "example.com" }),
+                },
+              },
+              opts,
+            ),
+          changed: association,
+        },
+        "the function of a Lambda data source given as a handler": {
+          create: (AppSync, opts) =>
+            new AppSync("MyApi", { schema }, opts).addDataSource({
+              name: "lambdaDS",
+              lambda: "src/lambda.handler",
             }),
-        );
-      }
-    });
-
-    it("the function of a Lambda data source given as a handler", async () => {
-      const source = { name: "lambdaDS", lambda: "src/lambda.handler" };
-      const result = await pulumi.takesOver(
-        () => new AppSync("MyApi", { schema }).addDataSource(source),
-        () => new AppSyncV5("MyApi", { schema }).addDataSource(source),
-      );
-      expect(result).toEqual({
-        unclaimed: ["sst:aws:AppSyncDataSource::MyApiDataSourceLambdaDS"],
-        changed: [],
-      });
-      // The function is now inside the API
-      const [fn] = registered("sst:aws:FunctionV5");
-      expect(fn.name).toBe("MyApiDataSourceFunctionLambdaDS");
-      expect(fn.parent.split("::").at(-1)).toBe("MyApi");
+          wrappers: 1,
+          changed: withTheProvider(
+            "MyApiDataSourceLambdaDSFunctionLogGroup",
+            "MyApiDataSourceLambdaDSFunctionRole",
+            "MyApiDataSourceLambdaDSFunctionFunction",
+            "MyApiDataSourceLambdaDSFunctionCode",
+          ),
+          // The function is now inside the API
+          check: () => {
+            const [fn] = registered("sst:aws:FunctionV5");
+            expect(fn.name).toBe("MyApiDataSourceFunctionLambdaDS");
+            expect(fn.parent.split("::").at(-1)).toBe("MyApi");
+          },
+        },
+      },
     });
   });
 

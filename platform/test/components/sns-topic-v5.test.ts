@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mockPulumi } from "../helpers/graph";
+import { mockPulumi, type TakeoverWay } from "../helpers/graph";
 
 const pulumi = mockPulumi();
 
@@ -27,101 +27,102 @@ describe("SnsTopicV5", () => {
   // What goes are the subscriber components SnsTopic wraps each subscription
   // in, which have nothing in AWS behind them.
   describe("takes over a deployed SnsTopic", () => {
-    it("default topic", async () => {
-      expect(
-        await pulumi.takesOver(
-          () => new SnsTopic("MyTopic"),
-          () => new SnsTopicV5("MyTopic"),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-    });
+    const filter = { filter: { price_usd: [{ numeric: [">=", 100] }] } };
+    // SnsTopic gives a function subscriber the topic's provider, and not a
+    // queue subscriber, which is created with the app's. SnsTopicV5 creates
+    // both with the topic's, which replaces a queue's subscription and policy.
+    const queueSubscriber = (way: TakeoverWay): [string, string[]][] =>
+      way === "with another provider"
+        ? [
+            ["MyTopicSubscriberOrdersSubscription", ["options.provider"]],
+            ["MyTopicSubscriberOrdersPolicy", ["options.provider"]],
+          ]
+        : [];
 
-    it("fifo topic with a transform", async () => {
-      const args = {
-        fifo: true,
-        transform: { topic: { displayName: "Orders" } },
-      };
-      expect(
-        await pulumi.takesOver(
-          () => new SnsTopic("MyTopic", args),
-          () => new SnsTopicV5("MyTopic", args),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-    });
-
-    it("a topic referenced with get", async () => {
-      expect(
-        await pulumi.takesOver(
-          () => SnsTopic.get("MyTopic", TOPIC_ARN),
-          () => SnsTopicV5.get("MyTopic", TOPIC_ARN),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-    });
-
-    it("function subscribers given as arns", async () => {
-      const filter = { filter: { price_usd: [{ numeric: [">=", 100] }] } };
-      expect(
-        await pulumi.takesOver(
-          () => {
-            const topic = new SnsTopic("MyTopic");
+    pulumi.takeoverCases({
+      original: () => SnsTopic,
+      v5: () => SnsTopicV5,
+      cases: {
+        "default topic": (SnsTopic, opts) => new SnsTopic("MyTopic", {}, opts),
+        "fifo topic with a transform": (SnsTopic, opts) =>
+          new SnsTopic(
+            "MyTopic",
+            { fifo: true, transform: { topic: { displayName: "Orders" } } },
+            opts,
+          ),
+        "a topic referenced with get": (SnsTopic, opts) =>
+          SnsTopic.get("MyTopic", TOPIC_ARN, opts),
+        "function subscribers given as arns": {
+          original: (opts) => {
+            const topic = new SnsTopic("MyTopic", {}, opts);
             topic.subscribe("Emailer", FUNCTION_ARN, filter);
             topic.subscribe("Auditor", FUNCTION_ARN);
           },
-          () =>
-            new SnsTopicV5("MyTopic")
+          v5: (opts) =>
+            new SnsTopicV5("MyTopic", {}, opts)
               .subscribe("Emailer", FUNCTION_ARN, filter)
               .subscribe("Auditor", FUNCTION_ARN),
-        ),
-      ).toEqual({
-        unclaimed: [
-          "sst:aws:SnsTopicLambdaSubscriber::MyTopicSubscriberAuditor",
-          "sst:aws:SnsTopicLambdaSubscriber::MyTopicSubscriberEmailer",
-        ],
-        changed: [],
-      });
-    });
-
-    it("a function subscriber created from a handler", async () => {
-      const result = await pulumi.takesOver(
-        () => new SnsTopic("MyTopic").subscribe("Emailer", "src/email.handler"),
-        () =>
-          new SnsTopicV5("MyTopic").subscribe("Emailer", "src/email.handler"),
-      );
-      expect(result.unclaimed).toEqual([
-        "sst:aws:SnsTopicLambdaSubscriber::MyTopicSubscriberEmailer",
-      ]);
-      // The function is kept. Its description is updated: it names the topic
-      // now, where it named the subscriber component.
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyTopicSubscriberEmailerFunctionFunction", ["description"]],
-      ]);
-      // The function and what it's made of are now inside the topic
-      expect(
-        pulumi.resources
-          .filter((r) => r.name.startsWith("MyTopicSubscriberEmailer"))
-          .map((r) => r.name)
-          .sort(),
-      ).toEqual([
-        "MyTopicSubscriberEmailer",
-        "MyTopicSubscriberEmailerCode",
-        "MyTopicSubscriberEmailerFunction",
-        "MyTopicSubscriberEmailerLogGroup",
-        "MyTopicSubscriberEmailerRole",
-      ]);
-    });
-
-    it("a queue subscriber", async () => {
-      const filter = { filter: { type: ["order"] } };
-      expect(
-        await pulumi.takesOver(
-          () => new SnsTopic("MyTopic").subscribeQueue("Orders", QUEUE_ARN, filter),
-          () =>
-            new SnsTopicV5("MyTopic").subscribeQueue("Orders", QUEUE_ARN, filter),
-        ),
-      ).toEqual({
-        unclaimed: ["sst:aws:SnsTopicQueueSubscriber::MyTopicSubscriberOrders"],
-        changed: [],
-      });
+          unclaimed: [
+            "sst:aws:SnsTopicLambdaSubscriber::MyTopicSubscriberAuditor",
+            "sst:aws:SnsTopicLambdaSubscriber::MyTopicSubscriberEmailer",
+          ],
+        },
+        "a function subscriber created from a handler": {
+          create: (SnsTopic, opts) =>
+            new SnsTopic("MyTopic", {}, opts).subscribe(
+              "Emailer",
+              "src/email.handler",
+            ),
+          unclaimed: [
+            "sst:aws:SnsTopicLambdaSubscriber::MyTopicSubscriberEmailer",
+          ],
+          // The function is kept. Its description is updated: it names the
+          // topic now, where it named the subscriber component.
+          changed: [
+            ["MyTopicSubscriberEmailerFunctionFunction", ["description"]],
+          ],
+          // The function and what it's made of are now inside the topic
+          check: () =>
+            expect(
+              pulumi.resources
+                .filter((r) => r.name.startsWith("MyTopicSubscriberEmailer"))
+                .map((r) => r.name)
+                .sort(),
+            ).toEqual([
+              "MyTopicSubscriberEmailer",
+              "MyTopicSubscriberEmailerCode",
+              "MyTopicSubscriberEmailerFunction",
+              "MyTopicSubscriberEmailerLogGroup",
+              "MyTopicSubscriberEmailerRole",
+            ]),
+        },
+        "a queue subscriber": {
+          create: (SnsTopic, opts) =>
+            new SnsTopic("MyTopic", {}, opts).subscribeQueue(
+              "Orders",
+              QUEUE_ARN,
+              {
+                filter: { type: ["order"] },
+              },
+            ),
+          unclaimed: [
+            "sst:aws:SnsTopicQueueSubscriber::MyTopicSubscriberOrders",
+          ],
+          changed: queueSubscriber,
+        },
+        "subscribers of a topic referenced with get": {
+          create: (SnsTopic, opts) => {
+            const topic = SnsTopic.get("MyTopic", TOPIC_ARN, opts);
+            topic.subscribe("Emailer", FUNCTION_ARN);
+            topic.subscribeQueue("Orders", QUEUE_ARN);
+          },
+          unclaimed: [
+            "sst:aws:SnsTopicLambdaSubscriber::MyTopicSubscriberEmailer",
+            "sst:aws:SnsTopicQueueSubscriber::MyTopicSubscriberOrders",
+          ],
+          changed: queueSubscriber,
+        },
+      },
     });
   });
 

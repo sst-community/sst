@@ -34,7 +34,6 @@ const pulumi = mockPulumi({
 type TaskClass =
   | typeof import("../../src/components/aws/task").Task
   | typeof import("../../src/components/aws/task-v5").TaskV5;
-type Cluster = import("../../src/components/aws/cluster").Cluster;
 
 describe("TaskV5", () => {
   let Task: typeof import("../../src/components/aws/task").Task;
@@ -105,211 +104,362 @@ describe("TaskV5", () => {
   // Task created has to be kept by the TaskV5, with the same inputs. Each
   // case also has to register the same thing for `sst dev` to run.
   describe("takes over a deployed Task", () => {
-    const cases: Record<string, (Task: TaskClass, cluster: Cluster) => void> = {
-      "an image that's pulled": (Task, cluster) => {
-        new Task("MyTask", { cluster, image: "nginx:latest" });
+    pulumi.takeoverCases({
+      original: () => Task,
+      v5: () => TaskV5,
+      check: () => {
+        expect(resource("MyTaskTaskDefinition").type).toBe(TASK_DEFINITION);
+        // What the task tells `sst dev` to run is compared with the rest
+        expect(pulumi.outputsOf("MyTask")).toHaveProperty("_task");
       },
-      "an image built from the Dockerfile at the root": (Task, cluster) => {
-        new Task("MyTask", { cluster, image: { context: app } });
-      },
-      "an image built with every setting": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          architecture: "arm64",
-          image: {
-            context: app,
-            dockerfile: "Dockerfile.task",
-            args: { NODE_ENV: "production" },
-            secrets: { NPM_TOKEN: "token" },
-            tags: ["latest", "v1"],
-            target: "runner",
-            cache: false,
-          },
-        });
-      },
-      "the size of the task": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: "nginx:latest",
-          cpu: "1 vCPU",
-          memory: "4 GB",
-          storage: "50 GB",
-        });
-      },
-      "what the container runs with": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: "nginx:latest",
-          command: ["node", "index.js"],
-          entrypoint: ["/usr/bin/tini", "--"],
-          environment: { STAGE: "test", LEVEL: "debug" },
-          environmentFiles: ["arn:aws:s3:::my-bucket/my-env-file.env"],
-          ssm: { API_KEY: "arn:aws:ssm:us-east-1:123456789012:parameter/key" },
-          logging: { retention: "1 week", name: "/custom/task" },
-          permissions: [
-            { actions: ["s3:GetObject"], resources: ["arn:aws:s3:::my-bucket/*"] },
-            { effect: "deny", actions: ["s3:DeleteObject"], resources: ["*"] },
-          ],
-        });
-      },
-      "linked resources": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: { context: app },
-          link: [new BucketV5("MyBucket")],
-        });
-      },
-      "settings given as outputs": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          architecture: output("arm64" as const),
-          image: output("nginx:latest"),
-          command: output(["node", output("index.js")]),
-          environment: output({ STAGE: output("test") }),
-          logging: output({ retention: "1 week" as const }),
-          ssm: output({ API_KEY: output("arn:aws:ssm:us-east-1:1:parameter/key") }),
-        });
-      },
-      "an image to build given as an output": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: output({ context: output(app), target: "runner" }),
-        });
-      },
-      "several containers": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          containers: [
+      cases: {
+        "an image that's pulled": (Task, opts) => {
+          new Task(
+            "MyTask",
+            { cluster: cluster(), image: "nginx:latest" },
+            opts,
+          );
+        },
+        "an image built from the Dockerfile at the root": (Task, opts) => {
+          new Task(
+            "MyTask",
+            { cluster: cluster(), image: { context: app } },
+            opts,
+          );
+        },
+        "an image built with every setting": (Task, opts) => {
+          new Task(
+            "MyTask",
             {
-              name: "app",
-              image: "nginxdemos/hello:plain-text",
-              cpu: "0.125 vCPU",
-              memory: "0.25 GB",
-              environment: { ROLE: "app" },
+              cluster: cluster(),
+              architecture: "arm64",
+              image: {
+                context: app,
+                dockerfile: "Dockerfile.task",
+                args: { NODE_ENV: "production" },
+                secrets: { NPM_TOKEN: "token" },
+                tags: ["latest", "v1"],
+                target: "runner",
+                cache: false,
+              },
             },
+            opts,
+          );
+        },
+        "the size of the task": (Task, opts) => {
+          new Task(
+            "MyTask",
             {
-              name: "admin-panel",
-              image: { context: admin },
-              command: ["node", "admin.js"],
-              logging: { retention: "3 days" },
-            },
-          ],
-        });
-      },
-      "a volume given by its ids": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: "nginx:latest",
-          volumes: [
-            {
-              efs: { fileSystem: "fs-1", accessPoint: "fsap-1" },
-              path: "/mnt/efs",
-            },
-          ],
-        });
-      },
-      "a volume several containers mount": (Task, cluster) => {
-        const efs = new Efs("MyEfs", {
-          vpc: { id: "vpc-1", subnets: ["subnet-1"] },
-        });
-        new Task("MyTask", {
-          cluster,
-          containers: [
-            {
-              name: "app",
+              cluster: cluster(),
               image: "nginx:latest",
-              volumes: [{ efs, path: "/mnt/efs" }],
+              cpu: "1 vCPU",
+              memory: "4 GB",
+              storage: "50 GB",
             },
+            opts,
+          );
+        },
+        "what the container runs with": (Task, opts) => {
+          new Task(
+            "MyTask",
             {
-              name: "worker",
+              cluster: cluster(),
               image: "nginx:latest",
-              volumes: [
-                { efs, path: "/data" },
-                { efs: { fileSystem: "fs-2", accessPoint: "fsap-2" }, path: "/more" },
-              ],
-            },
-          ],
-        });
-      },
-      "settings on each container": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          containers: [
-            {
-              name: "app",
-              image: "nginx:latest",
-              cpu: "0.125 vCPU",
               command: ["node", "index.js"],
               entrypoint: ["/usr/bin/tini", "--"],
-              environment: { ROLE: "app" },
-              environmentFiles: ["arn:aws:s3:::my-bucket/app.env"],
-              ssm: { API_KEY: "arn:aws:ssm:us-east-1:123456789012:parameter/key" },
-              logging: { name: "/custom/app", retention: "2 weeks" },
+              environment: { STAGE: "test", LEVEL: "debug" },
+              environmentFiles: ["arn:aws:s3:::my-bucket/my-env-file.env"],
+              ssm: {
+                API_KEY: "arn:aws:ssm:us-east-1:123456789012:parameter/key",
+              },
+              logging: { retention: "1 week", name: "/custom/task" },
+              permissions: [
+                {
+                  actions: ["s3:GetObject"],
+                  resources: ["arn:aws:s3:::my-bucket/*"],
+                },
+                {
+                  effect: "deny",
+                  actions: ["s3:DeleteObject"],
+                  resources: ["*"],
+                },
+              ],
             },
+            opts,
+          );
+        },
+        "linked resources": (Task, opts) => {
+          new Task(
+            "MyTask",
             {
-              name: "worker",
+              cluster: cluster(),
+              image: { context: app },
+              link: [new BucketV5("MyBucket")],
+            },
+            opts,
+          );
+        },
+        "settings given as outputs": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              architecture: output("arm64" as const),
               image: output("nginx:latest"),
-              environment: output({ ROLE: "worker" }),
-              logging: output({ retention: "forever" as const }),
+              command: output(["node", output("index.js")]),
+              environment: output({ STAGE: output("test") }),
+              logging: output({ retention: "1 week" as const }),
+              ssm: output({
+                API_KEY: output("arn:aws:ssm:us-east-1:1:parameter/key"),
+              }),
             },
-          ],
-        });
-      },
-      "a public task": (Task, cluster) => {
-        new Task("MyTask", { cluster, image: "nginx:latest", public: true });
-      },
-      "a task without a public ip": (Task, cluster) => {
-        new Task("MyTask", { cluster, image: "nginx:latest", publicIp: false });
-      },
-      transforms: (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: { context: app },
-          transform: {
-            taskRole: { description: "Runs the task" },
-            executionRole: (args, opts) => {
-              args.description = "Starts the task";
-              opts.protect = true;
+            opts,
+          );
+        },
+        "an image to build given as an output": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              image: output({ context: output(app), target: "runner" }),
             },
-            taskDefinition: (args) => {
-              args.family = "custom-family";
-              args.tags = { team: "data" };
+            opts,
+          );
+        },
+        "several containers": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              containers: [
+                {
+                  name: "app",
+                  image: "nginxdemos/hello:plain-text",
+                  cpu: "0.125 vCPU",
+                  memory: "0.25 GB",
+                  environment: { ROLE: "app" },
+                },
+                {
+                  name: "admin-panel",
+                  image: { context: admin },
+                  command: ["node", "admin.js"],
+                  logging: { retention: "3 days" },
+                },
+              ],
             },
-            logGroup: { kmsKeyId: "key-1" },
-            image: (args: any) => {
-              args.noCache = true;
-              return undefined;
+            opts,
+          );
+        },
+        "a volume given by its ids": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              image: "nginx:latest",
+              volumes: [
+                {
+                  efs: { fileSystem: "fs-1", accessPoint: "fsap-1" },
+                  path: "/mnt/efs",
+                },
+              ],
             },
+            opts,
+          );
+        },
+        "a volume several containers mount": (Task, opts) => {
+          const efs = new Efs("MyEfs", {
+            vpc: { id: "vpc-1", subnets: ["subnet-1"] },
+          });
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              containers: [
+                {
+                  name: "app",
+                  image: "nginx:latest",
+                  volumes: [{ efs, path: "/mnt/efs" }],
+                },
+                {
+                  name: "worker",
+                  image: "nginx:latest",
+                  volumes: [
+                    { efs, path: "/data" },
+                    {
+                      efs: { fileSystem: "fs-2", accessPoint: "fsap-2" },
+                      path: "/more",
+                    },
+                  ],
+                },
+              ],
+            },
+            opts,
+          );
+        },
+        "settings on each container": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              containers: [
+                {
+                  name: "app",
+                  image: "nginx:latest",
+                  cpu: "0.125 vCPU",
+                  command: ["node", "index.js"],
+                  entrypoint: ["/usr/bin/tini", "--"],
+                  environment: { ROLE: "app" },
+                  environmentFiles: ["arn:aws:s3:::my-bucket/app.env"],
+                  ssm: {
+                    API_KEY: "arn:aws:ssm:us-east-1:123456789012:parameter/key",
+                  },
+                  logging: { name: "/custom/app", retention: "2 weeks" },
+                },
+                {
+                  name: "worker",
+                  image: output("nginx:latest"),
+                  environment: output({ ROLE: "worker" }),
+                  logging: output({ retention: "forever" as const }),
+                },
+              ],
+            },
+            opts,
+          );
+        },
+        "a public task": (Task, opts) => {
+          new Task(
+            "MyTask",
+            { cluster: cluster(), image: "nginx:latest", public: true },
+            opts,
+          );
+        },
+        "a task without a public ip": (Task, opts) => {
+          new Task(
+            "MyTask",
+            { cluster: cluster(), image: "nginx:latest", publicIp: false },
+            opts,
+          );
+        },
+        transforms: (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              image: { context: app },
+              transform: {
+                taskRole: { description: "Runs the task" },
+                executionRole: (args, opts) => {
+                  args.description = "Starts the task";
+                  opts.protect = true;
+                },
+                taskDefinition: (args) => {
+                  args.family = "custom-family";
+                  args.tags = { team: "data" };
+                },
+                logGroup: { kmsKeyId: "key-1" },
+                image: (args: any) => {
+                  args.noCache = true;
+                  return undefined;
+                },
+              },
+            },
+            opts,
+          );
+        },
+        "dev settings outside of sst dev": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              image: { context: app },
+              dev: { command: "node task.js", directory: "packages/task" },
+            },
+            opts,
+          );
+        },
+        "a task in a VPC of your own": {
+          create: (Task, opts) => {
+            new Task(
+              "MyTask",
+              {
+                cluster: new ClusterClass("MyCluster", { vpc: customVpc }),
+                image: "nginx:latest",
+                public: true,
+              },
+              opts,
+            );
           },
-        });
+          check: () =>
+            expect(resource("MyTaskPublicSecurityGroup").inputs.vpcId).toBe(
+              "vpc-1",
+            ),
+        },
+        "roles you already have": {
+          original: (opts) =>
+            new Task(
+              "MyTask",
+              {
+                cluster: cluster(),
+                image: "nginx:latest",
+                taskRole: "my-task-role",
+                executionRole: "my-execution-role",
+              },
+              opts,
+            ),
+          v5: (opts) =>
+            new TaskV5(
+              "MyTask",
+              {
+                cluster: cluster(),
+                image: "nginx:latest",
+                existing: {
+                  taskRole: "my-task-role",
+                  executionRole: "my-execution-role",
+                },
+              },
+              opts,
+            ),
+          check: () => {
+            expect(resource("MyTaskTaskRole")).toMatchObject({
+              kind: "read",
+              options: { id: "my-task-role" },
+            });
+            expect(resource("MyTaskTaskDefinition").inputs).toMatchObject({
+              taskRoleArn: "arn:aws:iam::123456789012:role/my-task-role",
+              executionRoleArn:
+                "arn:aws:iam::123456789012:role/my-execution-role",
+            });
+          },
+        },
+        // TaskV5 merges an object transform into the defaults. Task replaced a
+        // nested object whole, which dropped the operating system here.
+        "an object transform that sets part of the platform": {
+          create: (Task, opts) => {
+            new Task(
+              "MyTask",
+              {
+                cluster: cluster(),
+                image: "nginx:latest",
+                transform: {
+                  taskDefinition: {
+                    runtimePlatform: { cpuArchitecture: "ARM64" },
+                  },
+                },
+              },
+              opts,
+            );
+          },
+          changed: [["MyTaskTask", ["runtimePlatform"]]],
+          check: () =>
+            expect(
+              resource("MyTaskTaskDefinition").inputs.runtimePlatform,
+            ).toEqual({
+              cpuArchitecture: "ARM64",
+              operatingSystemFamily: "LINUX",
+            }),
+        },
       },
-      "dev settings outside of sst dev": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: { context: app },
-          dev: { command: "node task.js", directory: "packages/task" },
-        });
-      },
-    };
-
-    for (const [name, create] of Object.entries(cases)) {
-      it(name, async () => {
-        let before: unknown;
-        expect(
-          await takesOver(
-            () => {
-              create(Task, cluster());
-              // What the Task tells `sst dev` to run
-              pulumi.settle().then(() => (before = pulumi.outputsOf("MyTask")));
-            },
-            () => create(TaskV5, cluster()),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
-        expect(resource("MyTaskTaskDefinition").type).toBe(TASK_DEFINITION);
-        expect(before).toBeDefined();
-        expect(pulumi.outputsOf("MyTask")).toEqual(before);
-      });
-    }
+    });
 
     // With no image settings the Dockerfile at the root of the app is built
     it("a task with no image settings", async () => {
@@ -404,115 +554,6 @@ describe("TaskV5", () => {
       });
     }
 
-    it("a task in a VPC of your own", async () => {
-      const create = (Task: TaskClass) => () =>
-        new Task("MyTask", {
-          cluster: new ClusterClass("MyCluster", { vpc: customVpc }),
-          image: "nginx:latest",
-          public: true,
-        });
-
-      expect(await takesOver(create(Task), create(TaskV5))).toEqual({
-        unclaimed: [],
-        changed: [],
-      });
-      expect(resource("MyTaskPublicSecurityGroup").inputs.vpcId).toBe("vpc-1");
-    });
-
-    it("roles you already have", async () => {
-      expect(
-        await takesOver(
-          () =>
-            new Task("MyTask", {
-              cluster: cluster(),
-              image: "nginx:latest",
-              taskRole: "my-task-role",
-              executionRole: "my-execution-role",
-            }),
-          () =>
-            new TaskV5("MyTask", {
-              cluster: cluster(),
-              image: "nginx:latest",
-              existing: {
-                taskRole: "my-task-role",
-                executionRole: "my-execution-role",
-              },
-            }),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-      expect(resource("MyTaskTaskRole")).toMatchObject({
-        kind: "read",
-        options: { id: "my-task-role" },
-      });
-      expect(resource("MyTaskTaskDefinition").inputs).toMatchObject({
-        taskRoleArn: "arn:aws:iam::123456789012:role/my-task-role",
-        executionRoleArn: "arn:aws:iam::123456789012:role/my-execution-role",
-      });
-    });
-
-    it("a task inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      class Jobs extends ComponentResource {
-        constructor(name: string) {
-          super("test:Jobs", name);
-        }
-      }
-      const create = (Task: TaskClass) => () =>
-        new Task(
-          "MyTask",
-          {
-            cluster: cluster(),
-            containers: [{ name: "app", image: { context: app } }],
-            public: true,
-          },
-          { parent: new Jobs("Jobs") },
-        );
-
-      expect(await takesOver(create(Task), create(TaskV5))).toEqual({
-        unclaimed: [],
-        changed: [],
-      });
-      expect(resource("MyTaskTaskDefinition").parent).toMatch(
-        /::test:Jobs\$sst:aws:TaskV5::MyTask$/,
-      );
-      expect(resource("MyTaskImageApp").parent).toMatch(
-        /::test:Jobs\$sst:aws:TaskV5::MyTask$/,
-      );
-    });
-
-    it("a task deployed with another provider", async () => {
-      const { Provider } = await import("@pulumi/aws");
-      const create = (Task: TaskClass) => () =>
-        new Task(
-          "MyTask",
-          { cluster: cluster(), image: "nginx:latest", public: true },
-          { provider: new Provider("West", { region: "us-west-2" }) },
-        );
-      const providers = () =>
-        pulumi.resources
-          .filter(
-            (r) =>
-              r.custom && r.type.startsWith("aws:") && r.name.startsWith("MyTask"),
-          )
-          .map((r) => r.options.provider as string);
-
-      create(Task)();
-      await pulumi.settle();
-      const original = providers();
-      expect(original).toHaveLength(5);
-      expect(new Set(original).size).toBe(1);
-      expect(original[0]).toMatch(/::West::/);
-      const before = pulumi
-        .graph()
-        .filter((r) => !r.type.startsWith("pulumi:providers:"));
-
-      pulumi.reset();
-      create(TaskV5)();
-      await pulumi.settle();
-      expect(pulumi.takeover(before)).toEqual({ unclaimed: [], changed: [] });
-      expect(providers()).toEqual(original);
-    });
-
     // The task definition is named after its part, and a container's image
     // and log group after the container's name as a name is written
     it("keeps what it renames", async () => {
@@ -555,29 +596,6 @@ describe("TaskV5", () => {
       expect(pulumi.takeover(original)).toEqual({ unclaimed: [], changed: [] });
     });
 
-    // TaskV5 merges an object transform into the defaults. Task replaced a
-    // nested object whole, which dropped the operating system here.
-    it("an object transform that sets part of the platform", async () => {
-      const create = (Task: TaskClass) => () =>
-        new Task("MyTask", {
-          cluster: cluster(),
-          image: "nginx:latest",
-          transform: {
-            taskDefinition: {
-              runtimePlatform: { cpuArchitecture: "ARM64" },
-            },
-          },
-        });
-
-      expect(await takesOver(create(Task), create(TaskV5))).toEqual({
-        unclaimed: [],
-        changed: [["MyTaskTask", ["runtimePlatform"]]],
-      });
-      expect(resource("MyTaskTaskDefinition").inputs.runtimePlatform).toEqual({
-        cpuArchitecture: "ARM64",
-        operatingSystemFamily: "LINUX",
-      });
-    });
   });
 
   describe("in sst dev", () => {
@@ -586,46 +604,46 @@ describe("TaskV5", () => {
       global.$dev = true;
     });
 
-    const stubbed: Record<string, (Task: TaskClass, cluster: Cluster) => void> = {
-      "a task with a command to run": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          image: { context: app },
-          environment: { STAGE: "test" },
-          command: ["node", "index.js"],
-          dev: { command: "node task.js" },
-        });
-      },
-      "the first of several containers": (Task, cluster) => {
-        new Task("MyTask", {
-          cluster,
-          containers: [
-            { name: "app", image: { context: app }, entrypoint: ["tini"] },
-            { name: "admin", image: { context: admin } },
-          ],
-        });
-      },
-      "a task that's deployed all the same": (Task, cluster) => {
-        new Task("MyTask", { cluster, image: { context: app }, dev: false });
-      },
-    };
-
-    for (const [name, create] of Object.entries(stubbed)) {
-      it(`takes over ${name}`, async () => {
-        let before: unknown;
-        expect(
-          await takesOver(
-            () => {
-              create(Task, cluster());
-              pulumi.settle().then(() => (before = pulumi.outputsOf("MyTask")));
+    pulumi.takeoverCases({
+      original: () => Task,
+      v5: () => TaskV5,
+      check: () => expect(pulumi.outputsOf("MyTask")).toHaveProperty("_task"),
+      cases: {
+        "a task with a command to run": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              image: { context: app },
+              environment: { STAGE: "test" },
+              command: ["node", "index.js"],
+              dev: { command: "node task.js" },
             },
-            () => create(TaskV5, cluster()),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
-        expect(before).toBeDefined();
-        expect(pulumi.outputsOf("MyTask")).toEqual(before);
-      });
-    }
+            opts,
+          );
+        },
+        "the first of several containers": (Task, opts) => {
+          new Task(
+            "MyTask",
+            {
+              cluster: cluster(),
+              containers: [
+                { name: "app", image: { context: app }, entrypoint: ["tini"] },
+                { name: "admin", image: { context: admin } },
+              ],
+            },
+            opts,
+          );
+        },
+        "a task that's deployed all the same": (Task, opts) => {
+          new Task(
+            "MyTask",
+            { cluster: cluster(), image: { context: app }, dev: false },
+            opts,
+          );
+        },
+      },
+    });
 
     it("deploys a stub in place of the task", async () => {
       const task = new TaskV5("MyTask", {

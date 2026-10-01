@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mockPulumi } from "../helpers/graph";
+import type { ComponentResourceOptions } from "@pulumi/pulumi";
+import { mockPulumi, type TakeoverWay } from "../helpers/graph";
 
 // A policy document is worked out by AWS. Here it's the statements it's given,
 // so two policies compare equal when their statements are the same. A bucket
@@ -28,15 +29,31 @@ const FUNCTION_ARN =
   "arn:aws:lambda:us-east-1:123456789012:function:my-subscriber";
 const QUEUE_ARN = "arn:aws:sqs:us-east-1:123456789012:orders";
 const TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:uploads";
+const threeTargets = [
+  { name: "A", function: FUNCTION_ARN },
+  { name: "B", queue: QUEUE_ARN },
+  { name: "C", topic: TOPIC_ARN },
+];
 
+type BucketClass =
+  | typeof import("../../src/components/aws/bucket").Bucket
+  | typeof import("../../src/components/aws/bucket-v5").BucketV5;
 type BucketArgs = import("../../src/components/aws/bucket").BucketArgs;
+type NotifyArgs = Parameters<
+  import("../../src/components/aws/bucket").Bucket["notify"]
+>[0] &
+  Parameters<import("../../src/components/aws/bucket-v5").BucketV5["notify"]>[0];
 type BucketV5Args = import("../../src/components/aws/bucket-v5").BucketV5Args;
 
 describe("BucketV5", () => {
   let Bucket: typeof import("../../src/components/aws/bucket").Bucket;
   let BucketV5: typeof import("../../src/components/aws/bucket-v5").BucketV5;
+  let Queue: typeof import("../../src/components/aws/queue").Queue;
+  let SnsTopic: typeof import("../../src/components/aws/sns-topic").SnsTopic;
 
   beforeAll(async () => {
+    Queue = (await import("../../src/components/aws/queue")).Queue;
+    SnsTopic = (await import("../../src/components/aws/sns-topic")).SnsTopic;
     Bucket = (await import("../../src/components/aws/bucket")).Bucket;
     BucketV5 = (await import("../../src/components/aws/bucket-v5")).BucketV5;
     await import("../../src/components/aws/takeover/bucket");
@@ -109,186 +126,184 @@ describe("BucketV5", () => {
       },
     };
 
-    it.each(Object.entries(cases))("%s", async (_, args) => {
-      expect(
-        await pulumi.takesOver(
-          () => new Bucket("MyBucket", args),
-          () => new BucketV5("MyBucket", args),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-    });
-
-    it("every part of the bucket", async () => {
-      await pulumi.takesOver(
-        () => new Bucket("MyBucket", { versioning: true, lifecycle: [{}] }),
-        () => new BucketV5("MyBucket", { versioning: true, lifecycle: [{}] }),
-      );
-      expect(names()).toEqual([
-        "MyBucket",
-        "MyBucketBucket",
-        "MyBucketCors",
-        "MyBucketLifecycle",
-        "MyBucketPolicy",
-        "MyBucketPublicAccessBlock",
-        "MyBucketVersioning",
-      ]);
-    });
-
-    it("no public access block", async () => {
-      expect(
-        await pulumi.takesOver(
-          () =>
-            new Bucket("MyBucket", { transform: { publicAccessBlock: false } }),
-          () => new BucketV5("MyBucket", { publicAccessBlock: false }),
-        ),
-      ).toEqual({ unclaimed: [], changed: [] });
-      expect(names()).not.toContain("MyBucketPublicAccessBlock");
-    });
-
-    // Bucket.get looks the bucket up outside of the component. BucketV5 looks
-    // the same bucket up inside it, which this can't match: a lookup has no
-    // aliases. Nothing is deployed for a lookup, so nothing is deleted.
-    it("a bucket referenced with get", async () => {
-      expect(
-        await pulumi.takesOver(
-          () => Bucket.get("MyBucket", "existing-bucket"),
-          () => BucketV5.get("MyBucket", "existing-bucket"),
-        ),
-      ).toEqual({ unclaimed: ["aws:s3/bucket:Bucket::MyBucketBucket"], changed: [] });
-      expect(resource("MyBucketBucket")).toMatchObject({
-        kind: "read",
-        options: { id: "existing-bucket" },
-      });
-      expect(names()).toEqual(["MyBucket", "MyBucketBucket"]);
-    });
-
+    const BUCKET = "aws:s3/bucket:Bucket::MyBucketBucket";
     // What goes is the component Bucket wraps its notifications in, which has
-    // nothing in AWS behind it.
-    describe("with notifications", () => {
-      const WRAPPER = "sst:aws:BucketNotification::MyBucketNotifications";
+    // nothing in AWS behind it. It's created with the bucket's own options,
+    // so inside whatever the bucket is inside.
+    const WRAPPER = "sst:aws:BucketNotification::MyBucketNotifications";
+    const notify =
+      (args: NotifyArgs) =>
+      (Bucket: BucketClass, opts?: ComponentResourceOptions) =>
+        new Bucket("MyBucket", {}, opts).notify(args);
+    // `Bucket.get` gives its options to the bucket it looks up and not to the
+    // component, which is at the top of the app wherever it's asked to be.
+    // `BucketV5.get` puts the component where it's asked to, so the old one,
+    // which has nothing in AWS behind it, goes.
+    const leftAtTheTop = (way: TakeoverWay) =>
+      way === "inside another component" ? ["sst:aws:Bucket::MyBucket"] : [];
 
-      it("functions given as arns", async () => {
-        const args = {
-          notifications: [
-            {
-              name: "Resizer",
-              function: FUNCTION_ARN,
-              events: ["s3:ObjectCreated:*" as const],
-              filterPrefix: "images/",
-              filterSuffix: ".jpg",
-            },
-            { name: "Auditor", function: FUNCTION_ARN },
+    pulumi.takeoverCases({
+      original: () => Bucket,
+      v5: () => BucketV5,
+      cases: {
+        ...Object.fromEntries(
+          Object.entries(cases).map(([name, args]) => [
+            name,
+            (Bucket: BucketClass, opts?: ComponentResourceOptions) =>
+              new Bucket("MyBucket", args, opts),
+          ]),
+        ),
+        "every part of the bucket": {
+          create: (Bucket, opts) =>
+            new Bucket("MyBucket", { versioning: true, lifecycle: [{}] }, opts),
+          check: () =>
+            expect(
+              names().filter((name) => name.startsWith("MyBucket")),
+            ).toEqual([
+              "MyBucket",
+              "MyBucketBucket",
+              "MyBucketCors",
+              "MyBucketLifecycle",
+              "MyBucketPolicy",
+              "MyBucketPublicAccessBlock",
+              "MyBucketVersioning",
+            ]),
+        },
+        "no public access block": {
+          original: (opts) =>
+            new Bucket(
+              "MyBucket",
+              { transform: { publicAccessBlock: false } },
+              opts,
+            ),
+          v5: (opts) =>
+            new BucketV5("MyBucket", { publicAccessBlock: false }, opts),
+          check: () =>
+            expect(names()).not.toContain("MyBucketPublicAccessBlock"),
+        },
+        // Bucket.get looks the bucket up outside of the component. BucketV5
+        // looks the same bucket up inside it, which this can't match: a lookup
+        // has no aliases. Nothing is deployed for a lookup, so nothing is
+        // deleted.
+        "a bucket referenced with get": {
+          create: (Bucket, opts) =>
+            Bucket.get("MyBucket", "existing-bucket", opts),
+          unclaimed: (way) => [BUCKET, ...leftAtTheTop(way)],
+          check: () => {
+            expect(resource("MyBucketBucket")).toMatchObject({
+              kind: "read",
+              options: { id: "existing-bucket" },
+            });
+            expect(
+              names().filter((name) => name.startsWith("MyBucket")),
+            ).toEqual(["MyBucket", "MyBucketBucket"]);
+          },
+        },
+        "notifications to functions given as arns": {
+          create: notify({
+            notifications: [
+              {
+                name: "Resizer",
+                function: FUNCTION_ARN,
+                events: ["s3:ObjectCreated:*" as const],
+                filterPrefix: "images/",
+                filterSuffix: ".jpg",
+              },
+              { name: "Auditor", function: FUNCTION_ARN },
+            ],
+          }),
+          unclaimed: [WRAPPER],
+        },
+        "a notification to a function created from a handler": {
+          create: notify({
+            notifications: [
+              { name: "Resizer", function: "src/resize.handler" },
+            ],
+          }),
+          unclaimed: [WRAPPER],
+          // The function is kept. Its description is updated: it names the
+          // bucket now, where it named the notification component.
+          changed: [
+            [
+              "MyBucketNotificationsNotificationResizerFunction",
+              ["description"],
+            ],
           ],
-        };
-        expect(
-          await pulumi.takesOver(
-            () => new Bucket("MyBucket").notify(args),
-            () => new BucketV5("MyBucket").notify(args),
-          ),
-        ).toEqual({ unclaimed: [WRAPPER], changed: [] });
-      });
-
-      it("a function created from a handler", async () => {
-        const args = {
-          notifications: [{ name: "Resizer", function: "src/resize.handler" }],
-        };
-        const result = await pulumi.takesOver(
-          () => new Bucket("MyBucket").notify(args),
-          () => new BucketV5("MyBucket").notify(args),
-        );
-        expect(result.unclaimed).toEqual([WRAPPER]);
-        // The function is kept. Its description is updated: it names the
-        // bucket now, where it named the notification component.
-        expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-          ["MyBucketNotificationsNotificationResizerFunction", ["description"]],
-        ]);
-        // The function and what it's made of are now inside the bucket
-        expect(
-          names().filter((name) => name.startsWith("MyBucketSubscriber")),
-        ).toEqual([
-          "MyBucketSubscriberResizer",
-          "MyBucketSubscriberResizerCode",
-          "MyBucketSubscriberResizerFunction",
-          "MyBucketSubscriberResizerLogGroup",
-          "MyBucketSubscriberResizerRole",
-        ]);
-      });
-
-      it("a queue and a topic given as arns", async () => {
-        const args = {
-          notifications: [
-            { name: "Orders", queue: QUEUE_ARN },
-            {
-              name: "Uploads",
-              topic: TOPIC_ARN,
-              events: ["s3:ObjectRemoved:*" as const],
-            },
-          ],
-        };
-        expect(
-          await pulumi.takesOver(
-            () => new Bucket("MyBucket").notify(args),
-            () => new BucketV5("MyBucket").notify(args),
-          ),
-        ).toEqual({ unclaimed: [WRAPPER], changed: [] });
-        expect(resource("MyBucketQueuePolicyOrders").options.retainOnDelete).toBe(
-          true,
-        );
-      });
-
-      it("a function, a queue and a topic with the same name apart", async () => {
-        const args = {
-          notifications: [
-            { name: "A", function: FUNCTION_ARN },
-            { name: "B", queue: QUEUE_ARN },
-            { name: "C", topic: TOPIC_ARN },
-          ],
-          transform: { notification: { eventbridge: true } },
-        };
-        const { transform, notifications } = args;
-        expect(
-          await pulumi.takesOver(
-            () => new Bucket("MyBucket").notify(args),
-            () =>
-              new BucketV5("MyBucket", { transform }).notify({ notifications }),
-          ),
-        ).toEqual({ unclaimed: [WRAPPER], changed: [] });
-      });
-
-      it("a queue and a topic given as components", async () => {
-        const { Queue } = await import("../../src/components/aws/queue");
-        const { SnsTopic } = await import("../../src/components/aws/sns-topic");
-        const notifications = () => [
-          { name: "Orders", queue: new Queue("Orders") },
-          { name: "Uploads", topic: new SnsTopic("Uploads") },
-        ];
-        expect(
-          await pulumi.takesOver(
-            () =>
-              new Bucket("MyBucket").notify({ notifications: notifications() }),
-            () =>
-              new BucketV5("MyBucket").notify({
-                notifications: notifications(),
-              }),
-          ),
-        ).toEqual({ unclaimed: [WRAPPER], changed: [] });
-      });
-
-      it("on a bucket referenced with get", async () => {
-        const args = {
-          notifications: [{ name: "Resizer", function: FUNCTION_ARN }],
-        };
-        expect(
-          await pulumi.takesOver(
-            () => Bucket.get("MyBucket", "existing-bucket").notify(args),
-            () => BucketV5.get("MyBucket", "existing-bucket").notify(args),
-          ),
-        ).toEqual({
+          // The function and what it's made of are now inside the bucket
+          check: () =>
+            expect(
+              names().filter((name) => name.startsWith("MyBucketSubscriber")),
+            ).toEqual([
+              "MyBucketSubscriberResizer",
+              "MyBucketSubscriberResizerCode",
+              "MyBucketSubscriberResizerFunction",
+              "MyBucketSubscriberResizerLogGroup",
+              "MyBucketSubscriberResizerRole",
+            ]),
+        },
+        "notifications to a queue and a topic given as arns": {
+          create: notify({
+            notifications: [
+              { name: "Orders", queue: QUEUE_ARN },
+              {
+                name: "Uploads",
+                topic: TOPIC_ARN,
+                events: ["s3:ObjectRemoved:*" as const],
+              },
+            ],
+          }),
+          unclaimed: [WRAPPER],
+          check: () =>
+            expect(
+              resource("MyBucketQueuePolicyOrders").options.retainOnDelete,
+            ).toBe(true),
+        },
+        "a function, a queue and a topic with the same name apart": {
+          original: (opts) =>
+            new Bucket("MyBucket", {}, opts).notify({
+              notifications: threeTargets,
+              transform: { notification: { eventbridge: true } },
+            }),
+          v5: (opts) =>
+            new BucketV5(
+              "MyBucket",
+              { transform: { notification: { eventbridge: true } } },
+              opts,
+            ).notify({ notifications: threeTargets }),
+          unclaimed: [WRAPPER],
+        },
+        "notifications to a queue and a topic given as components": {
+          create: (Bucket, opts) =>
+            new Bucket("MyBucket", {}, opts).notify({
+              notifications: [
+                { name: "Orders", queue: new Queue("Orders") },
+                { name: "Uploads", topic: new SnsTopic("Uploads") },
+              ],
+            }),
+          unclaimed: [WRAPPER],
+        },
+        "notifications of a bucket referenced with get": {
+          create: (Bucket, opts) =>
+            Bucket.get("MyBucket", "existing-bucket", opts).notify({
+              notifications: [{ name: "Resizer", function: FUNCTION_ARN }],
+            }),
           // The lookup, as above
-          unclaimed: ["aws:s3/bucket:Bucket::MyBucketBucket", WRAPPER],
-          changed: [],
-        });
-      });
+          unclaimed: (way) => [BUCKET, WRAPPER, ...leftAtTheTop(way)],
+          // Bucket creates the notifications of a bucket referenced with
+          // `get` with the app's provider. BucketV5 creates them with the one
+          // the bucket is looked up with, which replaces them.
+          changed: (way) =>
+            way === "with another provider"
+              ? [
+                  [
+                    "MyBucketNotificationsNotificationResizerPermission",
+                    ["options.provider"],
+                  ],
+                  ["MyBucketNotificationsNotification", ["options.provider"]],
+                ]
+              : [],
+        },
+      },
     });
 
     // `subscribe`, `subscribeQueue` and `subscribeTopic` are deprecated in
@@ -388,30 +403,6 @@ describe("BucketV5", () => {
       });
     });
 
-    // `notify()` created its component with the bucket's own options, so
-    // inside whatever the bucket is inside.
-    it("notifications of a bucket inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      const notifications = [
-        { name: "Resizer", function: FUNCTION_ARN },
-        { name: "Orders", queue: QUEUE_ARN },
-      ];
-      expect(
-        await pulumi.takesOver(
-          () => {
-            const parent = new ComponentResource("acme:Storage", "Storage");
-            new Bucket("MyBucket", {}, { parent }).notify({ notifications });
-          },
-          () => {
-            const parent = new ComponentResource("acme:Storage", "Storage");
-            new BucketV5("MyBucket", {}, { parent }).notify({ notifications });
-          },
-        ),
-      ).toEqual({
-        unclaimed: ["sst:aws:BucketNotification::MyBucketNotifications"],
-        changed: [],
-      });
-    });
   });
 
   describe("policy", () => {

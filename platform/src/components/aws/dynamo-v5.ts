@@ -173,6 +173,11 @@ type IndexKey = string | string[];
  *     .get("Orders", "orders-table")
  *     .subscribe("MySubscriber", "src/subscriber.handler");
  *   ```
+ * - `get` gives its options to the component, so a `provider` or `parent` you pass it
+ *   applies to the table's subscribers too. `Dynamo.get` gave them to the table it looked
+ *   up and to nothing else. If you pass `get` a `provider` and subscribe to that table,
+ *   the subscriber is replaced on switch, to be created with that provider: remove it and
+ *   deploy before you switch, then add it back.
  * - A `transform` function for the table is given the table's indexes, attributes and
  *   stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
  * - An object in `transform` is merged into the defaults, nested objects included, where

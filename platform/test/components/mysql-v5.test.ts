@@ -47,8 +47,10 @@ type MysqlClass =
 describe("MysqlV5", () => {
   let Mysql: typeof import("../../src/components/aws/mysql").Mysql;
   let MysqlV5: typeof import("../../src/components/aws/mysql-v5").MysqlV5;
+  let Vpc: typeof import("../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
+    Vpc = (await import("../../src/components/aws/vpc")).Vpc;
     Mysql = (await import("../../src/components/aws/mysql")).Mysql;
     MysqlV5 = (await import("../../src/components/aws/mysql-v5"))
       .MysqlV5;
@@ -69,203 +71,161 @@ describe("MysqlV5", () => {
   // the Mysql created has to be kept by the MysqlV5, with the same inputs: a
   // database that's replaced loses its data.
   describe("takes over a deployed Mysql", () => {
-    const cases: Record<string, (Mysql: MysqlClass) => void> = {
-      "default database": (Mysql) => {
-        new Mysql("MyDatabase", { vpc });
-      },
-      "every setting": (Mysql) => {
-        new Mysql("MyDatabase", {
-          vpc,
-          version: "8.4.4",
-          username: "admin",
-          password: "Passw0rd!",
-          database: "acme",
-          instance: "m7g.xlarge",
-          storage: "100 GB",
-          multiAz: true,
-          blueGreen: true,
-        });
-      },
-      "storage in terabytes": (Mysql) => {
-        new Mysql("MyDatabase", { vpc, storage: "2 TB" });
-      },
-      "blue/green with the smallest storage": (Mysql) => {
-        new Mysql("MyDatabase", { vpc, blueGreen: true });
-      },
-      "settings given as outputs": (Mysql) => {
-        new Mysql("MyDatabase", {
-          vpc: output({ subnets: [output("subnet-1"), "subnet-2"] }),
-          version: output("8.0.39"),
-          username: output("admin"),
-          password: output("Passw0rd!"),
-          database: output("acme"),
-          instance: output("t4g.small"),
-          storage: output("50 GB" as const),
-          multiAz: output(true),
-          blueGreen: output(false),
-        });
-      },
-      "a proxy": (Mysql) => {
-        new Mysql("MyDatabase", { vpc, proxy: true });
-      },
-      "a proxy with additional credentials": (Mysql) => {
-        new Mysql("MyDatabase", {
-          vpc,
-          proxy: {
-            credentials: [
-              { username: "metabase", password: "Passw0rd!" },
-              { username: "app_user", password: output("S3cret") },
-              { username: "Reporting", password: "Passw0rd!" },
-            ],
-          },
-        });
-      },
-      "a proxy with no additional credentials": (Mysql) => {
-        new Mysql("MyDatabase", { vpc, proxy: {} });
-      },
-      "read replicas": (Mysql) => {
-        new Mysql("MyDatabase", { vpc, replicas: 2 });
-      },
-      "read replicas with a chosen version": (Mysql) => {
-        new Mysql("MyDatabase", { vpc, replicas: 1, version: "8.4.4" });
-      },
-      transforms: (Mysql) => {
-        new Mysql("MyDatabase", {
-          vpc,
-          proxy: true,
-          transform: {
-            subnetGroup: { description: "custom" },
-            parameterGroup: (args) => {
-              args.description = "tuned";
+    pulumi.takeoverCases({
+      original: () => Mysql,
+      v5: () => MysqlV5,
+      check: () => expect(resource("MyDatabaseInstance").type).toBe(INSTANCE),
+      cases: {
+        "default database": (Mysql, opts) => {
+          new Mysql("MyDatabase", { vpc }, opts);
+        },
+        "every setting": (Mysql, opts) => {
+          new Mysql(
+            "MyDatabase",
+            {
+              vpc,
+              version: "8.4.4",
+              username: "admin",
+              password: "Passw0rd!",
+              database: "acme",
+              instance: "m7g.xlarge",
+              storage: "100 GB",
+              multiAz: true,
+              blueGreen: true,
             },
-            instance: (args, opts) => {
-              args.backupRetentionPeriod = 30;
-              args.identifier = "custom-identifier";
-              opts.protect = true;
+            opts,
+          );
+        },
+        "storage in terabytes": (Mysql, opts) => {
+          new Mysql("MyDatabase", { vpc, storage: "2 TB" }, opts);
+        },
+        "blue/green with the smallest storage": (Mysql, opts) => {
+          new Mysql("MyDatabase", { vpc, blueGreen: true }, opts);
+        },
+        "settings given as outputs": (Mysql, opts) => {
+          new Mysql(
+            "MyDatabase",
+            {
+              vpc: output({ subnets: [output("subnet-1"), "subnet-2"] }),
+              version: output("8.0.39"),
+              username: output("admin"),
+              password: output("Passw0rd!"),
+              database: output("acme"),
+              instance: output("t4g.small"),
+              storage: output("50 GB" as const),
+              multiAz: output(true),
+              blueGreen: output(false),
             },
-            proxy: { idleClientTimeout: 600, requireTls: true },
+            opts,
+          );
+        },
+        "a proxy": (Mysql, opts) => {
+          new Mysql("MyDatabase", { vpc, proxy: true }, opts);
+        },
+        "a proxy with additional credentials": (Mysql, opts) => {
+          new Mysql(
+            "MyDatabase",
+            {
+              vpc,
+              proxy: {
+                credentials: [
+                  { username: "metabase", password: "Passw0rd!" },
+                  { username: "app_user", password: output("S3cret") },
+                  { username: "Reporting", password: "Passw0rd!" },
+                ],
+              },
+            },
+            opts,
+          );
+        },
+        "a proxy with no additional credentials": (Mysql, opts) => {
+          new Mysql("MyDatabase", { vpc, proxy: {} }, opts);
+        },
+        "read replicas": (Mysql, opts) => {
+          new Mysql("MyDatabase", { vpc, replicas: 2 }, opts);
+        },
+        "read replicas with a chosen version": (Mysql, opts) => {
+          new Mysql("MyDatabase", { vpc, replicas: 1, version: "8.4.4" }, opts);
+        },
+        transforms: (Mysql, opts) => {
+          new Mysql(
+            "MyDatabase",
+            {
+              vpc,
+              proxy: true,
+              transform: {
+                subnetGroup: { description: "custom" },
+                parameterGroup: (args) => {
+                  args.description = "tuned";
+                },
+                instance: (args, opts) => {
+                  args.backupRetentionPeriod = 30;
+                  args.identifier = "custom-identifier";
+                  opts.protect = true;
+                },
+                proxy: { idleClientTimeout: 600, requireTls: true },
+              },
+            },
+            opts,
+          );
+        },
+        "dev args outside of sst dev": (Mysql, opts) => {
+          new Mysql(
+            "MyDatabase",
+            {
+              vpc,
+              dev: { username: "root", password: "password", port: 3307 },
+            },
+            opts,
+          );
+        },
+        "a database referenced with get": (Mysql, opts) => {
+          Mysql.get("MyDatabase", { id: "app-dev-mydatabase" }, opts);
+        },
+        "a database and proxy referenced with get": (Mysql, opts) => {
+          Mysql.get(
+            "MyDatabase",
+            {
+              id: "app-dev-mydatabase",
+              proxyId: "app-dev-mydatabase-proxy",
+            },
+            opts,
+          );
+        },
+        "a database in the private subnets of a Vpc": {
+          create: (Mysql, opts) => {
+            new Mysql(
+              "MyDatabase",
+              { vpc: new Vpc("MyVpc"), proxy: true },
+              opts,
+            );
           },
-        });
-      },
-      "dev args outside of sst dev": (Mysql) => {
-        new Mysql("MyDatabase", {
-          vpc,
-          dev: { username: "root", password: "password", port: 3307 },
-        });
-      },
-      "a database referenced with get": (Mysql) => {
-        Mysql.get("MyDatabase", { id: "app-dev-mydatabase" });
-      },
-      "a database and proxy referenced with get": (Mysql) => {
-        Mysql.get("MyDatabase", {
-          id: "app-dev-mydatabase",
-          proxyId: "app-dev-mydatabase-proxy",
-        });
-      },
-    };
-
-    for (const [name, create] of Object.entries(cases)) {
-      it(name, async () => {
-        expect(
-          await pulumi.takesOver(
-            () => create(Mysql),
-            () => create(MysqlV5),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
-        expect(resource("MyDatabaseInstance").type).toBe(INSTANCE);
-      });
-    }
-
-    // MysqlV5 merges an object transform into the defaults. Mysql replaced
-    // a nested object whole, so tags set this way took the place of the ones
-    // SST sets. Those come back: the one thing that changes.
-    it("an object transform that sets tags", async () => {
-      const create = (Mysql: MysqlClass) => () =>
-        new Mysql("MyDatabase", {
-          vpc,
-          transform: { instance: { tags: { team: "data" } } },
-        });
-
-      const result = await pulumi.takesOver(create(Mysql), create(MysqlV5));
-      expect(result.unclaimed).toEqual([]);
-      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyDatabaseInstance", ["tags"]],
-      ]);
-      expect(result.changed[0].original.tags).toEqual({ team: "data" });
-      expect(resource("MyDatabaseInstance").inputs.tags).toEqual({
-        team: "data",
-        "sst:component-version": "1",
-        "sst:ref:password": "MyDatabaseSecret_id",
-      });
-    });
-
-    it("a database in the private subnets of a Vpc", async () => {
-      const { Vpc } = await import("../../src/components/aws/vpc");
-      const create = (Mysql: MysqlClass) => () =>
-        new Mysql("MyDatabase", { vpc: new Vpc("MyVpc"), proxy: true });
-
-      const result = await pulumi.takesOver(create(Mysql), create(MysqlV5));
-      expect(result).toEqual({ unclaimed: [], changed: [] });
-      expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual([
-        "MyVpcPrivateSubnet1_id",
-        "MyVpcPrivateSubnet2_id",
-      ]);
-    });
-
-    it("a database inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      class Storage extends ComponentResource {
-        constructor(name: string) {
-          super("test:Storage", name);
-        }
-      }
-      const create = (Mysql: MysqlClass) => () =>
-        new Mysql(
-          "MyDatabase",
-          {
-            vpc,
-            replicas: 1,
-            proxy: { credentials: [{ username: "metabase", password: "x" }] },
+          check: () =>
+            expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual([
+              "MyVpcPrivateSubnet1_id",
+              "MyVpcPrivateSubnet2_id",
+            ]),
+        },
+        // MysqlV5 merges an object transform into the defaults. Mysql replaced
+        // a nested object whole, so tags set this way took the place of the
+        // ones SST sets. Those come back: the one thing that changes.
+        "an object transform that sets tags": {
+          create: (Mysql, opts) => {
+            new Mysql(
+              "MyDatabase",
+              { vpc, transform: { instance: { tags: { team: "data" } } } },
+              opts,
+            );
           },
-          { parent: new Storage("Storage") },
-        );
-
-      expect(
-        await pulumi.takesOver(create(Mysql), create(MysqlV5)),
-      ).toEqual({ unclaimed: [], changed: [] });
-      expect(resource("MyDatabaseInstance").parent).toMatch(
-        /::test:Storage\$sst:aws:MysqlV5::MyDatabase$/,
-      );
-    });
-
-    it("a database deployed with another provider", async () => {
-      const { Provider } = await import("@pulumi/aws");
-      const create = (Mysql: MysqlClass) => () =>
-        new Mysql(
-          "MyDatabase",
-          { vpc, proxy: true },
-          { provider: new Provider("West", { region: "us-west-2" }) },
-        );
-      const custom = () =>
-        pulumi.resources
-          .filter((r) => r.custom && r.type.startsWith("aws:"))
-          .map((r) => r.options.provider as string);
-
-      create(Mysql)();
-      await pulumi.settle();
-      const providers = custom();
-      expect(providers.length).toBeGreaterThan(8);
-      expect(new Set(providers).size).toBe(1);
-      expect(providers[0]).toMatch(/::West::/);
-      const before = pulumi
-        .graph()
-        .filter((r) => !r.type.startsWith("pulumi:providers:"));
-
-      pulumi.reset();
-      create(MysqlV5)();
-      await pulumi.settle();
-      expect(pulumi.takeover(before)).toEqual({ unclaimed: [], changed: [] });
-      expect(custom()).toEqual(providers.map(() => providers[0]));
+          changed: [["MyDatabaseInstance", ["tags"]]],
+          check: () =>
+            expect(resource("MyDatabaseInstance").inputs.tags).toEqual({
+              team: "data",
+              "sst:component-version": "1",
+              "sst:ref:password": "MyDatabaseSecret_id",
+            }),
+        },
+      },
     });
 
     it("keeps the secrets under their new names", async () => {

@@ -67,285 +67,274 @@ describe("DsqlV5", () => {
   const created = (type: string) =>
     pulumi.resources.filter((r) => r.type === type).map((r) => r.name).sort();
 
-  // Deploys the first, then the second, and reports what the second doesn't
-  // keep. The provider of the peer region is left out: it's created once in a
-  // process, so only the first deploy of a test run registers it.
-  const takesOver = async (original: () => void, v5: () => void) => {
-    const result = await pulumi.takesOver(original, v5);
-    return {
-      unclaimed: result.unclaimed.filter(
-        (urn) => !urn.startsWith("pulumi:providers:"),
-      ),
-      changed: result.changed.map((c) => [c.name, c.fields]),
-    };
-  };
-
   // Each case deploys a Dsql, then the same thing as a DsqlV5. Everything the
   // Dsql created has to be kept by the DsqlV5, with the same inputs: a
   // cluster that's replaced loses its data.
   describe("takes over a deployed Dsql", () => {
-    const cases: Record<string, (Dsql: DsqlClass) => void> = {
-      "single-region cluster": (Dsql) => {
-        new Dsql("MyCluster");
-      },
-      "multi-region cluster": (Dsql) => {
-        new Dsql("MyCluster", { regions });
-      },
-      "witness region given as an output": (Dsql) => {
-        new Dsql("MyCluster", {
-          regions: { witness: output("us-west-2"), peer: "us-east-2" },
-        });
-      },
-      "backups with the defaults": (Dsql) => {
-        new Dsql("MyCluster", { backup: true });
-      },
-      "backups with a schedule and retention": (Dsql) => {
-        new Dsql("MyCluster", {
-          backup: { schedule: "cron(0 2 ? * * *)", retention: "90 days" },
-        });
-      },
-      "backup settings given as outputs": (Dsql) => {
-        new Dsql("MyCluster", {
-          backup: {
-            schedule: output("cron(0 3 ? * MON *)"),
-            retention: output("30 days" as const),
-          },
-        });
-      },
-      "backups left at an empty object": (Dsql) => {
-        new Dsql("MyCluster", { backup: {} });
-      },
-      "backups switched off": (Dsql) => {
-        new Dsql("MyCluster", { backup: false });
-      },
-      "multi-region cluster with backups": (Dsql) => {
-        new Dsql("MyCluster", { regions, backup: { retention: "14 days" } });
-      },
-      transforms: (Dsql) => {
-        new Dsql("MyCluster", {
-          regions,
-          backup: true,
-          transform: {
-            cluster: { deletionProtectionEnabled: true },
-            peerCluster: (args, opts) => {
-              args.deletionProtectionEnabled = true;
-              opts.protect = true;
+    pulumi.takeoverCases({
+      original: () => Dsql,
+      v5: () => DsqlV5,
+      check: () => expect(resource("MyClusterCluster").type).toBe(CLUSTER),
+      cases: {
+        "single-region cluster": (Dsql, opts) => {
+          new Dsql("MyCluster", {}, opts);
+        },
+        "multi-region cluster": (Dsql, opts) => {
+          new Dsql("MyCluster", { regions }, opts);
+        },
+        "witness region given as an output": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              regions: { witness: output("us-west-2"), peer: "us-east-2" },
             },
-            backupVault: { forceDestroy: true },
-            backupPlan: (args) => {
-              args.tags = { team: "data" };
+            opts,
+          );
+        },
+        "backups with the defaults": (Dsql, opts) => {
+          new Dsql("MyCluster", { backup: true }, opts);
+        },
+        "backups with a schedule and retention": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              backup: { schedule: "cron(0 2 ? * * *)", retention: "90 days" },
             },
-            backupSelection: { name: "everything" },
-          },
-        });
-      },
-      // Dsql applies the vault's transform to the peer region's vault as well
-      "a vault transform as a function": (Dsql) => {
-        new Dsql("MyCluster", {
-          regions,
-          backup: true,
-          transform: {
-            backupVault: (args, opts) => {
-              args.forceDestroy = true;
-              opts.retainOnDelete = true;
+            opts,
+          );
+        },
+        "backup settings given as outputs": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              backup: {
+                schedule: output("cron(0 3 ? * MON *)"),
+                retention: output("30 days" as const),
+              },
             },
+            opts,
+          );
+        },
+        "backups left at an empty object": (Dsql, opts) => {
+          new Dsql("MyCluster", { backup: {} }, opts);
+        },
+        "backups switched off": (Dsql, opts) => {
+          new Dsql("MyCluster", { backup: false }, opts);
+        },
+        "multi-region cluster with backups": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            { regions, backup: { retention: "14 days" } },
+            opts,
+          );
+        },
+        transforms: (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              regions,
+              backup: true,
+              transform: {
+                cluster: { deletionProtectionEnabled: true },
+                peerCluster: (args, opts) => {
+                  args.deletionProtectionEnabled = true;
+                  opts.protect = true;
+                },
+                backupVault: { forceDestroy: true },
+                backupPlan: (args) => {
+                  args.tags = { team: "data" };
+                },
+                backupSelection: { name: "everything" },
+              },
+            },
+            opts,
+          );
+        },
+        // Dsql applies the vault's transform to the peer region's vault as well
+        "a vault transform as a function": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              regions,
+              backup: true,
+              transform: {
+                backupVault: (args, opts) => {
+                  args.forceDestroy = true;
+                  opts.retainOnDelete = true;
+                },
+              },
+            },
+            opts,
+          );
+        },
+        "a security group with tags of its own is left as it is": (
+          Dsql,
+          opts,
+        ) => {
+          new Dsql(
+            "MyCluster",
+            {
+              vpc: new Vpc("MyVpc"),
+              transform: { endpointSecurityGroup: { tags: { team: "data" } } },
+            },
+            opts,
+          );
+        },
+        // DsqlV5 merges an object transform into the defaults. Dsql replaced a
+        // nested object whole, which dropped the witness region here.
+        "an object transform that sets multi-region properties": {
+          create: (Dsql, opts) => {
+            new Dsql(
+              "MyCluster",
+              {
+                regions,
+                transform: {
+                  cluster: {
+                    multiRegionProperties: { clusters: ["arn:other"] },
+                  },
+                },
+              },
+              opts,
+            );
           },
-        });
+          changed: [["MyClusterCluster", ["multiRegionProperties"]]],
+          check: () =>
+            expect(
+              resource("MyClusterCluster").inputs.multiRegionProperties,
+            ).toEqual({ clusters: ["arn:other"], witnessRegion: "us-west-2" }),
+        },
+        // Dsql looks the clusters up beside the component. DsqlV5 looks them
+        // up inside it, which this can't match: a lookup has no aliases.
+        // Nothing is deployed for a lookup, so nothing is deleted.
+        "a cluster referenced with get": {
+          create: (Dsql, opts) =>
+            Dsql.get("MyCluster", { id: "kzttrvbdg4k2o5ze2m2rrwdj7u" }, opts),
+          unclaimed: [`${CLUSTER}::MyClusterCluster`],
+          check: () => {
+            expect(resource("MyClusterCluster")).toMatchObject({
+              kind: "read",
+              options: { id: "kzttrvbdg4k2o5ze2m2rrwdj7u" },
+            });
+            expect(created(CLUSTER)).toEqual(["MyClusterCluster"]);
+          },
+        },
+        "a multi-region cluster referenced with get": {
+          create: (Dsql, opts) =>
+            Dsql.get(
+              "MyCluster",
+              {
+                id: "app-dev-mycluster",
+                peer: { id: "kzttrvbdg4k2o5ze2m2rrwdj7u", region: "us-east-2" },
+              },
+              opts,
+            ),
+          unclaimed: [
+            `${CLUSTER}::MyClusterCluster`,
+            `${CLUSTER}::MyClusterPeerCluster`,
+          ],
+          check: () => {
+            expect(resource("MyClusterPeerCluster")).toMatchObject({
+              kind: "read",
+              options: {
+                id: "kzttrvbdg4k2o5ze2m2rrwdj7u",
+                provider: expect.stringMatching(
+                  /::AwsProvider\.sst\.us-east-2::/,
+                ),
+              },
+            });
+            expect(created(PEERING)).toEqual([]);
+          },
+        },
       },
-    };
-
-    for (const [name, create] of Object.entries(cases)) {
-      it(name, async () => {
-        expect(
-          await takesOver(
-            () => create(Dsql),
-            () => create(DsqlV5),
-          ),
-        ).toEqual({ unclaimed: [], changed: [] });
-        expect(resource("MyClusterCluster").type).toBe(CLUSTER);
-      });
-    }
+    });
 
     // The security group of the endpoints is named after its part now, and
     // a security group is named with a tag. That tag is updated in place;
     // nothing else about it changes.
-    const endpoints: Record<string, (Dsql: DsqlClass) => void> = {
-      "a cluster in a Vpc": (Dsql) => {
-        new Dsql("MyCluster", { vpc: new Vpc("MyVpc") });
-      },
-      "both endpoints": (Dsql) => {
-        new Dsql("MyCluster", {
-          vpc: {
-            instance: new Vpc("MyVpc"),
-            endpoints: { management: true, connection: true },
-          },
-        });
-      },
-      "only the management endpoint": (Dsql) => {
-        new Dsql("MyCluster", {
-          vpc: {
-            instance: new Vpc("MyVpc"),
-            endpoints: { management: true, connection: false },
-          },
-        });
-      },
-      "neither endpoint": (Dsql) => {
-        new Dsql("MyCluster", {
-          vpc: {
-            instance: new Vpc("MyVpc"),
-            endpoints: { management: false, connection: false },
-          },
-        });
-      },
-      "endpoint transforms": (Dsql) => {
-        new Dsql("MyCluster", {
-          vpc: {
-            instance: new Vpc("MyVpc"),
-            endpoints: { management: true },
-          },
-          backup: true,
-          transform: {
-            endpointSecurityGroup: { description: "custom" },
-            managementEndpoint: { privateDnsEnabled: false },
-            connectionEndpoint: (args, opts) => {
-              args.ipAddressType = "dualstack";
-              opts.protect = true;
-            },
-          },
-        });
-      },
-    };
-
-    for (const [name, create] of Object.entries(endpoints)) {
-      it(name, async () => {
-        expect(
-          await takesOver(
-            () => create(Dsql),
-            () => create(DsqlV5),
-          ),
-        ).toEqual({
-          unclaimed: [],
-          changed: [["MyClusterDsqlEndpointSecurityGroup", ["tags"]]],
-        });
+    pulumi.takeoverCases({
+      original: () => Dsql,
+      v5: () => DsqlV5,
+      changed: [["MyClusterDsqlEndpointSecurityGroup", ["tags"]]],
+      check: () =>
         expect(resource("MyClusterEndpointSecurityGroup").inputs.tags).toEqual({
           Name: expect.stringMatching(/MyClusterEndpointSecurityGroup$/),
-        });
-      });
-    }
-
-    it("a security group with tags of its own is left as it is", async () => {
-      const create = (Dsql: DsqlClass) => () =>
-        new Dsql("MyCluster", {
-          vpc: new Vpc("MyVpc"),
-          transform: { endpointSecurityGroup: { tags: { team: "data" } } },
-        });
-
-      expect(await takesOver(create(Dsql), create(DsqlV5))).toEqual({
-        unclaimed: [],
-        changed: [],
-      });
-    });
-
-    // DsqlV5 merges an object transform into the defaults. Dsql replaced a
-    // nested object whole, which dropped the witness region here.
-    it("an object transform that sets multi-region properties", async () => {
-      const create = (Dsql: DsqlClass) => () =>
-        new Dsql("MyCluster", {
-          regions,
-          transform: {
-            cluster: { multiRegionProperties: { clusters: ["arn:other"] } },
-          },
-        });
-
-      expect(await takesOver(create(Dsql), create(DsqlV5))).toEqual({
-        unclaimed: [],
-        changed: [["MyClusterCluster", ["multiRegionProperties"]]],
-      });
-      expect(resource("MyClusterCluster").inputs.multiRegionProperties).toEqual({
-        clusters: ["arn:other"],
-        witnessRegion: "us-west-2",
-      });
-    });
-
-    // Dsql looks the clusters up at the top of the app. DsqlV5 looks them up
-    // inside the component, which this can't match: a lookup has no aliases.
-    // Nothing is deployed for a lookup, so nothing is deleted.
-    it("a cluster referenced with get", async () => {
-      const args = { id: "kzttrvbdg4k2o5ze2m2rrwdj7u" };
-      expect(
-        await takesOver(
-          () => Dsql.get("MyCluster", args),
-          () => DsqlV5.get("MyCluster", args),
-        ),
-      ).toEqual({ unclaimed: [`${CLUSTER}::MyClusterCluster`], changed: [] });
-      expect(resource("MyClusterCluster")).toMatchObject({
-        kind: "read",
-        options: { id: "kzttrvbdg4k2o5ze2m2rrwdj7u" },
-      });
-      expect(names()).toEqual(["MyCluster", "MyClusterCluster"]);
-    });
-
-    it("a multi-region cluster referenced with get", async () => {
-      const args = {
-        id: "app-dev-mycluster",
-        peer: { id: "kzttrvbdg4k2o5ze2m2rrwdj7u", region: "us-east-2" },
-      };
-      expect(
-        await takesOver(
-          () => Dsql.get("MyCluster", args),
-          () => DsqlV5.get("MyCluster", args),
-        ),
-      ).toEqual({
-        unclaimed: [
-          `${CLUSTER}::MyClusterCluster`,
-          `${CLUSTER}::MyClusterPeerCluster`,
-        ],
-        changed: [],
-      });
-      expect(resource("MyClusterPeerCluster")).toMatchObject({
-        kind: "read",
-        options: {
-          id: "kzttrvbdg4k2o5ze2m2rrwdj7u",
-          provider: expect.stringMatching(/::AwsProvider\.sst\.us-east-2::/),
+        }),
+      cases: {
+        "a cluster in a Vpc": (Dsql, opts) => {
+          new Dsql("MyCluster", { vpc: new Vpc("MyVpc") }, opts);
         },
-      });
-      expect(created(PEERING)).toEqual([]);
-    });
-
-    it("a cluster inside another component", async () => {
-      const { ComponentResource } = await import("@pulumi/pulumi");
-      class Storage extends ComponentResource {
-        constructor(name: string) {
-          super("test:Storage", name);
-        }
-      }
-      const create = (Dsql: DsqlClass) => () =>
-        new Dsql(
-          "MyCluster",
-          { regions, backup: true },
-          { parent: new Storage("Storage") },
-        );
-
-      expect(await takesOver(create(Dsql), create(DsqlV5))).toEqual({
-        unclaimed: [],
-        changed: [],
-      });
-      expect(resource("MyClusterCluster").parent).toMatch(
-        /::test:Storage\$sst:aws:DsqlV5::MyCluster$/,
-      );
+        "both endpoints": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              vpc: {
+                instance: new Vpc("MyVpc"),
+                endpoints: { management: true, connection: true },
+              },
+            },
+            opts,
+          );
+        },
+        "only the management endpoint": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              vpc: {
+                instance: new Vpc("MyVpc"),
+                endpoints: { management: true, connection: false },
+              },
+            },
+            opts,
+          );
+        },
+        "neither endpoint": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              vpc: {
+                instance: new Vpc("MyVpc"),
+                endpoints: { management: false, connection: false },
+              },
+            },
+            opts,
+          );
+        },
+        "endpoint transforms": (Dsql, opts) => {
+          new Dsql(
+            "MyCluster",
+            {
+              vpc: {
+                instance: new Vpc("MyVpc"),
+                endpoints: { management: true },
+              },
+              backup: true,
+              transform: {
+                endpointSecurityGroup: { description: "custom" },
+                managementEndpoint: { privateDnsEnabled: false },
+                connectionEndpoint: (args, opts) => {
+                  args.ipAddressType = "dualstack";
+                  opts.protect = true;
+                },
+              },
+            },
+            opts,
+          );
+        },
+      },
     });
 
     // The peer's resources are in the peer region whatever provider the
     // component is given
-    it("a cluster deployed with another provider", async () => {
+    it("keeps the peer region with another provider", async () => {
       const { Provider } = await import("@pulumi/aws");
-      const create = (Dsql: DsqlClass) => () =>
-        new Dsql(
-          "MyCluster",
-          { regions, backup: true },
-          { provider: new Provider("West", { region: "us-west-1" }) },
-        );
-      const providers = () =>
+      new DsqlV5(
+        "MyCluster",
+        { regions, backup: true },
+        { provider: new Provider("West", { region: "us-west-1" }) },
+      );
+      await pulumi.settle();
+
+      expect(
         Object.fromEntries(
           pulumi.resources
             .filter((r) => r.custom && r.type.startsWith("aws:"))
@@ -353,31 +342,8 @@ describe("DsqlV5", () => {
               r.name,
               (r.options.provider as string).split("::").at(-2),
             ]),
-        );
-
-      create(Dsql)();
-      await pulumi.settle();
-      const original = providers();
-      expect(original).toEqual({
-        MyClusterCluster: "West",
-        MyClusterPeerCluster: "AwsProvider.sst.us-east-2",
-        MyClusterPeering1: "West",
-        MyClusterPeering2: "AwsProvider.sst.us-east-2",
-        MyClusterBackupRole: "West",
-        MyClusterBackupVault: "West",
-        MyClusterBackupVaultPeer: "AwsProvider.sst.us-east-2",
-        MyClusterBackupPlan: "West",
-        MyClusterBackupSelection: "West",
-      });
-      const before = pulumi
-        .graph()
-        .filter((r) => !r.type.startsWith("pulumi:providers:"));
-
-      pulumi.reset();
-      create(DsqlV5)();
-      await pulumi.settle();
-      expect(pulumi.takeover(before)).toEqual({ unclaimed: [], changed: [] });
-      expect(providers()).toEqual({
+        ),
+      ).toEqual({
         MyClusterCluster: "West",
         MyClusterPeerCluster: "AwsProvider.sst.us-east-2",
         MyClusterClusterPeering: "West",
