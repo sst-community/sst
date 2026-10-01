@@ -2917,6 +2917,7 @@ async function buildComponents() {
       "../platform/src/components/aws/cognito-user-pool-v5.ts",
       "../platform/src/components/aws/cron.ts",
       "../platform/src/components/aws/cron-v2.ts",
+      "../platform/src/components/aws/cron-v2-v5.ts",
       "../platform/src/components/aws/dsql-v5.ts",
       "../platform/src/components/aws/dynamo.ts",
       "../platform/src/components/aws/dynamo-lambda-subscriber.ts",

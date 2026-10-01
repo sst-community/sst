@@ -104,6 +104,8 @@ export function mockPulumi(input?: {
   // @ts-ignore
   global.$jsonParse = pulumi.jsonParse;
   // @ts-ignore
+  global.$jsonStringify = pulumi.jsonStringify;
+  // @ts-ignore
   global.$dev = false;
   // @ts-ignore
   global.$cli = { state: { version: {} }, paths: { root: "/", work, platform } };

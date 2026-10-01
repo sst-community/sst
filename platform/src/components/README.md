@@ -229,7 +229,7 @@ Everything above applies. The rest is specific to SST's own components in
 
 | For | Use |
 | --- | --- |
-| A function from a handler, args or ARN | `functionPart()` in `helpers/function-part.ts` |
+| A function from a handler, args, an ARN, a function or a `Workflow` | `functionPart()` in `helpers/function-part.ts` |
 | Letting a service invoke that function | `invokePermissionArgs(fn, principal, sourceArn)` in `helpers/function-permission.ts` |
 | A custom domain (`name`, `dns`, `cert`) | `customDomain()` and `CustomDomainArgs` in `helpers/custom-domain.ts` |
 | Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
@@ -363,6 +363,8 @@ await pulumi.expectTakeover(
   (see `dsql-v5.test.ts`).
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
+- A 4.x component that's passed in can be the real one: a `Vpc`, `Cluster` and `Task`
+  all deploy under the mock (see `cron-v2-v5.test.ts`).
 - Give the mock extra `state` for outputs the code reads (see `apigatewayv2-v5.test.ts`).
   A resource that's looked up comes back with no name or ARN unless `state` gives it
   one. The region, partition, account and IAM policy lookups have defaults.
@@ -412,7 +414,8 @@ client; `redis-v5.ts` for dev mode and `get`; `postgres-v5.ts` for the same with
 optional group of parts (the proxy) and a part per item in a list; `aurora-v5.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
 than one part; `dsql-v5.ts` for parts in another region, and features that each add a
-group of parts; `dynamo-v5.ts` for
+group of parts; `cron-v2-v5.ts` for a function the component may be given or may
+create, next to another component it's given (a `Task`); `dynamo-v5.ts` for
 required args next to `get`, and a static method replaced by `get`; `function-v5.ts`
 for a component 4.x built almost entirely inside `.apply()`, with parts that are
 created later.

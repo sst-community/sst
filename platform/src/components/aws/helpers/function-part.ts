@@ -9,6 +9,7 @@ import type {
 } from "../../parts-component";
 import { Function, FunctionArgs, FunctionArn } from "../function";
 import { FunctionV5, FunctionV5Args } from "../function-v5";
+import { Workflow } from "../workflow";
 import { parseRoleArn, splitQualifiedFunctionArn } from "./arn";
 
 /**
@@ -26,9 +27,18 @@ export type FunctionPart = Output<{
   targetResponseStreamingInvokeArn: Output<string>;
 }>;
 
-/** What a user can pass for a function: a handler, its args, or the ARN of one they have. */
+/**
+ * What a user can pass for a function: a handler, its args, or one they
+ * have, as its ARN, the function itself, or the workflow it runs.
+ */
 export type FunctionDefinition = Input<
-  string | FunctionArgs | FunctionV5Args | FunctionArn | FunctionV5
+  | string
+  | FunctionArgs
+  | FunctionV5Args
+  | FunctionArn
+  | FunctionV5
+  | Function
+  | Workflow
 >;
 
 /** Args a component adds to its function. Its link, environment and permissions are added to the user's. */
@@ -99,6 +109,7 @@ export function functionPart(
   ).apply((definition: unknown) => {
     if (definition instanceof FunctionV5 || definition instanceof Function)
       return use(definition);
+    if (definition instanceof Workflow) return use(definition.getFunction());
     if (typeof definition === "string" && definition.startsWith("arn:"))
       return useArn(definition);
 

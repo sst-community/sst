@@ -15,6 +15,7 @@ export * from "./cognito-identity-pool.js";
 export * from "./cognito-user-pool.js";
 export * from "./cron.js";
 export * from "./cron-v2.js";
+export * from "./cron-v2-v5.js";
 export * from "./dns.js";
 export * from "./dsql.js";
 export * from "./dsql-v5.js";
