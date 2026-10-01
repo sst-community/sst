@@ -383,6 +383,19 @@ describe("DynamoV5", () => {
     });
   });
 
+  it("merges a transform into the table's defaults", async () => {
+    new DynamoV5("MyTable", {
+      ...keys,
+      transform: { table: { pointInTimeRecovery: { recoveryPeriodInDays: 7 } } },
+    });
+    await pulumi.settle();
+
+    expect(resource("MyTableTable").inputs.pointInTimeRecovery).toEqual({
+      enabled: true,
+      recoveryPeriodInDays: 7,
+    });
+  });
+
   it("holds the table and each subscriber's resources on nodes", async () => {
     const table = new DynamoV5("MyTable", streaming);
     expect(table.nodes.table.constructor.name).toBe("Table");

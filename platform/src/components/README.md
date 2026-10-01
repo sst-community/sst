@@ -69,7 +69,8 @@ That is the whole pattern: declare `parts`, extend `sst.component(type, parts)`,
 ```ts
 const uploads = new Uploads("Docs", {
   teams: ["design", "legal"],
-  // Change how any part is created. An object is merged into the defaults, deeply.
+  // Change how any part is created. An object is merged into the defaults, deeply,
+  // and it's typed that way: a nested object can be given in part.
   transform: {
     bucket: { tags: { team: "storage" } },
     // A function can change the args and the options. For a `many` part it's

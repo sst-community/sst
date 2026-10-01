@@ -7,6 +7,7 @@ import { mockPulumi } from "../helpers/graph";
 const pulumi = mockPulumi();
 
 type Base = typeof import("../../src/components/component");
+type PartialArgs<T> = import("../../src/components/transform").PartialArgs<T>;
 type Module = typeof import("../../src/components/parts-component");
 
 describe("Component parts", () => {
@@ -667,7 +668,7 @@ describe("Component parts", () => {
       expect(
         mergeArgs(
           { a: { b: 1, c: 2 }, list: [1, 2], name: "x", keep: true },
-          { a: { c: 3 }, list: [9], name: "y" } as any,
+          { a: { c: 3 }, list: [9], name: "y" },
         ),
       ).toEqual({ a: { b: 1, c: 3 }, list: [9], name: "y", keep: true });
     });
@@ -686,6 +687,30 @@ describe("Component parts", () => {
         { tags: output({ z: "9" }) } as any,
       );
       expect(await pulumi.resolve(merged.tags)).toEqual({ z: "9" });
+    });
+
+    // The object form of a transform is typed the way it's merged. These are
+    // checked by the typecheck: an unused `@ts-expect-error` fails it.
+    it("is typed to take a nested object in part, and anything else whole", () => {
+      type Table = PartialArgs<aws.dynamodb.TableArgs>;
+      const transforms: Table[] = [
+        // A nested object is merged, so its required `enabled` can be left out
+        { pointInTimeRecovery: { recoveryPeriodInDays: 7 } },
+        { pointInTimeRecovery: output({ enabled: false }) },
+        { tags: { team: output("storage") } },
+        {
+          globalSecondaryIndexes: [
+            { name: "ByDate", hashKey: "date", projectionType: "ALL" },
+          ],
+        },
+        // @ts-expect-error A nested key that doesn't exist
+        { pointInTimeRecovery: { recoveryDays: 7 } },
+        // @ts-expect-error A nested value of the wrong type
+        { pointInTimeRecovery: { enabled: "yes" } },
+        // @ts-expect-error An array is replaced, so its items are given whole
+        { globalSecondaryIndexes: [{ name: "ByDate" }] },
+      ];
+      expect(transforms).toHaveLength(7);
     });
   });
 });

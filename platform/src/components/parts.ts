@@ -1,5 +1,5 @@
 import type { Input, Output } from "@pulumi/pulumi";
-import type { Transform } from "./transform";
+import type { PartTransform, PartialArgs } from "./transform";
 
 /**
  * The resources a component is made of, by name. Each one is the class of a
@@ -139,7 +139,7 @@ export type PartArgs<T extends Parts[string]> = NonNullable<
  * form is called for each one, with its id as the last argument.
  */
 export type ManyTransform<T> =
-  | Partial<T>
+  | PartialArgs<T>
   | ((
       args: T,
       opts: $util.CustomResourceOptions,
@@ -151,7 +151,7 @@ export type ManyTransform<T> =
 export type Transforms<P extends Parts> = {
   [K in keyof P]?: P[K] extends ManyPart
     ? ManyTransform<PartArgs<P[K]>>
-    : Transform<PartArgs<P[K]>>;
+    : PartTransform<PartArgs<P[K]>>;
 };
 
 /**

@@ -16,6 +16,8 @@ export {
   type LinkDefinition,
   type ManyTransform,
   type Nodes,
+  type PartTransform,
+  type PartialArgs,
   type Parts,
   type Transforms,
 } from "./parts-component.js";

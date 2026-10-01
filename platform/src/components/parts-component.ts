@@ -7,7 +7,7 @@ import {
 } from "@pulumi/pulumi";
 import { Component } from "./component";
 import { hashStringToPrettyString, logicalName } from "./naming";
-import { type Transform, transformPart } from "./transform";
+import { type PartTransform, transformPart } from "./transform";
 import {
   type CreatedKeys,
   type ManyKeys,
@@ -43,6 +43,7 @@ export {
   many,
   optional,
 } from "./parts";
+export { type PartTransform, type PartialArgs } from "./transform";
 
 /**
  * What a link grants besides its properties: an AWS permission from
@@ -124,7 +125,7 @@ export class PartsComponent<P extends Parts> extends Component {
   /** The resource options the component was created with. */
   protected readonly componentOpts: ComponentResourceOptions;
   private readonly partClasses: P;
-  private readonly partTransforms: Record<string, Transform<any> | undefined>;
+  private readonly partTransforms: Record<string, PartTransform<any> | undefined>;
   private readonly partExisting: Record<string, unknown>;
   // The resource each part was created as. A `many` part holds its by id.
   private readonly partNodes: Record<string, any> = {};
@@ -537,12 +538,13 @@ export class PartsComponent<P extends Parts> extends Component {
     return name;
   }
 
-  private transformOf(key: string, id?: string): Transform<any> | undefined {
+  private transformOf(key: string, id?: string): PartTransform<any> | undefined {
     const transform = this.partTransforms[key];
     if (id === undefined || typeof transform !== "function") return transform;
     // The transform of a `many` part is also told which one it is given.
     const many = transform as (...args: unknown[]) => undefined;
-    return (args, opts, name) => many(args, opts, name, id);
+    return (args: unknown, opts: unknown, name: unknown) =>
+      many(args, opts, name, id);
   }
 }
 
