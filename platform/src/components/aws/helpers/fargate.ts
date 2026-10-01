@@ -39,10 +39,64 @@ import {
 import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
 import type { Cluster } from "../v5/cluster";
+import { Vpc } from "../vpc";
 import { Efs } from "../v5/efs";
 import type { ServiceArgs } from "../service";
 import { bootstrap } from "./bootstrap";
 import { imageBuilder } from "./container-builder";
+
+/** Where a task or service runs: the VPC of its cluster. */
+export type Network = {
+  /** A `Vpc`, as opposed to a VPC given by its ids. */
+  isSstVpc: boolean;
+  id: Output<string>;
+  publicSubnets: Output<string[]>;
+  containerSubnets: Output<string[]>;
+  /** The subnets of a load balancer that is, or isn't, public. */
+  loadBalancerSubnets: (isPublic: Input<boolean>) => Output<string[]>;
+  securityGroups: Output<string[]>;
+  cloudmapNamespaceId: Output<string | undefined>;
+  cloudmapNamespaceName: Output<string | undefined>;
+};
+
+/**
+ * The VPC of a cluster, read the same way whether the cluster was given a
+ * `Vpc` or the ids of one.
+ */
+export function networkOf(cluster: OriginalCluster | Cluster): Network {
+  const ids = (list: Input<Input<string>[]> | undefined) =>
+    output(list ?? []) as Output<string[]>;
+
+  if (cluster.vpc instanceof Vpc) {
+    const vpc = cluster.vpc;
+    return {
+      isSstVpc: true,
+      id: vpc.id,
+      publicSubnets: ids(vpc.publicSubnets),
+      // In a `Vpc` the containers run in the public subnets
+      containerSubnets: ids(vpc.publicSubnets),
+      loadBalancerSubnets: (isPublic) =>
+        output(isPublic).apply((v) =>
+          ids(v ? vpc.publicSubnets : vpc.privateSubnets),
+        ),
+      securityGroups: ids(vpc.securityGroups),
+      cloudmapNamespaceId: vpc.nodes.cloudmapNamespace.id,
+      cloudmapNamespaceName: vpc.nodes.cloudmapNamespace.name,
+    };
+  }
+
+  const custom = output(cluster.vpc);
+  return {
+    isSstVpc: false,
+    id: custom.apply((v) => v.id),
+    publicSubnets: custom.apply((v) => ids(v.publicSubnets)),
+    containerSubnets: custom.apply((v) => ids(v.containerSubnets)),
+    loadBalancerSubnets: () => custom.apply((v) => ids(v.loadBalancerSubnets)),
+    securityGroups: custom.apply((v) => ids(v.securityGroups)),
+    cloudmapNamespaceId: custom.apply((v) => v.cloudmapNamespaceId),
+    cloudmapNamespaceName: custom.apply((v) => v.cloudmapNamespaceName),
+  };
+}
 
 /**
  * The file systems a container mounts. Each is given as an `Efs`, the 4.x one

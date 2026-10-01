@@ -44,6 +44,8 @@ import {
   executionRoleArgs,
   logGroupArgs,
   memoryOf,
+  type Network,
+  networkOf,
   storageOf,
   taskDefinitionArgs,
   taskRoleArgs,
@@ -57,7 +59,6 @@ import {
 } from "../helpers/load-balancer-args";
 import { URL_UNAVAILABLE } from "../linkable";
 import type { ServiceArgs as OriginalServiceArgs } from "../service";
-import { Vpc } from "../vpc";
 import { Alb } from "./alb";
 import type { Cluster } from "./cluster";
 import type { Efs } from "./efs";
@@ -1441,7 +1442,7 @@ export class Service extends component("sst:aws:Service", parts) {
     const containers = containersOf("service", args, name);
     const balancer = loadBalancerOf(name, args.loadBalancer, containers);
     const scaling = scalingOf(name, args.scaling, balancer);
-    const vpc = network();
+    const vpc = networkOf(cluster);
 
     const taskRole = this.part("taskRole", taskRoleArgs(args, opts, dev));
 
@@ -1471,7 +1472,7 @@ export class Service extends component("sst:aws:Service", parts) {
         url: balancer
           ? output((args.dev || undefined)?.url ?? URL_UNAVAILABLE)
           : undefined,
-        host: output(vpc.cloudmapNamespaceName).apply((namespace) =>
+        host: vpc.cloudmapNamespaceName.apply((namespace) =>
           namespace ? `dev.${namespace}` : undefined,
         ),
       };
@@ -1664,38 +1665,6 @@ export class Service extends component("sst:aws:Service", parts) {
     };
 
     this.registerOutputs({ _hint: this.reach.url });
-
-    // Where the service runs: the cluster's VPC
-    function network(): Network {
-      // "vpc" is a Vpc component
-      if (cluster.vpc instanceof Vpc) {
-        const vpc = cluster.vpc;
-        return {
-          isSstVpc: true,
-          id: vpc.id,
-          loadBalancerSubnets: (isPublic) =>
-            output(isPublic).apply((v) =>
-              v ? vpc.publicSubnets : vpc.privateSubnets,
-            ),
-          containerSubnets: vpc.publicSubnets,
-          securityGroups: vpc.securityGroups,
-          cloudmapNamespaceId: vpc.nodes.cloudmapNamespace.id,
-          cloudmapNamespaceName: vpc.nodes.cloudmapNamespace.name,
-        };
-      }
-
-      // "vpc" is object
-      const custom = output(cluster.vpc);
-      return {
-        isSstVpc: false,
-        id: custom.apply((v) => v.id),
-        loadBalancerSubnets: () => custom.apply((v) => v.loadBalancerSubnets),
-        containerSubnets: custom.apply((v) => v.containerSubnets),
-        securityGroups: custom.apply((v) => v.securityGroups),
-        cloudmapNamespaceId: custom.apply((v) => v.cloudmapNamespaceId),
-        cloudmapNamespaceName: custom.apply((v) => v.cloudmapNamespaceName),
-      };
-    }
   }
 
   // The service's own load balancer. Each port it listens on has a listener,
@@ -1966,8 +1935,8 @@ export class Service extends component("sst:aws:Service", parts) {
                 }),
           )
         : vpc.isSstVpc
-          ? output(create(output(vpc.cloudmapNamespaceId).apply((id) => id!)))
-          : output(vpc.cloudmapNamespaceId).apply((id) =>
+          ? output(create(vpc.cloudmapNamespaceId.apply((id) => id!)))
+          : vpc.cloudmapNamespaceId.apply((id) =>
               id ? create(id) : undefined,
             );
 
@@ -2026,17 +1995,6 @@ export class Service extends component("sst:aws:Service", parts) {
 }
 
 /** Where a service runs. */
-type Network = {
-  isSstVpc: boolean;
-  id: Input<string>;
-  /** The subnets of a load balancer that is, or isn't, public. */
-  loadBalancerSubnets: (isPublic: Input<boolean>) => Input<Input<string>[]>;
-  containerSubnets: Input<Input<string>[]>;
-  securityGroups: Input<Input<string>[]>;
-  cloudmapNamespaceId: Input<string | undefined>;
-  cloudmapNamespaceName: Input<string | undefined>;
-};
-
 /** A container port that traffic is sent to. */
 type Target = { group: lb.TargetGroup; container: string; port: number };
 

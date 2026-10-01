@@ -22,12 +22,12 @@ import {
   executionRoleArgs,
   logGroupArgs,
   memoryOf,
+  networkOf,
   storageOf,
   taskDefinitionArgs,
   taskRoleArgs,
 } from "../helpers/fargate";
 import { permission } from "../permission";
-import { Vpc } from "../vpc";
 import type { TaskArgs as OriginalTaskArgs } from "../task";
 import type { Cluster } from "./cluster";
 import type { Efs } from "./efs";
@@ -437,7 +437,7 @@ export class Task extends component("sst:aws:Task", parts) {
     const memory = memoryOf(cpu, args);
     const storage = storageOf(args);
     const containers = containersOf("task", args, name);
-    const vpc = network();
+    const vpc = networkOf(cluster);
     // A task in an SST VPC is in a public subnet, and needs a public IP to
     // reach the internet
     const hasPublicIp = isPublic || (args.publicIp ?? vpc.isSstVpc);
@@ -519,8 +519,15 @@ export class Task extends component("sst:aws:Task", parts) {
     this.run = {
       cluster,
       containers: containers.map((container) => container.name),
-      subnets:
-        isPublic || vpc.isSstVpc ? vpc.publicSubnets : vpc.containerSubnets,
+      subnets: isPublic
+        ? vpc.publicSubnets.apply((subnets) => {
+            if (!subnets.length)
+              throw new VisibleError(
+                `Set "vpc.publicSubnets" on the Cluster to use "public" on the "${name}" Task.`,
+              );
+            return subnets;
+          })
+        : vpc.containerSubnets,
       securityGroups: publicSecurityGroup
         ? all([vpc.securityGroups, publicSecurityGroup.id]).apply(
             ([groups, publicGroup]) => [...groups, publicGroup],
@@ -537,55 +544,24 @@ export class Task extends component("sst:aws:Task", parts) {
       })),
     });
 
-    // Where the task runs: the cluster's VPC
-    function network() {
-      const ids = (list: Input<Input<string>[]>) =>
-        output(list) as Output<string[]>;
-
-      // "vpc" is a Vpc component
-      if (cluster.vpc instanceof Vpc)
-        return {
-          id: cluster.vpc.id,
-          isSstVpc: true,
-          publicSubnets: ids(cluster.vpc.publicSubnets),
-          containerSubnets: ids(cluster.vpc.publicSubnets),
-          securityGroups: ids(cluster.vpc.securityGroups),
-        };
-
-      // "vpc" is object
-      const custom = output(cluster.vpc);
-      return {
-        id: custom.apply((v) => v.id),
-        isSstVpc: false,
-        publicSubnets: custom.apply((v) => {
-          if (isPublic && !v.publicSubnets?.length)
-            throw new VisibleError(
-              `Set "vpc.publicSubnets" on the Cluster to use "public" on the "${name}" Task.`,
-            );
-          return ids(v.publicSubnets ?? []);
-        }),
-        containerSubnets: custom.apply((v) => ids(v.containerSubnets)),
-        securityGroups: custom.apply((v) => ids(v.securityGroups)),
-      };
-    }
-
     function stub(container: Container): Container {
       return {
         ...container,
         entrypoint: undefined,
         command: undefined,
         image: "ghcr.io/sst-community/sst/bridge-task:latest",
-        environment: all([container.environment, OriginalFunction.appsync()]).apply(
-          ([environment, appsync]) => ({
-            ...environment,
-            SST_TASK_ID: name,
-            SST_REGION: process.env.SST_AWS_REGION!,
-            SST_APPSYNC_HTTP: appsync.http,
-            SST_APPSYNC_REALTIME: appsync.realtime,
-            SST_APP: $app.name,
-            SST_STAGE: $app.stage,
-          }),
-        ),
+        environment: all([
+          container.environment,
+          OriginalFunction.appsync(),
+        ]).apply(([environment, appsync]) => ({
+          ...environment,
+          SST_TASK_ID: name,
+          SST_REGION: process.env.SST_AWS_REGION!,
+          SST_APPSYNC_HTTP: appsync.http,
+          SST_APPSYNC_REALTIME: appsync.realtime,
+          SST_APP: $app.name,
+          SST_STAGE: $app.stage,
+        })),
       };
     }
   }
