@@ -102,6 +102,8 @@ export function mockPulumi(input?: {
   // @ts-ignore
   global.$interpolate = pulumi.interpolate;
   // @ts-ignore
+  global.$jsonParse = pulumi.jsonParse;
+  // @ts-ignore
   global.$dev = false;
   // @ts-ignore
   global.$cli = { state: { version: {} }, paths: { root: "/", work, platform } };
@@ -369,8 +371,8 @@ export function mockPulumi(input?: {
           const ignore: string[] = now.options.ignoreChanges ?? [];
           return {
             name: before.name,
-            original: stable(kept(before, ignore)),
-            now: stable(kept(now, ignore), asOriginal),
+            original: { ...stable(kept(before, ignore)), ...deployOptions(before) },
+            now: { ...stable(kept(now, ignore), asOriginal), ...deployOptions(now) },
           };
         })
         .filter((pair) => JSON.stringify(pair.original) !== JSON.stringify(pair.now))
@@ -387,6 +389,33 @@ export function mockPulumi(input?: {
       return { unclaimed, changed };
     },
   };
+}
+
+// The options that change what a deploy does to a resource that's already
+// there, as `options.<name>` next to its inputs. Losing `ignoreChanges` on a
+// database's engine version, or `retainOnDelete` on a bucket, is as much a
+// change as a different input.
+function deployOptions(r: RecordedResource) {
+  const options = [
+    "protect",
+    "retainOnDelete",
+    "deleteBeforeReplace",
+    "ignoreChanges",
+    "replaceOnChanges",
+    "additionalSecretOutputs",
+    "provider",
+  ];
+  return Object.fromEntries(
+    options
+      .filter((option) => r.options[option] !== undefined)
+      .map((option) => {
+        const value = r.options[option];
+        return [
+          `options.${option}`,
+          Array.isArray(value) ? [...value].sort() : value,
+        ];
+      }),
+  );
 }
 
 // What the lookups nearly every component makes return. Without these a
