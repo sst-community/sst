@@ -447,6 +447,105 @@ describe("FunctionV5", () => {
     });
   });
 
+  // The V5 components create their functions as FunctionV5, with
+  // `functionPart()`.
+  describe("as a part of another component", () => {
+    const handler = "src/subscriber.handler";
+    let Queue: typeof import("../../src/components/aws/queue").Queue;
+    let QueueV5: typeof import("../../src/components/aws/queue-v5").QueueV5;
+
+    beforeAll(async () => {
+      Queue = (await import("../../src/components/aws/queue")).Queue;
+      QueueV5 = (await import("../../src/components/aws/queue-v5")).QueueV5;
+      await import("../../src/components/aws/takeover/queue");
+    });
+
+    const inputs = (name: string) =>
+      pulumi.resources.find((r) => r.name === name)!.inputs;
+
+    // What `Function` takes that `FunctionV5` takes somewhere else: `live`,
+    // `role` and `logging.logGroup`
+    it("takes over a function written the way Function takes it", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const subscriber = () => ({
+        handler,
+        live: false as const,
+        role: ROLE_ARN,
+        logging: { logGroup: "/my/logs", format: "json" as const },
+      });
+      const result = await pulumi.takesOver(
+        () => new Queue("MyQueue").subscribe(subscriber()),
+        () => new QueueV5("MyQueue").subscribe(subscriber()),
+      );
+
+      // Only the component 4.x wraps a subscriber in goes
+      expect(result.unclaimed).toEqual([
+        "sst:aws:QueueLambdaSubscriber::MyQueueSubscriberVkxuom",
+      ]);
+      // The description names the queue now, where it named that component
+      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
+        ["MyQueueSubscriberVkxuomFunctionFunction", ["description"]],
+      ]);
+
+      expect(inputs("MyQueueSubscriberFunction")).toMatchObject({
+        // Not the stub that's deployed in `sst dev`
+        handler: "index.handler",
+        role: ROLE_ARN,
+        loggingConfig: { logFormat: "JSON", logGroup: "/my/logs" },
+      });
+    });
+
+    it("takes the deprecated url.route of Function", async () => {
+      new QueueV5("MyQueue").subscribe({
+        handler,
+        url: { route: { router: router("none"), path: "/jobs" } },
+      });
+      await pulumi.settle();
+
+      expect(
+        pulumi
+          .graph()
+          .filter((r) => r.name.startsWith("MyQueueSubscriberRout"))
+          .map((r) => r.name.split(".")[0]),
+      ).toEqual(["MyQueueSubscriberRouteKey", "MyQueueSubscriberRoutesUpdate"]);
+    });
+
+    it("is transformed through the component, down to its own parts", async () => {
+      new QueueV5("MyQueue", {
+        transform: {
+          subscriber: {
+            memory: "512 MB",
+            environment: { ADDED: "yes" },
+            transform: { function: { tracingConfig: { mode: "Active" } } },
+          },
+        },
+      }).subscribe({ handler, environment: { MINE: "yes" } });
+      await pulumi.settle();
+
+      const fn = inputs("MyQueueSubscriberFunction");
+      expect(fn.memorySize).toBe(512);
+      expect(fn.tracingConfig).toEqual({ mode: "Active" });
+      // An object in a transform is merged into what's there
+      expect(fn.environment.variables).toMatchObject({ ADDED: "yes", MINE: "yes" });
+    });
+
+    it("uses a function passed in existing as it is", async () => {
+      const mine = new FunctionV5("Mine", { handler });
+      const queue = new QueueV5("MyQueue", { existing: { subscriber: mine } });
+      queue.subscribe("src/unused.handler");
+      await pulumi.settle();
+
+      expect(await pulumi.resolve(queue.nodes.subscriber)).toBe(mine);
+      expect(pulumi.resources.some((r) => r.name === "MyQueueSubscriber")).toBe(
+        false,
+      );
+      expect(inputs("MyQueueEventSourceMapping").functionName).toContain(
+        "MineFunction",
+      );
+    });
+  });
+
   describe("says what to write instead", () => {
     const handler = "src/index.handler";
     const create = (args: object) => () =>

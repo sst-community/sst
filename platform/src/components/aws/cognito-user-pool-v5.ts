@@ -18,9 +18,9 @@ import type { Plain } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import { Function } from "./function";
+import { FunctionV5 } from "./function-v5";
 import { CustomDomainArgs, customDomain } from "./helpers/custom-domain";
-import { FunctionBuilder, functionPart } from "./helpers/function-builder";
+import { FunctionPart, functionPart } from "./helpers/function-part";
 import { invokePermissionArgs } from "./helpers/function-permission";
 import { useProvider } from "./helpers/provider";
 import { permission } from "./permission";
@@ -42,7 +42,7 @@ const parts = () => ({
    * The function behind each trigger, by trigger: `preSignUp`,
    * `postConfirmation` and so on.
    */
-  trigger: many(deferred(Function)),
+  trigger: many(deferred(FunctionV5)),
   /**
    * The permission that lets the user pool invoke each trigger's function, by
    * trigger.
@@ -377,7 +377,7 @@ export class CognitoUserPoolV5 extends component(
         `You must provide a KMS key via "kmsKey" when configuring "customEmailSender" or "customSmsSender" for the "${name}" user pool.`,
       );
 
-    const functions: Partial<Record<Trigger, FunctionBuilder>> = {};
+    const functions: Partial<Record<Trigger, FunctionPart>> = {};
     for (const trigger of TRIGGERS) {
       const definition = triggers[trigger];
       if (!definition) continue;

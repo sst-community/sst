@@ -53,6 +53,7 @@ describe("ApiGatewayV2V5", () => {
       "../../src/components/aws/apigatewayv2-v5"
     ));
     await import("../../src/components/aws/takeover/apigatewayv2");
+    await import("../../src/components/aws/takeover/function");
   });
 
   beforeEach(() => pulumi.reset());
@@ -110,7 +111,7 @@ describe("ApiGatewayV2V5", () => {
       // The functions and what they're made of are now inside the API
       expect(
         pulumi.resources
-          .filter((r) => r.type === "sst:aws:Function")
+          .filter((r) => r.type === "sst:aws:FunctionV5")
           .map((r) => r.parent.split("::").at(-1)),
       ).toEqual(["MyApi", "MyApi"]);
     });
@@ -304,7 +305,7 @@ describe("ApiGatewayV2V5", () => {
     expect(Object.keys(api.nodes.handler)).toEqual(["GET /", "GetUser"]);
     expect(Object.keys(api.nodes.permission)).toEqual(["GET /", "GetUser"]);
     const handler = await pulumi.resolve(api.nodes.handler.GetUser);
-    expect(handler.constructor.name).toBe("Function");
+    expect(handler.constructor.name).toBe("FunctionV5");
   });
 
   it("names routes that differ only in punctuation apart", async () => {

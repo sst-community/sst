@@ -3,8 +3,9 @@ import { lambda, sns, sqs } from "@pulumi/aws";
 import { V5Args, component, deferred, many } from "../parts-component";
 import { withDefault } from "../args";
 import type { Input } from "../input";
-import { Function, FunctionArgs, FunctionArn } from "./function";
-import { functionPart } from "./helpers/function-builder";
+import type { FunctionArgs, FunctionArn } from "./function";
+import { FunctionV5 } from "./function-v5";
+import { functionPart } from "./helpers/function-part";
 import { invokePermissionArgs } from "./helpers/function-permission";
 import { sendPolicyArgs } from "./helpers/queue-policy";
 import { permission } from "./permission";
@@ -20,7 +21,7 @@ const parts = () => ({
   /**
    * The functions subscribed to the topic, by subscriber name.
    */
-  subscriber: many(deferred(Function)),
+  subscriber: many(deferred(FunctionV5)),
   /**
    * The permissions that let the topic invoke each subscriber function, by subscriber name.
    */

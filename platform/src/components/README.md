@@ -87,7 +87,7 @@ uploads.nodes.bucket; // the aws.s3.Bucket
 uploads.nodes.audit; // undefined when it wasn't created
 uploads.nodes.reader.legal; // by id
 
-new sst.aws.Function("Api", { handler: "src/api.handler", link: [uploads] });
+new sst.aws.FunctionV5("Api", { handler: "src/api.handler", link: [uploads] });
 ```
 
 A `transform` or `existing` key that isn't one of the parts is an error, with the list of
@@ -106,10 +106,12 @@ the component reads its args.
     An id can be any string, like the route `"GET /users/{id}"`. A plain id is used in the
     name as it is; any other gets a short hash added so two similar ids don't collide.
     `id in this.nodes.reader` tells you whether one exists.
-  - `deferred(Function)`: a function that's built later, or not at all when the user passes
-    an ARN. Create it with `sst.aws.functionPart(this, key, definition, defaults)`, or with
-    an id for `many(deferred(Function))`. Its `nodes` entry is an `Output`.
-- **An SST component can be a part**, like `sst.aws.Function` or a certificate. If the
+  - `deferred(sst.aws.FunctionV5)`: a function that's built later, or not at all when the
+    user passes an ARN. Create it with `sst.aws.functionPart(this, key, definition,
+    defaults)`, or with an id for `many(deferred(sst.aws.FunctionV5))`. Its `nodes` entry is
+    an `Output`. The user's `transform` for it takes the function's args, including the
+    function's own `transform` and `existing`.
+- **An SST component can be a part**, like `sst.aws.FunctionV5` or a certificate. If the
   component's own file imports yours, declare the parts in a function so they're read
   late: `component("acme:Uploads", () => ({ ... }))`.
 - **A part can be created later**, inside an `.apply()`, when whether it exists depends
@@ -199,7 +201,7 @@ Everything above applies. The rest is specific to SST's own components in
 
 | For | Use |
 | --- | --- |
-| A function from a handler, args or ARN | `functionPart()` in `helpers/function-builder.ts` |
+| A function from a handler, args or ARN | `functionPart()` in `helpers/function-part.ts` |
 | Letting a service invoke that function | `invokePermissionArgs(fn, principal, sourceArn)` in `helpers/function-permission.ts` |
 | A custom domain (`name`, `dns`, `cert`) | `customDomain()` and `CustomDomainArgs` in `helpers/custom-domain.ts` |
 | Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
@@ -245,7 +247,15 @@ takeover(ApiGatewayV2V5, {
   over, because a lookup takes no old address. It's dropped from state and looked up
   again, which changes nothing in AWS.
 - A function's `description` usually changes, because 4.x named the wrapper in it. That's
-  an in-place update.
+  an in-place update. So does anything else made from the function's name when a
+  function part gets a new one: a URL behind a `Router` is registered under a key made
+  from it.
+- A part that is a V5 component, like a function, changed its type as well as its place.
+  You don't write that: the part's old address in `moved` is combined with the type its
+  own takeover map names in `from`.
+- A function definition can still be written the way `Function` takes it (`role`,
+  `logging.logGroup`, `live`, `url.route`). `functionPart()` moves those to where
+  `FunctionV5` takes them.
 - One of SST's own provider resources (`KvKeys`, `BucketFiles`) adds its type to its
   name: `MyFunctionRouteKey.sst.aws.KvKeys`. As a part it's matched without that. If it
   moved, write its old name in full, as a function in `moved`.

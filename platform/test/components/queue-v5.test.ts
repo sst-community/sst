@@ -18,6 +18,7 @@ describe("QueueV5", () => {
     Queue = (await import("../../src/components/aws/queue")).Queue;
     QueueV5 = (await import("../../src/components/aws/queue-v5")).QueueV5;
     await import("../../src/components/aws/takeover/queue");
+    await import("../../src/components/aws/takeover/function");
   });
 
   beforeEach(() => pulumi.reset());
@@ -141,7 +142,7 @@ describe("QueueV5", () => {
     const fn = await new Promise<any>((done) =>
       queue.nodes.subscriber.apply(done),
     );
-    expect(fn.constructor.name).toBe("Function");
+    expect(fn.constructor.name).toBe("FunctionV5");
   });
 
   it("applies the queue's transform to the subscriber", async () => {

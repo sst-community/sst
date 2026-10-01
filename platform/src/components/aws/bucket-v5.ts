@@ -20,8 +20,8 @@ import type { Plain } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { toSeconds } from "../duration";
-import { Function } from "./function";
-import { functionPart } from "./helpers/function-builder";
+import { FunctionV5 } from "./function-v5";
+import { functionPart } from "./helpers/function-part";
 import { invokePermissionArgs } from "./helpers/function-permission";
 import { sendPolicyArgs } from "./helpers/queue-policy";
 import { permission } from "./permission";
@@ -65,7 +65,7 @@ const parts = () => ({
   /**
    * The functions that are notified, by notification name.
    */
-  subscriber: many(deferred(Function)),
+  subscriber: many(deferred(FunctionV5)),
   /**
    * The permissions that let the bucket invoke each notified function, by
    * notification name.

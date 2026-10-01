@@ -17,6 +17,7 @@ describe("SnsTopicV5", () => {
     SnsTopicV5 = (await import("../../src/components/aws/sns-topic-v5"))
       .SnsTopicV5;
     await import("../../src/components/aws/takeover/sns-topic");
+    await import("../../src/components/aws/takeover/function");
   });
 
   beforeEach(() => pulumi.reset());
@@ -145,7 +146,7 @@ describe("SnsTopicV5", () => {
     const fn = await new Promise<any>((done) =>
       topic.nodes.subscriber.Emailer.apply(done),
     );
-    expect(fn.constructor.name).toBe("Function");
+    expect(fn.constructor.name).toBe("FunctionV5");
   });
 
   it("tells the topic's transform which subscriber it is given", async () => {

@@ -65,10 +65,7 @@ export class Component extends ComponentResource {
       ...opts,
       // A deployed component this one takes over from becomes this one.
       // Pulumi carries the alias over to its children.
-      aliases: [
-        ...(opts?.aliases ?? []),
-        ...[takeoverOf(type)?.from ?? []].flat().map((type) => ({ type })),
-      ],
+      aliases: [...(opts?.aliases ?? []), ...takeoverAliases(type, opts)],
       transformations: [
         // Ensure logical and physical names are prefixed
         (args) => nameResource({ type, name }, args),
@@ -159,6 +156,25 @@ export class Component extends ComponentResource {
       new Version(this.componentName, newVersion, { parent: this });
     }
   }
+}
+
+// The addresses of the component this one takes over from: the same
+// address with the old type. When the component is also given an old name or
+// parent, as a part that moved is, the old type goes with each of those too.
+// Pulumi reads every alias on its own, so two that each say one thing don't
+// add up to the address that had both.
+function takeoverAliases(type: string, opts?: ComponentResourceOptions) {
+  const from = takeoverOf(type)?.from;
+  if (!from) return [];
+  const moved = (opts?.aliases ?? []).flatMap((alias) =>
+    typeof alias === "object" &&
+    !Output.isInstance(alias) &&
+    !(alias instanceof Promise) &&
+    alias.type === undefined
+      ? [{ ...alias, type: from }]
+      : [],
+  );
+  return [...moved, { type: from }];
 }
 
 const ComponentTransforms = new Map<string, any[]>();

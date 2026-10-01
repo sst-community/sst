@@ -39,7 +39,7 @@ export interface DeferredPart<C extends PartClass = PartClass> {
  *
  * ```ts
  * const parts = () => ({
- *   subscriber: deferred(Function),
+ *   subscriber: deferred(FunctionV5),
  *   eventSourceMapping: aws.lambda.EventSourceMapping,
  * });
  *
@@ -96,7 +96,7 @@ export interface ManyPart<
  * the id. Its entry in `nodes` holds them by id.
  *
  * Wrap a deferred part to have several of those, like one function per
- * subscriber: `many(deferred(Function))`.
+ * subscriber: `many(deferred(FunctionV5))`.
  */
 export function many<T extends PartClass | DeferredPart>(part: T): ManyPart<T> {
   return { many: part };

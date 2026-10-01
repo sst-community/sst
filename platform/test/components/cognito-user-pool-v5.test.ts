@@ -64,6 +64,7 @@ describe("CognitoUserPoolV5", () => {
       "../../src/components/aws/cognito-user-pool-v5"
     ));
     await import("../../src/components/aws/takeover/cognito-user-pool");
+    await import("../../src/components/aws/takeover/function");
     await import("../../src/components/aws/takeover/cognito-user-pool-client");
   });
 
@@ -167,7 +168,7 @@ describe("CognitoUserPoolV5", () => {
       // The functions are inside the user pool, and the user pool can
       // invoke them
       expect(
-        registered("sst:aws:Function")
+        registered("sst:aws:FunctionV5")
           .map((r) => [r.name, r.parent.split("::").at(-1)])
           .sort(),
       ).toEqual([
@@ -409,7 +410,7 @@ describe("CognitoUserPoolV5", () => {
       "preSignUp",
     ]);
     const fn = await pulumi.resolve(pool.nodes.trigger.preSignUp);
-    expect(fn.constructor.name).toBe("Function");
+    expect(fn.constructor.name).toBe("FunctionV5");
   });
 
   it("lets the user pool invoke a trigger given as an ARN", async () => {

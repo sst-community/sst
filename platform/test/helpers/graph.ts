@@ -181,15 +181,22 @@ export function mockPulumi(input?: {
     },
     /**
      * Lets pending `.apply()` chains and registrations finish: waits until
-     * nothing new has been registered for a few rounds.
+     * nothing new has been registered for a few rounds, and nothing is being
+     * read or written on disk.
      */
     async settle() {
+      // A function's code is zipped on disk, which takes real time, and more
+      // of it when other test files run alongside. What's registered after
+      // the zip would otherwise be missed.
+      const onDisk = () =>
+        process
+          .getActiveResourcesInfo()
+          .some((resource) => /^(FSReq|FileHandle|Zlib)/i.test(resource));
       for (let quiet = 0, seen = -1; quiet < 3; ) {
         for (let i = 0; i < 50; i++)
           await new Promise((resolve) => setImmediate(resolve));
-        // A function's code is zipped on disk, which takes real time
         await new Promise((resolve) => setTimeout(resolve, 2));
-        quiet = resources.length === seen ? quiet + 1 : 0;
+        quiet = resources.length === seen && !onDisk() ? quiet + 1 : 0;
         seen = resources.length;
       }
     },
@@ -277,15 +284,20 @@ export function mockPulumi(input?: {
                 alias.spec.noparent ? "" : alias.spec.parenturn || r.parent,
               ),
         );
+        // Under each address its parent had, the resource answers to its own
+        // name and type, and to the name and type of each of its aliases.
         const inherited: string[] = [];
         const parentName = nameOf(r.parent);
         for (const parentAlias of claims.get(r.parent) ?? []) {
           if (parentAlias === r.parent) continue;
-          for (const name of [r.name, ...aliases.map(nameOf)]) {
+          for (const [type, name] of [
+            [r.type, r.name],
+            ...aliases.map((alias) => [typeOf(alias), nameOf(alias)]),
+          ]) {
             const aliasName = name.startsWith(parentName)
               ? nameOf(parentAlias) + name.substring(parentName.length)
               : name;
-            inherited.push(urn(r.type, aliasName, parentAlias));
+            inherited.push(urn(type, aliasName, parentAlias));
           }
         }
         claims.set(own, new Set([own, ...aliases, ...inherited]));
@@ -397,6 +409,11 @@ function urn(type: string, name: string, parent: string) {
 
 function nameOf(urn: string) {
   return urn.substring(urn.lastIndexOf("::") + 2);
+}
+
+// A resource's own type: the last in the chain of its parents' types
+function typeOf(urn: string) {
+  return urn.split("::")[2].split("$").at(-1)!;
 }
 
 function compact(options: Record<string, any>) {

@@ -5,10 +5,11 @@ import { ifSet, notAnOption, withDefault } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { toSeconds } from "../duration";
-import { Function, FunctionArgs, FunctionArn } from "./function";
+import type { FunctionArgs, FunctionArn } from "./function";
+import { FunctionV5 } from "./function-v5";
 import { parseQueueArn } from "./helpers/arn";
 import { batchSettings, filterCriteria } from "./helpers/event-source";
-import { functionPart } from "./helpers/function-builder";
+import { functionPart } from "./helpers/function-part";
 import { permission } from "./permission";
 import type { QueueArgs, QueueSubscriberArgs } from "./queue";
 
@@ -20,7 +21,7 @@ const parts = () => ({
   /**
    * The function subscribed to the queue.
    */
-  subscriber: deferred(Function),
+  subscriber: deferred(FunctionV5),
   /**
    * The Lambda event source mapping that sends the queue's messages to the subscriber.
    */

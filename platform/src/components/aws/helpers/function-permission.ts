@@ -1,6 +1,6 @@
 import { lambda } from "@pulumi/aws";
 import type { Input } from "../../input";
-import type { FunctionBuilder } from "./function-builder";
+import type { FunctionPart } from "./function-part";
 
 /**
  * The args of the permission that lets an AWS service invoke a function part.
@@ -15,7 +15,7 @@ import type { FunctionBuilder } from "./function-builder";
  * @param sourceArn What in that service may invoke it.
  */
 export function invokePermissionArgs(
-  fn: FunctionBuilder,
+  fn: FunctionPart,
   principal: string,
   sourceArn: Input<string>,
 ): lambda.PermissionArgs {

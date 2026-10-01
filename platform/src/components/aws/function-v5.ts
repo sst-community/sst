@@ -412,8 +412,8 @@ export interface FunctionV5Args
  * - `$transform(sst.aws.Function, ...)` doesn't apply to it. Write one for
  *   `sst.aws.FunctionV5`.
  *
- * Functions that other components create for you, like a queue's subscriber, are not
- * affected.
+ * The V5 components create their functions, like a queue's subscriber, as `FunctionV5`
+ * too. There you can keep writing the function the way `Function` takes it.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * new sst.aws.Function("MyFunction", { handler: "src/lambda.handler" });

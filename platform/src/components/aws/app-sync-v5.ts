@@ -12,10 +12,10 @@ import { withDefault } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import { Function } from "./function";
+import { FunctionV5 } from "./function-v5";
 import { parseDynamoArn } from "./helpers/arn";
 import { CustomDomainArgs, customDomain } from "./helpers/custom-domain";
-import { FunctionBuilder, functionPart } from "./helpers/function-builder";
+import { FunctionPart, functionPart } from "./helpers/function-part";
 import { useProvider } from "./helpers/provider";
 import type {
   AppSyncArgs,
@@ -49,7 +49,7 @@ const parts = () => ({
   /**
    * The function behind each Lambda data source, by data source name.
    */
-  dataSourceFunction: many(deferred(Function)),
+  dataSourceFunction: many(deferred(FunctionV5)),
   /**
    * The IAM role AppSync assumes to reach each data source, by data source
    * name. HTTP, RDS and empty data sources don't have one.
@@ -608,7 +608,7 @@ const SOURCES = [
 // without `access` needs no role.
 function sourceOf(
   args: AppSyncV5DataSourceArgs,
-  fn: FunctionBuilder | undefined,
+  fn: FunctionPart | undefined,
 ): {
   type: string;
   access?: { actions: string[]; resources: Input<string>[] };

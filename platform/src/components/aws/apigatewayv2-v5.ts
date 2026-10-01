@@ -18,9 +18,10 @@ import { VisibleError } from "../error";
 import { toSeconds } from "../duration";
 import { physicalName } from "../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import { Function, FunctionArgs, FunctionArn } from "./function";
+import type { FunctionArgs, FunctionArn } from "./function";
+import { FunctionV5 } from "./function-v5";
 import { CustomDomainArgs, customDomain } from "./helpers/custom-domain";
-import { functionPart } from "./helpers/function-builder";
+import { functionPart } from "./helpers/function-part";
 import { invokePermissionArgs } from "./helpers/function-permission";
 import type { ApiGatewayV2DomainArgs } from "./helpers/apigatewayv2-domain";
 import { RETENTION } from "./logging";
@@ -64,7 +65,7 @@ const parts = () => ({
   /**
    * The function behind each route added with `route`, by route.
    */
-  handler: many(deferred(Function)),
+  handler: many(deferred(FunctionV5)),
   /**
    * The permission that lets the API invoke each handler, by route.
    */
@@ -84,7 +85,7 @@ const parts = () => ({
   /**
    * The function behind each Lambda authorizer, by authorizer name.
    */
-  authorizerFunction: many(deferred(Function)),
+  authorizerFunction: many(deferred(FunctionV5)),
   /**
    * The permission that lets the API invoke each authorizer function, by
    * authorizer name.

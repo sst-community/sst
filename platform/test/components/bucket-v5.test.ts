@@ -40,6 +40,7 @@ describe("BucketV5", () => {
     Bucket = (await import("../../src/components/aws/bucket")).Bucket;
     BucketV5 = (await import("../../src/components/aws/bucket-v5")).BucketV5;
     await import("../../src/components/aws/takeover/bucket");
+    await import("../../src/components/aws/takeover/function");
   });
 
   beforeEach(() => pulumi.reset());
@@ -500,7 +501,7 @@ describe("BucketV5", () => {
       const fn = await new Promise<any>((done) =>
         bucket.nodes.subscriber.Resizer.apply(done),
       );
-      expect(fn.constructor.name).toBe("Function");
+      expect(fn.constructor.name).toBe("FunctionV5");
     });
 
     it("puts every notification in one notification configuration", async () => {

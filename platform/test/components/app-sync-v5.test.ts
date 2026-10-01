@@ -68,6 +68,7 @@ describe("AppSyncV5", () => {
     ({ AppSync } = await import("../../src/components/aws/app-sync"));
     ({ AppSyncV5 } = await import("../../src/components/aws/app-sync-v5"));
     await import("../../src/components/aws/takeover/app-sync");
+    await import("../../src/components/aws/takeover/function");
 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "app-sync-v5-"));
     schema = path.join(dir, "schema.graphql");
@@ -414,7 +415,7 @@ describe("AppSyncV5", () => {
         changed: [],
       });
       // The function is now inside the API
-      const [fn] = registered("sst:aws:Function");
+      const [fn] = registered("sst:aws:FunctionV5");
       expect(fn.name).toBe("MyApiDataSourceFunctionLambdaDS");
       expect(fn.parent.split("::").at(-1)).toBe("MyApi");
     });
@@ -439,7 +440,7 @@ describe("AppSyncV5", () => {
     expect(api.nodes.dataSource.arnDS).toBe(arnDS);
     expect(api.nodes.dataSource.httpDS).toBe(httpDS);
     const fn = await pulumi.resolve(api.nodes.dataSourceFunction.lambdaDS);
-    expect(fn.constructor.name).toBe("Function");
+    expect(fn.constructor.name).toBe("FunctionV5");
     expect(await pulumi.resolve(arnDS.name)).toBe("arnDS");
   });
 
