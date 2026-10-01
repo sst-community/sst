@@ -31,4 +31,4 @@
 
 ## V5 components
 
-`platform/src/components/README.md` is the guide to writing a V5 component and to porting a 4.x one: parts, args, takeover maps, tests and a checklist. Read it before touching a `*-v5.ts` file. Don't edit 4.x component files.
+`platform/src/components/README.md` is the guide to writing a V5 component and to porting a 4.x one: parts, args, takeover maps, tests and a checklist. Read it before touching a file in `platform/src/components/aws/v5/`. Don't edit 4.x component files.

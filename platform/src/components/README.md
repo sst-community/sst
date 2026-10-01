@@ -91,7 +91,7 @@ uploads.nodes.bucket; // the aws.s3.Bucket
 uploads.nodes.audit; // undefined when it wasn't created
 uploads.nodes.reader.legal; // by id
 
-new sst.aws.FunctionV5("Api", { handler: "src/api.handler", link: [uploads] });
+new sst.aws.v5.Function("Api", { handler: "src/api.handler", link: [uploads] });
 ```
 
 A `transform` or `existing` key that isn't one of the parts is an error, with the list of
@@ -110,9 +110,9 @@ the component reads its args.
     An id can be any string, like the route `"GET /users/{id}"`. A plain id is used in the
     name as it is; any other gets a short hash added so two similar ids don't collide.
     `id in this.nodes.reader` tells you whether one exists.
-  - `deferred(sst.aws.FunctionV5)`: a function that's built later, or not at all when the
+  - `deferred(sst.aws.v5.Function)`: a function that's built later, or not at all when the
     user passes an ARN. Create it with `sst.aws.functionPart(this, key, definition,
-    defaults)`, or with an id for `many(deferred(sst.aws.FunctionV5))`. Its `nodes` entry is
+    defaults)`, or with an id for `many(deferred(sst.aws.v5.Function))`. Its `nodes` entry is
     an `Output`. The user's `transform` for it takes the function's args, including the
     function's own `transform` and `existing`.
   - `named(part, "Name")`: the resource is named `<ComponentName><Name>` in place of the
@@ -120,7 +120,7 @@ the component reads its args.
     how a deployed app knows the resource, so it's permanent. It wraps a class or
     another marker: `named(optional(aws.ec2.SecurityGroup), "NatInstanceSecurityGroup")`.
     Use it when the name a resource has to keep isn't the key you want.
-- **An SST component can be a part**, like `sst.aws.FunctionV5` or a certificate. If the
+- **An SST component can be a part**, like `sst.aws.v5.Function` or a certificate. If the
   component's own file imports yours, declare the parts in a function so they're read
   late: `component("acme:Uploads", () => ({ ... }))`.
 - **A part can be created later**, inside an `.apply()`, when whether it exists depends
@@ -133,8 +133,8 @@ the component reads its args.
   `this.part()` already returns it instead of creating one.
 - **`this.lookupPart(key, [id], resourceId)`** looks a part's resource up in place of
   creating it, when the component references something that's already deployed and
-  works out the ids of its other parts itself: from a tag, or a data source. `AuroraV5`
-  is given a cluster and finds its instance, secret and proxy this way.
+  works out the ids of its other parts itself: from a tag, or a data source. The V5
+  `Aurora` is given a cluster and finds its instance, secret and proxy this way.
 - **`this.assertNew(what, key, id, args, transforms?)`** goes at the top of a method that
   adds a named thing (`addRoute`, `subscribe`). It rejects a name that's taken and a
   `transform` passed to the method, with a message that points at the component's own
@@ -144,8 +144,8 @@ the component reads its args.
   this.delegateOpts())`. They aren't parts. They're configured through what creates them.
 - **An arg the user's `transform` must not change** goes in a Pulumi transformation on
   the part: `this.part(key, args, { transformations: [({ props, opts }) => ({ props: {
-  ...props, runtime }, opts })] })`. It runs after the user's `transform`. `FunctionV5`
-  does this for the stub it deploys in `sst dev`.
+  ...props, runtime }, opts })] })`. It runs after the user's `transform`. The V5
+  `Function` does this for the stub it deploys in `sst dev`.
 
 ## Args
 
@@ -156,8 +156,8 @@ the component reads its args.
   created directly instead of inside `.apply()`, and lets `nodes` hold resources, not
   outputs of resources.
   The same goes for a list with a part per item, and for the field each part is
-  named after: `PostgresV5` takes the proxy's `credentials` and each `username` as
-  plain values, and the passwords as inputs.
+  named after: the V5 `Postgres` takes the proxy's `credentials` and each `username`
+  as plain values, and the passwords as inputs.
 - **A part the user can switch off gets its own arg** (`publicAccessBlock: false`).
   `transform` changes a part; it doesn't remove one.
 - **For a resource the user already has, use `existing`**, not an arg of your own.
@@ -166,8 +166,8 @@ the component reads its args.
   `if (this.existingPart("table")) return;`. `get` then passes only `existing`, with a
   cast to the args type.
 - **A check that needs a deployed value** goes in the output that everything depending
-  on it reads, so the error stops what would have used it. `DynamoV5` checks that the
-  table's stream is enabled inside the stream ARN its subscribers are given.
+  on it reads, so the error stops what would have used it. The V5 `Dynamo` checks that
+  the table's stream is enabled inside the stream ARN its subscribers are given.
 
 ## Linking, dev mode, naming
 
@@ -203,8 +203,13 @@ Everything above applies. The rest is specific to SST's own components in
 
 ### Ground rules
 
-- **The V5 component sits next to the original.** `Queue` in `queue.ts` becomes `QueueV5`
-  in `queue-v5.ts`, type `sst:aws:QueueV5`.
+- **The V5 component has the original's name, in the `v5` folder.** `Queue` in
+  `aws/queue.ts` is ported as `Queue` in `aws/v5/queue.ts`, type `sst:aws:QueueV5`. An
+  app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`.
+- **Where a file needs both, the 4.x one is `Original…`.** That goes for the class and
+  for its types: `import type { Queue as OriginalQueue } from "../queue"`. In prose,
+  say which one you mean: "the 4.x `Queue`" in a code comment, `sst.aws.Queue` and
+  `sst.aws.v5.Queue` in what the docs are generated from.
 - **Don't edit any 4.x component file.** They keep merging cleanly from upstream.
 - **Redesign, don't translate.** A V5 component doesn't have to mirror the original's
   structure.
@@ -214,10 +219,10 @@ Everything above applies. The rest is specific to SST's own components in
   both the original and the V5 one. The component that's taken goes last: an app
   switches to it once everything it's passed to is V5.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
-- **Reuse the original's arg types**: `interface QueueV5Args extends V5Args<QueueArgs,
-  typeof parts> {}`. `Omit` and re-declare only what has to change. For an arg that has
-  to become a plain value, write `cors?: Plain<BucketArgs["cors"]>` (`Plain` is in
-  `args.ts`): the docs generator follows it back to the original's docs.
+- **Reuse the original's arg types**: `interface QueueArgs extends
+  V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
+  change. For an arg that has to become a plain value, write
+  `cors?: Plain<OriginalBucketArgs["cors"]>` (`Plain` is in `args.ts`): the docs generator follows it back to the original's docs.
   An arg's docs come with it, examples included. Re-declare an arg whose example names
   the original (`new sst.aws.Queue("MyQueue", { dlq })`), so the V5 page doesn't tell
   people to create the 4.x component.
@@ -230,8 +235,8 @@ Everything above applies. The rest is specific to SST's own components in
   own. The method that adds one returns the parent (so calls chain) or the AWS resource
   (when the user needs something off it, like `authorizer.id`).
 - Something the user **names and links in its own right** stays a component of its own,
-  returned by the method that adds it. `CognitoUserPoolV5.addClient("Web")` returns a
-  `CognitoUserPoolClientV5`, so `link: [client]` still gives `Resource.Web.id`.
+  returned by the method that adds it. `addClient("Web")` on a V5 `CognitoUserPool`
+  returns a `CognitoUserPoolClient`, so `link: [client]` still gives `Resource.Web.id`.
 - A per-method `transform` moves to the component's `transform`. `this.assertNew()`
   rejects the old option with a message.
 - A deprecated overload isn't carried over (`subscribe(handler)` with no name). Throw
@@ -259,8 +264,8 @@ Everything above applies. The rest is specific to SST's own components in
 
 A helper returns the args of a part, or checks an arg. The component still creates
 each part with `this.part()`, so its constructor reads as the list of what it creates.
-`PostgresV5` and `MysqlV5` are the same component but for a handful of settings, and
-share everything else this way.
+The V5 `Postgres` and `Mysql` are the same component but for a handful of settings,
+and share everything else this way.
 
 One helper creates a part itself: `containerImage()` builds a container's image behind
 the limit on how many builds run at once, so the image is created when its turn comes.
@@ -272,12 +277,13 @@ renders an args type it finds there, and fails on one that's declared in a helpe
 
 ### Taking over what 4.x deployed
 
-Changing `Queue` to `QueueV5` with the same name has to keep the deployed resources. The
-component itself knows nothing about 4.x. All of that goes in a **takeover map**,
+Changing `sst.aws.Queue` to `sst.aws.v5.Queue` with the same name has to keep the
+deployed resources. The component itself knows nothing about 4.x. All of that goes in a **takeover map**,
 `aws/takeover/<name>.ts`, imported from `aws/takeover/index.ts`:
 
 ```ts
-takeover(ApiGatewayV2V5, {
+// The V5 one, from "../v5/apigatewayv2"
+takeover(ApiGatewayV2, {
   from: "sst:aws:ApiGatewayV2",
   moved: {
     // A part whose key changed: it was `<Api>AccessLog`
@@ -313,7 +319,7 @@ takeover(ApiGatewayV2V5, {
   changed once it's deployed. A resource that's named with a `Name` tag is the
   exception (a security group, a VPC endpoint, a subnet): the tag is made from the
   logical name, so a new name updates it. Declare such a part with the name 4.x gave
-  it, `named(optional(ec2.SecurityGroup), "DsqlEndpointSecurityGroup")`, as `DsqlV5`
+  it, `named(optional(ec2.SecurityGroup), "DsqlEndpointSecurityGroup")`, as the V5 `Dsql`
   does. It then needs no entry in the takeover map. The name goes in the declaration
   and not in the map because it has to outlive the map: once someone has switched, the
   kept name is the one in their state.
@@ -329,10 +335,11 @@ takeover(ApiGatewayV2V5, {
   replaced a nested object whole. So a config that sets a nested default this way
   (`transform: { instance: { tags: { team: "data" } } }`) deploys something different
   after the switch: here SST's own tags come back. Find the nested defaults of each
-  part, test one (`an object transform that sets tags` in `postgres-v5.test.ts`), and
+  part, test one (`an object transform that sets tags` in `v5/postgres.test.ts`), and
   name it in the "Switch from" section: "If you set `tags` on the instance with an
   object in `transform`, it keeps the tags SST sets next to yours."
-- `$transform(sst.aws.Queue, ...)` doesn't apply to `QueueV5`: it's matched by type.
+- `$transform(sst.aws.Queue, ...)` doesn't apply to `sst.aws.v5.Queue`: it's matched by
+  type.
 - The docs generator writes those two as the last notes of every "Switch from" section:
   that an object in `transform` is merged, and that a `$transform` for the original
   doesn't apply. It reads the original's name from the takeover map. Don't write them
@@ -344,22 +351,22 @@ takeover(ApiGatewayV2V5, {
 - A part that is a V5 component, like a function, changed its type as well as its place.
   You don't write that: the part's old address in `moved` is combined with the type its
   own takeover map names in `from`.
-- A function definition can still be written the way `Function` takes it (`role`,
-  `logging.logGroup`, `live`, `url.route`). `functionPart()` moves those to where
-  `FunctionV5` takes them.
+- A function definition can still be written the way the 4.x `Function` takes it
+  (`role`, `logging.logGroup`, `live`, `url.route`). `functionPart()` moves those to
+  where the V5 one takes them.
 - One of SST's own provider resources (`KvKeys`, `BucketFiles`) adds its type to its
   name: `MyFunctionRouteKey.sst.aws.KvKeys`. As a part it's matched without that. If it
   moved, write its old name in full, as a function in `moved`.
 - A resource 4.x created outside of any component got no name from SST. Add its type to
   `UNPREFIXED_TYPES` in `naming-rules.ts` so it keeps the name the provider gave it
-  (`FunctionV5` does this for the alias of a durable function's URL).
-- Reproduce what 4.x deploys, not what it means to. `Function` trusts the account in
-  every role because a check never passes; `FunctionV5` writes the same policy, with a
-  comment. Changing it is a decision of its own, not a side effect of a port.
+  (the V5 `Function` does this for the alias of a durable function's URL).
+- Reproduce what 4.x deploys, not what it means to. The 4.x `Function` trusts the
+  account in every role because a check never passes; the V5 one writes the same
+  policy, with a comment. Changing it is a decision of its own, not a side effect of a port.
 
 Also check for an **ordering guarantee** the original makes with an
-`x.apply(() => resource)` wrapper, and keep it. `Bucket` makes everything that reads
-`bucket.name` wait for the bucket policy; `BucketV5` keeps that in its getters.
+`x.apply(() => resource)` wrapper, and keep it. The 4.x `Bucket` makes everything that
+reads `bucket.name` wait for the bucket policy; the V5 one keeps that in its getters.
 
 ### Tests
 
@@ -374,8 +381,8 @@ const pulumi = mockPulumi();
 
 describe("takes over a deployed Queue", () => {
   pulumi.takeoverCases({
-    original: () => Queue,
-    v5: () => QueueV5,
+    original: () => OriginalQueue,
+    v5: () => Queue,
     cases: {
       // Written once, for both: it's given the original, then the V5 component
       "fifo queue": (Queue, opts) => new Queue("MyQueue", { fifo: true }, opts),
@@ -409,7 +416,7 @@ describe("takes over a deployed Queue", () => {
   loosen it. Where the two components aren't written the same way, give `original` and
   `v5` in place of `create`.
 - Wrappers whose names aren't worth writing out can be counted: give the mock a
-  `wrappers` pattern and the case a `wrappers` number (see `apigatewayv2-v5.test.ts`).
+  `wrappers` pattern and the case a `wrappers` number (see `v5/apigatewayv2.test.ts`).
 - For a one-off, `pulumi.takesOver(original, v5)` returns `{ unclaimed, changed }`.
 - The check compares each resource's inputs and the options that change what a deploy
   does to it: `ignoreChanges`, `protect`, `retainOnDelete`, `deleteBeforeReplace`,
@@ -429,12 +436,12 @@ describe("takes over a deployed Queue", () => {
   reports that as a change to the field.
 - `pulumi.outputsOf(name)` is what a component registered as its outputs. The takeover
   check passes when neither side registers anything, so assert that the output the CLI
-  reads is there (see `task-v5.test.ts`).
+  reads is there (see `v5/task.test.ts`).
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
 - A 4.x component that's passed in can be the real one: a `Vpc`, `Cluster` and `Task`
-  all deploy under the mock (see `cron-v2-v5.test.ts`).
-- Give the mock extra `state` for outputs the code reads (see `apigatewayv2-v5.test.ts`).
+  all deploy under the mock (see `v5/cron-v2.test.ts`).
+- Give the mock extra `state` for outputs the code reads (see `v5/apigatewayv2.test.ts`).
   A resource that's looked up comes back with no name or ARN unless `state` gives it
   one. The region, partition, account and IAM policy lookups have defaults.
 - Assert on what's created, too. A takeover test passes when both sides create nothing,
@@ -442,8 +449,9 @@ describe("takes over a deployed Queue", () => {
 - `sst dev` behaviour is tested by setting `global.$dev = true` in a `beforeEach`.
 - An error thrown inside `.apply()` can't be asserted: under the mock it's an
   unhandled rejection, which fails the run. Test the errors that are thrown directly.
-- `v5-components.test.ts` runs over every `*-v5.ts` file. It fails when one has no
-  takeover map, isn't exported from `aws/index.ts`, or names another component's type.
+- `v5-components.test.ts` runs over every file in `aws/v5/`. It fails when one has no
+  takeover map, isn't exported from `aws/v5/index.ts`, isn't named after the component
+  it replaces, or names another component's type.
 
 Run from `platform/`:
 
@@ -458,20 +466,21 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
 
 1. Read the original and every wrapper component it creates. Note each resource's
    logical name, parent and options.
-2. Write `aws/<name>-v5.ts`: parts, args, constructor, methods, `link()`, `static get`.
+2. Write `aws/v5/<name>.ts`, with the original's file name and class name: parts, args,
+   constructor, methods, `link()`, `static get`.
    Search `cmd/` and `pkg/` for the original's type (`"sst:aws:Function"`): the CLI
    finds some components by type, and the V5 type has to be added next to it.
 3. Write `aws/takeover/<name>.ts` and import it from `aws/takeover/index.ts`.
-4. Export the component from `aws/index.ts`.
-5. Write `test/components/<name>-v5.test.ts`: takeover cases with
+4. Export the component from `aws/v5/index.ts`, which is `sst.aws.v5`.
+5. Write `test/components/v5/<name>.test.ts`: takeover cases with
    `pulumi.takeoverCases()`, then behaviour.
-6. Write the class doc, including a "Switch from `<Name>`" section that lists what's
+6. Write the class doc, including a "Switch from `sst.aws.<Name>`" section that lists what's
    written differently and what changes on deploy. The docs generator adds the two notes
    every port has to its list. Document each part where it's declared: those comments
    become the `transform`, `existing` and `nodes` docs.
 7. `cd www && bun ./generate.ts components` generates the page. The docs generator and
-   the sidebar find a `*-v5.ts` file by its name, so there's nothing to add to either.
-   It fails when the page names the original outside the "Switch from" section, other
+   the sidebar find every file in `aws/v5/`, so there's nothing to add to either.
+   It fails when the page has `sst.aws.<Name>` outside the "Switch from" section, other
    than as a link to its page: an inherited arg whose examples create the original is
    the usual cause, and the arg is declared again with examples of its own.
 8. Typecheck, run the tests, and `bun run build:cli` from the repo root.
@@ -479,16 +488,16 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
    by side, resource by resource: args, options, names, what's read back. Then read the
    generated page.
 
-The existing ports are the reference: `apigatewayv2-v5.ts` for routes, authorizers and a
-custom domain; `sns-topic-v5.ts` for named subscribers; `bucket-v5.ts` for one resource
-built from many notifications; `cognito-user-pool-v5.ts` for triggers and a linkable
-client; `redis-v5.ts` for dev mode and `get`; `postgres-v5.ts` for the same with an
-optional group of parts (the proxy) and a part per item in a list; `aurora-v5.ts` for a
+The existing ports are the reference, all in `aws/v5/`: `apigatewayv2.ts` for routes,
+authorizers and a custom domain; `sns-topic.ts` for named subscribers; `bucket.ts` for
+one resource built from many notifications; `cognito-user-pool.ts` for triggers and a
+linkable client; `redis.ts` for dev mode and `get`; `postgres.ts` for the same with an
+optional group of parts (the proxy) and a part per item in a list; `aurora.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
-than one part; `dsql-v5.ts` for parts in another region, and features that each add a
-group of parts; `task-v5.ts` for parts per item of a plain list (containers), a part
-that's built later, a stub in `sst dev`, and outputs the CLI reads; `cron-v2-v5.ts` for a function the component may be given or may
-create, next to another component it's given (a `Task`); `dynamo-v5.ts` for
-required args next to `get`, and a static method replaced by `get`; `function-v5.ts`
-for a component 4.x built almost entirely inside `.apply()`, with parts that are
-created later.
+than one part; `dsql.ts` for parts in another region, and features that each add a
+group of parts; `task.ts` for parts per item of a plain list (containers), a part
+that's built later, a stub in `sst dev`, and outputs the CLI reads; `cron-v2.ts` for a
+function the component may be given or may create, next to another component it's
+given (a `Task`); `dynamo.ts` for required args next to `get`, and a static method
+replaced by `get`; `function.ts` for a component 4.x built almost entirely inside
+`.apply()`, with parts that are created later.

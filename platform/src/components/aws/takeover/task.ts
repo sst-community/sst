@@ -1,10 +1,10 @@
 import { takeover } from "../../takeover";
-import { TaskV5 } from "../task-v5";
+import { Task } from "../v5/task";
 
-takeover(TaskV5, {
+takeover(Task, {
   from: "sst:aws:Task",
   moved: {
-    // `Task` calls the task definition the task
+    // The 4.x `Task` calls the task definition the task
     taskDefinition: "task",
     // A container's image and log group were named after the container's
     // name as it was written

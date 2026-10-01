@@ -4,11 +4,13 @@ import { mockPulumi } from "../helpers/graph";
 
 mockPulumi();
 
-// Every V5 component: a `*-v5.ts` file next to the component it replaces. Its
-// docs page and sidebar entry are found by that name too. What's still
-// written by hand for each one is checked here.
-const dir = new URL("../../src/components/aws/", import.meta.url);
-const files = fs.readdirSync(dir).filter((file) => file.endsWith("-v5.ts"));
+// Every V5 component: a file in `aws/v5/`, named like the file of the
+// component it replaces. Its docs page and sidebar entry are found there too.
+// What's still written by hand for each one is checked here.
+const dir = new URL("../../src/components/aws/v5/", import.meta.url);
+const files = fs
+  .readdirSync(dir)
+  .filter((file) => file.endsWith(".ts") && file !== "index.ts");
 
 describe("V5 components", () => {
   let takeoverOf: typeof import("../../src/components/takeover").takeoverOf;
@@ -19,20 +21,33 @@ describe("V5 components", () => {
   });
 
   it("are found", () => {
-    expect(files).toContain("queue-v5.ts");
+    expect(files).toContain("queue.ts");
+  });
+
+  it("are exported as sst.aws.v5", () => {
+    const index = fs.readFileSync(new URL("../index.ts", dir), "utf8");
+    expect(index).toContain(`export * as v5 from "./v5/index.js";`);
   });
 
   describe.each(files)("%s", (file) => {
     let type: string;
+    let name: string;
 
     beforeAll(async () => {
       const module = await import(
-        `../../src/components/aws/${file.slice(0, -3)}.ts`
+        `../../src/components/aws/v5/${file.slice(0, -3)}.ts`
       );
       const component: any = Object.values(module).find(
         (value: any) => typeof value?.__pulumiType === "string",
       );
       type = component.__pulumiType;
+      name = component.name;
+    });
+
+    // The class has the name of the component it replaces. Its type says V5,
+    // so the two can be told apart in a deployed app.
+    it("has the name of the component it replaces", () => {
+      expect(type).toBe(`sst:aws:${name}V5`);
     });
 
     // Switching to the V5 component has to keep what's deployed, so each one
@@ -45,10 +60,10 @@ describe("V5 components", () => {
       ).toBe(type.slice(0, -2));
     });
 
-    it("is exported from sst.aws", () => {
+    it("is exported from sst.aws.v5", () => {
       const index = fs.readFileSync(new URL("index.ts", dir), "utf8");
-      const line = `export * from "./${file.slice(0, -3)}.js";`;
-      expect(index, `Add \`${line}\` to aws/index.ts`).toContain(line);
+      const line = `export * from "./${file.slice(0, -3)}";`;
+      expect(index, `Add \`${line}\` to aws/v5/index.ts`).toContain(line);
     });
 
     // What came before belongs in the takeover map. The component's code

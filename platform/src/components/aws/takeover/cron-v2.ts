@@ -1,10 +1,10 @@
 import { takeover } from "../../takeover";
-import { CronV2V5 } from "../cron-v2-v5";
+import { CronV2 } from "../v5/cron-v2";
 
-takeover(CronV2V5, {
+takeover(CronV2, {
   from: "sst:aws:CronV2",
   moved: {
-    // `CronV2` calls the function the job's handler
+    // The 4.x `CronV2` calls the function the job's handler
     function: "handler",
   },
 });

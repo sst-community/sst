@@ -1,10 +1,10 @@
 import { takeover } from "../../takeover";
-import { RedisV5 } from "../redis-v5";
+import { Redis } from "../v5/redis";
 
-takeover(RedisV5, {
+takeover(Redis, {
   from: "sst:aws:Redis",
   moved: {
-    // `Redis` calls these "proxy" secrets, though there is no proxy
+    // The 4.x `Redis` calls these "proxy" secrets, though there is no proxy
     secret: "proxySecret",
     secretVersion: "proxySecretVersion",
   },

@@ -1,14 +1,14 @@
 import { takeover } from "../../takeover";
 import { outputId } from "../../component";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { ApiGatewayV2V5 } from "../apigatewayv2-v5";
+import { ApiGatewayV2 } from "../v5/apigatewayv2";
 import { childOf } from "./helpers";
 
-// `ApiGatewayV2` keeps each route in a component of its own, next to the API.
-// There are three kinds, one for each thing a route can send requests to.
-// It's named after the route's `name`, or after a hash of the route.
-// `ApiGatewayV2V5` keeps a route's resources inside the API, under the
-// route's name or the route itself.
+// The 4.x `ApiGatewayV2` keeps each route in a component of its own, next to
+// the API. There are three kinds, one for each thing a route can send requests
+// to. It's named after the route's `name`, or after a hash of the route. The V5
+// one keeps a route's resources inside the API, under the route's name or the
+// route itself.
 const LAMBDA = "sst:aws:ApiGatewayV2LambdaRoute";
 const ROUTES = [LAMBDA, "sst:aws:ApiGatewayV2UrlRoute", "sst:aws:ApiGatewayV2PrivateRoute"];
 const ROUTE = /^(\$default$|(ANY|DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT) \/)/;
@@ -22,7 +22,7 @@ const AUTHORIZER = "sst:aws:ApiGatewayV2Authorizer";
 const authorizer = (api: string, id = "") =>
   `${api}Authorizer${logicalName(id)}`;
 
-takeover(ApiGatewayV2V5, {
+takeover(ApiGatewayV2, {
   from: "sst:aws:ApiGatewayV2",
   moved: {
     logGroup: "accessLog",

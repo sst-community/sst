@@ -1,18 +1,18 @@
 import { interpolate } from "@pulumi/pulumi";
 import { takeover } from "../../takeover";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { BucketV5 } from "../bucket-v5";
+import { Bucket } from "../v5/bucket";
 import { childOf } from "./helpers";
 
-// `Bucket` keeps what `notify()` creates in a component of its own, named
-// after the bucket. It's created with the bucket's own options, so it's next
-// to the bucket wherever the bucket is. `BucketV5` keeps it inside the bucket,
-// with each notification's resources under the notification's name.
+// The 4.x `Bucket` keeps what `notify()` creates in a component of its own,
+// named after the bucket. It's created with the bucket's own options, so it's
+// next to the bucket wherever the bucket is. The V5 one keeps it inside the
+// bucket, with each notification's resources under the notification's name.
 //
-// A bucket referenced with `Bucket.get` isn't given the options `get` is
-// given, so its notifications are at the top of the app whatever those say.
+// A bucket referenced with the 4.x `Bucket.get` isn't given the options `get`
+// is given, so its notifications are at the top of the app whatever those say.
 const NOTIFICATION = "sst:aws:BucketNotification";
-const notified = (bucket: BucketV5, name: string, child: string) => [
+const notified = (bucket: Bucket, name: string, child: string) => [
   childOf(NOTIFICATION, `${name}Notifications`, child, bucket),
   childOf(NOTIFICATION, `${name}Notifications`, child),
 ];
@@ -26,13 +26,13 @@ const SUBSCRIBERS = [
   "sst:aws:BucketQueueSubscriber",
   "sst:aws:BucketTopicSubscriber",
 ];
-const subscriber = (bucket: BucketV5, name: string) =>
+const subscriber = (bucket: Bucket, name: string) =>
   bucket.nodes.bucket.arn.apply(
     (arn) => `${name}Subscriber${logicalName(hashStringToPrettyString(arn, 6))}`,
   );
 // The policy of a subscribed queue or topic was created outside of the
 // subscriber component, with no parent.
-const subscriberPolicy = (bucket: BucketV5, name: string) => ({
+const subscriberPolicy = (bucket: Bucket, name: string) => ({
   name: interpolate`${subscriber(bucket, name)}Policy`,
   parent: false as const,
 });
@@ -41,7 +41,7 @@ const subscriberPolicy = (bucket: BucketV5, name: string) => ({
 const first = (created: Record<string, unknown>) =>
   Object.keys(created).length === 0;
 
-takeover(BucketV5, {
+takeover(Bucket, {
   from: "sst:aws:Bucket",
   moved: {
     notification: (bucket, { name }) => [

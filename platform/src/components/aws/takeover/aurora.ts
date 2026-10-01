@@ -1,10 +1,10 @@
 import { takeover } from "../../takeover";
-import { AuroraV5 } from "../aurora-v5";
+import { Aurora } from "../v5/aurora";
 
-takeover(AuroraV5, {
+takeover(Aurora, {
   from: "sst:aws:Aurora",
   moved: {
-    // `Aurora` calls the secret with the master user's credentials the
+    // The 4.x `Aurora` calls the secret with the master user's credentials the
     // "proxy" secret, though it's created without a proxy too
     secret: "proxySecret",
     secretVersion: "proxySecretVersion",

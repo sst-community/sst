@@ -838,7 +838,9 @@ async function generateComponentDoc(
   fs.mkdirSync(dir, { recursive: true });
 
   // The component a V5 component takes over from
-  const original = useTakeovers().get(className);
+  const original = isV5Source(sourceFile)
+    ? useTakeovers().get(className)
+    : undefined;
 
   fs.writeFileSync(
     outputFilePath,
@@ -901,7 +903,11 @@ async function generateComponentDoc(
       .flat()
       .join("\n")
   );
-  if (original) checkOriginalNotNamed(outputFilePath, original);
+  if (original)
+    checkOriginalNotNamed(
+      outputFilePath,
+      `${originalNamespace(fullClassName)}.${original}`
+    );
 }
 
 /*************************/
@@ -1214,22 +1220,35 @@ function renderType(
     if (type.name === "SsrSite") {
       return ['<code class="primitive">All SSR sites</code>'].join("");
     }
+    const fileName =
+      (type.reflection as TypeDoc.DeclarationReflection)?.sources?.[0].fileName ||
+      // Some local helper types only carry a ReflectionSymbolId target.
+      ((type as any)._target?.fileName as string | undefined);
+    // A V5 component has the name of the one it replaces, and so do its
+    // types, so a name alone doesn't say it's this doc's
+    const moduleFile = module.sources?.[0]?.fileName ?? "";
+    const elsewhere =
+      !!fileName && documentedSources.has(fileName) && fileName !== moduleFile;
+
     // types in the same doc (links to the class ie. `subscribe()` return type)
-    if (isModuleComponent(module) && type.name === useClassName(module)) {
+    if (
+      !elsewhere &&
+      isModuleComponent(module) &&
+      type.name === useClassName(module)
+    ) {
       return `[<code class="type">${type.name}</code>](.)`;
     }
     // types in the same doc (links to an interface)
-    if (useModuleInterfaces(module).find((i) => i.name === type.name)) {
+    if (
+      !elsewhere &&
+      useModuleInterfaces(module).find((i) => i.name === type.name)
+    ) {
       return `[<code class="type">${
         type.name
       }</code>](#${type.name.toLowerCase()})`;
     }
 
     // types in different doc
-    const fileName =
-      (type.reflection as TypeDoc.DeclarationReflection)?.sources?.[0].fileName ||
-      // Some local helper types only carry a ReflectionSymbolId target.
-      ((type as any)._target?.fileName as string | undefined);
     if (fileName?.startsWith("platform/src/components/")) {
       const docHash = type.name.endsWith("Args")
         ? `#${type.name.toLowerCase()}`
@@ -1238,7 +1257,18 @@ function renderType(
         /platform\/src\/components\/(.*)\.ts/,
         "/docs/component/$1"
       );
-      return `[<code class="type">${type.name}</code>](${docLink}${docHash})`;
+      // On a V5 page, a type of the component a V5 one replaces is written
+      // out in full: `sst.aws.Queue` next to this page's `Queue`
+      const replaced =
+        isV5Source(moduleFile) &&
+        !isV5Source(fileName) &&
+        documentedSources.has(
+          fileName.replace(/\/([\w-]+\.ts)$/, "/v5/$1")
+        );
+      const name = replaced
+        ? `sst.${fileName.split("/").slice(3, -1).join(".")}.${type.name}`
+        : type.name;
+      return `[<code class="type">${name}</code>](${docLink}${docHash})`;
     }
 
     // types in different doc without their own doc page
@@ -1664,9 +1694,18 @@ function renderConstructor(module: TypeDoc.DeclarationReflection) {
 /** V5 components: switching to one   **/
 /***************************************/
 
-// The component each V5 component takes over from, by class name: `QueueV5`
-// from `Queue`. It's read from the takeover maps, which is where a V5
-// component says what it replaces.
+// A V5 component is in its provider's `v5` folder, and is `sst.aws.v5.Queue`
+// next to the `sst.aws.Queue` it replaces
+function isV5Source(fileName: string) {
+  return /^platform\/src\/components\/\w+\/v5\//.test(fileName);
+}
+function originalNamespace(fullClassName: string) {
+  return fullClassName.split(".").slice(0, -2).join(".");
+}
+
+// The component each V5 component takes over from, by class name. It's read
+// from the takeover maps, which is where a V5 component says what it
+// replaces.
 function useTakeovers() {
   if (takeovers.size) return takeovers;
   const dir = "../platform/src/components/aws/takeover";
@@ -1704,10 +1743,10 @@ function renderSwitchNotes(
   const section = findSwitchSection(lines);
   if (!section) return about;
 
-  const namespace = fullClassName.slice(0, fullClassName.lastIndexOf("."));
+  const originalName = `${originalNamespace(fullClassName)}.${original}`;
   const notes = [
-    `- An object in \`transform\` is merged into the defaults, nested objects included, where \`${original}\` replaced a nested object whole. To replace one, use a function.`,
-    `- \`$transform(${namespace}.${original}, ...)\` doesn't apply to it. Write one for \`${fullClassName}\`.`,
+    `- An object in \`transform\` is merged into the defaults, nested objects included, where \`${originalName}\` replaced a nested object whole. To replace one, use a function.`,
+    `- \`$transform(${originalName}, ...)\` doesn't apply to it. Write one for \`${fullClassName}\`.`,
   ];
 
   // The section's list: from its first item to the last line that's an item
@@ -1738,16 +1777,14 @@ function renderSwitchNotes(
 function checkOriginalNotNamed(file: string, original: string) {
   const lines = fs.readFileSync(file, "utf8").split("\n");
   const section = findSwitchSection(lines);
-  const named = [
-    // Code that uses the original: `new sst.aws.Queue(`, `sst.aws.Queue.get(`
-    new RegExp(`\\bsst\\.\\w+\\.${original}\\b`),
-    // The original in prose, unless it's the text of a link
-    new RegExp(`(?<!\\[)\`${original}\`(?!\\]\\()`),
-  ];
+  // The original, ie. `new sst.aws.Queue(` or `sst.aws.Queue.get(`, unless
+  // it's the text of a link
+  const named = new RegExp(
+    `(?<!\\[\`|\\[<code class="type">)\\b${original.replaceAll(".", "\\.")}\\b`
+  );
   const found = lines.filter(
     (line, i) =>
-      !(section && i >= section.start && i < section.end) &&
-      named.some((pattern) => pattern.test(line))
+      !(section && i >= section.start && i < section.end) && named.test(line)
   );
   if (found.length)
     throw new Error(
@@ -1891,8 +1928,9 @@ function renderPartClass(
       opts.args ? "#inputs" : ""
     })`;
   }
-  // ie. `Function` from "./function.js": another component in the same folder
-  if (from.startsWith("./")) {
+  // ie. `Function` from "./function", or `Vpc` from "../vpc.js": another
+  // component
+  if (from.startsWith(".")) {
     const dir = path.dirname(module.sources![0].fileName);
     const file = path.join(dir, from.replace(/\.js$/, "")) + ".ts";
     if (documentedSources.has(file)) {
@@ -2698,6 +2736,9 @@ function useClassProviderNamespace(module: TypeDoc.DeclarationReflection) {
     );
   }
 
+  // ie. `aws`, or `aws/v5` for a V5 component
+  if (isV5Source(fileName))
+    return `sst.${fileName.split("/").slice(-3, -1).join(".")}`;
   const namespace = fileName.split("/").slice(-2, -1)[0];
   return namespace === "components" ? "sst" : `sst.${namespace}`;
 }

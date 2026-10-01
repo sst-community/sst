@@ -7,8 +7,12 @@ import type {
   Parts,
   PartsComponent,
 } from "../../parts-component";
-import { Function, FunctionArgs, FunctionArn } from "../function";
-import { FunctionV5, FunctionV5Args } from "../function-v5";
+import {
+  Function as OriginalFunction,
+  FunctionArgs as OriginalFunctionArgs,
+  FunctionArn,
+} from "../function";
+import { Function, FunctionArgs } from "../v5/function";
 import { Workflow } from "../workflow";
 import { parseRoleArn, splitQualifiedFunctionArn } from "./arn";
 
@@ -18,7 +22,7 @@ import { parseRoleArn, splitQualifiedFunctionArn } from "./arn";
  */
 export type FunctionPart = Output<{
   /** The function, when there is one to return: not for one given as an ARN. */
-  getFunction: () => FunctionV5;
+  getFunction: () => Function;
   arn: Output<string>;
   /** The ARN to invoke: the latest version of a function that has versions. */
   targetArn: Output<string>;
@@ -33,17 +37,17 @@ export type FunctionPart = Output<{
  */
 export type FunctionDefinition = Input<
   | string
+  | OriginalFunctionArgs
   | FunctionArgs
-  | FunctionV5Args
   | FunctionArn
-  | FunctionV5
   | Function
+  | OriginalFunction
   | Workflow
 >;
 
 /** Args a component adds to its function. Its link, environment and permissions are added to the user's. */
 export type FunctionDefaults = Pick<
-  FunctionV5Args,
+  FunctionArgs,
   | "description"
   | "link"
   | "environment"
@@ -57,11 +61,11 @@ export type FunctionDefaults = Pick<
  * Create a component's function part from what the user passed: a handler,
  * the function's args, or the ARN of a function they already have.
  *
- * The part has to be declared as `deferred(FunctionV5)`. It's created once
+ * The part has to be declared as `deferred(Function)`. It's created once
  * the definition is known, and not at all when it's an ARN.
  *
  * ```ts
- * const parts = () => ({ function: deferred(FunctionV5) });
+ * const parts = () => ({ function: deferred(Function) });
  *
  * const fn = functionPart(this, "function", args.subscriber, {
  *   description: `Subscribed to ${name}`,
@@ -82,7 +86,7 @@ export function functionPart<P extends Parts, K extends FunctionKeys<P>>(
   defaults: FunctionDefaults,
 ): FunctionPart;
 /**
- * @param id Which one to create, for a part declared as `many(deferred(FunctionV5))`.
+ * @param id Which one to create, for a part declared as `many(deferred(Function))`.
  */
 export function functionPart<P extends Parts, K extends ManyFunctionKeys<P>>(
   component: PartsComponent<P>,
@@ -107,7 +111,7 @@ export function functionPart(
     // A function passed in `existing`, or its ARN, is used as it is
     (part.existing as FunctionDefinition | undefined) ?? definition,
   ).apply((definition: unknown) => {
-    if (definition instanceof FunctionV5 || definition instanceof Function)
+    if (definition instanceof Function || definition instanceof OriginalFunction)
       return use(definition);
     if (definition instanceof Workflow) return use(definition.getFunction());
     if (typeof definition === "string" && definition.startsWith("arn:"))
@@ -123,7 +127,7 @@ export function functionPart(
       );
 
     return use(
-      new FunctionV5(
+      new Function(
         ...transformPart(
           part.transform,
           part.name,
@@ -153,9 +157,9 @@ export function functionPart(
   return fn;
 }
 
-function use(fn: FunctionV5 | Function) {
+function use(fn: Function | OriginalFunction) {
   return {
-    getFunction: () => fn as FunctionV5,
+    getFunction: () => fn as Function,
     arn: fn.arn,
     targetArn: fn.targetArn,
     qualifier: fn.qualifier,
@@ -170,7 +174,7 @@ function useArn(arn: string) {
   const invoke = (api: string, path: string) =>
     `arn:${partition}:apigateway:${region}:lambda:path/${api}/functions/${arn}/${path}`;
   return {
-    getFunction: (): FunctionV5 => {
+    getFunction: (): Function => {
       throw new VisibleError(
         "Cannot access the created function because it is referenced as an ARN.",
       );
@@ -185,15 +189,15 @@ function useArn(arn: string) {
   };
 }
 
-// A definition can be written the way `Function` takes it. The few options
-// `FunctionV5` takes somewhere else are moved to where it takes them.
-function asV5Args(args: Record<string, any>): FunctionV5Args {
+// A definition can be written the way the 4.x `Function` takes it. The few
+// options the V5 one takes somewhere else are moved to where it takes them.
+function asV5Args(args: Record<string, any>): FunctionArgs {
   const { live, role, ...rest } = args;
   const existing = { ...rest.existing };
   let { dev, logging, url } = rest;
 
   if (dev === undefined && live === false) dev = false;
-  // `Function` takes the role's ARN, and looks the role up by its name
+  // 4.x takes the role's ARN. `existing.role` is looked up by the role's name
   if (role) existing.role = parseRoleArn(role).roleName;
   if (logging && logging.logGroup !== undefined) {
     const { logGroup, ...others } = logging;
@@ -208,7 +212,7 @@ function asV5Args(args: Record<string, any>): FunctionV5Args {
   }
 
   return {
-    ...(rest as FunctionV5Args),
+    ...(rest as FunctionArgs),
     dev,
     logging,
     url,
@@ -217,11 +221,11 @@ function asV5Args(args: Record<string, any>): FunctionV5Args {
 }
 
 type FunctionKeys<P extends Parts> = {
-  [K in keyof P]: P[K] extends DeferredPart<typeof FunctionV5> ? K : never;
+  [K in keyof P]: P[K] extends DeferredPart<typeof Function> ? K : never;
 }[keyof P] &
   string;
 type ManyFunctionKeys<P extends Parts> = {
-  [K in keyof P]: P[K] extends ManyPart<DeferredPart<typeof FunctionV5>>
+  [K in keyof P]: P[K] extends ManyPart<DeferredPart<typeof Function>>
     ? K
     : never;
 }[keyof P] &

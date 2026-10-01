@@ -1,12 +1,12 @@
 import { takeover } from "../../takeover";
 import { logicalName } from "../../naming";
-import { AppSyncV5 } from "../app-sync-v5";
+import { AppSync } from "../v5/app-sync";
 import { childOf } from "./helpers";
 
-// `AppSync` keeps each data source, AppSync function and resolver in a
-// component of its own, next to the API. `AppSyncV5` keeps their resources
-// inside the API, under the data source's or function's name, or the
-// resolver's operation.
+// The 4.x `AppSync` keeps each data source, AppSync function and resolver in a
+// component of its own, next to the API. The V5 one keeps their resources
+// inside the API, under the data source's or function's name, or the resolver's
+// operation.
 const DATA_SOURCE = "sst:aws:AppSyncDataSource";
 const dataSource = (api: string, id = "") =>
   `${api}DataSource${logicalName(id)}`;
@@ -20,10 +20,10 @@ const RESOLVER = "sst:aws:AppSyncResolver";
 const resolver = (api: string, id = "") =>
   `${api}Resolver${id.split(" ").map(logicalName).join("")}`;
 
-// Two things `AppSync` created with no parent at all, beside the API rather
-// than inside anything: the function of a Lambda data source given as a
+// Two things the 4.x `AppSync` created with no parent at all, beside the API
+// rather than inside anything: the function of a Lambda data source given as a
 // handler, and the association between a custom domain and the API.
-takeover(AppSyncV5, {
+takeover(AppSync, {
   from: "sst:aws:AppSync",
   moved: {
     certificate: "ssl",

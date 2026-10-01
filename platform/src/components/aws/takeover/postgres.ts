@@ -1,11 +1,11 @@
 import { takeover } from "../../takeover";
-import { PostgresV5 } from "../postgres-v5";
+import { Postgres } from "../v5/postgres";
 
-takeover(PostgresV5, {
+takeover(Postgres, {
   from: "sst:aws:Postgres",
   moved: {
-    // `Postgres` calls the secret with the master user's credentials the
-    // "proxy" secret, though it's created without a proxy too
+    // The 4.x `Postgres` calls the secret with the master user's credentials
+    // the "proxy" secret, though it's created without a proxy too
     secret: "proxySecret",
     secretVersion: "proxySecretVersion",
     // The secret of an additional user was named after the username as it

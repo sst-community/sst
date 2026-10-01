@@ -1,6 +1,7 @@
 /**
  * How each V5 component takes over from the 4.x component it replaces, so
- * that changing `Queue` to `QueueV5` keeps what's already deployed.
+ * that changing `sst.aws.Queue` to `sst.aws.v5.Queue` keeps what's already
+ * deployed.
  *
  * The V5 components don't know about any of this. When the 4.x components are
  * removed, this folder goes with them.

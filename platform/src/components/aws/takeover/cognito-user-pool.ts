@@ -1,14 +1,14 @@
 import { takeover } from "../../takeover";
-import { CognitoUserPoolV5 } from "../cognito-user-pool-v5";
+import { CognitoUserPool } from "../v5/cognito-user-pool";
 import { childOf } from "./helpers";
 
-// `CognitoUserPool` keeps each identity provider in a component of its own.
-// That component isn't inside the user pool or named after it: it's next to
-// it, under the name the provider was added with. `CognitoUserPoolV5` keeps
-// them inside the user pool, under that name.
+// The 4.x `CognitoUserPool` keeps each identity provider in a component of its
+// own. That component isn't inside the user pool or named after it: it's next
+// to it, under the name the provider was added with. The V5 one keeps them
+// inside the user pool, under that name.
 const IDENTITY_PROVIDER = "sst:aws:CognitoIdentityProvider";
 
-takeover(CognitoUserPoolV5, {
+takeover(CognitoUserPool, {
   from: "sst:aws:CognitoUserPool",
   moved: {
     certificate: "ssl",

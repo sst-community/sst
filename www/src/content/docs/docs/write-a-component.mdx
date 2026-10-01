@@ -13,7 +13,7 @@ You build it from **parts**: a list of the resources it creates. From that one l
 - Resource names made from the component's name.
 - A check that it creates nothing outside the list.
 
-The V5 components, like [`QueueV5`](/docs/component/aws/queue-v5/), are built the same way.
+The V5 components, like [`sst.aws.v5.Queue`](/docs/component/aws/v5/queue/), are built the same way.
 
 ---
 
@@ -168,14 +168,14 @@ An ID can be any string, like the route `GET /users/{id}`. To check whether one 
 A function that's built later, or not at all when it's given as an ARN. Create it with `sst.aws.functionPart`.
 
 ```ts
-handler: sst.deferred(sst.aws.FunctionV5)
+handler: sst.deferred(sst.aws.v5.Function)
 ```
 
 ```ts
 sst.aws.functionPart(this, "handler", args.handler, { timeout: "30 seconds" });
 ```
 
-Its entry in `nodes` is an `Output`. For a function per item, use `sst.many(sst.deferred(sst.aws.FunctionV5))` and pass an ID.
+Its entry in `nodes` is an `Output`. For a function per item, use `sst.many(sst.deferred(sst.aws.v5.Function))` and pass an ID.
 
 ---
 
@@ -193,12 +193,12 @@ The key is what's written in `transform`, `existing` and `nodes`. The name is ho
 
 ### Another component as a part
 
-A part can be another component, like a [`FunctionV5`](/docs/component/aws/function-v5/) or a component of your own.
+A part can be another component, like a [`sst.aws.v5.Function`](/docs/component/aws/v5/function/) or a component of your own.
 
 ```ts
 const parts = {
   table: aws.dynamodb.Table,
-  cleanup: sst.aws.CronV2V5,
+  cleanup: sst.aws.v5.CronV2,
 };
 ```
 
@@ -292,7 +292,7 @@ class Uploads extends sst.component("acme:Uploads", parts) {
 The `properties` are readable at runtime as `Resource.Docs.name`. And `include` is what a function that links it is granted: AWS permissions with `sst.aws.permission()`, Cloudflare bindings with `sst.cloudflare.binding()`, and environment variables with `sst.env()`.
 
 ```ts title="sst.config.ts"
-new sst.aws.FunctionV5("Api", {
+new sst.aws.v5.Function("Api", {
   handler: "src/api.handler",
   link: [uploads],
 });

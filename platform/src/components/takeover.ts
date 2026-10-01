@@ -66,7 +66,7 @@ const takeovers = new Map<string, Takeover<any, any>>();
  *
  * @example
  * ```ts
- * takeover(RedisV5, {
+ * takeover(Redis, {
  *   from: "sst:aws:Redis",
  *   moved: {
  *     // The key this part had

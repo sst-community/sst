@@ -1,10 +1,10 @@
 import { takeover } from "../../takeover";
-import { MysqlV5 } from "../mysql-v5";
+import { Mysql } from "../v5/mysql";
 
-takeover(MysqlV5, {
+takeover(Mysql, {
   from: "sst:aws:Mysql",
   moved: {
-    // `Mysql` calls the secret with the master user's credentials the
+    // The 4.x `Mysql` calls the secret with the master user's credentials the
     // "proxy" secret, though it's created without a proxy too
     secret: "proxySecret",
     secretVersion: "proxySecretVersion",

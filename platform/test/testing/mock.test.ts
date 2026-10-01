@@ -16,7 +16,7 @@ describe("mock()", () => {
     expect($app).toMatchObject({ name: "acme", stage: "dev" });
     expect($dev).toBe(false);
     expect(typeof sst.component).toBe("function");
-    expect(typeof sst.aws.FunctionV5).toBe("function");
+    expect(typeof sst.aws.v5.Function).toBe("function");
     expect((globalThis as any).aws.s3.Bucket.name).toBe("Bucket");
     expect((globalThis as any).cloudflare.R2Bucket.name).toBe("R2Bucket");
     for (const name of [
@@ -65,7 +65,7 @@ describe("mock()", () => {
 
   it("gives a linked function the component's permissions", async () => {
     const uploads = new Uploads("Docs", { teams: [] });
-    new sst.aws.FunctionV5("Api", {
+    new sst.aws.v5.Function("Api", {
       handler: "src/api.handler",
       link: [uploads],
     });
@@ -82,7 +82,7 @@ describe("mock()", () => {
   it("deploys a function's stub in sst dev", async () => {
     (globalThis as any).$dev = true;
     try {
-      new sst.aws.FunctionV5("Api", {
+      new sst.aws.v5.Function("Api", {
         handler: "src/api.handler",
         runtime: "nodejs22.x",
       });
