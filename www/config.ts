@@ -33,6 +33,9 @@ export default {
   // The sst-community fork, for the site's own GitHub links. `github` stays
   // upstream's: example links are built from it with its `dev` branch.
   fork: "https://github.com/sst-community/sst",
+  // The sst-community Discord server. `discord` stays SST's: the migration
+  // guides send readers to channels there.
+  forkDiscord: "https://discord.gg/DQWT3WGVm2",
   discord: "https://sst.dev/discord",
   twitter: "https://x.com/SST_dev",
   youtube: "https://www.youtube.com/c/sst-dev",

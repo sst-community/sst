@@ -9,7 +9,7 @@ Build full-stack apps on your own infrastructure.
 > [!NOTE]
 > **sst-community** is a community-maintained fork of [SST](https://github.com/anomalyco/sst). It is not affiliated with SST or Anomaly. It tracks upstream releases and carries fixes that haven't landed upstream yet.
 >
-> Releases are numbered after the upstream line they're based on: `4.17.x` is based on upstream 4.17. Each release's notes list what it changes. Telemetry is off. Docs: [sst-community.github.io/sst](https://sst-community.github.io/sst/docs/).
+> Releases are numbered after the upstream line they're based on: `4.17.x` is based on upstream 4.17. Each release's notes list what it changes. Telemetry is off. Docs: [sst-community.github.io/sst](https://sst-community.github.io/sst/docs/). Chat: [Discord](https://discord.gg/DQWT3WGVm2).
 
 ## Installation
 
@@ -83,4 +83,4 @@ For building the docs, run `bun run docs:generate` and `bun run docs:dev`.
 
 ---
 
-**Found a bug or have a question about the fork?** [Open an issue](https://github.com/sst-community/sst/issues). For SST itself, see [anomalyco/sst](https://github.com/anomalyco/sst).
+**Found a bug or have a question about the fork?** [Open an issue](https://github.com/sst-community/sst/issues) or ask on [Discord](https://discord.gg/DQWT3WGVm2). For SST itself, see [anomalyco/sst](https://github.com/anomalyco/sst).

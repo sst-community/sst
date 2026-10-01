@@ -1,6 +1,8 @@
 ---
 // Home page for the sst-community docs site. The branch diagram shows the
 // fork's line leaving SST's release line, one commit per change the fork makes.
+import config from "../../config";
+
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const repo = "https://github.com/sst-community/sst";
 const command = "npm install sst@npm:@sst-community/sst";
@@ -46,6 +48,7 @@ const changes = [
       <a class="fl-button" href={`${base}/docs/`}>Read the docs</a>
       <a class="fl-link" href={`${repo}/releases`}>Releases</a>
       <a class="fl-link" href={repo}>GitHub</a>
+      <a class="fl-link" href={config.forkDiscord}>Discord</a>
     </div>
   </div>
 

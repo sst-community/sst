@@ -352,7 +352,10 @@ export default defineConfig({
         "./src/styles/tsdoc.css",
         "./src/styles/heading.css",
       ],
-      social: [{ icon: "github", label: "GitHub", href: config.fork }],
+      social: [
+        { icon: "github", label: "GitHub", href: config.fork },
+        { icon: "discord", label: "Discord", href: config.forkDiscord },
+      ],
       editLink: {
         baseUrl: "https://github.com/sst-community/sst/edit/main/www",
       },
