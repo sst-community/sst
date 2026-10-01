@@ -8,7 +8,7 @@
   "scripts": {
     "setup": "bun install && go mod tidy && bun run build:platform && bun run build:sdk",
     "build:platform": "bun run --filter @sst/platform build",
-    "build:cli": "go build ./cmd/sst",
+    "build:cli": "go build -ldflags \"-X github.com/sst/sst/v3/cmd/sst/mosaic/ui.Distribution=sst-community-v5\" -o dist/sst5 ./cmd/sst",
     "build:sdk": "bun run --cwd ./sdk/js build",
     "test:cli": "go test ./...",
     "typecheck": "bun run typecheck:platform && bun run typecheck:sdk",
