@@ -4,7 +4,9 @@ import { mockPulumi } from "../helpers/graph";
 
 mockPulumi();
 
-// Every V5 component: a `*-v5.ts` file next to the component it replaces
+// Every V5 component: a `*-v5.ts` file next to the component it replaces. Its
+// docs page and sidebar entry are found by that name too. What's still
+// written by hand for each one is checked here.
 const dir = new URL("../../src/components/aws/", import.meta.url);
 const files = fs.readdirSync(dir).filter((file) => file.endsWith("-v5.ts"));
 
@@ -37,12 +39,16 @@ describe("V5 components", () => {
     // needs a map in `aws/takeover/`, imported from its `index.ts`.
     it("takes over from the component it replaces", () => {
       expect(type).toMatch(/V5$/);
-      expect(takeoverOf(type)?.from).toBe(type.slice(0, -2));
+      expect(
+        takeoverOf(type)?.from,
+        `Write aws/takeover/<name>.ts and import it from aws/takeover/index.ts`,
+      ).toBe(type.slice(0, -2));
     });
 
     it("is exported from sst.aws", () => {
       const index = fs.readFileSync(new URL("index.ts", dir), "utf8");
-      expect(index).toContain(`export * from "./${file.slice(0, -3)}.js";`);
+      const line = `export * from "./${file.slice(0, -3)}.js";`;
+      expect(index, `Add \`${line}\` to aws/index.ts`).toContain(line);
     });
 
     // What came before belongs in the takeover map. The component's code

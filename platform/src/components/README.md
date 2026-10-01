@@ -445,8 +445,8 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
    has: object transforms are merged, and `$transform` for the original doesn't apply.
    Document each part where it's declared: those comments become the `transform`,
    `existing` and `nodes` docs.
-7. Add the file to the `entryPoints` in `www/generate.ts` and to the "V5" group in
-   `www/astro.config.mjs`. `cd www && bun ./generate.ts components` generates the page.
+7. `cd www && bun ./generate.ts components` generates the page. The docs generator and
+   the sidebar find a `*-v5.ts` file by its name, so there's nothing to add to either.
 8. Typecheck, run the tests, and `bun run build:cli` from the repo root.
 9. Review before calling it done. Read the original's constructor and the new one side
    by side, resource by resource: args, options, names, what's read back. Then read the

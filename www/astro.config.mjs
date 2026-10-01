@@ -3,6 +3,7 @@ import starlight from "@astrojs/starlight";
 import sitemap from "@astrojs/sitemap";
 import config from "./config";
 import forkLinks from "./src/fork-links.mjs";
+import { v5Components } from "./src/v5-components.mjs";
 import { rehypeHeadingIds } from "@astrojs/markdown-remark";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 
@@ -132,24 +133,7 @@ const sidebar = [
           {
             label: "V5",
             collapsed: true,
-            items: [
-              "docs/component/aws/apigatewayv2-v5",
-              "docs/component/aws/app-sync-v5",
-              "docs/component/aws/aurora-v5",
-              "docs/component/aws/bucket-v5",
-              "docs/component/aws/cognito-user-pool-v5",
-              "docs/component/aws/cognito-user-pool-client-v5",
-              "docs/component/aws/cron-v2-v5",
-              "docs/component/aws/dsql-v5",
-              "docs/component/aws/dynamo-v5",
-              "docs/component/aws/function-v5",
-              "docs/component/aws/mysql-v5",
-              "docs/component/aws/postgres-v5",
-              "docs/component/aws/queue-v5",
-              "docs/component/aws/redis-v5",
-              "docs/component/aws/sns-topic-v5",
-              "docs/component/aws/task-v5",
-            ],
+            items: v5Components().map((name) => `docs/component/aws/${name}`),
           },
           {
             label: "Internal",
