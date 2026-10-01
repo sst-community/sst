@@ -300,6 +300,76 @@ describe("DynamoV5", () => {
       });
     });
 
+    // Dynamo creates a subscriber's component at the top of the app, wherever
+    // the table is. DynamoV5 keeps the subscriber inside the table.
+    it("a subscriber of a table inside another component", async () => {
+      const { ComponentResource } = await import("@pulumi/pulumi");
+      class Storage extends ComponentResource {
+        constructor(name: string) {
+          super("test:Storage", name);
+        }
+      }
+      const result = await pulumi.takesOver(
+        () =>
+          new Dynamo("MyTable", streaming, {
+            parent: new Storage("Storage"),
+          }).subscribe("Indexer", "src/indexer.handler"),
+        () =>
+          new DynamoV5("MyTable", streaming, {
+            parent: new Storage("Storage"),
+          }).subscribe("Indexer", "src/indexer.handler"),
+      );
+
+      expect(result.unclaimed).toEqual([`${WRAPPER}::MyTableSubscriberIndexer`]);
+      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
+        ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
+      ]);
+      expect(resource("MyTableEventSourceMappingIndexer").parent).toMatch(
+        /\$sst:aws:DynamoV5::MyTable$/,
+      );
+    });
+
+    // A table created with a provider, for another region or account, gives
+    // it to its subscribers. Dynamo passes it to each subscriber's component.
+    it("a table and subscriber deployed with another provider", async () => {
+      const { Provider } = await import("@pulumi/aws");
+      const providerOf = (name: string) =>
+        resource(name).options.provider as string;
+
+      new Dynamo("MyTable", streaming, {
+        provider: new Provider("West", { region: "us-west-2" }),
+      }).subscribe("Indexer", "src/indexer.handler");
+      await pulumi.settle();
+      const west = providerOf("MyTableTable");
+      expect(west).toMatch(/::West::/);
+      expect([
+        providerOf("MyTableSubscriberIndexerEventSourceMapping"),
+        providerOf("MyTableSubscriberIndexerFunctionFunction"),
+        providerOf("MyTableSubscriberIndexerFunctionRole"),
+      ]).toEqual([west, west, west]);
+      const before = pulumi
+        .graph()
+        .filter((r) => !r.type.startsWith("pulumi:providers:"));
+
+      pulumi.reset();
+      new DynamoV5("MyTable", streaming, {
+        provider: new Provider("West", { region: "us-west-2" }),
+      }).subscribe("Indexer", "src/indexer.handler");
+      await pulumi.settle();
+
+      const result = pulumi.takeover(before);
+      expect(result.unclaimed).toEqual([`${WRAPPER}::MyTableSubscriberIndexer`]);
+      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
+        ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
+      ]);
+      expect([
+        providerOf("MyTableTable"),
+        providerOf("MyTableEventSourceMappingIndexer"),
+        providerOf("MyTableSubscriberIndexerFunction"),
+        providerOf("MyTableSubscriberIndexerRole"),
+      ]).toEqual([west, west, west, west]);
+    });
+
     // The static `subscribe` only has a stream ARN, so it names the
     // subscriber's component after the table in it. A DynamoV5 that
     // references that table takes the subscriber over, whatever it's called.

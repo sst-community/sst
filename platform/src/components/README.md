@@ -308,6 +308,9 @@ await pulumi.expectTakeover(
 ```
 
 - Cover every realistic combination of args, and every kind of thing the component adds.
+- Include the component inside another component (`{ parent }`) and with a `provider`.
+  4.x often created a wrapper at the top of the app with only the provider, wherever
+  the component was.
 - When something is expected to change, use `pulumi.takesOver()` and assert exactly what:
   `changed.map((c) => [c.name, c.fields])`. Don't loosen the assertion.
 - `await pulumi.settle()` after creating resources in every test, or they leak into the

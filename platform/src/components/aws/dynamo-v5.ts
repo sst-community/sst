@@ -37,7 +37,9 @@ export interface DynamoV5Args extends V5Args<DynamoArgs, typeof parts> {}
 export interface DynamoV5SubscriberArgs
   extends Omit<DynamoSubscriberArgs, "transform"> {}
 
-const FIELD_TYPES = { string: "S", number: "N", binary: "B" };
+// A field of any other type is created as binary, as `Dynamo` creates it
+const fieldType = (type: string) =>
+  type === "string" ? "S" : type === "number" ? "N" : "B";
 
 type Projection = "all" | "keys-only" | string[];
 type IndexKey = string | string[];
@@ -200,7 +202,7 @@ export class DynamoV5 extends component("sst:aws:DynamoV5", parts) {
       attributes: output(args.fields).apply((fields) =>
         Object.entries(fields).map(([name, type]) => ({
           name,
-          type: FIELD_TYPES[type],
+          type: fieldType(type),
         })),
       ),
       billingMode: "PAY_PER_REQUEST",
