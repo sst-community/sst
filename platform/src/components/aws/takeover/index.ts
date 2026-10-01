@@ -19,5 +19,6 @@ import "./mysql";
 import "./postgres";
 import "./queue";
 import "./redis";
+import "./service";
 import "./sns-topic";
 import "./task";

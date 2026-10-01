@@ -302,7 +302,7 @@ new sst.aws.v5.Function("Api", {
 
 ## Dev mode
 
-If your component runs something locally in `sst dev` and deploys nothing, say so in one place in the constructor. Call `this.runsLocally()` and return before creating any parts.
+If your component runs something locally in `sst dev` and isn't deployed, say so in one place in the constructor. Call `this.runsLocally()` and return before creating the parts that aren't deployed there.
 
 ```ts
 if ($dev) {
@@ -311,7 +311,7 @@ if ($dev) {
 }
 ```
 
-Reading `nodes` then explains why the resource isn't there.
+Reading `nodes` then explains why the resource isn't there. A part you create all the same, like the role the local process runs as, is in `nodes` as usual.
 
 ---
 

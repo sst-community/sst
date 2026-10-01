@@ -341,7 +341,9 @@ export class PartsComponent<P extends Parts> extends Component {
    * locally there. Reading `nodes` then explains why a resource is missing.
    *
    * Call it in the one place the component handles dev mode, and return
-   * before creating any parts.
+   * before creating the parts that aren't deployed there. A part that's
+   * created all the same, like the role the local process runs as, is in
+   * `nodes` as usual.
    */
   protected runsLocally() {
     this.runningLocally = true;
@@ -488,14 +490,14 @@ export class PartsComponent<P extends Parts> extends Component {
   }
 
   private nodeOf(key: string) {
-    if (this.runningLocally)
+    const part = this.partClasses[key];
+    const created = this.partNodes[key];
+    const deferred = this.partDeferred[key];
+    if (this.runningLocally && created === undefined && deferred === undefined)
       throw new VisibleError(
         `Cannot access \`nodes.${key}\` of "${this.componentName}" in \`sst dev\`. It runs locally there, so the resource isn't created.`,
       );
 
-    const part = this.partClasses[key];
-    const created = this.partNodes[key];
-    const deferred = this.partDeferred[key];
     if (!isMany(part)) return deferred ? deferred() : created;
     // Held by id on an object with no prototype, so `id in nodes.route` is
     // only true for a route that exists, whatever the id is.

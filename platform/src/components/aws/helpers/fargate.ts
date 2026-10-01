@@ -49,7 +49,7 @@ import { imageBuilder } from "./container-builder";
 export type Container = Omit<FargateContainerArgs, "name"> & {
   name: string;
   health?: ServiceArgs["health"];
-  dev?: unknown;
+  dev?: ServiceArgs["dev"];
 };
 
 /** What a task or service says about its containers. */
@@ -66,7 +66,7 @@ type ContainersArgs = Pick<
 > & {
   containers?: Container[];
   health?: ServiceArgs["health"];
-  dev?: unknown;
+  dev?: ServiceArgs["dev"];
 };
 
 /**

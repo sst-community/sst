@@ -127,6 +127,10 @@ the component reads its args.
   on something that's only known on deploy: another component's output, or the result of
   a build. Declare it `optional` or `many`. It's added to `nodes` when it's created, so
   say that in its doc comment. Do this only when a plain arg can't decide it.
+  If people read it from `nodes` in their config, declare it `deferred` instead, so its
+  entry is an output that's there from the start. The V5 `Service` does this for its
+  Cloud Map service, which exists only when the cluster's VPC has a namespace: it
+  creates it with `this.partHandle()`, and supplies the `nodes` entry with `defer()`.
 - **A part is created once.** Creating it a second time is an error.
 - **`this.existingPart(key)`** returns the resource the user passed in `existing`, when
   the component has to do something different for a resource it didn't create.
@@ -167,7 +171,12 @@ the component reads its args.
   cast to the args type.
 - **A check that needs a deployed value** goes in the output that everything depending
   on it reads, so the error stops what would have used it. The V5 `Dynamo` checks that
-  the table's stream is enabled inside the stream ARN its subscribers are given.
+  the table's stream is enabled inside the stream ARN its subscribers are given, and
+  the V5 `Service` checks that an `Alb` is in the cluster's VPC inside the VPC id its
+  target groups are given.
+- **An arg a resource is named after is plain all the way down.** A rule of a service's
+  load balancer is: its listener rule is named after its conditions. Check it with
+  `plainDeep(value, what)`.
 
 ## Linking, dev mode, naming
 
@@ -175,10 +184,12 @@ the component reads its args.
   `Resource.<Name>`) and `include` (`sst.aws.permission()`, `sst.cloudflare.binding()`,
   `sst.env()`). For compute SST doesn't manage, `sst.aws.iamStatements(links)` gives the
   IAM statements and `sst.Linkable.env(links)` the environment variables.
-- **Dev mode.** If the component runs locally in `sst dev` and creates nothing, handle
+- **Dev mode.** If the component runs locally in `sst dev` and isn't deployed, handle
   that in one place in the constructor: call `this.runsLocally()` and return before
-  creating parts. Reading `nodes` then explains why the resource is missing. Keep the
-  values the getters return in one object so the getters don't branch on dev.
+  creating the parts that aren't deployed. Reading `nodes` then explains why a resource
+  is missing. A part that's created all the same is in `nodes` as usual, like the role
+  a service's containers run as on the user's machine. Keep the values the getters
+  return in one object so the getters don't branch on dev.
 - **Physical names.** SST knows how to name the resource types its own components use.
   For another type, `sst.Component.naming("aws:athena/workgroup:Workgroup", { field:
   "name", max: 128 })`, or `false` to leave it to the provider. A resource that's looked
@@ -264,6 +275,7 @@ Everything above applies. The rest is specific to SST's own components in
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
 | An arg that must not be an output | `plain(value, what)` in `args.ts` |
+| An arg that must not have an output anywhere inside it | `plainDeep(value, what)` in `args.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |
 
 A helper returns the args of a part, or checks an arg. The component still creates
@@ -353,6 +365,11 @@ takeover(ApiGatewayV2, {
   that an object in `transform` is merged, and that a `$transform` for the original
   applies. The original is the component of the same name, one folder up. Don't write
   them in the class doc.
+- Something 4.x created outside the component with nothing in AWS behind it needs no
+  old address. The 4.x `Service` creates a `DevCommand` at the top of the app for each
+  container; in the V5 one they're parts, and a switch lists the old ones as removed
+  and the new ones as created. Expect them in `unclaimed`, and say so in the "Switch
+  from" section.
 - A function's `description` usually changes, because 4.x named the wrapper in it. That's
   an in-place update. So does anything else made from the function's name when a
   function part gets a new one: a URL behind a `Router` is registered under a key made
@@ -374,6 +391,10 @@ takeover(ApiGatewayV2, {
 Also check for an **ordering guarantee** the original makes with an
 `x.apply(() => resource)` wrapper, and keep it. The 4.x `Bucket` makes everything that
 reads `bucket.name` wait for the bucket policy; the V5 one keeps that in its getters.
+Where the original left an order to chance, and parts that are created directly make
+it easy to say, say it with `dependsOn`: the V5 `Service` makes the ECS service wait
+for the listeners that put its target groups on the load balancer. That changes
+nothing a deploy does to what's already there.
 
 ### Tests
 
@@ -506,7 +527,10 @@ optional group of parts (the proxy) and a part per item in a list; `aurora.ts` f
 `get` that finds the rest of what it references, and a transform that applies to more
 than one part; `dsql.ts` for parts in another region, and features that each add a
 group of parts; `task.ts` for parts per item of a plain list (containers), a part
-that's built later, a stub in `sst dev`, and outputs the CLI reads; `cron-v2.ts` for a
+that's built later, a stub in `sst dev`, and outputs the CLI reads; `service.ts` for
+groups of parts that depend on an arg (a load balancer of its own, or one it
+shares), parts made from a plain list of rules, a part that's read from `nodes` and
+only exists sometimes, and a part that's created in `sst dev` too; `cron-v2.ts` for a
 function the component may be given or may create, next to another component it's
 given (a `Task`); `dynamo.ts` for required args next to `get`, and a static method
 replaced by `get`; `function.ts` for a component 4.x built almost entirely inside

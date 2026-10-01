@@ -82,6 +82,24 @@ export function plain<T>(value: T, what: string): T {
 }
 
 /**
+ * Check that an arg is plain all the way down: the value, and everything
+ * inside it. This is for an arg a resource is named after, like the
+ * conditions of a load balancer rule.
+ *
+ * ```ts
+ * plainDeep(rule, `Rule ${i + 1} of the "${name}" service`);
+ * ```
+ *
+ * @param what The arg, as the start of the error message.
+ */
+export function plainDeep<T>(value: T, what: string): T {
+  plain(value, what);
+  if (value && typeof value === "object")
+    for (const inner of Object.values(value)) plainDeep(inner, what);
+  return value;
+}
+
+/**
  * Fail when a method is given an option it doesn't take, saying what to use
  * instead. The types flag this too, but a config runs without being
  * type-checked, and the option would be dropped without a word.

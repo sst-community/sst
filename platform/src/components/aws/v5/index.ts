@@ -17,5 +17,6 @@ export * from "./mysql";
 export * from "./postgres";
 export * from "./queue";
 export * from "./redis";
+export * from "./service";
 export * from "./sns-topic";
 export * from "./task";

@@ -301,6 +301,46 @@ describe("Component parts", () => {
     expect(bucket).toBeInstanceOf(aws.s3.Bucket);
   });
 
+  it("keeps a part it creates in sst dev in nodes, and explains the rest", async () => {
+    const parts = { role: aws.iam.Role, bucket: aws.s3.Bucket };
+    class Worker extends component("acme:Worker", parts) {
+      constructor(name: string) {
+        super(name, {});
+        // What runs on the user's machine in `sst dev` runs as this role
+        this.part("role", {
+          assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({
+            Service: "ecs-tasks.amazonaws.com",
+          }),
+        });
+        this.runsLocally();
+      }
+    }
+    const worker = new Worker("Jobs");
+    await pulumi.settle();
+
+    expect(worker.nodes.role.urn).toBeDefined();
+    expect(() => worker.nodes.bucket).toThrow(
+      /Cannot access `nodes.bucket` of "Jobs" in `sst dev`. It runs locally there/,
+    );
+  });
+
+  it("checks that an arg is plain all the way down", async () => {
+    const { plainDeep } = await import("../../src/components/args");
+    const rule = { listen: "80/http", conditions: { query: [{ value: "v1" }] } };
+
+    expect(plainDeep(rule, "The rule")).toBe(rule);
+    expect(plainDeep(undefined, "The rule")).toBe(undefined);
+    expect(() => plainDeep(output(rule), "The rule")).toThrow(
+      /The rule has to be a plain value, not an output/,
+    );
+    expect(() =>
+      plainDeep(
+        { ...rule, conditions: { query: [{ value: output("v1") }] } },
+        "The rule",
+      ),
+    ).toThrow(/The rule has to be a plain value/);
+  });
+
   describe("many parts", () => {
     function defineNetwork() {
       const parts = {
