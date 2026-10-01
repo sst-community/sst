@@ -1,30 +1,12 @@
 ---
-// Home page for the sst-community docs site. The branch diagram shows the
-// fork's line leaving SST's release line, one commit per change the fork makes.
+// Home page for the sst-community docs site. The right-hand column is how to
+// switch a project from SST. It names no versions or fixes, so it doesn't need
+// editing when a release is made; what a release changes is in its notes.
 import config from "../../config";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const repo = "https://github.com/sst-community/sst";
 const command = "npm install sst@npm:@sst-community/sst";
-
-const changes = [
-  {
-    title: "sst dev keeps its connection",
-    body: "Before forwarding an invocation, the dev bridge checks its subscription is live and reconnects if it isn't. Responses aren't lost after a function sits idle or on cold starts.",
-  },
-  {
-    title: "Stages stop breaking each other",
-    body: "Removing or redeploying one stage no longer deletes the dev bridge zip that every other stage in the account shares.",
-  },
-  {
-    title: "Log lines say which function",
-    body: "The sst dev UI tags each function's output with its name and gives concurrent invocations their own color.",
-  },
-  {
-    title: "No telemetry",
-    body: "Fork builds don't send usage data anywhere.",
-  },
-];
 ---
 
 <section class="fl" aria-labelledby="fl-title">
@@ -40,10 +22,6 @@ const changes = [
       <code class="fl-command">npm install <span class="fl-nowrap">sst@npm:@sst-community/sst</span></code>
       <button type="button" class="fl-copy" data-copy={command}>Copy</button>
     </div>
-    <p class="fl-note">
-      Switching a project? Set <code>"sst": "npm:@sst-community/sst@&lt;version&gt;"</code> and reinstall.
-    </p>
-
     <div class="fl-actions">
       <a class="fl-button" href={`${base}/docs/`}>Read the docs</a>
       <a class="fl-link" href={`${repo}/releases`}>Releases</a>
@@ -52,31 +30,43 @@ const changes = [
     </div>
   </div>
 
-  <figure class="fl-graph">
-    <figcaption class="fl-caption">What the fork adds on top of SST</figcaption>
-    <ol class="fl-log">
-      <li class="fl-row fl-row-tag">
-        <span class="fl-lane" aria-hidden="true"></span>
-        <span class="fl-dot" aria-hidden="true"></span>
-        <p class="fl-row-title">sst-community release</p>
-        <p class="fl-row-body">Published to npm as <code>@sst-community/sst</code>.</p>
+  <div class="fl-switch">
+    <h2 id="fl-switch-title" class="fl-caption">Switch a project from SST</h2>
+    <ol class="fl-steps" aria-labelledby="fl-switch-title">
+      <li class="fl-step">
+        <p class="fl-step-title">Run the install in your project</p>
+        <p class="fl-step-body">
+          One line of <code>package.json</code> changes. Your imports and your
+          <code>sst.config.ts</code> stay as they are.
+        </p>
+        <figure class="fl-diff">
+          <figcaption>package.json</figcaption>
+          <pre><span class="fl-del"><span class="fl-sign" aria-hidden="true">-</span><span>"sst": <span class="fl-val">"<i>&lt;version&gt;</i>"</span></span></span>
+<span class="fl-add"><span class="fl-sign" aria-hidden="true">+</span><span>"sst": <span class="fl-val">"<b>npm:@sst-community/sst@</b><i>&lt;version&gt;</i>"</span></span></span></pre>
+        </figure>
+        <p class="fl-step-body">
+          With pnpm, bun or yarn, use <code>add</code> in place of <code>install</code>.
+        </p>
       </li>
-      {changes.map((change) => (
-        <li class="fl-row">
-          <span class="fl-lane" aria-hidden="true"></span>
-          <span class="fl-dot" aria-hidden="true"></span>
-          <p class="fl-row-title">{change.title}</p>
-          <p class="fl-row-body">{change.body}</p>
-        </li>
-      ))}
-      <li class="fl-row fl-row-upstream">
-        <span class="fl-branch" aria-hidden="true"></span>
-        <span class="fl-dot" aria-hidden="true"></span>
-        <p class="fl-row-title">SST release</p>
-        <p class="fl-row-body">Each fork release starts from one and keeps its version line: sst-community 4.17.x is built on SST 4.17.</p>
+      <li class="fl-step">
+        <p class="fl-step-title">Check which CLI runs</p>
+        <p class="fl-step-body">
+          <code>npx sst version</code> ends in <code>(sst-community)</code>.
+        </p>
+      </li>
+      <li class="fl-step">
+        <p class="fl-step-title">Deploy as before</p>
+        <p class="fl-step-body">
+          The fork reads the same config and the same state, so <code>sst dev</code> and
+          <code>sst deploy</code> carry on where you left off. <code>sst upgrade</code>
+          keeps you on the fork.
+        </p>
       </li>
     </ol>
-  </figure>
+    <p class="fl-back">
+      To go back to SST, run <code>npm install sst@latest</code>.
+    </p>
+  </div>
 </section>
 
 <script>
@@ -108,10 +98,7 @@ const changes = [
     --fl-rule: var(--sl-color-gray-5);
     --fl-panel: var(--sl-color-gray-6);
 
-    --fl-lane-up: 0.5rem;
-    --fl-lane-fork: 1.75rem;
-    --fl-dot-y: 0.72rem;
-    --fl-dot: 0.625rem;
+    --fl-gutter: 2.75rem;
 
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -234,16 +221,6 @@ const changes = [
   .fl-copy:hover {
     color: var(--fl-ink);
   }
-  .fl-note {
-    margin-top: 0.75rem !important;
-    max-width: 34rem;
-    font-size: 0.875rem;
-    color: var(--fl-muted);
-  }
-  .fl-note code {
-    overflow-wrap: anywhere;
-  }
-
   .fl-actions {
     display: flex;
     flex-wrap: wrap;
@@ -277,129 +254,156 @@ const changes = [
     outline-offset: 3px;
   }
 
-  /* Branch diagram */
-  .fl-graph {
-    margin: 0;
-  }
+  /* Switch steps */
   .fl-caption {
+    margin: 0 0 1.25rem !important;
     font-family: var(--sl-font-mono);
     font-size: 0.8rem;
+    font-weight: 400;
+    line-height: 1.5;
     color: var(--fl-muted);
-    margin-bottom: 1.25rem;
   }
-  .fl-log {
-    position: relative;
+  .fl-steps {
     margin: 0;
     padding: 0;
     list-style: none;
+    counter-reset: fl-step;
   }
-  /* SST's line runs the full height, dashed where it continues without the fork. */
-  .fl-log::before {
-    content: "";
-    position: absolute;
-    top: var(--fl-dot-y);
-    bottom: 0;
-    left: calc(var(--fl-lane-up) - 1px);
-    border-left: 2px dashed color-mix(in srgb, var(--fl-upstream) 45%, transparent);
-  }
-  .fl-row {
+  .fl-step {
     position: relative;
     margin: 0 !important;
-    padding: 0 0 1.35rem 3rem;
+    padding: 0 0 1.6rem var(--fl-gutter);
+    counter-increment: fl-step;
   }
-  .fl-row-title {
+  .fl-step:last-child {
+    padding-bottom: 0;
+  }
+  .fl-step::before {
+    content: counter(fl-step);
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1.5rem;
     font-family: var(--sl-font-mono);
     font-size: 0.95rem;
     font-weight: 500;
     line-height: 1.5;
+    text-align: center;
+    color: var(--fl-fork);
+  }
+  /* A rule from each number down to the next. */
+  .fl-step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: 1.9rem;
+    bottom: 0.4rem;
+    left: calc(0.75rem - 0.5px);
+    width: 1px;
+    background: var(--fl-rule);
+  }
+  .fl-step-title {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.45;
     color: var(--fl-ink);
   }
-  .fl-row-body {
-    margin-top: 0.2rem !important;
+  .fl-step-body {
+    margin-top: 0.3rem !important;
     font-size: 0.9rem;
     line-height: 1.55;
     color: var(--fl-muted);
   }
-  .fl-row-body code {
+  .fl-step-body code,
+  .fl-back code {
     color: var(--fl-text);
   }
 
-  .fl-dot {
-    position: absolute;
-    top: calc(var(--fl-dot-y) - var(--fl-dot) / 2);
-    left: calc(var(--fl-lane-fork) - var(--fl-dot) / 2);
-    width: var(--fl-dot);
-    height: var(--fl-dot);
-    border-radius: 50%;
-    background: var(--fl-fork);
-    box-shadow: 0 0 0 3px var(--sl-color-black);
+  /* The one line that changes. */
+  .fl-diff {
+    margin: 0.9rem 0 0.8rem;
+    border: 1px solid var(--fl-rule);
+    border-radius: 0.5rem;
+    background: var(--fl-panel);
+    overflow: hidden;
   }
-  .fl-row-tag .fl-dot {
-    border-radius: 2px;
-    transform: rotate(45deg) scale(1.15);
+  .fl-diff figcaption {
+    padding: 0.45rem 0.9rem;
+    border-bottom: 1px solid var(--fl-rule);
+    font-family: var(--sl-font-mono);
+    font-size: 0.75rem;
+    color: var(--fl-muted);
   }
-  .fl-row-tag .fl-row-title {
+  .fl-diff pre {
+    margin: 0;
+    padding: 0.5rem 0;
+    border: 0;
+    background: none;
+    font-family: var(--sl-font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.7;
+    white-space: normal;
+  }
+  .fl-del,
+  .fl-add {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.05rem 0.9rem;
+    overflow-wrap: anywhere;
+  }
+  .fl-sign {
+    flex: none;
+  }
+  /* On a narrow screen the value drops to its own line before it breaks. */
+  .fl-val {
+    display: inline-block;
+    max-width: 100%;
+  }
+  .fl-del {
+    color: var(--fl-muted);
+  }
+  .fl-add {
+    color: var(--fl-ink);
+    background: color-mix(in srgb, var(--fl-fork) 9%, transparent);
+  }
+  .fl-add .fl-sign,
+  .fl-add b {
+    font-weight: inherit;
     color: var(--fl-fork);
   }
-
-  /* The fork's line: from each commit down to the next. */
-  .fl-lane {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: calc(var(--fl-lane-fork) - 1px);
-    width: 2px;
-    background: var(--fl-fork);
-    transform-origin: bottom;
+  .fl-diff i {
+    font-style: normal;
+    color: var(--fl-muted);
   }
-  .fl-row-tag .fl-lane {
-    top: var(--fl-dot-y);
-  }
-
-  /* Where the fork leaves SST's line. */
-  .fl-row-upstream {
-    padding-bottom: 0;
-  }
-  .fl-row-upstream .fl-dot {
-    left: calc(var(--fl-lane-up) - var(--fl-dot) / 2);
-    background: var(--fl-upstream);
-  }
-  .fl-branch {
-    position: absolute;
-    top: 0;
-    left: var(--fl-lane-up);
-    width: calc(var(--fl-lane-fork) - var(--fl-lane-up) + 1px);
-    height: var(--fl-dot-y);
-    border-right: 2px solid var(--fl-fork);
-    border-bottom: 2px solid var(--fl-fork);
-    border-bottom-right-radius: 0.75rem;
-    transform-origin: left bottom;
-  }
-  .fl-row-upstream .fl-row-title {
-    color: var(--fl-upstream);
-  }
-
-  /* Draw the fork's line up from where it leaves SST, once, on load. */
-  @media (prefers-reduced-motion: no-preference) {
-    .fl-branch,
-    .fl-lane,
-    .fl-dot {
-      animation: fl-grow 420ms cubic-bezier(0.3, 0.7, 0.2, 1) both;
+  /* Phones: tighter, so the new value fits on one line under its key. */
+  @media (max-width: 30rem) {
+    .fl {
+      --fl-gutter: 2rem;
     }
-    .fl-lane {
-      animation-name: fl-draw;
+    .fl-diff pre {
+      font-size: 0.75rem;
     }
-    .fl-row:nth-last-child(1) > * { animation-delay: 0ms; }
-    .fl-row:nth-last-child(2) > * { animation-delay: 140ms; }
-    .fl-row:nth-last-child(3) > * { animation-delay: 280ms; }
-    .fl-row:nth-last-child(4) > * { animation-delay: 420ms; }
-    .fl-row:nth-last-child(5) > * { animation-delay: 560ms; }
-    .fl-row:nth-last-child(6) > * { animation-delay: 700ms; }
+    .fl-diff figcaption,
+    .fl-del,
+    .fl-add {
+      padding-inline: 0.7rem;
+    }
+    .fl-del,
+    .fl-add {
+      gap: 0.6rem;
+    }
   }
-  @keyframes fl-draw {
-    from { transform: scaleY(0); }
+  @media (max-width: 22rem) {
+    .fl-val {
+      display: inline;
+    }
   }
-  @keyframes fl-grow {
-    from { opacity: 0; }
+
+  .fl-back {
+    margin-top: 1.6rem !important;
+    padding: 1rem 0 0 var(--fl-gutter);
+    border-top: 1px solid var(--fl-rule);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    color: var(--fl-muted);
   }
 </style>
