@@ -130,6 +130,21 @@ const sidebar = [
           "docs/component/aws/cognito-identity-pool",
           "docs/component/aws/apigateway-websocket",
           {
+            label: "V5",
+            collapsed: true,
+            items: [
+              "docs/component/aws/apigatewayv2-v5",
+              "docs/component/aws/app-sync-v5",
+              "docs/component/aws/bucket-v5",
+              "docs/component/aws/cognito-user-pool-v5",
+              "docs/component/aws/cognito-user-pool-client-v5",
+              "docs/component/aws/function-v5",
+              "docs/component/aws/queue-v5",
+              "docs/component/aws/redis-v5",
+              "docs/component/aws/sns-topic-v5",
+            ],
+          },
+          {
             label: "Internal",
             collapsed: true,
             items: [

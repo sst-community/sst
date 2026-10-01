@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import * as TypeDoc from "typedoc";
+import ts from "typescript";
 import config from "./config";
 
 process.on("uncaughtException", (err) => {
@@ -45,6 +46,10 @@ const externalTypeDocLinks = new Map<string, string>([
     "[the AWS Durable Execution SDK docs](https://docs.aws.amazon.com/durable-functions/sdk-reference/)",
   ],
 ]);
+// The source files that get a doc page
+const documentedSources = new Set<string>();
+// The parts of each V5 component, by source file
+const partsBySource = new Map<string, Parts | undefined>();
 function useLinkHashes(module: TypeDoc.DeclarationReflection) {
   const v =
     linkHashes.get(module) ?? new Map<TypeDoc.DeclarationReflection, string>();
@@ -59,6 +64,9 @@ if (!cmd || cmd === "components") {
     buildComponents(),
     buildSdk(),
   ]);
+
+  for (const component of components)
+    documentedSources.add(component.sources![0].fileName);
 
   for (const component of components) {
     const sourceFile = component.sources![0].fileName;
@@ -964,6 +972,7 @@ function renderType(
   return renderSomeType(type.type!);
 
   function renderSomeType(type: TypeDoc.SomeType): string {
+    type = usePlainType(type);
     if (type.type === "intrinsic") return renderIntrisicType(type);
     if (type.type === "literal") return renderLiteralType(type);
     if (type.type === "templateLiteral") return renderTemplateLiteralType(type);
@@ -1014,6 +1023,9 @@ function renderType(
     }
     if (type.type === "unknown") {
       return renderUnknownType(type as TypeDoc.SomeType & { name?: string });
+    }
+    if (type.type === "query") {
+      return `<code class="primitive">typeof ${type.queryType.name}</code>`;
     }
 
     // @ts-expect-error
@@ -1153,6 +1165,15 @@ function renderType(
         renderSomeType(type.typeArguments?.[0]!),
         `<code class="symbol">&gt;</code>`,
       ].join("");
+    }
+    // Any DNS adapter
+    if (type.name === "Dns") {
+      return ["aws", "cloudflare", "vercel"]
+        .map(
+          (provider) =>
+            `[<code class="type">sst.${provider}.dns</code>](/docs/component/${provider}/dns/)`
+        )
+        .join(`<code class="symbol"> | </code>`);
     }
     const dnsProvider = {
       AwsDns: "aws",
@@ -1629,6 +1650,319 @@ function renderConstructor(module: TypeDoc.DeclarationReflection) {
   return lines;
 }
 
+/********************************/
+/** V5 components: their parts **/
+/********************************/
+
+// A V5 component declares the resources it's made of in a `parts` constant.
+// Its `transform`, `existing` and `nodes` are types generated from that, which
+// TypeDoc doesn't expand, so they're documented from the declaration itself.
+type Part = {
+  key: string;
+  description: string;
+  // The resource class as written, ie. `sqs.Queue` or `Function`
+  cls: string;
+  optional: boolean;
+  many: boolean;
+  deferred: boolean;
+};
+type Parts = { parts: Part[]; imports: Map<string, string> };
+
+function useParts(module: TypeDoc.DeclarationReflection) {
+  const sourceFile = module.sources![0].fileName;
+  if (!partsBySource.has(sourceFile)) {
+    partsBySource.set(sourceFile, parseParts(path.join("..", sourceFile)));
+  }
+  return partsBySource.get(sourceFile);
+}
+
+// The parts behind an args interface's `transform` and `existing`: this
+// component's for its own args, or another component's when the interface
+// extends that component's args (ie. the args of a method that creates one).
+function usePartsOfArgs(
+  module: TypeDoc.DeclarationReflection,
+  int: TypeDoc.DeclarationReflection
+) {
+  // Not a component, ie. a DNS adapter
+  if (!module.getChildrenByKind(TypeDoc.ReflectionKind.Class).length)
+    return undefined;
+  if (int.name === `${useClassName(module)}Args`) return useParts(module);
+
+  const referenced = (type: TypeDoc.SomeType): string[] =>
+    type.type !== "reference"
+      ? []
+      : [
+          ...((type.reflection as TypeDoc.DeclarationReflection | undefined)
+            ?.sources ?? []
+          ).map((source) => source.fileName),
+          ...(type.typeArguments ?? []).flatMap(referenced),
+        ];
+  const sourceFile = (int.extendedTypes ?? [])
+    .flatMap(referenced)
+    .find((fileName) => fileName !== module.sources![0].fileName);
+  if (!sourceFile) return undefined;
+  if (!partsBySource.has(sourceFile))
+    partsBySource.set(sourceFile, parseParts(path.join("..", sourceFile)));
+  return partsBySource.get(sourceFile);
+}
+
+function parseParts(file: string): Parts | undefined {
+  const source = ts.createSourceFile(
+    file,
+    fs.readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true
+  );
+  const declaration = source.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((s) => [...s.declarationList.declarations])
+    .find((d) => d.name.getText() === "parts");
+  let literal = declaration?.initializer;
+  // `const parts = () => ({ ... })`
+  if (literal && ts.isArrowFunction(literal)) literal = literal.body as ts.Expression;
+  while (literal && ts.isParenthesizedExpression(literal)) literal = literal.expression;
+  if (!literal || !ts.isObjectLiteralExpression(literal)) return undefined;
+
+  // What each imported name comes from, ie. `sqs` from "@pulumi/aws"
+  const imports = new Map<string, string>();
+  for (const statement of source.statements.filter(ts.isImportDeclaration)) {
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements)
+      imports.set(
+        element.name.getText(),
+        (statement.moduleSpecifier as ts.StringLiteral).text
+      );
+  }
+
+  const parts = literal.properties.filter(ts.isPropertyAssignment).map((prop) => {
+    // `many(deferred(Function))`
+    const markers = new Set<string>();
+    let value = prop.initializer;
+    while (
+      ts.isCallExpression(value) &&
+      ["optional", "many", "deferred"].includes(value.expression.getText())
+    ) {
+      markers.add(value.expression.getText());
+      value = value.arguments[0];
+    }
+    const doc = ts.getJSDocCommentsAndTags(prop).find(ts.isJSDoc);
+    return {
+      key: prop.name.getText(),
+      description: (ts.getTextOfJSDocComment(doc?.comment) ?? "").trim(),
+      cls: value.getText(),
+      optional: markers.has("optional"),
+      many: markers.has("many"),
+      deferred: markers.has("deferred"),
+    };
+  });
+  return { parts, imports };
+}
+
+// A part's resource class, or its args, linked to where it's documented
+function renderPartClass(
+  module: TypeDoc.DeclarationReflection,
+  { imports }: Parts,
+  part: Part,
+  opts: { args?: boolean } = {}
+) {
+  const namespace = part.cls.includes(".") ? part.cls.split(".")[0] : undefined;
+  const cls = part.cls.split(".").at(-1)!;
+  const name = opts.args ? `${cls}Args` : cls;
+  const code = `<code class="type">${name}</code>`;
+  const from = imports.get(namespace ?? cls) ?? "";
+
+  // ie. `sqs.Queue` from "@pulumi/aws", or `RandomPassword` from "@pulumi/random"
+  if (from.startsWith("@pulumi/")) {
+    const provider = from.slice("@pulumi/".length);
+    const page = [namespace, cls.toLowerCase()].filter(Boolean).join("/");
+    return `[${code}](https://www.pulumi.com/registry/packages/${provider}/api-docs/${page}/${
+      opts.args ? "#inputs" : ""
+    })`;
+  }
+  // ie. `Function` from "./function.js": another component in the same folder
+  if (from.startsWith("./")) {
+    const dir = path.dirname(module.sources![0].fileName);
+    const file = path.join(dir, from.replace(/\.js$/, "")) + ".ts";
+    if (documentedSources.has(file)) {
+      const page = file.replace(
+        /platform\/src\/components\/(.*)\.ts/,
+        "/docs/component/$1"
+      );
+      return `[${code}](${page}${opts.args ? `#${name.toLowerCase()}` : ""})`;
+    }
+  }
+  return code;
+}
+
+function renderPartsSummary(
+  prop: string,
+  parts: Parts,
+  optional: boolean
+) {
+  return [
+    `<Section type="parameters">`,
+    `<InlineSection>`,
+    `**Type** <code class="primitive">Object</code>`,
+    `</InlineSection>`,
+    ...parts.parts.map(
+      (part) =>
+        `- <p>[<code class="key">${part.key}${
+          optional || part.optional ? "?" : ""
+        }</code>](#${prop}-${part.key.toLowerCase()})</p>`
+    ),
+    `</Section>`,
+  ];
+}
+
+function renderPart(
+  prop: string,
+  part: Part,
+  optional: boolean,
+  type: string,
+  description: string
+) {
+  return [
+    `<NestedTitle id="${prop}-${part.key.toLowerCase()}" Tag="h4" parent="${prop}.">${
+      part.key
+    }${optional ? "?" : ""}</NestedTitle>`,
+    `<Segment>`,
+    `<Section type="parameters">`,
+    `<InlineSection>`,
+    `**Type** ${type}`,
+    `</InlineSection>`,
+    `</Section>`,
+    description,
+    ``,
+    `</Segment>`,
+  ];
+}
+
+function symbol(text: string) {
+  return `<code class="symbol">${text}</code>`;
+}
+function primitive(text: string) {
+  return `<code class="primitive">${text}</code>`;
+}
+function byId(type: string) {
+  return [
+    primitive("Record"),
+    symbol("&lt;"),
+    primitive("string"),
+    symbol(", "),
+    type,
+    symbol("&gt;"),
+  ].join("");
+}
+
+function renderPartsTransform(
+  module: TypeDoc.DeclarationReflection,
+  prop: TypeDoc.DeclarationReflection,
+  parts: Parts
+) {
+  return [
+    `### ${renderName(prop)}`,
+    `<Segment>`,
+    ...renderPartsSummary("transform", parts, true),
+    ...renderDescription(prop),
+    ``,
+    `An object is merged into the part's args. A function can change the args and the options.`,
+    ``,
+    `</Segment>`,
+    ...parts.parts.flatMap((part) => {
+      const args = renderPartClass(module, parts, part, { args: true });
+      const type = [
+        args,
+        symbol(" | "),
+        symbol("("),
+        primitive("args"),
+        symbol(": "),
+        args,
+        symbol(", "),
+        primitive("opts"),
+        symbol(": "),
+        `[<code class="type">ComponentResourceOptions</code>](https://www.pulumi.com/docs/concepts/options/)`,
+        symbol(", "),
+        primitive("name"),
+        symbol(": "),
+        primitive("string"),
+        // The function is also told which one it's given
+        ...(part.many
+          ? [symbol(", "), primitive("id"), symbol(": "), primitive("string")]
+          : []),
+        symbol(")"),
+        symbol(" => "),
+        primitive("void"),
+      ].join("");
+      return renderPart(
+        "transform",
+        part,
+        true,
+        type,
+        [
+          part.description,
+          ...(part.many
+            ? [``, `It applies to each one. A function is also given the \`id\` of the one it's changing.`]
+            : []),
+        ].join("\n")
+      );
+    }),
+  ];
+}
+
+function renderPartsExisting(
+  module: TypeDoc.DeclarationReflection,
+  prop: TypeDoc.DeclarationReflection,
+  parts: Parts
+) {
+  return [
+    `### ${renderName(prop)}`,
+    `<Segment>`,
+    ...renderPartsSummary("existing", parts, true),
+    ...renderDescription(prop),
+    ``,
+    `</Segment>`,
+    ...parts.parts.flatMap((part) => {
+      const one = [
+        renderPartClass(module, parts, part),
+        symbol(" | "),
+        primitive("string"),
+      ].join("");
+      return renderPart(
+        "existing",
+        part,
+        true,
+        part.many ? byId(one) : one,
+        part.description
+      );
+    }),
+  ];
+}
+
+function renderPartsNodes(module: TypeDoc.DeclarationReflection, parts: Parts) {
+  return [
+    ``,
+    `### nodes`,
+    `<Segment>`,
+    ...renderPartsSummary("nodes", parts, false),
+    `The underlying [resources](/docs/components/#nodes) this component creates.`,
+    `</Segment>`,
+    ...parts.parts.flatMap((part) => {
+      const cls = renderPartClass(module, parts, part);
+      // A function part is built later, so it's an output
+      const one = part.deferred
+        ? [primitive("Output"), symbol("&lt;"), cls, symbol("&gt;")].join("")
+        : cls;
+      const type = part.many
+        ? byId(one)
+        : part.optional
+          ? [one, symbol(" | "), primitive("undefined")].join("")
+          : one;
+      return renderPart("nodes", part, part.optional, type, part.description);
+    }),
+  ];
+}
+
 function renderMethods(module: TypeDoc.DeclarationReflection) {
   const lines: string[] = [];
   const methods = useClassMethods(module);
@@ -1705,6 +2039,11 @@ function renderProperties(module: TypeDoc.DeclarationReflection) {
 
   for (const g of getters) {
     console.debug(` - property ${g.name}`);
+    const parts = g.name === "nodes" ? useParts(module) : undefined;
+    if (parts) {
+      lines.push(...renderPartsNodes(module, parts));
+      continue;
+    }
     lines.push(
       ``,
       `### ${renderName(g)}`,
@@ -1746,7 +2085,7 @@ function renderProperties(module: TypeDoc.DeclarationReflection) {
 
 function renderLinks(module: TypeDoc.DeclarationReflection) {
   const lines: string[] = [];
-  const method = useClassMethodByName(module, "getSSTLink");
+  const method = useClassLinkMethod(module);
   if (!method) return lines;
 
   // Get `getSSTLink()` return type
@@ -1805,7 +2144,7 @@ function renderLinks(module: TypeDoc.DeclarationReflection) {
 
 function renderCloudflareBindings(module: TypeDoc.DeclarationReflection) {
   const lines: string[] = [];
-  const method = useClassMethodByName(module, "getSSTLink");
+  const method = useClassLinkMethod(module);
   if (!method) return lines;
 
   // Get `getSSTLink()` return type
@@ -1867,6 +2206,19 @@ function renderInterfacesAtH2Level(
 
     // props
     for (const prop of useInterfaceProps(int)) {
+      const parts =
+        prop.name === "transform" || prop.name === "existing"
+          ? usePartsOfArgs(module, int)
+          : undefined;
+      if (parts) {
+        console.debug(`   - interface prop ${prop.name} (from parts)`);
+        lines.push(
+          ...(prop.name === "transform"
+            ? renderPartsTransform(module, prop, parts)
+            : renderPartsExisting(module, prop, parts))
+        );
+        continue;
+      }
       if (prop.kind === TypeDoc.ReflectionKind.Property) {
         console.debug(`   - interface prop ${prop.name}`);
         lines.push(
@@ -2251,6 +2603,10 @@ function useClassMethods(module: TypeDoc.DeclarationReflection) {
     .getChildrenByKind(TypeDoc.ReflectionKind.Method)
     .filter(
       (c) =>
+        // What every component inherits is documented once, not on each page
+        !isFromComponentBase(c) &&
+        // A V5 component's `link()` is rendered under "Links"
+        c.name !== "link" &&
         !c.flags.isExternal &&
         !c.flags.isPrivate &&
         !c.flags.isProtected &&
@@ -2258,6 +2614,22 @@ function useClassMethods(module: TypeDoc.DeclarationReflection) {
         !c.signatures[0].comment?.modifierTags.has("@internal") &&
         !c.signatures[0].comment?.blockTags.find((t) => t.tag === "@deprecated")
     );
+}
+function isFromComponentBase(c: TypeDoc.DeclarationReflection) {
+  const fileName = c.sources?.[0]?.fileName ?? "";
+  return (
+    fileName.endsWith("/components/component.ts") ||
+    fileName.endsWith("/components/parts-component.ts")
+  );
+}
+// 4.x components define `getSSTLink()`, V5 components define `link()`
+function useClassLinkMethod(module: TypeDoc.DeclarationReflection) {
+  return (
+    useClassMethodByName(module, "getSSTLink") ??
+    useClass(module)
+      .getChildrenByKind(TypeDoc.ReflectionKind.Method)
+      .find((c) => c.name === "link" && !isFromComponentBase(c))
+  );
 }
 function useClassMethodByName(
   module: TypeDoc.DeclarationReflection,
@@ -2280,6 +2652,55 @@ function useInterfaceProps(i: TypeDoc.DeclarationReflection) {
     .filter((c) => !c.comment?.modifierTags.has("@internal"))
     .filter((c) => !c.comment?.blockTags.find((t) => t.tag === "@deprecated"));
 }
+// A V5 arg declared as `Plain<BucketArgs["cors"]>` is the 4.x arg without
+// its `Input`. TypeDoc keeps that as a reference to `Plain`, so look up what
+// it stands for. `Input<T>` is patched to `Array<T>` while docs generate, so
+// the plain form is the array's element.
+function usePlainType(type: TypeDoc.SomeType): TypeDoc.SomeType {
+  if (
+    type.type !== "reference" ||
+    type.name !== "Plain" ||
+    type.typeArguments?.length !== 1
+  )
+    return type;
+
+  const resolve = (type: TypeDoc.SomeType): TypeDoc.SomeType => {
+    if (type.type === "reference" && type.name === "Plain") return usePlainType(type);
+    if (type.type !== "indexedAccess") return type;
+    const object = resolve(type.objectType);
+    const index = type.indexType;
+    // ie. `BucketArgs["cors"]`
+    if (index.type === "literal" && object.type === "reference") {
+      const prop = (
+        object.reflection as TypeDoc.DeclarationReflection | undefined
+      )?.children?.find((c) => c.name === index.value);
+      if (prop?.type) return prop.type;
+    }
+    // ie. `Notifications[number]`
+    const list = plain(object);
+    if (index.type === "intrinsic" && index.name === "number" && list.type === "array")
+      return list.elementType;
+    return type;
+  };
+
+  // `Input<T>` shows up as a reference to `Input`, or as the array it's
+  // patched to
+  const plain = (type: TypeDoc.SomeType): TypeDoc.SomeType =>
+    type.type === "array"
+      ? type.elementType
+      : type.type === "reference" &&
+          type.name === "Input" &&
+          type.typeArguments?.length === 1
+        ? type.typeArguments[0]
+        : type;
+  const inner = resolve(type.typeArguments[0]);
+  if (inner.type !== "union") return plain(inner);
+  // An optional prop: whether it's set shows in its name, not its type
+  const types = inner.types
+    .filter((t) => !(t.type === "intrinsic" && t.name === "undefined"))
+    .map(plain);
+  return types.length === 1 ? types[0] : new TypeDoc.UnionType(types);
+}
 function useNestedTypes(
   type: TypeDoc.SomeType,
   prefix: string = "",
@@ -2289,6 +2710,7 @@ function useNestedTypes(
   prefix: string;
   depth: number;
 }[] {
+  type = usePlainType(type);
   if (type.type === "union") {
     return type.types.flatMap((t) => useNestedTypes(t, prefix, depth));
   }
@@ -2466,14 +2888,17 @@ async function buildComponents() {
       "../platform/src/components/aws/apigatewayv2-lambda-route.ts",
       "../platform/src/components/aws/apigatewayv2-private-route.ts",
       "../platform/src/components/aws/apigatewayv2-url-route.ts",
+      "../platform/src/components/aws/apigatewayv2-v5.ts",
       "../platform/src/components/aws/app-sync.ts",
       "../platform/src/components/aws/app-sync-data-source.ts",
       "../platform/src/components/aws/app-sync-function.ts",
       "../platform/src/components/aws/app-sync-resolver.ts",
+      "../platform/src/components/aws/app-sync-v5.ts",
       "../platform/src/components/aws/auth.ts",
       "../platform/src/components/aws/aurora.ts",
       "../platform/src/components/aws/bucket.ts",
       "../platform/src/components/aws/bucket-notification.ts",
+      "../platform/src/components/aws/bucket-v5.ts",
       "../platform/src/components/aws/bus.ts",
       "../platform/src/components/aws/bus-lambda-subscriber.ts",
       "../platform/src/components/aws/bus-queue-subscriber.ts",
@@ -2483,6 +2908,8 @@ async function buildComponents() {
       "../platform/src/components/aws/cognito-identity-provider.ts",
       "../platform/src/components/aws/cognito-user-pool.ts",
       "../platform/src/components/aws/cognito-user-pool-client.ts",
+      "../platform/src/components/aws/cognito-user-pool-client-v5.ts",
+      "../platform/src/components/aws/cognito-user-pool-v5.ts",
       "../platform/src/components/aws/cron.ts",
       "../platform/src/components/aws/cron-v2.ts",
       "../platform/src/components/aws/dynamo.ts",
@@ -2490,6 +2917,7 @@ async function buildComponents() {
       "../platform/src/components/aws/efs.ts",
       "../platform/src/components/aws/email.ts",
       "../platform/src/components/aws/function.ts",
+      "../platform/src/components/aws/function-v5.ts",
       "../platform/src/components/aws/mysql.ts",
       "../platform/src/components/aws/postgres.ts",
       "../platform/src/components/aws/postgres-v1.ts",
@@ -2504,9 +2932,11 @@ async function buildComponents() {
       "../platform/src/components/aws/react.ts",
       "../platform/src/components/aws/redis.ts",
       "../platform/src/components/aws/redis-v1.ts",
+      "../platform/src/components/aws/redis-v5.ts",
       "../platform/src/components/aws/remix.ts",
       "../platform/src/components/aws/queue.ts",
       "../platform/src/components/aws/queue-lambda-subscriber.ts",
+      "../platform/src/components/aws/queue-v5.ts",
       "../platform/src/components/aws/kinesis-stream.ts",
       "../platform/src/components/aws/kinesis-stream-lambda-subscriber.ts",
       "../platform/src/components/aws/opencontrol.ts",
@@ -2517,6 +2947,7 @@ async function buildComponents() {
       "../platform/src/components/aws/sns-topic.ts",
       "../platform/src/components/aws/sns-topic-lambda-subscriber.ts",
       "../platform/src/components/aws/sns-topic-queue-subscriber.ts",
+      "../platform/src/components/aws/sns-topic-v5.ts",
       "../platform/src/components/aws/solid-start.ts",
       "../platform/src/components/aws/static-site.ts",
       "../platform/src/components/aws/svelte-kit.ts",
