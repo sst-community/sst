@@ -227,10 +227,6 @@ export interface AppSyncV5ResolverArgs
  *   app's provider, whatever the API was given. If your API has a `provider` and either of
  *   these, they're replaced on switch: remove the data source or the domain and deploy
  *   before you switch, then add it back.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `AppSync` replaced a nested object whole. To replace one, use a function.
- * - `$transform(sst.aws.AppSync, ...)` doesn't apply to it. Write one for
- *   `sst.aws.AppSyncV5`.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const api = new sst.aws.AppSync("MyApi", { schema: "schema.graphql" });

@@ -369,12 +369,8 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  *   stores the master user's credentials is `nodes.secret`.
  * - `transform.instance` still applies to the primary instance and to each replica. To
  *   change only the replicas, use `transform.replica`, which is applied after it.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `Aurora` replaced a nested object whole. To replace one, use a function.
- *   If you set `tags` on the cluster that way, it keeps the tags SST sets next to
- *   yours; they're added back when you switch.
- * - `$transform(sst.aws.Aurora, ...)` doesn't apply to it. Write one for
- *   `sst.aws.AuroraV5`.
+ * - If you set `tags` on the cluster with an object in `transform`, it keeps the tags SST
+ *   sets next to yours. They're added back when you switch.
  *
  * ---
  *

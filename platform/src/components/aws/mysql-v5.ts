@@ -262,12 +262,8 @@ interface Connection {
  *   user's credentials is `nodes.secret`.
  * - `proxyId` fails as soon as it's read when there is no proxy, where `Mysql` failed
  *   on deploy.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `Mysql` replaced a nested object whole. To replace one, use a function.
- *   If you set `tags` on the instance that way, it keeps the tags SST sets next to
- *   yours; they're added back when you switch.
- * - `$transform(sst.aws.Mysql, ...)` doesn't apply to it. Write one for
- *   `sst.aws.MysqlV5`.
+ * - If you set `tags` on the instance with an object in `transform`, it keeps the tags
+ *   SST sets next to yours. They're added back when you switch.
  *
  * ---
  *

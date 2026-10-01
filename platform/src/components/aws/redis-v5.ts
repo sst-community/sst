@@ -80,14 +80,10 @@ interface Connection {
  * const redis = new sst.aws.RedisV5("MyRedis", { vpc });
  * ```
  *
- * Two things work differently:
+ * A few things work differently:
  *
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `Redis` replaced a nested object whole. To replace one, use a function.
- *   If you set `tags` on the cluster that way, it keeps the tags SST sets next to
- *   yours; they're added back when you switch.
- * - `$transform(sst.aws.Redis, ...)` doesn't apply to it. Write one for
- *   `sst.aws.RedisV5`.
+ * - If you set `tags` on the cluster with an object in `transform`, it keeps the tags SST
+ *   sets next to yours. They're added back when you switch.
  *
  * #### Link to a resource
  *

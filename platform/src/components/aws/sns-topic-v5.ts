@@ -89,10 +89,6 @@ export interface SnsTopicV5SubscriberArgs
  *   your app's provider, whatever the topic was given. If your topic has a `provider` and
  *   a queue subscribed to it, the subscription and the queue's policy are replaced on
  *   switch: remove the subscriber and deploy before you switch, then add it back.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `SnsTopic` replaced a nested object whole. To replace one, use a function.
- * - `$transform(sst.aws.SnsTopic, ...)` doesn't apply to it. Write one for
- *   `sst.aws.SnsTopicV5`.
  */
 export class SnsTopicV5 extends component("sst:aws:SnsTopicV5", parts) {
   constructor(

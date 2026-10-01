@@ -268,10 +268,6 @@ export interface CognitoUserPoolV5IdentityProviderArgs
  *   user pool it looked up and to nothing else. If you pass `get` a `provider` and add a
  *   client to that user pool, the client is replaced on switch, to be created with that
  *   provider, and gets a new ID.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `CognitoUserPool` replaced a nested object whole. To replace one, use a function.
- * - `$transform(sst.aws.CognitoUserPool, ...)` doesn't apply to it. Write one for
- *   `sst.aws.CognitoUserPoolV5`.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const userPool = new sst.aws.CognitoUserPool("MyUserPool");

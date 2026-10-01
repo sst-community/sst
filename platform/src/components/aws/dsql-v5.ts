@@ -304,12 +304,8 @@ export interface DsqlV5Args extends ComponentArgs<typeof parts> {
  *   the peer's.
  * - The security group of the VPC endpoints is named after `endpointSecurityGroup`, so
  *   its `Name` tag is updated when you switch. Nothing else about it changes.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `Dsql` replaced a nested object whole. To replace one, use a function.
- *   If you set `multiRegionProperties` on the cluster that way, it keeps its witness
- *   region.
- * - `$transform(sst.aws.Dsql, ...)` doesn't apply to it. Write one for
- *   `sst.aws.DsqlV5`.
+ * - If you set `multiRegionProperties` on the cluster with an object in `transform`, it
+ *   keeps its witness region.
  *
  * ---
  *

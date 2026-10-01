@@ -276,11 +276,8 @@ export interface TaskV5Args
  * - A `transform` function for `logGroup` or `taskDefinition` is given outputs where
  *   `Task` gave it plain values. For `logGroup` and `image` it's also given the
  *   container's name.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `Task` replaced a nested object whole. If you set part of the task definition's
- *   `runtimePlatform` that way, the rest of it is kept. To replace one, use a function.
- * - `$transform(sst.aws.Task, ...)` doesn't apply to it. Write one for
- *   `sst.aws.TaskV5`.
+ * - If you set part of the task definition's `runtimePlatform` with an object in
+ *   `transform`, the rest of it is kept.
  *
  * ---
  *

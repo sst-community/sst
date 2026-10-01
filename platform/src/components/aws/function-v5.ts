@@ -410,11 +410,8 @@ export interface FunctionV5Args
  *   `provider`. `Function` created it with your app's provider, whatever the function was
  *   given. If a durable function has a `url` and a `provider`, the alias is replaced on
  *   switch, and the URL with it.
- * - An object in `transform` is merged into the defaults, so
- *   `transform: { function: { environment: { variables: { A: "1" } } } }` adds a
+ * - `transform: { function: { environment: { variables: { A: "1" } } } }` adds a
  *   variable where it used to replace them all.
- * - `$transform(sst.aws.Function, ...)` doesn't apply to it. Write one for
- *   `sst.aws.FunctionV5`.
  *
  * The V5 components create their functions, like a queue's subscriber, as `FunctionV5`
  * too. There you can keep writing the function the way `Function` takes it.

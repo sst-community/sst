@@ -119,13 +119,6 @@ export interface QueueV5SubscriberArgs
  * const queue = new sst.aws.QueueV5("MyQueue");
  * ```
  *
- * Two things work differently:
- *
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `Queue` replaced a nested object whole. To replace one, use a function.
- * - `$transform(sst.aws.Queue, ...)` doesn't apply to it. Write one for
- *   `sst.aws.QueueV5`.
- *
  * #### Use a queue you already have
  *
  * Pass the queue, or its URL.

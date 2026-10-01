@@ -311,9 +311,13 @@ takeover(ApiGatewayV2V5, {
   (`transform: { instance: { tags: { team: "data" } } }`) deploys something different
   after the switch: here SST's own tags come back. Find the nested defaults of each
   part, test one (`an object transform that sets tags` in `postgres-v5.test.ts`), and
-  name it in the "Switch from" section.
+  name it in the "Switch from" section: "If you set `tags` on the instance with an
+  object in `transform`, it keeps the tags SST sets next to yours."
 - `$transform(sst.aws.Queue, ...)` doesn't apply to `QueueV5`: it's matched by type.
-  Every "Switch from" section says so.
+- The docs generator writes those two as the last notes of every "Switch from" section:
+  that an object in `transform` is merged, and that a `$transform` for the original
+  doesn't apply. It reads the original's name from the takeover map. Don't write them
+  in the class doc.
 - A function's `description` usually changes, because 4.x named the wrapper in it. That's
   an in-place update. So does anything else made from the function's name when a
   function part gets a new one: a URL behind a `Router` is registered under a key made
@@ -441,16 +445,18 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
 5. Write `test/components/<name>-v5.test.ts`: takeover cases with
    `pulumi.takeoverCases()`, then behaviour.
 6. Write the class doc, including a "Switch from `<Name>`" section that lists what's
-   written differently and what changes on deploy, including the two notes every port
-   has: object transforms are merged, and `$transform` for the original doesn't apply.
-   Document each part where it's declared: those comments become the `transform`,
-   `existing` and `nodes` docs.
+   written differently and what changes on deploy. The docs generator adds the two notes
+   every port has to its list. Document each part where it's declared: those comments
+   become the `transform`, `existing` and `nodes` docs.
 7. `cd www && bun ./generate.ts components` generates the page. The docs generator and
    the sidebar find a `*-v5.ts` file by its name, so there's nothing to add to either.
+   It fails when the page names the original outside the "Switch from" section, other
+   than as a link to its page: an inherited arg whose examples create the original is
+   the usual cause, and the arg is declared again with examples of its own.
 8. Typecheck, run the tests, and `bun run build:cli` from the repo root.
 9. Review before calling it done. Read the original's constructor and the new one side
    by side, resource by resource: args, options, names, what's read back. Then read the
-   generated page: outside the "Switch from" section, nothing should name the original.
+   generated page.
 
 The existing ports are the reference: `apigatewayv2-v5.ts` for routes, authorizers and a
 custom domain; `sns-topic-v5.ts` for named subscribers; `bucket-v5.ts` for one resource

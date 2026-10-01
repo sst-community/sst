@@ -51,6 +51,7 @@ const externalTypeDocLinks = new Map<string, string>([
 const documentedSources = new Set<string>();
 // The parts of each V5 component, by source file
 const partsBySource = new Map<string, Parts | undefined>();
+const takeovers = new Map<string, string>();
 function useLinkHashes(module: TypeDoc.DeclarationReflection) {
   const v =
     linkHashes.get(module) ?? new Map<TypeDoc.DeclarationReflection, string>();
@@ -836,6 +837,9 @@ async function generateComponentDoc(
   const dir = path.dirname(outputFilePath);
   fs.mkdirSync(dir, { recursive: true });
 
+  // The component a V5 component takes over from
+  const original = useTakeovers().get(className);
+
   fs.writeFileSync(
     outputFilePath,
     [
@@ -846,7 +850,11 @@ async function generateComponentDoc(
       renderSourceMessage(sourceFile),
       renderImports(outputFilePath),
       renderBodyBegin(),
-      renderAbout(useClassComment(component)),
+      renderSwitchNotes(
+        renderAbout(useClassComment(component)),
+        fullClassName,
+        original
+      ),
       renderConstructor(component)
         .join("\n")
         .replace(`new ${className}`, `new ${className}${version}`),
@@ -893,6 +901,7 @@ async function generateComponentDoc(
       .flat()
       .join("\n")
   );
+  if (original) checkOriginalNotNamed(outputFilePath, original);
 }
 
 /*************************/
@@ -1649,6 +1658,105 @@ function renderConstructor(module: TypeDoc.DeclarationReflection) {
 
   lines.push(`</Segment>`);
   return lines;
+}
+
+/***************************************/
+/** V5 components: switching to one   **/
+/***************************************/
+
+// The component each V5 component takes over from, by class name: `QueueV5`
+// from `Queue`. It's read from the takeover maps, which is where a V5
+// component says what it replaces.
+function useTakeovers() {
+  if (takeovers.size) return takeovers;
+  const dir = "../platform/src/components/aws/takeover";
+  for (const file of fs.readdirSync(dir)) {
+    const source = fs.readFileSync(path.join(dir, file), "utf8");
+    for (const [, v5, original] of source.matchAll(
+      /\btakeover\(\s*(\w+)\s*,\s*\{\s*from:\s*"sst:\w+:(\w+)"/g
+    ))
+      takeovers.set(v5, original);
+  }
+  return takeovers;
+}
+
+// Where a page's "Switch from" section starts and ends, in lines
+function findSwitchSection(lines: string[]) {
+  const start = lines.findIndex((line) => /^#### Switch from /.test(line));
+  if (start === -1) return undefined;
+  const next = lines.findIndex(
+    (line, i) => i > start && /^(#{1,4} |---$|<\/Section>)/.test(line)
+  );
+  return { start, end: next === -1 ? lines.length : next };
+}
+
+// Two things are true of every V5 component, so they're written here and not
+// in each one: an object in `transform` is merged where the original replaced
+// a nested object, and a `$transform` for the original doesn't apply. They're
+// added to the list in the "Switch from" section, or as a list of their own.
+function renderSwitchNotes(
+  about: string[],
+  fullClassName: string,
+  original?: string
+) {
+  if (!original) return about;
+  const lines = about.join("\n").split("\n");
+  const section = findSwitchSection(lines);
+  if (!section) return about;
+
+  const namespace = fullClassName.slice(0, fullClassName.lastIndexOf("."));
+  const notes = [
+    `- An object in \`transform\` is merged into the defaults, nested objects included, where \`${original}\` replaced a nested object whole. To replace one, use a function.`,
+    `- \`$transform(${namespace}.${original}, ...)\` doesn't apply to it. Write one for \`${fullClassName}\`.`,
+  ];
+
+  // The section's list: from its first item to the last line that's an item
+  // or indented under one
+  const first = lines.findIndex(
+    (line, i) => i > section.start && i < section.end && line.startsWith("- ")
+  );
+  if (first === -1) {
+    let end = section.end;
+    while (lines[end - 1].trim() === "") end--;
+    lines.splice(end, 0, "", "Two things work differently:", "", ...notes);
+    return lines;
+  }
+  let last = first;
+  for (let i = first + 1; i < section.end; i++) {
+    if (lines[i].trim() === "") continue;
+    if (!lines[i].startsWith("- ") && !lines[i].startsWith("  ")) break;
+    last = i;
+  }
+  lines.splice(last + 1, 0, ...notes);
+  return lines;
+}
+
+// A V5 component's page documents the V5 component. Outside its "Switch
+// from" section it may link to the original's page, and nothing else: an
+// example that creates the original is one someone will copy. An arg that's
+// inherited with the original's examples is the usual cause.
+function checkOriginalNotNamed(file: string, original: string) {
+  const lines = fs.readFileSync(file, "utf8").split("\n");
+  const section = findSwitchSection(lines);
+  const named = [
+    // Code that uses the original: `new sst.aws.Queue(`, `sst.aws.Queue.get(`
+    new RegExp(`\\bsst\\.\\w+\\.${original}\\b`),
+    // The original in prose, unless it's the text of a link
+    new RegExp(`(?<!\\[)\`${original}\`(?!\\]\\()`),
+  ];
+  const found = lines.filter(
+    (line, i) =>
+      !(section && i >= section.start && i < section.end) &&
+      named.some((pattern) => pattern.test(line))
+  );
+  if (found.length)
+    throw new Error(
+      [
+        `${file} names \`${original}\` outside its "Switch from" section:`,
+        ...found.map((line) => `  ${line.trim()}`),
+        `Give an inherited arg its own doc comment and examples, and move what's about \`${original}\` to the "Switch from" section.`,
+      ].join("\n")
+    );
 }
 
 /********************************/

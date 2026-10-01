@@ -289,10 +289,6 @@ export interface BucketV5NotifyArgs {
  *   looked up and to nothing else. If you pass `get` a `provider` and call `notify` on that
  *   bucket, its notifications are replaced on switch, to be created with that provider:
  *   remove them and deploy before you switch, then add them back.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `Bucket` replaced a nested object whole. To replace one, use a function.
- * - `$transform(sst.aws.Bucket, ...)` doesn't apply to it. Write one for
- *   `sst.aws.BucketV5`.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const bucket = new sst.aws.Bucket("MyBucket");

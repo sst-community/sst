@@ -195,11 +195,8 @@ export interface CronV2V5Args
  * - The function is a `FunctionV5`, so its definition can be written the way
  *   [`FunctionV5`](/docs/component/aws/function-v5) takes it. The way `Function` takes it
  *   still works.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `CronV2` replaced a nested object whole. If you set part of the schedule's `target`
- *   that way, the rest of the target is kept. To replace one, use a function.
- * - `$transform(sst.aws.CronV2, ...)` doesn't apply to it. Write one for
- *   `sst.aws.CronV2V5`.
+ * - If you set part of the schedule's `target` with an object in `transform`, the rest
+ *   of the target is kept.
  */
 export class CronV2V5 extends component("sst:aws:CronV2V5", parts) {
   constructor(

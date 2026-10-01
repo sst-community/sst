@@ -243,10 +243,6 @@ export interface ApiGatewayV2V5AuthorizerArgs
  *   `transform` for `handler`, `integration` and `route`.
  * - `domain.nameId` becomes `existing: { domainName }`.
  * - `domain` and `domain.dns` have to be plain values, not outputs.
- * - An object in `transform` is merged into the defaults, nested objects included, where
- *   `ApiGatewayV2` replaced a nested object whole. To replace one, use a function.
- * - `$transform(sst.aws.ApiGatewayV2, ...)` doesn't apply to it. Write one for
- *   `sst.aws.ApiGatewayV2V5`.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const api = new sst.aws.ApiGatewayV2("MyApi");
