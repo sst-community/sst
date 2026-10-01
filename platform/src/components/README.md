@@ -338,6 +338,10 @@ await pulumi.expectTakeover(
   does to it: `ignoreChanges`, `protect`, `retainOnDelete`, `deleteBeforeReplace`,
   `replaceOnChanges` and its provider. A difference there is reported as a field named
   `options.<name>`.
+- A resource's ids and ARNs are made from its name under the mock, so the check reads
+  a renamed resource's new name as its old one wherever another resource refers to it.
+  It doesn't in the resource's own inputs: its own name there is the name SST gave it,
+  like a `Name` tag, and a new one is a change.
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
 - Give the mock extra `state` for outputs the code reads (see `apigatewayv2-v5.test.ts`).

@@ -346,12 +346,17 @@ export function mockPulumi(input?: {
             typeof now === "string" && typeof before === "string" && now !== before,
         )
         .sort((a, b) => b[0].length - a[0].length);
-      const asOriginal = (value: string) =>
-        renames.reduce(
-          (v, [now, before]) =>
-            v.replace(new RegExp(`\\b${now}(?=\\b|_)`, "g"), before),
-          keptValues.reduce((v, [now, before]) => v.split(now).join(before), value),
-        );
+      // A resource can't read its own id or ARN, so its own name in its
+      // inputs is the name SST gave it, and that one is left as it is: a
+      // `Name` tag made from a new logical name is a real change.
+      const asOriginal = (own: string) => (value: string) =>
+        renames
+          .filter(([now]) => now !== own)
+          .reduce(
+            (v, [now, before]) =>
+              v.replace(new RegExp(`\\b${now}(?=\\b|_)`, "g"), before),
+            keptValues.reduce((v, [now, before]) => v.split(now).join(before), value),
+          );
       // An input the resource ignores changes to, like a generated name,
       // keeps its deployed value.
       const kept = (r: RecordedResource, ignore: string[]) =>
@@ -372,7 +377,10 @@ export function mockPulumi(input?: {
           return {
             name: before.name,
             original: { ...stable(kept(before, ignore)), ...deployOptions(before) },
-            now: { ...stable(kept(now, ignore), asOriginal), ...deployOptions(now) },
+            now: {
+              ...stable(kept(now, ignore), asOriginal(now.name)),
+              ...deployOptions(now),
+            },
           };
         })
         .filter((pair) => JSON.stringify(pair.original) !== JSON.stringify(pair.now))
