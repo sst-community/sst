@@ -1,86 +1,79 @@
-<h1 align="center">sst-community</h1>
+<h1 align="center">sst-community v5</h1>
 
-<p align="center">A community-maintained fork of <a href="https://github.com/anomalyco/sst">SST</a></p>
+<p align="center">The next major version of <a href="https://github.com/sst-community/sst">sst-community</a>, in development</p>
 
 ---
-
-Build full-stack apps on your own infrastructure.
 
 > [!NOTE]
-> **sst-community** is a community-maintained fork of [SST](https://github.com/anomalyco/sst). It is not affiliated with SST or Anomaly. It tracks upstream releases and carries fixes that haven't landed upstream yet.
+> This is the `v5` branch. **It isn't released**: there is no 5.x on npm. For the version you can install today, see the [`main` branch](https://github.com/sst-community/sst/tree/main).
 >
-> Releases are numbered after the upstream line they're based on: `4.17.x` is based on upstream 4.17. Each release's notes list what it changes. Telemetry is off. Docs: [sst-community.github.io/sst](https://sst-community.github.io/sst/docs/). Chat: [Discord](https://discord.gg/DQWT3WGVm2).
+> sst-community is a community-maintained fork of [SST](https://github.com/anomalyco/sst). It is not affiliated with SST or Anomaly.
 
-## Installation
+## What v5 is for
 
-For JavaScript projects, install the fork locally under the name `sst`, so the CLI version is tracked with your app and `import ... from "sst"` keeps working. You can then run the CLI with the same package manager.
+In version 4, each component decides for itself which of its resources you can change. Some can be transformed and some can't. Some are in `nodes` and some aren't. Using a resource you already have is a different option on every component, where there is one.
 
-```bash
-npm install sst@npm:@sst-community/sst
-# pnpm add sst@npm:@sst-community/sst
-# bun add sst@npm:@sst-community/sst
-# yarn add sst@npm:@sst-community/sst
+v5 rebuilds the components on one foundation. A component declares every resource it creates as a **part**, and from that one list every component gives you the same three things:
+
+```ts
+const redis = new sst.aws.v5.Redis("MyRedis", {
+  vpc,
+  // Change how any resource is created
+  transform: { cluster: { snapshotRetentionLimit: 7 } },
+  // Use a resource you already have in place of one it would create
+  existing: { subnetGroup: "my-subnet-group" },
+});
+
+// Read any resource it created
+redis.nodes.parameterGroup.name;
 ```
 
-To switch an existing project from SST, change its dependency to `"sst": "npm:@sst-community/sst@<version>"` and reinstall. `sst upgrade` keeps it pointing at the fork.
+## What it sets out to do
 
-If you are not using JavaScript, you can install the CLI globally.
+- **Every resource is yours to change.** `transform`, `existing` and `nodes` cover all of a component's resources, and they're typed and documented from the same list.
+- **Switch without redeploying.** The v5 components sit next to the version 4 ones, as `sst.aws.v5.*`. Change `sst.aws.Queue` to `sst.aws.v5.Queue`, keep the name, and the resources you've deployed are kept. You switch one component at a time, and each component's docs list what's written differently.
+- **Write your own components the same way.** `sst.component()` is what SST's own components are built on, so yours get `transform`, `existing`, `nodes`, naming and linking too.
+- **Test components without AWS.** `mock()` stands in for the deploy engine, so a test can create a component and check what it would deploy.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/sst-community/sst/main/install | bash
-```
+## Status
 
-To install a specific version.
+- **Ported:** `Alb`, `ApiGatewayV2`, `AppSync`, `Aurora`, `Bucket`, `Cluster`, `CognitoUserPool`, `CronV2`, `Dsql`, `Dynamo`, `Efs`, `Function`, `Mysql`, `Postgres`, `Queue`, `Redis`, `Service`, `SnsTopic` and `Task`.
+- **Not yet:** the sites (`Nextjs`, `Astro` and the rest), `Vpc`, `Router`, `StaticSite` and the others.
+- **Version 4 components are untouched.** Everything in `sst.aws.*` works as it does on `main`, so an app can mix the two.
+- **How it's been checked:** each port is tested against the component it replaces, under a mock of the deploy engine, to confirm a switch keeps what's deployed. It has not been deployed to a real AWS account yet.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/sst-community/sst/main/install | VERSION=4.17.2 bash
-```
+## Try it
 
-#### Manually
-
-Download the pre-compiled binaries from the [releases](https://github.com/sst-community/sst/releases/latest) page and copy to the desired location. On Linux, the `.deb` and `.rpm` packages there install with `sudo dpkg -i` and `sudo rpm -i`.
-
-## Get Started
-
-Get started with your favorite framework:
-
-- [Next.js](https://sst-community.github.io/sst/docs/start/aws/nextjs)
-- [Remix](https://sst-community.github.io/sst/docs/start/aws/remix)
-- [Astro](https://sst-community.github.io/sst/docs/start/aws/astro)
-- [Hono](https://sst-community.github.io/sst/docs/start/aws/hono)
-
-## Learn More
-
-Learn more about some of the key concepts:
-
-- [Live](https://sst-community.github.io/sst/docs/live)
-- [Linking](https://sst-community.github.io/sst/docs/linking)
-- [Console](https://sst-community.github.io/sst/docs/console)
-- [Components](https://sst-community.github.io/sst/docs/components)
-
-## Contributing
-
-Here's how you can contribute:
-
-- Help us improve our docs
-- Find a bug? Open an issue
-- Feature request? Submit a PR 
-
-## Running Locally
-
-Run `bun run setup`. You need [Go](https://go.dev/) and [Bun](https://bun.sh/) installed.
-
-Now you can run the CLI locally on any of the `examples/` apps.
+You need [Go](https://go.dev/) and [Bun](https://bun.sh/).
 
 ```bash
-cd examples/aws-api
-go run ../../cmd/sst <command>
+git clone -b v5 https://github.com/sst-community/sst
+cd sst
+bun run setup
+bun run build:cli
 ```
 
-If you want to build the CLI binary, run `bun run build:cli`. This creates `dist/sst5`, a v5 development build that you can run next to a stable `sst`.
+That builds `dist/sst5`, which runs next to a stable `sst`. Use it in an app in place of `sst`, on a stage of its own:
 
-For building the docs, run `bun run docs:generate` and `bun run docs:dev`.
+```bash
+/path/to/sst/dist/sst5 dev --stage v5
+```
+
+## Working on it
+
+- [Writing V5 components](platform/src/components/README.md) is the guide: parts, args, tests, and how to port a version 4 component.
+- [Write a Component](www/src/content/docs/docs/write-a-component.mdx) is the same for a component in your own app.
+
+```bash
+cd platform
+npx tsc --noEmit -p tsconfig.json   # typecheck
+npx vitest run --pool=forks         # tests
+```
+
+Three test files (`alb`, `bucket`, `service-alb`) fail to load, as they do on `main`.
+
+For the docs, run `bun run docs:generate` and `bun run docs:dev` from the repo root.
 
 ---
 
-**Found a bug or have a question about the fork?** [Open an issue](https://github.com/sst-community/sst/issues) or ask on [Discord](https://discord.gg/DQWT3WGVm2). For SST itself, see [anomalyco/sst](https://github.com/anomalyco/sst).
+**Found a bug or have a question?** [Open an issue](https://github.com/sst-community/sst/issues) or ask on [Discord](https://discord.gg/DQWT3WGVm2). For SST itself, see [anomalyco/sst](https://github.com/anomalyco/sst).
