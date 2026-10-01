@@ -146,6 +146,12 @@ the component reads its args.
   `transform` changes a part; it doesn't remove one.
 - **For a resource the user already has, use `existing`**, not an arg of your own.
   A static `get` is one line: `return new Uploads(name, { existing: { bucket: id } }, opts)`.
+  When the component has required args, return before reading them:
+  `if (this.existingPart("table")) return;`. `get` then passes only `existing`, with a
+  cast to the args type.
+- **A check that needs a deployed value** goes in the output that everything depending
+  on it reads, so the error stops what would have used it. `DynamoV5` checks that the
+  table's stream is enabled inside the stream ARN its subscribers are given.
 
 ## Linking, dev mode, naming
 
@@ -196,6 +202,12 @@ Everything above applies. The rest is specific to SST's own components in
   `CognitoUserPoolClientV5`, so `link: [client]` still gives `Resource.Web.id`.
 - A per-method `transform` moves to the component's `transform`. `this.assertNew()`
   rejects the old option with a message.
+- A deprecated overload isn't carried over (`subscribe(handler)` with no name). Throw
+  an error that shows the call to write instead; without one the user gets whatever
+  the shifted arguments happen to fail on.
+- A static method that adds something to a resource outside the app (`Dynamo.subscribe`
+  with a stream ARN) becomes `get(...)` and the ordinary method. The takeover map can
+  still find what the static method created: see `takeover/dynamo.ts`.
 
 ### Helpers
 
@@ -242,7 +254,11 @@ takeover(ApiGatewayV2V5, {
   top (`Bucket.notify` does).
 - `{ name, parent: false }` is something 4.x created with no parent at all.
 - A `moved` function can return several candidates. Addresses that don't exist are
-  ignored.
+  ignored. A candidate's name can be made from one of the component's outputs, like
+  the table's own name.
+- When 4.x created a resource inside `.apply()`, a `transform` function for it was
+  given plain values. Created directly, it's given outputs for whatever is made from
+  the component's args. Say so in the "Switch from" section.
 - A resource 4.x **looked up** outside the component (`Bucket.get`) can't be carried
   over, because a lookup takes no old address. It's dropped from state and looked up
   again, which changes nothing in AWS.
@@ -301,6 +317,8 @@ await pulumi.expectTakeover(
 - Assert on what's created, too. A takeover test passes when both sides create nothing,
   which is what happens when a mock is missing and both sides fail the same way.
 - `sst dev` behaviour is tested by setting `global.$dev = true` in a `beforeEach`.
+- An error thrown inside `.apply()` can't be asserted: under the mock it's an
+  unhandled rejection, which fails the run. Test the errors that are thrown directly.
 - `v5-components.test.ts` runs over every `*-v5.ts` file. It fails when one has no
   takeover map, isn't exported from `aws/index.ts`, or names another component's type.
 
@@ -333,5 +351,6 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
 The existing ports are the reference: `apigatewayv2-v5.ts` for routes, authorizers and a
 custom domain; `sns-topic-v5.ts` for named subscribers; `bucket-v5.ts` for one resource
 built from many notifications; `cognito-user-pool-v5.ts` for triggers and a linkable
-client; `redis-v5.ts` for dev mode and `get`; `function-v5.ts` for a component 4.x
+client; `redis-v5.ts` for dev mode and `get`; `dynamo-v5.ts` for required args next
+to `get`, and a static method replaced by `get`; `function-v5.ts` for a component 4.x
 built almost entirely inside `.apply()`, with parts that are created later.

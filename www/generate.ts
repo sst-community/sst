@@ -2914,6 +2914,7 @@ async function buildComponents() {
       "../platform/src/components/aws/cron-v2.ts",
       "../platform/src/components/aws/dynamo.ts",
       "../platform/src/components/aws/dynamo-lambda-subscriber.ts",
+      "../platform/src/components/aws/dynamo-v5.ts",
       "../platform/src/components/aws/efs.ts",
       "../platform/src/components/aws/email.ts",
       "../platform/src/components/aws/function.ts",

@@ -10,6 +10,7 @@ import "./app-sync";
 import "./bucket";
 import "./cognito-user-pool";
 import "./cognito-user-pool-client";
+import "./dynamo";
 import "./function";
 import "./queue";
 import "./redis";
