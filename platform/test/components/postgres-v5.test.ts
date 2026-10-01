@@ -179,6 +179,29 @@ describe("PostgresV5", () => {
       });
     }
 
+    // PostgresV5 merges an object transform into the defaults. Postgres replaced
+    // a nested object whole, so tags set this way took the place of the ones
+    // SST sets. Those come back: the one thing that changes.
+    it("an object transform that sets tags", async () => {
+      const create = (Postgres: PostgresClass) => () =>
+        new Postgres("MyDatabase", {
+          vpc,
+          transform: { instance: { tags: { team: "data" } } },
+        });
+
+      const result = await pulumi.takesOver(create(Postgres), create(PostgresV5));
+      expect(result.unclaimed).toEqual([VERSION]);
+      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
+        ["MyDatabaseInstance", ["tags"]],
+      ]);
+      expect(result.changed[0].original.tags).toEqual({ team: "data" });
+      expect(resource("MyDatabaseInstance").inputs.tags).toEqual({
+        team: "data",
+        "sst:component-version": "2",
+        "sst:lookup:password": "MyDatabaseSecret_id",
+      });
+    });
+
     it("a database in the private subnets of a Vpc", async () => {
       const { Vpc } = await import("../../src/components/aws/vpc");
       const create = (Postgres: PostgresClass) => () =>

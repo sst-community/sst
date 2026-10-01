@@ -255,7 +255,7 @@ export interface CognitoUserPoolV5IdentityProviderArgs
  * #### Switch from `CognitoUserPool`
  *
  * Change `CognitoUserPool` to `CognitoUserPoolV5` and keep the name. The user pool, its
- * domain, its clients, its identity providers and its trigger functions are kept. Three
+ * domain, its clients, its identity providers and its trigger functions are kept. A few
  * things are written differently:
  *
  * - `addIdentityProvider` returns the Cognito identity provider. `provider.providerName`
@@ -263,6 +263,10 @@ export interface CognitoUserPoolV5IdentityProviderArgs
  * - An identity provider's own `transform` becomes the user pool's
  *   `transform.identityProvider`.
  * - `domain`, `domain.dns` and `triggers` have to be plain values, not outputs.
+ * - An object in `transform` is merged into the defaults, nested objects included, where
+ *   `CognitoUserPool` replaced a nested object whole. To replace one, use a function.
+ * - `$transform(sst.aws.CognitoUserPool, ...)` doesn't apply to it. Write one for
+ *   `sst.aws.CognitoUserPoolV5`.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const userPool = new sst.aws.CognitoUserPool("MyUserPool");

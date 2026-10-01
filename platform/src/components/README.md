@@ -202,6 +202,9 @@ Everything above applies. The rest is specific to SST's own components in
   typeof parts> {}`. `Omit` and re-declare only what has to change. For an arg that has
   to become a plain value, write `cors?: Plain<BucketArgs["cors"]>` (`Plain` is in
   `args.ts`): the docs generator follows it back to the original's docs.
+  An arg's docs come with it, examples included. Re-declare an arg whose example names
+  the original (`new sst.aws.Queue("MyQueue", { dlq })`), so the V5 page doesn't tell
+  people to create the 4.x component.
 
 ### What becomes a part, and what stays a component
 
@@ -289,6 +292,14 @@ takeover(ApiGatewayV2V5, {
   exception (a security group, a VPC endpoint, a subnet). Its tag is made from the new
   name and updated in place. Say so in the "Switch from" section, as `DsqlV5` does for
   the security group of its endpoints.
+- An object in `transform` is merged into the defaults, nested objects included; 4.x
+  replaced a nested object whole. So a config that sets a nested default this way
+  (`transform: { instance: { tags: { team: "data" } } }`) deploys something different
+  after the switch: here SST's own tags come back. Find the nested defaults of each
+  part, test one (`an object transform that sets tags` in `postgres-v5.test.ts`), and
+  name it in the "Switch from" section.
+- `$transform(sst.aws.Queue, ...)` doesn't apply to `QueueV5`: it's matched by type.
+  Every "Switch from" section says so.
 - A function's `description` usually changes, because 4.x named the wrapper in it. That's
   an in-place update. So does anything else made from the function's name when a
   function part gets a new one: a URL behind a `Router` is registered under a key made
@@ -383,11 +394,16 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
 4. Export the component from `aws/index.ts`.
 5. Write `test/components/<name>-v5.test.ts`: takeover cases, then behaviour.
 6. Write the class doc, including a "Switch from `<Name>`" section that lists what's
-   written differently. Document each part where it's declared: those comments become
-   the `transform`, `existing` and `nodes` docs.
+   written differently and what changes on deploy, including the two notes every port
+   has: object transforms are merged, and `$transform` for the original doesn't apply.
+   Document each part where it's declared: those comments become the `transform`,
+   `existing` and `nodes` docs.
 7. Add the file to the `entryPoints` in `www/generate.ts` and to the "V5" group in
    `www/astro.config.mjs`. `cd www && bun ./generate.ts components` generates the page.
 8. Typecheck, run the tests, and `bun run build:cli` from the repo root.
+9. Review before calling it done. Read the original's constructor and the new one side
+   by side, resource by resource: args, options, names, what's read back. Then read the
+   generated page: outside the "Switch from" section, nothing should name the original.
 
 The existing ports are the reference: `apigatewayv2-v5.ts` for routes, authorizers and a
 custom domain; `sns-topic-v5.ts` for named subscribers; `bucket-v5.ts` for one resource

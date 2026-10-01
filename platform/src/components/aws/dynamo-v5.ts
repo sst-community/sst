@@ -175,6 +175,10 @@ type IndexKey = string | string[];
  *   ```
  * - A `transform` function for the table is given the table's indexes, attributes and
  *   stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
+ * - An object in `transform` is merged into the defaults, nested objects included, where
+ *   `Dynamo` replaced a nested object whole. To replace one, use a function.
+ * - `$transform(sst.aws.Dynamo, ...)` doesn't apply to it. Write one for
+ *   `sst.aws.DynamoV5`.
  *
  * #### Use a table you already have
  *

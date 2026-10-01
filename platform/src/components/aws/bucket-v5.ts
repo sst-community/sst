@@ -284,6 +284,10 @@ export interface BucketV5NotifyArgs {
  * - The `transform` of `notify` becomes the bucket's `transform.notification`.
  * - `subscribe`, `subscribeQueue` and `subscribeTopic` are gone. Use `notify`, which keeps
  *   the subscriber you had.
+ * - An object in `transform` is merged into the defaults, nested objects included, where
+ *   `Bucket` replaced a nested object whole. To replace one, use a function.
+ * - `$transform(sst.aws.Bucket, ...)` doesn't apply to it. Write one for
+ *   `sst.aws.BucketV5`.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const bucket = new sst.aws.Bucket("MyBucket");

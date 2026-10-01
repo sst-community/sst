@@ -82,6 +82,13 @@ export interface SnsTopicV5SubscriberArgs
  * const topic = new sst.aws.SnsTopic("MyTopic");
  * const topic = new sst.aws.SnsTopicV5("MyTopic");
  * ```
+ *
+ * Two things work differently:
+ *
+ * - An object in `transform` is merged into the defaults, nested objects included, where
+ *   `SnsTopic` replaced a nested object whole. To replace one, use a function.
+ * - `$transform(sst.aws.SnsTopic, ...)` doesn't apply to it. Write one for
+ *   `sst.aws.SnsTopicV5`.
  */
 export class SnsTopicV5 extends component("sst:aws:SnsTopicV5", parts) {
   constructor(

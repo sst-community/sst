@@ -222,6 +222,10 @@ export interface AppSyncV5ResolverArgs
  * - The `transform` of a data source, function or resolver becomes the API's `transform`
  *   for `dataSource`, `serviceRole`, `dataSourceFunction`, `function` and `resolver`.
  * - `domain` and `domain.dns` have to be plain values, not outputs.
+ * - An object in `transform` is merged into the defaults, nested objects included, where
+ *   `AppSync` replaced a nested object whole. To replace one, use a function.
+ * - `$transform(sst.aws.AppSync, ...)` doesn't apply to it. Write one for
+ *   `sst.aws.AppSyncV5`.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const api = new sst.aws.AppSync("MyApi", { schema: "schema.graphql" });
