@@ -27,13 +27,21 @@ export * from "./open-search.js";
 export * from "./postgres.js";
 export * from "./mysql.js";
 export * from "./queue.js";
+export * from "./apigatewayv2-v5.js";
+export * from "./app-sync-v5.js";
+export * from "./bucket-v5.js";
+export * from "./cognito-user-pool-v5.js";
+export * from "./cognito-user-pool-client-v5.js";
+export * from "./queue-v5.js";
 export * from "./realtime.js";
 export * from "./react.js";
 export * from "./redis.js";
+export * from "./redis-v5.js";
 export * from "./remix.js";
 export * from "./router.js";
 export * from "./service.js";
 export * from "./sns-topic.js";
+export * from "./sns-topic-v5.js";
 export * from "./solid-start.js";
 export * from "./step-functions.js";
 export * from "./tan-stack-start.js";
@@ -52,3 +60,6 @@ export { iamEdit } from "./iam-edit.js";
 // internal components
 export * from "./cdn.js";
 export * from "./dns-validated-certificate.js";
+
+// How the V5 components take over from the ones they replace
+import "./takeover/index.js";
