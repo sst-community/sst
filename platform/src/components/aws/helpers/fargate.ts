@@ -29,7 +29,7 @@ import type { ManyPart, Parts, PartsComponent } from "../../parts-component";
 import { toGBs, toMBs } from "../../size";
 import { transformPart } from "../../transform";
 import type { Cluster as OriginalCluster } from "../cluster";
-import { Efs } from "../efs";
+import { Efs as OriginalEfs } from "../efs";
 import {
   type FargateBaseArgs,
   type FargateContainerArgs,
@@ -39,16 +39,31 @@ import {
 import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
 import type { Cluster } from "../v5/cluster";
+import { Efs } from "../v5/efs";
 import type { ServiceArgs } from "../service";
 import { bootstrap } from "./bootstrap";
 import { imageBuilder } from "./container-builder";
 
 /**
+ * The file systems a container mounts. Each is given as an `Efs`, the 4.x one
+ * or the V5 one, or as the ids of a file system and one of its access points.
+ */
+type Volumes = Input<{
+  efs: Input<
+    | OriginalEfs
+    | Efs
+    | { fileSystem: Input<string>; accessPoint: Input<string> }
+  >;
+  path: Input<string>;
+}>[];
+
+/**
  * A container of a task or service. The name is a plain value: the
  * container's log group and image are named after it.
  */
-export type Container = Omit<FargateContainerArgs, "name"> & {
+export type Container = Omit<FargateContainerArgs, "name" | "volumes"> & {
   name: string;
+  volumes?: Volumes;
   health?: ServiceArgs["health"];
   dev?: ServiceArgs["dev"];
 };
@@ -61,11 +76,11 @@ type ContainersArgs = Pick<
   | "environment"
   | "environmentFiles"
   | "ssm"
-  | "volumes"
   | "command"
   | "entrypoint"
 > & {
   containers?: Container[];
+  volumes?: Volumes;
   health?: ServiceArgs["health"];
   dev?: ServiceArgs["dev"];
 };
@@ -444,14 +459,13 @@ export function taskDefinitionArgs(task: {
   executionRole: iam.Role;
 }): ecs.TaskDefinitionArgs {
   const linkEnvs = Link.propertiesToEnv(Link.getProperties(task.link));
-  // Each container's volumes. A volume is given as an `Efs`, or as the ids
-  // of a file system and one of its access points.
+  // Each container's volumes, as the ids of a file system and its access point
   const volumes = task.containers.map(({ container }) =>
     output(container.volumes).apply((volumes) =>
       volumes?.map((volume) => ({
         path: volume.path,
         efs:
-          volume.efs instanceof Efs
+          volume.efs instanceof OriginalEfs || volume.efs instanceof Efs
             ? {
                 fileSystem: volume.efs.id,
                 accessPoint: volume.efs.accessPoint,

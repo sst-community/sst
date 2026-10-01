@@ -13,6 +13,7 @@ export * from "./cognito-user-pool-client";
 export * from "./cron-v2";
 export * from "./dsql";
 export * from "./dynamo";
+export * from "./efs";
 export * from "./function";
 export * from "./mysql";
 export * from "./postgres";

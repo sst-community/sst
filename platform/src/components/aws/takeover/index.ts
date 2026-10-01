@@ -14,6 +14,7 @@ import "./cognito-user-pool";
 import "./cron-v2";
 import "./dsql";
 import "./dynamo";
+import "./efs";
 import "./function";
 import "./mysql";
 import "./postgres";

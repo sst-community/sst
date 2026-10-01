@@ -32,6 +32,7 @@ import { hashStringToPrettyString } from "../../naming";
 import { transformPart } from "../../transform";
 import { Alb } from "../alb";
 import type { Cluster as OriginalCluster } from "../cluster";
+import type { Efs as OriginalEfs } from "../efs";
 import { DnsValidatedCertificate } from "../dns-validated-certificate";
 import type { FargateContainerArgs } from "../fargate";
 import { type CustomDomainArgs, customDomain } from "../helpers/custom-domain";
@@ -52,6 +53,7 @@ import { URL_UNAVAILABLE } from "../linkable";
 import type { ServiceArgs as OriginalServiceArgs } from "../service";
 import { Vpc } from "../vpc";
 import type { Cluster } from "./cluster";
+import type { Efs } from "./efs";
 
 const parts = () => ({
   /**
@@ -151,7 +153,7 @@ type Port = `${number}/${"http" | "https" | "tcp" | "udp" | "tcp_udp" | "tls"}`;
 type AlbPort = `${number}/${"http" | "https"}`;
 
 export interface ServiceContainerArgs
-  extends Omit<FargateContainerArgs, "name"> {
+  extends Omit<FargateContainerArgs, "name" | "volumes"> {
   /**
    * The name of the container.
    *
@@ -185,6 +187,11 @@ export interface ServiceContainerArgs
      */
     directory?: Input<string>;
   };
+  /**
+   * Mount Amazon EFS file systems into the container. Same as the top-level
+   * [`volumes`](#volumes).
+   */
+  volumes?: ServiceArgs["volumes"];
 }
 
 export interface ServiceDomainArgs extends CustomDomainArgs {
@@ -797,6 +804,7 @@ export interface ServiceArgs
       OriginalServiceArgs,
       | "cluster"
       | "containers"
+      | "volumes"
       | "taskRole"
       | "executionRole"
       | "public"
@@ -1039,6 +1047,69 @@ export interface ServiceArgs
    * container can be an output.
    */
   containers?: ServiceContainerArgs[];
+  /**
+   * Mount Amazon EFS file systems into the container.
+   *
+   * @example
+   * Create an EFS file system.
+   *
+   * ```ts title="sst.config.ts"
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const fileSystem = new sst.aws.v5.Efs("MyFileSystem", { vpc });
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   volumes: [
+   *     {
+   *       efs: fileSystem,
+   *       path: "/mnt/efs"
+   *     }
+   *   ]
+   * }
+   * ```
+   *
+   * Or pass in a the EFS file system ID.
+   *
+   * ```js
+   * {
+   *   volumes: [
+   *     {
+   *       efs: {
+   *         fileSystem: "fs-12345678",
+   *         accessPoint: "fsap-12345678"
+   *       },
+   *       path: "/mnt/efs"
+   *     }
+   *   ]
+   * }
+   * ```
+   */
+  volumes?: Input<{
+    /**
+     * The Amazon EFS file system to mount.
+     */
+    efs: Input<
+      | OriginalEfs
+      | Efs
+      | {
+          /**
+           * The ID of the EFS file system.
+           */
+          fileSystem: Input<string>;
+          /**
+           * The ID of the EFS access point.
+           */
+          accessPoint: Input<string>;
+        }
+    >;
+    /**
+     * The path to mount the volume.
+     */
+    path: Input<string>;
+  }>[];
 }
 
 /**

@@ -38,8 +38,9 @@ import {
   Function as OriginalFunction,
   FunctionArgs as OriginalFunctionArgs,
 } from "../function";
-import { Efs } from "../efs";
+import { Efs as OriginalEfs } from "../efs";
 import { Vpc } from "../vpc";
+import { Efs } from "./efs";
 import { RETENTION } from "../logging";
 import { Permission, permission } from "../permission";
 import { normalizeRouteArgs } from "../router";
@@ -219,10 +220,71 @@ export interface FunctionArgs
   extends V5Args<
     Omit<
       OriginalFunctionArgs,
-      "live" | "dev" | "role" | "logging" | "url" | "python" | "concurrency"
+      | "live"
+      | "dev"
+      | "role"
+      | "logging"
+      | "url"
+      | "python"
+      | "concurrency"
+      | "volume"
     >,
     typeof parts
   > {
+  /**
+   * Mount an EFS file system to the function.
+   *
+   * @example
+   * Create an EFS file system.
+   *
+   * ```ts title="sst.config.ts"
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const fileSystem = new sst.aws.v5.Efs("MyFileSystem", { vpc });
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   volume: {
+   *     efs: fileSystem
+   *   }
+   * }
+   * ```
+   *
+   * By default, the file system will be mounted to `/mnt/efs`. You can change this by
+   * passing in the `path` property.
+   *
+   * ```js
+   * {
+   *   volume: {
+   *     efs: fileSystem,
+   *     path: "/mnt/my-files"
+   *   }
+   * }
+   * ```
+   *
+   * To use an existing EFS, you can pass in an EFS access point ARN.
+   *
+   * ```js
+   * {
+   *   volume: {
+   *     efs: "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-12345678",
+   *   }
+   * }
+   * ```
+   */
+  volume?: Input<{
+    /**
+     * The EFS file system to mount. Or an EFS access point ARN.
+     */
+    efs: Input<OriginalEfs | Efs | string>;
+    /**
+     * The path to mount the volume.
+     * @default `"/mnt/efs"`
+     */
+    path?: Input<string>;
+  }>;
   /**
    * Disable running this function [_Live_](/docs/live/) in `sst dev`.
    *
@@ -838,7 +900,7 @@ export class Function extends component("sst:aws:Function", parts) {
 
       return output(args.volume).apply((volume) => ({
         efs:
-          volume.efs instanceof Efs
+          volume.efs instanceof OriginalEfs || volume.efs instanceof Efs
             ? volume.efs.nodes.accessPoint.arn
             : output(volume.efs),
         path: volume.path ?? "/mnt/efs",

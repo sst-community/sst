@@ -235,7 +235,8 @@ Everything above applies. The rest is specific to SST's own components in
   taken goes last: an app switches to it once everything it's passed to is V5.
   The V5 `Service` and `Task` take either `Cluster`. The arg is declared again in each
   (`cluster: OriginalCluster | Cluster`), and the V5 `Cluster` gives them the same
-  `nodes.cluster` and `vpc` to read as the 4.x one.
+  `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Function`, `Service` and
+  `Task` take either `Efs` the same way.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **Reuse the original's arg types**: `interface QueueArgs extends
   V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
@@ -337,6 +338,10 @@ takeover(ApiGatewayV2, {
 - A resource 4.x **looked up** outside the component (`Bucket.get`) can't be carried
   over, because a lookup takes no old address. It's dropped from state and looked up
   again, which changes nothing in AWS.
+- A resource 4.x looked up under the component for a value isn't a part: it's not the
+  component's to transform or replace. Look it up with `this.delegateOpts()` and the
+  name it had, and it stays where it was in the state. The V5 `Efs` does this for the
+  VPC whose CIDR block it reads.
 - A part that gets a new name keeps its physical name: a generated name is never
   changed once it's deployed. A resource that's named with a `Name` tag is the
   exception (a security group, a VPC endpoint, a subnet): the tag is made from the
@@ -399,7 +404,9 @@ reads `bucket.name` wait for the bucket policy; the V5 one keeps that in its get
 Where the original left an order to chance, and parts that are created directly make
 it easy to say, say it with `dependsOn`: the V5 `Service` makes the ECS service wait
 for the listeners that put its target groups on the load balancer. That changes
-nothing a deploy does to what's already there.
+nothing a deploy does to what's already there. `dependsOn` also takes an output of
+resources, so it works for parts that are created later: the 4.x `Efs` made its ids
+wait for the mount targets, and in the V5 one the access point depends on them.
 
 ### Tests
 
@@ -531,7 +538,9 @@ linkable client; `redis.ts` for dev mode and `get`; `postgres.ts` for the same w
 optional group of parts (the proxy) and a part per item in a list; `aurora.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
 than one part; `cluster.ts` for the smallest one: nothing moved, so no takeover map,
-and a `get` that takes args next to the id; `dsql.ts` for parts in another region, and features that each add a
+and a `get` that takes args next to the id; `efs.ts` for a part per item of a list
+that's only known on deploy (a mount target per subnet), and a `get` that finds the
+other part it needs; `dsql.ts` for parts in another region, and features that each add a
 group of parts; `task.ts` for parts per item of a plain list (containers), a part
 that's built later, a stub in `sst dev`, and outputs the CLI reads; `service.ts` for
 groups of parts that depend on an arg (a load balancer of its own, or one it
