@@ -183,6 +183,11 @@ the component reads its args.
   For another type, `sst.Component.naming("aws:athena/workgroup:Workgroup", { field:
   "name", max: 128 })`, or `false` to leave it to the provider. A resource that's looked
   up keeps the name it has.
+- **Testing.** `mock()` from `.sst/platform/src/testing` stands in for the engine and
+  gives a test the globals a config has. Create the component, `await app.settle()`, and
+  read `app.resources`. `app.takeover(saved)` checks a change against a saved
+  `app.graph()`: what a deploy would remove, and what it would update. It works with
+  vitest and with `bun test`. The docs page has the examples.
 - **Renaming a part later.** A part's key is in the name of its resource, so a new key
   is a new resource. To change the key and keep what's deployed, declare the part with
   the name it had: `files: sst.named(aws.s3.Bucket, "Bucket")`. Or give the resource its
@@ -358,9 +363,11 @@ Also check for an **ordering guarantee** the original makes with an
 
 ### Tests
 
-`platform/test/helpers/graph.ts` mocks Pulumi and records every resource a component
-registers. A port's test file starts with its takeover cases, then tests the component's
-own behaviour:
+`platform/src/testing/mock.ts` mocks Pulumi and records every resource a component
+registers. It ships with the platform, and `mock()` next to it is what an app tests its
+own components with, so it imports no test runner. `platform/test/helpers/graph.ts` adds
+the takeover suite for the ports, which is written for vitest. A port's test file starts
+with its takeover cases, then tests the component's own behaviour:
 
 ```ts
 const pulumi = mockPulumi();

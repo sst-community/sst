@@ -350,3 +350,122 @@ sst.takeover(Uploads, {
 ```
 
 The same call lets a new component take over from another one. Give it the other component's type in `from`, and keep the name you gave the component.
+
+---
+
+## Test it
+
+You can test your component without deploying it. Put it in a file of its own and export it.
+
+```ts title="infra/uploads.ts"
+const parts = {
+  bucket: aws.s3.Bucket,
+  // ...
+};
+
+export class Uploads extends sst.component("acme:Uploads", parts) {
+  // ...
+}
+```
+
+Then `mock` stands in for what deploys your app. It gives your test everything your `sst.config.ts` has, like `sst`, `aws` and `$app`, and records each resource your component creates.
+
+```ts title="uploads.test.ts"
+import { beforeEach, expect, test } from "vitest";
+import { mock } from "./.sst/platform/src/testing";
+
+const app = await mock();
+const { Uploads } = await import("./infra/uploads");
+
+beforeEach(() => app.reset());
+
+test("creates a role for each team", async () => {
+  new Uploads("Docs", { teams: ["design", "legal"] });
+  await app.settle();
+
+  expect(app.resources.map((r) => r.name).sort()).toEqual([
+    "Docs",
+    "DocsBucket",
+    "DocsReaderDesign",
+    "DocsReaderLegal",
+  ]);
+});
+```
+
+Nothing is deployed, and no provider is called. This works with [Vitest](https://vitest.dev) and with `bun test`.
+
+:::note
+Call `mock` before your component's file is loaded. That file reads `sst` and `aws` as it loads, which is why it's imported with `await import`.
+:::
+
+The `.sst/platform` directory is created by `sst install`, so run that first in a fresh checkout.
+
+---
+
+#### What you get
+
+- `app.resources` has each resource that was created, with its `type`, `name`, `parent`, the `inputs` it was given and its `options`.
+- `app.settle()` waits until everything has been created.
+- `app.resolve(value)` reads an `Output`.
+- `app.reset()` empties the list, so each test sees its own resources.
+
+```ts title="uploads.test.ts"
+test("turns on force destroy", async () => {
+  const uploads = new Uploads("Docs", { teams: [] });
+  await app.settle();
+
+  const bucket = app.resources.find((r) => r.name === "DocsBucket")!;
+  expect(bucket.inputs.forceDestroy).toBe(true);
+  expect(await app.resolve(uploads.name)).toMatch(/^app-test-docsbucket-/);
+});
+```
+
+---
+
+#### What a resource returns
+
+A resource comes back with the inputs it was given, an ID of `<name>_id`, and an ARN made from its name. If your component reads another output, say what it is with `state`. And `call` does the same for a function like `aws.getRegion`.
+
+```ts title="uploads.test.ts"
+const app = await mock({
+  state: (args) =>
+    args.type === "aws:s3/bucket:Bucket"
+      ? { bucketRegionalDomainName: `${args.name}.s3.amazonaws.com` }
+      : {},
+  call: (args) =>
+    args.token === "aws:index/getRegion:getRegion"
+      ? { name: "eu-west-1", region: "eu-west-1" }
+      : undefined,
+});
+```
+
+You can also pass the `app` name and the `stage`, which are `app` and `test` by default. To test what your component does in `sst dev`, pass `dev: true`.
+
+---
+
+#### Check a change before you deploy it
+
+A component that's deployed can lose a resource when you change it. A renamed part is a new resource, and the old one is removed.
+
+To catch that, save what your component creates when you deploy it.
+
+```ts title="uploads.test.ts"
+new Uploads("Docs", { teams: ["design"] });
+await app.settle();
+fs.writeFileSync("uploads.deployed.json", JSON.stringify(app.graph()));
+```
+
+Then check your changes against it.
+
+```ts title="uploads.test.ts"
+test("keeps what's deployed", async () => {
+  const deployed = JSON.parse(fs.readFileSync("uploads.deployed.json", "utf8"));
+
+  new Uploads("Docs", { teams: ["design"] });
+  await app.settle();
+
+  expect(app.takeover(deployed)).toEqual({ unclaimed: [], changed: [] });
+});
+```
+
+Here `unclaimed` are the resources a deploy would remove. And `changed` are the ones it would update, with the inputs that are different. A part that's [renamed](#rename-a-part) with `sst.named` or `sst.takeover` passes this.
