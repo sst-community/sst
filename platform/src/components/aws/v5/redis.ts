@@ -110,7 +110,7 @@ interface Connection {
  * });
  * ```
  */
-export class Redis extends component("sst:aws:RedisV5", parts) {
+export class Redis extends component("sst:aws:Redis", parts) {
   private connection: Connection;
 
   constructor(name: string, args: RedisArgs, opts?: ComponentResourceOptions) {

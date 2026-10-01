@@ -233,7 +233,7 @@ export interface AppSyncResolverArgs
  * const api = new sst.aws.v5.AppSync("MyApi", { schema: "schema.graphql" });
  * ```
  */
-export class AppSync extends component("sst:aws:AppSyncV5", parts) {
+export class AppSync extends component("sst:aws:AppSync", parts) {
   constructor(
     name: string,
     args: AppSyncArgs,

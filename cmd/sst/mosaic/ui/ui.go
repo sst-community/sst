@@ -626,7 +626,7 @@ func (u *UI) functionName(functionID string) string {
 		return functionID
 	}
 	for _, resource := range u.complete.Resources {
-		if (resource.Type == "sst:aws:Function" || resource.Type == "sst:aws:FunctionV5") && resource.URN.Name() == functionID {
+		if resource.Type == "sst:aws:Function" && resource.URN.Name() == functionID {
 			return strings.TrimPrefix(resource.Outputs["_metadata"].(map[string]interface{})["handler"].(string), "./")
 		}
 		if resource.Type == "sst:cloudflare:Worker" && resource.URN.Name() == functionID {

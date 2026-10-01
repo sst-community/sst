@@ -133,7 +133,7 @@ describe("ApiGatewayV2", () => {
           check: () =>
             expect(
               pulumi.resources
-                .filter((r) => r.type === "sst:aws:FunctionV5")
+                .filter((r) => r.type === "sst:aws:Function")
                 .map((r) => r.parent.split("::").at(-1)),
             ).toEqual(["MyApi", "MyApi"]),
         },
@@ -278,7 +278,9 @@ describe("ApiGatewayV2", () => {
     expect(Object.keys(api.nodes.handler)).toEqual(["GET /", "GetUser"]);
     expect(Object.keys(api.nodes.permission)).toEqual(["GET /", "GetUser"]);
     const handler = await pulumi.resolve(api.nodes.handler.GetUser);
-    expect((handler.constructor as any).__pulumiType).toBe("sst:aws:FunctionV5");
+    expect(handler).toBeInstanceOf(
+      (await import("../../../src/components/aws/v5/function")).Function,
+    );
   });
 
   it("names routes that differ only in punctuation apart", async () => {

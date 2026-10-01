@@ -312,7 +312,7 @@ export interface BucketNotifyArgs {
  * });
  * ```
  */
-export class Bucket extends component("sst:aws:BucketV5", parts) {
+export class Bucket extends component("sst:aws:Bucket", parts) {
   constructor(
     name: string,
     args: BucketArgs = {},

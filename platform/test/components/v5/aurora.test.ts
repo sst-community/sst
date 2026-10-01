@@ -390,7 +390,7 @@ describe("Aurora", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:AuroraV5",
+        "sst:aws:Aurora",
         "sst:sst:DevCommand",
       ]);
       expect(
@@ -750,7 +750,7 @@ describe("Aurora", () => {
       });
       await pulumi.settle();
 
-      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:AuroraV5"]);
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Aurora"]);
       expect(database.nodes.cluster).toBe(cluster);
       expect(
         await pulumi.resolve([

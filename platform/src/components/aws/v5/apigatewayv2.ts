@@ -255,7 +255,7 @@ export interface ApiGatewayV2AuthorizerArgs
  * const api = new sst.aws.v5.ApiGatewayV2("MyApi");
  * ```
  */
-export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2V5", parts) {
+export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   private handlerLink: OriginalFunctionArgs["link"];
 
   constructor(

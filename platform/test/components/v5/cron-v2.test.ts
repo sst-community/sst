@@ -358,7 +358,7 @@ describe("CronV2", () => {
 
     const fn = resource("MyCronJobFunctionFunction");
     expect(fn.type).toBe(FUNCTION);
-    expect(resource("MyCronJobFunction").type).toBe("sst:aws:FunctionV5");
+    expect(resource("MyCronJobFunction").type).toBe("sst:aws:Function");
     expect(resource("MyCronJobSchedule").inputs).toMatchObject({
       scheduleExpression: "rate(1 minute)",
       flexibleTimeWindow: { mode: "OFF" },

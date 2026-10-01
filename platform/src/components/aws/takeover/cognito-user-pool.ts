@@ -9,7 +9,6 @@ import { childOf } from "./helpers";
 const IDENTITY_PROVIDER = "sst:aws:CognitoIdentityProvider";
 
 takeover(CognitoUserPool, {
-  from: "sst:aws:CognitoUserPool",
   moved: {
     certificate: "ssl",
     // A trigger's function and permission were named after the trigger the

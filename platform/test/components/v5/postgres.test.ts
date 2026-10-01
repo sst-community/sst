@@ -289,7 +289,7 @@ describe("Postgres", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:PostgresV5",
+        "sst:aws:Postgres",
         "sst:sst:DevCommand",
       ]);
       expect(
@@ -587,7 +587,7 @@ describe("Postgres", () => {
       await pulumi.settle();
 
       expect(database.nodes.instance).toBe(mine);
-      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:PostgresV5"]);
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Postgres"]);
       expect(
         await pulumi.resolve([
           database.host,

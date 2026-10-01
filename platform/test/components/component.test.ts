@@ -904,7 +904,7 @@ describe("Component parts", () => {
       await pulumi.settle();
 
       expect(sessions.nodes.cleanup).toBeInstanceOf(CronV2);
-      expect(resource("LoginsCleanup").type).toBe("sst:aws:CronV2V5");
+      expect(resource("LoginsCleanup").type).toBe("sst:aws:CronV2");
       expect(resource("LoginsCleanupSchedule").inputs).toMatchObject({
         scheduleExpression: "rate(1 day)",
         scheduleExpressionTimezone: "America/New_York",
@@ -937,7 +937,7 @@ describe("Component parts", () => {
 
       // Given its new name, and told where it was: the resource is kept
       const Moved = define(aws.s3.Bucket);
-      takeover(Moved, { from: "docs:Renamed", moved: { files: "bucket" } });
+      takeover(Moved, { moved: { files: "bucket" } });
       expect(
         await pulumi.takesOver(
           () => new Before("Docs", { teams: [] }),
@@ -945,6 +945,38 @@ describe("Component parts", () => {
         ),
       ).toEqual({ unclaimed: [], changed: [] });
       expect(names()).toEqual(["Docs", "DocsFiles"]);
+    });
+
+    it("takes over from a component of another type, given that type", async () => {
+      const { takeover } = await import("../../src/components/takeover");
+      const Before = defineUploads("docs:Uploads");
+      const After = defineUploads("docs:Files");
+
+      // Without it, a component of another type is another component
+      expect(
+        (
+          await pulumi.takesOver(
+            () => new Before("Docs", { teams: ["legal"] }),
+            () => new After("Docs", { teams: ["legal"] }),
+          )
+        ).unclaimed.length,
+      ).toBe(3);
+
+      takeover(After, { from: "docs:Uploads" });
+      expect(
+        await pulumi.takesOver(
+          () => new Before("Docs", { teams: ["legal"] }),
+          () => new After("Docs", { teams: ["legal"] }),
+        ),
+      ).toEqual({ unclaimed: [], changed: [] });
+      // A class that extends it takes over the same way
+      class Extended extends After {}
+      expect(
+        await pulumi.takesOver(
+          () => new Before("Docs", { teams: ["legal"] }),
+          () => new Extended("Docs", { teams: ["legal"] }),
+        ),
+      ).toEqual({ unclaimed: [], changed: [] });
     });
   });
 

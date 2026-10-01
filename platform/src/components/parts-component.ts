@@ -554,7 +554,7 @@ export class PartsComponent<P extends Parts> extends Component {
 
   // Where a part's resource lived in the component this one takes over from
   private aliasesOf(key: string, id?: string) {
-    const moved = takeoverOf(this.componentType)?.moved?.[key];
+    const moved = takeoverOf(this.constructor)?.moved?.[key];
     if (!moved) return [];
 
     // A part that only changed its key was named the way 4.x names things:

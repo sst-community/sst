@@ -331,7 +331,7 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
  *
  * Check out the [Aurora DSQL pricing](https://aws.amazon.com/rds/aurora/dsql/pricing/) for more details.
  */
-export class Dsql extends component("sst:aws:DsqlV5", parts) {
+export class Dsql extends component("sst:aws:Dsql", parts) {
   constructor(
     name: string,
     args: DsqlArgs = {},

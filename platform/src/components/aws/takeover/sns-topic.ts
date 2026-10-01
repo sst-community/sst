@@ -11,7 +11,6 @@ const QUEUE = "sst:aws:SnsTopicQueueSubscriber";
 const subscriber = (topic: string, name?: string) => `${topic}Subscriber${name}`;
 
 takeover(SnsTopic, {
-  from: "sst:aws:SnsTopic",
   moved: {
     subscriber: (_, { name, id }) =>
       childOf(FUNCTION, subscriber(name, id), "Function"),

@@ -299,7 +299,7 @@ export interface TaskArgs
  * [Fargate pricing](https://aws.amazon.com/fargate/pricing/) and the
  * [Public IPv4 Address pricing](https://aws.amazon.com/vpc/pricing/) for more details.
  */
-export class Task extends component("sst:aws:TaskV5", parts) {
+export class Task extends component("sst:aws:Task", parts) {
   private readonly run: {
     cluster: TaskArgs["cluster"];
     containers: string[];

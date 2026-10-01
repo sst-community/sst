@@ -278,7 +278,7 @@ describe("Mysql", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:MysqlV5",
+        "sst:aws:Mysql",
         "sst:sst:DevCommand",
       ]);
       expect(
@@ -590,7 +590,7 @@ describe("Mysql", () => {
       await pulumi.settle();
 
       expect(database.nodes.instance).toBe(mine);
-      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:MysqlV5"]);
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Mysql"]);
       expect(
         await pulumi.resolve([
           database.host,

@@ -579,21 +579,89 @@ describe("Function", () => {
     });
   });
 
+  // The 4.x Function takes a few options another way: `live`, `role`,
+  // `logging.logGroup` and `url.route`. The V5 one takes those too, because a
+  // `$transform` written for the 4.x one runs on it: they have the same type.
+  describe("takes what's written for the 4.x Function", () => {
+    const handler = "src/index.handler";
+    const inputs = (name: string) =>
+      pulumi.resources.find((r) => r.name === name)!.inputs;
+
+    it("as its own args", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const args = () => ({
+        handler,
+        live: false as const,
+        role: ROLE_ARN,
+        logging: { logGroup: "/my/logs", format: "json" as const },
+        url: { route: { router: router("none"), path: "/jobs" } },
+      });
+      const result = await pulumi.takesOver(
+        () => new OriginalFunction("MyFunction", args()),
+        () => new Function("MyFunction", args() as FunctionArgs),
+      );
+
+      expect(result.unclaimed).toEqual([]);
+      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([]);
+      expect(inputs("MyFunctionFunction")).toMatchObject({
+        // Not the stub that's deployed in `sst dev`
+        handler: "index.handler",
+        role: ROLE_ARN,
+        loggingConfig: { logFormat: "JSON", logGroup: "/my/logs" },
+      });
+    });
+
+    it("in a $transform, which applies to both", async () => {
+      const { $transform } = await import("../../../src/components/component");
+      $transform(OriginalFunction, (args, _opts, name) => {
+        if (!name.startsWith("Transformed")) return;
+        args.memory = "2 GB";
+        args.role = ROLE_ARN;
+      });
+
+      new OriginalFunction("TransformedOriginal", { handler });
+      new Function("Transformed", { handler });
+      // A function a V5 component creates
+      const { Queue } = await import("../../../src/components/aws/v5/queue");
+      new Queue("TransformedQueue").subscribe(handler);
+      await pulumi.settle();
+
+      for (const name of [
+        "TransformedOriginalFunction",
+        "TransformedFunction",
+        "TransformedQueueSubscriberFunction",
+      ])
+        expect(inputs(name), name).toMatchObject({
+          memorySize: 2048,
+          role: ROLE_ARN,
+        });
+      // The role is the one that's passed: none is created
+      expect(
+        pulumi.resources.filter(
+          (r) => r.type === "aws:iam/role:Role" && r.kind === "register",
+        ),
+      ).toEqual([]);
+    });
+
+    it("unless the V5 way of writing it is there too", async () => {
+      new Function("MyFunction", {
+        handler,
+        role: ROLE_ARN,
+        existing: { role: "another-role" },
+      } as FunctionArgs);
+      await pulumi.settle();
+
+      expect(
+        pulumi.resources.filter((r) => r.type === "aws:iam/role:Role"),
+      ).toMatchObject([{ kind: "read", options: { id: "another-role" } }]);
+    });
+  });
+
   describe("says what to write instead", () => {
     const handler = "src/index.handler";
     const create = (args: object) => () =>
       new Function("MyFunction", { handler, ...args } as FunctionArgs);
-
-    it("for options that moved", () => {
-      expect(create({ live: false })).toThrow(/"live" isn't an option.*dev: false/);
-      expect(create({ role: ROLE_ARN })).toThrow(/"role" isn't an option.*existing/);
-      expect(create({ logging: { logGroup: "/my/logs" } })).toThrow(
-        /"logGroup" isn't an option.*existing/,
-      );
-      expect(create({ url: { route: {} } })).toThrow(
-        /"route" isn't an option.*url\.router/,
-      );
-    });
 
     it("for args that have to be plain values", () => {
       for (const args of [

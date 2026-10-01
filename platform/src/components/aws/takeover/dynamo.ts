@@ -18,7 +18,6 @@ const subscribers = (table: Dynamo, name: string, id?: string) => [
 ];
 
 takeover(Dynamo, {
-  from: "sst:aws:Dynamo",
   moved: {
     subscriber: (table, { name, id }) =>
       subscribers(table, name, id).map((subscriber) =>

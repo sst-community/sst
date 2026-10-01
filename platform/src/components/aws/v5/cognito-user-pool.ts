@@ -275,7 +275,7 @@ export interface CognitoUserPoolIdentityProviderArgs
  * ```
  */
 export class CognitoUserPool extends component(
-  "sst:aws:CognitoUserPoolV5",
+  "sst:aws:CognitoUserPool",
   parts,
 ) {
   private hostedUiUrl?: Output<string>;

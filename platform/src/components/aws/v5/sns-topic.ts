@@ -101,7 +101,7 @@ export interface SnsTopicSubscriberArgs
  *   replaced on switch: remove the subscriber and deploy before you switch, then add it
  *   back.
  */
-export class SnsTopic extends component("sst:aws:SnsTopicV5", parts) {
+export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
   constructor(
     name: string,
     args: SnsTopicArgs = {},

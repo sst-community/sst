@@ -141,7 +141,7 @@ export interface QueueSubscriberArgs
  * });
  * ```
  */
-export class Queue extends component("sst:aws:QueueV5", parts) {
+export class Queue extends component("sst:aws:Queue", parts) {
   constructor(
     name: string,
     args: QueueArgs = {},

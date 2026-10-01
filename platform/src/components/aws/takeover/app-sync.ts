@@ -24,7 +24,6 @@ const resolver = (api: string, id = "") =>
 // rather than inside anything: the function of a Lambda data source given as a
 // handler, and the association between a custom domain and the API.
 takeover(AppSync, {
-  from: "sst:aws:AppSync",
   moved: {
     certificate: "ssl",
     domainAssociation: (_, { name }) => ({

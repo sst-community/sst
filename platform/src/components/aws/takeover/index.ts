@@ -11,7 +11,6 @@ import "./app-sync";
 import "./aurora";
 import "./bucket";
 import "./cognito-user-pool";
-import "./cognito-user-pool-client";
 import "./cron-v2";
 import "./dsql";
 import "./dynamo";

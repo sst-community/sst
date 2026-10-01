@@ -275,7 +275,7 @@ describe("Dynamo", () => {
               "MyTableSubscriberIndexerRole",
             ]);
             expect(resource("MyTableEventSourceMappingIndexer").parent).toMatch(
-              /sst:aws:DynamoV5::MyTable$/,
+              /sst:aws:Dynamo::MyTable$/,
             );
           },
         },
@@ -435,7 +435,9 @@ describe("Dynamo", () => {
       "Indexer",
     ]);
     const fn = await pulumi.resolve(table.nodes.subscriber.Indexer);
-    expect((fn.constructor as any).__pulumiType).toBe("sst:aws:FunctionV5");
+    expect(fn).toBeInstanceOf(
+      (await import("../../../src/components/aws/v5/function")).Function,
+    );
   });
 
   it("lets a subscriber read the table's stream", async () => {
@@ -500,7 +502,7 @@ describe("Dynamo", () => {
     await pulumi.settle();
 
     expect(table.nodes.table).toBe(mine);
-    expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:DynamoV5"]);
+    expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Dynamo"]);
   });
 
   it("links with its name and permission to use the table", async () => {

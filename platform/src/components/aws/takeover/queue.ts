@@ -12,7 +12,6 @@ const subscriber = (queue: Queue, name: string) =>
   );
 
 takeover(Queue, {
-  from: "sst:aws:Queue",
   moved: {
     subscriber: (queue, { name }) =>
       childOf(SUBSCRIBER, subscriber(queue, name), "Function"),

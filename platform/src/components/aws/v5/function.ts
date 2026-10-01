@@ -25,7 +25,7 @@ import {
 } from "@pulumi/aws";
 import { Image } from "@pulumi/docker-build";
 import { V5Args, component, many, optional } from "../../parts-component";
-import { Plain, ifSet, notAnOption, plain, withDefault } from "../../args";
+import { Plain, ifSet, plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { Link } from "../../link";
@@ -44,7 +44,7 @@ import { RETENTION } from "../logging";
 import { Permission, permission } from "../permission";
 import { normalizeRouteArgs } from "../router";
 import { bootstrap } from "../helpers/bootstrap";
-import { splitQualifiedFunctionArn } from "../helpers/arn";
+import { parseRoleArn, splitQualifiedFunctionArn } from "../helpers/arn";
 import {
   FunctionBundle,
   FunctionFile,
@@ -410,6 +410,7 @@ export interface FunctionArgs
  * - `logging: { logGroup: name }` becomes `existing: { logGroup }`, with the log group
  *   or its name.
  * - `live: false` becomes `dev: false`, and `url.route` becomes `url.router`.
+ * - The way `sst.aws.Function` takes those four still works.
  * - `nodes.function` and `nodes.logGroup` are the resources themselves, not outputs.
  * - The alias the URL of a durable function points at is created with the function's
  *   `provider`. `sst.aws.Function` created it with your app's provider, whatever the
@@ -427,7 +428,7 @@ export interface FunctionArgs
  * new sst.aws.v5.Function("MyFunction", { handler: "src/lambda.handler" });
  * ```
  */
-export class Function extends component("sst:aws:FunctionV5", parts) {
+export class Function extends component("sst:aws:Function", parts) {
   private readonly durable: boolean;
   private readonly fn: lambda.Function;
   private readonly urlEndpoint: Output<string | undefined>;
@@ -450,15 +451,26 @@ export class Function extends component("sst:aws:FunctionV5", parts) {
     }
 
     const option = (arg: string) => `The "${arg}" of the "${name}" function`;
-    notAnOption(args, "live", `Use "dev: false".`);
-    notAnOption(
-      args,
-      "role",
-      `Pass the role, or its name, in "existing": { existing: { role } }.`,
-    );
+    // A few options are written another way for the 4.x `Function`: `live`,
+    // `role`, `logging.logGroup` and `url.route`. They're taken here too. A
+    // `$transform` written for the 4.x one runs on this one, as they have
+    // the same type, and so does the definition of a function part.
+    const given = args as Record<string, any>;
+    const original: {
+      live?: boolean;
+      role?: Input<string>;
+      logGroup?: Input<string>;
+    } = {
+      live: given.live,
+      role: given.role,
+      logGroup: plain(given.logging, option("logging"))?.logGroup,
+    };
 
     // The args that decide which resources are created are read first
-    const dev = plain(args.dev, option("dev")) !== false && $dev;
+    const dev =
+      plain(args.dev, option("dev")) !== false &&
+      !(args.dev === undefined && original.live === false) &&
+      $dev;
     const logging = normalizeLogging();
     const url = normalizeUrl();
     const python = plain(args.python, option("python"));
@@ -490,20 +502,32 @@ export class Function extends component("sst:aws:FunctionV5", parts) {
     const environment = normalizeEnvironment();
     const durableConfig = normalizeDurable();
 
-    const role = this.existingPart("role") ?? this.part("role", roleArgs());
+    // 4.x takes the role's ARN. A role that's passed is looked up by its name.
+    const role =
+      this.existingPart("role") ??
+      (original.role
+        ? this.lookupPart(
+            "role",
+            output(original.role).apply((arn) => parseRoleArn(arn).roleName),
+          )
+        : this.part("role", roleArgs()));
 
-    const logGroup = logging
-      ? this.part(
-          "logGroup",
-          {
-            name: interpolate`/aws/lambda/${
-              args.name ?? physicalName(64, `${name}Function`)
-            }`,
-            retentionInDays: logging.retention,
-          },
-          { ignoreChanges: ["name"] },
-        )
-      : undefined;
+    const givenLogGroup =
+      original.logGroup !== undefined && !args.existing?.logGroup;
+    const logGroup = !logging
+      ? undefined
+      : givenLogGroup
+        ? this.lookupPart("logGroup", original.logGroup!)
+        : this.part(
+            "logGroup",
+            {
+              name: interpolate`/aws/lambda/${
+                args.name ?? physicalName(64, `${name}Function`)
+              }`,
+              retentionInDays: logging.retention,
+            },
+            { ignoreChanges: ["name"] },
+          );
 
     // Build the code. In `sst dev` the stub is deployed in its place, and the
     // CLI is told about the function so it can run it locally.
@@ -689,14 +713,12 @@ export class Function extends component("sst:aws:FunctionV5", parts) {
       const logging = plain(args.logging, option("logging"));
       if (logging === false) return undefined;
 
-      notAnOption(
-        logging ?? {},
-        "logGroup",
-        `Pass the log group, or its name, in "existing": { existing: { logGroup } }.`,
-      );
-      if (logging?.retention !== undefined && args.existing?.logGroup)
+      if (
+        logging?.retention !== undefined &&
+        (args.existing?.logGroup || original.logGroup !== undefined)
+      )
         throw new VisibleError(
-          `Cannot set "logging.retention" for the "${name}" function: it's given a log group in "existing", and that log group has its own retention.`,
+          `Cannot set "logging.retention" for the "${name}" function: it's given a log group, and that log group has its own retention.`,
         );
 
       return {
@@ -719,11 +741,11 @@ export class Function extends component("sst:aws:FunctionV5", parts) {
       const url = plain(args.url, option("url"));
       if (url === false || url === undefined) return undefined;
       const urlArgs = url === true ? {} : url;
-      notAnOption(
-        urlArgs,
-        "route",
-        `Use "url.router": { url: { router: { instance: router } } }.`,
-      );
+      // 4.x names the router `route.router`
+      const { router: instance, ...routing } =
+        plain((urlArgs as any).route, option("url.route")) ?? {};
+      const router =
+        urlArgs.router ?? (instance ? { ...routing, instance } : undefined);
 
       const defaultCors: types.input.lambda.FunctionUrlCors = {
         allowHeaders: ["*"],
@@ -744,7 +766,7 @@ export class Function extends component("sst:aws:FunctionV5", parts) {
                   maxAge: cors.maxAge && toSeconds(cors.maxAge),
                 },
         ),
-        route: normalizeRouteArgs(plain(urlArgs.router, option("url.router"))),
+        route: normalizeRouteArgs(plain(router, option("url.router"))),
       };
     }
 
@@ -1019,7 +1041,8 @@ export class Function extends component("sst:aws:FunctionV5", parts) {
       // The source maps are stored under the log group the function creates,
       // which is where the errors to map are read from. How many there are
       // is only known once the code is built.
-      const ownLogGroup = self.existingPart("logGroup") ? undefined : logGroup;
+      const ownLogGroup =
+        self.existingPart("logGroup") || givenLogGroup ? undefined : logGroup;
       if (ownLogGroup)
         all([built, zip]).apply(([built, zip]) =>
           (built.sourcemaps ?? []).forEach((file, index) =>

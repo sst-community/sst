@@ -42,7 +42,6 @@ const first = (created: Record<string, unknown>) =>
   Object.keys(created).length === 0;
 
 takeover(Bucket, {
-  from: "sst:aws:Bucket",
   moved: {
     notification: (bucket, { name }) => [
       ...notified(bucket, name, "Notification"),

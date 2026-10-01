@@ -38,14 +38,17 @@ export interface OldAddress {
  * How a component takes over from the one it replaces, so that switching to
  * it keeps the resources that are already deployed.
  *
- * A deployed component of the `from` type, with the same name, becomes this
- * component. Each of its resources is matched to the part with the same key.
- * List a part under `moved` when it used to have a different key, or lived in
- * a different component.
+ * A deployed component with the same type and name becomes this component.
+ * Each of its resources is matched to the part with the same key. List a part
+ * under `moved` when it used to have a different key, or lived in a different
+ * component.
  */
 export interface Takeover<P extends Parts, C = unknown> {
-  /** The component type this one takes over from. */
-  from: string;
+  /**
+   * The type of the component this one takes over from, when that isn't this
+   * component's own type.
+   */
+  from?: string;
   moved?: {
     [K in keyof P]?:
       | string
@@ -57,7 +60,9 @@ export interface Takeover<P extends Parts, C = unknown> {
   };
 }
 
-const takeovers = new Map<string, Takeover<any, any>>();
+// By class and not by type: a component and the one that replaces it can
+// have the same type
+const takeovers = new Map<Function, Takeover<any, any>>();
 
 /**
  * Say how a component takes over from the one it replaces. This lives apart
@@ -67,7 +72,6 @@ const takeovers = new Map<string, Takeover<any, any>>();
  * @example
  * ```ts
  * takeover(Redis, {
- *   from: "sst:aws:Redis",
  *   moved: {
  *     // The key this part had
  *     secret: "proxySecret",
@@ -76,7 +80,7 @@ const takeovers = new Map<string, Takeover<any, any>>();
  * ```
  *
  * @param component The component that takes over.
- * @param how The type it takes over from, and the parts that moved.
+ * @param how The parts that moved, and the type it takes over from when that's another type.
  */
 export function takeover<P extends Parts, C>(
   component: {
@@ -86,11 +90,20 @@ export function takeover<P extends Parts, C>(
   },
   how: Takeover<P, C>,
 ) {
-  takeovers.set(component.__pulumiType, how);
+  takeovers.set(component, how);
 }
 
-export function takeoverOf(type: string): Takeover<Parts, any> | undefined {
-  return takeovers.get(type);
+/**
+ * How a component's class takes over, or the class it extends.
+ * @internal
+ */
+export function takeoverOf(
+  component: Function | undefined,
+): Takeover<Parts, any> | undefined {
+  for (let cls = component; cls; cls = Object.getPrototypeOf(cls)) {
+    const how = takeovers.get(cls);
+    if (how) return how;
+  }
 }
 
 /** The Pulumi alias for an old address. */

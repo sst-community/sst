@@ -23,7 +23,6 @@ const authorizer = (api: string, id = "") =>
   `${api}Authorizer${logicalName(id)}`;
 
 takeover(ApiGatewayV2, {
-  from: "sst:aws:ApiGatewayV2",
   moved: {
     logGroup: "accessLog",
     certificate: "ssl",

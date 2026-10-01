@@ -462,7 +462,7 @@ describe("AppSync", () => {
           ),
           // The function is now inside the API
           check: () => {
-            const [fn] = registered("sst:aws:FunctionV5");
+            const [fn] = registered("sst:aws:Function");
             expect(fn.name).toBe("MyApiDataSourceFunctionLambdaDS");
             expect(fn.parent.split("::").at(-1)).toBe("MyApi");
           },
@@ -490,7 +490,9 @@ describe("AppSync", () => {
     expect(api.nodes.dataSource.arnDS).toBe(arnDS);
     expect(api.nodes.dataSource.httpDS).toBe(httpDS);
     const fn = await pulumi.resolve(api.nodes.dataSourceFunction.lambdaDS);
-    expect((fn.constructor as any).__pulumiType).toBe("sst:aws:FunctionV5");
+    expect(fn).toBeInstanceOf(
+      (await import("../../../src/components/aws/v5/function")).Function,
+    );
     expect(await pulumi.resolve(arnDS.name)).toBe("arnDS");
   });
 

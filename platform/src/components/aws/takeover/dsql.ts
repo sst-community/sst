@@ -2,7 +2,6 @@ import { takeover } from "../../takeover";
 import { Dsql } from "../v5/dsql";
 
 takeover(Dsql, {
-  from: "sst:aws:Dsql",
   moved: {
     // The 4.x `Dsql` numbers the two sides of the peering
     clusterPeering: "peering1",

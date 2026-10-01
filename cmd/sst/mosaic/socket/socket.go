@@ -150,7 +150,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 				source := ""
 				if complete != nil {
 					for _, resource := range complete.Resources {
-						if resource.URN.Name() == evt.FunctionID && (resource.Type == "sst:aws:Function" || resource.Type == "sst:aws:FunctionV5") {
+						if resource.URN.Name() == evt.FunctionID && resource.Type == "sst:aws:Function" {
 							source = string(resource.URN)
 						}
 					}

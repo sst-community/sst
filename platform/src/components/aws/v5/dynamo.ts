@@ -195,7 +195,7 @@ type IndexKey = string | string[];
  * const table = sst.aws.v5.Dynamo.get("MyTable", "app-dev-mytable");
  * ```
  */
-export class Dynamo extends component("sst:aws:DynamoV5", parts) {
+export class Dynamo extends component("sst:aws:Dynamo", parts) {
   constructor(
     name: string,
     args: DynamoArgs,

@@ -492,7 +492,9 @@ describe("Bucket", () => {
       const fn = await new Promise<any>((done) =>
         bucket.nodes.subscriber.Resizer.apply(done),
       );
-      expect((fn.constructor as any).__pulumiType).toBe("sst:aws:FunctionV5");
+      expect(fn).toBeInstanceOf(
+        (await import("../../../src/components/aws/v5/function")).Function,
+      );
     });
 
     it("puts every notification in one notification configuration", async () => {

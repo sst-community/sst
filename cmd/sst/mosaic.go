@@ -295,7 +295,7 @@ func CmdMosaic(c *cli.Cli) error {
 				}
 				var options []multiplexer.FilterOption
 				for _, r := range completed.Resources {
-					if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:aws:FunctionV5" || string(r.Type) == "sst:cloudflare:Worker" {
+					if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:cloudflare:Worker" {
 						name := r.URN.Name()
 						handler := name
 						if meta, ok := r.Outputs["_metadata"].(map[string]interface{}); ok {
@@ -397,7 +397,7 @@ func CmdMosaic(c *cli.Cli) error {
 						}
 						var fnNames []string
 						for _, r := range evt.Resources {
-							if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:aws:FunctionV5" || string(r.Type) == "sst:cloudflare:Worker" {
+							if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:cloudflare:Worker" {
 								fnNames = append(fnNames, r.URN.Name())
 							}
 						}

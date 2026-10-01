@@ -136,7 +136,7 @@ describe("Redis", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:RedisV5",
+        "sst:aws:Redis",
         "sst:sst:DevCommand",
       ]);
       expect(

@@ -202,7 +202,7 @@ export interface CronV2Args
  * - If you set part of the schedule's `target` with an object in `transform`, the rest
  *   of the target is kept.
  */
-export class CronV2 extends component("sst:aws:CronV2V5", parts) {
+export class CronV2 extends component("sst:aws:CronV2", parts) {
   constructor(
     name: string,
     args: CronV2Args,

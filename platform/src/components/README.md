@@ -191,8 +191,7 @@ the component reads its args.
 - **Renaming a part later.** A part's key is in the name of its resource, so a new key
   is a new resource. To change the key and keep what's deployed, declare the part with
   the name it had: `files: sst.named(aws.s3.Bucket, "Bucket")`. Or give the resource its
-  new name and say where it was: `sst.takeover(Uploads, { from: "acme:Uploads", moved: {
-  files: "bucket" } })`.
+  new name and say where it was: `sst.takeover(Uploads, { moved: { files: "bucket" } })`.
 
 ---
 
@@ -204,8 +203,13 @@ Everything above applies. The rest is specific to SST's own components in
 ### Ground rules
 
 - **The V5 component has the original's name, in the `v5` folder.** `Queue` in
-  `aws/queue.ts` is ported as `Queue` in `aws/v5/queue.ts`, type `sst:aws:QueueV5`. An
-  app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`.
+  `aws/queue.ts` is ported as `Queue` in `aws/v5/queue.ts`, with the same type,
+  `sst:aws:Queue`. An app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`.
+- **The same type is what makes it the same component.** A deployed `sst:aws:Queue`
+  named `MyQueue` is the one `new sst.aws.v5.Queue("MyQueue")` creates, so it's kept, and
+  so is each resource in it that has the name it had. Going back to the 4.x component
+  keeps those too. What links the component sees no change, and a `$transform` for
+  either applies to both.
 - **Where a file needs both, the 4.x one is `Original…`.** That goes for the class and
   for its types: `import type { Queue as OriginalQueue } from "../queue"`. In prose,
   say which one you mean: "the 4.x `Queue`" in a code comment, `sst.aws.Queue` and
@@ -278,13 +282,14 @@ renders an args type it finds there, and fails on one that's declared in a helpe
 ### Taking over what 4.x deployed
 
 Changing `sst.aws.Queue` to `sst.aws.v5.Queue` with the same name has to keep the
-deployed resources. The component itself knows nothing about 4.x. All of that goes in a **takeover map**,
-`aws/takeover/<name>.ts`, imported from `aws/takeover/index.ts`:
+deployed resources. The component and every part with the name it had are kept as they
+are, because the type is the same. What moved goes in a **takeover map**,
+`aws/takeover/<name>.ts`, imported from `aws/takeover/index.ts`. The component itself
+knows nothing about 4.x. A component with nothing that moved has no map.
 
 ```ts
 // The V5 one, from "../v5/apigatewayv2"
 takeover(ApiGatewayV2, {
-  from: "sst:aws:ApiGatewayV2",
   moved: {
     // A part whose key changed: it was `<Api>AccessLog`
     logGroup: "accessLog",
@@ -338,22 +343,24 @@ takeover(ApiGatewayV2, {
   part, test one (`an object transform that sets tags` in `v5/postgres.test.ts`), and
   name it in the "Switch from" section: "If you set `tags` on the instance with an
   object in `transform`, it keeps the tags SST sets next to yours."
-- `$transform(sst.aws.Queue, ...)` doesn't apply to `sst.aws.v5.Queue`: it's matched by
-  type.
+- `$transform(sst.aws.Queue, ...)` applies to `sst.aws.v5.Queue` too: it's matched by
+  type. So an option the original takes and the V5 one doesn't can still arrive. Say
+  where it went with `notAnOption()`. Where that would break configs people have, take
+  the old form as well: the V5 `Function` does, for `role`, `live`, `logging.logGroup`
+  and `url.route`, because a `$transform` for functions reaches the ones inside every
+  V5 component.
 - The docs generator writes those two as the last notes of every "Switch from" section:
   that an object in `transform` is merged, and that a `$transform` for the original
-  doesn't apply. It reads the original's name from the takeover map. Don't write them
-  in the class doc.
+  applies. The original is the component of the same name, one folder up. Don't write
+  them in the class doc.
 - A function's `description` usually changes, because 4.x named the wrapper in it. That's
   an in-place update. So does anything else made from the function's name when a
   function part gets a new one: a URL behind a `Router` is registered under a key made
   from it.
-- A part that is a V5 component, like a function, changed its type as well as its place.
-  You don't write that: the part's old address in `moved` is combined with the type its
-  own takeover map names in `from`.
 - A function definition can still be written the way the 4.x `Function` takes it
-  (`role`, `logging.logGroup`, `live`, `url.route`). `functionPart()` moves those to
-  where the V5 one takes them.
+  (`role`, `logging.logGroup`, `live`, `url.route`). The V5 one takes those too.
+- `takeover()` also takes `from`, the type a component had, for one that takes over
+  from a component of another type. No V5 component needs it.
 - One of SST's own provider resources (`KvKeys`, `BucketFiles`) adds its type to its
   name: `MyFunctionRouteKey.sst.aws.KvKeys`. As a part it's matched without that. If it
   moved, write its old name in full, as a function in `moved`.
@@ -449,9 +456,10 @@ describe("takes over a deployed Queue", () => {
 - `sst dev` behaviour is tested by setting `global.$dev = true` in a `beforeEach`.
 - An error thrown inside `.apply()` can't be asserted: under the mock it's an
   unhandled rejection, which fails the run. Test the errors that are thrown directly.
-- `v5-components.test.ts` runs over every file in `aws/v5/`. It fails when one has no
-  takeover map, isn't exported from `aws/v5/index.ts`, isn't named after the component
-  it replaces, or names another component's type.
+- `v5-components.test.ts` runs over every file in `aws/v5/`. It fails when one doesn't
+  have the name and type of the component it replaces, isn't exported from
+  `aws/v5/index.ts`, has a takeover map that isn't imported, or names another
+  component's type.
 
 Run from `platform/`:
 
@@ -468,9 +476,11 @@ Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
    logical name, parent and options.
 2. Write `aws/v5/<name>.ts`, with the original's file name and class name: parts, args,
    constructor, methods, `link()`, `static get`.
-   Search `cmd/` and `pkg/` for the original's type (`"sst:aws:Function"`): the CLI
-   finds some components by type, and the V5 type has to be added next to it.
-3. Write `aws/takeover/<name>.ts` and import it from `aws/takeover/index.ts`.
+   Give it the original's type. Search `cmd/` and `pkg/` for that type
+   (`"sst:aws:Function"`): the CLI finds some components by it and reads what they
+   register as outputs, so the V5 one has to register the same.
+3. If a part has another name or place than it had, write `aws/takeover/<name>.ts` and
+   import it from `aws/takeover/index.ts`.
 4. Export the component from `aws/v5/index.ts`, which is `sst.aws.v5`.
 5. Write `test/components/v5/<name>.test.ts`: takeover cases with
    `pulumi.takeoverCases()`, then behaviour.

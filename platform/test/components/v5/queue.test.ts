@@ -140,7 +140,9 @@ describe("Queue", () => {
     const fn = await new Promise<any>((done) =>
       queue.nodes.subscriber.apply(done),
     );
-    expect((fn.constructor as any).__pulumiType).toBe("sst:aws:FunctionV5");
+    expect(fn).toBeInstanceOf(
+      (await import("../../../src/components/aws/v5/function")).Function,
+    );
   });
 
   it("applies the queue's transform to the subscriber", async () => {
@@ -176,7 +178,7 @@ describe("Queue", () => {
     await pulumi.settle();
 
     expect(queue.nodes.queue).toBe(mine);
-    expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:QueueV5"]);
+    expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Queue"]);
   });
 
   it("links with its url and permission to use the queue", async () => {

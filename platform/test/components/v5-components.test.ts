@@ -30,34 +30,37 @@ describe("V5 components", () => {
   });
 
   describe.each(files)("%s", (file) => {
-    let type: string;
-    let name: string;
+    const name = file.slice(0, -3);
+    let component: any;
 
     beforeAll(async () => {
-      const module = await import(
-        `../../src/components/aws/v5/${file.slice(0, -3)}.ts`
-      );
-      const component: any = Object.values(module).find(
+      const module = await import(`../../src/components/aws/v5/${name}.ts`);
+      component = Object.values(module).find(
         (value: any) => typeof value?.__pulumiType === "string",
       );
-      type = component.__pulumiType;
-      name = component.name;
     });
 
-    // The class has the name of the component it replaces. Its type says V5,
-    // so the two can be told apart in a deployed app.
-    it("has the name of the component it replaces", () => {
-      expect(type).toBe(`sst:aws:${name}V5`);
-    });
-
-    // Switching to the V5 component has to keep what's deployed, so each one
-    // needs a map in `aws/takeover/`, imported from its `index.ts`.
-    it("takes over from the component it replaces", () => {
-      expect(type).toMatch(/V5$/);
+    // A deployed component becomes the V5 one when the name is kept, because
+    // the two have the same type. The class is named the same, and so is the
+    // file.
+    it("has the name and type of the component it replaces", async () => {
+      expect(component.__pulumiType).toBe(`sst:aws:${component.name}`);
+      const original = await import(`../../src/components/aws/${name}.ts`);
       expect(
-        takeoverOf(type)?.from,
-        `Write aws/takeover/<name>.ts and import it from aws/takeover/index.ts`,
-      ).toBe(type.slice(0, -2));
+        original[component.name]?.__pulumiType,
+        `aws/${file} has to export the ${component.name} this one replaces`,
+      ).toBe(component.__pulumiType);
+    });
+
+    // A part that has another name, or another place, than it had in the
+    // component it replaces is in a map in `aws/takeover/`, imported from its
+    // `index.ts`.
+    it("has its takeover map loaded, when it has one", () => {
+      if (!fs.existsSync(new URL(`../takeover/${file}`, dir))) return;
+      expect(
+        takeoverOf(component),
+        `Import aws/takeover/${file} from aws/takeover/index.ts`,
+      ).toBeDefined();
     });
 
     it("is exported from sst.aws.v5", () => {
@@ -76,7 +79,7 @@ describe("V5 components", () => {
         .replace(/^\s*\/\/.*$/gm, "");
 
       const otherTypes = (code.match(/sst:\w+:[A-Z]\w+/g) ?? []).filter(
-        (found) => found !== type,
+        (found) => found !== component.__pulumiType,
       );
       expect(otherTypes).toEqual([]);
       expect(code).not.toMatch(/takeover|\baliases\s*:/);

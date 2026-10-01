@@ -410,7 +410,7 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  * Check out the [RDS Data API pricing](https://aws.amazon.com/rds/aurora/pricing/#Data_API_costs)
  * for more details.
  */
-export class Aurora extends component("sst:aws:AuroraV5", parts) {
+export class Aurora extends component("sst:aws:Aurora", parts) {
   private connection: Connection;
 
   constructor(

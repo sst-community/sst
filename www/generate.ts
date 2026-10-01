@@ -51,7 +51,6 @@ const externalTypeDocLinks = new Map<string, string>([
 const documentedSources = new Set<string>();
 // The parts of each V5 component, by source file
 const partsBySource = new Map<string, Parts | undefined>();
-const takeovers = new Map<string, string>();
 function useLinkHashes(module: TypeDoc.DeclarationReflection) {
   const v =
     linkHashes.get(module) ?? new Map<TypeDoc.DeclarationReflection, string>();
@@ -837,10 +836,12 @@ async function generateComponentDoc(
   const dir = path.dirname(outputFilePath);
   fs.mkdirSync(dir, { recursive: true });
 
-  // The component a V5 component takes over from
-  const original = isV5Source(sourceFile)
-    ? useTakeovers().get(className)
-    : undefined;
+  // The component a V5 component replaces has its name, one folder up
+  const original =
+    isV5Source(sourceFile) &&
+    documentedSources.has(sourceFile.replace("/v5/", "/"))
+      ? className
+      : undefined;
 
   fs.writeFileSync(
     outputFilePath,
@@ -1703,22 +1704,6 @@ function originalNamespace(fullClassName: string) {
   return fullClassName.split(".").slice(0, -2).join(".");
 }
 
-// The component each V5 component takes over from, by class name. It's read
-// from the takeover maps, which is where a V5 component says what it
-// replaces.
-function useTakeovers() {
-  if (takeovers.size) return takeovers;
-  const dir = "../platform/src/components/aws/takeover";
-  for (const file of fs.readdirSync(dir)) {
-    const source = fs.readFileSync(path.join(dir, file), "utf8");
-    for (const [, v5, original] of source.matchAll(
-      /\btakeover\(\s*(\w+)\s*,\s*\{\s*from:\s*"sst:\w+:(\w+)"/g
-    ))
-      takeovers.set(v5, original);
-  }
-  return takeovers;
-}
-
 // Where a page's "Switch from" section starts and ends, in lines
 function findSwitchSection(lines: string[]) {
   const start = lines.findIndex((line) => /^#### Switch from /.test(line));
@@ -1731,8 +1716,9 @@ function findSwitchSection(lines: string[]) {
 
 // Two things are true of every V5 component, so they're written here and not
 // in each one: an object in `transform` is merged where the original replaced
-// a nested object, and a `$transform` for the original doesn't apply. They're
-// added to the list in the "Switch from" section, or as a list of their own.
+// a nested object, and a `$transform` for the original applies to it too.
+// They're added to the list in the "Switch from" section, or as a list of
+// their own.
 function renderSwitchNotes(
   about: string[],
   fullClassName: string,
@@ -1746,7 +1732,7 @@ function renderSwitchNotes(
   const originalName = `${originalNamespace(fullClassName)}.${original}`;
   const notes = [
     `- An object in \`transform\` is merged into the defaults, nested objects included, where \`${originalName}\` replaced a nested object whole. To replace one, use a function.`,
-    `- \`$transform(${originalName}, ...)\` doesn't apply to it. Write one for \`${fullClassName}\`.`,
+    `- \`$transform(${originalName}, ...)\` applies to it too, and one for \`${fullClassName}\` applies to \`${originalName}\`. The two have the same type.`,
   ];
 
   // The section's list: from its first item to the last line that's an item
@@ -1757,7 +1743,7 @@ function renderSwitchNotes(
   if (first === -1) {
     let end = section.end;
     while (lines[end - 1].trim() === "") end--;
-    lines.splice(end, 0, "", "Two things work differently:", "", ...notes);
+    lines.splice(end, 0, "", "Two things to know:", "", ...notes);
     return lines;
   }
   let last = first;

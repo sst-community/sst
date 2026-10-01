@@ -289,7 +289,7 @@ interface Connection {
  * This is a rough estimate for _us-east-1_, check out the
  * [RDS Proxy pricing](https://aws.amazon.com/rds/proxy/pricing/) for more details.
  */
-export class Mysql extends component("sst:aws:MysqlV5", parts) {
+export class Mysql extends component("sst:aws:Mysql", parts) {
   private connection: Connection;
 
   constructor(

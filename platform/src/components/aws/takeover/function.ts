@@ -2,7 +2,6 @@ import { takeover } from "../../takeover";
 import { Function } from "../v5/function";
 
 takeover(Function, {
-  from: "sst:aws:Function",
   moved: {
     // The 4.x `Function` names the two permissions of a URL after who they're
     // for: everyone, or the distribution of the router the URL is behind.

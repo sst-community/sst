@@ -48,7 +48,7 @@ export interface CognitoUserPoolClientArgs
  * `Resource.Web.secret`.
  */
 export class CognitoUserPoolClient extends component(
-  "sst:aws:CognitoUserPoolClientV5",
+  "sst:aws:CognitoUserPoolClient",
   parts,
 ) {
   constructor(

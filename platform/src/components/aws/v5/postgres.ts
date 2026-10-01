@@ -293,7 +293,7 @@ interface Connection {
  * This is a rough estimate for _us-east-1_, check out the
  * [RDS Proxy pricing](https://aws.amazon.com/rds/proxy/pricing/) for more details.
  */
-export class Postgres extends component("sst:aws:PostgresV5", parts) {
+export class Postgres extends component("sst:aws:Postgres", parts) {
   private connection: Connection;
 
   constructor(

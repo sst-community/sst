@@ -147,7 +147,9 @@ describe("SnsTopic", () => {
     const fn = await new Promise<any>((done) =>
       topic.nodes.subscriber.Emailer.apply(done),
     );
-    expect((fn.constructor as any).__pulumiType).toBe("sst:aws:FunctionV5");
+    expect(fn).toBeInstanceOf(
+      (await import("../../../src/components/aws/v5/function")).Function,
+    );
   });
 
   it("tells the topic's transform which subscriber it is given", async () => {

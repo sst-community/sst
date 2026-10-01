@@ -2,7 +2,6 @@ import { takeover } from "../../takeover";
 import { Task } from "../v5/task";
 
 takeover(Task, {
-  from: "sst:aws:Task",
   moved: {
     // The 4.x `Task` calls the task definition the task
     taskDefinition: "task",

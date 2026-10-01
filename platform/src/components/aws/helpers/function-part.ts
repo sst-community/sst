@@ -14,7 +14,7 @@ import {
 } from "../function";
 import { Function, FunctionArgs } from "../v5/function";
 import { Workflow } from "../workflow";
-import { parseRoleArn, splitQualifiedFunctionArn } from "./arn";
+import { splitQualifiedFunctionArn } from "./arn";
 
 /**
  * A component's function: one the component created, or one the user
@@ -131,7 +131,8 @@ export function functionPart(
         ...transformPart(
           part.transform,
           part.name,
-          asV5Args({
+          // Written the way the 4.x `Function` takes it, or the V5 one
+          {
             ...defaults,
             ...args,
             link: all([defaults.link, args.link]).apply(([added, link]) => [
@@ -147,7 +148,7 @@ export function functionPart(
                 ...(permissions ?? []),
               ],
             ),
-          }),
+          },
           part.opts,
         ),
       ),
@@ -186,37 +187,6 @@ function useArn(arn: string) {
     targetResponseStreamingInvokeArn: output(
       invoke("2021-11-15", "response-streaming-invocations"),
     ),
-  };
-}
-
-// A definition can be written the way the 4.x `Function` takes it. The few
-// options the V5 one takes somewhere else are moved to where it takes them.
-function asV5Args(args: Record<string, any>): FunctionArgs {
-  const { live, role, ...rest } = args;
-  const existing = { ...rest.existing };
-  let { dev, logging, url } = rest;
-
-  if (dev === undefined && live === false) dev = false;
-  // 4.x takes the role's ARN. `existing.role` is looked up by the role's name
-  if (role) existing.role = parseRoleArn(role).roleName;
-  if (logging && logging.logGroup !== undefined) {
-    const { logGroup, ...others } = logging;
-    existing.logGroup = logGroup;
-    logging = others;
-  }
-  // The deprecated `url.route` names the router `router`
-  if (url && typeof url === "object" && url.route) {
-    const { route, ...others } = url;
-    const { router, ...routing } = route;
-    url = { router: { ...routing, instance: router }, ...others };
-  }
-
-  return {
-    ...(rest as FunctionArgs),
-    dev,
-    logging,
-    url,
-    ...(Object.keys(existing).length ? { existing } : {}),
   };
 }
 
