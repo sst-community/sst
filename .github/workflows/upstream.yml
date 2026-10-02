@@ -1,0 +1,72 @@
+name: upstream
+
+# Checks once a week whether SST (anomalyco/sst) has a release that isn't merged
+# into main, and opens an issue saying what merging it involves. It merges and
+# pushes nothing. One issue is kept: if it's still open when SST releases again,
+# it's updated rather than a second one opened.
+
+on:
+  schedule:
+    # Mondays, 14:17 UTC.
+    - cron: "17 14 * * 1"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Compare against this ref instead of main, e.g. upstream/v4.17.0 (for testing)"
+        required: false
+      dry_run:
+        description: "Print the issue in the run summary instead of opening it"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency: ${{ github.workflow }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find an unmerged SST release
+        id: release
+        run: .github/scripts/upstream-release.sh
+        env:
+          BASE: ${{ inputs.base || 'HEAD' }}
+
+      - name: Open or update the issue
+        if: steps.release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: ${{ steps.release.outputs.title }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            { echo "## $TITLE"; echo; cat upstream-release.md; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          issues=$(gh issue list --state all --limit 200 \
+            --search 'in:title "Upstream release"' --json number,title,state)
+
+          # This release already has an issue, open or closed.
+          if [ -n "$(jq -r --arg title "$TITLE" '.[] | select(.title == $title) | .number' <<< "$issues")" ]; then
+            echo "$TITLE already has an issue."
+            exit 0
+          fi
+
+          # An issue for an earlier release is still open: bring it up to date.
+          open=$(jq -r '[.[] | select(.state == "OPEN" and (.title | startswith("Upstream release ")))][0].number // empty' <<< "$issues")
+          if [ -n "$open" ]; then
+            gh issue edit "$open" --title "$TITLE" --body-file upstream-release.md
+            gh issue comment "$open" --body "SST released again. This issue now covers ${TITLE#Upstream release }."
+          else
+            gh issue create --title "$TITLE" --body-file upstream-release.md
+          fi

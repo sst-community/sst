@@ -105,3 +105,13 @@ jobs:
         # package needs a trusted publisher for this workflow on npmjs.com.
         env:
           NPM_CONFIG_PROVENANCE: true
+
+      # Posts the release notes to the Discord announcements channel. It's
+      # skipped while the DISCORD_WEBHOOK_URL secret isn't set.
+      - name: Announce on Discord
+        run: .github/scripts/announce-release.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
