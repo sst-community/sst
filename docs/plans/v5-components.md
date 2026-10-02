@@ -92,7 +92,7 @@ Before the sites, the docs generator needed to read arg types from helper files.
 
 ## Not verified
 
-- `sst dev` with v5 components.
+- `sst dev` with a `Service` or `Task`, and on a stage deployed with 4.x. Live functions were run on 2026-10-01 and work.
 - `get` and `existing` against real AWS, and a custom `provider`.
 - Creating the databases fresh with v5 (in the AWS test they were created by 4.x and taken over).
 - `CognitoUserPool` and `AppSync` custom domains, and a multi-region `Dsql`.
