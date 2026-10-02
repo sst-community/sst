@@ -8,6 +8,7 @@
 - `pkg/bus/` — pub/sub event bus
 - `sdk/js/` — runtime SDK for reading linked resources
 - `www/` — docs site (auto-generated from JSDoc comments in platform and extracted from the Go CLI)
+- `docs/plans/` — plans and progress for larger pieces of work (not the docs site)
 
 ## Commands
 
@@ -32,3 +33,7 @@
 ## V5 components
 
 `platform/src/components/README.md` is the guide to writing a V5 component and to porting a 4.x one: parts, args, takeover maps, tests and a checklist. Read it before touching a file in `platform/src/components/aws/v5/`. Don't edit 4.x component files.
+
+## Plans and progress
+
+What's been done, what's next and what's undecided is in `docs/plans/`, not in this file. Start with `docs/plans/v5-components.md`. When a piece of work lands, add it to `docs/plans/v5-progress.md` and update the status in the plan. Keep this file to how to work in the repo.
