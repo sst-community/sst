@@ -293,6 +293,7 @@ Everything above applies. The rest is specific to SST's own components in
 | An arg that must not be an output | `plain(value, what)` in `args.ts` |
 | An arg that must not have an output anywhere inside it | `plainDeep(value, what)` in `args.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |
+| A value made on this machine from things in AWS, like built code | `withoutDependencies(output)` in `args.ts` |
 
 A helper returns the args of a part, or checks an arg. The component still creates
 each part with `this.part()`, so its constructor reads as the list of what it creates.
@@ -326,7 +327,6 @@ are, because the type is the same. What moved goes in a **takeover map**,
 `aws/takeover/<name>.ts`, imported from `aws/takeover/index.ts`. The component itself
 knows nothing about 4.x. A component with nothing that moved has no map.
 
-```ts
 A map is a file that's imported for what it does, not for what it exports. The CLI
 bundles a config with esbuild, which leaves such a file out of a package that says it
 has no side effects, so `sideEffects` in `platform/package.json` lists
@@ -335,6 +335,7 @@ switch deletes and recreates whatever moved, while every test under the mock pas
 `v5-components.test.ts` bundles the components the way the CLI does and checks the maps
 are in.
 
+```ts
 // The V5 one, from "../v5/apigatewayv2"
 takeover(ApiGatewayV2, {
   moved: {
@@ -517,6 +518,10 @@ describe("takes over a deployed Queue", () => {
   `replaceOnChanges` and its provider. A difference there is reported as a field named
   `options.<name>`. For a component it compares what's registered as its outputs
   (`outputs`): the CLI reads some of them (`_task`, `_dev`, `_tunnel`).
+- For a function it also compares what the CLI is given to build the code from
+  (`build`): the handler, runtime, copied files and **links**. A function's links go into
+  its code, not into any resource's inputs, so this is the only place a wrong link
+  shows. A takeover suite for a component with function parts needs a case with `link`.
 - A resource's ids and ARNs are made from its name under the mock, so the check reads
   a renamed resource's new name as its old one wherever another resource refers to it.
   It doesn't in the resource's own inputs: its own name there is the name SST gave it,
@@ -556,6 +561,25 @@ npx vitest run --pool=forks
 ```
 
 Three test files (`bucket`, `alb`, `service-alb`) fail to load on `main` too.
+
+**What the mock can't see.** It stands in for the engine and for the CLI, so a test
+there never bundles a config, builds a function or calls AWS. The first deploy to a
+real account found two bugs every test had passed: the takeover maps were missing from
+a bundled config, and a V5 function's links were written into its code under the wrong
+names. Both have a test now. For a port that touches how a config is built, what the
+CLI is told, or the order things are created in, deploy it: the 4.x component first,
+then `sst diff` after the switch, then `sst deploy`, then `sst remove`.
+
+**Depending on a component is depending on everything in it.** A value read from a
+component itself, like its `urn`, makes whatever is given that value wait for every
+resource the component has created. A part is inside its component, so a part given
+such a value waits for itself and is never created, with no error. That's how a
+subscriber that linked its own queue (`queue.subscribe({ handler, link: [queue] })`)
+went missing: a function's code is built from its links, and a link's name is read
+from the linked component. 4.x didn't have the problem only because its subscriber sat
+outside the queue. Give a part the outputs of the resources it needs, and where a value
+is made on this machine from what's in AWS, pass it through `withoutDependencies()`.
+For a component with function parts, test a function that links the component.
 
 ### Checklist
 

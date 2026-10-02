@@ -496,6 +496,34 @@ describe("Function", () => {
     const inputs = (name: string) =>
       pulumi.resources.find((r) => r.name === name)!.inputs;
 
+    // A function part is inside the component it's linked to here. Its code
+    // is built from the links, and a link's name is read from the linked
+    // component: if the code depended on that, it would depend on everything
+    // in the component, itself included, and never be created.
+    it("is created when it links the component it's a part of", async () => {
+      const queue = new Queue("MyQueue");
+      queue.subscribe({ handler, link: [queue] });
+      await pulumi.settle();
+
+      expect(inputs("MyQueueSubscriberFunction").handler).toBe("index.handler");
+      const policy = inputs("MyQueueSubscriberRole").inlinePolicies[0].policy;
+      expect(JSON.parse(policy).statements).toContainEqual(
+        expect.objectContaining({ actions: ["sqs:*"] }),
+      );
+    });
+
+    // The permissions and the environment are what say what the function
+    // needs in AWS. What it's built from is files on this machine.
+    it("has code that doesn't depend on what's linked", async () => {
+      const other = new Queue("Other");
+      new Function("MyFunction", { handler, link: [other] });
+      await pulumi.settle();
+
+      const code = pulumi.resources.find((r) => r.name === "MyFunctionCode")!;
+      expect(code.options.dependencies ?? []).toEqual([]);
+      expect(pulumi.dependsOn("MyFunctionRole", "OtherQueue")).toBe(true);
+    });
+
     // What 4.x takes that V5 takes somewhere else: `live`, `role` and
     // `logging.logGroup`
     it("takes over a function written the way the 4.x Function takes it", async () => {

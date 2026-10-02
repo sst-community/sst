@@ -112,3 +112,22 @@ export function notAnOption(args: object, option: string, instead: string) {
   if ((args as Record<string, unknown>)[option] !== undefined)
     throw new VisibleError(`"${option}" isn't an option here. ${instead}`);
 }
+
+/**
+ * The same value, without the resources it came from: what's given it doesn't
+ * depend on them, though it still waits for the value. For a value that's
+ * made on this machine from things in AWS, like a function's built code,
+ * which is given its links. Without this the code would depend on everything
+ * that's linked.
+ */
+export function withoutDependencies<T>(value: Output<T>): Output<T> {
+  const from = value as any;
+  // As Pulumi's own `unsecret()` rebuilds an output
+  return new (Output as any)(
+    [],
+    from.promise(/* withUnknowns */ true),
+    from.isKnown,
+    from.isSecret,
+    Promise.resolve([]),
+  );
+}

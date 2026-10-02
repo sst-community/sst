@@ -25,7 +25,13 @@ import {
 } from "@pulumi/aws";
 import { Image } from "@pulumi/docker-build";
 import { V5Args, component, many, optional } from "../../parts-component";
-import { Plain, ifSet, plain, withDefault } from "../../args";
+import {
+  Plain,
+  ifSet,
+  plain,
+  withDefault,
+  withoutDependencies,
+} from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { Link } from "../../link";
@@ -616,12 +622,18 @@ export class Function extends component("sst:aws:Function", parts) {
       dev,
     });
     if (dev) buildInput.apply((input) => rpc.call("Runtime.AddTarget", input));
+    // What's built is files on this machine. It's given the links, and a
+    // link's name is read from the component that's linked, so without this
+    // the code would depend on every resource of every linked component. A
+    // subscriber that links what it subscribes to would wait for itself.
     const built: Output<FunctionBundle> = dev
       ? output(devBridgeBundle(durable))
-      : buildInput.apply((input) =>
-          buildBundle(
-            { ...input, isContainer },
-            args.hook && ((dir) => args.hook!.postbuild(dir)),
+      : withoutDependencies(
+          buildInput.apply((input) =>
+            buildBundle(
+              { ...input, isContainer },
+              args.hook && ((dir) => args.hook!.postbuild(dir)),
+            ),
           ),
         );
     // A Node.js handler is wrapped in a file that runs the injections first
