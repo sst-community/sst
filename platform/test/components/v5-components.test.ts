@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { mockPulumi } from "../helpers/graph";
 
@@ -84,5 +85,57 @@ describe("V5 components", () => {
       expect(otherTypes).toEqual([]);
       expect(code).not.toMatch(/takeover|\baliases\s*:/);
     });
+  });
+});
+
+// The CLI bundles a config with esbuild, and this package says its files have
+// no side effects. A file that's imported for what it does, not for what it
+// exports, is then left out of the bundle: the takeover maps are such files,
+// and without them a switch deletes and recreates everything that moved. No
+// test under the mock can see that, because nothing is bundled there.
+describe("a config the CLI builds", () => {
+  it("has every takeover map in it", async () => {
+    const { build } = await import("esbuild");
+    const result = await build({
+      absWorkingDir: fileURLToPath(new URL("../../", import.meta.url)),
+      stdin: {
+        contents: `import * as sst from "./src/components/index.ts"; globalThis.sst = sst;`,
+        resolveDir: fileURLToPath(new URL("../../", import.meta.url)),
+        loader: "ts",
+      },
+      // As in `pkg/js/js.go`
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      mainFields: ["module", "main"],
+      external: [
+        "@pulumi/*",
+        "undici",
+        "@pulumiverse/*",
+        "@sst-provider/*",
+        "@aws-sdk/*",
+        "esbuild",
+        "archiver",
+        "glob",
+        "vite",
+      ],
+      write: false,
+      metafile: true,
+      logLevel: "silent",
+    });
+    const [output] = Object.values(result.metafile.outputs);
+    const bundled = Object.entries(output.inputs)
+      .filter(([, input]) => input.bytesInOutput > 0)
+      .map(([path]) => path);
+
+    const maps = fs
+      .readdirSync(new URL("../takeover/", dir))
+      .filter((file) => !["index.ts", "helpers.ts"].includes(file));
+    expect(maps).toContain("queue.ts");
+    for (const map of maps)
+      expect(
+        bundled,
+        `aws/takeover/${map} isn't in a built config. "sideEffects" in package.json has to list the takeover maps.`,
+      ).toContain(`src/components/aws/takeover/${map}`);
   });
 });

@@ -327,6 +327,14 @@ are, because the type is the same. What moved goes in a **takeover map**,
 knows nothing about 4.x. A component with nothing that moved has no map.
 
 ```ts
+A map is a file that's imported for what it does, not for what it exports. The CLI
+bundles a config with esbuild, which leaves such a file out of a package that says it
+has no side effects, so `sideEffects` in `platform/package.json` lists
+`aws/takeover/*.ts`. Without that line every map is dropped from a real build and a
+switch deletes and recreates whatever moved, while every test under the mock passes.
+`v5-components.test.ts` bundles the components the way the CLI does and checks the maps
+are in.
+
 // The V5 one, from "../v5/apigatewayv2"
 takeover(ApiGatewayV2, {
   moved: {

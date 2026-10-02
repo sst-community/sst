@@ -8,7 +8,9 @@
     "dev": "tsc --watch --noEmit",
     "build": "bash ./scripts/build"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./src/components/aws/takeover/*.ts"
+  ],
   "trustedDependencies": [
     "esbuild",
     "protobufjs"
