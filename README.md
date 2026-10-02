@@ -28,11 +28,50 @@ const redis = new sst.aws.v5.Redis("MyRedis", {
 redis.nodes.parameterGroup.name;
 ```
 
+## Your own components, from any provider
+
+The same foundation is yours to build on. `sst.component()` is what SST's own components are made with, and a part can be a resource from any provider in your app: AWS, Cloudflare, or any other Pulumi provider you've added.
+
+In version 4 this was very hard to do. The class SST's components extend wasn't available to an app. It also only accepted the resource types on a list written into SST itself, so a component that created any other type failed on deploy. And each component wrote its own `transform` and `nodes` by hand. What you could write was a bare Pulumi component, with none of it.
+
+This one verifies an email domain. The identity is in AWS and the DNS record is in Cloudflare.
+
+```ts
+const parts = {
+  identity: aws.ses.DomainIdentity,
+  verification: cloudflare.DnsRecord,
+};
+
+interface EmailDomainArgs extends sst.ComponentArgs<typeof parts> {
+  domain: string;
+  zoneId: string;
+}
+
+class EmailDomain extends sst.component("acme:EmailDomain", parts) {
+  constructor(name: string, args: EmailDomainArgs, opts?: $util.ComponentResourceOptions) {
+    super(name, args, opts);
+
+    const identity = this.part("identity", { domain: args.domain });
+    this.part("verification", {
+      zoneId: args.zoneId,
+      name: `_amazonses.${args.domain}`,
+      type: "TXT",
+      content: identity.verificationToken,
+      ttl: 60,
+    });
+  }
+}
+```
+
+Whoever uses it gets what SST's components give, with nothing more to write: `transform` and `existing` for both parts, and `nodes.identity` and `nodes.verification`. Add a `link()` method and it can be linked like any other.
+
+Resources are named after the app and stage, as in SST's components. That list of resource types is still there, but it no longer limits you: a type that isn't on it is named by its provider, or you say which field holds its name with `sst.Component.naming()`.
+
 ## What it sets out to do
 
 - **Every resource is yours to change.** `transform`, `existing` and `nodes` cover all of a component's resources, and they're typed and documented from the same list.
 - **Switch without redeploying.** The v5 components sit next to the version 4 ones, as `sst.aws.v5.*`. Change `sst.aws.Queue` to `sst.aws.v5.Queue`, keep the name, and the resources you've deployed are kept. You switch one component at a time, and each component's docs list what's written differently.
-- **Write your own components the same way.** `sst.component()` is what SST's own components are built on, so yours get `transform`, `existing`, `nodes`, naming and linking too.
+- **Write your own components, across providers.** One component can hold resources from several providers, and it works like SST's own.
 - **Test components without AWS.** `mock()` stands in for the deploy engine, so a test can create a component and check what it would deploy.
 
 ## Status
@@ -40,7 +79,7 @@ redis.nodes.parameterGroup.name;
 - **Ported:** `Alb`, `ApiGatewayV2`, `AppSync`, `Aurora`, `Bucket`, `Cluster`, `CognitoUserPool`, `CronV2`, `Dsql`, `Dynamo`, `Efs`, `Function`, `Mysql`, `Postgres`, `Queue`, `Redis`, `Service`, `SnsTopic` and `Task`.
 - **Not yet:** the sites (`Nextjs`, `Astro` and the rest), `Vpc`, `Router`, `StaticSite` and the others.
 - **Version 4 components are untouched.** Everything in `sst.aws.*` works as it does on `main`, so an app can mix the two.
-- **How it's been checked:** each port is tested against the component it replaces, under a mock of the deploy engine, to confirm a switch keeps what's deployed. It has not been deployed to a real AWS account yet.
+- **How it's been checked:** each port is tested against the component it replaces, under a mock of the deploy engine, to confirm a switch keeps what's deployed. The ported components have also been through it once in a real AWS account: deployed with version 4, switched to v5, and removed. Nothing was replaced on the switch except the uploaded code of functions that got a new name.
 
 ## Try it
 

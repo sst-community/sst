@@ -783,6 +783,59 @@ describe("Component parts", () => {
     });
   });
 
+  // The component in the repo's README: its parts are from two providers.
+  describe("the component in the README", () => {
+    type ComponentArgs<P> =
+      import("../../src/components/parts-component").ComponentArgs<
+        P extends import("../../src/components/parts-component").Parts ? P : never
+      >;
+
+    it("has a part from AWS and one from Cloudflare", async () => {
+      const parts = {
+        identity: aws.ses.DomainIdentity,
+        verification: cloudflare.DnsRecord,
+      };
+      interface EmailDomainArgs extends ComponentArgs<typeof parts> {
+        domain: string;
+        zoneId: string;
+      }
+      class EmailDomain extends component("acme:EmailDomain", parts) {
+        constructor(name: string, args: EmailDomainArgs, opts?: object) {
+          super(name, args, opts);
+
+          const identity = this.part("identity", { domain: args.domain });
+          this.part("verification", {
+            zoneId: args.zoneId,
+            name: `_amazonses.${args.domain}`,
+            type: "TXT",
+            content: identity.verificationToken,
+            ttl: 60,
+          });
+        }
+      }
+
+      const email = new EmailDomain("Mail", {
+        domain: "example.com",
+        zoneId: "zone-1",
+        transform: { verification: { ttl: 300 } },
+      });
+      await pulumi.settle();
+
+      const inputs = (name: string) =>
+        pulumi.resources.find((r) => r.name === name)!.inputs;
+      expect(inputs("MailIdentity")).toEqual({ domain: "example.com" });
+      // A DNS record's name is the record, so it's left as it's given
+      expect(inputs("MailVerification")).toMatchObject({
+        zoneId: "zone-1",
+        name: "_amazonses.example.com",
+        type: "TXT",
+        ttl: 300,
+      });
+      expect(email.nodes.identity).toBeInstanceOf(aws.ses.DomainIdentity);
+      expect(email.nodes.verification).toBeInstanceOf(cloudflare.DnsRecord);
+    });
+  });
+
   // The component on the docs page "Write a Component". What the page says
   // it does is checked here.
   describe("the component in the docs", () => {
