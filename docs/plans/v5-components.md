@@ -52,7 +52,7 @@ Against `main`, the only existing files changed under `platform/src` are `compon
 - 1488 tests under a mock of the deploy engine. Each port runs its takeover cases three ways (as it is, inside another component, with another provider) and has to keep everything the 4.x component deployed, with the same inputs, options, registered outputs, function build inputs and teardown order.
 - One run in a real AWS account on 2026-10-01: all 19 deployed with 4.x, switched, and removed. See [the report](v5-aws-test-2026-10-01.md).
 
-**Where things stand (2026-10-01):** `origin/v5` is at `a075e1bdb`. Not committed yet, on top of it: the three fixes the AWS test found and their tests, the README section on writing your own components, and this folder.
+**Where things stand (2026-10-01):** everything above is committed and pushed. `git log origin/v5` has the latest.
 
 ## Order from here
 

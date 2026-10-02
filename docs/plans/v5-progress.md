@@ -124,16 +124,15 @@ The check caught one regression: the v5 `Service` created its Cloud Map service 
 
 ### The first real AWS deploy
 
-See [the report](v5-aws-test-2026-10-01.md). It found three bugs that every test under the mock had passed, and one that isn't v5's. The fixes are not committed yet:
+See [the report](v5-aws-test-2026-10-01.md). It found three bugs that every test under the mock had passed, and one that isn't v5's.
 
-| File | What |
+| Commit | What |
 | --- | --- |
-| `platform/package.json` | `sideEffects` lists `aws/takeover/*.ts`. The bundler was dropping every takeover map from a real build. |
-| `aws/v5/function.ts`, `args.ts` | A function's links are read with `all()`, and its build result is passed through the new `withoutDependencies()`. |
-| `testing/mock.ts` | The mock records what each function is built from, and the takeover check compares it. |
-| `test/components/v5-components.test.ts` | Bundles the components the way the CLI does and checks every takeover map is in the output. |
-
-The root `README.md` also gained "Your own components, from any provider", with an example that's pinned by a test (`component.test.ts`, "the component in the README").
+| `1d41fe1b8` | `sideEffects` in `platform/package.json` lists `aws/takeover/*.ts`. The bundler was dropping every takeover map from a real build. A test bundles the components the way the CLI does and checks every map is in the output. |
+| `fdb71c156` | A function's links are read with `all()`, so each goes into the code under its own name. The mock records what each function is built from, and the takeover check compares it. |
+| `4b4ec945f` | A function's build result is passed through the new `withoutDependencies()`, so its code doesn't depend on what's linked, and a function part that links its own component is created. |
+| `78c944bb2` | The root `README.md` gains "Your own components, from any provider". Its example is pinned by a test (`component.test.ts`, "the component in the README"). |
+| `27e9bfdde` | This folder. |
 
 ## What the harness can and can't see
 
