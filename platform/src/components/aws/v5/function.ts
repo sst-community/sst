@@ -558,7 +558,11 @@ export class Function extends component("sst:aws:Function", parts) {
     const architecture = withDefault(args.architecture, "x86_64");
     const streaming = withDefault(args.streaming, false);
     const injections = withDefault(args.injections, []);
-    const links = output(args.link || []).apply((links) => Link.build(links));
+    // `Link.build` gives an output for each link, and `all` reads them. Left
+    // as outputs, each one's name would be an output where a string is read.
+    const links = output(args.link || []).apply((links) =>
+      all(Link.build(links)),
+    );
     const copyFiles = normalizeCopyFiles();
     const nodejs = normalizeNodeJs();
     const vpc = normalizeVpc();

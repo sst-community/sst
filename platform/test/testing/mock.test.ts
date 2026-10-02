@@ -79,6 +79,21 @@ describe("mock()", () => {
     });
   });
 
+  // A function's links go into its code, so they're in no resource's inputs
+  it("records what a function's code is built from", async () => {
+    const uploads = new Uploads("Docs", { teams: [] });
+    new sst.aws.v5.Function("Api", {
+      handler: "src/api.handler",
+      link: [uploads],
+    });
+    await app.settle();
+
+    const { build } = app.graph().find((r) => r.name === "Api" && !r.custom)!;
+    expect(build!.handler).toBe("src/api.handler");
+    expect(Object.keys(build!.links)).toEqual(["Docs"]);
+    expect(build!.links.Docs.name).toMatch(/^acme-dev-docsbucket-/);
+  });
+
   it("deploys a function's stub in sst dev", async () => {
     (globalThis as any).$dev = true;
     try {
@@ -142,6 +157,26 @@ describe("mock()", () => {
       expect(unclaimed).toEqual([]);
       expect(changed.map((c) => [c.name, c.fields])).toEqual([
         ["DocsReaderA", ["maxSessionDuration"]],
+      ]);
+    });
+
+    it("says when what a function is built from changed", async () => {
+      const api = (link: boolean) => () => {
+        const uploads = new Uploads("Docs", { teams: [] });
+        new sst.aws.v5.Function("Api", {
+          handler: "src/api.handler",
+          link: link ? [uploads] : [],
+        });
+      };
+      const deployed = await deploy(api(true));
+
+      app.reset();
+      api(false)();
+      await app.settle();
+      const { changed } = app.takeover(deployed);
+      expect(changed.map((c) => [c.name, c.fields])).toContainEqual([
+        "Api",
+        ["build"],
       ]);
     });
   });

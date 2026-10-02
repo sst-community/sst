@@ -23,6 +23,12 @@ export interface RecordedResource {
   options: Record<string, any>;
   /** What a component registered as its outputs. The CLI reads some of them. */
   outputs?: Record<string, any>;
+  /**
+   * What the CLI was given to build a function's code from: its handler,
+   * runtime and links. The links go into the code, so they aren't in any
+   * resource's inputs.
+   */
+  build?: Record<string, any>;
 }
 
 // Suppress Pulumi "Trace events are unavailable" errors in test environment
@@ -85,7 +91,17 @@ export function mockPulumi(input?: MockInput) {
     fs.mkdirSync(path.join(platform, "dist", stub), { recursive: true });
     fs.writeFileSync(path.join(platform, "dist", stub, "bootstrap"), stub);
   }
+  // What the CLI builds each function from, by the function's name. The
+  // name, the app's key and the mode are left out: they aren't the
+  // function's own.
+  const builds = new Map<string, Record<string, any>>();
+  const built = ({ functionID, encryptionKey, dev, logGroup, ...build }: any) =>
+    builds.set(functionID, build);
+  const buildOf = (r: RecordedResource) =>
+    !r.custom && r.type === "sst:aws:Function" ? builds.get(r.name) : undefined;
   rpc.call = (async (method: string, args: any) => {
+    if (method === "Runtime.Build" || method === "Runtime.AddTarget")
+      built(args);
     if (method === "Runtime.Build")
       return {
         handler: "index.handler",
@@ -243,6 +259,7 @@ export function mockPulumi(input?: MockInput) {
     reset() {
       resources.length = 0;
       registered.clear();
+      builds.clear();
     },
     /** The outputs a component registered, by the component's name. */
     outputsOf(name: string) {
@@ -313,6 +330,7 @@ export function mockPulumi(input?: MockInput) {
           ...r,
           inputs: stable(r.inputs),
           ...(r.custom ? {} : { outputs: outputsOf(r) }),
+          ...(buildOf(r) ? { build: buildOf(r) } : {}),
         }))
         .sort((a, b) =>
           `${a.type}::${a.name}`.localeCompare(`${b.type}::${b.name}`),
@@ -461,18 +479,24 @@ export function mockPulumi(input?: MockInput) {
           // What a component registers as its outputs is kept in the state
           // too, and the CLI reads it
           const registers = !before.custom || !now.custom;
+          // What a function's code is built from ends up in the code
+          const builds = before.build || buildOf(now);
           return {
             name: before.name,
             original: {
               ...stable(kept(before, ignore)),
               ...deployOptions(before),
               ...(registers ? { outputs: stable(before.outputs ?? {}) } : {}),
+              ...(builds ? { build: stable(before.build ?? {}) } : {}),
             },
             now: {
               ...stable(kept(now, ignore), asOriginal(now.name)),
               ...deployOptions(now),
               ...(registers
                 ? { outputs: stable(outputsOf(now), asOriginal(now.name)) }
+                : {}),
+              ...(builds
+                ? { build: stable(buildOf(now) ?? {}, asOriginal(now.name)) }
                 : {}),
             },
           };
