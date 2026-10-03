@@ -1,6 +1,7 @@
 import { getCollection, getEntry } from "astro:content";
 import type { APIRoute } from "astro";
 import { cleanMarkdown } from "../../util/markdown";
+import { siteUrl } from "../../util/site";
 
 export async function getStaticPaths() {
   const docs = await getCollection("docs");
@@ -42,7 +43,7 @@ export const GET: APIRoute = async ({ params }) => {
 
 ${entry.data.description || ""}
 
-Source: https://sst.dev/docs/${slug}
+Source: ${siteUrl(`docs/${slug}`)}
 
 ---
 
@@ -53,7 +54,7 @@ ${catalog}`;
 
 ${entry.data.description || ""}
 
-Source: https://sst.dev/docs/${slug}
+Source: ${siteUrl(`docs/${slug}`)}
 
 ---
 

@@ -274,10 +274,10 @@ export class Auth extends Component implements Link.Linkable {
         `  - The latest version is now powered by OpenAuth - https://openauth.js.org`,
         ``,
         `To upgrade:`,
-        `  - Set \`forceUpgrade: "v${_version}"\` on the "Auth" component. Learn more https://sst.dev/docs/component/aws/auth#forceupgrade`,
+        `  - Set \`forceUpgrade: "v${_version}"\` on the "Auth" component. Learn more https://sst-community.github.io/sst/docs/component/aws/auth#forceupgrade`,
         ``,
         `To continue using v${$cli.state.version[name]}:`,
-        `  - Rename "Auth" to "Auth.v${$cli.state.version[name]}". Learn more about versioning - https://sst.dev/docs/components/#versioning`,
+        `  - Rename "Auth" to "Auth.v${$cli.state.version[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
       ].join("\n"),
       forceUpgrade: args.forceUpgrade,
     });

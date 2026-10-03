@@ -1,6 +1,7 @@
 import { getEntry } from "astro:content";
 import type { APIRoute } from "astro";
 import { cleanMarkdown } from "../../util/markdown";
+import { siteUrl } from "../../util/site";
 
 export const GET: APIRoute = async () => {
   const entry = await getEntry("docs", "docs");
@@ -11,7 +12,7 @@ export const GET: APIRoute = async () => {
 
 ${entry.data.description || ""}
 
-Source: https://sst.dev/docs
+Source: ${siteUrl("docs")}
 
 ---
 

@@ -90,7 +90,7 @@ func (w *Watch) UnmarshalJSON(data []byte) error {
 
 	for _, path := range decoded.Paths {
 		if strings.ContainsAny(path, "*?[") {
-			return util.NewReadableError(nil, fmt.Sprintf("Watch path globs are only supported in the legacy array form: %q\nUse explicit directories or ignore patterns instead: https://sst.dev/docs/reference/config/#watch", path))
+			return util.NewReadableError(nil, fmt.Sprintf("Watch path globs are only supported in the legacy array form: %q\nUse explicit directories or ignore patterns instead: https://sst-community.github.io/sst/docs/reference/config/#watch", path))
 		}
 	}
 

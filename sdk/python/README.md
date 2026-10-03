@@ -1,6 +1,6 @@
 # SST Python SDK
 
-The Python SDK for [SST](https://sst.dev) lets you access linked resources in your Python Lambda functions.
+The Python SDK for [SST](https://sst-community.github.io/sst/) lets you access linked resources in your Python Lambda functions.
 
 ## Installation
 
@@ -68,7 +68,7 @@ The SDK reads resource bindings from encrypted environment variables set by SST 
 
 ## Links
 
-- [SST Documentation](https://sst.dev/docs/)
-- [SDK Reference](https://sst.dev/docs/reference/sdk/#python)
+- [SST Documentation](https://sst-community.github.io/sst/docs/)
+- [SDK Reference](https://sst-community.github.io/sst/docs/reference/sdk/#python)
 - [Python Examples](https://github.com/anomalyco/sst/tree/dev/examples/aws-python)
 - [GitHub](https://github.com/anomalyco/sst)

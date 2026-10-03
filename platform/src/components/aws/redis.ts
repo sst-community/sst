@@ -412,7 +412,7 @@ export class Redis extends Component implements Link.Linkable {
           `There is a new version of "Redis" that has breaking changes.`,
           ``,
           `To continue using the previous version, rename "Redis" to "Redis.v${oldVersion}".`,
-          `Or recreate this component to update - https://sst.dev/docs/components/#versioning`,
+          `Or recreate this component to update - https://sst-community.github.io/sst/docs/components/#versioning`,
         ].join("\n"),
       });
     }

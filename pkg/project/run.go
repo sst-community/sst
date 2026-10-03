@@ -607,7 +607,7 @@ loop:
 						Message: "Your app state is corrupted.",
 						Help: []string{
 							"Run `sst state repair` to fix state integrity issues",
-							"Learn more: https://sst.dev/docs/reference/cli/#state-repair",
+							"Learn more: https://sst-community.github.io/sst/docs/reference/cli/#state-repair",
 						},
 					})
 				} else {

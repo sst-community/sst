@@ -582,7 +582,7 @@ export class Postgres extends Component implements Link.Linkable {
         message: [
           `This component has been renamed. Please change:\n`,
           `"sst.aws.Postgres" to "sst.aws.Postgres.v${$cli.state.version[name]}"\n`,
-          `Learn more https://sst.dev/docs/components/#versioning`,
+          `Learn more https://sst-community.github.io/sst/docs/components/#versioning`,
         ].join("\n"),
       });
     }

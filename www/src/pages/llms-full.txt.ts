@@ -1,6 +1,7 @@
 import { getCollection } from "astro:content";
 import type { APIRoute } from "astro";
 import { cleanMarkdown } from "../util/markdown";
+import { siteUrl } from "../util/site";
 
 export const GET: APIRoute = async () => {
   const docs = await getCollection("docs");
@@ -16,7 +17,7 @@ export const GET: APIRoute = async () => {
 
 ${doc.data.description || ""}
 
-https://sst.dev/${slug}
+${siteUrl(slug)}
 
 ${cleaned}`;
   });

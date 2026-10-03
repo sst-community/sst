@@ -17,7 +17,7 @@ export function validateNoWranglerFile(sitePath: string, componentName: string):
           `Found ${file} in "${path.resolve(sitePath)}" for ${componentName}.`,
           "",
           "Remove it to avoid interfering with SST managed wrangler configurations:",
-          `https://sst.dev/docs/cloudflare/#cloudflare-vite-plugin`,
+          `https://sst-community.github.io/sst/docs/cloudflare/#cloudflare-vite-plugin`,
         ].join("\n"),
       );
     }
@@ -67,7 +67,7 @@ export function validateFrameworkConfig(input: {
         `  configPath: process.env.SST_WRANGLER_PATH,`,
         "",
         `This is required for linked resources to work correctly:`,
-        `https://sst.dev/docs/cloudflare/#cloudflare-vite-plugin`,
+        `https://sst-community.github.io/sst/docs/cloudflare/#cloudflare-vite-plugin`,
       ].join("\n")
     );
   }

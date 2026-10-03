@@ -1,5 +1,6 @@
 import { getCollection } from "astro:content";
 import type { APIRoute } from "astro";
+import { siteUrl } from "../util/site";
 
 export const GET: APIRoute = async () => {
   const docs = await getCollection("docs");
@@ -12,7 +13,7 @@ export const GET: APIRoute = async () => {
     .map((doc) => {
       const slug = doc.id.replace(/\.mdx?$/, "");
       const description = doc.data.description || "";
-      return `- [${doc.data.title}](https://sst.dev/${slug})${description ? `: ${description}` : ""}`;
+      return `- [${doc.data.title}](${siteUrl(slug)})${description ? `: ${description}` : ""}`;
     })
     .join("\n");
 

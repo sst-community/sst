@@ -332,10 +332,10 @@ export class Cluster extends Component {
           `  - In the latest version, both the load balancer and the services are deployed in public subnets. The VPC is not required to have NAT gateways. So the new default makes this cheaper to run.`,
           ``,
           `To upgrade:`,
-          `  - Set \`forceUpgrade: "v${newMajorVersion}"\` on the "Cluster" component. Learn more https://sst.dev/docs/component/aws/cluster#forceupgrade`,
+          `  - Set \`forceUpgrade: "v${newMajorVersion}"\` on the "Cluster" component. Learn more https://sst-community.github.io/sst/docs/component/aws/cluster#forceupgrade`,
           ``,
           `To continue using v${$cli.state.version[name]}:`,
-          `  - Rename "Cluster" to "Cluster.v${$cli.state.version[name]}". Learn more about versioning - https://sst.dev/docs/components/#versioning`,
+          `  - Rename "Cluster" to "Cluster.v${$cli.state.version[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
         ].join("\n"),
         forceUpgrade: args.forceUpgrade,
       });

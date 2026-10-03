@@ -448,7 +448,7 @@ export class Component extends ComponentResource {
         throw new VisibleError(
           [
             `It seems you are trying to use an older version of "${className}".`,
-            `You need to recreate this component to rollback - https://sst.dev/docs/components/#versioning`,
+            `You need to recreate this component to rollback - https://sst-community.github.io/sst/docs/components/#versioning`,
           ].join("\n"),
         );
       }
