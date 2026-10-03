@@ -415,8 +415,9 @@ export class SvelteKit extends SsrSite {
         const manifest = fs
           .readFileSync(path.join(serverOutputPath, "manifest.js"))
           .toString();
-        const appDir = manifest.match(/appDir: "(.+?)"/)?.[1];
-        const appPath = manifest.match(/appPath: "(.+?)"/)?.[1];
+        // SvelteKit 3 renamed these manifest fields from camelCase to snake_case
+        const appDir = manifest.match(/app(?:Dir|_dir): "(.+?)"/)?.[1];
+        const appPath = manifest.match(/app(?:Path|_path): "(.+?)"/)?.[1];
         if (appDir && appPath && appPath.endsWith(appDir)) {
           basepath = appPath.substring(0, appPath.length - appDir.length);
         }
