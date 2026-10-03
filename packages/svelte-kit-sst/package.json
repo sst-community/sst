@@ -1,0 +1,48 @@
+{
+  "name": "svelte-kit-sst",
+  "description": "Adapter for SvelteKit apps to work on AWS Lambda and AWS Lambda@Edge.",
+  "version": "3.0.0-alpha.0",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "SST",
+    "url": "https://sst.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sst-community/sst.git",
+    "directory": "packages/svelte-kit-sst"
+  },
+  "keywords": [
+    "svelte",
+    "svelte-kit",
+    "svelte-kit-adapter"
+  ],
+  "bugs": "https://github.com/sst-community/sst/issues",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test \"test/*.test.mjs\""
+  },
+  "peerDependencies": {
+    "@sveltejs/kit": "^2.0.0 || ^3.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/kit": "3.0.0",
+    "@types/aws-lambda": "8.10.162",
+    "@types/node": "24.19.1",
+    "esbuild": "0.27.2",
+    "typescript": "6.0.3"
+  }
+}
