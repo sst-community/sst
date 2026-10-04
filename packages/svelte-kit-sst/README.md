@@ -1,14 +1,19 @@
 # svelte-kit-sst
 
-This adapter allows SvelteKit to deploy your SSR site to [AWS](https://aws.amazon.com/).
+This adapter allows SvelteKit to deploy your SSR site to [AWS](https://aws.amazon.com/). It's the sst-community build of SST's `svelte-kit-sst`, published as `@sst-community/svelte-kit-sst`.
 
 ## Installation
 
-Install the adapter to your project’s dependencies using your preferred package manager. If you’re using npm or aren’t sure, run this in the terminal:
+Install it under the name `svelte-kit-sst`, so `import adapter from "svelte-kit-sst"` keeps working.
 
 ```bash
-  npm install svelte-kit-sst
+npm install svelte-kit-sst@npm:@sst-community/svelte-kit-sst
+# pnpm add svelte-kit-sst@npm:@sst-community/svelte-kit-sst
+# bun add svelte-kit-sst@npm:@sst-community/svelte-kit-sst
+# yarn add svelte-kit-sst@npm:@sst-community/svelte-kit-sst
 ```
+
+To switch an existing project, change its dependency to `"svelte-kit-sst": "npm:@sst-community/svelte-kit-sst@<version>"` and reinstall.
 
 One package works with SvelteKit 2 and 3. It's tested with 2.70 and 3.0.
 
@@ -38,7 +43,7 @@ SvelteKit 2 reads the adapter from `svelte.config.js`. The install and the impor
 
 ```diff
 + import adapter from "svelte-kit-sst";
-  import { vitePreprocess } from "@sveltejs/kit/vite";
+  import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
   const config = {
     preprocess: vitePreprocess(),
