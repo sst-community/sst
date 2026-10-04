@@ -92,7 +92,7 @@ Things to know:
 - **The package is renamed at publish time.** `sdk/js/package.json` stays named `sst`, and `sdk/js/scripts/release.ts` publishes it as `@sst-community/sst`. Renaming it in the repo changes `bun.lockb` and breaks `bun install --frozen-lockfile`.
 - **Users install it under the name `sst`**, as `sst@npm:@sst-community/sst`, so `import ... from "sst"` keeps working. `sst upgrade` and `sst init` write that alias. `pkg/global/distribution.go` holds the release repo and the package name.
 - **The container image has to be public.** GitHub may create the `sst/bridge-task` package as private on its first push. Until it's public, `sst dev` can't start a Task.
-- **The environment doesn't cover the image.** A workflow on any branch can push `bridge-task:latest` with its own `GITHUB_TOKEN`.
+- **The environment doesn't cover the image.** A workflow on any branch can push `bridge-task:latest` with its own `GITHUB_TOKEN`, and `sst dev` runs whatever that tag points at. Every committer is a releaser today, so this gives nobody more than a release tag already does. Before adding a committer who isn't a releaser, have the release build the CLI with the digest of the image it pushed, so that a later push to the tag can't change what a released CLI runs.
 - **The Discord webhook** is the `DISCORD_WEBHOOK_URL` secret of the `release` environment. Without it the step is skipped. `.github/scripts/announce-release.sh` is the script.
 - **Fork builds are labelled.** `.goreleaser.yml` sets `ui.Distribution=sst-community`, which `sst version` and the `sst dev` banner show. Keep it out of `main.version`.
 
