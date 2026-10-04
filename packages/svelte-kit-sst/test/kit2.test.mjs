@@ -5,5 +5,6 @@ defineSuite({
 	fixtureDir: 'fixture-kit2',
 	configFile: 'svelte.config.js',
 	alias: '$lib',
-	manifestFields: /appDir: "_app",\s+appPath: "_app"/
+	manifestFields: /appDir: "_app",\s+appPath: "_app"/,
+	polyfills: true
 });

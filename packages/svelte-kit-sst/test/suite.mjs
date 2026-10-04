@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -64,28 +64,32 @@ function v2(rawPath, { method = 'GET', query = '', headers = {}, cookies, body, 
  * @param {string} options.configFile file in the fixture that imports the adapter
  * @param {string} options.alias import alias for src/lib: "#lib" (Kit 3) or "$lib" (Kit 2)
  * @param {RegExp} options.manifestFields matches the fields sst.aws.SvelteKit reads
+ * @param {boolean} options.polyfills whether the server installs Kit 2's Node polyfills
  */
-export function defineSuite({ name, fixtureDir, configFile, alias, manifestFields }) {
+export function defineSuite({ name, fixtureDir, configFile, alias, manifestFields, polyfills }) {
 const fixture = path.join(root, 'test', fixtureDir);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'svelte-kit-sst-'));
 
 let handler;
 let prerenderedDir;
 let output;
+let bundled;
 
 describe(name, () => {
 before(async () => {
 	assert.ok(fs.existsSync(path.join(root, 'dist', 'index.js')), 'run `npm run build` first');
 
 	if (!fs.existsSync(path.join(fixture, 'node_modules'))) {
-		const i = run('npm', ['install', '--no-audit', '--no-fund'], fixture);
+		// `npm ci` installs exactly what the fixture's lockfile pins.
+		const cmd = fs.existsSync(path.join(fixture, 'package-lock.json')) ? 'ci' : 'install';
+		const i = run('npm', [cmd, '--no-audit', '--no-fund'], fixture);
 		assert.equal(i.status, 0, i.out);
 	}
 	const b = run('npx', ['vite', 'build'], fixture);
 	assert.equal(b.status, 0, b.out);
 
 	output = path.join(fixture, '.svelte-kit', 'svelte-kit-sst');
-	const bundled = path.join(tmp, 'index.mjs');
+	bundled = path.join(tmp, 'index.mjs');
 	await bundle(path.join(output, 'server', 'lambda-handler', 'index.js'), bundled);
 
 	// SST copies the prerendered folder next to the bundle, and runs from there.
@@ -113,6 +117,37 @@ describe('output layout (what sst.aws.SvelteKit relies on)', () => {
 		const m = fs.readFileSync(path.join(output, 'server/manifest.js'), 'utf8');
 		assert.match(m, manifestFields);
 	});
+
+	it(polyfills ? "installs Kit 2's polyfills in server.js" : 'does not import the removed polyfills module in server.js', () => {
+		const src = fs.readFileSync(path.join(output, 'server/server.js'), 'utf8');
+		if (polyfills) {
+			assert.match(src, /import \{ installPolyfills \} from "@sveltejs\/kit\/node\/polyfills"/);
+			assert.match(src, /installPolyfills\(\);[\s\S]*new Server\(manifest\)/);
+		} else {
+			assert.doesNotMatch(src, /node\/polyfills/);
+		}
+	});
+});
+
+describe('Node globals', () => {
+	// Node 18 has no `crypto` or `File` global. Remove them, as on Node 18, and
+	// check the bundled handler puts them back before SvelteKit starts.
+	it(
+		'sets crypto and File when the runtime lacks them',
+		{ skip: !polyfills && 'SvelteKit 3 requires Node 22.17+, which has both globals' },
+		() => {
+			const code = [
+				'delete globalThis.File;',
+				'delete globalThis.crypto;',
+				`await import(${JSON.stringify(pathToFileURL(bundled).href)});`,
+				'console.log(JSON.stringify({ File: typeof globalThis.File, crypto: typeof globalThis.crypto?.getRandomValues }));'
+			].join('\n');
+			const r = run(process.execPath, ['--input-type=module', '-e', code], tmp);
+			assert.equal(r.status, 0, r.out);
+			const last = r.stdout.trim().split('\n').pop();
+			assert.deepEqual(JSON.parse(last), { File: 'function', crypto: 'function' });
+		}
+	);
 });
 
 describe('requests', () => {

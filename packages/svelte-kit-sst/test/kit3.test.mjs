@@ -5,5 +5,6 @@ defineSuite({
 	fixtureDir: 'fixture-kit3',
 	configFile: 'vite.config.ts',
 	alias: '#lib',
-	manifestFields: /app_dir: "_app",\s+app_path: "_app"/
+	manifestFields: /app_dir: "_app",\s+app_path: "_app"/,
+	polyfills: false
 });

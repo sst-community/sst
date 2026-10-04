@@ -35,12 +35,18 @@ export default function (): Adapter {
       } else {
         // SvelteKit 2 has no `generateServerInstance`. Copy the server output
         // and build the instance from the `Server` class and manifest it wrote.
+        // Install Kit 2's polyfills first, as the handler did before Kit 3:
+        // they set `crypto` and `File` on Node versions that lack them.
         builder.writeServer(serverDir);
         fs.writeFileSync(
           path.join(serverDir, "server.js"),
           [
+            `import { installPolyfills } from "@sveltejs/kit/node/polyfills";`,
             `import { Server } from "./index.js";`,
             `import { manifest } from "./manifest.js";`,
+            ``,
+            `installPolyfills();`,
+            ``,
             `export const server = new Server(manifest);`,
             ``,
           ].join("\n")
