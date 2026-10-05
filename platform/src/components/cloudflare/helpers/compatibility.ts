@@ -12,8 +12,8 @@ type CompatibilityArgs = {
   transform?: {
     worker?:
       | {
-          compatibilityDate?: Input<string>;
-          compatibilityFlags?: Input<Input<string>[]>;
+          compatibilityDate?: Input<string | undefined>;
+          compatibilityFlags?: Input<Input<string>[] | undefined>;
         }
       | ((...args: any[]) => undefined);
   };

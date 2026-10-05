@@ -412,7 +412,7 @@ export class StaticSite extends Component implements Link.Linkable {
             worker: (workerArgs) => {
               workerArgs.bindings = output(workerArgs.bindings ?? []).apply(
                 (bindings) => [
-                  ...bindings,
+                  ...(bindings ?? []),
                   {
                     type: "kv_namespace",
                     name: "ASSETS",
