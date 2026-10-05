@@ -1528,7 +1528,7 @@ export interface FunctionArgs {
 }
 
 /**
- * The `Function` component lets you add serverless functions to your app.
+ * The `Function` component lets you add serverless functions to your app, on AWS Lambda.
  * It uses [AWS Lambda](https://aws.amazon.com/lambda/).
  *
  * #### Supported runtimes
