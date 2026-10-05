@@ -109,6 +109,36 @@ go build -ldflags "-X main.version=<version> -X github.com/sst/sst/v3/cmd/sst/mo
 - Run `./dist/sst version` from outside the repo. Inside it, the binary hands off to the `sst` in `node_modules`.
 - `.gitignore` matches `cmd/sst`. Stage changes there with `git add -u`, not by path.
 
+## Updating Pulumi and the providers
+
+The versions are pinned in two places: the `@pulumi/*` packages in `platform/package.json`, and `pulumi/pkg/v3` and `pulumi/sdk/v3` in `go.mod`.
+
+```bash
+go get github.com/pulumi/pulumi/pkg/v3@v<new> github.com/pulumi/pulumi/sdk/v3@v<new>
+go mod tidy
+# edit the versions in platform/package.json, then
+bun install
+```
+
+- **`@pulumi/pulumi` and the two Go modules are one version.** The CLI downloads the Pulumi binary of its Go SDK's version (`pkg/global/pulumi.go`) and writes that same version into an app's `.sst/platform/package.json` (`pkg/project/install.go`).
+- **A newer Pulumi can raise the `go` line in `go.mod`.** CI installs the newest Go, so the workflows don't change.
+- **Leave `platform/bun.lockb` alone.** Only the root `bun.lockb` changes, as in SST's own bumps.
+- **Typecheck first.** A provider can change its types within a major version, and `cd platform && bun tsc --noEmit` is where that shows.
+- **Check the Node version `@pulumi/pulumi` needs** (`npm view @pulumi/pulumi@<new> engines`). The user's own `node` runs their config. Since 3.249 it has to be Node 22 or later. A change there goes in the release notes.
+- **An app that doesn't pin a provider's version gets the one in `platform/package.json`.** An existing app moves to it on the first deploy after the CLI is upgraded. `sst diff` shows that as the provider entries being replaced, and it should show nothing else.
+
+### Testing a bump
+
+The tests run without a real provider, so deploy an app:
+
+1. Deploy it with the current release.
+2. Switch to the new build and run `sst diff`. Only the provider entries should change.
+3. Deploy, call what it deployed, and run `sst diff` again. It should say no changes.
+4. Run `sst dev --mode=basic` and invoke a function. This is what exercises the bridge, which is built with the new Go modules.
+5. Remove it, then deploy it from scratch with the new build and remove it again.
+
+**A build replaces the installed Pulumi.** Every command, `sst version` included, checks the Pulumi binary in the `sst/bin` folder of your user config directory and downloads its own version when that differs. So a test build swaps the binary your installed CLI uses, and so does the docs build, which runs `go run ../cmd/sst`. Run the test build with `HOME` set to an empty folder and it installs Pulumi, Bun and the provider plugins there instead. It then can't read `~/.aws`, so give it credentials as environment variables. To put the binary back, run your installed CLI once.
+
 ## The docs site
 
 `www/` is published to GitHub Pages at https://sst-community.github.io/sst/ by `.github/workflows/docs.yml`. It runs on a push to `main` that touches `www/`, `platform/src/`, `cmd/sst/` or `examples/`.

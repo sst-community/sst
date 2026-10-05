@@ -1,6 +1,6 @@
 ## Maintaining the fork
 
-This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST release, versions, releasing, the docs site, and who can merge. Read it before a merge from upstream, a release, or a change under `.github/`. `CONTRIBUTING.md` is the guide for sending a change.
+This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST release, versions, releasing, updating Pulumi and the providers, the docs site, and who can merge. Read it before a merge from upstream, a release, a Pulumi or provider update, or a change under `.github/`. `CONTRIBUTING.md` is the guide for sending a change.
 
 ## Layout
 
