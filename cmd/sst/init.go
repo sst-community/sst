@@ -122,7 +122,7 @@ func CmdInit(cli *cli.Cli) error {
 	}):
 		fmt.Println("  SvelteKit detected. This will...")
 		fmt.Println("   - create an sst.config.ts")
-		fmt.Println("   - add sst to package.json")
+		fmt.Println("   - add sst and the svelte-kit-sst adapter to package.json")
 		template = "svelte-kit"
 		break
 
