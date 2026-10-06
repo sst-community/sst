@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
@@ -71,6 +72,7 @@ const fixture = path.join(root, 'test', fixtureDir);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'svelte-kit-sst-'));
 
 let handler;
+let streamHandler;
 let prerenderedDir;
 let output;
 let bundled;
@@ -98,6 +100,20 @@ before(async () => {
 	process.chdir(tmp);
 	process.env.FIXTURE_VALUE = 'from-lambda-env';
 	({ handler } = await import(bundled));
+
+	// The Lambda runtime sets `awslambda`. Record what the handler streams.
+	globalThis.awslambda = {
+		streamifyResponse: (fn) => fn,
+		HttpResponseStream: {
+			from: (stream, metadata) => {
+				stream.metadata = metadata;
+				return stream;
+			}
+		}
+	};
+	const bundledStream = path.join(tmp, 'stream.mjs');
+	await bundle(path.join(output, 'server', 'lambda-handler', 'stream.js'), bundledStream);
+	({ handler: streamHandler } = await import(bundledStream));
 });
 
 describe('output layout (what sst.aws.SvelteKit relies on)', () => {
@@ -261,6 +277,101 @@ describe('form actions', () => {
 	it('honours x-forwarded-host when checking the origin', async () => {
 		const r = await handler(form('name=alice', { host: 'abc.lambda-url.us-east-1.on.aws', 'x-forwarded-host': HOST }));
 		assert.equal(r.statusCode, 200);
+	});
+});
+
+describe('streaming', () => {
+	/** Calls the streaming handler and records each chunk with the time it was written. */
+	async function stream(event) {
+		const chunks = [];
+		const start = Date.now();
+		const responseStream = new Writable({
+			write(chunk, _encoding, callback) {
+				chunks.push({ at: Date.now() - start, text: Buffer.from(chunk).toString('utf8'), bytes: Buffer.from(chunk) });
+				callback();
+			}
+		});
+		const done = new Promise((resolve) => responseStream.on('finish', resolve));
+		await streamHandler(event, responseStream, {});
+		await done;
+		return {
+			...responseStream.metadata,
+			chunks,
+			body: chunks.map((c) => c.text).join(''),
+			bytes: Buffer.concat(chunks.map((c) => c.bytes))
+		};
+	}
+
+	it('writes adapter.json with streaming off by default', () => {
+		const meta = JSON.parse(fs.readFileSync(path.join(output, 'adapter.json'), 'utf8'));
+		assert.deepEqual(meta, { streaming: false });
+	});
+
+	it('sends the page before a promise from load resolves, then the rest', async () => {
+		const r = await stream(v2('/stream', { headers: { accept: 'text/html' } }));
+		assert.equal(r.statusCode, 200);
+		assert.match(r.headers['content-type'], /text\/html/);
+		assert.ok(r.chunks.length > 1, `expected several chunks, got ${r.chunks.length}`);
+		assert.match(r.chunks[0].text, /instant-value/);
+		assert.doesNotMatch(r.chunks[0].text, /streamed-value/);
+		assert.match(r.body, /streamed-value/);
+		const last = r.chunks.findLast((c) => c.text.includes('streamed-value'));
+		assert.ok(last.at - r.chunks[0].at >= 200, `the promise's chunk came ${last.at - r.chunks[0].at}ms after the first`);
+	});
+
+	it('serves a prerendered page from the prerendered folder', async () => {
+		const r = await stream(v2('/'));
+		assert.equal(r.statusCode, 200);
+		assert.equal(r.body, fs.readFileSync(path.join(prerenderedDir, 'index.html'), 'utf8'));
+	});
+
+	it('reads the request cookies and sends cookies in `cookies`, not in headers', async () => {
+		const r = await stream(v2('/ssr', { query: 'name=Ada', cookies: ['visits=4'] }));
+		assert.match(r.body, /Hello Ada/);
+		assert.match(r.body, /visits: 5/);
+		assert.ok(r.cookies.some((c) => c.startsWith('visits=5')), JSON.stringify(r.cookies));
+		assert.equal(r.headers['set-cookie'], undefined);
+
+		const c = await stream(v2('/api/cookies'));
+		assert.deepEqual(c.cookies.map((c) => c.split(';')[0]).sort(), ['a=1', 'b=2']);
+	});
+
+	it('passes a POST body and the client address through', async () => {
+		const r = await stream(v2('/api/echo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"a":1}' }));
+		assert.deepEqual(JSON.parse(r.body), { method: 'POST', contentType: 'application/json', body: '{"a":1}', ip: '203.0.113.9' });
+	});
+
+	it('streams binary responses as raw bytes', async () => {
+		const r = await stream(v2('/api/binary'));
+		assert.deepEqual([...r.bytes], [0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]);
+	});
+
+	it('returns a redirect with its Location header', async () => {
+		const r = await stream(v2('/go'));
+		assert.equal(r.statusCode, 302);
+		assert.equal(r.headers.location, '/ssr?name=redirected');
+	});
+
+	it('returns 404 for an unknown route', async () => {
+		const r = await stream(v2('/nope', { headers: { accept: 'text/html' } }));
+		assert.equal(r.statusCode, 404);
+	});
+});
+
+describe('adapter options', () => {
+	it('writes adapter.json with streaming on for adapter({ streaming: true })', () => {
+		const copy = path.join(tmp, 'streaming-fixture');
+		fs.cpSync(fixture, copy, { recursive: true, filter: (s) => !/[\\/](\.svelte-kit|node_modules)([\\/]|$)/.test(s) });
+		fs.symlinkSync(path.join(fixture, 'node_modules'), path.join(copy, 'node_modules'));
+		const config = fs.readFileSync(path.join(copy, configFile), 'utf8')
+			.replace('../../dist/index.js', path.join(root, 'dist', 'index.js'))
+			.replace('adapter()', 'adapter({ streaming: true })');
+		assert.match(config, /streaming: true/);
+		fs.writeFileSync(path.join(copy, configFile), config);
+		const b = run('npx', ['vite', 'build'], copy);
+		assert.equal(b.status, 0, b.out);
+		const meta = JSON.parse(fs.readFileSync(path.join(copy, '.svelte-kit', 'svelte-kit-sst', 'adapter.json'), 'utf8'));
+		assert.deepEqual(meta, { streaming: true });
 	});
 });
 

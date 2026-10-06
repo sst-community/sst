@@ -409,6 +409,21 @@ export interface SvelteKitArgs extends SsrSiteArgs {
  *
  * console.log(Resource.MyBucket.name);
  * ```
+ *
+ * #### Stream responses
+ *
+ * Turn on `streaming` in the adapter to stream responses from the server. The page's
+ * HTML is sent right away, and the promises a `load` function returns without
+ * awaiting are sent as they resolve.
+ *
+ * ```js title="vite.config.ts"
+ * sveltekit({
+ *   adapter: adapter({ streaming: true })
+ * })
+ * ```
+ *
+ * The function URL is then set up for [response streaming](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html).
+ * This needs `svelte-kit-sst` 3.1.0 or later.
  */
 export class SvelteKit extends SsrSite {
   constructor(
@@ -442,22 +457,33 @@ export class SvelteKit extends SsrSite {
         }
       } catch (e) {}
 
-      // Copy streaming handler into the server output directory
-      fs.copyFileSync(
-        path.join(
-          $cli.paths.platform,
-          "functions",
-          "sveltekit-server",
-          "server.mjs",
-        ),
-        path.join(serverOutputPath, "server.mjs"),
-      );
+      // Written by svelte-kit-sst 3.1.0 and later
+      let streaming = false;
+      try {
+        streaming =
+          JSON.parse(
+            fs
+              .readFileSync(
+                path.join(
+                  outputPath,
+                  ".svelte-kit",
+                  "svelte-kit-sst",
+                  "adapter.json",
+                ),
+              )
+              .toString(),
+          ).streaming === true;
+      } catch (e) {}
 
       return {
         base: basepath,
         server: {
-          handler: path.join(serverOutputPath, "server.handler"),
-          streaming: true,
+          handler: path.join(
+            serverOutputPath,
+            "lambda-handler",
+            streaming ? "stream.handler" : "index.handler",
+          ),
+          streaming,
           nodejs: {
             esbuild: {
               minify: process.env.SST_DEBUG ? false : true,

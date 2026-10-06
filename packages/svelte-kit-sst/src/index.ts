@@ -4,7 +4,18 @@ import { fileURLToPath } from "node:url";
 import type { Adapter, Builder } from "@sveltejs/kit";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
-export default function (): Adapter {
+export interface AdapterOptions {
+  /**
+   * Stream responses from the Lambda function, so the page's HTML and any
+   * promises a `load` function returns without awaiting reach the browser
+   * as they're ready. `sst.aws.SvelteKit` reads this and sets up the function
+   * URL for streaming.
+   * @default false
+   */
+  streaming?: boolean;
+}
+
+export default function (options: AdapterOptions = {}): Adapter {
   return {
     name: "svelte-kit-sst",
     async adapt(builder: Builder) {
@@ -61,6 +72,11 @@ export default function (): Adapter {
       fs.writeFileSync(
         path.join(serverDir, "lambda-handler", "prerendered-file-list.js"),
         `export default ${JSON.stringify(prerenderedFiles)}`
+      );
+      // sst.aws.SvelteKit reads this to pick the handler
+      fs.writeFileSync(
+        path.join(out, "adapter.json"),
+        JSON.stringify({ streaming: options.streaming === true })
       );
     },
 

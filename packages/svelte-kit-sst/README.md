@@ -55,6 +55,16 @@ SvelteKit 2 reads the adapter from `svelte.config.js`. The install and the impor
   export default config;
 ```
 
+## Streaming
+
+Set `streaming` to stream responses from the Lambda function. The page's HTML is sent right away, and the promises a `load` function returns without awaiting are sent as they resolve.
+
+```js
+adapter({ streaming: true });
+```
+
+`sst.aws.SvelteKit` reads the option and sets up the function URL for [response streaming](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html). It's off by default.
+
 ## Limitations
 
 - `read` from `$app/server` isn't supported. The function only contains the server code and prerendered pages, and client assets are served from S3. A route that uses `read` fails the build with an error that says so.
