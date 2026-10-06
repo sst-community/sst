@@ -11,14 +11,17 @@
       }
     },
     {
+      "type": "npm",
+      "properties": {
+        "file": "package.json",
+        "package": "svelte-kit-sst"
+      }
+    },
+    {
       "type": "instructions",
       "properties": [
-        "Next steps:",
+        "Next steps: use the adapter in vite.config.ts (SvelteKit 3), or in svelte.config.js (SvelteKit 2):",
         "",
-        "1. Install the adapter:",
-        "   npm install -D svelte-kit-sst@npm:@sst-community/svelte-kit-sst",
-        "",
-        "2. Use it in vite.config.ts (SvelteKit 3), or in svelte.config.js (SvelteKit 2):",
         "   import adapter from \"svelte-kit-sst\";",
         "   sveltekit({ adapter: adapter() })"
       ]

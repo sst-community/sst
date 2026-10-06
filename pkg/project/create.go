@@ -144,10 +144,11 @@ func Create(templateName string, home string) ([]string, error) {
 				packageJsons[npmStep.File] = packageJson
 			}
 
-			// Templates add "sst"; install this distribution under that name.
+			// Templates add upstream packages such as "sst"; install this
+			// distribution's package under the upstream name.
 			pkgName := npmStep.Package
-			if pkgName == "sst" {
-				pkgName = global.NPMPackage
+			if mapped, ok := global.CommunityPackages[pkgName]; ok {
+				pkgName = mapped
 			}
 			version := npmStep.Version
 			if version == "" {
@@ -161,7 +162,7 @@ func Create(templateName string, home string) ([]string, error) {
 				version = data.Version
 			}
 			if pkgName != npmStep.Package {
-				version = global.NPMSpec(version)
+				version = global.AliasSpec(pkgName, version)
 			}
 			target[npmStep.Package] = version
 

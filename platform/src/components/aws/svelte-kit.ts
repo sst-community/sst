@@ -227,7 +227,11 @@ export interface SvelteKitArgs extends SsrSiteArgs {
    * SvelteKit app as well.
    * :::
    *
-   * ```js title="vite.config.ts" {5}
+   * ```js title="vite.config.ts" {9}
+   * import adapter from "svelte-kit-sst";
+   * import { sveltekit } from "@sveltejs/kit/vite";
+   * import { defineConfig } from "vite";
+   *
    * export default defineConfig({
    *   plugins: [
    *     sveltekit({
@@ -236,6 +240,18 @@ export interface SvelteKitArgs extends SsrSiteArgs {
    *     })
    *   ]
    * });
+   * ```
+   *
+   * In SvelteKit 2, it goes in `svelte.config.js`.
+   *
+   * ```js title="svelte.config.js" {4}
+   * export default {
+   *   kit: {
+   *     paths: {
+   *       base: "/docs"
+   *     }
+   *   }
+   * };
    * ```
    *
    * To serve your SvelteKit app **from a subdomain**, you'll need to configure the
@@ -327,7 +343,7 @@ export interface SvelteKitArgs extends SsrSiteArgs {
 }
 
 /**
- * The `SvelteKit` component lets you deploy a [SvelteKit](https://kit.svelte.dev/) app to AWS.
+ * The `SvelteKit` component lets you deploy a [SvelteKit](https://svelte.dev/docs/kit) app to AWS.
  *
  * @example
  *
