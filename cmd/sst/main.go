@@ -165,7 +165,7 @@ var root = &cli.Command{
 			"```",
 			"",
 			":::note",
-			"The CLI currently supports macOS, Linux, and WSL. Windows support is in beta.",
+			"The CLI currently supports macOS, Linux, and WSL. Windows support is in beta. It needs Node.js 22 or later, which runs your `sst.config.ts`.",
 			":::",
 			"",
 			"To install a specific version.",

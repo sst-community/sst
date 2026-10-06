@@ -263,6 +263,10 @@ Learn more about our [monorepo setup](/docs/set-up-a-monorepo/).
 
 To make this all work, SST comes with a [CLI](/docs/reference/cli/). For JavaScript projects, install SST locally in your project so the CLI version is tracked with your app. This installs the sst-community build under the name `sst`, so imports from `sst` keep working.
 
+:::note
+SST needs Node.js 22 or later. It runs your `sst.config.ts` with Node, even when your app isn't written in JavaScript.
+:::
+
 <Tabs syncKey="package-manager">
   <TabItem label="npm">
   ```bash
