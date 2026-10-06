@@ -18,7 +18,11 @@ var CmdVersion = &cli.Command{
 	},
 	Run: func(cli *cli.Cli) error {
 		if ui.Distribution != "" {
-			fmt.Println("sst", version, "("+ui.Distribution+")")
+			label := ui.Distribution
+			if ui.Upstream != "" {
+				label += ", built on SST " + ui.Upstream
+			}
+			fmt.Println("sst", version, "("+label+")")
 		} else {
 			fmt.Println("sst", version)
 		}

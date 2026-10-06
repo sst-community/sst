@@ -6,7 +6,6 @@ description: Build full-stack apps on your own infrastructure.
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import { LinkCard } from '@astrojs/starlight/components';
 import { Icon } from '@astrojs/starlight/components';
-import VideoAside from "../../../components/VideoAside.astro";
 import config from '../../../../config.ts';
 
 export const github  = config.github;
@@ -170,8 +169,6 @@ Learn more about [transforms](/docs/components#transforms).
 
 SST has built-in components for AWS and Cloudflare that make these services easier to use.
 
-<VideoAside title="Watch a video about providers in SST" href="https://youtu.be/rlR2f5N9mW4" />
-
 However it also supports components from any one of the **150+ Pulumi/Terraform providers**. For example, you can use Vercel for your frontends.
 
 ```ts title="sst.config.ts"
@@ -187,8 +184,6 @@ Learn more about [Providers](/docs/providers) and check out the full list in the
 ## Link resources
 
 Once you've added a couple of features, SST can help you link them together. This is great because you **won't need to hardcode** anything in your app.
-
-<VideoAside title="Watch a video on linking resources" href="https://youtu.be/s8cWklU4Akw" />
 
 Let's say you are deploying an Express app in a container and you want to upload files to an S3 bucket. You can `link` the bucket to your container.
 
@@ -221,8 +216,6 @@ Learn more about [resource linking](/docs/linking/).
 ## Project structure
 
 We've looked at a couple of different types of files. Let's take a step back and see what an SST app looks like in practice.
-
-<VideoAside title="Watch a video about SST's project structure" href="https://youtu.be/mserRA-CWRw" />
 
 ---
 
@@ -342,8 +335,6 @@ This brings up a _multiplexer_ that:
 2. Runs your functions [_Live_](/docs/live/), letting you make and test changes without having to redeploy them.
 3. Creates a [_tunnel_](/docs/reference/cli#tunnel) to connect your local machine to any resources in a VPC.
 4. Starts your frontend and container services in dev mode and links it to your infrastructure.
-
-<VideoAside title="Watch a video about dev mode" href="https://youtu.be/mefLc137EB0" />
 
 The `sst dev` CLI makes it so that you won’t have to start your frontend or container applications separately. Learn more about [`sst dev`](/docs/reference/cli/#dev).
 

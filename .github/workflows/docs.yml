@@ -27,8 +27,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # The whole history, for each page's "Last updated" date.
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
@@ -66,6 +69,7 @@ jobs:
         run: cd www && bun run build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCS_LAST_UPDATED: "true"
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v3

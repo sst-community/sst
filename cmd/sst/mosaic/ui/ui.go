@@ -716,6 +716,11 @@ func (u *UI) Destroy() {
 //	-ldflags "-X github.com/sst/sst/v3/cmd/sst/mosaic/ui.Distribution=sst-community"
 var Distribution = ""
 
+// Upstream is the SST release a downstream build is built on, such as
+// "4.17.1", which `sst version` shows next to Distribution. Set it at link
+// time like Distribution. It's empty in SST's own builds and in local ones.
+var Upstream = ""
+
 func (u *UI) header(version, app, stage string) {
 	if u.hasHeader {
 		return

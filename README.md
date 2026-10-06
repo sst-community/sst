@@ -9,7 +9,7 @@ Build full-stack apps on your own infrastructure.
 > [!NOTE]
 > **sst-community** is a community-maintained fork of [SST](https://github.com/anomalyco/sst). It is not affiliated with SST or Anomaly. It tracks upstream releases and carries fixes that haven't landed upstream yet.
 >
-> Releases are numbered after the upstream line they're based on: `4.17.x` is based on upstream 4.17. Each release's notes list what it changes. Telemetry is off. Docs: [sst-community.github.io/sst](https://sst-community.github.io/sst/docs/). Chat: [Discord](https://discord.gg/DQWT3WGVm2).
+> Releases have their own version numbers, because the fork moves faster than SST: up to 4.17.2 they followed SST's, and from there on the fork's 4.18.0 isn't SST's 4.18.0. Each release's notes say which SST release it's built on and list what it changes, and `sst version` shows the SST release too. Telemetry is off. Docs: [sst-community.github.io/sst](https://sst-community.github.io/sst/docs/). Chat: [Discord](https://discord.gg/DQWT3WGVm2).
 
 ## Installation
 

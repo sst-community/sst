@@ -1,0 +1,22 @@
+{
+	"name": "svelte-kit-sst-test-fixture",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"build": "vite build",
+		"prepare": "svelte-kit sync || echo ''"
+	},
+	"devDependencies": {
+		"@sveltejs/kit": "3.0.0",
+		"@sveltejs/vite-plugin-svelte": "7.3.1",
+		"svelte": "5.57.1",
+		"sst": "npm:@sst-community/sst@4.17.2",
+		"typescript": "6.0.3",
+		"vite": "8.3.2"
+	},
+	"imports": {
+		"#lib": "./src/lib/index.js",
+		"#lib/*": "./src/lib/*"
+	}
+}

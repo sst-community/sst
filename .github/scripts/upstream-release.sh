@@ -67,13 +67,31 @@ case "$status" in
   *) echo "git merge-tree failed." >&2; exit "$status" ;;
 esac
 
-# The fork's version: the next free patch number in upstream's major.minor line.
+# The fork numbers its own releases. Merging SST's release bumps the fork's
+# newest release in this history by as much as SST's release moved: a new SST
+# minor is a minor, a new SST patch a patch. Pull requests merged since the
+# fork's release can call for more; next-version.sh counts both.
 IFS=. read -r major minor patch <<< "$version"
-last=$(git tag --list "v$major.$minor.*" \
-  | grep -E "^v$major\.$minor\.[0-9]+$" \
-  | sed "s/^v$major\.$minor\.//" | sort -n | tail -n 1 || true)
-if [ -n "$last" ] && [ "$last" -ge "$patch" ]; then patch=$((last + 1)); fi
-next="v$major.$minor.$patch"
+IFS=. read -r merged_major merged_minor _ <<< "${merged#upstream/v}"
+if [ -z "$merged" ] || [ "$major" != "$merged_major" ]; then
+  level=major
+elif [ "$minor" != "$merged_minor" ]; then
+  level=minor
+else
+  level=patch
+fi
+release=$(git tag --merged "$BASE" --list 'v*' --sort=-version:refname \
+  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+if [ -n "$release" ]; then
+  IFS=. read -r a b c <<< "${release#v}"
+  case "$level" in
+    major) next="v$((a + 1)).0.0" ;;
+    minor) next="v$a.$((b + 1)).0" ;;
+    patch) next="v$a.$b.$((c + 1))" ;;
+  esac
+else
+  next="$tag"
+fi
 
 {
   echo "SST released [$tag](https://github.com/$UPSTREAM/releases/tag/$tag), and it isn't merged into \`main\` yet."
@@ -87,7 +105,14 @@ next="v$major.$minor.$patch"
     if [ "$count" = 1 ]; then files="1 file"; else files="$count files"; fi
     echo "- **Conflicts:** $files, listed below."
   fi
-  echo "- **Next fork version:** \`$next\`, the next free patch number in the $major.$minor line."
+  if [ -n "$release" ]; then
+    echo "- **Next fork version:** \`$next\` at least: SST $tag is a $level release, so the fork's \`$release\` gets a $level bump. \`.github/scripts/next-version.sh\` also counts the pull requests merged since \`$release\`."
+  else
+    echo "- **Next fork version:** \`$next\`. The fork has no release in this history yet."
+  fi
+  if [ "$level" = major ]; then
+    echo "- **SST $tag is a new major version**, with breaking changes. \`main\` doesn't take breaking changes for now, so decide how to take it before merging."
+  fi
   if [ -n "$conflicts" ]; then
     echo
     echo "### Conflicting files"
@@ -107,7 +132,7 @@ next="v$major.$minor.$patch"
   echo
   echo "### Release it"
   echo
-  echo "Write \`.github/release-notes/$next.md\`, naming SST $tag as the upstream version it includes, then push the \`$next\` tag."
+  echo "Run \`.github/scripts/next-version.sh\` on \`main\` for the version, \`$next\` or higher. Write \`.github/release-notes/<version>.md\`, naming SST $tag as the upstream version it includes, then push the tag."
   echo
   echo "To skip this release, close this issue. It isn't opened again until SST releases a newer version."
 } > "$BODY_FILE"

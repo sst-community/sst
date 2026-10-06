@@ -2,13 +2,32 @@ package resource
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 )
+
+// isBucketAbsent reports whether err indicates the target S3 bucket no longer
+// exists. It detects the typed *s3types.NoSuchBucket as well as a Smithy
+// APIError carrying the "NoSuchBucket" code, which some S3 operations surface
+// instead of the modeled type.
+func isBucketAbsent(err error) bool {
+	var noSuchBucket *s3types.NoSuchBucket
+	if errors.As(err, &noSuchBucket) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchBucket" {
+		return true
+	}
+	return false
+}
 
 type BucketFiles struct {
 	*AwsResource
@@ -109,7 +128,18 @@ func (r *BucketFiles) Delete(input *DeleteInput[BucketFilesOutputs], output *int
 	}
 	s3Client := s3.NewFromConfig(cfg)
 
-	return r.purge(s3Client, input.Outs.BucketName, nil, input.Outs.Files)
+	// Deletion is idempotent: if the asset bucket has already been removed
+	// (e.g. an interrupted removal, or the bucket deleted out-of-band), there
+	// is nothing left to purge, so treat NoSuchBucket as success. This is
+	// scoped to Delete only — purge is also used during Update, where a
+	// missing bucket must remain a fatal error.
+	if err := r.purge(s3Client, input.Outs.BucketName, nil, input.Outs.Files); err != nil {
+		if isBucketAbsent(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *BucketFiles) upload(client *s3.Client, bucketName string, files []BucketFile, oldFiles []BucketFile) error {

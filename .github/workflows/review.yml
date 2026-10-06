@@ -1,0 +1,72 @@
+name: review
+
+# A first-pass review of each pull request to main, before a committer looks:
+# checks that don't need a model (review-prepare.sh), then a review by opencode
+# with one of its free models, posted as one comment, a risk label and a
+# `review` status (review-post.sh).
+#
+# pull_request_target runs this file from main with a token that can comment,
+# for pull requests from forks too. That's safe only because nothing from the
+# pull request runs: main is checked out, the diff is fetched as text, and
+# opencode can read files and write text but has no shell, no edits and no web
+# access (.github/review/opencode.json), and no token. Keep it that way: never
+# check out the pull request's ref here.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    branches: [main]
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      statuses: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      MODEL: opencode/space-bunny-free
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Collect the pull request and run the checks
+        run: |
+          echo "OUT=$RUNNER_TEMP/review" >> "$GITHUB_ENV"
+          OUT="$RUNNER_TEMP/review" .github/scripts/review-prepare.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # No token here. A failure, such as the free model being unavailable,
+      # still posts the checks.
+      - name: Review with opencode
+        id: opencode
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          npx -y opencode-ai@1.18.34 run --pure --agent review --model "$MODEL" \
+            -f "$OUT/pr.md" -f "$OUT/pr.diff" -- "$(cat .github/review/prompt.md)" \
+            </dev/null >"$OUT/review.raw"
+        env:
+          OPENCODE_CONFIG: .github/review/opencode.json
+
+      - name: Post the review
+        run: .github/scripts/review-post.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          OPENCODE_OUTCOME: ${{ steps.opencode.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

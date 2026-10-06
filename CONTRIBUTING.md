@@ -43,8 +43,9 @@ If the change affects what gets deployed or how `sst dev` behaves, try it on an 
 - Keep one change to a pull request.
 - Title it the way commits here are titled: the area, a colon, then what the change does. For example, `Function: retain the shared dev bridge code object on delete`.
 - The `check` workflow has to pass. On your first pull request, a maintainer approves the run before it starts.
-- An AI reviewer, CodeRabbit, reviews it first, within a few minutes and again after each push. Fix what it asks for, or reply to it if you disagree. Its rules are in `.coderabbit.yaml`: among them, the title format above, no edits to generated docs, no version changes, and a line in the description saying how you tested a change to the CLI or the components. Once it approves, a committer reviews.
-- A committer or maintainer other than the author has to approve it. Anyone can review, and reviews from anyone are welcome, but only theirs count toward merging. If you push again after the approval, it needs approving again.
+- An automatic review runs first, within a few minutes and again after each push or edit to the title or description. It posts one comment with a risk label, a few checks (the title format above, no edits to generated docs, no version changes, and a line in the description saying how you tested a change to the code) and a review by an AI model, which also labels the change `semver: patch`, `semver: minor` or `semver: major`. Fix what it asks for, or reply if you disagree: it can be wrong. A committer reviews after that.
+- `main` doesn't take breaking changes for now: removing or renaming an arg, output, component or CLI flag, changing a default, or replacing a user's existing resources when they update. Ask on Discord first if your change needs one.
+- A committer or maintainer other than the author has to approve it. Anyone can review, and reviews from anyone are welcome, but only theirs count toward merging. If you push again after the approval, it needs approving again. A releaser can merge their own pull request without one.
 - Pull requests are squash-merged, so the title becomes the commit.
 - A change to how the fork is built, released or installed needs a review from a code owner. `.github/CODEOWNERS` lists those files.
 

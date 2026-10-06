@@ -12,6 +12,8 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
       - -X github.com/sst/sst/v3/cmd/sst/mosaic/ui.Distribution=sst-community
+      # The SST release this build is on, which release.yml works out.
+      - -X github.com/sst/sst/v3/cmd/sst/mosaic/ui.Upstream={{ envOrDefault "SST_UPSTREAM" "" }}
 
 archives:
   - formats:

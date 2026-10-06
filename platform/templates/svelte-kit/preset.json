@@ -14,15 +14,19 @@
       "type": "npm",
       "properties": {
         "file": "package.json",
-        "package": "svelte-kit-sst"
+        "package": "svelte-kit-sst",
+        "dev": true
       }
     },
     {
       "type": "instructions",
       "properties": [
-        "Next steps: update svelte.config.js",
+        "Next steps: use the adapter.",
         "",
-        "import adapter from \"svelte-kit-sst\";"
+        "   import adapter from \"svelte-kit-sst\";",
+        "",
+        "   SvelteKit 3, in vite.config.ts:   sveltekit({ adapter: adapter() })",
+        "   SvelteKit 2, in svelte.config.js: kit: { adapter: adapter() }"
       ]
     }
   ]

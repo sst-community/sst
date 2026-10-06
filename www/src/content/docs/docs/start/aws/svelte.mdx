@@ -56,12 +56,18 @@ npm install
 
 Select the defaults and pick **AWS**. This'll create a `sst.config.ts` file in your project root.
 
-It'll also ask you to update your `svelte.config.mjs` with something like this.
+It'll also add the SvelteKit adapter, `svelte-kit-sst`, to your `package.json`. Now use it in your `vite.config.ts`.
 
-```diff lang="js" title="svelte.config.mjs"
+```diff lang="ts" title="vite.config.ts"
 - import adapter from '@sveltejs/adapter-auto';
 + import adapter from "svelte-kit-sst";
 ```
+
+The `sveltekit()` plugin in a new app already has `adapter: adapter()`, so this import is the only change.
+
+:::note
+In SvelteKit 2, set the same adapter in `svelte.config.js` under `kit.adapter`. If you add SST to an existing app without `sst init`, install the adapter yourself with `npm install -D svelte-kit-sst@npm:@sst-community/svelte-kit-sst`.
+:::
 
 ---
 
@@ -244,18 +250,24 @@ npm install
 
 Select the defaults and pick **AWS**. This'll create a `sst.config.ts` file in your project root.
 
-It'll also ask you to update your `svelte.config.mjs`. But **we'll instead use** the [Node.js adapter](https://kit.svelte.dev/docs/adapter-node) since we're deploying it through a container.
+It'll also show you how to set up the SvelteKit adapter. But **we'll instead use** the [Node.js adapter](https://svelte.dev/docs/kit/adapter-node) since we're deploying it through a container.
 
 ```bash
 npm i -D @sveltejs/adapter-node
 ```
 
-And updating your `svelte.config.js`.
+And updating your `vite.config.ts`.
 
-```diff lang="js" title="svelte.config.mjs"
+```diff lang="ts" title="vite.config.ts"
 - import adapter from '@sveltejs/adapter-auto';
 + import adapter from '@sveltejs/adapter-node';
 ```
+
+The `sveltekit()` plugin in a new app already has `adapter: adapter()`, so this import is the only change.
+
+:::note
+In SvelteKit 2, this goes in `svelte.config.js` under `kit.adapter`.
+:::
 
 ---
 

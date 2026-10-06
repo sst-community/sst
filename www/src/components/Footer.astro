@@ -3,6 +3,7 @@ import userConfig from 'virtual:starlight/user-config';
 import type { Props } from '@astrojs/starlight/props';
 import { Icon } from '@astrojs/starlight/components';
 import config from '../../config';
+import { sourceDate } from '../source-dates';
 
 const slug = Astro.url.pathname
   .slice(import.meta.env.BASE_URL.replace(/\/$/, "").length)
@@ -20,25 +21,40 @@ const {
 
 let editUrl = Astro.locals.starlightRoute.editUrl;
 
+// Generated pages aren't in git: they link to, and are dated by, the file or
+// folder they're generated from.
+let source: string | undefined;
+
 // Change path for component source files
 if (slug.startsWith("docs/component/")) {
-  editUrl = new URL(
-    `platform/src/components/${slug.replace("docs/component/", "")}.ts`, editLink
-  );
+  source = `platform/src/components/${slug.replace("docs/component/", "")}.ts`;
 }
 // Change path for reference source files
 else if (slug === "docs/reference/config") {
-  editUrl = new URL("platform/src/config.ts", editLink);
+  source = "platform/src/config.ts";
 }
 else if (slug === "docs/reference/global") {
-  editUrl = new URL("platform/src/global.d.ts", editLink);
+  source = "platform/src/global.d.ts";
 }
 else if (slug === "docs/reference/cli") {
-  editUrl = new URL("cmd/sst/main.go", editLink);
+  source = "cmd/sst/main.go";
 }
 else if (slug === "docs/examples") {
-  editUrl = new URL("examples", editLink);
+  source = "examples";
 }
+if (source) editUrl = new URL(source, editLink);
+// An example is a folder, edited at its sst.config.ts.
+if (slug.startsWith("docs/examples/")) {
+  source = `examples/${slug.replace("docs/examples/", "")}`;
+  editUrl = new URL(`${source}/sst.config.ts`, editLink);
+}
+
+// Starlight dates the pages that are in git, when `lastUpdated` is on. For a
+// generated page it would give the date its file was deleted from git, years
+// ago, so those are dated by their source only.
+const updated = source
+  ? userConfig.lastUpdated ? sourceDate(source) : undefined
+  : lastUpdated;
 ---
 
 {
@@ -63,14 +79,14 @@ else if (slug === "docs/examples") {
           <p>
             A community-maintained fork of <a target="_blank" href={config.github}>SST</a>
           </p>
+          { updated && (
           <p>
             Last updated —{' '}
-            { lastUpdated && (
-            <time datetime={lastUpdated.toISOString()}>
-              {lastUpdated.toLocaleDateString(lang, { dateStyle: 'medium', timeZone: 'UTC' })}
+            <time datetime={updated.toISOString()}>
+              {updated.toLocaleDateString(lang, { dateStyle: 'medium', timeZone: 'UTC' })}
             </time>
-            )}
           </p>
+          )}
           <p>
             Based on the <a target="_blank" href="https://sst.dev/docs/">SST docs</a> &copy; Anomaly Innovations
           </p>

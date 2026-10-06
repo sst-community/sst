@@ -92,6 +92,17 @@ jobs:
           notes=".github/release-notes/${GITHUB_REF_NAME}.md"
           if [ -f "$notes" ]; then echo "args=--release-notes $notes" >> "$GITHUB_OUTPUT"; fi
 
+      # `sst version` names the SST release a build is on: the newest SST tag
+      # in its history. SST's tags go under refs/upstream-tags/, not
+      # refs/tags/, so goreleaser can't take one for the previous release.
+      - name: Find the SST release
+        run: |
+          git fetch --quiet --no-tags https://github.com/anomalyco/sst.git '+refs/tags/v*:refs/upstream-tags/v*'
+          base=$(git for-each-ref --merged HEAD --sort=-version:refname --format='%(refname:lstrip=2)' refs/upstream-tags/ \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          echo "Built on SST ${base:-(none found)}"
+          echo "SST_UPSTREAM=${base#v}" >> "$GITHUB_ENV"
+
       - name: Release CLI
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -107,6 +118,24 @@ jobs:
           bun run release
         # npm trusted publishing (OIDC via id-token: write), no token. Each
         # package needs a trusted publisher for this workflow on npmjs.com.
+        env:
+          NPM_CONFIG_PROVENANCE: true
+
+      # Publishes packages/svelte-kit-sst when its version isn't on npm yet, so
+      # a pull request that bumps the version ships with the next release. Its
+      # tests run in the svelte-kit-sst workflow, not here.
+      - name: Release svelte-kit-sst
+        working-directory: packages/svelte-kit-sst
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "@sst-community/svelte-kit-sst@$version" version >/dev/null 2>&1; then
+            echo "@sst-community/svelte-kit-sst@$version is already on npm"
+            exit 0
+          fi
+          tag=latest
+          case "$version" in *-*) tag=next ;; esac
+          npm ci
+          npm publish --access public --tag "$tag"
         env:
           NPM_CONFIG_PROVENANCE: true
 

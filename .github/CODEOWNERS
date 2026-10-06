@@ -1,17 +1,14 @@
-# Every pull request needs an approval from a committer. The CodeRabbit app can
-# approve, and its approval would count toward the one `main` requires, but it
-# isn't a code owner, so a committer still has to approve.
+# Every pull request needs an approval from a committer. An approval from an app
+# with write access to the repo would count toward the one `main` requires, but
+# an app isn't a code owner, so a committer still has to approve.
 * @sst-community/committers
 
 # The files below override that: a pull request that changes one needs a review
 # from its owner. They decide what gets built, released to npm, and run on a
 # user's machine at install.
 
-# Workflows, their scripts, and this file.
+# Workflows, their scripts, the automatic review's rules, and this file.
 /.github/ @the-human-mustachio
-
-# The AI reviewer's rules.
-/.coderabbit.yaml @the-human-mustachio
 
 # The release build and the container image it pushes.
 /.goreleaser.yml @the-human-mustachio

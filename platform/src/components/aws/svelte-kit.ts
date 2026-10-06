@@ -217,13 +217,32 @@ export interface SvelteKitArgs extends SsrSiteArgs {
    * }
    * ```
    *
-   * You also need to set the [`base`](https://kit.svelte.dev/docs/configuration#paths)
-   * to `/docs` in your `svelte.config.js` without a trailing slash.
+   * You also need to set the [`base`](https://svelte.dev/docs/kit/configuration#paths)
+   * to `/docs` in your SvelteKit config without a trailing slash. In SvelteKit 3, pass
+   * `paths` to the `sveltekit()` plugin in `vite.config.ts`. In SvelteKit 2, use
+   * `kit.paths` in `svelte.config.js`.
    *
    * :::caution
    * If routing to a path, you need to set that as the base path in your
    * SvelteKit app as well.
    * :::
+   *
+   * ```js title="vite.config.ts" {9}
+   * import adapter from "svelte-kit-sst";
+   * import { sveltekit } from "@sveltejs/kit/vite";
+   * import { defineConfig } from "vite";
+   *
+   * export default defineConfig({
+   *   plugins: [
+   *     sveltekit({
+   *       adapter: adapter(),
+   *       paths: { base: "/docs" }
+   *     })
+   *   ]
+   * });
+   * ```
+   *
+   * In SvelteKit 2, it goes in `svelte.config.js`.
    *
    * ```js title="svelte.config.js" {4}
    * export default {
@@ -283,7 +302,7 @@ export interface SvelteKitArgs extends SsrSiteArgs {
    * }
    * ```
    *
-   * Also, make sure to set the base path in your `svelte.config.js`, like above.
+   * Also, make sure to set the base path in your SvelteKit config, like above.
    */
   router?: SsrSiteArgs["router"];
   /**
@@ -324,7 +343,7 @@ export interface SvelteKitArgs extends SsrSiteArgs {
 }
 
 /**
- * The `SvelteKit` component lets you deploy a [SvelteKit](https://kit.svelte.dev/) app to AWS.
+ * The `SvelteKit` component lets you deploy a [SvelteKit](https://svelte.dev/docs/kit) app to AWS.
  *
  * @example
  *

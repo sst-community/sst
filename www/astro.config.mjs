@@ -323,7 +323,9 @@ export default defineConfig({
     }),
     starlight({
       title: "sst-community",
-      lastUpdated: !process.env.CI,
+      // Dates come from git. CI leaves them out to build faster, except the
+      // build that publishes the site (docs.yml sets DOCS_LAST_UPDATED).
+      lastUpdated: !process.env.CI || process.env.DOCS_LAST_UPDATED === "true",
       favicon: "/fork-favicon.svg",
       pagination: false,
       markdown: {
