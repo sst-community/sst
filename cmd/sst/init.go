@@ -115,7 +115,11 @@ func CmdInit(cli *cli.Cli) error {
 		template = "nuxt"
 		break
 
-	case slices.ContainsFunc(hints, func(s string) bool { return strings.HasPrefix(s, "svelte.config") }):
+	case slices.ContainsFunc(hints, func(s string) bool {
+		// SvelteKit 3 has no svelte.config.*; its config lives in vite.config.*
+		return strings.HasPrefix(s, "svelte.config") ||
+			(strings.HasPrefix(s, "vite.config") && fileContains(s, "@sveltejs/kit"))
+	}):
 		fmt.Println("  SvelteKit detected. This will...")
 		fmt.Println("   - create an sst.config.ts")
 		fmt.Println("   - add sst to package.json")
