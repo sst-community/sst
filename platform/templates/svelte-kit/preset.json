@@ -20,10 +20,12 @@
     {
       "type": "instructions",
       "properties": [
-        "Next steps: use the adapter in vite.config.ts (SvelteKit 3), or in svelte.config.js (SvelteKit 2):",
+        "Next steps: use the adapter.",
         "",
         "   import adapter from \"svelte-kit-sst\";",
-        "   sveltekit({ adapter: adapter() })"
+        "",
+        "   SvelteKit 3, in vite.config.ts:   sveltekit({ adapter: adapter() })",
+        "   SvelteKit 2, in svelte.config.js: kit: { adapter: adapter() }"
       ]
     }
   ]
