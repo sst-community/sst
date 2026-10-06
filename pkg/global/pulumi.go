@@ -26,6 +26,7 @@ func NeedsPulumi() bool {
 		return true
 	}
 	cmd := process.Command(path, "version")
+	cmd.Env = append(os.Environ(), "PULUMI_HOME="+ConfigDir())
 	output, err := cmd.Output()
 	if err != nil {
 		return true
