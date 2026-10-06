@@ -133,16 +133,18 @@ bun install
 - **Typecheck first.** A provider can change its types within a major version, and `cd platform && bun tsc --noEmit` is where that shows.
 - **Check the Node version `@pulumi/pulumi` needs** (`npm view @pulumi/pulumi@<new> engines`). The user's own `node` runs their config. Since 3.249 it has to be Node 22 or later. A change there goes in the release notes.
 - **An app that doesn't pin a provider's version gets the one in `platform/package.json`.** An existing app moves to it on the first deploy after the CLI is upgraded. `sst diff` shows that as the provider entries being replaced, and it should show nothing else.
+- **A docker-build update can rebuild every image once.** docker-build is built on pulumi-go-provider, which replaces its provider on any config change except `version` ([pulumi-go-provider#409](https://github.com/pulumi/pulumi-go-provider/issues/409)) and stores its own version in that config. When that version changes, every image SST builds is rebuilt on the next deploy, and each Service, Task or container Function using one is redeployed. Say so in the release notes.
 
 ### Testing a bump
 
-The tests run without a real provider, so deploy an app:
+The tests run without a real provider, so deploy an app with a site, a database, and a Service whose image is built from a Dockerfile:
 
 1. Deploy it with the current release.
 2. Switch to the new build and run `sst diff`. Only the provider entries should change.
 3. Deploy, call what it deployed, and run `sst diff` again. It should say no changes.
 4. Run `sst dev --mode=basic` and invoke a function. This is what exercises the bridge, which is built with the new Go modules.
-5. Remove it, then deploy it from scratch with the new build and remove it again.
+5. Roll back: run `sst diff` and deploy with the current release. It should read the state the new build wrote and change only the provider entries.
+6. Remove it, then deploy it from scratch with the new build and remove it again.
 
 **A build replaces the installed Pulumi.** Every command, `sst version` included, checks the Pulumi binary in the `sst/bin` folder of your user config directory and downloads its own version when that differs. So a test build swaps the binary your installed CLI uses, and so does the docs build, which runs `go run ../cmd/sst`. Run the test build with `HOME` set to an empty folder and it installs Pulumi, Bun and the provider plugins there instead. It then can't read `~/.aws`, so give it credentials as environment variables. To put the binary back, run your installed CLI once.
 
