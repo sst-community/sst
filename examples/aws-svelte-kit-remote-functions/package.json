@@ -24,6 +24,6 @@
   },
   "dependencies": {
     "sst": "file:../../sdk/js",
-    "svelte-kit-sst": "latest"
+    "svelte-kit-sst": "npm:@sst-community/svelte-kit-sst@3.0.0"
   }
 }
