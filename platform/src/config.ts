@@ -160,8 +160,6 @@ export interface App {
    * This applies to not just the `sst remove` command but also cases where you remove a
    * resource from the `sst.config.ts` and run `sst dev` or `sst deploy`.
    *
-   * <VideoAside title="Watch a video on how to protect your prod resources" href="https://youtu.be/fb6UBGwgDuA" />
-   *
    * To control how a stage is handled on `sst remove`, check out the `protect` prop.
    *
    * @default `"retain"`
@@ -263,8 +261,6 @@ export interface App {
    * ```
    *
    * However, this only applies to `sst remove` for stages.
-   *
-   * <VideoAside title="Watch a video on how to protect your prod resources" href="https://youtu.be/fb6UBGwgDuA" />
    *
    * If you accidentally remove a resource from the `sst.config.ts` and run `sst deploy` or
    * `sst dev`, it'll still get removed. To avoid this, check out the `removal` prop.

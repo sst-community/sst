@@ -4,7 +4,6 @@ description: The basics of building apps with SST.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
-import VideoAside from "../../../components/VideoAside.astro";
 
 The main difference between working on SST versus any other framework is that everything related to your app is all **defined in code**.
 
@@ -125,8 +124,6 @@ There are some exceptions to this. You might have resources that are not defined
 ### Linking
 
 Let's say you wanted your function from the above example to upload a file to the S3 bucket, you'd need to hardcode the name of the bucket in your API.
-
-<VideoAside title="Watch a video on linking resources" href="https://youtu.be/s8cWklU4Akw" />
 
 SST avoids this by allowing you to **link resources** together.
 
@@ -298,8 +295,6 @@ sst dev
 
 This deploys your app to your _personal_ stage in _dev mode_. It brings up a multiplexer that deploys your app, runs your functions, creates a tunnel, and starts your frontend and container services.
 
-<VideoAside title="Watch a video about dev mode" href="https://youtu.be/mefLc137EB0" />
-
 It deploys your app a little differently and is optimized for local development.
 
 1. It runs the functions in your app [_Live_](/docs/live/) by deploying a **_stub_ version**. These proxy any requests to your local machine.
@@ -350,8 +345,6 @@ removal: input?.stage === "production" ? "retain" : "remove",
 
 This is telling SST that if the stage is called `production` then on remove, retain critical resources like buckets and databases. This should avoid any accidental data loss.
 
-<VideoAside title="Watch a video on how to protect your prod resources" href="https://youtu.be/fb6UBGwgDuA" />
-
 Learn more about [removal policies](/docs/reference/config/#removal).
 
 ---
@@ -359,8 +352,6 @@ Learn more about [removal policies](/docs/reference/config/#removal).
 ## With a team
 
 This workflow really shines when working with a team. Let's look at what it looks like with a basic git workflow.
-
-<VideoAside title="Watch a video about preview environments and the team workflow" href="https://youtu.be/Pvg_AiTfWeY" />
 
 1. Every developer on the team uses `sst dev` to work in their own isolated personal stage.
 2. You commit your changes to a branch called `dev`.
