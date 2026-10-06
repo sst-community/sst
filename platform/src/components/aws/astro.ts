@@ -421,6 +421,7 @@ export class Astro extends SsrSite {
         responseMode: "stream" | "buffer";
         clientBuildOutputDir: string;
         clientBuildVersionedSubDir: string;
+        routes?: { route: string; prerender?: boolean }[];
       };
       const serverOutputPath = path.join(outputPath, "dist", "server");
 
@@ -482,6 +483,18 @@ export class Astro extends SsrSite {
             )
             ? "/404.html"
             : undefined,
+        // With a server, keep prerendered routes from shadowing server routes
+        //   in the same folder, ie. /api/list.json and /api/[id].
+        ...(isStatic
+          ? {}
+          : {
+              hasStaticRoutes: true,
+              // Route patterns don't include the base path.
+              prerenderedDirs: (buildMeta.routes ?? [])
+                .filter((r) => r.prerender)
+                .map((r) => r.route.replace(/^\/+/, "").split("/")[0])
+                .filter(Boolean),
+            }),
       };
     });
   }

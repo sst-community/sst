@@ -485,8 +485,10 @@ export class SvelteKit extends SsrSite {
             from: path.join(".svelte-kit", "svelte-kit-sst", "prerendered"),
             to: "",
             cached: false,
+            listFiles: true,
           },
         ],
+        hasStaticRoutes: true,
       };
     });
   }

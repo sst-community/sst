@@ -1362,7 +1362,8 @@ interface RouterRef {
  *   splits the routes into multiple values to keep it under the limit.
  * - The KeyValueStore can be a maximum of 5MB. This is fairly large. But to
  *   handle sites that have a lot of files, only top-level assets get individual
- *   entries.
+ *   entries. Folders with prerendered routes are the exception: their files get
+ *   entries too, up to 1MB per site, so they don't hide server routes.
  */
 export class Router extends Component implements Link.Linkable {
   private constructorName: string;
