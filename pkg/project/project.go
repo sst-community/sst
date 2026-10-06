@@ -109,6 +109,7 @@ type Project struct {
 	home            provider.Home
 	env             map[string]string
 	loadedProviders map[string]provider.Provider
+	nodeVersion     string
 	Runtime         *runtime.Collection
 }
 
@@ -222,6 +223,7 @@ func New(input *ProjectConfig) (*Project, error) {
 			},
 			Code: fmt.Sprintf(`
 import mod from '%s';
+console.log("~n" + process.versions.node)
 if (mod.stacks || mod.config) {
   console.log("~v2")
   process.exit(0)
@@ -252,6 +254,10 @@ console.log("~j" + JSON.stringify(await mod.app({
 		line := scanner.Text()
 		if line == "~v2" {
 			return nil, ErrV2Config
+		}
+		if strings.HasPrefix(line, "~n") {
+			proj.nodeVersion = line[2:]
+			continue
 		}
 		if strings.HasPrefix(line, "~j") {
 			var parsed App
@@ -445,6 +451,11 @@ func (p Project) Version() string {
 
 func (p Project) App() *App {
 	return p.app
+}
+
+// NodeVersion is the version of the Node.js that evaluated the config.
+func (p Project) NodeVersion() string {
+	return p.nodeVersion
 }
 
 func (p Project) Backend() provider.Home {
