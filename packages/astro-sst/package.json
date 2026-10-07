@@ -1,5 +1,5 @@
 {
-  "name": "astro-sst",
+  "name": "@sst-community/astro-sst",
   "description": "Adapter that allows Astro to deploy your site to AWS utilizing SST.",
   "version": "3.1.4",
   "type": "module",
@@ -10,14 +10,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sst/astro-sst.git",
+    "url": "git+https://github.com/sst-community/sst.git",
     "directory": "packages/astro-sst"
   },
   "keywords": [
     "withastro",
     "astro-adapter"
   ],
-  "bugs": "https://github.com/sst/astro-sst/issues",
+  "bugs": "https://github.com/sst-community/sst/issues",
   "exports": {
     ".": "./dist/adapter.js",
     "./entrypoint": "./dist/entrypoint.js",
@@ -34,15 +34,25 @@
       ]
     }
   },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc"
+    "build": "rm -rf dist && tsc",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "set-cookie-parser": "^2.7.1"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.146",
-    "@types/set-cookie-parser": "^2.4.10",
-    "astro": "^5.0.8"
+    "@types/aws-lambda": "8.10.146",
+    "@types/node": "22.10.2",
+    "@types/set-cookie-parser": "2.4.10",
+    "astro": "5.18.2",
+    "typescript": "5.6.3"
   }
 }

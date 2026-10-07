@@ -3,7 +3,7 @@ import { BuildMeta, IntegrationConfig } from "./lib/build-meta.js";
 import ASTRO_PACKAGE from "astro/package.json" with { type: "json" };
 import { debug } from "./lib/logger.js";
 
-const PACKAGE_NAME = "astro-sst";
+const PACKAGE_NAME = "@sst-community/astro-sst";
 const astroMajorVersion = parseInt(ASTRO_PACKAGE.version.split(".")[0] ?? 0);
 
 export default function createIntegration(
@@ -64,7 +64,10 @@ export default function createIntegration(
         BuildMeta.setBuildOutput(buildOutput);
         setAdapter({
           name: PACKAGE_NAME,
-          serverEntrypoint: `${PACKAGE_NAME}/entrypoint`,
+          // A URL rather than a package path, so the entrypoint resolves
+          // whether the app installs this package by its name or under the
+          // `astro-sst` alias that `sst init` writes.
+          serverEntrypoint: new URL("./entrypoint.js", import.meta.url),
           args: { responseMode: entrypointParameters.responseMode },
           exports: ["handler"],
           adapterFeatures: {
