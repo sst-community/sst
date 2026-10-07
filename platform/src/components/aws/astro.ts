@@ -514,9 +514,10 @@ const __pulumiType = "sst:aws:Astro";
 Astro.__pulumiType = __pulumiType;
 
 /**
- * SST's own "astro-sst" adapter, 3.x, imports applyPolyfills, which Astro 6
- * removed, so building an Astro 6 or 7 app with it fails with a "Missing
- * export" error that doesn't say what to do. Say it before the build.
+ * SST's own "astro-sst" adapter, 2.x and 3.x, imports applyPolyfills, which
+ * Astro 6 removed, so building an Astro 6 or 7 app with it fails with a
+ * "Missing export" error that doesn't say what to do. Say it before the build.
+ * A later version of SST's adapter, which may support Astro 6, isn't stopped.
  */
 function checkAdapter(sitePath: string) {
   const read = (file: string) => {
@@ -545,12 +546,12 @@ function checkAdapter(sitePath: string) {
   const adapter = resolve("astro-sst");
   const astro = resolve("astro");
   if (adapter?.name !== "astro-sst" || !astro?.version) return;
-  if (parseInt(astro.version) < 6) return;
+  if (parseInt(adapter.version) >= 4 || parseInt(astro.version) < 6) return;
   throw new VisibleError(
     [
-      `This app uses Astro ${astro.version} with SST's "astro-sst" adapter ${adapter.version}, which only supports Astro 5, so the build would fail.`,
+      `This app uses Astro ${astro.version} with SST's "astro-sst" adapter ${adapter.version}, which doesn't support Astro 6 or later, so the build would fail.`,
       ``,
-      `Switch to the sst-community adapter, which supports Astro 5, 6 and 7. Change the "astro-sst" line in package.json to`,
+      `Switch to the sst-community adapter, which supports Astro 6 and 7. Change the "astro-sst" line in package.json to`,
       ``,
       `  "astro-sst": "npm:@sst-community/astro-sst@^4.0.0"`,
       ``,

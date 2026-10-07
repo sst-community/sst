@@ -57,7 +57,7 @@ SST edits `www/astro.config.mjs` often, mostly the sidebar. The fork's edits the
 - the redirects
 - the `forkLinks` rehype plugin
 
-The fork also edits `www/config.ts` (`fork`, `forkDiscord`), the Head, Header, HeaderLinks, Footer, Hero and TestimonialWall components, `index.mdx`, and the install commands in `docs/index.mdx` and `docs/reference/sdk.mdx`.
+The fork also edits `www/config.ts` (`fork`, `forkDiscord`), the Head, Header, HeaderLinks, Footer, Hero and TestimonialWall components, `index.mdx`, the install commands in `docs/index.mdx` and `docs/reference/sdk.mdx`, and the adapter steps in the Astro and SvelteKit guides, `docs/start/aws/astro.mdx` and `svelte.mdx`.
 
 ## Versions
 

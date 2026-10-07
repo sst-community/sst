@@ -24,7 +24,7 @@ npm install sst@npm:@sst-community/sst
 
 To switch an existing project from SST, change its dependency to `"sst": "npm:@sst-community/sst@<version>"` and reinstall. `sst upgrade` keeps it pointing at the fork.
 
-If the project uses the Astro or SvelteKit adapter, switch it the same way, to `"astro-sst": "npm:@sst-community/astro-sst@<version>"` or `"svelte-kit-sst": "npm:@sst-community/svelte-kit-sst@<version>"`. Its imports stay the same. SST's own adapters don't support Astro 6 or later, or SvelteKit 3, and `sst upgrade` doesn't change them.
+If the project uses the Astro or SvelteKit adapter, switch it the same way, to `"astro-sst": "npm:@sst-community/astro-sst@<version>"` or `"svelte-kit-sst": "npm:@sst-community/svelte-kit-sst@<version>"`. Its imports stay the same. SST's own `astro-sst` 3.x doesn't support Astro 6 or later, and its `svelte-kit-sst` 2.x doesn't support SvelteKit 3. `sst upgrade` doesn't change the adapters.
 
 If you are not using JavaScript, you can install the CLI globally.
 
