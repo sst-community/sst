@@ -8,8 +8,8 @@ import type {
   CloudFrontHeaders,
 } from "aws-lambda";
 import type { ResponseStream } from "./types";
-import { splitCookiesString, parse, Cookie } from "set-cookie-parser";
-import { isBinaryContentType } from "./binary.js";
+import { splitCookiesString } from "set-cookie-parser";
+import { isBinaryResponse } from "./binary.js";
 import zlib from "zlib";
 
 export type InternalEvent = {
@@ -34,7 +34,7 @@ type InternalResult = {
   readonly type: "v1" | "v2" | "cf";
   statusCode: number;
   headers: Record<string, string>;
-  cookies: Cookie[];
+  cookies: string[];
   body: string;
   isBase64Encoded: boolean;
 };
@@ -42,7 +42,7 @@ type InternalResult = {
 type InternalStreamingResult = {
   statusCode: number;
   headers: Record<string, string>;
-  cookies: Cookie[];
+  cookies: string[];
   body: ReadableStream | null;
   responseStream: ResponseStream;
   isBase64Encoded: boolean;
@@ -151,17 +151,15 @@ export async function convertTo({
       return headers;
     }, {} as { [key: string]: string });
 
-  // Parse cookies
-  const cookies = parse(
-    [
-      ...splitCookiesString(response.headers.getSetCookie() ?? undefined),
-      ...(appCookies ?? []),
-    ],
-    { decodeValues: false, map: false, silent: true }
-  );
+  // Set-Cookie values are passed on as they are. Parsing them and writing
+  // them out again turned Max-Age into "maxAge", which browsers ignore.
+  const cookies = [
+    ...splitCookiesString(response.headers.getSetCookie() ?? undefined),
+    ...(appCookies ?? []),
+  ];
 
-  // Parse isBase64Encoded
-  const isBase64Encoded = isBinaryContentType(headers["content-type"]);
+  // Bytes are sent as base64, and aren't gzipped when streamed.
+  const isBase64Encoded = isBinaryResponse(headers);
 
   // Build streaming result
   if (type === "v2" && responseStream) {
@@ -205,7 +203,7 @@ function convertToApigV1Result({
 }: InternalResult): APIGatewayProxyResult {
   const multiValueHeaders: Record<string, string[]> = {};
   if (cookies.length > 0) {
-    multiValueHeaders["set-cookie"] = stringifyCookies(cookies);
+    multiValueHeaders["set-cookie"] = cookies;
   }
 
   const response: APIGatewayProxyResult = {
@@ -229,7 +227,7 @@ function convertToApigV2Result({
   const response: APIGatewayProxyResultV2 = {
     statusCode,
     headers,
-    cookies: cookies.length > 0 ? stringifyCookies(cookies) : undefined,
+    cookies: cookies.length > 0 ? cookies : undefined,
     body,
     isBase64Encoded,
   };
@@ -245,17 +243,20 @@ function convertToApigV2StreamingResult({
   responseStream,
   isBase64Encoded,
 }: InternalStreamingResult) {
-  if (body && !isBase64Encoded) {
+  const gzipped = !!body && !body.locked && !isBase64Encoded;
+  if (gzipped) {
     headers["content-encoding"] = "gzip";
+    // The app's length is the uncompressed one.
+    delete headers["content-length"];
   }
 
   const metadata = {
     statusCode,
     headers,
+    // Lambda sends each cookie as its own Set-Cookie header. Joined into one
+    // header, several cookies arrived as one broken cookie.
+    ...(cookies.length > 0 && { cookies }),
   };
-  if (cookies.length > 0) {
-    metadata.headers["set-cookie"] = stringifyCookies(cookies).join(", ");
-  }
   responseStream = awslambda.HttpResponseStream.from(responseStream, metadata);
   // Lambda sends the status and headers just before the first write. Write
   // nothing now, so they go out even if the body turns out to be empty.
@@ -283,7 +284,7 @@ function convertToApigV2StreamingResult({
   }
 
   let streamToWrite: ResponseStream | zlib.Gzip;
-  if (!isBase64Encoded) {
+  if (gzipped) {
     const gzip = zlib.createGzip();
     gzip.pipe(responseStream);
     streamToWrite = gzip;
@@ -299,12 +300,16 @@ function convertToApigV2StreamingResult({
     // then it will appear here, it is useless, but it needs to be catch.
     reader.cancel(error).catch(() => {});
 
-    if (!isBase64Encoded) {
+    if (gzipped) {
       // Unpipe the gzip stream to ensure no more data is written
       (streamToWrite as zlib.Gzip).unpipe(responseStream);
 
       if (error) {
-        streamToWrite.destroy(error);
+        // The gzip stream's listeners are gone, so destroying it with the
+        // error would throw it out of the process. End the response with the
+        // error instead, so Lambda knows it was cut short.
+        streamToWrite.destroy();
+        responseStream.destroy(error);
       } else {
         // In case there's no error, just close the gzip stream
         streamToWrite.end();
@@ -324,12 +329,15 @@ function convertToApigV2StreamingResult({
         const { done, value } = await reader.read();
         if (done) break;
 
-        if (!isBase64Encoded) {
+        if (gzipped) {
           const writer = streamToWrite as zlib.Gzip;
           const result = writer.write(value, () => {
             writer.flush(zlib.constants.Z_SYNC_FLUSH);
           });
-          if (!result) writer.once("drain", next);
+          if (!result) {
+            writer.once("drain", next);
+            return;
+          }
         } else {
           if (!streamToWrite.write(value)) {
             streamToWrite.once("drain", next);
@@ -360,12 +368,10 @@ function convertToCfResult({
     {} as CloudFrontHeaders
   );
   if (cookies.length > 0) {
-    combinedHeaders["set-cookie"] = stringifyCookies(cookies).map(
-      (cookie) => ({
-        key: "set-cookie",
-        value: cookie,
-      })
-    );
+    combinedHeaders["set-cookie"] = cookies.map((value) => ({
+      key: "set-cookie",
+      value,
+    }));
   }
 
   const response: CloudFrontRequestResult = {
@@ -465,26 +471,4 @@ function normalizeCfHeaders(event: CloudFrontRequestEvent) {
   }
 
   return combinedHeaders;
-}
-
-function stringifyCookies(cookies: Cookie[]) {
-  return cookies.map(
-    (cookie) =>
-      `${cookie.name}=${cookie.value};${Object.entries(cookie)
-        .filter(
-          ([key, value]) =>
-            key !== "value" &&
-            key !== "name" &&
-            typeof value !== "undefined" &&
-            value !== false
-        )
-        .map(([key, value]) =>
-          typeof value === "boolean"
-            ? `${key};`
-            : typeof value.toUTCString !== "undefined"
-            ? `${key}=${value.toUTCString()};`
-            : `${key}=${value};`
-        )
-        .join("")}`
-  );
 }

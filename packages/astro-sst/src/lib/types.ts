@@ -23,6 +23,7 @@ declare global {
         metadata: {
           statusCode: number;
           headers?: Record<string, string>;
+          cookies?: string[];
         }
       ): ResponseStream;
     };

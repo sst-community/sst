@@ -6,7 +6,10 @@ The first release as `@sst-community/astro-sst`, from the sst-community fork.
 
 - Works with Astro 6 and 7 as well as 5. Astro 6 and 7 use the entrypoints from [anomalyco/astro-sst#27](https://github.com/anomalyco/astro-sst/pull/27) by Florian Lefebvre. Astro 5 behaves as before, Node polyfills included.
 - Astro routes every request itself, so trailing-slash redirects and a custom `src/fetch.ts` work, and a page that returns an empty 404 gets the custom 404 page. The function serves its own copy of `404.html` instead of fetching it over the network.
+- Cookies keep the attributes the app set: `Max-Age` used to come out as `maxAge`, which browsers ignore, so the cookie expired with the session. In stream mode, each cookie is sent as its own header; several used to arrive as one broken cookie.
+- Any response whose type isn't text is sent as bytes, so types missing from 3.1.4's list, such as AVIF, MP4 and WASM, are no longer corrupted. A response that's already encoded isn't gzipped again.
 - In stream mode, a response with no body, such as a redirect, keeps its status and headers and no longer arrives as a broken gzip body.
+- In stream mode, a body that fails partway ends the response with the error, instead of crashing the function. A large body waits for the stream to drain.
 - Lambda@Edge (CloudFront event) responses keep the cookies the app sets. They used to be dropped, and every status was labelled "OK".
 - `responseMode` defaults to `"buffer"` when the options leave it out.
 - Install it as `astro-sst@npm:@sst-community/astro-sst`, so `import aws from "astro-sst"` keeps working.

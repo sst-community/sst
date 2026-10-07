@@ -102,6 +102,7 @@ async function callStreaming(handler, event) {
   return {
     statusCode: stream.metadata?.statusCode,
     headers,
+    cookies: stream.metadata?.cookies,
     body:
       headers["content-encoding"] === "gzip" ? zlib.gunzipSync(raw) : raw,
   };
@@ -283,6 +284,14 @@ export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile
         assert.equal(r.headers["set-cookie"], undefined);
       });
 
+      it("keeps each cookie's attributes as the app set them", async () => {
+        const r = await call(v2("/api/cookies"));
+        const a = r.cookies.find((c) => c.startsWith("a="));
+        assert.match(a, /Max-Age=3600/i);
+        assert.match(a, /HttpOnly/i);
+        assert.match(a, /SameSite=Lax/i);
+      });
+
       it("passes a JSON POST body and the client address through", async () => {
         const r = await call(
           v2("/api/echo", {
@@ -361,6 +370,15 @@ export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile
         assert.deepEqual(
           [...Buffer.from(r.body, "base64")],
           [0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]
+        );
+      });
+
+      it("returns any type that isn't text as base64, such as AVIF", async () => {
+        const r = await call(v2("/api/avif"));
+        assert.equal(r.isBase64Encoded, true);
+        assert.deepEqual(
+          [...Buffer.from(r.body, "base64")],
+          [0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0xff, 0xfe, 0x80]
         );
       });
 
@@ -464,13 +482,37 @@ export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile
         assert.match(r.headers["content-type"], /text\/html/);
         assert.equal(r.headers["content-encoding"], "gzip");
         assert.match(r.body.toString(), /Hello Ada/);
-        assert.match(r.headers["set-cookie"], /visits=5/);
+        assert.ok(r.cookies?.some((c) => c.startsWith("visits=5")), JSON.stringify(r));
+      });
+
+      it("sends each cookie on its own, attributes included", async () => {
+        const r = await call(v2("/api/cookies"));
+        assert.deepEqual(r.cookies?.map((c) => c.split(";")[0]).sort(), ["a=1", "b=2"]);
+        assert.match(r.cookies.find((c) => c.startsWith("a=")), /Max-Age=3600/i);
+        assert.equal(r.headers["set-cookie"], undefined);
       });
 
       it("streams binary responses without gzip or corruption", async () => {
         const r = await call(v2("/api/binary"));
         assert.equal(r.headers["content-encoding"], undefined);
         assert.deepEqual([...r.body], [0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]);
+        const avif = await call(v2("/api/avif"));
+        assert.equal(avif.headers["content-encoding"], undefined);
+        assert.deepEqual(
+          [...avif.body],
+          [0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0xff, 0xfe, 0x80]
+        );
+      });
+
+      it("streams a large body whole and in order", async () => {
+        const r = await call(v2("/api/large"));
+        const lines = r.body.toString().trimEnd().split("\n");
+        assert.equal(lines.length, 200);
+        lines.forEach((line, i) => assert.ok(line.startsWith(String(i).padStart(4, "0")), `line ${i}`));
+      });
+
+      it("ends the response when the body fails partway", { timeout: 5000 }, async () => {
+        await assert.rejects(call(v2("/api/stream-error")), /failed partway/);
       });
 
       it("returns a redirect with its Location header", async () => {
