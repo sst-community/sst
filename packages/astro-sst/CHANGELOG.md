@@ -9,7 +9,8 @@ The first release as `@sst-community/astro-sst`, from the sst-community fork.
 - Cookies keep the attributes the app set: `Max-Age` used to come out as `maxAge`, which browsers ignore, so the cookie expired with the session. In stream mode, each cookie is sent as its own header; several used to arrive as one broken cookie.
 - Any response whose type isn't text is sent as bytes, so types missing from 3.1.4's list, such as AVIF, MP4 and WASM, are no longer corrupted. A response that's already encoded isn't gzipped again.
 - In stream mode, a response with no body, such as a redirect, keeps its status and headers and no longer arrives as a broken gzip body.
-- In stream mode, a body that fails partway ends the response with the error, instead of crashing the function. A large body waits for the stream to drain.
+- In stream mode, a body that fails partway is reported to Lambda as the invocation's error, instead of crashing the function's runtime. A large body waits for the stream to drain, and a response is only gzipped when the client accepts gzip.
+- `Astro.clientAddress` comes from `CloudFront-Viewer-Address`, which CloudFront sets, or else the request's source IP. It used to come from `X-Forwarded-For`, which a client can set to any value and CloudFront passes on.
 - Lambda@Edge (CloudFront event) responses keep the cookies the app sets. They used to be dropped, and every status was labelled "OK".
 - `responseMode` defaults to `"buffer"` when the options leave it out.
 - Install it as `astro-sst@npm:@sst-community/astro-sst`, so `import aws from "astro-sst"` keeps working.

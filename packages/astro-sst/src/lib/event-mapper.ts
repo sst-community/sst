@@ -28,6 +28,8 @@ type InternalResultInput = {
   response: Response;
   responseStream?: ResponseStream;
   cookies?: string[];
+  // The request's Accept-Encoding, which says whether a stream can be gzipped
+  acceptEncoding?: string;
 };
 
 type InternalResult = {
@@ -46,6 +48,7 @@ type InternalStreamingResult = {
   body: ReadableStream | null;
   responseStream: ResponseStream;
   isBase64Encoded: boolean;
+  acceptEncoding?: string;
 };
 
 function isApigV2Event(event: any): event is APIGatewayProxyEventV2 {
@@ -140,6 +143,7 @@ export async function convertTo({
   response,
   responseStream,
   cookies: appCookies,
+  acceptEncoding,
 }: InternalResultInput) {
   // Parse headers (except cookies)
   const headers: { [key: string]: string } = Array.from(
@@ -170,6 +174,7 @@ export async function convertTo({
       cookies,
       responseStream,
       isBase64Encoded,
+      acceptEncoding,
     });
   }
 
@@ -242,8 +247,10 @@ function convertToApigV2StreamingResult({
   body,
   responseStream,
   isBase64Encoded,
+  acceptEncoding,
 }: InternalStreamingResult) {
-  const gzipped = !!body && !body.locked && !isBase64Encoded;
+  const gzipped =
+    !!body && !body.locked && !isBase64Encoded && acceptsGzip(acceptEncoding);
   if (gzipped) {
     headers["content-encoding"] = "gzip";
     // The app's length is the uncompressed one.
@@ -283,6 +290,18 @@ function convertToApigV2StreamingResult({
     return;
   }
 
+  // Settles when the response has been sent, and rejects when the body
+  // fails, so the handler rejects and Lambda's runtime reports the error.
+  // Ending the response stream with the error instead makes the runtime
+  // reject a promise nothing awaits, and Node exits.
+  let fail: (error: Error) => void = () => {};
+  const failed = new Promise<never>((_, reject) => {
+    fail = reject;
+  });
+  const sent = new Promise<void>((resolve) => {
+    responseStream.once("finish", resolve);
+  });
+
   let streamToWrite: ResponseStream | zlib.Gzip;
   if (gzipped) {
     const gzip = zlib.createGzip();
@@ -305,24 +324,22 @@ function convertToApigV2StreamingResult({
       (streamToWrite as zlib.Gzip).unpipe(responseStream);
 
       if (error) {
-        // The gzip stream's listeners are gone, so destroying it with the
-        // error would throw it out of the process. End the response with the
-        // error instead, so Lambda knows it was cut short.
+        // Without an error: its listeners are gone, so the error would be
+        // thrown out of the process.
         streamToWrite.destroy();
-        responseStream.destroy(error);
       } else {
         // In case there's no error, just close the gzip stream
         streamToWrite.end();
       }
-    } else if (error) {
-      responseStream.destroy(error);
     }
+    if (error) fail(error);
   };
 
   streamToWrite.on("close", cancel);
   streamToWrite.on("error", cancel);
 
   next();
+  return Promise.race([sent, failed]);
   async function next() {
     try {
       for (;;) {
@@ -471,4 +488,19 @@ function normalizeCfHeaders(event: CloudFrontRequestEvent) {
   }
 
   return combinedHeaders;
+}
+
+/**
+ * Whether Accept-Encoding allows gzip: "gzip", or else "*", with a q-value
+ * above 0.
+ */
+export function acceptsGzip(acceptEncoding = "") {
+  const q: Record<string, number> = {};
+  for (const entry of acceptEncoding.toLowerCase().split(",")) {
+    const [coding, ...params] = entry.split(";").map((part) => part.trim());
+    if (!coding) continue;
+    const value = params.find((param) => param.startsWith("q="));
+    q[coding] = value ? parseFloat(value.slice(2)) : 1;
+  }
+  return (q["gzip"] ?? q["*"] ?? 0) > 0;
 }

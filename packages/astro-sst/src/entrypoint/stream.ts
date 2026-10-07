@@ -4,6 +4,7 @@ import { convertFrom, convertTo } from "../lib/event-mapper.js";
 import { debug } from "../lib/logger.js";
 import type { ResponseStream } from "../lib/types";
 import {
+  clientAddress,
   createRequest,
   prerenderedErrorPageFetch,
 } from "../lib/entrypoint-utils.js";
@@ -22,8 +23,7 @@ async function streamHandler(
   // Astro matches the route itself, so it can redirect a trailing slash,
   // hand the request to src/fetch.ts, or render the 404 page.
   const response = await app.render(request, {
-    clientAddress:
-      internalEvent.headers["x-forwarded-for"] || internalEvent.remoteAddress,
+    clientAddress: clientAddress(internalEvent),
     prerenderedErrorPageFetch,
   });
 
@@ -33,6 +33,7 @@ async function streamHandler(
     response,
     responseStream,
     cookies: Array.from(app.setCookieHeaders(response)),
+    acceptEncoding: internalEvent.headers["accept-encoding"],
   });
 
   debug("response", convertedResponse);

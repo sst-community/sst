@@ -91,12 +91,23 @@ async function callStreaming(handler, event) {
     }
     return write(chunk, ...rest);
   };
-  const finished = new Promise((resolve, reject) => {
+  // In Lambda, an error on the response stream rejects a promise nothing
+  // awaits, and Node exits. A failed response has to reject the handler.
+  let streamError;
+  stream.on("error", (error) => {
+    streamError = error;
+  });
+  const finished = new Promise((resolve) => {
     stream.on("finish", resolve);
-    stream.on("error", reject);
+    stream.on("close", resolve);
   });
   await handler(event, stream);
   await finished;
+  if (streamError) {
+    throw new Error(
+      `The response stream got an error, which crashes Lambda's runtime: ${streamError.message}`
+    );
+  }
   const raw = Buffer.concat(chunks);
   const headers = stream.metadata?.headers ?? {};
   return {
@@ -309,15 +320,33 @@ export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile
         });
       });
 
-      it("takes the client address from x-forwarded-for when CloudFront sets it", async () => {
+      const echoIp = async (headers) => {
         const r = await call(
           v2("/api/echo", {
             method: "POST",
-            headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.7" },
+            headers: { "content-type": "application/json", ...headers },
             body: "{}",
           })
         );
-        assert.equal(JSON.parse(r.body).ip, "198.51.100.7");
+        return JSON.parse(r.body).ip;
+      };
+
+      it("takes the client address from CloudFront-Viewer-Address", async () => {
+        // A client can send its own X-Forwarded-For, which CloudFront passes
+        // on; CloudFront-Viewer-Address is set by CloudFront.
+        assert.equal(
+          await echoIp({
+            "x-forwarded-for": "203.0.113.66",
+            "cloudfront-viewer-address": "198.51.100.7:44321",
+          }),
+          "198.51.100.7"
+        );
+        assert.equal(await echoIp({ "cloudfront-viewer-address": "2001:db8::7:44321" }), "2001:db8::7");
+        assert.equal(await echoIp({ "cloudfront-viewer-address": "[2001:db8::7]:44321" }), "2001:db8::7");
+      });
+
+      it("ignores X-Forwarded-For without CloudFront, and uses the source IP", async () => {
+        assert.equal(await echoIp({ "x-forwarded-for": "203.0.113.66" }), "203.0.113.9");
       });
 
       it("decodes a base64 request body", async () => {
@@ -477,12 +506,27 @@ export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile
       const call = (event) => callStreaming(handlers.stream, event);
 
       it("streams a server page, gzipped, with its status, headers and cookies", async () => {
-        const r = await call(v2("/ssr", { query: "name=Ada", cookies: ["visits=4"] }));
+        const r = await call(
+          v2("/ssr", {
+            query: "name=Ada",
+            cookies: ["visits=4"],
+            headers: { "accept-encoding": "gzip, deflate, br" },
+          })
+        );
         assert.equal(r.statusCode, 200);
         assert.match(r.headers["content-type"], /text\/html/);
         assert.equal(r.headers["content-encoding"], "gzip");
         assert.match(r.body.toString(), /Hello Ada/);
         assert.ok(r.cookies?.some((c) => c.startsWith("visits=5")), JSON.stringify(r));
+      });
+
+      it("doesn't gzip for a client that doesn't accept it", async () => {
+        for (const acceptEncoding of [undefined, "identity", "br", "gzip;q=0"]) {
+          const headers = acceptEncoding ? { "accept-encoding": acceptEncoding } : {};
+          const r = await call(v2("/ssr", { query: "name=Ada", headers }));
+          assert.equal(r.headers["content-encoding"], undefined, acceptEncoding);
+          assert.match(r.body.toString(), /Hello Ada/);
+        }
       });
 
       it("sends each cookie on its own, attributes included", async () => {
@@ -511,8 +555,13 @@ export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile
         lines.forEach((line, i) => assert.ok(line.startsWith(String(i).padStart(4, "0")), `line ${i}`));
       });
 
-      it("ends the response when the body fails partway", { timeout: 5000 }, async () => {
-        await assert.rejects(call(v2("/api/stream-error")), /failed partway/);
+      it("returns a body that fails partway as the handler's error", { timeout: 5000 }, async () => {
+        // The handler rejecting is how Lambda's runtime learns the response
+        // failed, without crashing.
+        await assert.rejects(call(v2("/api/stream-error")), (error) => {
+          assert.equal(error.message, "failed partway");
+          return true;
+        });
       });
 
       it("returns a redirect with its Location header", async () => {

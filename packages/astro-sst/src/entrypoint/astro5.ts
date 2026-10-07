@@ -9,6 +9,7 @@ import { convertFrom, convertTo } from "../lib/event-mapper.js";
 import { debug } from "../lib/logger.js";
 import type { ResponseStream } from "../lib/types";
 import {
+  clientAddress,
   createRequest,
   prerenderedErrorPageFetch,
 } from "../lib/entrypoint-utils.js";
@@ -42,8 +43,7 @@ export function createExports(
     // Astro matches the route itself, so it can redirect a trailing slash
     // or render the 404 page.
     const response = await app.render(request, {
-      clientAddress:
-        internalEvent.headers["x-forwarded-for"] || internalEvent.remoteAddress,
+      clientAddress: clientAddress(internalEvent),
       prerenderedErrorPageFetch,
     });
 
@@ -53,6 +53,7 @@ export function createExports(
       response,
       responseStream,
       cookies: Array.from(app.setCookieHeaders(response)),
+      acceptEncoding: internalEvent.headers["accept-encoding"],
     });
 
     debug("response", convertedResponse);
@@ -69,8 +70,7 @@ export function createExports(
     // Astro matches the route itself, so it can redirect a trailing slash
     // or render the 404 page.
     const response = await app.render(request, {
-      clientAddress:
-        internalEvent.headers["x-forwarded-for"] || internalEvent.remoteAddress,
+      clientAddress: clientAddress(internalEvent),
       prerenderedErrorPageFetch,
     });
 

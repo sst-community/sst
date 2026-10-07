@@ -6,6 +6,7 @@ import type {
 import { convertFrom, convertTo } from "../lib/event-mapper.js";
 import { debug } from "../lib/logger.js";
 import {
+  clientAddress,
   createRequest,
   prerenderedErrorPageFetch,
 } from "../lib/entrypoint-utils.js";
@@ -23,8 +24,7 @@ export async function handler(
   // Astro matches the route itself, so it can redirect a trailing slash,
   // hand the request to src/fetch.ts, or render the 404 page.
   const response = await app.render(request, {
-    clientAddress:
-      internalEvent.headers["x-forwarded-for"] || internalEvent.remoteAddress,
+    clientAddress: clientAddress(internalEvent),
     prerenderedErrorPageFetch,
   });
 
