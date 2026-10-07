@@ -4,7 +4,9 @@ import ASTRO_PACKAGE from "astro/package.json" with { type: "json" };
 import { debug } from "./lib/logger.js";
 
 const PACKAGE_NAME = "@sst-community/astro-sst";
-const astroMajorVersion = parseInt(ASTRO_PACKAGE.version.split(".")[0] ?? 0);
+const [astroMajorVersion, astroMinorVersion] = ASTRO_PACKAGE.version
+  .split(".")
+  .map((part) => parseInt(part));
 
 export default function createIntegration(
   entrypointParameters: Partial<IntegrationConfig> = {}
@@ -14,6 +16,13 @@ export default function createIntegration(
   if (astroMajorVersion < 5) {
     throw new Error(
       `${PACKAGE_NAME} requires Astro 5 or newer. Please upgrade your Astro app. Alternatively, use v2 of upstream's adapter by pinning to \`astro-sst@two\`.`
+    );
+  }
+  // Before 5.6, Astro can't be given the 404 page, so it fetches it over the
+  // network from the site, and a failed fetch fails the request.
+  if (astroMajorVersion === 5 && astroMinorVersion < 6) {
+    throw new Error(
+      `${PACKAGE_NAME} requires Astro 5.6 or newer, and this app has Astro ${ASTRO_PACKAGE.version}. Please upgrade Astro: 5.6 and later 5.x versions are minor updates.`
     );
   }
 

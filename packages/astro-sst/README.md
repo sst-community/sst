@@ -15,7 +15,7 @@ npm install astro-sst@npm:@sst-community/astro-sst
 
 To switch an existing project from SST's adapter, change its dependency to `"astro-sst": "npm:@sst-community/astro-sst@<version>"` and reinstall. Nothing else changes.
 
-One package works with Astro 5, 6 and 7. It's tested with 5.18, 6.4 and 7.3. Astro 6 and 7 need Node.js 22.12 or later: the server function's default runtime, `nodejs24.x`, is fine, and so is `nodejs22.x`.
+One package works with Astro 5.6 and later, 6 and 7. It's tested with 5.18, 6.4 and 7.3. Astro 6 and 7 need Node.js 22.12 or later: the server function's default runtime, `nodejs24.x`, is fine, and so is `nodejs22.x`.
 
 Then add the adapter to your `astro.config.mjs`.
 
