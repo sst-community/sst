@@ -37,6 +37,26 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      # Trusted publishing can't create a package, so an adapter's first version
+      # is published by hand (see MAINTAINING.md). Stop here if one hasn't been,
+      # before anything is published: the bridge-task image and the CLI
+      # release, which can't be changed once it's out.
+      - name: Check the adapters are on npm
+        run: |
+          for dir in packages/*/; do
+            [ -f "${dir}package.json" ] || continue
+            [ "$(node -p "!!require('./${dir}package.json').private")" = false ] || continue
+            name=$(node -p "require('./${dir}package.json').name")
+            if ! out=$(npm view "$name" name 2>&1); then
+              if grep -q E404 <<< "$out"; then
+                echo "::error::$name isn't on npm. Publish its first version by hand; see MAINTAINING.md."
+              else
+                echo "$out"
+              fi
+              exit 1
+            fi
+          done
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -102,25 +122,6 @@ jobs:
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
           echo "Built on SST ${base:-(none found)}"
           echo "SST_UPSTREAM=${base#v}" >> "$GITHUB_ENV"
-
-      # Trusted publishing can't create a package, so an adapter's first version
-      # is published by hand (see MAINTAINING.md). Stop here if one hasn't been,
-      # before the CLI release, which can't be changed once it's out.
-      - name: Check the adapters are on npm
-        run: |
-          for dir in packages/*/; do
-            [ -f "${dir}package.json" ] || continue
-            [ "$(node -p "!!require('./${dir}package.json').private")" = false ] || continue
-            name=$(node -p "require('./${dir}package.json').name")
-            if ! out=$(npm view "$name" name 2>&1); then
-              if grep -q E404 <<< "$out"; then
-                echo "::error::$name isn't on npm. Publish its first version by hand; see MAINTAINING.md."
-              else
-                echo "$out"
-              fi
-              exit 1
-            fi
-          done
 
       - name: Release CLI
         uses: goreleaser/goreleaser-action@v6
