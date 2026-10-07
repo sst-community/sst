@@ -331,6 +331,8 @@ export interface AstroArgs extends SsrSiteArgs {
  * Your Astro config needs the `astro-sst` adapter, which `sst init` adds. To add it
  * yourself, run `npm install astro-sst@npm:@sst-community/astro-sst` and set
  * `adapter: aws()` with `import aws from "astro-sst"` in your `astro.config.mjs`.
+ * Version 4 of it supports Astro 5.6 and later, 6 and 7. SST's own `astro-sst` 3.x
+ * only supports Astro 5.
  *
  * @example
  *
