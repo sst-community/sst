@@ -112,8 +112,12 @@ jobs:
             [ -f "${dir}package.json" ] || continue
             [ "$(node -p "!!require('./${dir}package.json').private")" = false ] || continue
             name=$(node -p "require('./${dir}package.json').name")
-            if ! npm view "$name" name >/dev/null; then
-              echo "::error::$name isn't on npm. Publish its first version by hand; see MAINTAINING.md."
+            if ! out=$(npm view "$name" name 2>&1); then
+              if grep -q E404 <<< "$out"; then
+                echo "::error::$name isn't on npm. Publish its first version by hand; see MAINTAINING.md."
+              else
+                echo "$out"
+              fi
               exit 1
             fi
           done

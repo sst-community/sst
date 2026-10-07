@@ -84,6 +84,7 @@ The fork numbers its own releases, with semver, because it moves faster than SST
 
 `release.yml` then:
 
+- stops if an adapter in `packages/` has never been published to npm, before anything is released
 - builds the CLI with goreleaser and creates the GitHub release, using your notes in place of a generated changelog
 - pushes the `bridge-task` image, which `sst.aws.Task` runs in `sst dev`, to `ghcr.io/sst-community/sst/bridge-task`
 - publishes `@sst-community/sst` and a `@sst-community/sst-<os>-<cpu>` package for each platform to npm
