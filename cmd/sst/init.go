@@ -248,8 +248,15 @@ func CmdInit(cli *cli.Cli) error {
 		spin.Suffix = "  Installing dependencies..."
 		spin.Start()
 		slog.Info("installing deps", "args", cmd.Args)
-		cmd.Run()
+		err := cmd.Run()
 		spin.Stop()
+		// The install's output isn't shown, so say it failed. A peer
+		// dependency conflict, such as an Astro too old for the adapter,
+		// ends up here.
+		if err != nil {
+			color.New(color.FgYellow, color.Bold).Print("!")
+			color.New(color.FgWhite).Printf("  `%s install` failed. Run it to see why.\n", mgr)
+		}
 	}
 
 	if template == "nextjs" {

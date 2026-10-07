@@ -328,6 +328,10 @@ export interface AstroArgs extends SsrSiteArgs {
 /**
  * The `Astro` component lets you deploy an [Astro](https://astro.build) site to AWS.
  *
+ * Your Astro config needs the `astro-sst` adapter, which `sst init` adds. To add it
+ * yourself, run `npm install astro-sst@npm:@sst-community/astro-sst` and set
+ * `adapter: aws()` with `import aws from "astro-sst"` in your `astro.config.mjs`.
+ *
  * @example
  *
  * #### Minimal example
