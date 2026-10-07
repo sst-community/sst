@@ -1,0 +1,48 @@
+{
+  "name": "astro-sst",
+  "description": "Adapter that allows Astro to deploy your site to AWS utilizing SST.",
+  "version": "3.1.4",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "SST",
+    "url": "https://sst.dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sst/astro-sst.git",
+    "directory": "packages/astro-sst"
+  },
+  "keywords": [
+    "withastro",
+    "astro-adapter"
+  ],
+  "bugs": "https://github.com/sst/astro-sst/issues",
+  "exports": {
+    ".": "./dist/adapter.js",
+    "./entrypoint": "./dist/entrypoint.js",
+    "./build-meta": "./dist/lib/build-meta.js",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "*": [
+        "dist/adapter.d.ts"
+      ],
+      "build-meta": [
+        "dist/lib/build-meta.d.ts"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "set-cookie-parser": "^2.7.1"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.146",
+    "@types/set-cookie-parser": "^2.4.10",
+    "astro": "^5.0.8"
+  }
+}
