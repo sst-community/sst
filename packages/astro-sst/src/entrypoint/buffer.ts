@@ -3,13 +3,11 @@ import type {
   APIGatewayProxyEventV2,
   CloudFrontRequestEvent,
 } from "aws-lambda";
-import fs from "fs/promises";
 import { convertFrom, convertTo } from "../lib/event-mapper.js";
 import { debug } from "../lib/logger.js";
 import {
-  build404Url,
   createRequest,
-  existsAsync,
+  prerenderedErrorPageFetch,
 } from "../lib/entrypoint-utils.js";
 
 const app = createApp();
@@ -20,41 +18,14 @@ export async function handler(
   debug("event", event);
 
   const internalEvent = convertFrom(event);
-  let request = createRequest(internalEvent);
-  let routeData = app.match(request);
-  if (!routeData) {
-    // handle prerendered 404
-    if (await existsAsync("404.html")) {
-      return convertTo({
-        type: internalEvent.type,
-        response: new Response(await fs.readFile("404.html", "utf-8"), {
-          status: 404,
-          headers: {
-            "Content-Type": "text/html",
-          },
-        }),
-      });
-    }
+  const request = createRequest(internalEvent);
 
-    // handle server-side 404
-    request = createRequest({
-      ...internalEvent,
-      url: build404Url(internalEvent.url),
-    });
-    routeData = app.match(request);
-    if (!routeData) {
-      return convertTo({
-        type: internalEvent.type,
-        response: new Response("Not found", { status: 404 }),
-      });
-    }
-  }
-
-  // Process request
+  // Astro matches the route itself, so it can redirect a trailing slash,
+  // hand the request to src/fetch.ts, or render the 404 page.
   const response = await app.render(request, {
-    routeData,
     clientAddress:
       internalEvent.headers["x-forwarded-for"] || internalEvent.remoteAddress,
+    prerenderedErrorPageFetch,
   });
 
   // Buffer response back to Cloudfront

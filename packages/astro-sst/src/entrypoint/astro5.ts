@@ -1,4 +1,3 @@
-import fs from "fs/promises";
 import type { SSRManifest } from "astro";
 import type {
   APIGatewayProxyEventV2,
@@ -10,10 +9,8 @@ import { convertFrom, convertTo } from "../lib/event-mapper.js";
 import { debug } from "../lib/logger.js";
 import type { ResponseStream } from "../lib/types";
 import {
-  build404Url,
   createRequest,
-  existsAsync,
-  streamError,
+  prerenderedErrorPageFetch,
 } from "../lib/entrypoint-utils.js";
 
 // The Astro 5 entrypoint. Astro 6 and later use buffer.ts and stream.ts.
@@ -40,33 +37,14 @@ export function createExports(
     debug("event", event);
 
     const internalEvent = convertFrom(event);
-    let request = createRequest(internalEvent);
-    let routeData = app.match(request);
-    if (!routeData) {
-      // handle prerendered 404
-      if (await existsAsync("404.html")) {
-        return streamError(
-          404,
-          await fs.readFile("404.html", "utf-8"),
-          responseStream
-        );
-      }
+    const request = createRequest(internalEvent);
 
-      // handle server-side 404
-      request = createRequest({
-        ...internalEvent,
-        url: build404Url(internalEvent.url),
-      });
-      routeData = app.match(request);
-      if (!routeData) {
-        return streamError(404, "Not found", responseStream);
-      }
-    }
-
+    // Astro matches the route itself, so it can redirect a trailing slash
+    // or render the 404 page.
     const response = await app.render(request, {
-      routeData,
       clientAddress:
         internalEvent.headers["x-forwarded-for"] || internalEvent.remoteAddress,
+      prerenderedErrorPageFetch,
     });
 
     // Stream response back to Cloudfront
@@ -86,41 +64,14 @@ export function createExports(
     debug("event", event);
 
     const internalEvent = convertFrom(event);
-    let request = createRequest(internalEvent);
-    let routeData = app.match(request);
-    if (!routeData) {
-      // handle prerendered 404
-      if (await existsAsync("404.html")) {
-        return convertTo({
-          type: internalEvent.type,
-          response: new Response(await fs.readFile("404.html", "utf-8"), {
-            status: 404,
-            headers: {
-              "Content-Type": "text/html",
-            },
-          }),
-        });
-      }
+    const request = createRequest(internalEvent);
 
-      // handle server-side 404
-      request = createRequest({
-        ...internalEvent,
-        url: build404Url(internalEvent.url),
-      });
-      routeData = app.match(request);
-      if (!routeData) {
-        return convertTo({
-          type: internalEvent.type,
-          response: new Response("Not found", { status: 404 }),
-        });
-      }
-    }
-
-    // Process request
+    // Astro matches the route itself, so it can redirect a trailing slash
+    // or render the 404 page.
     const response = await app.render(request, {
-      routeData,
       clientAddress:
         internalEvent.headers["x-forwarded-for"] || internalEvent.remoteAddress,
+      prerenderedErrorPageFetch,
     });
 
     // Buffer response back to Cloudfront

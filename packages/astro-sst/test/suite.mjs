@@ -132,8 +132,10 @@ function v2(
  *   by: "astro-sst", the alias `sst init` writes, or "@sst-community/astro-sst"
  * @param {boolean} options.polyfills whether the handler installs Astro 5's
  *   Node polyfills
+ * @param {string} [options.fetchFile] a custom fetch handler in the fixture's
+ *   src/, built as a third variant
  */
-export function defineSuite({ name, fixtureDir, importName, polyfills }) {
+export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile }) {
   const fixture = path.join(root, "test", fixtureDir);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "astro-sst-"));
   const handlers = {};
@@ -170,16 +172,22 @@ export function defineSuite({ name, fixtureDir, importName, polyfills }) {
       );
       assert.equal(a.status, 0, a.out);
 
-      for (const mode of ["buffer", "stream"]) {
-        const outDir = mode === "buffer" ? "dist" : "dist-stream";
-        const b = run("npx", ["astro", "build"], fixture, {
-          OUT_DIR: outDir,
-          RESPONSE_MODE: mode,
+      const variants = [
+        { key: "buffer", env: { OUT_DIR: "dist", RESPONSE_MODE: "buffer" } },
+        { key: "stream", env: { OUT_DIR: "dist-stream", RESPONSE_MODE: "stream" } },
+      ];
+      if (fetchFile) {
+        variants.push({
+          key: "fetch",
+          env: { OUT_DIR: "dist-fetch", RESPONSE_MODE: "buffer", FETCH_FILE: fetchFile },
         });
+      }
+      for (const { key, env } of variants) {
+        const b = run("npx", ["astro", "build"], fixture, env);
         assert.equal(b.status, 0, b.out);
-        const bundled = path.join(tmp, mode, "index.mjs");
-        await bundle(path.join(fixture, outDir, "server", "entry.mjs"), bundled);
-        handlers[mode] = (await import(bundled)).handler;
+        const bundled = path.join(tmp, key, "index.mjs");
+        await bundle(path.join(fixture, env.OUT_DIR, "server", "entry.mjs"), bundled);
+        handlers[key] = (await import(bundled)).handler;
       }
 
       // sst.aws.Astro copies 404.html next to the bundle, and runs from there.
@@ -381,6 +389,18 @@ export function defineSuite({ name, fixtureDir, importName, polyfills }) {
         assert.match(r.body, /Custom not found/);
       });
 
+      it("serves the prerendered 404.html when a page returns an empty 404", async () => {
+        const r = await call(v2("/blog/missing"));
+        assert.equal(r.statusCode, 404);
+        assert.match(r.body, /Custom not found/);
+      });
+
+      it("redirects a trailing slash, as trailingSlash: never asks", async () => {
+        const r = await call(v2("/ssr/", { query: "name=Ada" }));
+        assert.equal(r.statusCode, 301);
+        assert.equal(r.headers.location, "/ssr?name=Ada");
+      });
+
       it("accepts API Gateway v1 (REST API) events", async () => {
         const r = await call({
           httpMethod: "GET",
@@ -454,6 +474,36 @@ export function defineSuite({ name, fixtureDir, importName, polyfills }) {
         const r = await call(v2("/nope"));
         assert.equal(r.statusCode, 404);
         assert.match(r.body.toString(), /Custom not found/);
+      });
+
+      it("serves the prerendered 404.html when a page returns an empty 404", async () => {
+        const r = await call(v2("/blog/missing"));
+        assert.equal(r.statusCode, 404);
+        assert.match(r.body.toString(), /Custom not found/);
+      });
+
+      it("redirects a trailing slash, as trailingSlash: never asks", async () => {
+        const r = await call(v2("/ssr/"));
+        assert.equal(r.statusCode, 301);
+        assert.equal(r.headers.location, "/ssr");
+      });
+    });
+
+    describe("a custom fetch handler (src/fetch.ts)", () => {
+      const skip = !fetchFile && "this fixture has no custom fetch handler";
+
+      it("gets requests that match no route", { skip }, async () => {
+        const r = await handlers.fetch(v2("/from-fetch"));
+        assert.equal(r.statusCode, 200);
+        assert.equal(r.body, "handled by src/custom-fetch.ts");
+      });
+
+      it("passes the rest to Astro, 404 page included", { skip }, async () => {
+        const ok = await handlers.fetch(v2("/blog/first-post"));
+        assert.match(ok.body, /post: first-post/);
+        const missing = await handlers.fetch(v2("/nope"));
+        assert.equal(missing.statusCode, 404);
+        assert.match(missing.body, /Custom not found/);
       });
     });
   });

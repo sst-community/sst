@@ -1,14 +1,6 @@
 import fs from "fs/promises";
+import path from "path";
 import type { InternalEvent } from "./event-mapper.js";
-import type { ResponseStream } from "./types";
-
-export function build404Url(url: string) {
-  const url404 = new URL(url);
-  url404.pathname = "/404";
-  url404.search = "";
-  url404.hash = "";
-  return url404.toString();
-}
 
 export async function existsAsync(input: string) {
   return fs
@@ -29,20 +21,20 @@ export function createRequest(internalEvent: InternalEvent) {
   return new Request(requestUrl, requestProps);
 }
 
-export function streamError(
-  statusCode: number,
-  error: string | Error,
-  responseStream: ResponseStream
-) {
-  console.error(error);
-
-  responseStream = awslambda.HttpResponseStream.from(responseStream, {
-    statusCode,
-    headers: {
-      "Content-Type": "text/html",
-    },
-  });
-
-  responseStream.write(error.toString());
-  responseStream.end();
+/**
+ * Passed to Astro's render(), which calls it for a prerendered error page
+ * when a request ends in a 404 or 500. sst.aws.Astro copies 404.html next to
+ * the handler, so that's read from disk. Anything else is fetched, as Astro
+ * does by default.
+ */
+export async function prerenderedErrorPageFetch(url: string) {
+  if (
+    path.posix.basename(new URL(url).pathname) === "404.html" &&
+    (await existsAsync("404.html"))
+  ) {
+    return new Response(await fs.readFile("404.html"), {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
+  return fetch(url);
 }

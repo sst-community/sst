@@ -4,6 +4,7 @@ import aws from "astro-sst";
 
 export default defineConfig({
   output: "server",
+  trailingSlash: "never",
   outDir: process.env.OUT_DIR ?? "dist",
   adapter: aws({ responseMode: process.env.RESPONSE_MODE ?? "buffer" }),
 });

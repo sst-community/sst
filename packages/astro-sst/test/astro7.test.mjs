@@ -5,4 +5,5 @@ defineSuite({
   fixtureDir: "fixture-astro7",
   importName: "@sst-community/astro-sst",
   polyfills: false,
+  fetchFile: "custom-fetch",
 });
