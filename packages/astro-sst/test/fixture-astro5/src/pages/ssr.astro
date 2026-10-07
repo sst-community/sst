@@ -1,0 +1,12 @@
+---
+const name = Astro.url.searchParams.get("name") ?? "world";
+const visits = Number(Astro.cookies.get("visits")?.value ?? 0) + 1;
+Astro.cookies.set("visits", String(visits), { path: "/" });
+---
+
+<html>
+  <body>
+    <p>Hello {name}</p>
+    <p>visits: {visits}</p>
+  </body>
+</html>

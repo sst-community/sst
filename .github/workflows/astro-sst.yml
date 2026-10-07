@@ -1,0 +1,46 @@
+name: astro-sst
+
+# Runs the adapter's tests: they build an Astro app with it in buffer and
+# stream modes, bundle the handler as SST does, and call it with Lambda events.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/astro-sst/**"
+      - ".github/workflows/astro-sst.yml"
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - "packages/astro-sst/**"
+      - ".github/workflows/astro-sst.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/astro-sst
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
