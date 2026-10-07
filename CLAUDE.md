@@ -12,6 +12,7 @@ This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST rel
 - `pkg/bus/` — pub/sub event bus
 - `sdk/js/` — runtime SDK for reading linked resources
 - `packages/svelte-kit-sst/` — SvelteKit adapter for AWS Lambda (SvelteKit 2 and 3). Not a Bun workspace: it has its own `package-lock.json` and uses npm. Run `npm test` in it.
+- `packages/astro-sst/` — Astro adapter for AWS Lambda (Astro 5, 6 and 7), the same way: npm, its own lockfile, `npm test` in it.
 - `www/` — docs site (auto-generated from JSDoc comments in platform and extracted from the Go CLI)
 
 ## Commands

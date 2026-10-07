@@ -121,21 +121,23 @@ jobs:
         env:
           NPM_CONFIG_PROVENANCE: true
 
-      # Publishes packages/svelte-kit-sst when its version isn't on npm yet, so
-      # a pull request that bumps the version ships with the next release. Its
-      # tests run in the svelte-kit-sst workflow, not here.
-      - name: Release svelte-kit-sst
-        working-directory: packages/svelte-kit-sst
+      # Publishes each adapter in packages/ whose version isn't on npm yet, so
+      # a pull request that bumps a version ships with the next release. Their
+      # tests run in their own workflows, not here. A new package's first
+      # version is published by hand; see MAINTAINING.md.
+      - name: Release adapters
         run: |
-          version=$(node -p "require('./package.json').version")
-          if npm view "@sst-community/svelte-kit-sst@$version" version >/dev/null 2>&1; then
-            echo "@sst-community/svelte-kit-sst@$version is already on npm"
-            exit 0
-          fi
-          tag=latest
-          case "$version" in *-*) tag=next ;; esac
-          npm ci
-          npm publish --access public --tag "$tag"
+          for dir in packages/*/; do
+            name=$(node -p "require('./${dir}package.json').name")
+            version=$(node -p "require('./${dir}package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm"
+              continue
+            fi
+            tag=latest
+            case "$version" in *-*) tag=next ;; esac
+            (cd "$dir" && npm ci && npm publish --access public --tag "$tag")
+          done
         env:
           NPM_CONFIG_PROVENANCE: true
 
