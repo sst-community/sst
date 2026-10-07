@@ -359,18 +359,20 @@ function convertToCfResult({
     },
     {} as CloudFrontHeaders
   );
-  combinedHeaders["set-cookie"] = stringifyCookies(cookies).map((cookie) => ({
-    key: "set-cookie",
-    value: cookie,
-  }));
+  if (cookies.length > 0) {
+    combinedHeaders["set-cookie"] = stringifyCookies(cookies).map(
+      (cookie) => ({
+        key: "set-cookie",
+        value: cookie,
+      })
+    );
+  }
 
   const response: CloudFrontRequestResult = {
+    // No statusDescription: CloudFront gives the standard one, which "OK"
+    // was for every status.
     status: statusCode.toString(),
-    statusDescription: "OK",
-    headers: Object.entries(headers).reduce((headers, [key, value]) => {
-      headers[key.toLowerCase()] = [{ key, value }];
-      return headers;
-    }, {} as CloudFrontHeaders),
+    headers: combinedHeaders,
     bodyEncoding: isBase64Encoded ? "base64" : "text",
     body: body,
   };

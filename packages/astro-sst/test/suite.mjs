@@ -416,24 +416,42 @@ export function defineSuite({ name, fixtureDir, importName, polyfills, fetchFile
         assert.deepEqual(JSON.parse(r.body), { query: { x: "1" } });
       });
 
-      it("accepts CloudFront (Lambda@Edge) events", async () => {
-        const r = await call({
-          Records: [
-            {
-              cf: {
-                request: {
-                  method: "GET",
-                  uri: "/ssr",
-                  querystring: "name=Edge",
-                  headers: { host: [{ key: "host", value: HOST }] },
-                  clientIp: "203.0.113.9",
+      /** CloudFront (Lambda@Edge) origin request event */
+      const cf = (uri, { querystring = "", cookie } = {}) => ({
+        Records: [
+          {
+            cf: {
+              request: {
+                method: "GET",
+                uri,
+                querystring,
+                headers: {
+                  host: [{ key: "host", value: HOST }],
+                  ...(cookie && { cookie: [{ key: "cookie", value: cookie }] }),
                 },
+                clientIp: "203.0.113.9",
               },
             },
-          ],
-        });
+          },
+        ],
+      });
+
+      it("accepts CloudFront (Lambda@Edge) events, cookies included", async () => {
+        const r = await call(cf("/ssr", { querystring: "name=Edge", cookie: "visits=4" }));
         assert.equal(r.status, "200");
         assert.match(r.body, /Hello Edge/);
+        assert.match(r.body, /visits: 5/);
+        assert.ok(
+          r.headers["set-cookie"]?.some((h) => h.value.startsWith("visits=5")),
+          JSON.stringify(r.headers)
+        );
+      });
+
+      it("leaves a CloudFront response's status text to CloudFront", async () => {
+        const r = await call(cf("/nope"));
+        assert.equal(r.status, "404");
+        assert.equal(r.statusDescription, undefined);
+        assert.equal(r.headers["set-cookie"], undefined);
       });
     });
 
