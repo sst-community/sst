@@ -1,6 +1,7 @@
 import fs from "fs";
+import { createRequire } from "module";
 import path from "path";
-import { ComponentResourceOptions, Output } from "@pulumi/pulumi";
+import { ComponentResourceOptions, Output, all } from "@pulumi/pulumi";
 import { isALtB } from "../../util/compare-semver.js";
 import { VisibleError } from "../error.js";
 import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
@@ -403,7 +404,19 @@ export class Astro extends SsrSite {
     super(__pulumiType, name, args, opts);
   }
 
-  protected normalizeBuildCommand() { }
+  protected normalizeBuildCommand(args: AstroArgs) {
+    // `sst dev` runs Astro's dev server instead of building.
+    if ($dev && args.dev !== false) return;
+    // Chained to the build command so the check runs before the build. An
+    // undefined command lets the build pick the package manager, as when this
+    // returns nothing.
+    return all([args.buildCommand, args.path]).apply(
+      ([buildCommand, sitePath]) => {
+        checkAdapter(sitePath ?? ".");
+        return buildCommand;
+      },
+    ) as Output<string>;
+  }
 
   protected buildPlan(outputPath: Output<string>): Output<Plan> {
     return outputPath.apply((outputPath) => {
@@ -499,3 +512,49 @@ export class Astro extends SsrSite {
 const __pulumiType = "sst:aws:Astro";
 // @ts-expect-error
 Astro.__pulumiType = __pulumiType;
+
+/**
+ * SST's own "astro-sst" adapter, 3.x, imports applyPolyfills, which Astro 6
+ * removed, so building an Astro 6 or 7 app with it fails with a "Missing
+ * export" error that doesn't say what to do. Say it before the build.
+ */
+function checkAdapter(sitePath: string) {
+  const read = (file: string) => {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf-8"));
+    } catch {
+      return undefined;
+    }
+  };
+  // Only when the app lists "astro-sst" itself: in a monorepo, another
+  // package's copy could be the one that resolves.
+  const appPackageJson = path.resolve(sitePath, "package.json");
+  const app = read(appPackageJson);
+  if (!app?.dependencies?.["astro-sst"] && !app?.devDependencies?.["astro-sst"])
+    return;
+  const require = createRequire(appPackageJson);
+  const resolve = (pkg: string) => {
+    try {
+      return read(require.resolve(`${pkg}/package.json`));
+    } catch {
+      return undefined;
+    }
+  };
+  // Under the alias "astro-sst", the sst-community adapter's package.json
+  // still has its own name.
+  const adapter = resolve("astro-sst");
+  const astro = resolve("astro");
+  if (adapter?.name !== "astro-sst" || !astro?.version) return;
+  if (parseInt(astro.version) < 6) return;
+  throw new VisibleError(
+    [
+      `This app uses Astro ${astro.version} with SST's "astro-sst" adapter ${adapter.version}, which only supports Astro 5, so the build would fail.`,
+      ``,
+      `Switch to the sst-community adapter, which supports Astro 5, 6 and 7. Change the "astro-sst" line in package.json to`,
+      ``,
+      `  "astro-sst": "npm:@sst-community/astro-sst@^4.0.0"`,
+      ``,
+      `and reinstall. astro.config.mjs can keep importing "astro-sst".`,
+    ].join("\n"),
+  );
+}

@@ -86,7 +86,7 @@ func CmdInit(cli *cli.Cli) error {
 		fmt.Println("  Astro detected. This will...")
 		fmt.Println("   - create an sst.config.ts")
 		fmt.Println("   - modify the tsconfig.json")
-		fmt.Println("   - add sst to package.json")
+		fmt.Println("   - add sst and the astro-sst adapter to package.json")
 		template = "astro"
 		break
 
