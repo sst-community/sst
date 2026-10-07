@@ -54,12 +54,16 @@ async function bundle(entry, outfile) {
 }
 
 // Stands in for the `awslambda` global that Lambda's Node.js runtime provides
-// to streaming handlers.
+// to streaming handlers. As in aws-lambda-nodejs-runtime-interface-client's
+// src/stream, the status and headers are sent just before the first write, so
+// a response that never writes loses them.
 globalThis.awslambda = {
   streamifyResponse: (handler) => handler,
   HttpResponseStream: {
     from(stream, metadata) {
-      stream.metadata = metadata;
+      stream._onBeforeFirstWrite = () => {
+        stream.metadata = metadata;
+      };
       return stream;
     },
   },
@@ -73,6 +77,20 @@ async function callStreaming(handler, event) {
       callback();
     },
   });
+  // Like Lambda's response stream: a chunk that isn't a string or bytes is
+  // written as JSON, and the first write runs _onBeforeFirstWrite.
+  const write = stream.write.bind(stream);
+  let written = false;
+  stream.write = (chunk, ...rest) => {
+    if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) {
+      chunk = JSON.stringify(chunk);
+    }
+    if (!written) {
+      written = true;
+      stream._onBeforeFirstWrite?.();
+    }
+    return write(chunk, ...rest);
+  };
   const finished = new Promise((resolve, reject) => {
     stream.on("finish", resolve);
     stream.on("error", reject);
@@ -326,6 +344,13 @@ export function defineSuite({ name, fixtureDir, importName }) {
         assert.equal(r.statusCode, 500);
       });
 
+      it("returns a response with no body", async () => {
+        const r = await call(v2("/api/empty"));
+        assert.equal(r.statusCode, 204);
+        assert.equal(r.headers["x-empty"], "yes");
+        assert.equal(r.body, "");
+      });
+
       it("serves the prerendered 404.html for an unknown route", async () => {
         const r = await call(v2("/nope"));
         assert.equal(r.statusCode, 404);
@@ -387,15 +412,20 @@ export function defineSuite({ name, fixtureDir, importName }) {
         assert.deepEqual([...r.body], [0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]);
       });
 
-      it(
-        "returns a redirect with its Location header",
-        { todo: "3.1.4 writes the number 0 for an empty body, which Node streams reject" },
-        async () => {
-          const r = await call(v2("/go"));
-          assert.equal(r.statusCode, 302);
-          assert.equal(r.headers.location, "/ssr?name=redirected");
-        }
-      );
+      it("returns a redirect with its Location header", async () => {
+        const r = await call(v2("/go"));
+        assert.equal(r.statusCode, 302);
+        assert.equal(r.headers.location, "/ssr?name=redirected");
+        assert.equal(r.body.length, 0);
+      });
+
+      it("sends the status and headers of a response with no body", async () => {
+        const r = await call(v2("/api/empty"));
+        assert.equal(r.statusCode, 204);
+        assert.equal(r.headers["x-empty"], "yes");
+        assert.equal(r.headers["content-encoding"], undefined);
+        assert.equal(r.body.length, 0);
+      });
 
       it("serves the prerendered 404.html for an unknown route", async () => {
         const r = await call(v2("/nope"));

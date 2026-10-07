@@ -245,7 +245,7 @@ function convertToApigV2StreamingResult({
   responseStream,
   isBase64Encoded,
 }: InternalStreamingResult) {
-  if (!isBase64Encoded) {
+  if (body && !isBase64Encoded) {
     headers["content-encoding"] = "gzip";
   }
 
@@ -257,9 +257,11 @@ function convertToApigV2StreamingResult({
     metadata.headers["set-cookie"] = stringifyCookies(cookies).join(", ");
   }
   responseStream = awslambda.HttpResponseStream.from(responseStream, metadata);
+  // Lambda sends the status and headers just before the first write. Write
+  // nothing now, so they go out even if the body turns out to be empty.
+  responseStream.write("");
 
   if (!body) {
-    responseStream.write(0);
     responseStream.end();
     return;
   }
