@@ -3,50 +3,26 @@ import type { SSRManifest } from "astro";
 import type {
   APIGatewayProxyEventV2,
   CloudFrontRequestEvent,
-  Callback,
-  Context,
 } from "aws-lambda";
-import { NodeApp, applyPolyfills } from "astro/app/node";
-import type { IntegrationConfig } from "./lib/build-meta";
-import { InternalEvent, convertFrom, convertTo } from "./lib/event-mapper.js";
-import { debug } from "./lib/logger.js";
-import { ResponseStream } from "./lib/types";
+import * as astroNode from "astro/app/node";
+import type { IntegrationConfig } from "../lib/build-meta";
+import { convertFrom, convertTo } from "../lib/event-mapper.js";
+import { debug } from "../lib/logger.js";
+import type { ResponseStream } from "../lib/types";
+import {
+  build404Url,
+  createRequest,
+  existsAsync,
+  streamError,
+} from "../lib/entrypoint-utils.js";
 
-type RequestHandler = (
-  event: APIGatewayProxyEventV2,
-  streamResponse: ResponseStream,
-  context?: Context,
-  callback?: Callback
-) => void | Promise<void>;
+// The Astro 5 entrypoint. Astro 6 and later use buffer.ts and stream.ts.
+const { NodeApp } = astroNode;
 
-applyPolyfills();
-
-declare global {
-  const awslambda: {
-    streamifyResponse(handler: RequestHandler): RequestHandler;
-    HttpResponseStream: {
-      from(
-        underlyingStream: ResponseStream,
-        metadata: {
-          statusCode: number;
-          headers?: Record<string, string>;
-        }
-      ): ResponseStream;
-    };
-  };
-}
-
-function createRequest(internalEvent: InternalEvent) {
-  const requestUrl = internalEvent.url;
-  const requestProps = {
-    method: internalEvent.method,
-    headers: internalEvent.headers,
-    body: ["GET", "HEAD"].includes(internalEvent.method)
-      ? undefined
-      : internalEvent.body,
-  };
-  return new Request(requestUrl, requestProps);
-}
+// Astro 5 supports Node 18, which lacks globals Astro uses. Astro 6 removed
+// applyPolyfills, and this package is type-checked against Astro 7, so it's
+// looked up rather than imported by name.
+(astroNode as { applyPolyfills?: () => void }).applyPolyfills?.();
 
 export function createExports(
   manifest: SSRManifest,
@@ -56,14 +32,6 @@ export function createExports(
 
   const isStreaming = responseMode === "stream";
   const app = new NodeApp(manifest);
-
-  function build404Url(url: string) {
-    const url404 = new URL(url);
-    url404.pathname = "/404";
-    url404.search = "";
-    url404.hash = "";
-    return url404.toString();
-  }
 
   async function streamHandler(
     event: APIGatewayProxyEventV2,
@@ -172,29 +140,4 @@ export function createExports(
       ? awslambda.streamifyResponse(streamHandler)
       : bufferHandler,
   };
-}
-
-export function streamError(
-  statusCode: number,
-  error: string | Error,
-  responseStream: ResponseStream
-) {
-  console.error(error);
-
-  responseStream = awslambda.HttpResponseStream.from(responseStream, {
-    statusCode,
-    headers: {
-      "Content-Type": "text/html",
-    },
-  });
-
-  responseStream.write(error.toString());
-  responseStream.end();
-}
-
-async function existsAsync(input: string) {
-  return fs
-    .access(input)
-    .then(() => true)
-    .catch(() => false);
 }

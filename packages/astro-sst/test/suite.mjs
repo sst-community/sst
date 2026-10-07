@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { build } from "esbuild";
 
@@ -130,8 +130,10 @@ function v2(
  * @param {string} options.fixtureDir folder name under test/
  * @param {string} options.importName the name the fixture imports the adapter
  *   by: "astro-sst", the alias `sst init` writes, or "@sst-community/astro-sst"
+ * @param {boolean} options.polyfills whether the handler installs Astro 5's
+ *   Node polyfills
  */
-export function defineSuite({ name, fixtureDir, importName }) {
+export function defineSuite({ name, fixtureDir, importName, polyfills }) {
   const fixture = path.join(root, "test", fixtureDir);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "astro-sst-"));
   const handlers = {};
@@ -225,6 +227,27 @@ export function defineSuite({ name, fixtureDir, importName }) {
           fs.readFileSync(path.join(fixture, "dist/client/404.html"), "utf8")
         );
       });
+    });
+
+    describe("Node globals", () => {
+      // Node 18 has no `crypto` or `File` global. Remove them, as on Node 18,
+      // and check the bundled handler puts them back before Astro starts.
+      it(
+        "sets crypto and File when the runtime lacks them",
+        { skip: !polyfills && "Astro 6 and later require Node 22.12+, which has both globals" },
+        () => {
+          const code = [
+            "delete globalThis.File;",
+            "delete globalThis.crypto;",
+            `await import(${JSON.stringify(pathToFileURL(path.join(tmp, "buffer", "index.mjs")).href)});`,
+            "console.log(JSON.stringify({ File: typeof globalThis.File, crypto: typeof globalThis.crypto?.getRandomValues }));",
+          ].join("\n");
+          const r = run(process.execPath, ["--input-type=module", "-e", code], tmp);
+          assert.equal(r.status, 0, r.out);
+          const last = r.stdout.trim().split("\n").pop();
+          assert.deepEqual(JSON.parse(last), { File: "function", crypto: "function" });
+        }
+      );
     });
 
     describe("buffered responses", () => {

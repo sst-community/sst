@@ -7,17 +7,20 @@ const PACKAGE_NAME = "@sst-community/astro-sst";
 const astroMajorVersion = parseInt(ASTRO_PACKAGE.version.split(".")[0] ?? 0);
 
 export default function createIntegration(
-  entrypointParameters: IntegrationConfig = {
-    responseMode: "buffer",
-  }
+  entrypointParameters: Partial<IntegrationConfig> = {}
 ): AstroIntegration {
   debug("astroVersion", ASTRO_PACKAGE.version);
 
   if (astroMajorVersion < 5) {
     throw new Error(
-      "astro-sst requires Astro 5 or newer. Please upgrade your Astro app. Alternatively, use v2 of astro-sst by pinning to `astro-sst@two`."
+      `${PACKAGE_NAME} requires Astro 5 or newer. Please upgrade your Astro app. Alternatively, use v2 of upstream's adapter by pinning to \`astro-sst@two\`.`
     );
   }
+
+  const integrationConfig: IntegrationConfig = {
+    responseMode:
+      entrypointParameters.responseMode === "stream" ? "stream" : "buffer",
+  };
 
   return {
     name: PACKAGE_NAME,
@@ -54,7 +57,7 @@ export default function createIntegration(
           },
         });
 
-        BuildMeta.setIntegrationConfig(entrypointParameters);
+        BuildMeta.setIntegrationConfig(integrationConfig);
       },
       "astro:routes:resolved": ({ routes }) => {
         BuildMeta.setRoutes(routes);
@@ -62,16 +65,32 @@ export default function createIntegration(
       "astro:config:done": ({ config, setAdapter, buildOutput }) => {
         BuildMeta.setAstroConfig(config);
         BuildMeta.setBuildOutput(buildOutput);
+        // Entrypoints are given as URLs rather than package paths, so they
+        // resolve whether the app installs this package by its name or under
+        // the `astro-sst` alias that `sst init` writes.
+        const entrypoint =
+          astroMajorVersion >= 6
+            ? ({
+                // Astro 6 and later bundle the entrypoint as the server entry
+                // and let it create the app, so each response mode has one.
+                entrypointResolution: "auto",
+                serverEntrypoint: new URL(
+                  `./entrypoint/${integrationConfig.responseMode}.js`,
+                  import.meta.url
+                ),
+              } as const)
+            : {
+                serverEntrypoint: new URL(
+                  "./entrypoint/astro5.js",
+                  import.meta.url
+                ),
+                args: integrationConfig,
+                exports: ["handler"],
+              };
         setAdapter({
           name: PACKAGE_NAME,
-          // A URL rather than a package path, so the entrypoint resolves
-          // whether the app installs this package by its name or under the
-          // `astro-sst` alias that `sst init` writes.
-          serverEntrypoint: new URL("./entrypoint.js", import.meta.url),
-          args: { responseMode: entrypointParameters.responseMode },
-          exports: ["handler"],
+          ...entrypoint,
           adapterFeatures: {
-            edgeMiddleware: false,
             buildOutput: buildOutput,
           },
           supportedAstroFeatures: {
