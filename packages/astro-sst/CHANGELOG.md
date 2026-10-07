@@ -1,5 +1,15 @@
 # astro-sst
 
+## 4.0.0
+
+The first release as `@sst-community/astro-sst`, from the sst-community fork.
+
+- Works with Astro 6 and 7 as well as 5. Astro 6 and 7 use the entrypoints from [anomalyco/astro-sst#27](https://github.com/anomalyco/astro-sst/pull/27) by Florian Lefebvre. Astro 5 behaves as before, Node polyfills included.
+- Astro routes every request itself, so trailing-slash redirects and a custom `src/fetch.ts` work, and a page that returns an empty 404 gets the custom 404 page. The function serves its own copy of `404.html` instead of fetching it over the network.
+- In stream mode, a response with no body, such as a redirect, keeps its status and headers and no longer arrives as a broken gzip body.
+- `responseMode` defaults to `"buffer"` when the options leave it out.
+- Install it as `astro-sst@npm:@sst-community/astro-sst`, so `import aws from "astro-sst"` keeps working.
+
 ## 3.1.4
 
 ### Patch Changes

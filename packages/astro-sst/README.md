@@ -1,39 +1,33 @@
 # astro-sst
 
-This adapter allows Astro to deploy your SSR or static site to [AWS](https://aws.amazon.com/).
+This adapter allows Astro to deploy your SSR or static site to [AWS](https://aws.amazon.com/) with SST's `sst.aws.Astro`. It's the sst-community build of SST's `astro-sst`, published as `@sst-community/astro-sst`.
 
 ## Installation
 
-Add the AWS adapter to enable SST in your Astro project with the following `astro add` command. This will install the adapter and make the appropriate changes to your `astro.config.mjs` file in one step.
+Install it under the name `astro-sst`, so `import aws from "astro-sst"` keeps working. `sst init` does this for you.
 
-```sh
-# Using NPM
-npx astro add astro-sst
-# Using Yarn
-yarn astro add astro-sst
-# Using PNPM
-pnpm astro add astro-sst
+```bash
+npm install astro-sst@npm:@sst-community/astro-sst
+# pnpm add astro-sst@npm:@sst-community/astro-sst
+# bun add astro-sst@npm:@sst-community/astro-sst
+# yarn add astro-sst@npm:@sst-community/astro-sst
 ```
 
-If you prefer to install the adapter manually instead, complete the following two steps:
+To switch an existing project from SST's adapter, change its dependency to `"astro-sst": "npm:@sst-community/astro-sst@<version>"` and reinstall. Nothing else changes.
 
-1. Install the AWS adapter to your project's dependencies using your preferred package manager. If you're using npm or aren't sure, run this in the terminal:
+One package works with Astro 5, 6 and 7. It's tested with 5.18, 6.4 and 7.3. Astro 6 and 7 need Node.js 22.12 or later: the server function's default runtime, `nodejs24.x`, is fine, and so is `nodejs22.x`.
 
-   ```bash
-     npm install astro-sst
-   ```
+Then add the adapter to your `astro.config.mjs`.
 
-1. Add two new lines to your `astro.config.mjs` project configuration file.
+```js title="astro.config.mjs" ins={2, 5-6}
+import { defineConfig } from "astro/config";
+import aws from "astro-sst";
 
-   ```js title="astro.config.mjs" ins={2, 5-6}
-   import { defineConfig } from "astro/config";
-   import aws from "astro-sst";
-
-   export default defineConfig({
-     output: "server",
-     adapter: aws(),
-   });
-   ```
+export default defineConfig({
+  output: "server",
+  adapter: aws(),
+});
+```
 
 ### Response Mode
 
