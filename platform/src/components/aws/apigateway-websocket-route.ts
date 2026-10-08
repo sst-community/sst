@@ -7,6 +7,7 @@ import {
   output,
 } from "@pulumi/pulumi";
 import { Component, Transform, transform } from "../component";
+import { VisibleError } from "../error";
 import { FunctionArgs, FunctionArn } from "./function.js";
 import { ApiGatewayWebSocketRouteArgs } from "./apigateway-websocket";
 import { apigatewayv2, lambda } from "@pulumi/aws";
@@ -67,6 +68,7 @@ export class ApiGatewayWebSocketRoute extends Component {
     const api = output(args.api);
     const route = output(args.route);
 
+    validateJwtAuth();
     const fn = createFunction();
     const permission = createPermission();
     const integration = createIntegration();
@@ -76,6 +78,23 @@ export class ApiGatewayWebSocketRoute extends Component {
     this.permission = permission;
     this.apiRoute = apiRoute;
     this.integration = integration;
+
+    // WebSocket routes take NONE, AWS_IAM or CUSTOM auth, not JWT. When the route
+    // and its auth are plain values, check here, so that `sst diff` stops even if
+    // the authorizer's ID isn't known yet. createApiRoute checks the rest. `iam`
+    // and `lambda` win over `jwt` there, so a route with either isn't stopped.
+    function validateJwtAuth() {
+      const auth = args.auth;
+      if (args.route !== "$connect") return;
+      if (!auth || Output.isInstance(auth) || auth instanceof Promise) return;
+      if (auth.jwt && !auth.iam && !auth.lambda) throw jwtAuthError("$connect");
+    }
+
+    function jwtAuthError(route: string) {
+      return new VisibleError(
+        `The ${route} route uses "auth.jwt", but API Gateway only supports JWT auth on HTTP APIs. Use "auth.lambda" with a Lambda authorizer that verifies the token.`,
+      );
+    }
 
     function createFunction() {
       return functionBuilder(
@@ -131,12 +150,7 @@ export class ApiGatewayWebSocketRoute extends Component {
             authorizationType: "CUSTOM",
             authorizerId: auth.lambda,
           };
-        if (auth.jwt)
-          return {
-            authorizationType: "JWT",
-            authorizationScopes: auth.jwt.scopes,
-            authorizerId: auth.jwt.authorizer,
-          };
+        if (auth.jwt) throw jwtAuthError(route);
         return { authorizationType: "NONE" };
       });
 

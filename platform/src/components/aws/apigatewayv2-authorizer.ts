@@ -62,6 +62,7 @@ export class ApiGatewayV2Authorizer extends Component {
     const jwt = args.jwt && output(args.jwt);
 
     validateSingleAuthorizer();
+    validateWebSocketJwt();
     const fn = createFunction();
     const authorizer = createAuthorizer();
     createPermission();
@@ -79,6 +80,15 @@ export class ApiGatewayV2Authorizer extends Component {
       if (authorizers.length > 1)
         throw new VisibleError(
           `Please provide only one of "lambda" or "jwt" for the ${args.name} authorizer.`,
+        );
+    }
+
+    // API Gateway only takes JWT authorizers on HTTP APIs. On a WebSocket API,
+    // CreateAuthorizer fails with "Only REQUEST authorizer type is supported".
+    function validateWebSocketJwt() {
+      if (args.type === "websocket" && jwt)
+        throw new VisibleError(
+          `The ${args.name} authorizer uses "jwt", but API Gateway only supports JWT authorizers on HTTP APIs. A WebSocket API needs a Lambda authorizer: use "lambda" with a function that verifies the token.`,
         );
     }
 
