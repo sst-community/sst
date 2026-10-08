@@ -805,6 +805,12 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    *     identitySources: ["route.request.querystring.token"]
    *   }
    * });
+   *
+   * api.route("$connect", "src/connect.handler", {
+   *   auth: {
+   *     lambda: authorizer.id
+   *   }
+   * });
    * ```
    *
    * The authorizer verifies the token with
