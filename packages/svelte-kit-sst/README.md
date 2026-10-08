@@ -65,6 +65,8 @@ adapter({ streaming: true });
 
 `sst.aws.SvelteKit` reads the option and sets up the function URL for [response streaming](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html). It's off by default.
 
+The option needs a version of the `sst` CLI that reads it. With an older CLI the function URL isn't set up for streaming, and the option is ignored without a message.
+
 ## Client address
 
 In a route, `getClientAddress()` returns the visitor's IP address when requests come through CloudFront. It's read from the `CloudFront-Viewer-Address` header, which CloudFront sets and replaces when a client sends its own. `X-Forwarded-For` isn't used, because CloudFront passes on whatever the client sent in it. Without that header, it's the source IP of the request.

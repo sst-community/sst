@@ -322,13 +322,23 @@ describe('form actions', () => {
 
 describe('streaming', () => {
 	/** Calls the streaming handler and records each chunk with the time it was written. */
-	async function stream(event) {
+	async function stream(event, { slow = false, highWaterMark = 16384 } = {}) {
 		const chunks = [];
+		let maxQueued = 0;
+		// Lambda sends the status and headers just before the first write, even an empty one.
+		let wrote = false;
 		const start = Date.now();
 		const responseStream = new Writable({
+			highWaterMark,
 			write(chunk, _encoding, callback) {
-				chunks.push({ at: Date.now() - start, text: Buffer.from(chunk).toString('utf8'), bytes: Buffer.from(chunk) });
-				callback();
+				wrote = true;
+				// An empty write sends no bytes; it only makes Lambda send the status and headers.
+				if (chunk.length > 0) {
+					chunks.push({ at: Date.now() - start, text: Buffer.from(chunk).toString('utf8'), bytes: Buffer.from(chunk) });
+				}
+				maxQueued = Math.max(maxQueued, responseStream.writableLength);
+				if (slow) setImmediate(callback);
+				else callback();
 			}
 		});
 		const done = new Promise((resolve) => responseStream.on('finish', resolve));
@@ -337,6 +347,8 @@ describe('streaming', () => {
 		return {
 			...responseStream.metadata,
 			chunks,
+			maxQueued,
+			wrote,
 			body: chunks.map((c) => c.text).join(''),
 			bytes: Buffer.concat(chunks.map((c) => c.bytes))
 		};
@@ -384,6 +396,39 @@ describe('streaming', () => {
 	it('streams binary responses as raw bytes', async () => {
 		const r = await stream(v2('/api/binary'));
 		assert.deepEqual([...r.bytes], [0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x80]);
+	});
+
+	it('takes the client address from CloudFront-Viewer-Address, not X-Forwarded-For', async () => {
+		const echo = async (headers) => {
+			const r = await stream(v2('/api/echo', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}' }));
+			return JSON.parse(r.body).ip;
+		};
+		assert.equal(await echo({ 'x-forwarded-for': '203.0.113.66', 'cloudfront-viewer-address': '198.51.100.7:44321' }), '198.51.100.7');
+		assert.equal(await echo({ 'cloudfront-viewer-address': '2001:db8::7:44321' }), '2001:db8::7');
+		assert.equal(await echo({ 'x-forwarded-for': '203.0.113.66' }), '203.0.113.9');
+	});
+
+	it('sends the status and headers of a response with no body, and no body bytes', async () => {
+		const r = await stream(v2('/api/empty'));
+		assert.equal(r.statusCode, 204);
+		assert.equal(r.headers['x-empty'], 'yes');
+		assert.equal(r.wrote, true, 'nothing was written, so Lambda would not send the headers');
+		assert.equal(r.bytes.length, 0);
+	});
+
+	it('sends the status and headers of a response whose body is an empty string', async () => {
+		const r = await stream(v2('/api/empty200'));
+		assert.equal(r.statusCode, 200);
+		assert.equal(r.headers['x-empty'], 'yes');
+		assert.match(r.headers['content-type'], /text\/plain/);
+		assert.equal(r.wrote, true, 'nothing was written, so Lambda would not send the headers');
+		assert.equal(r.bytes.length, 0);
+	});
+
+	it('waits for the stream to drain, so a large body is not queued whole', async () => {
+		const r = await stream(v2('/api/large'), { slow: true, highWaterMark: 1024 });
+		assert.equal(r.bytes.length, 3 * 1024 * 1024);
+		assert.ok(r.maxQueued < 512 * 1024, `up to ${r.maxQueued} bytes were queued at once`);
 	});
 
 	it('returns a redirect with its Location header', async () => {

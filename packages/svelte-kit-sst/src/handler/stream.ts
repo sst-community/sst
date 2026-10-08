@@ -6,7 +6,7 @@ import { server } from "../server.js";
 // @ts-ignore Written by the adapter when it runs
 import prerenderedFiles from "./prerendered-file-list.js";
 import type { APIGatewayProxyEventV2, Context } from "aws-lambda";
-import { convertFrom } from "./event-mapper.js";
+import { clientAddress, convertFrom } from "./event-mapper.js";
 import { debug } from "./logger.js";
 
 // The Lambda Node.js runtime sets this global.
@@ -73,7 +73,7 @@ export const handler = awslambda.streamifyResponse(
         : new Uint8Array(internalEvent.body),
     });
     const response: Response = await server.respond(request, {
-      getClientAddress: () => internalEvent.remoteAddress,
+      getClientAddress: () => clientAddress(internalEvent),
     });
     debug("response", response);
 
@@ -88,18 +88,36 @@ export const handler = awslambda.streamifyResponse(
       cookies: response.headers.getSetCookie(),
     });
 
+    // Lambda sends the status and headers just before the first write, so make
+    // one now, whether or not the body turns out to have anything in it. An
+    // empty write sends no body bytes, which matters for a 204, a 304 and a
+    // HEAD response.
+    writer.write("");
+
     if (response.body) {
       for await (const chunk of response.body) {
-        writer.write(chunk);
+        // The client is gone: leaving the loop cancels the response body.
+        if (writer.destroyed) break;
+        // Wait for the stream to drain, so a large body isn't held in memory.
+        if (!writer.write(chunk)) await drained(writer);
       }
-    } else {
-      // Lambda doesn't send the status and headers until something is
-      // written, so an empty response needs a write.
-      writer.write(" ");
     }
     writer.end();
   }
 );
+
+// Settles when the stream can take more data, or when it has closed.
+function drained(writer: Writable) {
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      writer.off("drain", done);
+      writer.off("close", done);
+      resolve();
+    };
+    writer.once("drain", done);
+    writer.once("close", done);
+  });
+}
 
 function isPrerenderedFile(uri: string) {
   // remove leading and trailing slashes
