@@ -55,6 +55,12 @@ SvelteKit 2 reads the adapter from `svelte.config.js`. The install and the impor
   export default config;
 ```
 
+## Client address
+
+In a route, `getClientAddress()` returns the visitor's IP address when requests come through CloudFront. It's read from the `CloudFront-Viewer-Address` header, which CloudFront sets and replaces when a client sends its own. `X-Forwarded-For` isn't used, because CloudFront passes on whatever the client sent in it. Without that header, it's the source IP of the request.
+
+Only trust it when requests reach the function through CloudFront. The server function's URL is public unless the site's `protection` is `"oac"` or `"oac-with-edge-signing"`, and anyone who has the URL can send their own `CloudFront-Viewer-Address`. If you use the address for rate limiting or to allow or block clients, set `protection` on the `sst.aws.SvelteKit` component.
+
 ## Limitations
 
 - `read` from `$app/server` isn't supported. The function only contains the server code and prerendered pages, and client assets are served from S3. A route that uses `read` fails the build with an error that says so.

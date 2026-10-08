@@ -1,5 +1,9 @@
 # svelte-kit-sst
 
+## Unreleased
+
+- `getClientAddress()` returns the visitor's IP address behind CloudFront, read from `CloudFront-Viewer-Address`. It used to return CloudFront's own address. It's only trustworthy when requests come through CloudFront; see the README.
+
 ## 3.0.0
 
 The first release as `@sst-community/svelte-kit-sst`, from the sst-community fork.

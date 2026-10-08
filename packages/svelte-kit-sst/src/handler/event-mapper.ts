@@ -7,6 +7,7 @@ import type {
   CloudFrontRequestResult,
   CloudFrontHeaders,
 } from "aws-lambda";
+import { isIP } from "node:net";
 import { debug } from "./logger.js";
 
 export type InternalEvent = {
@@ -301,7 +302,11 @@ export function clientAddress(internalEvent: InternalEvent) {
   if (viewer && viewer.includes(":")) {
     // Remove the port, after the last colon, and the brackets of an IPv6
     // address if there are any.
-    return viewer.slice(0, viewer.lastIndexOf(":")).replace(/^\[|\]$/g, "");
+    const address = viewer
+      .slice(0, viewer.lastIndexOf(":"))
+      .replace(/^\[|\]$/g, "");
+    // CloudFront always writes an IP address. Anything else wasn't sent by it.
+    if (isIP(address)) return address;
   }
   return internalEvent.remoteAddress;
 }

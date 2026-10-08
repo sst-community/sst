@@ -345,6 +345,12 @@ export interface SvelteKitArgs extends SsrSiteArgs {
 /**
  * The `SvelteKit` component lets you deploy a [SvelteKit](https://svelte.dev/docs/kit) app to AWS.
  *
+ * In a route, `getClientAddress()` returns the visitor's IP address when requests come through
+ * CloudFront, read from the `CloudFront-Viewer-Address` header. The server function's URL is
+ * public unless `protection` is set to `"oac"` or `"oac-with-edge-signing"`, and anyone who
+ * has it can send their own header. If you use the address for rate limiting or to allow or
+ * block clients, set `protection`.
+ *
  * @example
  *
  * #### Minimal example
