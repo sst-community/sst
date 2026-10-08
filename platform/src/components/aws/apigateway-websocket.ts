@@ -695,10 +695,10 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    * api.route("$default", "src/default.handler");
    * ```
    *
-   * Enable auth for a route.
+   * Enable auth on the `$connect` route, where API Gateway checks it.
    *
    * ```js title="sst.config.ts"
-   * api.route("sendMessage", "src/sendMessage.handler", {
+   * api.route("$connect", "src/connect.handler", {
    *   auth: {
    *     iam: true
    *   }
@@ -809,7 +809,11 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    *
    * The authorizer verifies the token with
    * [`aws-jwt-verify`](https://github.com/awslabs/aws-jwt-verify), and returns a policy
-   * that allows the connection.
+   * that allows the connection. Add the package to your app first.
+   *
+   * ```bash
+   * npm install aws-jwt-verify
+   * ```
    *
    * ```ts title="src/authorizer.ts"
    * import { CognitoJwtVerifier } from "aws-jwt-verify";
