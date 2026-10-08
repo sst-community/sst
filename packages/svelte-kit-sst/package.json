@@ -1,7 +1,7 @@
 {
   "name": "@sst-community/svelte-kit-sst",
   "description": "Adapter for SvelteKit apps to work on AWS Lambda and AWS Lambda@Edge.",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "type": "module",
   "license": "MIT",
   "author": {

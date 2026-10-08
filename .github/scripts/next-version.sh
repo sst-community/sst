@@ -63,13 +63,14 @@ fi
 since=$(git log -1 --format=%cs "$release^{commit}")
 prs=$(gh pr list --base main --state merged --search "merged:>=$since" --limit 200 \
   --json number,title,labels,mergeCommit \
-  --jq '.[] | [.number, (.mergeCommit.oid // ""), ([.labels[].name | select(startswith("semver: ")) | ltrimstr("semver: ")] | first // ""), .title] | map(tostring) | join("\u001f")')
+  --jq '.[] | [.number, (.mergeCommit.oid // ""), ([.labels[].name | select(startswith("semver: ")) | ltrimstr("semver: ")] | first // ""), any(.labels[]; .name == "breaking"), .title] | map(tostring) | join("\u001f")')
 echo
 echo "Pull requests merged since $release:"
 listed=false
 merged=""
+breaking=""
 # Fields are split on the unit separator: tabs would collapse an empty label.
-while IFS=$'\x1f' read -r number oid semver title; do
+while IFS=$'\x1f' read -r number oid semver labelled title; do
   [ -n "$number" ] || continue
   if ! git cat-file -e "$oid^{commit}" 2>/dev/null; then
     echo "  ?      #$number $title (its merge isn't in this clone: pull main)"
@@ -80,11 +81,20 @@ while IFS=$'\x1f' read -r number oid semver title; do
   git merge-base --is-ancestor "$oid" "$REF" || continue
   listed=true
   merged+="$number"$'\x1f'"$title"$'\n'
+  # The `breaking` label: it changes what users need, such as a new minimum
+  # requirement. It goes first in the notes, and is a minor at least.
+  if [ "$labelled" = true ]; then
+    breaking+="  #$number $title"$'\n'
+    bump minor
+  fi
+  mark=""
+  [ "$labelled" != true ] || mark=" ⚠️ breaking"
   if [ -n "$semver" ]; then
-    printf '  %-6s #%s %s\n' "$semver" "$number" "$title"
+    printf '  %-6s #%s %s%s\n' "$semver" "$number" "$title" "$mark"
     bump "$semver"
+    [ "$semver" != major ] || breaking+="  #$number $title (semver: major)"$'\n'
   else
-    echo "  -      #$number $title (no semver label, not counted)"
+    echo "  -      #$number $title (no semver label, not counted)$mark"
   fi
 done <<<"$prs"
 [ "$listed" = true ] || echo "  none"
@@ -98,6 +108,27 @@ if [ -n "$direct" ]; then
   echo "$direct" | sed 's/^/  /'
 fi
 
+# The automatic review drafts each pull request's line for the release notes,
+# under "Release note (draft)" in its comment, to start the notes from. Lines
+# that start with "Breaking:" are listed first. The comment breaks mentions
+# with a zero-width space, which is taken out here, so a package name like
+# @sst-community/sst copies cleanly.
+breaking_drafts=""
+drafts=""
+while IFS=$'\x1f' read -r number title; do
+  [ -n "$number" ] || continue
+  draft=$(gh api "repos/$GH_REPO/issues/$number/comments" \
+    --jq '[.[] | select(.body | startswith("<!-- sst-community-review -->"))][0].body // ""' |
+    awk '/^### Release note/{on=1; next} /^(#|<sub>)/{on=0} on' | grep -v '^[[:space:]]*$' |
+    perl -CS -pe 's/\x{200B}//g' | paste -sd' ' - || true)
+  line="- $draft ([#$number](https://github.com/$GH_REPO/pull/$number))"$'\n'
+  case "$draft" in
+    "" | _None*) ;;
+    \*\*Breaking* | Breaking*) breaking_drafts+="$line" ;;
+    *) drafts+="$line" ;;
+  esac
+done <<<"$merged"
+
 # Anything released is at least a patch.
 [ "$level" != none ] || level=patch
 IFS=. read -r a b c <<<"${release#v}"
@@ -110,6 +141,23 @@ echo
 echo "Next version: $next ($level)"
 if [ "$level" = major ]; then
   echo "A breaking change is in. main doesn't take breaking changes for now: sort that out before releasing."
+fi
+
+echo
+if [ -n "$breaking_drafts" ]; then
+  echo "Drafted release notes for Breaking changes, which go first:"
+  printf '%s' "$breaking_drafts"
+  [ -z "$drafts" ] || echo
+fi
+if [ -n "$drafts" ]; then
+  echo "Drafted release notes for the rest:"
+  printf '%s' "$drafts"
+elif [ -z "$breaking_drafts" ]; then
+  echo "The automatic review drafted no release notes for these pull requests."
+fi
+if [ "$then_sst" != "$now_sst" ]; then
+  echo
+  echo "SST ${now_sst#upstream/v} is merged since $release. Read its release notes for breaking changes and new minimum requirements: they go under Breaking changes too."
 fi
 
 # The release notes are written by hand, so check that they link every pull
@@ -132,4 +180,15 @@ if [ -n "$missing" ]; then
   printf '%s' "$missing"
 else
   echo "$notes links every pull request merged since $release."
+fi
+
+# Breaking changes have to be the first thing in the notes.
+if [ -n "$breaking" ]; then
+  first=$(grep -m 1 '^### ' "$notes" || true)
+  if ! grep -Eqi '^###.*breaking changes' <<<"$first"; then
+    echo
+    echo "⚠️  These change what users need, but $notes doesn't open with a \"### ⚠️ Breaking changes\" section:"
+    printf '%s' "$breaking"
+    echo "Put them first, under that heading, and say what users have to do."
+  fi
 fi

@@ -22,6 +22,9 @@ const command = "npm install sst@npm:@sst-community/sst";
       <code class="fl-command">npm install <span class="fl-nowrap">sst@npm:@sst-community/sst</span></code>
       <button type="button" class="fl-copy" data-copy={command}>Copy</button>
     </div>
+    <p class="fl-requires">
+      Needs <strong>Node.js 22 or later</strong>, wherever you run <code>sst</code>, CI included.
+    </p>
     <div class="fl-actions">
       <a class="fl-button" href={`${base}/docs/`}>Read the docs</a>
       <a class="fl-link" href={`${repo}/releases`}>Releases</a>
@@ -33,6 +36,13 @@ const command = "npm install sst@npm:@sst-community/sst";
   <div class="fl-switch">
     <h2 id="fl-switch-title" class="fl-caption">Switch a project from SST</h2>
     <ol class="fl-steps" aria-labelledby="fl-switch-title">
+      <li class="fl-step">
+        <p class="fl-step-title">Use Node.js 22 or later</p>
+        <p class="fl-step-body">
+          <code>node --version</code> should show <code>v22</code> or later, wherever you run
+          <code>sst</code>, CI included. On an older Node.js the CLI warns, and some features fail.
+        </p>
+      </li>
       <li class="fl-step">
         <p class="fl-step-title">Run the install in your project</p>
         <p class="fl-step-body">
@@ -47,11 +57,17 @@ const command = "npm install sst@npm:@sst-community/sst";
         <p class="fl-step-body">
           With pnpm, bun or yarn, use <code>add</code> in place of <code>install</code>.
         </p>
+        <p class="fl-step-body">
+          Using the Astro or SvelteKit adapter? Switch its line the same way, to
+          <code>npm:@sst-community/astro-sst</code> or
+          <code>npm:@sst-community/svelte-kit-sst</code>.
+        </p>
       </li>
       <li class="fl-step">
         <p class="fl-step-title">Check which CLI runs</p>
         <p class="fl-step-body">
-          <code>npx sst version</code> ends in <code>(sst-community)</code>.
+          <code>npx sst version</code> names <code>sst-community</code> and the SST
+          release it's built on.
         </p>
       </li>
       <li class="fl-step">
@@ -221,6 +237,33 @@ const command = "npm install sst@npm:@sst-community/sst";
   .fl-copy:hover {
     color: var(--fl-ink);
   }
+  .fl-requires {
+    position: relative;
+    margin-top: 0.85rem !important;
+    max-width: 34rem;
+    padding-left: 1.1rem;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    color: var(--fl-text);
+  }
+  .fl-requires::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.5em;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--fl-fork);
+  }
+  .fl-requires strong {
+    color: var(--fl-ink);
+    font-weight: 600;
+  }
+  .fl-requires code {
+    color: var(--fl-ink);
+  }
+
   .fl-actions {
     display: flex;
     flex-wrap: wrap;

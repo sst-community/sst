@@ -7,6 +7,7 @@ import type {
   CloudFrontRequestResult,
   CloudFrontHeaders,
 } from "aws-lambda";
+import { isIP } from "node:net";
 import { debug } from "./logger.js";
 
 export type InternalEvent = {
@@ -287,4 +288,25 @@ function normalizeCloudFrontRequestEventHeaders(
   }
 
   return headers;
+}
+
+/**
+ * The client's IP address. Behind CloudFront it's in CloudFront-Viewer-Address
+ * ("198.51.100.10:46532"), which CloudFront sets, replacing any value the
+ * client sent. The request's source IP is CloudFront's own address there, and
+ * X-Forwarded-For isn't used: CloudFront passes on whatever the client sent in
+ * it. Without CloudFront, it's the source IP of the request.
+ */
+export function clientAddress(internalEvent: InternalEvent) {
+  const viewer = internalEvent.headers["cloudfront-viewer-address"];
+  if (viewer && viewer.includes(":")) {
+    // Remove the port, after the last colon, and the brackets of an IPv6
+    // address if there are any.
+    const address = viewer
+      .slice(0, viewer.lastIndexOf(":"))
+      .replace(/^\[|\]$/g, "");
+    // CloudFront always writes an IP address. Anything else wasn't sent by it.
+    if (isIP(address)) return address;
+  }
+  return internalEvent.remoteAddress;
 }

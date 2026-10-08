@@ -37,6 +37,26 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      # Trusted publishing can't create a package, so an adapter's first version
+      # is published by hand (see MAINTAINING.md). Stop here if one hasn't been,
+      # before anything is published: the bridge-task image and the CLI
+      # release, which can't be changed once it's out.
+      - name: Check the adapters are on npm
+        run: |
+          for dir in packages/*/; do
+            [ -f "${dir}package.json" ] || continue
+            [ "$(node -p "!!require('./${dir}package.json').private")" = false ] || continue
+            name=$(node -p "require('./${dir}package.json').name")
+            if ! out=$(npm view "$name" name 2>&1); then
+              if grep -q E404 <<< "$out"; then
+                echo "::error::$name isn't on npm. Publish its first version by hand; see MAINTAINING.md."
+              else
+                echo "$out"
+              fi
+              exit 1
+            fi
+          done
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -103,7 +123,35 @@ jobs:
           echo "Built on SST ${base:-(none found)}"
           echo "SST_UPSTREAM=${base#v}" >> "$GITHUB_ENV"
 
+      # A release that failed partway can be finished with "Re-run failed
+      # jobs": what's already out is skipped. A published GitHub release can't
+      # be changed, and an npm version can't be published twice. A lookup that
+      # fails for another reason stops here rather than guessing.
+      - name: See what's already released
+        id: done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if draft=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>&1); then
+            if [ "$draft" = false ]; then
+              echo "The GitHub release $GITHUB_REF_NAME is already published."
+              echo "github=true" >> "$GITHUB_OUTPUT"
+            fi
+          elif ! grep -q 'release not found' <<< "$draft"; then
+            echo "$draft"
+            exit 1
+          fi
+          spec="@sst-community/sst@${GITHUB_REF_NAME#v}"
+          if out=$(npm view "$spec" version 2>&1); then
+            echo "$spec is already on npm."
+            echo "npm=true" >> "$GITHUB_OUTPUT"
+          elif ! grep -q E404 <<< "$out"; then
+            echo "$out"
+            exit 1
+          fi
+
       - name: Release CLI
+        if: steps.done.outputs.github != 'true'
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -112,7 +160,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # On a re-run after the GitHub release is out but before npm has the CLI:
+      # build the binaries again for the npm packages, without publishing.
+      - name: Build CLI for npm
+        if: steps.done.outputs.github == 'true' && steps.done.outputs.npm != 'true'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean --skip=publish
+
       - name: Release JS SDK
+        if: steps.done.outputs.npm != 'true'
         run: |
           cd sdk/js
           bun run release
@@ -121,21 +180,31 @@ jobs:
         env:
           NPM_CONFIG_PROVENANCE: true
 
-      # Publishes packages/svelte-kit-sst when its version isn't on npm yet, so
-      # a pull request that bumps the version ships with the next release. Its
-      # tests run in the svelte-kit-sst workflow, not here.
-      - name: Release svelte-kit-sst
-        working-directory: packages/svelte-kit-sst
+      # Publishes each adapter in packages/ whose version isn't on npm yet, so
+      # a pull request that bumps a version ships with the next release. Their
+      # tests run in their own workflows, not here. A new package's first
+      # version is published by hand; see MAINTAINING.md.
+      - name: Release adapters
         run: |
-          version=$(node -p "require('./package.json').version")
-          if npm view "@sst-community/svelte-kit-sst@$version" version >/dev/null 2>&1; then
-            echo "@sst-community/svelte-kit-sst@$version is already on npm"
-            exit 0
-          fi
-          tag=latest
-          case "$version" in *-*) tag=next ;; esac
-          npm ci
-          npm publish --access public --tag "$tag"
+          for dir in packages/*/; do
+            [ -f "${dir}package.json" ] || continue
+            [ "$(node -p "!!require('./${dir}package.json').private")" = false ] || continue
+            name=$(node -p "require('./${dir}package.json').name")
+            version=$(node -p "require('./${dir}package.json').version")
+            if out=$(npm view "$name@$version" version 2>&1); then
+              echo "$name@$version is already on npm"
+              continue
+            elif ! grep -q E404 <<< "$out"; then
+              # Not a "no such version": don't guess, so a network error can't
+              # lead to publishing.
+              echo "$out"
+              exit 1
+            fi
+            tag=latest
+            case "$version" in *-*) tag=next ;; esac
+            # Verbose, so a refused publish shows npm's trusted-publishing steps.
+            (cd "$dir" && npm ci && npm publish --access public --tag "$tag" --loglevel verbose)
+          done
         env:
           NPM_CONFIG_PROVENANCE: true
 

@@ -137,38 +137,8 @@ export interface ApiGatewayWebSocketArgs {
 
 export interface ApiGatewayWebSocketAuthorizerArgs {
   /**
-   * Create a JWT or JSON Web Token authorizer that can be used by the routes.
-   *
-   * @example
-   * Configure JWT auth.
-   *
-   * ```js
-   * {
-   *   jwt: {
-   *     issuer: "https://issuer.com/",
-   *     audiences: ["https://api.example.com"],
-   *     identitySource: "$request.header.AccessToken"
-   *   }
-   * }
-   * ```
-   *
-   * You can also use Cognito as the identity provider.
-   *
-   * ```js
-   * {
-   *   jwt: {
-   *     audiences: [userPoolClient.id],
-   *     issuer: $interpolate`https://cognito-idp.${aws.getArnOutput(userPool).region}.amazonaws.com/${userPool.id}`,
-   *   }
-   * }
-   * ```
-   *
-   * Where `userPool` and `userPoolClient` are:
-   *
-   * ```js
-   * const userPool = new aws.cognito.UserPool();
-   * const userPoolClient = new aws.cognito.UserPoolClient();
-   * ```
+   * @deprecated API Gateway only supports JWT authorizers on HTTP APIs, so this stops
+   * the deploy. Use `lambda` with a function that verifies the token instead.
    */
   jwt?: Input<{
     /**
@@ -192,7 +162,12 @@ export interface ApiGatewayWebSocketAuthorizerArgs {
     identitySource?: Input<string>;
   }>;
   /**
-   * Create a Lambda authorizer that can be used by the routes.
+   * Create a Lambda authorizer that can be used by the `$connect` route.
+   *
+   * The function returns an IAM policy that allows or denies `execute-api:Invoke`, or
+   * throws `Unauthorized`. This is also how to check a JWT, such as a Cognito token:
+   * WebSocket APIs don't support JWT authorizers, so the function verifies the token.
+   * See [`addAuthorizer`](#addauthorizer) for an example.
    *
    * @example
    * Configure Lambda auth.
@@ -230,34 +205,25 @@ export interface ApiGatewayWebSocketAuthorizerArgs {
      */
     function: Input<string | FunctionArgs>;
     /**
-     * The JWT payload version.
-     * @default `"2.0"`
-     * @example
-     * ```js
-     * {
-     *   payload: "2.0"
-     * }
-     * ```
+     * @deprecated WebSocket APIs ignore this. It's only for HTTP API authorizers.
      */
     payload?: Input<"1.0" | "2.0">;
     /**
-     * The response type.
-     * @default `"simple"`
-     * @example
-     * ```js
-     * {
-     *   response: "iam"
-     * }
-     * ```
+     * @deprecated WebSocket APIs ignore this. A WebSocket authorizer always returns an
+     * IAM policy.
      */
     response?: Input<"simple" | "iam">;
     /**
-     * Specifies where to extract the identity from.
+     * Specifies where to extract the identity from. A request without it is rejected
+     * before the authorizer runs.
+     *
+     * A browser can't set headers on a WebSocket connection, so a browser client usually
+     * sends its token in the query string.
      * @default `["route.request.header.Authorization"]`
      * @example
      * ```js
      * {
-     *   identitySources: ["$request.header.RequestToken"]
+     *   identitySources: ["route.request.querystring.token"]
      * }
      * ```
      */
@@ -279,6 +245,9 @@ export interface ApiGatewayWebSocketRouteArgs {
   /**
    * Enable auth for your WebSocket API. By default, auth is disabled.
    *
+   * Auth only applies to the `$connect` route: API Gateway checks it once, when a client
+   * connects. Other routes ignore it.
+   *
    * @example
    * ```js
    * {
@@ -297,23 +266,9 @@ export interface ApiGatewayWebSocketRouteArgs {
        */
       iam?: Input<boolean>;
       /**
-       * Enable JWT or JSON Web Token authorization for a given API route. When JWT auth is enabled, clients need to include a valid JWT in their requests.
-       *
-       * @example
-       * You can configure JWT auth.
-       *
-       * ```js
-       * {
-       *   auth: {
-       *     jwt: {
-       *       authorizer: myAuthorizer.id,
-       *       scopes: ["read:profile", "write:profile"]
-       *     }
-       *   }
-       * }
-       * ```
-       *
-       * Where `myAuthorizer` is created by calling the `addAuthorizer` method.
+       * @deprecated API Gateway only supports JWT auth on HTTP APIs, so this stops the
+       * deploy on the `$connect` route. Use `lambda` with a Lambda authorizer that
+       * verifies the token instead.
        */
       jwt?: Input<{
         /**
@@ -740,10 +695,10 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    * api.route("$default", "src/default.handler");
    * ```
    *
-   * Enable auth for a route.
+   * Enable auth on the `$connect` route, where API Gateway checks it.
    *
    * ```js title="sst.config.ts"
-   * api.route("sendMessage", "src/sendMessage.handler", {
+   * api.route("$connect", "src/connect.handler", {
    *   auth: {
    *     iam: true
    *   }
@@ -813,53 +768,89 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    * Add a Lambda authorizer.
    *
    * ```js title="sst.config.ts"
-   * api.addAuthorizer({
-   *   name: "myAuthorizer",
+   * const authorizer = api.addAuthorizer("MyAuthorizer", {
    *   lambda: {
-   *     function: "src/authorizer.index"
+   *     function: "src/authorizer.handler"
    *   }
    * });
    * ```
    *
-   * Add a JWT authorizer.
+   * Then use it on the `$connect` route, where API Gateway checks auth.
    *
    * ```js title="sst.config.ts"
-   * const authorizer = api.addAuthorizer({
-   *   name: "myAuthorizer",
-   *   jwt: {
-   *     issuer: "https://issuer.com/",
-   *     audiences: ["https://api.example.com"],
-   *     identitySource: "$request.header.AccessToken"
+   * api.route("$connect", "src/connect.handler", {
+   *   auth: {
+   *     lambda: authorizer.id
    *   }
    * });
    * ```
    *
-   * Add a Cognito UserPool as a JWT authorizer.
+   * API Gateway doesn't support JWT authorizers on WebSocket APIs. To accept a JWT, such
+   * as a Cognito token, have the Lambda authorizer verify it. Here a browser sends the
+   * token in the query string, since it can't set headers on a WebSocket connection.
    *
    * ```js title="sst.config.ts"
    * const pool = new sst.aws.CognitoUserPool("MyUserPool");
-   * const poolClient = userPool.addClient("Web");
+   * const client = pool.addClient("Web");
    *
-   * const authorizer = api.addAuthorizer({
-   *   name: "myCognitoAuthorizer",
-   *   jwt: {
-   *     issuer: $interpolate`https://cognito-idp.${aws.getRegionOutput().region}.amazonaws.com/${pool.id}`,
-   *     audiences: [poolClient.id]
+   * const authorizer = api.addAuthorizer("MyAuthorizer", {
+   *   lambda: {
+   *     function: {
+   *       handler: "src/authorizer.handler",
+   *       environment: {
+   *         USER_POOL_ID: pool.id,
+   *         USER_POOL_CLIENT_ID: client.id
+   *       }
+   *     },
+   *     identitySources: ["route.request.querystring.token"]
    *   }
    * });
-   * ```
    *
-   * Now you can use the authorizer in your routes.
-   *
-   * ```js title="sst.config.ts"
-   * api.route("GET /", "src/get.handler", {
+   * api.route("$connect", "src/connect.handler", {
    *   auth: {
-   *     jwt: {
-   *       authorizer: authorizer.id
-   *     }
+   *     lambda: authorizer.id
    *   }
    * });
    * ```
+   *
+   * The authorizer verifies the token with
+   * [`aws-jwt-verify`](https://github.com/awslabs/aws-jwt-verify), and returns a policy
+   * that allows the connection. Add the package to your app first.
+   *
+   * ```bash
+   * npm install aws-jwt-verify
+   * ```
+   *
+   * ```ts title="src/authorizer.ts"
+   * import { CognitoJwtVerifier } from "aws-jwt-verify";
+   *
+   * const verifier = CognitoJwtVerifier.create({
+   *   userPoolId: process.env.USER_POOL_ID!,
+   *   clientId: process.env.USER_POOL_CLIENT_ID!,
+   *   tokenUse: "access"
+   * });
+   *
+   * export async function handler(event) {
+   *   try {
+   *     const claims = await verifier.verify(event.queryStringParameters.token);
+   *     return {
+   *       principalId: claims.sub,
+   *       policyDocument: {
+   *         Version: "2012-10-17",
+   *         Statement: [
+   *           { Action: "execute-api:Invoke", Effect: "Allow", Resource: event.methodArn }
+   *         ]
+   *       }
+   *     };
+   *   } catch {
+   *     throw new Error("Unauthorized");
+   *   }
+   * }
+   * ```
+   *
+   * The client connects with the token, as `wss://<api>/<stage>?token=<token>`. For
+   * another issuer, `aws-jwt-verify`'s `JwtVerifier` or the `jose` package can check the
+   * token against the issuer's keys.
    */
   public addAuthorizer(name: string, args: ApiGatewayWebSocketAuthorizerArgs) {
     const self = this;

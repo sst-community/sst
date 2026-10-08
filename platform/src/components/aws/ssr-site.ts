@@ -50,6 +50,13 @@ import { Size, toMBs } from "../size.js";
 import { KvRoutesUpdate } from "./providers/kv-routes-update.js";
 import { toPosix } from "../path.js";
 
+// CloudFront KeyValueStore keys are at most 512 bytes, including the
+// `<namespace>:` prefix.
+const MAX_KV_KEY_LENGTH = 500;
+// The KV store holds 5 MB and is shared by the sites on a Router, so each site
+// lists at most 1 MB of prerendered files.
+const MAX_LISTED_KV_BYTES = 1024 * 1024;
+
 const supportedRegions = {
   "af-south-1": { lat: -33.9249, lon: 18.4241 }, // Cape Town, South Africa
   "ap-east-1": { lat: 22.3193, lon: 114.1694 }, // Hong Kong
@@ -61,6 +68,7 @@ const supportedRegions = {
   "ap-southeast-3": { lat: -6.2088, lon: 106.8456 }, // Jakarta, Indonesia
   "ap-southeast-4": { lat: -37.8136, lon: 144.9631 }, // Melbourne, Australia
   "ap-southeast-5": { lat: 3.139, lon: 101.6869 }, // Kuala Lumpur, Malaysia
+  "ap-southeast-6": { lat: -36.8485, lon: 174.7633 }, // Auckland, New Zealand
   "ap-southeast-7": { lat: 13.7563, lon: 100.5018 }, // Bangkok, Thailand
   "ap-south-1": { lat: 19.076, lon: 72.8777 }, // Mumbai, India
   "ap-south-2": { lat: 17.385, lon: 78.4867 }, // Hyderabad, India
@@ -107,6 +115,9 @@ export type Plan = {
     cached: boolean;
     versionedSubDir?: string;
     deepRoute?: string;
+    // List every file in this copy in the KV store instead of routing its
+    // folders to S3. For copies that hold prerendered routes only.
+    listFiles?: boolean;
   }[];
   isrCache?: {
     from: string;
@@ -114,6 +125,13 @@ export type Plan = {
   };
   custom404?: string;
   buildId?: string;
+  // Asset folders with an `.html` file at any depth are listed file by file
+  // in the KV store instead of being routed to S3 as a whole, so server
+  // routes in the same folder still reach the server.
+  hasStaticRoutes?: boolean;
+  // Top-level asset folders known to hold prerendered routes. They're listed
+  // file by file too.
+  prerenderedDirs?: string[];
 };
 
 export interface SsrSiteArgs extends BaseSsrSiteArgs {
@@ -1074,6 +1092,7 @@ async function handler(event) {
         // Server functions
         servers.forEach(({ region, server }) => {
           const provider = useProvider(region);
+          const urlDependsOn = server.nodes.url.apply((u) => (u ? [u] : []));
 
           if (protection.mode === "none") {
             new lambda.Permission(
@@ -1084,7 +1103,7 @@ async function handler(event) {
                 principal: "*",
                 functionUrlAuthType: "NONE",
               },
-              { provider, parent: self },
+              { provider, parent: self, dependsOn: urlDependsOn },
             );
           } else if (
             protection.mode === "oac" ||
@@ -1098,7 +1117,7 @@ async function handler(event) {
                 principal: "cloudfront.amazonaws.com",
                 sourceArn: distributionArn,
               },
-              { provider, parent: self },
+              { provider, parent: self, dependsOn: urlDependsOn },
             );
             new lambda.Permission(
               `${name}CloudFrontInvokeFunction${logicalName(region)}`,
@@ -1109,13 +1128,16 @@ async function handler(event) {
                 sourceArn: distributionArn,
                 invokedViaFunctionUrl: true,
               },
-              { provider, parent: self },
+              { provider, parent: self, dependsOn: urlDependsOn },
             );
           }
         });
 
         // Image optimizer
         if (imgOptimizer) {
+          const urlDependsOn = imgOptimizer.nodes.url.apply((u) =>
+            u ? [u] : [],
+          );
           if (protection.mode === "none") {
             new lambda.Permission(
               `${name}ImageOptimizerPublicFunctionUrlAccess`,
@@ -1125,7 +1147,7 @@ async function handler(event) {
                 principal: "*",
                 functionUrlAuthType: "NONE",
               },
-              { parent: self },
+              { parent: self, dependsOn: urlDependsOn },
             );
           } else if (
             protection.mode === "oac" ||
@@ -1139,7 +1161,7 @@ async function handler(event) {
                 principal: "cloudfront.amazonaws.com",
                 sourceArn: distributionArn,
               },
-              { parent: self },
+              { parent: self, dependsOn: urlDependsOn },
             );
             new lambda.Permission(
               `${name}ImageOptimizerCloudFrontInvokeFunction`,
@@ -1150,7 +1172,7 @@ async function handler(event) {
                 sourceArn: distributionArn,
                 invokedViaFunctionUrl: true,
               },
-              { parent: self },
+              { parent: self, dependsOn: urlDependsOn },
             );
           }
         }
@@ -1789,6 +1811,27 @@ async function handler(event) {
             //   the suffixes ie. "handleTrailingSlashse"
             const expandDirs = [".well-known"];
 
+            // Every file under `dir`, as paths relative to it. Undefined if it
+            // holds anything other than files and folders, like a symlink.
+            const listDir = (dir: string): string[] | undefined => {
+              const files: string[] = [];
+              for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+                if (item.isFile()) {
+                  files.push(item.name);
+                  continue;
+                }
+                if (!item.isDirectory()) return;
+                const children = listDir(path.join(dir, item.name));
+                if (!children) return;
+                files.push(
+                  ...children.map((file) => path.join(item.name, file)),
+                );
+              }
+              return files;
+            };
+            // Folders to list file by file, if they fit in the KV budget.
+            const listed: { dir: string; keys: string[] }[] = [];
+
             plan.assets.forEach((copy) => {
               const processDir = (childPath = "", level = 0) => {
                 const currentPath = path.join(outputPath, copy.from, childPath);
@@ -1814,6 +1857,43 @@ async function handler(event) {
                       processDir(path.join(childPath, item.name), level + 1);
                       return;
                     }
+                    // Directory with prerendered routes: add its files, not the
+                    //   folder, so server routes in the same folder are not
+                    //   shadowed by S3 (ie. /blog/post.html and /blog/[slug]).
+                    //   Folders with a key over the KV key size limit are still
+                    //   routed as a whole.
+                    const dirPath = toPosix(path.join(childPath, item.name));
+                    if (
+                      item.isDirectory() &&
+                      !(
+                        copy.versionedSubDir &&
+                        (dirPath === copy.versionedSubDir ||
+                          dirPath.startsWith(copy.versionedSubDir + "/"))
+                      ) &&
+                      (copy.listFiles ||
+                        plan.hasStaticRoutes ||
+                        plan.prerenderedDirs?.length)
+                    ) {
+                      const keys = listDir(
+                        path.join(currentPath, item.name),
+                      )?.map((file) => toPosix(path.join("/", dirPath, file)));
+                      if (
+                        keys &&
+                        (copy.listFiles ||
+                          (level === 0 &&
+                            plan.prerenderedDirs?.includes(item.name)) ||
+                          keys.some((key) => key.endsWith(".html"))) &&
+                        keys.every(
+                          (key) => Buffer.byteLength(key) <= MAX_KV_KEY_LENGTH,
+                        )
+                      ) {
+                        listed.push({
+                          dir: toPosix(path.join("/", dirPath)),
+                          keys,
+                        });
+                        return;
+                      }
+                    }
                     // Directory + NOT expand: add to route
                     dirs.push(toPosix(path.join("/", childPath, item.name)));
                   },
@@ -1821,6 +1901,23 @@ async function handler(event) {
               };
               processDir();
             });
+
+            // Over the budget, route the folders to S3 as a whole, as before.
+            // Each item also stores the `<namespace>:` prefix and the "s3" value.
+            const listedBytes = listed
+              .flatMap(({ keys }) => keys)
+              .reduce((total, key) => total + Buffer.byteLength(key) + 8, 0);
+            if (listedBytes <= MAX_LISTED_KV_BYTES) {
+              listed.forEach(({ keys }) =>
+                keys.forEach((key) => (kvEntries[key] = "s3")),
+              );
+            } else {
+              const dirList = listed.map(({ dir }) => dir).join(", ");
+              console.warn(
+                `${name}: too many prerendered files to list in the KV store, so server routes in these folders may return 403: ${dirList}`,
+              );
+              dirs.push(...listed.map(({ dir }) => dir));
+            }
 
             kvEntries["metadata"] = JSON.stringify({
               base: plan.base,

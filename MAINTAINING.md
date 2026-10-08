@@ -57,7 +57,7 @@ SST edits `www/astro.config.mjs` often, mostly the sidebar. The fork's edits the
 - the redirects
 - the `forkLinks` rehype plugin
 
-The fork also edits `www/config.ts` (`fork`, `forkDiscord`), the Head, Header, HeaderLinks, Footer, Hero and TestimonialWall components, `index.mdx`, and the install commands in `docs/index.mdx` and `docs/reference/sdk.mdx`.
+The fork also edits `www/config.ts` (`fork`, `forkDiscord`), the Head, Header, HeaderLinks, Footer, Hero and TestimonialWall components, `index.mdx`, the install commands in `docs/index.mdx` and `docs/reference/sdk.mdx`, and the adapter steps in the Astro and SvelteKit guides, `docs/start/aws/astro.mdx` and `svelte.mdx`.
 
 ## Versions
 
@@ -67,7 +67,8 @@ The fork numbers its own releases, with semver, because it moves faster than SST
 |---|---|
 | Only fixes and changes users can't call, from the fork or a merged SST patch release | The next patch |
 | Something new users can use (a component, arg, output, `nodes` member, CLI command or flag, or SDK function), or a merged SST minor release | The next minor |
-| A breaking change | `main` doesn't take them for now |
+| A new minimum requirement: a newer Node.js, Bun, Go or Python, a newer Pulumi or provider, a newer framework version, or a permission the deploy role didn't need before | The next minor, listed first in the release notes, under Breaking changes |
+| Any other breaking change: an arg, output, component or CLI flag removed or renamed, a default changed, or existing resources replaced | `main` doesn't take them for now |
 
 - Count up from the fork's newest release on `main`. Never reuse a number or go back.
 - **`.github/scripts/next-version.sh` works it out.** Run it on an up-to-date `main`. It takes the highest `semver:` label of the pull requests merged since the last release, and the SST release merged since then, if any. It lists what it didn't count: pull requests without the label, and commits pushed straight to `main`. Check those by hand.
@@ -78,26 +79,29 @@ The fork numbers its own releases, with semver, because it moves faster than SST
 ## Releasing
 
 1. Run `.github/scripts/next-version.sh` on an up-to-date `main` for the version (see [Versions](#versions)).
-2. Write `.github/release-notes/vX.Y.Z.md`. Name the SST release it includes, and link each pull request users would notice. Keep `### Install` as the last section: the Discord post leaves out everything from that heading on.
+2. Write `.github/release-notes/vX.Y.Z.md`, starting from the lines `next-version.sh` prints from the automatic review's drafts. Name the SST release it includes, and link each pull request users would notice. **If anything changes what users need** (a pull request labelled `breaking`, or a new minimum requirement in a merged SST release), the notes open with a `### ⚠️ Breaking changes` section, before Fixes, and each item says what users have to do. It's first so it's what the GitHub release, the Discord post and anyone skimming see first. Keep `### Install` as the last section: the Discord post leaves out everything from that heading on.
 3. Run `next-version.sh` again. It lists the pull requests in the release that the notes don't link.
 4. Push the `vX.Y.Z` tag on a commit that's on `main`. Only an admin or a member of the `releasers` team can.
 
 `release.yml` then:
 
+- stops if an adapter in `packages/` has never been published to npm, before anything is released
 - builds the CLI with goreleaser and creates the GitHub release, using your notes in place of a generated changelog
 - pushes the `bridge-task` image, which `sst.aws.Task` runs in `sst dev`, to `ghcr.io/sst-community/sst/bridge-task`
 - publishes `@sst-community/sst` and a `@sst-community/sst-<os>-<cpu>` package for each platform to npm
-- publishes `@sst-community/svelte-kit-sst` when the version in `packages/svelte-kit-sst/package.json` isn't on npm yet
+- publishes each adapter in `packages/`, `@sst-community/svelte-kit-sst` and `@sst-community/astro-sst`, when the version in its `package.json` isn't on npm yet
 - posts the notes to the Discord announcements channel
 
 Things to know:
 
+- **A release that fails partway is finished with "Re-run failed jobs".** The job checks what's already out and skips it: the GitHub release once it's published, `@sst-community/sst` and each platform package already on npm, and each adapter already on npm. If the GitHub release is out but npm doesn't have the CLI, it builds the binaries again for npm without publishing. The Discord post goes out at the end, as usual. A re-run uses the `release.yml` of the tagged commit, so this works for tags from v4.18.2 on. The adapters publish with `--loglevel verbose`, so a refused publish shows npm's trusted-publishing steps; v4.18.1's `svelte-kit-sst` 3.0.1 was refused with a 404 although its trusted publisher was set up, and was published by hand.
 - **The release job runs in the `release` environment.** Only `v*` tags can use it, and only admins and the `releasers` team can push those. Keep what a release needs in that environment and not on the repo: anyone with Write access can push a branch, and a workflow on a branch can read repo secrets and ask for an npm token.
 - **npm publishing has no token.** It uses trusted publishing. Each package has to exist on npm with a trusted publisher for this repo's `release.yml` in the `release` environment. For a new package: `npm trust github <package> --repo sst-community/sst --file release.yml --env release --allow-publish` (npm 11.15 or later).
 - **Releases are immutable**, every one after 4.17.2. Once a release is published, its files and its tag can't be changed, so `install` and `sst upgrade` download what the release built. goreleaser uploads to a draft and publishes it last. A release can still be deleted, and its tag name can't be used again.
 - **The package is renamed at publish time.** `sdk/js/package.json` stays named `sst`, and `sdk/js/scripts/release.ts` publishes it as `@sst-community/sst`. Renaming it in the repo changes `bun.lockb` and breaks `bun install --frozen-lockfile`.
 - **Users install it under the name `sst`**, as `sst@npm:@sst-community/sst`, so `import ... from "sst"` keeps working. `sst upgrade` and `sst init` write that alias. `pkg/global/distribution.go` holds the release repo and the package name.
-- **The SvelteKit adapter has its own version.** To release it, bump the version in `packages/svelte-kit-sst/package.json` (`npm version <x.y.z> --no-git-tag-version` there, which updates the lockfile too) and add a `CHANGELOG.md` entry; the next release tag publishes it. A version with a suffix, such as `3.1.0-alpha.0`, goes out under the `next` tag instead of `latest`. Users install it as `svelte-kit-sst@npm:@sst-community/svelte-kit-sst`.
+- **The adapters have their own versions.** To release one, bump the version in its `packages/<adapter>/package.json` (`npm version <x.y.z> --no-git-tag-version` there, which updates the lockfile too) and add a `CHANGELOG.md` entry; the next release tag publishes it. A version with a suffix, such as `3.1.0-alpha.0`, goes out under the `next` tag instead of `latest`. Users install them under SST's names, as `svelte-kit-sst@npm:@sst-community/svelte-kit-sst` and `astro-sst@npm:@sst-community/astro-sst`, and `sst init` writes those aliases (`CommunityPackages` in `pkg/global/distribution.go`).
+- **A new adapter is published by hand first.** Trusted publishing can't create a package, so publish its first version from your machine (`npm publish --access public` in its folder) and add the trusted publisher. Do it before the release whose CLI maps the name in `CommunityPackages`: `sst init` looks up the package's latest version and fails if it isn't on npm.
 - **The container image has to be public.** GitHub may create the `sst/bridge-task` package as private on its first push. Until it's public, `sst dev` can't start a Task.
 - **The environment doesn't cover the image.** A workflow on any branch can push `bridge-task:latest` with its own `GITHUB_TOKEN`, and `sst dev` runs whatever that tag points at. Every committer is a releaser today, so this gives nobody more than a release tag already does. Before adding a committer who isn't a releaser, have the release build the CLI with the digest of the image it pushed, so that a later push to the tag can't change what a released CLI runs.
 - **The Discord webhook** is the `DISCORD_WEBHOOK_URL` secret of the `release` environment. Without it the step is skipped. `.github/scripts/announce-release.sh` is the script.
@@ -115,6 +119,38 @@ go build -ldflags "-X main.version=<version> -X github.com/sst/sst/v3/cmd/sst/mo
 - `platform/scripts/build` ends with a Docker build of the `bridge-task` image. The steps before it are enough for a local CLI.
 - Run `./dist/sst version` from outside the repo. Inside it, the binary hands off to the `sst` in `node_modules`.
 - `.gitignore` matches `cmd/sst`. Stage changes there with `git add -u`, not by path.
+
+## Updating Pulumi and the providers
+
+The versions are pinned in two places: the `@pulumi/*` packages in `platform/package.json`, and `pulumi/pkg/v3` and `pulumi/sdk/v3` in `go.mod`.
+
+```bash
+go get github.com/pulumi/pulumi/pkg/v3@v<new> github.com/pulumi/pulumi/sdk/v3@v<new>
+go mod tidy
+# edit the versions in platform/package.json, then
+bun install
+```
+
+- **`@pulumi/pulumi` and the two Go modules are one version.** The CLI downloads the Pulumi binary of its Go SDK's version (`pkg/global/pulumi.go`) and writes that same version into an app's `.sst/platform/package.json` (`pkg/project/install.go`).
+- **A newer Pulumi can raise the `go` line in `go.mod`.** CI installs the newest Go, so the workflows don't change.
+- **Leave `platform/bun.lockb` alone.** Only the root `bun.lockb` changes, as in SST's own bumps.
+- **Typecheck first.** A provider can change its types within a major version, and `cd platform && bun tsc --noEmit` is where that shows.
+- **Check the Node version `@pulumi/pulumi` needs** (`npm view @pulumi/pulumi@<new> engines`). The user's own `node` runs their config. Since 3.249 it has to be Node 22 or later. A change there goes in the release notes.
+- **An app that doesn't pin a provider's version gets the one in `platform/package.json`.** An existing app moves to it on the first deploy after the CLI is upgraded. `sst diff` shows that as the provider entries being replaced, and it should show nothing else.
+- **A docker-build update can rebuild every image once.** docker-build is built on pulumi-go-provider, which replaces its provider on any config change except `version` ([pulumi-go-provider#409](https://github.com/pulumi/pulumi-go-provider/issues/409)) and stores its own version in that config. When that version changes, every image SST builds is rebuilt on the next deploy, and each Service, Task or container Function using one is redeployed. Say so in the release notes.
+
+### Testing a bump
+
+The tests run without a real provider, so deploy an app with a site, a database, and a Service whose image is built from a Dockerfile:
+
+1. Deploy it with the current release.
+2. Switch to the new build and run `sst diff`. Only the provider entries should change.
+3. Deploy, call what it deployed, and run `sst diff` again. It should say no changes.
+4. Run `sst dev --mode=basic` and invoke a function. This is what exercises the bridge, which is built with the new Go modules.
+5. Roll back: run `sst diff` and deploy with the current release. It should read the state the new build wrote and change only the provider entries.
+6. Remove it, then deploy it from scratch with the new build and remove it again.
+
+**A build replaces the installed Pulumi.** Every command, `sst version` included, checks the Pulumi binary in the `sst/bin` folder of your user config directory and downloads its own version when that differs. So a test build swaps the binary your installed CLI uses, and so does the docs build, which runs `go run ../cmd/sst`. Run the test build with `HOME` set to an empty folder and it installs Pulumi, Bun and the provider plugins there instead. It then can't read `~/.aws`, so give it credentials as environment variables. To put the binary back, run your installed CLI once.
 
 ## The docs site
 
@@ -141,6 +177,10 @@ Also:
   - checks that don't need a model: the title, no edits to generated docs, no version changes, and a description that says how a change to code was tested
   - a review by opencode with a free model (`MODEL` in the workflow), following `.github/review/prompt.md`
   - a `semver: patch`, `semver: minor` or `semver: major` label, from the review's Version section. A run whose review has no version leaves the label as it was.
+  - a drafted line for the release notes, which `next-version.sh` prints at release time. A change that alters what users need, such as a new minimum requirement, starts with "Breaking:" and gets a `breaking` label. Add or remove the label by hand when the review gets it wrong: `next-version.sh` goes by the label.
+  - for a pull request that carries a fix from SST, whether SST's pull request is still open or merged. Once SST merges it, the fix comes with SST's next release, so the fork's copy may not be needed.
+
+  The comment opens with a table (result, risk, version, checks, and upstream when there is one) and puts blocking findings above suggestions, each linked to its line. `.github/scripts/review-comment.py` builds it from the model's output; `review-post.sh` posts it, sets the labels and the status.
 
   It sets a `review` status: failure when a check fails, the review tags a finding `[blocking]`, or the version is `major`, since `main` doesn't take breaking changes for now. The prompt lists what counts as blocking (bugs, security, docs made wrong, a doc comment not updated, replaced resources); everything else is a `[suggestion]`, and the script, not the model, turns the tags into the status, so the verdict holds steady between runs. A finding that depends on what AWS or another outside service accepts is a `[suggestion]` too, since the model can't read their docs. The model runs at temperature 0, as the `review` agent in `opencode.json`, with 60 tool calls (`steps`). A review that runs out of them before it writes its findings says so, with what it did write folded away, and nothing in it counts. Pick up the pull requests where it passes, or where the author has answered it. The status isn't required, so you can merge over it when the review is wrong. If the free model is down or its free period ends, the comment says so and the checks still run; change `MODEL` to another free model (`opencode models opencode` lists them).
 - **The automatic review is safe for forks because nothing from the pull request runs.** It uses `pull_request_target`, which runs the workflow from `main` with a token that can comment. It checks out `main` only, fetches the diff as text, and gives opencode no token and no tools but reading files (`.github/review/opencode.json`). Never make it check out or run the pull request's code.

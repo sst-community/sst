@@ -1,6 +1,6 @@
 ## Maintaining the fork
 
-This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST release, versions, releasing, the docs site, and who can merge. Read it before a merge from upstream, a release, or a change under `.github/`. `CONTRIBUTING.md` is the guide for sending a change.
+This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST release, versions, releasing, updating Pulumi and the providers, the docs site, and who can merge. Read it before a merge from upstream, a release, a Pulumi or provider update, or a change under `.github/`. `CONTRIBUTING.md` is the guide for sending a change.
 
 ## Layout
 
@@ -12,6 +12,7 @@ This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST rel
 - `pkg/bus/` — pub/sub event bus
 - `sdk/js/` — runtime SDK for reading linked resources
 - `packages/svelte-kit-sst/` — SvelteKit adapter for AWS Lambda (SvelteKit 2 and 3). Not a Bun workspace: it has its own `package-lock.json` and uses npm. Run `npm test` in it.
+- `packages/astro-sst/` — Astro adapter for AWS Lambda (Astro 5, 6 and 7), the same way: npm, its own lockfile, `npm test` in it.
 - `www/` — docs site (auto-generated from JSDoc comments in platform and extracted from the Go CLI)
 
 ## Commands

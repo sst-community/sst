@@ -1,0 +1,9 @@
+---
+const { slug } = Astro.params;
+if (slug === "missing") {
+  // An empty 404 makes Astro render the custom 404 page.
+  return new Response(null, { status: 404 });
+}
+---
+
+<p>post: {slug}</p>

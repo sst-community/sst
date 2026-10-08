@@ -117,7 +117,7 @@ export class Service extends Component implements Link.Linkable {
     const image = createImage();
     const logGroup = createLogGroup();
     const taskDefinition = createTaskDefinition();
-    const certificateArn = createSsl();
+    const { cert, arn: certificateArn } = createSsl();
     const { loadBalancer, targets } = createLoadBalancer();
     const service = createService();
     createAutoScaling();
@@ -414,7 +414,13 @@ export class Service extends Component implements Link.Linkable {
             securityGroups: [securityGroup.id],
             enableCrossZoneLoadBalancing: true,
           },
-          { parent: self },
+          {
+            parent: self,
+            // Depend on the certificate, so on remove the load balancer is
+            //   deleted before it. A plain array, so a `transform` can add to
+            //   it; an undefined certificate adds no dependency.
+            dependsOn: [cert as Output<DnsValidatedCertificate>],
+          },
         ),
       );
 
@@ -487,11 +493,15 @@ export class Service extends Component implements Link.Linkable {
     }
 
     function createSsl() {
-      if (!pub) return output(undefined);
+      if (!pub) {
+        return {
+          cert: output<DnsValidatedCertificate | undefined>(undefined),
+          arn: output<string | undefined>(undefined),
+        };
+      }
 
-      return pub.domain.apply((domain) => {
-        if (!domain) return output(undefined);
-        if (domain.cert) return output(domain.cert);
+      const cert = pub.domain.apply((domain) => {
+        if (!domain || domain.cert) return undefined;
 
         return new DnsValidatedCertificate(
           `${name}Ssl`,
@@ -500,8 +510,18 @@ export class Service extends Component implements Link.Linkable {
             dns: domain.dns!,
           },
           { parent: self },
-        ).arn;
+        );
       });
+      return {
+        cert,
+        arn: all([pub.domain, cert]).apply(([domain, cert]) => {
+          if (!domain) return undefined;
+          if (domain.cert) return domain.cert;
+          // `cert` is set whenever there's a domain without `cert`, since
+          //   both come from the same `domain` value.
+          return cert!.arn;
+        }),
+      };
     }
 
     function createLogGroup() {

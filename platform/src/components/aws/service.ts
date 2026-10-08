@@ -408,6 +408,9 @@ export interface ServiceArgs extends FargateBaseArgs {
      * providers, you'll need to pass in a `cert` that validates domain ownership and add the
      * DNS records.
      *
+     * When SST creates the certificate, the load balancer is created after the certificate
+     * is validated, and removed before the certificate.
+     *
      * :::tip
      * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
      * providers.
@@ -654,6 +657,9 @@ export interface ServiceArgs extends FargateBaseArgs {
      * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
      * providers, you'll need to pass in a `cert` that validates domain ownership and add the
      * DNS records.
+     *
+     * When SST creates the certificate, the load balancer is created after the certificate
+     * is validated, and removed before the certificate.
      *
      * :::tip
      * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
@@ -1822,7 +1828,7 @@ export class Service extends Component implements Link.Linkable {
     let effectiveLbArn: Output<string> | undefined;
     let effectiveDomain: Output<string | undefined>;
     let effectiveDnsName: Output<string> | undefined;
-    const certificateArn = albAttachment ? output(undefined) : createSsl();
+    const { cert, arn: certificateArn } = createSsl();
     if (albAttachment) {
       all([albAttachment.instance._vpc, vpc.id]).apply(
         ([albVpcId, clusterVpcId]) => {
@@ -2155,7 +2161,13 @@ export class Service extends Component implements Link.Linkable {
             securityGroups: [securityGroup.id],
             enableCrossZoneLoadBalancing: true,
           },
-          { parent: self },
+          {
+            parent: self,
+            // Depend on the certificate, so on remove the load balancer is
+            //   deleted before it. A plain array, so a `transform` can add to
+            //   it; an undefined certificate adds no dependency.
+            dependsOn: [cert as Output<DnsValidatedCertificate>],
+          },
         ),
       );
     }
@@ -2344,11 +2356,15 @@ export class Service extends Component implements Link.Linkable {
     }
 
     function createSsl() {
-      if (!lbArgs) return output(undefined);
+      if (!lbArgs) {
+        return {
+          cert: output<DnsValidatedCertificate | undefined>(undefined),
+          arn: output<string | undefined>(undefined),
+        };
+      }
 
-      return lbArgs.domain.apply((domain) => {
-        if (!domain) return output(undefined);
-        if (domain.cert) return output(domain.cert);
+      const cert = lbArgs.domain.apply((domain) => {
+        if (!domain || domain.cert) return undefined;
 
         return new DnsValidatedCertificate(
           `${name}Ssl`,
@@ -2358,8 +2374,18 @@ export class Service extends Component implements Link.Linkable {
             dns: domain.dns!,
           },
           { parent: self },
-        ).arn;
+        );
       });
+      return {
+        cert,
+        arn: all([lbArgs.domain, cert]).apply(([domain, cert]) => {
+          if (!domain) return undefined;
+          if (domain.cert) return domain.cert;
+          // `cert` is set whenever there's a domain without `cert`, since
+          //   both come from the same `domain` value.
+          return cert!.arn;
+        }),
+      };
     }
 
     function createCloudmapService() {

@@ -130,6 +130,8 @@ fi
   echo
   echo "Use a merge commit. Don't rebase or squash: \`main\` is shared history."
   echo
+  echo "Before merging, read SST's notes for these releases. A breaking change or a new minimum requirement, such as a newer Node.js, goes first in the fork's release notes, under Breaking changes."
+  echo
   echo "### Release it"
   echo
   echo "Run \`.github/scripts/next-version.sh\` on \`main\` for the version, \`$next\` or higher. Write \`.github/release-notes/<version>.md\`, naming SST $tag as the upstream version it includes, then push the tag."

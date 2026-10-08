@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -81,13 +82,34 @@ func function(ctx context.Context, input input) {
 	workerShutdownChan := make(chan *WorkerInfo, 1000)
 	nextChan := map[string]chan io.Reader{}
 	workers := map[string]*WorkerInfo{}
+	// nextChan and workers are written by the event loop below while the
+	// lambda runtime-API handlers read them from request goroutines; a bare
+	// map access on either side crashes the process with a concurrent
+	// map read/write fatal under cold-start bursts.
+	var stateMu sync.Mutex
+	loadNextChan := func(workerID string) chan io.Reader {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		ch, ok := nextChan[workerID]
+		if !ok {
+			ch = make(chan io.Reader, 100)
+			nextChan[workerID] = ch
+		}
+		return ch
+	}
+	loadWorker := func(workerID string) (*WorkerInfo, bool) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		info, ok := workers[workerID]
+		return info, ok
+	}
 	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{}, &FunctionInvokedEvent{})
 	go fileLogger(input.project)
 
 	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/next`, func(w http.ResponseWriter, r *http.Request) {
 		log.Info("got next request", "workerID", r.PathValue("workerID"))
 		workerID := r.PathValue("workerID")
-		ch := nextChan[workerID]
+		ch := loadNextChan(workerID)
 		select {
 		case <-r.Context().Done():
 			log.Info("worker disconnected", "workerID", workerID)
@@ -106,7 +128,7 @@ func function(ctx context.Context, input input) {
 			var buf bytes.Buffer
 			tee := io.TeeReader(resp.Body, &buf)
 			io.Copy(w, tee)
-			workerInfo, ok := workers[workerID]
+			workerInfo, ok := loadWorker(workerID)
 			if ok {
 				bus.Publish(&FunctionInvokedEvent{
 					FunctionID: workerInfo.FunctionID,
@@ -127,7 +149,7 @@ func function(ctx context.Context, input input) {
 		io.Copy(writer, tee)
 		writer.Close()
 		w.WriteHeader(200)
-		info, ok := workers[workerID]
+		info, ok := loadWorker(workerID)
 		if ok {
 			fee := &FunctionErrorEvent{
 				FunctionID: info.FunctionID,
@@ -144,7 +166,7 @@ func function(ctx context.Context, input input) {
 		log.Info("got response", "workerID", workerID, "requestID", r.PathValue("requestID"))
 		writer := input.client.NewWriter(bridge.MessageResponse, input.prefix+"/"+workerID+"/in")
 		writer.SetID(requestID)
-		info, ok := workers[workerID]
+		info, ok := loadWorker(workerID)
 		if ok && info.Streaming {
 			writer.SetStreaming(true)
 			io.Copy(writer, r.Body)
@@ -184,7 +206,7 @@ func function(ctx context.Context, input input) {
 		io.Copy(writer, tee)
 		writer.Close()
 		w.WriteHeader(202)
-		info, ok := workers[workerID]
+		info, ok := loadWorker(workerID)
 		if ok {
 			fee := &FunctionErrorEvent{
 				FunctionID: info.FunctionID,
@@ -266,16 +288,21 @@ func function(ctx context.Context, input input) {
 			scanner := bufio.NewScanner(logs)
 			for scanner.Scan() {
 				line := scanner.Text()
+				stateMu.Lock()
+				requestID := info.CurrentRequestID
+				stateMu.Unlock()
 				bus.Publish(&FunctionLogEvent{
 					FunctionID: functionID,
 					WorkerID:   workerID,
-					RequestID:  info.CurrentRequestID,
+					RequestID:  requestID,
 					Line:       line,
 				})
 			}
 			workerShutdownChan <- info
 		}()
+		stateMu.Lock()
 		workers[workerID] = info
+		stateMu.Unlock()
 
 		return true
 	}
@@ -289,7 +316,9 @@ func function(ctx context.Context, input input) {
 			startWorker(info.FunctionID, workerID)
 		} else {
 			log.Info("lazy startup: deferring worker restart until invoked", "workerID", workerID, "functionID", info.FunctionID)
+			stateMu.Lock()
 			delete(workers, workerID)
+			stateMu.Unlock()
 		}
 	}
 
@@ -300,11 +329,7 @@ func function(ctx context.Context, input input) {
 		case msg := <-input.msg:
 			switch msg.Type {
 			case bridge.MessageInit:
-				ch, ok := nextChan[msg.Source]
-				if !ok {
-					ch = make(chan io.Reader, 100)
-					nextChan[msg.Source] = ch
-				}
+				loadNextChan(msg.Source)
 				init := bridge.InitBody{}
 				json.NewDecoder(msg.Body).Decode(&init)
 				if _, ok := targets[init.FunctionID]; !ok {
@@ -312,7 +337,7 @@ func function(ctx context.Context, input input) {
 					continue
 				}
 				workerID := msg.Source
-				if _, ok := workers[workerID]; ok {
+				if _, ok := loadWorker(workerID); ok {
 					log.Error("got reboot but worker already exists", "workerID", workerID, "functionID", init.FunctionID)
 					continue
 				}
@@ -352,12 +377,8 @@ func function(ctx context.Context, input input) {
 				writer := input.client.NewWriter(bridge.MessagePing, input.prefix+"/"+msg.Source+"/in")
 				json.NewEncoder(writer).Encode(bridge.PingBody{})
 				writer.Close()
-				ch, ok := nextChan[msg.Source]
-				if !ok {
-					ch = make(chan io.Reader, 100)
-					nextChan[msg.Source] = ch
-				}
-				_, ok = workers[msg.Source]
+				ch := loadNextChan(msg.Source)
+				_, ok := loadWorker(msg.Source)
 				if !ok {
 					log.Info("asking for reboot", "workerID", msg.Source)
 					writer := input.client.NewWriter(bridge.MessageReboot, input.prefix+"/"+msg.Source+"/in")
@@ -370,25 +391,26 @@ func function(ctx context.Context, input input) {
 
 		case info := <-workerShutdownChan:
 			log.Info("worker died", "workerID", info.WorkerID)
+			stateMu.Lock()
 			existing, ok := workers[info.WorkerID]
-			if !ok {
-				continue
-			}
 			// only delete if a new worker hasn't already been started
-			if existing == info {
+			if ok && existing == info {
 				log.Info("deleting worker", "workerID", info.WorkerID)
 				delete(workers, info.WorkerID)
 				delete(nextChan, info.WorkerID)
 			}
+			stateMu.Unlock()
 			break
 		case unknown := <-evts:
 			switch evt := unknown.(type) {
 			case *FunctionInvokedEvent:
-				info, ok := workers[evt.WorkerID]
+				info, ok := loadWorker(evt.WorkerID)
 				if !ok {
 					continue
 				}
+				stateMu.Lock()
 				info.CurrentRequestID = evt.RequestID
+				stateMu.Unlock()
 			case *project.CompleteEvent:
 				if evt.Old {
 					continue

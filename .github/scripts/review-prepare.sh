@@ -4,12 +4,13 @@
 # whether the description says how the change was tested.
 #
 # Needs GH_TOKEN, GH_REPO, PR and OUT. Writes, in $OUT:
-#   pr.md      title, description, files and check results, for the model
-#   pr.diff    the change, cut at 100 KB
-#   checks.md  the check results, for the comment
-#   risk       low, medium or high
-#   risk.md    why, for the comment
-#   failed     how many checks failed
+#   pr.md        title, description, files and check results, for the model
+#   pr.diff      the change, cut at 100 KB
+#   checks.md    the check results, for the comment
+#   risk         low, medium or high
+#   risk.md      why, for the comment
+#   failed       how many checks failed
+#   upstream.md  each SST pull request the description links, and its state
 set -euo pipefail
 
 mkdir -p "$OUT"
@@ -64,10 +65,20 @@ while IFS= read -r f; do
 done <"$OUT/files"
 echo "$risk" >"$OUT/risk"
 if [ -n "$why" ]; then
-  echo "\`risk: $risk\`, because of \`$why\`" >"$OUT/risk.md"
+  echo "\`$why\`" >"$OUT/risk.md"
 else
-  echo "\`risk: $risk\`: docs, Markdown and examples only" >"$OUT/risk.md"
+  echo "docs, Markdown and examples only" >"$OUT/risk.md"
 fi
+
+# A pull request that carries a fix from SST links its pull request there.
+# Once SST merges it, the fix arrives with SST's next release, so the fork's
+# copy may not be needed.
+: >"$OUT/upstream.md"
+for n in $(grep -Eo 'github\.com/anomalyco/sst/pull/[0-9]+' <<<"$body" | grep -Eo '[0-9]+$' | awk '!seen[$0]++' | head -n 5); do
+  state=$(gh api "repos/anomalyco/sst/pulls/$n" \
+    --jq 'if .merged_at then "🟣 merged on \(.merged_at[0:10]): it comes with the SST release that has it" elif .state == "closed" then "⚪ closed without merging" else "🟢 open" end' 2>/dev/null) || continue
+  echo "[anomalyco/sst#$n](https://github.com/anomalyco/sst/pull/$n) $state" >>"$OUT/upstream.md"
+done
 
 failed=0
 : >"$OUT/checks.md"

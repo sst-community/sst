@@ -302,6 +302,9 @@ export interface ClusterServiceArgs {
      * providers, you'll need to pass in a `cert` that validates domain ownership and add the
      * DNS records.
      *
+     * When SST creates the certificate, the load balancer is created after the certificate
+     * is validated, and removed before the certificate.
+     *
      * :::tip
      * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
      * providers.

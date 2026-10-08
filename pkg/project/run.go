@@ -110,6 +110,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 			cmd.Env = append(cmd.Env,
 				"PULUMI_BACKEND_URL="+filepath.ToSlash("file://"+workdir.Backend()),
 				"PULUMI_CONFIG_PASSPHRASE="+passphrase,
+				"PULUMI_HOME="+global.ConfigDir(),
 			)
 			err := cmd.Run()
 			if err != nil {

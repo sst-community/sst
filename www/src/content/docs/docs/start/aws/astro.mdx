@@ -57,7 +57,7 @@ npm install
 
 Select the defaults and pick **AWS**. This'll create a `sst.config.ts` file in your project root.
 
-It'll also ask you to update your `astro.config.mjs` with something like this.
+It'll also add the Astro adapter, `astro-sst`, to your `package.json`, and ask you to update your `astro.config.mjs` with something like this.
 
 ```diff lang="js" title="astro.config.mjs"
 + import aws from "astro-sst";
@@ -67,6 +67,8 @@ export default defineConfig({
 +  adapter: aws()
 });
 ```
+
+The adapter supports Astro 5.6 and later, 6 and 7. If you add SST to an existing app without `sst init`, install it yourself with `npm install astro-sst@npm:@sst-community/astro-sst`. SST's own `astro-sst` 3.x only supports Astro 5.
 
 ---
 
