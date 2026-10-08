@@ -9,7 +9,12 @@ import type {
   APIGatewayProxyEvent,
   CloudFrontRequestEvent,
 } from "aws-lambda";
-import { InternalEvent, convertFrom, convertTo } from "./event-mapper.js";
+import {
+  InternalEvent,
+  clientAddress,
+  convertFrom,
+  convertTo,
+} from "./event-mapper.js";
 import { debug } from "./logger.js";
 import { isBinaryContentType } from "./binary.js";
 
@@ -53,7 +58,7 @@ export async function handler(
   debug("request", requestUrl, requestProps);
   const request = new Request(requestUrl, requestProps);
   const response: Response = await server.respond(request, {
-    getClientAddress: () => internalEvent.remoteAddress,
+    getClientAddress: () => clientAddress(internalEvent),
   });
   debug("response", response);
 

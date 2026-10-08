@@ -179,6 +179,16 @@ describe('requests', () => {
 		assert.equal(r.headers['set-cookie'], undefined);
 	});
 
+	it('takes the client address from CloudFront-Viewer-Address, not X-Forwarded-For', async () => {
+		const echo = async (headers) => {
+			const r = await handler(v2('/api/echo', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}' }));
+			return JSON.parse(r.body).ip;
+		};
+		assert.equal(await echo({ 'x-forwarded-for': '203.0.113.66', 'cloudfront-viewer-address': '198.51.100.7:44321' }), '198.51.100.7');
+		assert.equal(await echo({ 'cloudfront-viewer-address': '[2001:db8::7]:44321' }), '2001:db8::7');
+		assert.equal(await echo({ 'x-forwarded-for': '203.0.113.66' }), '203.0.113.9');
+	});
+
 	it('passes a JSON POST body and the client address through', async () => {
 		const r = await handler(v2('/api/echo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"a":1}' }));
 		assert.equal(r.statusCode, 200);
