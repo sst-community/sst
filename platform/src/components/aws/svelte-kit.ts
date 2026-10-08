@@ -349,7 +349,11 @@ export interface SvelteKitArgs extends SsrSiteArgs {
  * CloudFront, read from the `CloudFront-Viewer-Address` header. The server function's URL is
  * public unless `protection` is set to `"oac"` or `"oac-with-edge-signing"`, and anyone who
  * has it can send their own header. If you use the address for rate limiting or to allow or
- * block clients, set `protection`.
+ * block clients, set `protection` on this component, or on the `Router` if the site is served
+ * through one.
+ *
+ * If another CDN sits in front of CloudFront, the address is that CDN's. Read the header it
+ * sets instead.
  *
  * @example
  *

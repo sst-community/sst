@@ -196,6 +196,29 @@ describe('requests', () => {
 		assert.equal(await echo({ 'cloudfront-viewer-address': ':44321' }), '203.0.113.9');
 	});
 
+	it('takes the client address from CloudFront-Viewer-Address in API Gateway v1 events', async () => {
+		const echo = async (headers, multiValueHeaders = {}) => {
+			const r = await handler({ httpMethod: 'POST', path: '/api/echo', queryStringParameters: null, multiValueQueryStringParameters: null, headers: { host: HOST, 'content-type': 'application/json', ...headers }, multiValueHeaders, requestContext: { identity: { sourceIp: '203.0.113.9' } }, body: '{}' });
+			return JSON.parse(r.body).ip;
+		};
+		assert.equal(await echo({ 'x-forwarded-for': '203.0.113.66', 'cloudfront-viewer-address': '198.51.100.7:44321' }), '198.51.100.7');
+		assert.equal(await echo({}), '203.0.113.9');
+		// A repeated header is joined with a comma in v1 events, which is not an IP address.
+		assert.equal(await echo({}, { 'cloudfront-viewer-address': ['198.51.100.7:44321', '203.0.113.66:55555'] }), '203.0.113.9');
+	});
+
+	it('takes the client address from CloudFront-Viewer-Address in Lambda@Edge events', async () => {
+		const echo = async (extraHeaders) => {
+			const headers = { host: [{ key: 'host', value: HOST }], 'content-type': [{ key: 'content-type', value: 'application/json' }] };
+			for (const [key, value] of Object.entries(extraHeaders)) headers[key] = [{ key, value }];
+			const r = await handler({ Records: [{ cf: { request: { method: 'POST', uri: '/api/echo', querystring: '', headers, body: { data: '{}', encoding: 'text' }, clientIp: '203.0.113.9' } } }] });
+			return JSON.parse(r.body).ip;
+		};
+		assert.equal(await echo({ 'cloudfront-viewer-address': '198.51.100.7:44321' }), '198.51.100.7');
+		// Without the header, `clientIp` is the viewer's address in Lambda@Edge.
+		assert.equal(await echo({}), '203.0.113.9');
+	});
+
 	it('passes a JSON POST body and the client address through', async () => {
 		const r = await handler(v2('/api/echo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"a":1}' }));
 		assert.equal(r.statusCode, 200);
