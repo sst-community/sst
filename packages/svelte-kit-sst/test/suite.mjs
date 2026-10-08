@@ -186,6 +186,9 @@ describe('requests', () => {
 		};
 		assert.equal(await echo({ 'x-forwarded-for': '203.0.113.66', 'cloudfront-viewer-address': '198.51.100.7:44321' }), '198.51.100.7');
 		assert.equal(await echo({ 'cloudfront-viewer-address': '[2001:db8::7]:44321' }), '2001:db8::7');
+		// CloudFront writes IPv6 addresses without brackets, with the port after the last colon.
+		assert.equal(await echo({ 'cloudfront-viewer-address': '2001:db8::7:44321' }), '2001:db8::7');
+		assert.equal(await echo({ 'cloudfront-viewer-address': '2001:db8:85a3:0:0:8a2e:370:7334:46532' }), '2001:db8:85a3:0:0:8a2e:370:7334');
 		assert.equal(await echo({ 'x-forwarded-for': '203.0.113.66' }), '203.0.113.9');
 	});
 
