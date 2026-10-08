@@ -82,10 +82,11 @@ export const handler = awslambda.streamifyResponse(
     response.headers.forEach((value, key) => {
       if (key !== "set-cookie") headers[key] = value;
     });
+    const cookies = response.headers.getSetCookie();
     const writer = awslambda.HttpResponseStream.from(responseStream, {
       statusCode: response.status,
       headers,
-      cookies: response.headers.getSetCookie(),
+      ...(cookies.length > 0 && { cookies }),
     });
 
     // Lambda sends the status and headers just before the first write, so make

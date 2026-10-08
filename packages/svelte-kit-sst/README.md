@@ -59,13 +59,29 @@ SvelteKit 2 reads the adapter from `svelte.config.js`. The install and the impor
 
 Set `streaming` to stream responses from the Lambda function. The page's HTML is sent right away, and the promises a `load` function returns without awaiting are sent as they resolve.
 
+SvelteKit 3 takes it in the `sveltekit()` plugin in `vite.config.ts`:
+
 ```js
-adapter({ streaming: true });
+sveltekit({
+  adapter: adapter({ streaming: true }),
+});
+```
+
+SvelteKit 2 takes it in `kit.adapter` in `svelte.config.js`:
+
+```js
+export default {
+  kit: {
+    adapter: adapter({ streaming: true }),
+  },
+};
 ```
 
 `sst.aws.SvelteKit` reads the option and sets up the function URL for [response streaming](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html). It's off by default.
 
-The option needs a version of the `sst` CLI that reads it. With an older CLI the function URL isn't set up for streaming, and the option is ignored without a message.
+The option needs a version of the `sst` CLI that reads it. With an older CLI the function URL isn't set up for streaming, and the option is ignored without a message. An older adapter (3.0.1 and earlier) ignores the option too.
+
+Turning streaming on or off changes the function URL's invoke mode. In testing, Lambda kept using the old mode for about 20 seconds after the deploy finished, and requests in that window came back empty or as the handler's raw result. A deploy that keeps the mode the same isn't affected.
 
 ## Client address
 

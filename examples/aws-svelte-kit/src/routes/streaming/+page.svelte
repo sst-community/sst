@@ -40,6 +40,7 @@
 <section>
   <h1>SvelteKit Streaming Demo</h1>
   <p>This page demonstrates Lambda response streaming. The shell and instant data arrive first, then streamed promises resolve progressively.</p>
+  <p>Streaming needs a version of the <code>svelte-kit-sst</code> adapter newer than 3.0.1. With an older one, this page arrives all at once.</p>
 
   <div class="card">
     <h3>Instant Data</h3>

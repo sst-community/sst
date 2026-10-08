@@ -388,6 +388,12 @@ describe('streaming', () => {
 		assert.deepEqual(c.cookies.map((c) => c.split(';')[0]).sort(), ['a=1', 'b=2']);
 	});
 
+	it('leaves `cookies` out of the response metadata when the response sets none', async () => {
+		const r = await stream(v2('/api/binary'));
+		assert.equal(r.statusCode, 200);
+		assert.equal('cookies' in r, false);
+	});
+
 	it('passes a POST body and the client address through', async () => {
 		const r = await stream(v2('/api/echo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"a":1}' }));
 		assert.deepEqual(JSON.parse(r.body), { method: 'POST', contentType: 'application/json', body: '{"a":1}', ip: '203.0.113.9' });

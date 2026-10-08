@@ -426,14 +426,24 @@ export interface SvelteKitArgs extends SsrSiteArgs {
  * HTML is sent right away, and the promises a `load` function returns without
  * awaiting are sent as they resolve.
  *
- * ```js title="vite.config.ts"
+ * ```js title="vite.config.ts" {3}
  * sveltekit({
  *   adapter: adapter({ streaming: true })
  * })
  * ```
  *
+ * In SvelteKit 2, it goes in `svelte.config.js`.
+ *
+ * ```js title="svelte.config.js" {3}
+ * export default {
+ *   kit: {
+ *     adapter: adapter({ streaming: true })
+ *   }
+ * };
+ * ```
+ *
  * The function URL is then set up for [response streaming](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html).
- * This needs `svelte-kit-sst` 3.1.0 or later.
+ * This needs a newer version of the `svelte-kit-sst` adapter than 3.0.1, which doesn't have the option.
  */
 export class SvelteKit extends SsrSite {
   constructor(
