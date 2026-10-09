@@ -36,6 +36,8 @@
  * npx sst dev
  * ```
  *
+ * Astro 7 needs Node.js 22.12 or later, and `sst dev` runs `astro dev` on your machine.
+ *
  * Now if you go to `http://localhost:4321` you’ll see a counter update as you refresh the page.
  *
  * Finally, you can deploy it by adding the `Dockerfile` that's included in this example and
