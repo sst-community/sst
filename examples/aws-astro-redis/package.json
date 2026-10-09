@@ -11,11 +11,13 @@
     "start": "astro dev"
   },
   "dependencies": {
-    "@astrojs/check": "^0.9.10",
     "@astrojs/node": "^11.1.7",
     "astro": "^7.3.8",
     "ioredis": "^5.4.1",
-    "sst": "file:../../sdk/js",
+    "sst": "file:../../sdk/js"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
     "typescript": "^6.0.3"
   }
 }
