@@ -5,7 +5,7 @@
  *
  * Follows the [Astro Streaming](https://docs.astro.build/en/recipes/streaming-improve-page-performance/) guide to create an app that streams HTML.
  *
- * The `responseMode` in the [`astro-sst`](https://www.npmjs.com/package/astro-sst) adapter
+ * The `responseMode` in the [`@sst-community/astro-sst`](https://www.npmjs.com/package/@sst-community/astro-sst) adapter
  * is set to enable streaming.
  *
  *

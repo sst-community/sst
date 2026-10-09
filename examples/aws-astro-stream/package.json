@@ -10,10 +10,10 @@
     "start": "astro dev"
   },
   "dependencies": {
-    "@astrojs/check": "^0.9.3",
-    "astro": "^4.15.9",
-    "astro-sst": "2.43.5",
+    "@astrojs/check": "^0.9.10",
+    "astro": "^7.3.8",
+    "astro-sst": "npm:@sst-community/astro-sst@^4.0.0",
     "sst": "file:../../sdk/js",
-    "typescript": "^5.6.2"
+    "typescript": "^6.0.3"
   }
 }
