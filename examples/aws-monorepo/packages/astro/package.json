@@ -16,6 +16,6 @@
     "astro": "^7.3.8",
     "astro-sst": "npm:@sst-community/astro-sst@^4.0.0",
     "sst": "file:../../../../sdk/js",
-    "typescript": "^6.0.3"
+    "typescript": "^5.4.3"
   }
 }
