@@ -127,12 +127,7 @@ function createContext(input: CreateContextInput) {
   return { context, event };
 }
 
-function loadRouteSite(input: {
-  uri: string;
-  headers: Record<string, CloudFrontField>;
-  cookies?: Record<string, CloudFrontField>;
-  querystring?: Record<string, unknown>;
-}) {
+function loadRouteSite(input: CreateContextInput) {
   const { context, event } = createContext(input);
 
   new vm.Script(
@@ -463,6 +458,176 @@ describe("CloudFront router", () => {
       expect(response.statusCode).toBe(431);
       expect(response.statusDescription).toBe("Request Header Fields Too Large");
       expect(response.body.data).toContain("Reduce cookie size");
+    });
+  });
+
+  describe("base path", () => {
+    const S3_DOMAIN = "assets.s3.us-east-1.amazonaws.com";
+
+    function siteMetadata(overrides: Record<string, any> = {}) {
+      return {
+        base: "/admin/board",
+        s3: { domain: S3_DOMAIN, dir: "/_assets", prefix: "", routes: ["/_next/static"] },
+        servers: [["server.lambda-url.us-east-1.on.aws", 0, 0]],
+        ...overrides,
+      };
+    }
+
+    it("keys an S3 route without the base", async () => {
+      // The regression. The route is matched against the baseless uri, so the
+      // key has to be built from it too. Building it from the full uri asks S3
+      // for /_assets/admin/board/_next/... while the deploy uploaded
+      // /_assets/_next/..., so every asset 404s. S3 reports that as 403 when
+      // the caller cannot list, which sends people hunting for a permissions
+      // problem that is not there.
+      const { event, routeSite } = loadRouteSite({
+        uri: "/admin/board/_next/static/css/abc123.css",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite("test", siteMetadata());
+
+      expect(event.request.uri).toBe("/_assets/_next/static/css/abc123.css");
+    });
+
+    it("does not leave the base anywhere in the key", async () => {
+      const { event, routeSite } = loadRouteSite({
+        uri: "/admin/board/_next/static/chunk.js",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite("test", siteMetadata());
+
+      expect(event.request.uri).not.toContain("/admin/board");
+    });
+
+    it("sends it to the S3 origin", async () => {
+      let origin: any;
+      const { routeSite } = loadRouteSite({
+        uri: "/admin/board/_next/static/chunk.js",
+        headers: { host: { value: "example.com" } },
+        updateRequestOrigin: (o) => (origin = o),
+      });
+
+      await routeSite("test", siteMetadata());
+
+      expect(origin.domainName).toBe(S3_DOMAIN);
+    });
+
+    it("is unchanged for a site with no base", async () => {
+      const { event, routeSite } = loadRouteSite({
+        uri: "/_next/static/css/abc123.css",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite("test", siteMetadata({ base: undefined }));
+
+      expect(event.request.uri).toBe("/_assets/_next/static/css/abc123.css");
+    });
+
+    it("keys a file found in the KV store without the base", async () => {
+      // The other branch that matches baseless and then keyed with the full
+      // uri. Its own comment says files are stored in the root.
+      const { event, routeSite } = loadRouteSite({
+        uri: "/admin/board/about",
+        headers: { host: { value: "example.com" } },
+        kvGet: async (key: string) => {
+          if (key === "test:/about.html") return "";
+          throw new Error("missing");
+        },
+      });
+
+      await routeSite("test", siteMetadata());
+
+      expect(event.request.uri).toBe("/_assets/about.html");
+    });
+
+    it("still appends index.html under a base", async () => {
+      const { event, routeSite } = loadRouteSite({
+        uri: "/admin/board/docs/guide",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite(
+        "test",
+        siteMetadata({
+          s3: { domain: S3_DOMAIN, dir: "/_assets", prefix: "", routes: ["/docs"] },
+        }),
+      );
+
+      expect(event.request.uri).toBe("/_assets/docs/guide/index.html");
+    });
+
+    it("keeps the route's path prefix in the key", async () => {
+      // A site on a Router path (/admin) with its own base path (/admin/board):
+      // the files are uploaded under the route's prefix, so the key has the
+      // prefix and the uri without the base.
+      const { event, routeSite } = loadRouteSite({
+        uri: "/admin/board/_next/static/chunk.js",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite(
+        "test",
+        siteMetadata({
+          s3: { domain: S3_DOMAIN, dir: "/_assets", prefix: "/admin", routes: ["/_next/static"] },
+        }),
+      );
+
+      expect(event.request.uri).toBe("/_assets/admin/_next/static/chunk.js");
+    });
+
+    it("keeps the whole uri for a StaticSite on a Router path", async () => {
+      // A StaticSite's base is the Router path, and it uploads under it, so the
+      // key is the uri itself. Taking the base off breaks every file.
+      const { event, routeSite } = loadRouteSite({
+        uri: "/admin/app.js",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite(
+        "test",
+        siteMetadata({
+          base: "/admin",
+          servers: undefined,
+          s3: { domain: S3_DOMAIN, dir: "", prefix: "/admin", routes: ["/app.js"] },
+        }),
+      );
+
+      expect(event.request.uri).toBe("/admin/app.js");
+    });
+
+    it("uses the whole uri for metadata from before the prefix was stored", async () => {
+      // A Router can serve a site deployed with an older SST, whose metadata has
+      // no prefix. It keeps the old key.
+      const { event, routeSite } = loadRouteSite({
+        uri: "/admin/app.js",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite(
+        "test",
+        siteMetadata({
+          base: "/admin",
+          servers: undefined,
+          s3: { domain: S3_DOMAIN, dir: "", routes: ["/app.js"] },
+        }),
+      );
+
+      expect(event.request.uri).toBe("/admin/app.js");
+    });
+
+    it("leaves a path the S3 routes do not match to the server", async () => {
+      let origin: any;
+      const { routeSite } = loadRouteSite({
+        uri: "/admin/board/b/123",
+        headers: { host: { value: "example.com" } },
+        updateRequestOrigin: (o) => (origin = o),
+      });
+
+      await routeSite("test", siteMetadata());
+
+      expect(origin.domainName).toBe("server.lambda-url.us-east-1.on.aws");
     });
   });
 });

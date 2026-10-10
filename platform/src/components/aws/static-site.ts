@@ -1053,6 +1053,10 @@ export class StaticSite extends Component implements Link.Linkable {
           s3: {
             domain: bucketDomain,
             dir: assets.path ? "/" + assets.path : "",
+            prefix:
+              route?.pathPrefix && route.pathPrefix !== "/"
+                ? route.pathPrefix
+                : "",
             routes: [...assets.routes, ...dirs],
           },
         } satisfies KV_SITE_METADATA);

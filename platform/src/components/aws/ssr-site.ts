@@ -1789,6 +1789,7 @@ async function handler(event) {
         bucket.nodes.bucket.bucketRegionalDomainName,
         timeout,
         protection,
+        route,
       ]).apply(
         ([
           servers,
@@ -1798,6 +1799,7 @@ async function handler(event) {
           bucketDomain,
           timeout,
           protectionConfig,
+          route,
         ]) =>
           all([
             servers.map((s) => ({ region: s.region, url: s.server!.url })),
@@ -1925,6 +1927,10 @@ async function handler(event) {
               s3: {
                 domain: bucketDomain,
                 dir: plan.assets[0].to ? "/" + plan.assets[0].to : "",
+                prefix:
+                  route?.pathPrefix && route.pathPrefix !== "/"
+                    ? route.pathPrefix
+                    : "",
                 routes: dirs,
               },
               image: imageOptimizerUrl
