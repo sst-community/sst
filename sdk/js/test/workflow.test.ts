@@ -1,10 +1,27 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import {
   ExecutionStatus,
   LocalDurableTestRunner,
 } from "@aws/durable-execution-sdk-js-testing";
-import { aws } from "../src/aws/client.ts";
-import { workflow } from "../src/aws/workflow.ts";
+
+// The client tests set `aws.fetch` to answer the request a `workflow` function
+// makes. `workflow.ts` calls `awsFetch` from `client.ts`, so that is replaced
+// with a function that calls `aws.fetch`. It has to happen before `workflow.ts`
+// is imported.
+const aws = {
+  fetch: (async () => {
+    throw new Error("aws.fetch is not set");
+  }) as (
+    service: string,
+    path: string,
+    init: RequestInit,
+  ) => Promise<Response>,
+};
+mock.module("../src/aws/client.ts", () => ({
+  awsFetch: (service: string, path: string, init: RequestInit) =>
+    aws.fetch(service, path, init),
+}));
+const { workflow } = await import("../src/aws/workflow.ts");
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
