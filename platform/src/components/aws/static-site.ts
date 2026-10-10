@@ -781,6 +781,7 @@ export class StaticSite extends Component implements Link.Linkable {
     const assetsUploaded = uploadAssets();
     const kvNamespace = buildKvNamespace();
 
+    let originAccessControl: OriginAccessControl | undefined;
     let distribution: Cdn | undefined;
     let distributionId: Output<string>;
     let kvStoreArn: Output<string>;
@@ -1170,10 +1171,45 @@ async function handler(event) {
     }
 
     function createOriginAccessControl() {
-      return new OriginAccessControl(
+      return (originAccessControl ??= new OriginAccessControl(
         `${name}S3AccessControl`,
         { name: physicalName(64, name) },
         { parent: self, ignoreChanges: ["name"] },
+      ));
+    }
+
+    // The default origin. CloudFront fetches custom error pages without running
+    // the viewer request function, so a site with an error page needs the bucket
+    // itself as its default origin, not a placeholder. A site without one keeps
+    // the placeholder, and creates no access control. This is a plain array
+    // unless `errorPage` is itself an Output, so a `transform.cdn` that reads
+    // `args.origins` still gets an array.
+    function createDefaultOrigins() {
+      const placeholder = () => [
+        {
+          originId: "default",
+          domainName: "placeholder.sst.dev",
+          customOriginConfig: {
+            httpPort: 80,
+            httpsPort: 443,
+            originProtocolPolicy: "https-only" as const,
+            originReadTimeout: 20,
+            originSslProtocols: ["TLSv1.2"],
+          },
+        },
+      ];
+      const bucketOrigin = () => [
+        {
+          originId: "default",
+          domainName: bucketDomain,
+          originAccessControlId: createOriginAccessControl().id,
+        },
+      ];
+
+      if (!args.errorPage) return placeholder();
+      if (!Output.isInstance(args.errorPage)) return bucketOrigin();
+      return args.errorPage.apply((errorPage) =>
+        errorPage ? bucketOrigin() : placeholder(),
       );
     }
 
@@ -1189,29 +1225,7 @@ async function handler(event) {
             // viewer request function, so a site with an error page needs the
             // bucket itself as its default origin, not a placeholder. A site
             // without one keeps the placeholder, and creates no access control.
-            origins: output(args.errorPage).apply((hasCustomErrorPage) =>
-              hasCustomErrorPage
-                ? [
-                    {
-                      originId: "default",
-                      domainName: bucketDomain,
-                      originAccessControlId: createOriginAccessControl().id,
-                    },
-                  ]
-                : [
-                    {
-                      originId: "default",
-                      domainName: "placeholder.sst.dev",
-                      customOriginConfig: {
-                        httpPort: 80,
-                        httpsPort: 443,
-                        originProtocolPolicy: "https-only",
-                        originReadTimeout: 20,
-                        originSslProtocols: ["TLSv1.2"],
-                      },
-                    },
-                  ],
-            ),
+            origins: createDefaultOrigins(),
             defaultCacheBehavior: {
               targetOriginId: "default",
               viewerProtocolPolicy: "redirect-to-https",

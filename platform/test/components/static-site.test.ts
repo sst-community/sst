@@ -147,6 +147,45 @@ describe("StaticSite", function () {
     ).toBe(false);
   });
 
+  it("gives transform.cdn a plain origins array when errorPage is a string", async () => {
+    let origins: any;
+    new StaticSite("TransformSite", {
+      path: sitePath,
+      errorPage: "404.html",
+      transform: {
+        cdn: (args: any) => {
+          origins = args.origins;
+        },
+      },
+    });
+    new StaticSite("TransformPlain", {
+      path: sitePath,
+      transform: {
+        cdn: (args: any) => {
+          expect(Array.isArray(args.origins)).toBe(true);
+        },
+      },
+    });
+    await settle();
+
+    expect(Array.isArray(origins)).toBe(true);
+  });
+
+  it("creates one access control when errorPage is an Output", async () => {
+    new StaticSite("OutputSite", {
+      path: sitePath,
+      errorPage: pulumi.output("404.html"),
+    });
+    await settle();
+
+    expect(
+      createdResources.filter((r) => r.type === "sst:aws:OriginAccessControl"),
+    ).toHaveLength(1);
+    expect(findDistribution("OutputSite").inputs.origins[0].domainName).toBe(
+      "OutputSiteAssetsBucket.s3.us-east-1.amazonaws.com",
+    );
+  });
+
   it("points the error page at the assets path", async () => {
     new StaticSite("PrefixedSite", {
       path: sitePath,
