@@ -14,7 +14,12 @@ import { Duration, DurationDays, toSeconds } from "../duration";
 import { VisibleError } from "../error";
 import { parseBucketArn } from "./helpers/arn";
 import { BucketLambdaSubscriber } from "./bucket-lambda-subscriber";
-import { iam, s3 } from "@pulumi/aws";
+import {
+  getCallerIdentityOutput,
+  getPartitionOutput,
+  iam,
+  s3,
+} from "@pulumi/aws";
 import { permission } from "./permission";
 import { BucketQueueSubscriber } from "./bucket-queue-subscriber";
 import { BucketTopicSubscriber } from "./bucket-topic-subscriber";
@@ -192,7 +197,9 @@ export interface BucketArgs {
    * :::
    *
    * This adds a statement to the bucket policy that either allows `public` access or just
-   * `cloudfront` access.
+   * `cloudfront` access. With `cloudfront`, only CloudFront distributions in the same AWS
+   * account can read the bucket. To let a distribution in another account read it, add a
+   * statement with the `policy` option.
    *
    * @example
    * ```js
@@ -1054,6 +1061,20 @@ export class Bucket extends Component implements Link.Linkable {
               ],
               actions: ["s3:GetObject"],
               resources: [interpolate`${bucket.arn}/*`],
+              // Without a condition, a distribution in any AWS account could
+              // read the bucket through its own Origin Access Control.
+              conditions:
+                access === "public"
+                  ? undefined
+                  : [
+                      {
+                        test: "StringLike",
+                        variable: "aws:SourceArn",
+                        values: [
+                          interpolate`arn:${getPartitionOutput({}, opts).partition}:cloudfront::${getCallerIdentityOutput({}, opts).accountId}:distribution/*`,
+                        ],
+                      },
+                    ],
             });
           }
           if (enforceHttps) {
