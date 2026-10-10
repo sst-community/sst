@@ -2741,18 +2741,18 @@ if (event.request.headers.host.value.includes('cloudfront.net')) {
 
 // CloudFront Function handler code injected into site and router CF functions.
 // NOTE: This string is size-sensitive — CloudFront Functions have a 10KB limit.
+// NOTE: `s3Key` is the S3 key of a file: the folder, the path prefix the files were
+// uploaded under (`s3.prefix`), then the uri without the site's base path. Without
+// `s3.prefix` (metadata from an older version) it is the folder and the whole uri.
+// It takes everything as arguments: reading `baselessUri` from `routeSite` fails with
+// "cannot access variable before initialization" in the CloudFront function runtime.
+// The custom 404 and the "unmatched" branches below still use the old key.
 export const CF_ROUTER_INJECTION = minify`
 async function routeSite(kvNamespace, metadata) {
   const baselessUri = metadata.base
     ? event.request.uri.replace(metadata.base, "")
     : event.request.uri;
 
-  // The S3 key of the file: the folder, then the path prefix the files were
-  // uploaded under (\`s3.prefix\`), then the uri without the site's base path.
-  // Without \`s3.prefix\` the uri is used as it is.
-  // (Takes everything as arguments: a helper that reads \`baselessUri\` from
-  // the enclosing function fails with "cannot access variable before
-  // initialization" in the CloudFront function runtime.)
   function s3Key(metadata, uri, baselessUri) {
     return metadata.s3.dir + (metadata.s3.prefix === undefined ? uri : metadata.s3.prefix + baselessUri);
   }
