@@ -2749,8 +2749,8 @@ if (event.request.headers.host.value.includes('cloudfront.net')) {
 // The custom 404 and the "unmatched" branches below still use the old key.
 export const CF_ROUTER_INJECTION = minify`
 async function routeSite(kvNamespace, metadata) {
-  const baselessUri = metadata.base
-    ? event.request.uri.replace(metadata.base, "")
+  const baselessUri = metadata.base && event.request.uri.startsWith(metadata.base)
+    ? event.request.uri.slice(metadata.base.length)
     : event.request.uri;
 
   function s3Key(metadata, uri, baselessUri) {

@@ -617,6 +617,24 @@ describe("CloudFront router", () => {
       expect(event.request.uri).toBe("/admin/app.js");
     });
 
+    it("takes the base off the start of the uri only", async () => {
+      // String.replace takes out the first match anywhere, so a uri outside
+      // the base that has the base in the middle lost it, and got another key.
+      const { event, routeSite } = loadRouteSite({
+        uri: "/other/admin/board/chunk.js",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite(
+        "test",
+        siteMetadata({
+          s3: { domain: S3_DOMAIN, dir: "/_assets", prefix: "", routes: ["/other"] },
+        }),
+      );
+
+      expect(event.request.uri).toBe("/_assets/other/admin/board/chunk.js");
+    });
+
     it("leaves a path the S3 routes do not match to the server", async () => {
       let origin: any;
       const { routeSite } = loadRouteSite({
