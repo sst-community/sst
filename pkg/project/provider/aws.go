@@ -152,6 +152,8 @@ func (p *AwsProvider) Bootstrap(region string) (*AwsBootstrapData, error) {
 	ssmClient := ssm.NewFromConfig(cfg)
 	bootstrapData := &AwsBootstrapData{}
 	slog.Info("fetching bootstrap")
+	// Decrypt, in case the account's policy turned the parameter into a
+	// SecureString. This is ignored for a String, which is what we write.
 	result, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           aws.String(SSM_NAME_BOOTSTRAP),
 		WithDecryption: aws.Bool(true),
@@ -187,7 +189,7 @@ func (p *AwsProvider) Bootstrap(region string) (*AwsBootstrapData, error) {
 			ctx,
 			&ssm.PutParameterInput{
 				Name:      aws.String(SSM_NAME_BOOTSTRAP),
-				Type:      ssmTypes.ParameterTypeSecureString,
+				Type:      ssmTypes.ParameterTypeString,
 				Overwrite: aws.Bool(true),
 				Value:     aws.String(string(data)),
 			},
