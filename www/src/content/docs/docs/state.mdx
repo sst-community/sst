@@ -115,7 +115,7 @@ If you accidentally remove the bootstrap resources the SST CLI will not be able 
 To fix this you'll need to reset your bootstrap resources.
 
 1. Remove the resources that are listed in the parameter. For example, the `asset` or `state` bucket. Or the ECR repository. If your organization stores the parameter encrypted, read it with `aws ssm get-parameter --name /sst/bootstrap --with-decryption --region <region>`.
-2. Remove the SSM parameter.
+2. Remove the SSM parameter: `aws ssm delete-parameter --name /sst/bootstrap --region <region>`.
 
 Now when you run the SST CLI, it'll bootstrap your account again.
 
