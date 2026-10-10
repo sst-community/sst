@@ -4,7 +4,10 @@ import { awsFetch, type AwsOptions } from "./client.js";
 /**
  * The `workflow` SDK is a thin wrapper around the
  * [`@aws/durable-execution-sdk-js`](https://www.npmjs.com/package/@aws/durable-execution-sdk-js)
- * package and the AWS Lambda durable execution APIs.
+ * package and the AWS Lambda durable execution APIs. `sst` depends on one
+ * version of that package, and the errors your workflow code catches, such as
+ * `StepError` or `CallbackError`, come from it, not from SST. When you update
+ * `sst`, check that package's release notes for changes to them.
  *
  * SST also adds a few helpers on top, including `ctx.stepWithRollback()`,
  * `ctx.rollbackAll()`, and `ctx.waitUntil()`.
