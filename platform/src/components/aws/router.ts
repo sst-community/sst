@@ -3019,7 +3019,7 @@ function setS3Origin(s3Domain, override) {
 }`;
 
 export type KV_SITE_METADATA = {
-  base?: string; // Should be undefiend if no base path, should never be "/"
+  base?: string; // Should be undefined if no base path. Starts with "/", never ends with one (so never "/"): the router strips it with `base + "/"`.
   custom404?: string;
   errorResponseCode?: number;
   s3: {
