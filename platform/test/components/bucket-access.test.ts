@@ -14,8 +14,10 @@ global.$app = {
 };
 global.$util = pulumi;
 
-// The policy statements the Bucket passes to getPolicyDocument, per bucket.
+// The policy statements the Bucket passes to getPolicyDocument. A bucket with no
+// access still builds its policy (for the HTTPS rule), so every bucket makes one call.
 let policyCalls: any[] = [];
+let onPolicy: (() => void) | undefined;
 
 pulumi.runtime.setMocks(
   {
@@ -35,6 +37,7 @@ pulumi.runtime.setMocks(
         return { partition: "aws" };
       if (args.token === "aws:iam/getPolicyDocument:getPolicyDocument") {
         policyCalls.push(args.inputs);
+        onPolicy?.();
         return { json: JSON.stringify(args.inputs) };
       }
       return args.inputs;
@@ -48,10 +51,10 @@ pulumi.runtime.setMocks(
 async function statementsFor(access?: "public" | "cloudfront") {
   const { Bucket } = await import("./../../src/components/aws/bucket");
   policyCalls = [];
-  const bucket = new Bucket("Files", access ? { access } : {});
-  // The policy is built inside apply()s: wait for the bucket's outputs first.
-  await new Promise((resolve) => pulumi.all([bucket.name]).apply(resolve));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The policy is built inside apply()s: wait for the call instead of for a time.
+  const built = new Promise<void>((resolve) => (onPolicy = resolve));
+  new Bucket("Files", access ? { access } : {});
+  await built;
   return policyCalls.flatMap((c) => c.statements ?? []);
 }
 

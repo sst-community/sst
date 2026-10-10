@@ -307,11 +307,19 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
        *         "Service": "cloudfront.amazonaws.com"
        *       },
        *       "Action": "s3:GetObject",
-       *       "Resource": "arn:aws:s3:::my-existing-bucket/*"
+       *       "Resource": "arn:aws:s3:::my-existing-bucket/*",
+       *       "Condition": {
+       *         "StringLike": {
+       *           "aws:SourceArn": "arn:aws:cloudfront::ACCOUNT_ID:distribution/*"
+       *         }
+       *       }
        *     }
        *   ]
        * }
        * ```
+       *
+       * The `Condition` limits it to the CloudFront distributions in your own AWS account.
+       * Without it, a distribution in any account can read the bucket.
        */
       bucket?: Input<string>;
       /**

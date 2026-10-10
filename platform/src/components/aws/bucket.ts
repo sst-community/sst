@@ -906,6 +906,8 @@ export class Bucket extends Component implements Link.Linkable {
     }
 
     const parent = this;
+    const partition = getPartitionOutput({}, opts).partition;
+    const accountId = getCallerIdentityOutput({}, opts).accountId;
     const access = normalizeAccess();
     const enforceHttps = output(args.enforceHttps ?? true);
     const policyArgs = normalizePolicy();
@@ -1094,7 +1096,7 @@ export class Bucket extends Component implements Link.Linkable {
                         test: "StringLike",
                         variable: "aws:SourceArn",
                         values: [
-                          interpolate`arn:${getPartitionOutput({}, opts).partition}:cloudfront::${getCallerIdentityOutput({}, opts).accountId}:distribution/*`,
+                          interpolate`arn:${partition}:cloudfront::${accountId}:distribution/*`,
                         ],
                       },
                     ],
