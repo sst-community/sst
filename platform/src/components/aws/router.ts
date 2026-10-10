@@ -2742,11 +2742,13 @@ if (event.request.headers.host.value.includes('cloudfront.net')) {
 // CloudFront Function handler code injected into site and router CF functions.
 // NOTE: This string is size-sensitive — CloudFront Functions have a 10KB limit.
 // NOTE: `s3Key` is the S3 key of a file: the folder, the path prefix the files were
-// uploaded under (`s3.prefix`), then the uri without the site's base path. The base is
-// only taken off the start of the uri, and only at a segment boundary (`/admin` is not
-// taken off `/administrator`), so don't go back to `replace`. Without
+// uploaded under (`s3.prefix`), then the uri without the site's base path. Without
 // `s3.prefix` (metadata from an older version) it is the folder and the whole uri.
-// It takes everything as arguments: reading `baselessUri` from `routeSite` fails with
+// The base is only taken off the start of the uri, and only at a segment boundary
+// (`/admin` is not taken off `/administrator`), so don't go back to `replace`. The base
+// never has a trailing slash (the route's path prefix is normalized in this file, and an
+// SSR site's base in `ssr-site.ts`), so `base + "/"` is safe.
+// `s3Key` takes everything as arguments: reading `baselessUri` from `routeSite` fails with
 // "cannot access variable before initialization" in the CloudFront function runtime.
 // The custom 404 and the "unmatched" branches below still use the old key.
 export const CF_ROUTER_INJECTION = minify`
