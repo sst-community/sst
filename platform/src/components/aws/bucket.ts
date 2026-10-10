@@ -14,7 +14,12 @@ import { Duration, DurationDays, toSeconds } from "../duration";
 import { VisibleError } from "../error";
 import { parseBucketArn } from "./helpers/arn";
 import { BucketLambdaSubscriber } from "./bucket-lambda-subscriber";
-import { iam, s3 } from "@pulumi/aws";
+import {
+  getCallerIdentityOutput,
+  getPartitionOutput,
+  iam,
+  s3,
+} from "@pulumi/aws";
 import { permission } from "./permission";
 import { BucketQueueSubscriber } from "./bucket-queue-subscriber";
 import { BucketTopicSubscriber } from "./bucket-topic-subscriber";
@@ -192,12 +197,38 @@ export interface BucketArgs {
    * :::
    *
    * This adds a statement to the bucket policy that either allows `public` access or just
-   * `cloudfront` access.
+   * `cloudfront` access. With `cloudfront`, only CloudFront distributions in the same AWS
+   * account can read the bucket.
    *
    * @example
    * ```js
    * {
    *   access: "public"
+   * }
+   * ```
+   *
+   * To let the distributions of another AWS account read a `cloudfront` bucket, add a
+   * statement with the `policy` option. In the GovCloud and China partitions, start the ARN
+   * with `arn:aws-us-gov:` or `arn:aws-cn:` instead of `arn:aws:`.
+   *
+   * ```js
+   * {
+   *   access: "cloudfront",
+   *   policy: [
+   *     {
+   *       effect: "allow",
+   *       principals: [{ type: "service", identifiers: ["cloudfront.amazonaws.com"] }],
+   *       actions: ["s3:GetObject"],
+   *       paths: ["*"],
+   *       conditions: [
+   *         {
+   *           test: "StringLike",
+   *           variable: "aws:SourceArn",
+   *           values: ["arn:aws:cloudfront::OTHER_ACCOUNT_ID:distribution/*"]
+   *         }
+   *       ]
+   *     }
+   *   ]
    * }
    * ```
    */
@@ -876,6 +907,10 @@ export class Bucket extends Component implements Link.Linkable {
     }
 
     const parent = this;
+    // Looked up once, and only for a bucket that needs them (access "cloudfront").
+    let cloudfrontScope: Output<string> | undefined;
+    const getCloudfrontScope = () =>
+      (cloudfrontScope ??= interpolate`arn:${getPartitionOutput({}, opts).partition}:cloudfront::${getCallerIdentityOutput({}, opts).accountId}:distribution/*`);
     const access = normalizeAccess();
     const enforceHttps = output(args.enforceHttps ?? true);
     const policyArgs = normalizePolicy();
@@ -1054,6 +1089,18 @@ export class Bucket extends Component implements Link.Linkable {
               ],
               actions: ["s3:GetObject"],
               resources: [interpolate`${bucket.arn}/*`],
+              // Without a condition, a distribution in any AWS account could
+              // read the bucket through its own Origin Access Control.
+              conditions:
+                access === "public"
+                  ? undefined
+                  : [
+                      {
+                        test: "StringLike",
+                        variable: "aws:SourceArn",
+                        values: [getCloudfrontScope()],
+                      },
+                    ],
             });
           }
           if (enforceHttps) {
