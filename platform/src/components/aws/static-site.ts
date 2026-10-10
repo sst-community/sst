@@ -37,6 +37,8 @@ import {
 import { DistributionInvalidation } from "./providers/distribution-invalidation.js";
 import { VisibleError } from "../error.js";
 import { KvRoutesUpdate } from "./providers/kv-routes-update.js";
+import { OriginAccessControl } from "./providers/origin-access-control.js";
+import { physicalName } from "../naming.js";
 import { toPosix } from "../path.js";
 
 export interface StaticSiteArgs extends BaseStaticSiteArgs {
@@ -787,6 +789,7 @@ export class StaticSite extends Component implements Link.Linkable {
     const assetsUploaded = uploadAssets();
     const kvNamespace = buildKvNamespace();
 
+    let originAccessControl: OriginAccessControl | undefined;
     let distribution: Cdn | undefined;
     let distributionId: Output<string>;
     let kvStoreArn: Output<string>;
@@ -1175,6 +1178,49 @@ async function handler(event) {
       });
     }
 
+    function createOriginAccessControl() {
+      return (originAccessControl ??= new OriginAccessControl(
+        `${name}S3AccessControl`,
+        { name: physicalName(64, name) },
+        { parent: self, ignoreChanges: ["name"] },
+      ));
+    }
+
+    // The default origin. CloudFront fetches custom error pages without running
+    // the viewer request function, so a site with an error page needs the bucket
+    // itself as its default origin, not a placeholder. A site without one keeps
+    // the placeholder, and creates no access control. This is a plain array
+    // unless `errorPage` is itself an Output, so a `transform.cdn` that reads
+    // `args.origins` still gets an array.
+    function createDefaultOrigins() {
+      const placeholder = () => [
+        {
+          originId: "default",
+          domainName: "placeholder.sst.dev",
+          customOriginConfig: {
+            httpPort: 80,
+            httpsPort: 443,
+            originProtocolPolicy: "https-only" as const,
+            originReadTimeout: 20,
+            originSslProtocols: ["TLSv1.2"],
+          },
+        },
+      ];
+      const bucketOrigin = () => [
+        {
+          originId: "default",
+          domainName: bucketDomain,
+          originAccessControlId: createOriginAccessControl().id,
+        },
+      ];
+
+      if (!args.errorPage) return placeholder();
+      if (!Output.isInstance(args.errorPage)) return bucketOrigin();
+      return args.errorPage.apply((errorPage) =>
+        errorPage ? bucketOrigin() : placeholder(),
+      );
+    }
+
     function createDistribution() {
       return new Cdn(
         ...transform(
@@ -1183,19 +1229,11 @@ async function handler(event) {
           {
             comment: `${name} site`,
             domain: args.domain,
-            origins: [
-              {
-                originId: "default",
-                domainName: "placeholder.sst.dev",
-                customOriginConfig: {
-                  httpPort: 80,
-                  httpsPort: 443,
-                  originProtocolPolicy: "https-only",
-                  originReadTimeout: 20,
-                  originSslProtocols: ["TLSv1.2"],
-                },
-              },
-            ],
+            // CloudFront fetches custom error pages without running the
+            // viewer request function, so a site with an error page needs the
+            // bucket itself as its default origin, not a placeholder. A site
+            // without one keeps the placeholder, and creates no access control.
+            origins: createDefaultOrigins(),
             defaultCacheBehavior: {
               targetOriginId: "default",
               viewerProtocolPolicy: "redirect-to-https",
@@ -1225,14 +1263,14 @@ async function handler(event) {
             customErrorResponses: all([
               args.errorPage,
               errorPage,
-              route,
-            ]).apply(([hasCustomErrorPage, errorPage, route]) => {
+              assets.path,
+            ]).apply(([hasCustomErrorPage, errorPage, assetsPath]) => {
               if (!hasCustomErrorPage) return [];
-              const base =
-                route?.pathPrefix && route.pathPrefix !== "/"
-                  ? route.pathPrefix
-                  : "/";
-              const pagePath = path.posix.join(base, errorPage);
+              // Error page fetches skip the viewer request function, which is
+              // what prepends the assets path for every other request. (This
+              // runs only for a site with its own distribution, so there is no
+              // Router path to add.)
+              const pagePath = path.posix.join("/", assetsPath ?? "", errorPage);
 
               return [
                 {
