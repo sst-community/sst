@@ -17,7 +17,11 @@ const aws = {
     init: RequestInit,
   ) => Promise<Response>,
 };
+// Spread the real module, so `client` and the other exports stay intact for
+// anything else in the process that imports them. Module mocks are global.
+const actualClient = await import("../src/aws/client.ts");
 mock.module("../src/aws/client.ts", () => ({
+  ...actualClient,
   awsFetch: (service: string, path: string, init: RequestInit) =>
     aws.fetch(service, path, init),
 }));
