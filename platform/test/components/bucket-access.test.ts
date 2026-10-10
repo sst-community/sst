@@ -18,6 +18,8 @@ global.$util = pulumi;
 // access still builds its policy (for the HTTPS rule), so every bucket makes one call.
 let policyCalls: any[] = [];
 let onPolicy: (() => void) | undefined;
+// The data sources looked up for the last bucket.
+let lookups: string[] = [];
 
 pulumi.runtime.setMocks(
   {
@@ -31,6 +33,7 @@ pulumi.runtime.setMocks(
       };
     },
     call: function (args: pulumi.runtime.MockCallArgs) {
+      lookups.push(args.token);
       if (args.token === "aws:index/getCallerIdentity:getCallerIdentity")
         return { accountId: "TESTACCOUNT" };
       if (args.token === "aws:index/getPartition:getPartition")
@@ -51,6 +54,7 @@ pulumi.runtime.setMocks(
 async function statementsFor(access?: "public" | "cloudfront") {
   const { Bucket } = await import("./../../src/components/aws/bucket");
   policyCalls = [];
+  lookups = [];
   // The policy is built inside apply()s: wait for the call instead of for a time.
   const built = new Promise<void>((resolve) => (onPolicy = resolve));
   new Bucket("Files", access ? { access } : {});
@@ -79,6 +83,13 @@ describe("Bucket access", () => {
         values: ["arn:aws:cloudfront::TESTACCOUNT:distribution/*"],
       },
     ]);
+    // Looked up once each.
+    expect(
+      lookups.filter((t) => t === "aws:index/getCallerIdentity:getCallerIdentity"),
+    ).toHaveLength(1);
+    expect(
+      lookups.filter((t) => t === "aws:index/getPartition:getPartition"),
+    ).toHaveLength(1);
   });
 
   it("leaves a public bucket without a condition", async () => {
@@ -89,6 +100,8 @@ describe("Bucket access", () => {
 
     expect(read.principals).toEqual([{ type: "*", identifiers: ["*"] }]);
     expect(read.conditions).toBeUndefined();
+    // No account or partition lookup for a bucket that doesn't need them.
+    expect(lookups).not.toContain("aws:index/getCallerIdentity:getCallerIdentity");
   });
 
   it("adds no read statement to a bucket with no access", async () => {
@@ -97,5 +110,7 @@ describe("Bucket access", () => {
     expect(
       statements.some((s: any) => s.actions?.includes("s3:GetObject")),
     ).toBe(false);
+    expect(lookups).not.toContain("aws:index/getCallerIdentity:getCallerIdentity");
+    expect(lookups).not.toContain("aws:index/getPartition:getPartition");
   });
 });

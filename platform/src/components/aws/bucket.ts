@@ -208,7 +208,8 @@ export interface BucketArgs {
    * ```
    *
    * To let the distributions of another AWS account read a `cloudfront` bucket, add a
-   * statement with the `policy` option.
+   * statement with the `policy` option. In the GovCloud and China partitions, start the ARN
+   * with `arn:aws-us-gov:` or `arn:aws-cn:` instead of `arn:aws:`.
    *
    * ```js
    * {
@@ -906,8 +907,10 @@ export class Bucket extends Component implements Link.Linkable {
     }
 
     const parent = this;
-    const partition = getPartitionOutput({}, opts).partition;
-    const accountId = getCallerIdentityOutput({}, opts).accountId;
+    // Looked up once, and only for a bucket that needs them (access "cloudfront").
+    let cloudfrontScope: Output<string> | undefined;
+    const getCloudfrontScope = () =>
+      (cloudfrontScope ??= interpolate`arn:${getPartitionOutput({}, opts).partition}:cloudfront::${getCallerIdentityOutput({}, opts).accountId}:distribution/*`);
     const access = normalizeAccess();
     const enforceHttps = output(args.enforceHttps ?? true);
     const policyArgs = normalizePolicy();
@@ -1095,9 +1098,7 @@ export class Bucket extends Component implements Link.Linkable {
                       {
                         test: "StringLike",
                         variable: "aws:SourceArn",
-                        values: [
-                          interpolate`arn:${partition}:cloudfront::${accountId}:distribution/*`,
-                        ],
+                        values: [getCloudfrontScope()],
                       },
                     ],
             });
