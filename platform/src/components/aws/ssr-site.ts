@@ -57,6 +57,26 @@ const MAX_KV_KEY_LENGTH = 500;
 // lists at most 1 MB of prerendered files.
 const MAX_LISTED_KV_BYTES = 1024 * 1024;
 
+// Regions without Lambda function URLs, which the server functions use. Creating one there
+// fails with `AccessDeniedException: Unable to determine service/operation name to be
+// authorized`. Checked by creating a function URL in each region, in October 2026. The ones
+// not listed here either work or couldn't be reached (me-south-1, Bahrain, is out of
+// service). AWS doesn't publish this list any more:
+// https://docs.aws.amazon.com/lambda/latest/dg/urls-configuration.html
+const regionsWithoutFunctionUrls = [
+  "ap-east-2",
+  "ap-south-2",
+  "ap-southeast-4",
+  "ap-southeast-5",
+  "ap-southeast-6",
+  "ap-southeast-7",
+  "ca-west-1",
+  "eu-central-2",
+  "il-central-1",
+  "me-central-1",
+  "mx-central-1",
+];
+
 const supportedRegions = {
   "af-south-1": { lat: -33.9249, lon: 18.4241 }, // Cape Town, South Africa
   "ap-east-1": { lat: 22.3193, lon: 114.1694 }, // Hong Kong
@@ -1248,20 +1268,9 @@ async function handler(event) {
           );
 
         return regions.map((region) => {
-          if (
-            [
-              "ap-south-2",
-              "ap-southeast-4",
-              "ap-southeast-5",
-              "ca-west-1",
-              "eu-south-2",
-              "eu-central-2",
-              "il-central-1",
-              "me-central-1",
-            ].includes(region)
-          )
+          if (regionsWithoutFunctionUrls.includes(region))
             throw new VisibleError(
-              `Region ${region} is not supported by this component. Please select a different AWS region.`,
+              `Region ${region} is not supported by this component, because Lambda function URLs aren't available there. Please select a different AWS region.`,
             );
 
           if (!Object.values(Region).includes(region as Region))
