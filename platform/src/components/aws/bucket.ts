@@ -198,13 +198,36 @@ export interface BucketArgs {
    *
    * This adds a statement to the bucket policy that either allows `public` access or just
    * `cloudfront` access. With `cloudfront`, only CloudFront distributions in the same AWS
-   * account can read the bucket. To let a distribution in another account read it, add a
-   * statement with the `policy` option.
+   * account can read the bucket.
    *
    * @example
    * ```js
    * {
    *   access: "public"
+   * }
+   * ```
+   *
+   * To let the distributions of another AWS account read a `cloudfront` bucket, add a
+   * statement with the `policy` option.
+   *
+   * ```js
+   * {
+   *   access: "cloudfront",
+   *   policy: [
+   *     {
+   *       effect: "allow",
+   *       principals: [{ type: "service", identifiers: ["cloudfront.amazonaws.com"] }],
+   *       actions: ["s3:GetObject"],
+   *       paths: ["*"],
+   *       conditions: [
+   *         {
+   *           test: "StringLike",
+   *           variable: "aws:SourceArn",
+   *           values: ["arn:aws:cloudfront::OTHER_ACCOUNT_ID:distribution/*"]
+   *         }
+   *       ]
+   *     }
+   *   ]
    * }
    * ```
    */
