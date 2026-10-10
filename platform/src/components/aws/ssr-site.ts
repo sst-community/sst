@@ -63,7 +63,7 @@ const MAX_LISTED_KV_BYTES = 1024 * 1024;
 // not listed here either work or couldn't be reached (me-south-1, Bahrain, is out of
 // service). AWS doesn't publish this list any more:
 // https://docs.aws.amazon.com/lambda/latest/dg/urls-configuration.html
-const regionsWithoutFunctionUrls = [
+export const regionsWithoutFunctionUrls = [
   "ap-east-2",
   "ap-south-2",
   "ap-southeast-4",
@@ -77,9 +77,10 @@ const regionsWithoutFunctionUrls = [
   "mx-central-1",
 ];
 
-const supportedRegions = {
+export const supportedRegions = {
   "af-south-1": { lat: -33.9249, lon: 18.4241 }, // Cape Town, South Africa
   "ap-east-1": { lat: 22.3193, lon: 114.1694 }, // Hong Kong
+  "ap-east-2": { lat: 25.033, lon: 121.5654 }, // Taipei, Taiwan
   "ap-northeast-1": { lat: 35.6895, lon: 139.6917 }, // Tokyo, Japan
   "ap-northeast-2": { lat: 37.5665, lon: 126.978 }, // Seoul, South Korea
   "ap-northeast-3": { lat: 34.6937, lon: 135.5023 }, // Osaka, Japan
@@ -1267,8 +1268,14 @@ async function handler(event) {
             "No deployment regions specified. Please specify at least one region in the 'regions' property.",
           );
 
+        // The check only matters when a function URL is created. `sst dev` doesn't create
+        // one, and `sst refresh` has to work on a stack that an earlier deploy left behind
+        // in one of these regions. (`sst remove` doesn't run the program.)
+        const needsFunctionUrls =
+          !($dev && args.dev !== false) && $cli.command !== "refresh";
+
         return regions.map((region) => {
-          if (regionsWithoutFunctionUrls.includes(region))
+          if (needsFunctionUrls && regionsWithoutFunctionUrls.includes(region))
             throw new VisibleError(
               `Region ${region} is not supported by this component, because Lambda function URLs aren't available there. Please select a different AWS region.`,
             );
