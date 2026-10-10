@@ -120,6 +120,33 @@ describe("StaticSite", function () {
     ]);
   });
 
+  it("creates one origin access control for a site with an error page", async () => {
+    new StaticSite("OacSite", { path: sitePath, errorPage: "404.html" });
+    await settle();
+
+    expect(
+      createdResources.filter((r) => r.type === "sst:aws:OriginAccessControl"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the placeholder origin, and creates no access control, for a site without an error page", async () => {
+    new StaticSite("PlainSite", { path: sitePath });
+    await settle();
+
+    const { origins, customErrorResponses } = findDistribution("PlainSite").inputs;
+    expect(origins).toEqual([
+      expect.objectContaining({
+        originId: "default",
+        domainName: "placeholder.sst.dev",
+      }),
+    ]);
+    expect(origins[0].originAccessControlId).toBeUndefined();
+    expect(customErrorResponses).toEqual([]);
+    expect(
+      createdResources.some((r) => r.type === "sst:aws:OriginAccessControl"),
+    ).toBe(false);
+  });
+
   it("points the error page at the assets path", async () => {
     new StaticSite("PrefixedSite", {
       path: sitePath,

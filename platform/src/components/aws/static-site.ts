@@ -1186,15 +1186,32 @@ async function handler(event) {
             comment: `${name} site`,
             domain: args.domain,
             // CloudFront fetches custom error pages without running the
-            // viewer request function, so the default origin has to be the
-            // bucket itself rather than a placeholder.
-            origins: [
-              {
-                originId: "default",
-                domainName: bucketDomain,
-                originAccessControlId: createOriginAccessControl().id,
-              },
-            ],
+            // viewer request function, so a site with an error page needs the
+            // bucket itself as its default origin, not a placeholder. A site
+            // without one keeps the placeholder, and creates no access control.
+            origins: output(args.errorPage).apply((hasCustomErrorPage) =>
+              hasCustomErrorPage
+                ? [
+                    {
+                      originId: "default",
+                      domainName: bucketDomain,
+                      originAccessControlId: createOriginAccessControl().id,
+                    },
+                  ]
+                : [
+                    {
+                      originId: "default",
+                      domainName: "placeholder.sst.dev",
+                      customOriginConfig: {
+                        httpPort: 80,
+                        httpsPort: 443,
+                        originProtocolPolicy: "https-only",
+                        originReadTimeout: 20,
+                        originSslProtocols: ["TLSv1.2"],
+                      },
+                    },
+                  ],
+            ),
             defaultCacheBehavior: {
               targetOriginId: "default",
               viewerProtocolPolicy: "redirect-to-https",
@@ -1224,22 +1241,14 @@ async function handler(event) {
             customErrorResponses: all([
               args.errorPage,
               errorPage,
-              route,
               assets.path,
-            ]).apply(([hasCustomErrorPage, errorPage, route, assetsPath]) => {
+            ]).apply(([hasCustomErrorPage, errorPage, assetsPath]) => {
               if (!hasCustomErrorPage) return [];
-              const base =
-                route?.pathPrefix && route.pathPrefix !== "/"
-                  ? route.pathPrefix
-                  : "/";
               // Error page fetches skip the viewer request function, which is
-              // what prepends the assets path for every other request
-              const pagePath = path.posix.join(
-                "/",
-                assetsPath ?? "",
-                base,
-                errorPage,
-              );
+              // what prepends the assets path for every other request. (This
+              // runs only for a site with its own distribution, so there is no
+              // Router path to add.)
+              const pagePath = path.posix.join("/", assetsPath ?? "", errorPage);
 
               return [
                 {
