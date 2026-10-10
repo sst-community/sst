@@ -635,6 +635,23 @@ describe("CloudFront router", () => {
       expect(event.request.uri).toBe("/_assets/other/admin/board/chunk.js");
     });
 
+    it("takes the base off at a segment boundary only", async () => {
+      const { event, routeSite } = loadRouteSite({
+        uri: "/administrator/chunk.js",
+        headers: { host: { value: "example.com" } },
+      });
+
+      await routeSite(
+        "test",
+        siteMetadata({
+          base: "/admin",
+          s3: { domain: S3_DOMAIN, dir: "/_assets", prefix: "", routes: ["/administrator"] },
+        }),
+      );
+
+      expect(event.request.uri).toBe("/_assets/administrator/chunk.js");
+    });
+
     it("leaves a path the S3 routes do not match to the server", async () => {
       let origin: any;
       const { routeSite } = loadRouteSite({
