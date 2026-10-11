@@ -568,8 +568,17 @@ export interface BucketArgs {
 
 export interface BucketNotificationsArgs {
   /**
-   * Enable EventBridge notifications for this bucket. This publishes S3 events to
-   * the account's default EventBridge bus.
+   * Enable EventBridge notifications for this bucket. This publishes every S3 event of
+   * the bucket to the account's default EventBridge bus. It doesn't send them anywhere
+   * by itself: add rules with [`Bucket.subscribeEventBridge`](#static-subscribeeventbridge),
+   * or your own rules on the default bus, to react to them.
+   *
+   * S3 keeps a single notification configuration for each bucket. To use EventBridge
+   * together with the queue, topic and function `notifications` below, set it in the
+   * same `notify` call. Calling `notify` again would replace what was set before, so
+   * it isn't allowed.
+   *
+   * Set it to `false`, or leave it out, to turn EventBridge notifications off.
    *
    * @default `false`
    * @example
@@ -587,7 +596,8 @@ export interface BucketNotificationsArgs {
    */
   eventBridge?: Input<boolean>;
   /**
-   * A list of subscribers that'll be notified when events happen in the bucket.
+   * A list of subscribers that'll be notified when events happen in the bucket. Leave
+   * it out if the bucket only uses `eventBridge`.
    */
   notifications?: Input<
     Input<{
@@ -773,7 +783,12 @@ export interface BucketEventBridgeSubscriberArgs
    */
   pattern?: Input<{
     /**
-     * A list of `detail-type` values to match against.
+     * A list of `detail-type` values to match against. These are the names of the S3
+     * events: `Object Created`, `Object Deleted`, `Object Restore Initiated`,
+     * `Object Restore Completed`, `Object Restore Expired`, `Object Tags Added`,
+     * `Object Tags Deleted`, `Object ACL Updated`, `Object Storage Class Changed`,
+     * `Object Access Tier Changed` and `Async Copy Completion`. Leave it out to match
+     * all of them.
      *
      * @example
      * ```js
@@ -792,6 +807,9 @@ export interface BucketEventBridgeSubscriberArgs
         | "Object Tags Added"
         | "Object Tags Deleted"
         | "Object ACL Updated"
+        | "Object Storage Class Changed"
+        | "Object Access Tier Changed"
+        | "Async Copy Completion"
         | string
       >[]
     >;
@@ -1450,10 +1468,13 @@ export class Bucket extends Component implements Link.Linkable {
   }
 
   /**
-   * Subscribe to S3 EventBridge notifications from an existing bucket with a function.
+   * Subscribe to S3 EventBridge notifications from a bucket with a function. The bucket
+   * is given by name, so it can be one that SST doesn't manage.
    *
-   * This creates an EventBridge rule and target only. The bucket owner must enable
-   * EventBridge notifications separately with `notify`.
+   * This creates an EventBridge rule on the account's default bus, and a target for
+   * it, only. The rule matches the events of that one bucket. The bucket has to publish
+   * to EventBridge for it to receive anything: for a bucket in your app, that's
+   * `notify({ eventBridge: true })`; for any other bucket, turn it on there.
    *
    * @param name The name of the subscription.
    * @param bucketName The name of the S3 bucket to subscribe to.
