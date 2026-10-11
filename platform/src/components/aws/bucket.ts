@@ -578,7 +578,7 @@ export interface BucketNotificationsArgs {
    * same `notify` call. Calling `notify` again would replace what was set before, so
    * it isn't allowed.
    *
-   * Set it to `false`, or leave it out, to turn EventBridge notifications off.
+   * Set it to `false` to turn EventBridge notifications off.
    *
    * @default `false`
    * @example
