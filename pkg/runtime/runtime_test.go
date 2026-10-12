@@ -33,6 +33,13 @@ func (m *mockRuntime) ShouldRunEagerly() bool {
 	return true
 }
 
+// outputRuntime returns a build output, like a real runtime does
+type outputRuntime struct{ mockRuntime }
+
+func (m *outputRuntime) Build(ctx context.Context, input *runtime.BuildInput) (*runtime.BuildOutput, error) {
+	return &runtime.BuildOutput{Out: input.Out(), Handler: input.Handler}, nil
+}
+
 func TestBuildInputOut(t *testing.T) {
 	cfgPath := filepath.Join("/project", "sst.config.ts")
 	workingDir := filepath.Join("/project", ".sst")
@@ -183,24 +190,23 @@ func TestCollectionBuildEncryptedResourceFileWithBundle(t *testing.T) {
 		}
 	})
 
-	t.Run("removes the shared file an older version left in the bundle", func(t *testing.T) {
-		bundleDir := t.TempDir()
-		stale := filepath.Join(bundleDir, "resource.enc")
-		require.NoError(t, os.WriteFile(stale, []byte("old"), 0644))
+	t.Run("writes resource.enc at the root of the output when there is no bundle", func(t *testing.T) {
+		projectDir := t.TempDir()
+		mr := &outputRuntime{mockRuntime{matchFn: func(r string) bool { return r == "nodejs" }}}
+		c := runtime.NewCollection(filepath.Join(projectDir, "sst.config.ts"), mr)
 
-		mr := &mockRuntime{matchFn: func(r string) bool { return r == "nodejs" }}
-		c := runtime.NewCollection("cfg", mr)
-		_, err := c.Build(context.Background(), &runtime.BuildInput{
-			FunctionID:    "fn-a",
+		input := &runtime.BuildInput{
+			CfgPath:       filepath.Join(projectDir, "sst.config.ts"),
+			FunctionID:    "my-function",
 			Handler:       "index.handler",
-			Bundle:        bundleDir,
 			Runtime:       "nodejs",
 			EncryptionKey: encryptionKey,
 			Links:         map[string]json.RawMessage{},
-		})
+		}
+		out := input.Out()
+		_, err := c.Build(context.Background(), input)
 		require.NoError(t, err)
-
-		_, err = os.Stat(stale)
-		assert.True(t, os.IsNotExist(err), "stale resource.enc should be removed")
+		_, err = os.Stat(filepath.Join(out, "resource.enc"))
+		assert.NoError(t, err)
 	})
 }

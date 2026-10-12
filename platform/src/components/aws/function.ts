@@ -391,7 +391,8 @@ export interface FunctionArgs {
    * SST writes the linked resources of each function to `.sst/<function name>/resource.enc`
    * inside the bundle directory, so functions that share a bundle don't overwrite each
    * other. Each function's zip only includes its own folder from `.sst`. Don't keep your
-   * own files in a `.sst` folder in the bundle, they are left out of the zip.
+   * own files in a `.sst` folder or a `resource.enc` file at the root of the bundle, they are
+   * left out of the zip.
    * :::
    *
    * @example
@@ -2524,9 +2525,11 @@ export class Function extends Component implements Link.Linkable {
                 // on every platform.
                 const ownDir = `.sst/${name}/`;
                 const filtered =
-                  item.from === bundle
+                  !dev && item.from === bundle
                     ? found.filter((file) => {
                         const f = toPosix(file);
+                        // also leave out the shared file an older version wrote
+                        if (f === "resource.enc") return false;
                         return (
                           !f.startsWith(".sst/") ||
                           f === `.sst/${name}` ||
