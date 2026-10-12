@@ -151,6 +151,9 @@ func (r *Runtime) releaseContext(functionID string) {
 	r.contextsLock.Lock()
 	if entry, ok := r.contexts[functionID]; ok {
 		entry.building--
+		// the build that just finished counts as the latest use
+		r.contextClock++
+		entry.lastUsed = r.contextClock
 	}
 	for len(r.contexts) > r.contextCap {
 		oldestID := ""

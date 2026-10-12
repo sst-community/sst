@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/sst/sst/v3/pkg/flag"
@@ -120,5 +121,48 @@ func TestDevBuildCacheOffDisposesContexts(t *testing.T) {
 	r.contextsLock.Unlock()
 	if got != 0 {
 		t.Errorf("live esbuild contexts = %d, want 0", got)
+	}
+}
+
+func TestDevBuildConcurrentBuildsWithEviction(t *testing.T) {
+	dir := t.TempDir()
+	r := New("dev")
+	r.contextCap = 2
+
+	inputs := make([]*runtime.BuildInput, 4)
+	for i := range inputs {
+		inputs[i] = devBuildInput(t, dir, fmt.Sprintf("fn%d", i))
+	}
+
+	var wg sync.WaitGroup
+	for round := 0; round < 3; round++ {
+		for i := 0; i < 8; i++ {
+			// several builds of the same function and of different functions at once
+			input := inputs[i%len(inputs)]
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				output, err := r.Build(context.Background(), input)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if len(output.Errors) > 0 {
+					t.Error(output.Errors)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+
+	r.contextsLock.Lock()
+	defer r.contextsLock.Unlock()
+	if len(r.contexts) > 2 {
+		t.Errorf("live esbuild contexts = %d, want <= 2", len(r.contexts))
+	}
+	for id, entry := range r.contexts {
+		if entry.building != 0 {
+			t.Errorf("%s is still pinned (%d)", id, entry.building)
+		}
 	}
 }

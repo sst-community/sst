@@ -55,7 +55,8 @@ func New() (*Server, error) {
 		local := func(h http.HandlerFunc) http.HandlerFunc {
 			return func(w http.ResponseWriter, r *http.Request) {
 				host, _, err := net.SplitHostPort(r.RemoteAddr)
-				if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
+				// requests through the TLS proxy arrive from 127.0.0.1 with X-Forwarded-For set
+				if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() || r.Header.Get("X-Forwarded-For") != "" {
 					http.Error(w, "pprof is only served to localhost", http.StatusForbidden)
 					return
 				}
