@@ -7,13 +7,18 @@
  * Redis and connect to it from a function in the same VPC. The maximum storage and ECPUs per second
  * cap how far the cache scales.
  *
- * A serverless cache has no password and always uses TLS, so the function only needs the `host`
- * and `port`.
+ * A serverless cache always uses TLS and has a generated password, like a provisioned Redis.
  *
  * ```ts title="index.ts"
  * const client = new Cluster(
  *   [{ host: Resource.MyRedis.host, port: Resource.MyRedis.port }],
- *   { redisOptions: { tls: { checkServerIdentity: () => undefined } } }
+ *   {
+ *     redisOptions: {
+ *       tls: { checkServerIdentity: () => undefined },
+ *       username: Resource.MyRedis.username,
+ *       password: Resource.MyRedis.password,
+ *     },
+ *   }
  * );
  * ```
  */

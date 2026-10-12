@@ -10,7 +10,7 @@ import { RandomPassword } from "@pulumi/random";
 import { Component, Transform, transform } from "../component.js";
 import { Link } from "../link.js";
 import { Input } from "../input.js";
-import { elasticache, secretsmanager } from "@pulumi/aws";
+import { elasticache, secretsmanager, ssm } from "@pulumi/aws";
 import { Vpc } from "./vpc.js";
 import { toGBs } from "../size.js";
 import { VisibleError } from "../error.js";
@@ -128,16 +128,18 @@ export interface RedisArgs {
    *
    * When this is set, `instance`, `cluster`, `nodes` and `parameters` are ignored, and
    * `transform.subnetGroup`, `transform.parameterGroup` and `transform.cluster` don't run.
-   * Use `transform.serverlessCache` instead.
+   * Use `transform.serverlessCache` instead. The password is set through an ElastiCache user
+   * and user group that SST creates for the cache.
    *
    * :::danger
    * Turning this on or off for an existing Redis replaces it with a different kind of cache,
    * and its data is lost.
    * :::
    *
-   * A serverless cache always uses TLS and, as set up by SST, has no password. Access is
-   * limited by the security groups of the `vpc`. So the linked resource has `host`, `port`
-   * and `username`, but no `password`.
+   * A serverless cache always uses TLS. By default SST also gives it a generated password for
+   * the `default` user, like a provisioned cluster, so the linked resource has the same `host`,
+   * `port`, `username` and `password`, and the code that connects to it doesn't change. Turn it
+   * off with `password: false`.
    *
    * :::note
    * `Redis.get` only works with provisioned clusters.
@@ -165,6 +167,33 @@ export interface RedisArgs {
   serverless?:
     | boolean
     | {
+        /**
+         * Protect the cache with a password. SST generates one for the `default` user, links
+         * it as `password`, and keeps a copy in an encrypted SSM parameter so you can read it
+         * with the AWS CLI. Without a password, anything that can reach the cache inside the
+         * VPC can read and write it.
+         *
+         * Set this to `false` for a cache with no password. Then the link has `host`, `port` and
+         * `username`, and no `password`.
+         *
+         * To read the password:
+         *
+         * ```bash
+         * aws ssm get-parameter --with-decryption \
+         *   --name /sst/redis/<cache id>/password --query Parameter.Value --output text
+         * ```
+         *
+         * The cache id is the `clusterId` output. The deploy role needs `ssm:PutParameter`,
+         * `ssm:DeleteParameter` and `ssm:AddTagsToResource` for the parameter.
+         *
+         * :::danger
+         * Turning this on or off for an existing cache changes how clients connect, so apps
+         * that were linked before have to be deployed again.
+         * :::
+         *
+         * @default `true`
+         */
+        password?: boolean;
         /**
          * The amount of data the cache can store, in whole GB. A fraction is rounded up. A
          * `minimum` and a `maximum` have to be at least `1 GB`, and the `minimum` can't be above
@@ -346,7 +375,8 @@ interface RedisRef {
  * #### Create a serverless Redis
  *
  * You can also create a serverless Redis instance that automatically scales based on usage.
- * Check out the [serverless example](/docs/examples/#aws-redis-serverless).
+ * Check out the [serverless example](/docs/examples/#aws-redis-serverless). It connects with the same
+ * `username` and `password` as a provisioned Redis.
  *
  * ```js title="sst.config.ts"
  * const vpc = new sst.aws.Vpc("MyVpc");
@@ -397,19 +427,6 @@ interface RedisRef {
  *       password: Resource.MyRedis.password
  *     }
  *   }
- * );
- * ```
- *
- * For a serverless Redis there is no password, so leave out `password`. Check out the
- * [serverless example](/docs/examples/#aws-redis-serverless).
- *
- * ```ts title="app/page.tsx" {6,7}
- * const client = new Cluster(
- *   [{
- *     host: Resource.MyRedis.host,
- *     port: Resource.MyRedis.port
- *   }],
- *   { redisOptions: { tls: { checkServerIdentity: () => undefined } } }
  * );
  * ```
  *
@@ -501,7 +518,11 @@ export class Redis extends Component implements Link.Linkable {
     const vpc = normalizeVpc();
     const serverless = normalizeServerless();
     if (serverless) {
-      this.serverlessCache = createServerlessCache(serverless);
+      const auth = serverless.password ? createServerlessAuth() : undefined;
+      this._authToken = auth?.password;
+      const cache = createServerlessCache(serverless, auth?.userGroup);
+      this.serverlessCache = cache;
+      if (auth) storeServerlessPassword(cache, auth.password);
       return;
     }
     const instance = output(args.instance).apply((v) => v ?? "t4g.micro");
@@ -627,6 +648,7 @@ Listening on "${dev.host}:${dev.port}"...`,
       if (!v) return undefined;
       const options = v === true ? {} : v;
       return {
+        password: options.password ?? true,
         storage: output(options.storage).apply((v) => {
           const minimum = v?.minimum ? Math.ceil(toGBs(v.minimum)) : undefined;
           const maximum = v?.maximum ? Math.ceil(toGBs(v.maximum)) : 10;
@@ -799,8 +821,68 @@ Listening on "${dev.host}:${dev.port}"...`,
       );
     }
 
+    function createServerlessAuth() {
+      const password = new RandomPassword(
+        `${name}AuthToken`,
+        {
+          length: 32,
+          special: true,
+          overrideSpecial: "!&#$^<>-",
+        },
+        { parent: self },
+      ).result;
+
+      // A serverless cache takes its passwords from a user group. The group needs
+      // a user named "default", this one has the password.
+      const user = new elasticache.User(
+        `${name}User`,
+        {
+          // the id is named by SST, an empty string leaves it to the naming rule
+          userId: "",
+          userName: "default",
+          engine,
+          accessString: "on ~* +@all",
+          authenticationMode: {
+            type: "password",
+            passwords: [password],
+          },
+        },
+        { parent: self },
+      );
+      const userGroup = new elasticache.UserGroup(
+        `${name}UserGroup`,
+        {
+          userGroupId: "",
+          engine,
+          userIds: [user.userId],
+        },
+        { parent: self },
+      );
+
+      return { password, userGroup };
+    }
+
+    function storeServerlessPassword(
+      cache: elasticache.ServerlessCache,
+      password: Output<string>,
+    ) {
+      // A copy of the password for people. Nothing reads it at runtime, the
+      // linked functions get the password in their encrypted resource file.
+      new ssm.Parameter(
+        `${name}PasswordParameter`,
+        {
+          name: interpolate`/sst/redis/${cache.id}/password`,
+          description: "Password of the serverless Redis, managed by SST",
+          type: ssm.ParameterType.SecureString,
+          value: password,
+        },
+        { parent: self },
+      );
+    }
+
     function createServerlessCache(
       serverless: NonNullable<ReturnType<typeof normalizeServerless>>,
+      userGroup: elasticache.UserGroup | undefined,
     ) {
       return new elasticache.ServerlessCache(
         ...transform(
@@ -832,6 +914,7 @@ Listening on "${dev.host}:${dev.port}"...`,
             },
             securityGroupIds: vpc.securityGroups,
             subnetIds: vpc.subnets,
+            userGroupId: userGroup?.userGroupId,
             tags: {
               "sst:component-version": _version.toString(),
             },
@@ -860,8 +943,8 @@ Listening on "${dev.host}:${dev.port}"...`,
   }
 
   /**
-   * The password to connect to the Redis cluster. This is `undefined` when `serverless`
-   * is set, a serverless cache has no password.
+   * The password to connect to the Redis cluster. This is `undefined` for a serverless cache
+   * with `password: false`.
    */
   public get password(): Output<string> | undefined {
     return this.dev ? this.dev.password ?? output("") : this._authToken;
@@ -946,7 +1029,7 @@ Listening on "${dev.host}:${dev.port}"...`,
         host: this.host,
         port: this.port,
         username: this.username,
-        ...(this.serverlessCache ? {} : { password: this.password }),
+        ...(this.password ? { password: this.password } : {}),
       },
     };
   }

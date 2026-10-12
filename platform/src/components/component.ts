@@ -256,6 +256,16 @@ export class Component extends ComponentResource {
               40,
               { lower: true, replace: (name) => name.replaceAll(/-+/g, "-") },
             ],
+            "aws:elasticache/user:User": [
+              "userId",
+              40,
+              { lower: true, replace: (name) => name.replaceAll(/-+/g, "-") },
+            ],
+            "aws:elasticache/userGroup:UserGroup": [
+              "userGroupId",
+              40,
+              { lower: true, replace: (name) => name.replaceAll(/-+/g, "-") },
+            ],
             "aws:elasticache/subnetGroup:SubnetGroup": [
               "name",
               255,

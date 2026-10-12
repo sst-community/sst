@@ -97,7 +97,6 @@ describe("Redis serverless", function () {
     expect(cache.inputs.majorEngineVersion).toBe("7");
     expect(cache.inputs.securityGroupIds).toEqual(["sg-a"]);
     expect(cache.inputs.subnetIds).toEqual(["subnet-a", "subnet-b"]);
-    expect(redis.password).toBeUndefined();
   });
 
   it("passes minimum and maximum limits through", async () => {
@@ -120,9 +119,52 @@ describe("Redis serverless", function () {
     });
   });
 
-  it("links host, port and username, but no password", async () => {
-    const redis = new Redis("Link", { vpc, serverless: true });
+  it("protects the cache with a password by default", async () => {
+    const redis = new Redis("Pw", { vpc, serverless: true });
     await settle();
+    const [user] = ofType("aws:elasticache/user:User");
+    // named by SST, lowercase and at most 40 characters
+    expect(user.inputs.userId).toMatch(/^[a-z0-9-]{1,40}$/);
+    expect(user.inputs.userName).toBe("default");
+    expect(user.inputs.engine).toBe("redis");
+    expect(user.inputs.authenticationMode.type).toBe("password");
+    expect(user.inputs.authenticationMode.passwords).toHaveLength(1);
+    const [group] = ofType("aws:elasticache/userGroup:UserGroup");
+    expect(group.inputs.userGroupId).toMatch(/^[a-z0-9-]{1,40}$/);
+    expect(group.inputs.engine).toBe("redis");
+    const [cache] = ofType("aws:elasticache/serverlessCache:ServerlessCache");
+    expect(cache.inputs.userGroupId).toBeDefined();
+    // a copy for people, as a SecureString
+    const [param] = ofType("aws:ssm/parameter:Parameter");
+    expect(param.inputs.type).toBe("SecureString");
+    expect(redis.password).toBeDefined();
+    const properties = (redis.getSSTLink() as any).properties;
+    expect(Object.keys(properties).sort()).toEqual([
+      "host",
+      "password",
+      "port",
+      "username",
+    ]);
+  });
+
+  it("uses the valkey engine for the user and the group", async () => {
+    new Redis("Vk", { vpc, engine: "valkey", serverless: true });
+    await settle();
+    expect(ofType("aws:elasticache/user:User")[0].inputs.engine).toBe("valkey");
+    expect(ofType("aws:elasticache/userGroup:UserGroup")[0].inputs.engine).toBe(
+      "valkey",
+    );
+  });
+
+  it("has no password, user, group or parameter with password: false", async () => {
+    const redis = new Redis("NoPw", { vpc, serverless: { password: false } });
+    await settle();
+    expect(ofType("aws:elasticache/user:User")).toHaveLength(0);
+    expect(ofType("aws:elasticache/userGroup:UserGroup")).toHaveLength(0);
+    expect(ofType("aws:ssm/parameter:Parameter")).toHaveLength(0);
+    const [cache] = ofType("aws:elasticache/serverlessCache:ServerlessCache");
+    expect(cache.inputs.userGroupId).toBeUndefined();
+    expect(redis.password).toBeUndefined();
     const properties = (redis.getSSTLink() as any).properties;
     expect(Object.keys(properties).sort()).toEqual(["host", "port", "username"]);
   });
