@@ -2301,35 +2301,36 @@ export class Function extends Component implements Link.Linkable {
             // `dev` is an Output, resolve it before choosing the policy. Only
             // `sst dev` trusts the account root, a deployed role trusts
             // the Lambda service alone.
-            assumeRolePolicy: all([
-              dev,
-              iam.getPolicyDocumentOutput({
-                statements: [
-                  {
-                    actions: ["sts:AssumeRole"],
-                    principals: [
+            assumeRolePolicy: dev.apply((dev) =>
+              dev
+                ? iam.getPolicyDocumentOutput({
+                    statements: [
                       {
-                        type: "Service",
-                        identifiers: ["lambda.amazonaws.com"],
-                      },
-                      {
-                        type: "AWS",
-                        identifiers: [
-                          interpolate`arn:${partition}:iam::${
-                            getCallerIdentityOutput({}, opts).accountId
-                          }:root`,
+                        actions: ["sts:AssumeRole"],
+                        principals: [
+                          {
+                            type: "Service",
+                            identifiers: ["lambda.amazonaws.com"],
+                          },
+                          {
+                            type: "AWS",
+                            identifiers: [
+                              interpolate`arn:${partition}:iam::${
+                                getCallerIdentityOutput({}, opts).accountId
+                              }:root`,
+                            ],
+                          },
                         ],
                       },
                     ],
-                  },
-                ],
-              }).json,
-            ]).apply(([dev, devPolicy]) =>
-              dev
-                ? devPolicy
-                : iam.assumeRolePolicyForPrincipal({
-                    Service: "lambda.amazonaws.com",
-                  }),
+                  }).json
+                : output(
+                    JSON.stringify(
+                      iam.assumeRolePolicyForPrincipal({
+                        Service: "lambda.amazonaws.com",
+                      }),
+                    ),
+                  ),
             ),
             // if there are no statements, do not add an inline policy.
             // adding an inline policy with no statements will cause an error.
