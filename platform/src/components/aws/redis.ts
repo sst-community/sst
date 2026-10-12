@@ -162,7 +162,7 @@ export interface RedisArgs {
     | boolean
     | {
         /**
-         * The amount of data the cache can store. AWS allows 1 GB to 5,000 GB.
+         * The amount of data the cache can store.
          *
          * @default `{ maximum: "10 GB" }`
          * @example
@@ -183,8 +183,7 @@ export interface RedisArgs {
           maximum?: Input<SizeGbTb>;
         }>;
         /**
-         * The ElastiCache Processing Units (ECPU) the cache can use per second. AWS allows
-         * 1,000 to 15,000,000.
+         * The ElastiCache Processing Units (ECPU) the cache can use per second.
          *
          * @default `{ maximum: 5000 }`
          * @example
@@ -394,6 +393,19 @@ interface RedisRef {
  * );
  * ```
  *
+ * For a serverless Redis there is no password, so leave out `password`. Check out the
+ * [serverless example](/docs/examples/#aws-redis-serverless).
+ *
+ * ```ts title="app/page.tsx" {6,7}
+ * const client = new Cluster(
+ *   [{
+ *     host: Resource.MyRedis.host,
+ *     port: Resource.MyRedis.port
+ *   }],
+ *   { redisOptions: { tls: { checkServerIdentity: () => undefined } } }
+ * );
+ * ```
+ *
  * #### Running locally
  *
  * By default, your Redis cluster is deployed in `sst dev`. But let's say you are running Redis
@@ -515,7 +527,7 @@ export class Redis extends Component implements Link.Linkable {
 
         if (!tags?.["sst:ref:secret"])
           throw new VisibleError(
-            `Failed to lookup secret for Redis cluster "${name}".`,
+            `Failed to lookup secret for Redis cluster "${name}". \`Redis.get\` only works with a provisioned cluster, not with a serverless cache.`,
           );
 
         return {
@@ -611,13 +623,13 @@ Listening on "${dev.host}:${dev.port}"...`,
         storage: output(options.storage).apply((v) => {
           const minimum = v?.minimum ? Math.ceil(toGBs(v.minimum)) : undefined;
           const maximum = v?.maximum ? Math.ceil(toGBs(v.maximum)) : 10;
-          checkRange(name, "storage", "GB", 1, 5000, minimum, maximum);
+          checkRange(name, "storage", "GB", minimum, maximum);
           return { minimum, maximum };
         }),
         ecpuPerSecond: output(options.ecpuPerSecond).apply((v) => {
           const minimum = v?.minimum;
           const maximum = v?.maximum ?? 5000;
-          checkRange(name, "ecpuPerSecond", "", 1000, 15000000, minimum, maximum);
+          checkRange(name, "ecpuPerSecond", "", minimum, maximum);
           return { minimum, maximum };
         }),
       };
@@ -627,8 +639,6 @@ Listening on "${dev.host}:${dev.port}"...`,
       name: string,
       key: string,
       unit: string,
-      low: number,
-      high: number,
       minimum: number | undefined,
       maximum: number,
     ) {
@@ -637,10 +647,9 @@ Listening on "${dev.host}:${dev.port}"...`,
         ["minimum", minimum],
         ["maximum", maximum],
       ] as const) {
-        if (value === undefined) continue;
-        if (value < low || value > high)
+        if (value !== undefined && value < 1)
           throw new VisibleError(
-            `In the Redis component "${name}", \`serverless.${key}.${limit}\` is ${value}${suffix}, it has to be between ${low} and ${high}${suffix}.`,
+            `In the Redis component "${name}", \`serverless.${key}.${limit}\` has to be at least 1${suffix}.`,
           );
       }
       if (minimum !== undefined && minimum > maximum)
@@ -793,7 +802,14 @@ Listening on "${dev.host}:${dev.port}"...`,
           {
             description: "Managed by SST",
             engine,
-            majorEngineVersion: version.apply((v) => v.split(".")[0]),
+            majorEngineVersion: version.apply((v) => {
+              const major = v.split(".")[0];
+              if (parseInt(major) < 7)
+                throw new VisibleError(
+                  `In the Redis component "${name}", \`serverless\` needs version 7 or later, but \`version\` is "${v}".`,
+                );
+              return major;
+            }),
             cacheUsageLimits: {
               dataStorage: {
                 minimum: serverless.storage.minimum,
@@ -850,9 +866,14 @@ Listening on "${dev.host}:${dev.port}"...`,
   public get host() {
     if (this.dev) return this.dev.host;
     if (this.serverlessCache) {
-      return this.serverlessCache.endpoints.apply(
-        (endpoints) => endpoints?.[0]?.address ?? "",
-      );
+      return this.serverlessCache.endpoints.apply((endpoints) => {
+        const address = endpoints?.[0]?.address;
+        if (!address)
+          throw new VisibleError(
+            "The serverless Redis cache has no endpoint address yet.",
+          );
+        return address;
+      });
     }
     return this.cluster!.clusterEnabled.apply((enabled) =>
       enabled
