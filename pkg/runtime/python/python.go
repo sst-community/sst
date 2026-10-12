@@ -192,6 +192,11 @@ func (r *PythonRuntime) Run(ctx context.Context, input *runtime.RunInput) (runti
 		env = append(env, "PYTHONPATH="+pythonPath)
 
 		resourceEncPath := filepath.Join(input.Build.Out, "resource.enc")
+		// functions sharing a `bundle` keep their own file under .sst/<id>/
+		shared := filepath.Join(input.Build.Out, ".sst", input.FunctionID, "resource.enc")
+		if _, err := os.Stat(shared); err == nil {
+			resourceEncPath = shared
+		}
 		env = append(env, "SST_KEY_FILE="+resourceEncPath)
 	}
 
