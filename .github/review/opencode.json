@@ -3,7 +3,6 @@
   "share": "disabled",
   "autoupdate": false,
   "tools": {
-    "bash": false,
     "edit": false,
     "write": false,
     "patch": false,
@@ -18,7 +17,10 @@
     "grep": "allow",
     "list": "allow",
     "edit": "deny",
-    "bash": "deny",
+    "bash": {
+      "*": "deny",
+      "true": "allow"
+    },
     "task": "deny",
     "external_directory": "deny",
     "todowrite": "deny",
@@ -41,7 +43,10 @@
         "grep": "allow",
         "list": "allow",
         "edit": "deny",
-        "bash": "deny",
+        "bash": {
+          "*": "deny",
+          "true": "allow"
+        },
         "task": "deny",
         "external_directory": "deny",
         "todowrite": "deny",

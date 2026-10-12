@@ -8,12 +8,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/http/pprof"
 	"net/rpc"
 	"net/rpc/jsonrpc"
 	"net/url"
 	"os"
 	"path/filepath"
 
+	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/server/aws"
@@ -48,6 +50,25 @@ func New() (*Server, error) {
 		slog.Info("rpc request", "method", r.Method, "url", r.URL.String())
 		result.Rpc.ServeCodec(jsonrpc.NewServerCodec(&HttpConn{Reader: r.Body, Writer: w}))
 	})
+	if flag.SST_PPROF {
+		// the dev server listens on all interfaces, profiles are for this machine only
+		local := func(h http.HandlerFunc) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				host, _, err := net.SplitHostPort(r.RemoteAddr)
+				// requests through the TLS proxy arrive from 127.0.0.1 with X-Forwarded-For set
+				if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() || r.Header.Get("X-Forwarded-For") != "" {
+					http.Error(w, "pprof is only served to localhost", http.StatusForbidden)
+					return
+				}
+				h(w, r)
+			}
+		}
+		result.Mux.HandleFunc("/debug/pprof/", local(pprof.Index))
+		result.Mux.HandleFunc("/debug/pprof/cmdline", local(pprof.Cmdline))
+		result.Mux.HandleFunc("/debug/pprof/profile", local(pprof.Profile))
+		result.Mux.HandleFunc("/debug/pprof/symbol", local(pprof.Symbol))
+		result.Mux.HandleFunc("/debug/pprof/trace", local(pprof.Trace))
+	}
 	return result, nil
 }
 

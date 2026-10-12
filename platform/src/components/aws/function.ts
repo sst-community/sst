@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { toPosix } from "../path.js";
 import crypto from "crypto";
 import archiver from "archiver";
 import type { Loader } from "esbuild";
@@ -386,9 +387,18 @@ export interface FunctionArgs {
    *
    * If the `bundle` option is specified, the `handler` needs to be in the root of the bundle.
    *
+   * :::note
+   * SST writes the linked resources of each function to `.sst/<function name>/resource.enc`
+   * inside the bundle directory, so functions that share a bundle don't overwrite each
+   * other. Each function's zip only includes its own folder from `.sst`. Don't keep your
+   * own files in a `.sst` folder or a `resource.enc` file at the root of the bundle, they are
+   * left out of the zip.
+   * :::
+   *
    * @example
    *
-   * Here, the entire `packages/functions/src` directory is zipped. And the handler is
+   * Here, the entire `packages/functions/src` directory is zipped, except for the
+   * `.sst` folders of other functions and any `resource.enc` at the root. And the handler is
    * in the `src` directory.
    *
    * ```js
@@ -1898,8 +1908,9 @@ export class Function extends Component implements Link.Linkable {
         Function.encryptionKey().base64,
         args.link,
         args.streaming,
+        args.bundle,
         dev.apply((dev) => dev ? Function.appsync() : undefined),
-      ]).apply(([environment, dev, bootstrap, key, link, streaming, appsync]) => {
+      ]).apply(([environment, dev, bootstrap, key, link, streaming, bundle, appsync]) => {
         const result = environment ?? {};
         result.SST_RESOURCE_App = JSON.stringify({
           name: $app.name,
@@ -1913,7 +1924,16 @@ export class Function extends Component implements Link.Linkable {
           }
         }
         result.SST_KEY = key;
-        result.SST_KEY_FILE = "resource.enc";
+        // When a shared `bundle` is used, multiple functions write into the
+        // same output directory — the Go runtime namespaces the encrypted
+        // resource file under `.sst/<FunctionID>/resource.enc` to avoid a
+        // concurrent-write race that corrupts the ciphertext, AND so each
+        // Lambda's uploaded zip can exclude every sibling's subtree (the
+        // zipper filters on `.sst/<otherFunctionID>/`). Point each Lambda
+        // at its own file to match.
+        result.SST_KEY_FILE = bundle
+          ? `.sst/${name}/resource.enc`
+          : "resource.enc";
         if (dev) {
           result.SST_REGION = process.env.SST_AWS_REGION!;
           result.SST_APPSYNC_HTTP = appsync.http;
@@ -2416,7 +2436,10 @@ export class Function extends Component implements Link.Linkable {
         isContainer,
         logGroup.apply((l) => l?.arn),
         dev,
-        region,
+        all([region, args.bundle]).apply(([regionName, customBundle]) => ({
+          regionName,
+          customBundle: !!customBundle,
+        })),
       ]).apply(
         async ([
           bundle,
@@ -2426,7 +2449,7 @@ export class Function extends Component implements Link.Linkable {
           isContainer,
           logGroupArn,
           dev,
-          regionName,
+          { regionName, customBundle },
         ]) => {
           if (isContainer) return;
 
@@ -2497,8 +2520,28 @@ export class Function extends Component implements Link.Linkable {
                     sourcemaps?.map((item) => path.relative(bundle, item)) ||
                     [],
                 });
+                // Functions that share a `bundle:` directory each get their
+                // own `.sst/<name>/resource.enc` (written by the Go runtime).
+                // Keep only this function's folder in its zip, so a function
+                // doesn't ship the linked resources of its siblings. Only
+                // applies to zip functions, `glob` returns "/" separated paths
+                // on every platform.
+                const ownDir = `.sst/${name}/`;
+                const filtered =
+                  !dev && customBundle && item.from === bundle
+                    ? found.filter((file) => {
+                        const f = toPosix(file);
+                        // also leave out the shared file an older version wrote
+                        if (f === "resource.enc") return false;
+                        return (
+                          !f.startsWith(".sst/") ||
+                          f === `.sst/${name}` ||
+                          f.startsWith(ownDir)
+                        );
+                      })
+                    : found;
                 files.push(
-                  ...found.map((file) => ({
+                  ...filtered.map((file) => ({
                     from: path.join(item.from, file),
                     to: path.join(item.to, file),
                   })),

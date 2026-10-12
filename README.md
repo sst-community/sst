@@ -2,6 +2,12 @@
 
 <p align="center">A community-maintained fork of <a href="https://github.com/anomalyco/sst">SST</a></p>
 
+<p align="center">
+  <a href="https://discord.gg/DQWT3WGVm2"><img alt="Discord" src="https://img.shields.io/discord/1555318753917407362?style=flat-square&label=Discord" /></a>
+  <a href="https://www.npmjs.com/package/@sst-community/sst"><img alt="npm" src="https://img.shields.io/npm/v/@sst-community/sst?style=flat-square" /></a>
+  <a href="https://github.com/sst-community/sst/actions/workflows/check.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/sst-community/sst/check.yml?style=flat-square&branch=main&label=build" /></a>
+</p>
+
 ---
 
 Build full-stack apps on your own infrastructure.
