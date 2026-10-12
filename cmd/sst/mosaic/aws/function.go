@@ -222,26 +222,19 @@ func function(ctx context.Context, input input) {
 	builds := map[string]*runtime.BuildOutput{}
 	targets := map[string]*runtime.BuildInput{}
 
+	// whether a build wrote its handler into its output folder when it was made,
+	// the Python runtime in dev for one doesn't, its handler stays in the source
+	handlerBuilt := map[string]bool{}
+
 	getBuildOutput := func(functionID string) *runtime.BuildOutput {
 		build := builds[functionID]
 		if build != nil {
-			// check that the handler file still exists on disk
-			handlerFile := build.Handler
-			if i := strings.LastIndex(handlerFile, "."); i > 0 {
-				handlerFile = handlerFile[:i]
-			}
-			matches, _ := filepath.Glob(filepath.Join(build.Out, handlerFile+".*"))
-			if len(matches) == 0 {
-				// also check without extension for compiled binaries
-				if _, err := os.Stat(filepath.Join(build.Out, handlerFile)); err != nil {
-					log.Info("build output missing, rebuilding", "functionID", functionID, "handler", build.Handler)
-					delete(builds, functionID)
-				} else {
-					return build
-				}
-			} else {
+			// a build whose handler file has gone is built again
+			if !handlerBuilt[functionID] || handlerFileExists(build) {
 				return build
 			}
+			log.Info("build output missing, rebuilding", "functionID", functionID, "handler", build.Handler)
+			delete(builds, functionID)
 		}
 		target, _ := targets[functionID]
 		build, err := input.project.Runtime.Build(ctx, target)
@@ -261,6 +254,7 @@ func function(ctx context.Context, input input) {
 			return nil
 		}
 		builds[functionID] = build
+		handlerBuilt[functionID] = handlerFileExists(build)
 		return build
 	}
 
@@ -516,4 +510,18 @@ func fileLogger(p *project.Project) {
 			}
 		}
 	}
+}
+
+// handlerFileExists tells whether the handler of a build is in its output folder,
+// with any extension, or without one for compiled binaries.
+func handlerFileExists(build *runtime.BuildOutput) bool {
+	handlerFile := build.Handler
+	if i := strings.LastIndex(handlerFile, "."); i > 0 {
+		handlerFile = handlerFile[:i]
+	}
+	if matches, _ := filepath.Glob(filepath.Join(build.Out, handlerFile+".*")); len(matches) > 0 {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(build.Out, handlerFile))
+	return err == nil
 }
