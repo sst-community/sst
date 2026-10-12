@@ -170,6 +170,10 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 				return nil, err
 			}
 			if input.Dev {
+				// a dev rebuild keeps the folder, so replace a link that points somewhere else
+				if target, err := os.Readlink(dest); err == nil && target != from {
+					os.Remove(dest)
+				}
 				if err := os.Symlink(from, dest); err != nil {
 					if !os.IsExist(err) {
 						return nil, err

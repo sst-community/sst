@@ -515,9 +515,11 @@ func fileLogger(p *project.Project) {
 // handlerFileExists tells whether the handler of a build is in its output folder,
 // with any extension, or without one for compiled binaries.
 func handlerFileExists(build *runtime.BuildOutput) bool {
+	// the method comes after the last dot of the file name, not of the whole path
 	handlerFile := build.Handler
-	if i := strings.LastIndex(handlerFile, "."); i > 0 {
-		handlerFile = handlerFile[:i]
+	base := filepath.Base(handlerFile)
+	if i := strings.LastIndex(base, "."); i > 0 {
+		handlerFile = filepath.Join(filepath.Dir(handlerFile), base[:i])
 	}
 	if matches, _ := filepath.Glob(filepath.Join(build.Out, handlerFile+".*")); len(matches) > 0 {
 		return true
