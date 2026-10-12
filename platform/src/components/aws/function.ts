@@ -397,8 +397,8 @@ export interface FunctionArgs {
    *
    * @example
    *
-   * Here, the entire `packages/functions/src` directory is zipped, except for the `.sst`
-   * folders of other functions. And the handler is
+   * Here, the entire `packages/functions/src` directory is zipped, except for the
+   * `.sst` folders of other functions and any `resource.enc` at the root. And the handler is
    * in the `src` directory.
    *
    * ```js
@@ -2436,7 +2436,10 @@ export class Function extends Component implements Link.Linkable {
         isContainer,
         logGroup.apply((l) => l?.arn),
         dev,
-        region,
+        all([region, args.bundle]).apply(([regionName, customBundle]) => ({
+          regionName,
+          customBundle: !!customBundle,
+        })),
       ]).apply(
         async ([
           bundle,
@@ -2446,7 +2449,7 @@ export class Function extends Component implements Link.Linkable {
           isContainer,
           logGroupArn,
           dev,
-          regionName,
+          { regionName, customBundle },
         ]) => {
           if (isContainer) return;
 
@@ -2525,7 +2528,7 @@ export class Function extends Component implements Link.Linkable {
                 // on every platform.
                 const ownDir = `.sst/${name}/`;
                 const filtered =
-                  !dev && item.from === bundle
+                  !dev && customBundle && item.from === bundle
                     ? found.filter((file) => {
                         const f = toPosix(file);
                         // also leave out the shared file an older version wrote

@@ -227,6 +227,10 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		resourcePath := filepath.Join(result.Out, "resource.enc")
 		if input.Bundle != "" {
 			resourcePath = filepath.Join(result.Out, ".sst", input.FunctionID, "resource.enc")
+			// this folder belongs to the function, start it clean
+			if err := os.RemoveAll(filepath.Dir(resourcePath)); err != nil {
+				return nil, err
+			}
 			if err := os.MkdirAll(filepath.Dir(resourcePath), 0755); err != nil {
 				return nil, err
 			}
