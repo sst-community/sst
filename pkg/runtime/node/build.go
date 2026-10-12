@@ -192,7 +192,10 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 	)
 	log.Info("running esbuild")
 	if !input.Dev {
-		context, _ := esbuild.Context(options)
+		context, ctxErr := esbuild.Context(options)
+		if ctxErr != nil {
+			return nil, ctxErr
+		}
 		result = context.Rebuild()
 		context.Dispose()
 	}

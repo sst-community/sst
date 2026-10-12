@@ -93,6 +93,8 @@ func New(version string) *Runtime {
 		}
 	}
 
+	slog.Debug("esbuild build context cache", "cap", contextCap)
+
 	return &Runtime{
 		version:     version,
 		concurrency: semaphore.NewWeighted(weight),
@@ -178,7 +180,7 @@ func (r *Runtime) releaseContext(functionID string) {
 // can match changed files without retaining the full build result.
 func (r *Runtime) storeInputs(functionID string, metafile string) {
 	var meta struct {
-		Inputs map[string]json.RawMessage `json:"inputs"`
+		Inputs map[string]struct{} `json:"inputs"`
 	}
 	if err := json.Unmarshal([]byte(metafile), &meta); err != nil {
 		return

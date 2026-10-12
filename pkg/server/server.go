@@ -51,11 +51,22 @@ func New() (*Server, error) {
 		result.Rpc.ServeCodec(jsonrpc.NewServerCodec(&HttpConn{Reader: r.Body, Writer: w}))
 	})
 	if flag.SST_PPROF {
-		result.Mux.HandleFunc("/debug/pprof/", pprof.Index)
-		result.Mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		result.Mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		result.Mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		result.Mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		// the dev server listens on all interfaces, profiles are for this machine only
+		local := func(h http.HandlerFunc) http.HandlerFunc {
+			return func(w http.ResponseWriter, r *http.Request) {
+				host, _, err := net.SplitHostPort(r.RemoteAddr)
+				if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
+					http.Error(w, "pprof is only served to localhost", http.StatusForbidden)
+					return
+				}
+				h(w, r)
+			}
+		}
+		result.Mux.HandleFunc("/debug/pprof/", local(pprof.Index))
+		result.Mux.HandleFunc("/debug/pprof/cmdline", local(pprof.Cmdline))
+		result.Mux.HandleFunc("/debug/pprof/profile", local(pprof.Profile))
+		result.Mux.HandleFunc("/debug/pprof/symbol", local(pprof.Symbol))
+		result.Mux.HandleFunc("/debug/pprof/trace", local(pprof.Trace))
 	}
 	return result, nil
 }

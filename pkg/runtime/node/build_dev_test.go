@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/runtime"
 )
 
@@ -90,5 +91,34 @@ func TestDevBuildShouldRebuildTracksInputs(t *testing.T) {
 	}
 	if len(output.Errors) > 0 {
 		t.Fatal(output.Errors)
+	}
+}
+
+func TestDevBuildContextCapFromEnv(t *testing.T) {
+	original := flag.SST_BUILD_CONTEXT_CACHE
+	defer func() { flag.SST_BUILD_CONTEXT_CACHE = original }()
+
+	for value, want := range map[string]int{"": DefaultContextCap, "0": 0, "7": 7, "-1": DefaultContextCap, "abc": DefaultContextCap} {
+		flag.SST_BUILD_CONTEXT_CACHE = value
+		if got := New("dev").contextCap; got != want {
+			t.Errorf("SST_BUILD_CONTEXT_CACHE=%q: contextCap = %d, want %d", value, got, want)
+		}
+	}
+}
+
+func TestDevBuildCacheOffDisposesContexts(t *testing.T) {
+	dir := t.TempDir()
+	r := New("dev")
+	r.contextCap = 0
+	for i := 0; i < 3; i++ {
+		if _, err := r.Build(context.Background(), devBuildInput(t, dir, fmt.Sprintf("fn%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.contextsLock.Lock()
+	got := len(r.contexts)
+	r.contextsLock.Unlock()
+	if got != 0 {
+		t.Errorf("live esbuild contexts = %d, want 0", got)
 	}
 }
