@@ -649,18 +649,23 @@ Listening on "${dev.host}:${dev.port}"...`,
       const options = v === true ? {} : v;
       return {
         password: options.password ?? true,
-        storage: output(options.storage).apply((v) => {
-          const minimum = v?.minimum ? Math.ceil(toGBs(v.minimum)) : undefined;
-          const maximum = v?.maximum ? Math.ceil(toGBs(v.maximum)) : 10;
-          checkRange(name, "storage", "GB", minimum, maximum);
-          return { minimum, maximum };
-        }),
-        ecpuPerSecond: output(options.ecpuPerSecond).apply((v) => {
-          const minimum = v?.minimum;
-          const maximum = v?.maximum ?? 5000;
-          checkRange(name, "ecpuPerSecond", "", minimum, maximum);
-          return { minimum, maximum };
-        }),
+        // The limits can be outputs, so flatten them before reading any value
+        storage: output(options.storage)
+          .apply((v) => all([v?.minimum, v?.maximum]))
+          .apply(([min, max]) => {
+            const minimum = min ? Math.ceil(toGBs(min)) : undefined;
+            const maximum = max ? Math.ceil(toGBs(max)) : 10;
+            checkRange(name, "storage", "GB", minimum, maximum);
+            return { minimum, maximum };
+          }),
+        ecpuPerSecond: output(options.ecpuPerSecond)
+          .apply((v) => all([v?.minimum, v?.maximum]))
+          .apply(([min, max]) => {
+            const minimum = min;
+            const maximum = max ?? 5000;
+            checkRange(name, "ecpuPerSecond", "", minimum, maximum);
+            return { minimum, maximum };
+          }),
       };
     }
 
