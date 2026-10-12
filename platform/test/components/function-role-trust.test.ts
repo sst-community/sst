@@ -90,19 +90,33 @@ pulumi.runtime.setMocks(
   false,
 );
 
+// Waits until no resource has been registered for 250 ms.
 async function settle() {
-  for (let i = 0; i < 100; i++) {
-    await new Promise((resolve) => setImmediate(resolve));
+  let count = -1;
+  let quiet = 0;
+  for (let i = 0; i < 400 && quiet < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    quiet = createdResources.length === count ? quiet + 1 : 0;
+    count = createdResources.length;
   }
 }
 
-async function trustOf(name: string) {
+// The principals the function role trusts, by type
+async function trustOf(name: string): Promise<Record<string, string[]>> {
   await settle();
   const role = createdResources.find(
     (r) => r.type === "aws:iam/role:Role" && r.name === `${name}Role`,
   );
   expect(role).toBeDefined();
-  return JSON.stringify(await new Promise((r) => pulumi.output(role!.inputs.assumeRolePolicy).apply(r)));
+  const policy: any = await new Promise((resolve) =>
+    pulumi.output(role!.inputs.assumeRolePolicy).apply(resolve as any),
+  );
+  const doc = typeof policy === "string" ? JSON.parse(policy) : policy;
+  expect(doc.Statement).toHaveLength(1);
+  const principal = doc.Statement[0].Principal;
+  return Object.fromEntries(
+    Object.entries(principal).map(([type, ids]) => [type, [ids].flat() as string[]]),
+  );
 }
 
 describe("Function role trust policy", function () {
@@ -120,17 +134,18 @@ describe("Function role trust policy", function () {
     // @ts-ignore
     global.$dev = false;
     new Function("Deployed", { handler: "index.handler", bundle: out });
-    const trust = await trustOf("Deployed");
-    expect(trust).toContain("lambda.amazonaws.com");
-    expect(trust).not.toContain(":root");
+    expect(await trustOf("Deployed")).toEqual({
+      Service: ["lambda.amazonaws.com"],
+    });
   });
 
   it("also trusts the account root in sst dev", async () => {
     // @ts-ignore
     global.$dev = true;
     new Function("Dev", { handler: "index.handler", bundle: out });
-    const trust = await trustOf("Dev");
-    expect(trust).toContain("lambda.amazonaws.com");
-    expect(trust).toContain("111111111111");
+    expect(await trustOf("Dev")).toEqual({
+      Service: ["lambda.amazonaws.com"],
+      AWS: ["arn:aws:iam::111111111111:root"],
+    });
   });
 });
