@@ -123,7 +123,8 @@ export interface RedisArgs {
    * stored and the compute you use.
    *
    * A serverless cache needs `version` 7 or later, which the defaults are. A lower `version`
-   * fails with an error.
+   * fails with an error. Only the major part of `version` is used, so `"7.2"` is sent as `"7"`
+   * and ElastiCache picks the minor version.
    *
    * When this is set, `instance`, `cluster`, `nodes` and `parameters` are ignored, and
    * `transform.subnetGroup`, `transform.parameterGroup` and `transform.cluster` don't run.
