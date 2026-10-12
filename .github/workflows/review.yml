@@ -8,8 +8,10 @@ name: review
 # pull_request_target runs this file from main with a token that can comment,
 # for pull requests from forks too. That's safe only because nothing from the
 # pull request runs: main is checked out, the diff is fetched as text, and
-# opencode can read files and write text but has no shell, no edits and no web
-# access (.github/review/opencode.json), and no token. Keep it that way: never
+# opencode can read files and write text but has no edits, no web access and
+# no usable shell (.github/review/opencode.json), and no token. The shell tool
+# stays listed, with every command denied but `true`, because opencode's free
+# models refuse requests that come without it. Keep it that way: never
 # check out the pull request's ref here.
 
 on:
