@@ -278,8 +278,10 @@ export interface FunctionArgs {
    * In `sst dev` a _stub_ version of your function is deployed.
    * :::
    *
-   * In `sst dev` the function's role also trusts the root of your AWS account, so you can
-   * assume it from your machine. A deployed function's role trusts only Lambda.
+   * In `sst dev` the role that SST creates for the function also trusts the root of your AWS
+   * account, so you can assume it from your machine. A deployed role trusts only Lambda. If
+   * you run `sst dev` on a stage that is also deployed, the account root is added back to
+   * the role until the next `sst deploy`, so each switch updates the role.
    *
    * This shows under the **Functions** tab in the multiplexer sidebar where your invocations
    * are logged. You can turn this off by setting `dev` to `false`.
