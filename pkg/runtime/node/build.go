@@ -205,8 +205,11 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 		if ctxErr != nil {
 			return nil, ctxErr
 		}
-		result = buildContext.Rebuild()
-		r.releaseContext(input.FunctionID)
+		func() {
+			// release even if the rebuild panics, or the context stays pinned
+			defer r.releaseContext(input.FunctionID)
+			result = buildContext.Rebuild()
+		}()
 		r.storeInputs(input.FunctionID, result.Metafile)
 	}
 	log.Info("esbuild finished")
