@@ -166,3 +166,23 @@ func TestDevBuildConcurrentBuildsWithEviction(t *testing.T) {
 		}
 	}
 }
+
+func TestDevBuildDefaultCap(t *testing.T) {
+	original := flag.SST_BUILD_CONTEXT_CACHE
+	defer func() { flag.SST_BUILD_CONTEXT_CACHE = original }()
+	flag.SST_BUILD_CONTEXT_CACHE = ""
+
+	dir := t.TempDir()
+	r := New("dev")
+	for i := 0; i < DefaultContextCap+3; i++ {
+		if _, err := r.Build(context.Background(), devBuildInput(t, dir, fmt.Sprintf("fn%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.contextsLock.Lock()
+	got := len(r.contexts)
+	r.contextsLock.Unlock()
+	if got != DefaultContextCap {
+		t.Errorf("live esbuild contexts = %d, want %d", got, DefaultContextCap)
+	}
+}

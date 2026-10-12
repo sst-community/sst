@@ -90,6 +90,8 @@ func New(version string) *Runtime {
 	if flag.SST_BUILD_CONTEXT_CACHE != "" {
 		if parsed, err := strconv.Atoi(flag.SST_BUILD_CONTEXT_CACHE); err == nil && parsed >= 0 {
 			contextCap = parsed
+		} else {
+			slog.Warn("ignoring SST_BUILD_CONTEXT_CACHE, it has to be a number of 0 or more", "value", flag.SST_BUILD_CONTEXT_CACHE, "using", contextCap)
 		}
 	}
 

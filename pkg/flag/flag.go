@@ -22,7 +22,8 @@ var SST_BUILD_CONCURRENCY_SITE = os.Getenv("SST_BUILD_CONCURRENCY_SITE")
 var SST_BUILD_CONTEXT_CACHE = os.Getenv("SST_BUILD_CONTEXT_CACHE")
 
 // SST_PPROF exposes Go pprof handlers under /debug/pprof/ on the local SST server
-// that every command starts, for requests from localhost only
+// that `sst dev`, `deploy`, `diff`, `remove` and `refresh` start, for requests from
+// localhost only
 var SST_PPROF = isTrue("SST_PPROF")
 var SST_SKIP_DEPENDENCY_CHECK = isTrue("SST_SKIP_DEPENDENCY_CHECK")
 var SST_TELEMETRY_DISABLED = isTrue("SST_TELEMETRY_DISABLED") || isTrue("DO_NOT_TRACK")
