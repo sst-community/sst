@@ -904,19 +904,22 @@ Listening on "${dev.host}:${dev.port}"...`,
                 );
               return major;
             }),
-            cacheUsageLimits: {
+            cacheUsageLimits: all([
+              serverless.storage,
+              serverless.ecpuPerSecond,
+            ]).apply(([storage, ecpu]) => ({
               dataStorage: {
-                minimum: serverless.storage.minimum,
-                maximum: serverless.storage.maximum,
+                minimum: storage.minimum,
+                maximum: storage.maximum,
                 unit: "GB",
               },
               ecpuPerSeconds: [
                 {
-                  minimum: serverless.ecpuPerSecond.minimum,
-                  maximum: serverless.ecpuPerSecond.maximum,
+                  minimum: ecpu.minimum,
+                  maximum: ecpu.maximum,
                 },
               ],
-            },
+            })),
             securityGroupIds: vpc.securityGroups,
             subnetIds: vpc.subnets,
             userGroupId: userGroup?.userGroupId,
