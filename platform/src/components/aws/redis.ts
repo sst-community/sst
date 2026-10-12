@@ -922,7 +922,8 @@ Listening on "${dev.host}:${dev.port}"...`,
         return _this.cluster!;
       },
       /**
-       * The ElastiCache Redis serverless cache.
+       * The ElastiCache Redis serverless cache. This throws when `serverless` is not set, use
+       * `cluster` instead.
        */
       get serverlessCache() {
         if (_this.dev)

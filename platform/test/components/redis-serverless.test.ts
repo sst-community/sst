@@ -134,4 +134,27 @@ describe("Redis serverless", function () {
     expect(() => serverless.nodes.cluster).toThrow(/serverless/);
     expect(() => plain.nodes.serverlessCache).toThrow(/not set/);
   });
+
+  it("accepts limits that are outputs", async () => {
+    new Redis("Outputs", {
+      vpc,
+      serverless: {
+        storage: {
+          minimum: pulumi.output("2 GB" as const),
+          maximum: pulumi.output("30 GB" as const),
+        },
+        ecpuPerSecond: { minimum: pulumi.output(2000), maximum: pulumi.output(9000) },
+      },
+    });
+    await settle();
+    const [cache] = ofType("aws:elasticache/serverlessCache:ServerlessCache");
+    expect(cache.inputs.cacheUsageLimits.dataStorage).toMatchObject({
+      minimum: 2,
+      maximum: 30,
+    });
+    expect(cache.inputs.cacheUsageLimits.ecpuPerSeconds[0]).toMatchObject({
+      minimum: 2000,
+      maximum: 9000,
+    });
+  });
 });
