@@ -122,7 +122,14 @@ export interface RedisArgs {
    * instead of a provisioned cluster. It scales with your usage and you pay for the data
    * stored and the compute you use.
    *
-   * When this is set, `instance`, `cluster`, `nodes` and `parameters` are ignored.
+   * When this is set, `instance`, `cluster`, `nodes` and `parameters` are ignored, and
+   * `transform.subnetGroup`, `transform.parameterGroup` and `transform.cluster` don't run.
+   * Use `transform.serverlessCache` instead.
+   *
+   * :::danger
+   * Turning this on or off for an existing Redis replaces it with a different kind of cache,
+   * and its data is lost.
+   * :::
    *
    * A serverless cache always uses TLS and, as set up by SST, has no password. Access is
    * limited by the security groups of the `vpc`. So the linked resource has `host`, `port`
@@ -333,6 +340,7 @@ interface RedisRef {
  * #### Create a serverless Redis
  *
  * You can also create a serverless Redis instance that automatically scales based on usage.
+ * Check out the [serverless example](/docs/examples/#aws-redis-serverless).
  *
  * ```js title="sst.config.ts"
  * const vpc = new sst.aws.Vpc("MyVpc");
@@ -425,6 +433,11 @@ interface RedisRef {
  * If the `valkey` engine is used, the cost is $0.0128 per hour. That works out to $0.0128 x 24 x 30 or **$9 per month**.
  *
  * Adjust this for the `instance` type and number of `nodes` you are using.
+ *
+ * With `serverless`, you pay for the data stored and the ECPUs used instead. A serverless cache
+ * is billed for at least 1 GB of storage, even when idle, and setting a `minimum` raises that floor.
+ * The `maximum` limits cap what it can cost. Check out the
+ * [ElastiCache Serverless pricing](https://aws.amazon.com/elasticache/pricing/).
  *
  * The above are rough estimates for _us-east-1_, check out the
  * [ElastiCache pricing](https://aws.amazon.com/elasticache/pricing/) for more details.
@@ -595,15 +608,45 @@ Listening on "${dev.host}:${dev.port}"...`,
       if (!v) return undefined;
       const options = v === true ? {} : v;
       return {
-        storage: output(options.storage).apply((v) => ({
-          minimum: v?.minimum ? Math.ceil(toGBs(v.minimum)) : undefined,
-          maximum: v?.maximum ? Math.ceil(toGBs(v.maximum)) : 10,
-        })),
-        ecpuPerSecond: output(options.ecpuPerSecond).apply((v) => ({
-          minimum: v?.minimum,
-          maximum: v?.maximum ?? 5000,
-        })),
+        storage: output(options.storage).apply((v) => {
+          const minimum = v?.minimum ? Math.ceil(toGBs(v.minimum)) : undefined;
+          const maximum = v?.maximum ? Math.ceil(toGBs(v.maximum)) : 10;
+          checkRange(name, "storage", "GB", 1, 5000, minimum, maximum);
+          return { minimum, maximum };
+        }),
+        ecpuPerSecond: output(options.ecpuPerSecond).apply((v) => {
+          const minimum = v?.minimum;
+          const maximum = v?.maximum ?? 5000;
+          checkRange(name, "ecpuPerSecond", "", 1000, 15000000, minimum, maximum);
+          return { minimum, maximum };
+        }),
       };
+    }
+
+    function checkRange(
+      name: string,
+      key: string,
+      unit: string,
+      low: number,
+      high: number,
+      minimum: number | undefined,
+      maximum: number,
+    ) {
+      const suffix = unit ? ` ${unit}` : "";
+      for (const [limit, value] of [
+        ["minimum", minimum],
+        ["maximum", maximum],
+      ] as const) {
+        if (value === undefined) continue;
+        if (value < low || value > high)
+          throw new VisibleError(
+            `In the Redis component "${name}", \`serverless.${key}.${limit}\` is ${value}${suffix}, it has to be between ${low} and ${high}${suffix}.`,
+          );
+      }
+      if (minimum !== undefined && minimum > maximum)
+        throw new VisibleError(
+          `In the Redis component "${name}", \`serverless.${key}.minimum\` (${minimum}${suffix}) is above \`serverless.${key}.maximum\` (${maximum}${suffix}).`,
+        );
     }
 
     function createAuthToken() {
@@ -777,7 +820,8 @@ Listening on "${dev.host}:${dev.port}"...`,
   }
 
   /**
-   * The ID of the Redis cluster.
+   * The ID of the Redis cluster, or of the serverless cache when `serverless` is set.
+   * `Redis.get` only works with the ID of a cluster.
    */
   public get clusterId() {
     if (this.dev) return output("placeholder");
@@ -793,9 +837,10 @@ Listening on "${dev.host}:${dev.port}"...`,
   }
 
   /**
-   * The password to connect to the Redis cluster.
+   * The password to connect to the Redis cluster. This is `undefined` when `serverless`
+   * is set, a serverless cache has no password.
    */
-  public get password() {
+  public get password(): Output<string> | undefined {
     return this.dev ? this.dev.password ?? output("") : this._authToken;
   }
 
@@ -841,6 +886,10 @@ Listening on "${dev.host}:${dev.port}"...`,
       get cluster() {
         if (_this.dev)
           throw new VisibleError("Cannot access `nodes.cluster` in dev mode.");
+        if (_this.serverlessCache)
+          throw new VisibleError(
+            "Cannot access `nodes.cluster` when `serverless` is set, use `nodes.serverlessCache`.",
+          );
         return _this.cluster!;
       },
       /**
@@ -851,7 +900,11 @@ Listening on "${dev.host}:${dev.port}"...`,
           throw new VisibleError(
             "Cannot access `nodes.serverlessCache` in dev mode.",
           );
-        return _this.serverlessCache!;
+        if (!_this.serverlessCache)
+          throw new VisibleError(
+            "Cannot access `nodes.serverlessCache` when `serverless` is not set, use `nodes.cluster`.",
+          );
+        return _this.serverlessCache;
       },
     };
   }
