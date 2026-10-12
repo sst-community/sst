@@ -12,6 +12,7 @@ import { Link } from "../link.js";
 import { Input } from "../input.js";
 import { elasticache, secretsmanager } from "@pulumi/aws";
 import { Vpc } from "./vpc.js";
+import { SizeGbTb, toGBs } from "../size.js";
 import { VisibleError } from "../error.js";
 import { DevCommand } from "../experimental/dev-command.js";
 import { Redis as RedisV1 } from "./redis-v1";
@@ -117,64 +118,86 @@ export interface RedisArgs {
    */
   parameters?: Input<Record<string, Input<string>>>;
   /**
-   * Enable serverless Redis using Amazon ElastiCache Serverless.
+   * Use [Amazon ElastiCache Serverless](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.serverless.html)
+   * instead of a provisioned cluster. It scales with your usage and you pay for the data
+   * stored and the compute you use.
    *
-   * Serverless Redis automatically scales based on usage and offers pay-per-use pricing.
-   * When enabled, traditional cluster configuration options like `instance`, `cluster`, and `parameters` are ignored.
+   * When this is set, `instance`, `cluster`, `nodes` and `parameters` are ignored.
+   *
+   * A serverless cache always uses TLS and, as set up by SST, has no password. Access is
+   * limited by the security groups of the `vpc`. So the linked resource has `host`, `port`
+   * and `username`, but no `password`.
+   *
+   * :::note
+   * `Redis.get` only works with provisioned clusters.
+   * :::
    *
    * @default `false`
    * @example
-   * Enable serverless Redis with default limits.
+   * Use the default limits.
    * ```js
    * {
    *   serverless: true
    * }
    * ```
    *
-   * Configure serverless Redis with custom limits.
+   * Set your own limits. These cap how far the cache scales, and so what it can cost.
    * ```js
    * {
    *   serverless: {
-   *     dataStorage: { maximum: 100, unit: "GB" },
-   *     ecpuPerSeconds: { maximum: 50000 }
+   *     storage: { maximum: "100 GB" },
+   *     ecpuPerSecond: { maximum: 50000 }
    *   }
    * }
    * ```
    */
-  serverless?: Input<
+  serverless?:
     | boolean
     | {
         /**
-         * The maximum data storage limit in GB.
+         * The amount of data the cache can store. AWS allows 1 GB to 5,000 GB.
          *
-         * @default `{ maximum: 10, unit: "GB" }`
+         * @default `{ maximum: "10 GB" }`
          * @example
          * ```js
          * {
-         *   dataStorage: { maximum: 100, unit: "GB" }
+         *   storage: { minimum: "1 GB", maximum: "100 GB" }
          * }
          * ```
          */
-        dataStorage?: Input<{
-          maximum: Input<number>;
-          unit: Input<"GB">;
+        storage?: Input<{
+          /**
+           * The smallest amount of storage the cache keeps available.
+           */
+          minimum?: Input<SizeGbTb>;
+          /**
+           * The most data the cache can store.
+           */
+          maximum?: Input<SizeGbTb>;
         }>;
         /**
-         * The maximum ElastiCache Processing Units (ECPU) per second.
+         * The ElastiCache Processing Units (ECPU) the cache can use per second. AWS allows
+         * 1,000 to 15,000,000.
          *
          * @default `{ maximum: 5000 }`
          * @example
          * ```js
          * {
-         *   ecpuPerSeconds: { maximum: 50000 }
+         *   ecpuPerSecond: { minimum: 1000, maximum: 50000 }
          * }
          * ```
          */
-        ecpuPerSeconds?: Input<{
-          maximum: Input<number>;
+        ecpuPerSecond?: Input<{
+          /**
+           * The smallest number of ECPUs per second the cache keeps available.
+           */
+          minimum?: Input<number>;
+          /**
+           * The most ECPUs per second the cache can use.
+           */
+          maximum?: Input<number>;
         }>;
-      }
-  >;
+      };
   /**
    * The VPC to use for the Redis instance.
    *
@@ -325,8 +348,8 @@ interface RedisRef {
  * const redis = new sst.aws.Redis("MyRedis", {
  *   vpc,
  *   serverless: {
- *     dataStorage: { maximum: 100, unit: "GB" },
- *     ecpuPerSeconds: { maximum: 50000 }
+ *     storage: { maximum: "100 GB" },
+ *     ecpuPerSecond: { maximum: 50000 }
  *   }
  * });
  * ```
@@ -408,7 +431,7 @@ interface RedisRef {
  */
 export class Redis extends Component implements Link.Linkable {
   private cluster?: Output<elasticache.ReplicationGroup>;
-  private serverlessCache?: Output<elasticache.ServerlessCache>;
+  private serverlessCache?: elasticache.ServerlessCache;
   private _authToken?: Output<string>;
   private dev?: {
     enabled: boolean;
@@ -445,9 +468,8 @@ export class Redis extends Component implements Link.Linkable {
 
     const vpc = normalizeVpc();
     const serverless = normalizeServerless();
-    if (serverless.enabled) {
-      const serverlessCache = createServerlessCache();
-      this.serverlessCache = serverlessCache;
+    if (serverless) {
+      this.serverlessCache = createServerlessCache(serverless);
       return;
     }
     const instance = output(args.instance).apply((v) => v ?? "t4g.micro");
@@ -569,23 +591,19 @@ Listening on "${dev.host}:${dev.port}"...`,
     }
 
     function normalizeServerless() {
-      return output(args.serverless).apply((v) => {
-        if (v === true) {
-          return {
-            enabled: true,
-            dataStorage: { maximum: 10, unit: "GB" },
-            ecpuPerSeconds: { maximum: 5000 },
-          };
-        }
-        if (v === false || v === undefined) {
-          return { enabled: false };
-        }
-        return {
-          enabled: true,
-          dataStorage: v.dataStorage ?? { maximum: 10, unit: "GB" },
-          ecpuPerSeconds: v.ecpuPerSeconds ?? { maximum: 5000 },
-        };
-      });
+      const v = args.serverless;
+      if (!v) return undefined;
+      const options = v === true ? {} : v;
+      return {
+        storage: output(options.storage).apply((v) => ({
+          minimum: v?.minimum ? Math.ceil(toGBs(v.minimum)) : undefined,
+          maximum: v?.maximum ? Math.ceil(toGBs(v.maximum)) : 10,
+        })),
+        ecpuPerSecond: output(options.ecpuPerSecond).apply((v) => ({
+          minimum: v?.minimum,
+          maximum: v?.maximum ?? 5000,
+        })),
+      };
     }
 
     function createAuthToken() {
@@ -722,42 +740,38 @@ Listening on "${dev.host}:${dev.port}"...`,
       );
     }
 
-    function createServerlessCache() {
-      return serverless.apply(
-        (serverless) =>
-          new elasticache.ServerlessCache(
-            ...transform(
-              args.transform?.serverlessCache,
-              `${name}ServerlessCache`,
-              {
-                description: "Managed by SST",
-                engine,
-                name: `${name.toLowerCase()}`,
-                majorEngineVersion: version.apply((v) => {
-                  // Extract major version (e.g., "7.1" -> "7")
-                  const majorVersion = v.split(".")[0];
-                  return majorVersion;
-                }),
-                cacheUsageLimits: {
-                  dataStorage: {
-                    maximum: serverless.dataStorage?.maximum ?? 10,
-                    unit: serverless.dataStorage?.unit ?? "GB",
-                  },
-                  ecpuPerSeconds: [
-                    {
-                      maximum: serverless.ecpuPerSeconds?.maximum ?? 5000,
-                    },
-                  ],
-                },
-                securityGroupIds: vpc.securityGroups,
-                subnetIds: vpc.subnets,
-                tags: {
-                  "sst:component-version": _version.toString(),
-                },
+    function createServerlessCache(
+      serverless: NonNullable<ReturnType<typeof normalizeServerless>>,
+    ) {
+      return new elasticache.ServerlessCache(
+        ...transform(
+          args.transform?.serverlessCache,
+          `${name}ServerlessCache`,
+          {
+            description: "Managed by SST",
+            engine,
+            majorEngineVersion: version.apply((v) => v.split(".")[0]),
+            cacheUsageLimits: {
+              dataStorage: {
+                minimum: serverless.storage.minimum,
+                maximum: serverless.storage.maximum,
+                unit: "GB",
               },
-              { parent: self },
-            ),
-          ),
+              ecpuPerSeconds: [
+                {
+                  minimum: serverless.ecpuPerSecond.minimum,
+                  maximum: serverless.ecpuPerSecond.maximum,
+                },
+              ],
+            },
+            securityGroupIds: vpc.securityGroups,
+            subnetIds: vpc.subnets,
+            tags: {
+              "sst:component-version": _version.toString(),
+            },
+          },
+          { parent: self },
+        ),
       );
     }
   }
@@ -849,7 +863,7 @@ Listening on "${dev.host}:${dev.port}"...`,
         host: this.host,
         port: this.port,
         username: this.username,
-        password: this.password,
+        ...(this.serverlessCache ? {} : { password: this.password }),
       },
     };
   }

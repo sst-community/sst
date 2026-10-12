@@ -13,8 +13,6 @@ const client = new Cluster(
       tls: {
         checkServerIdentity: () => undefined,
       },
-      username: Resource.MyRedis.username,
-      password: Resource.MyRedis.password,
     },
   }
 );

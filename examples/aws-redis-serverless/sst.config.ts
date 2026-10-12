@@ -9,14 +9,13 @@ export default $config({
     };
   },
   async run() {
-    // Serverless Redis doesn't require NAT Gateways
     const vpc = new sst.aws.Vpc("MyVpc");
     const redis = new sst.aws.Redis("MyRedis", {
       vpc,
       serverless: {
-        dataStorage: { maximum: 10, unit: "GB" },
-        ecpuPerSeconds: { maximum: 5000 }
-      }
+        storage: { maximum: "10 GB" },
+        ecpuPerSecond: { maximum: 5000 },
+      },
     });
     new sst.aws.Function("MyApp", {
       handler: "index.handler",
