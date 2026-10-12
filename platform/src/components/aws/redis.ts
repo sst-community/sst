@@ -12,7 +12,7 @@ import { Link } from "../link.js";
 import { Input } from "../input.js";
 import { elasticache, secretsmanager } from "@pulumi/aws";
 import { Vpc } from "./vpc.js";
-import { SizeGbTb, toGBs } from "../size.js";
+import { toGBs } from "../size.js";
 import { VisibleError } from "../error.js";
 import { DevCommand } from "../experimental/dev-command.js";
 import { Redis as RedisV1 } from "./redis-v1";
@@ -165,7 +165,9 @@ export interface RedisArgs {
     | boolean
     | {
         /**
-         * The amount of data the cache can store.
+         * The amount of data the cache can store, in whole GB. A fraction is rounded up. A
+         * `minimum` and a `maximum` have to be at least `1 GB`, and the `minimum` can't be above
+         * the `maximum`.
          *
          * @default `{ maximum: "10 GB" }`
          * @example
@@ -179,14 +181,15 @@ export interface RedisArgs {
           /**
            * The smallest amount of storage the cache keeps available.
            */
-          minimum?: Input<SizeGbTb>;
+          minimum?: Input<`${number} GB`>;
           /**
            * The most data the cache can store.
            */
-          maximum?: Input<SizeGbTb>;
+          maximum?: Input<`${number} GB`>;
         }>;
         /**
-         * The ElastiCache Processing Units (ECPU) the cache can use per second.
+         * The ElastiCache Processing Units (ECPU) the cache can use per second. A `minimum` and
+         * a `maximum` have to be at least `1`, and the `minimum` can't be above the `maximum`.
          *
          * @default `{ maximum: 5000 }`
          * @example
@@ -530,7 +533,7 @@ export class Redis extends Component implements Link.Linkable {
 
         if (!tags?.["sst:ref:secret"])
           throw new VisibleError(
-            `Failed to lookup secret for Redis cluster "${name}". \`Redis.get\` only works with a provisioned cluster, not with a serverless cache.`,
+            `Failed to lookup secret for Redis cluster "${name}".`,
           );
 
         return {
@@ -905,7 +908,8 @@ Listening on "${dev.host}:${dev.port}"...`,
     const _this = this;
     return {
       /**
-       * The ElastiCache Redis cluster.
+       * The ElastiCache Redis cluster. This throws when `serverless` is set, use
+       * `serverlessCache` instead.
        */
       get cluster() {
         if (_this.dev)
