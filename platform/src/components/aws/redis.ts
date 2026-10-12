@@ -122,6 +122,9 @@ export interface RedisArgs {
    * instead of a provisioned cluster. It scales with your usage and you pay for the data
    * stored and the compute you use.
    *
+   * A serverless cache needs `version` 7 or later, which the defaults are. A lower `version`
+   * fails with an error.
+   *
    * When this is set, `instance`, `cluster`, `nodes` and `parameters` are ignored, and
    * `transform.subnetGroup`, `transform.parameterGroup` and `transform.cluster` don't run.
    * Use `transform.serverlessCache` instead.
