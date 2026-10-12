@@ -182,4 +182,25 @@ func TestCollectionBuildEncryptedResourceFileWithBundle(t *testing.T) {
 			assert.NoError(t, err, "expected %s to exist", p)
 		}
 	})
+
+	t.Run("removes the shared file an older version left in the bundle", func(t *testing.T) {
+		bundleDir := t.TempDir()
+		stale := filepath.Join(bundleDir, "resource.enc")
+		require.NoError(t, os.WriteFile(stale, []byte("old"), 0644))
+
+		mr := &mockRuntime{matchFn: func(r string) bool { return r == "nodejs" }}
+		c := runtime.NewCollection("cfg", mr)
+		_, err := c.Build(context.Background(), &runtime.BuildInput{
+			FunctionID:    "fn-a",
+			Handler:       "index.handler",
+			Bundle:        bundleDir,
+			Runtime:       "nodejs",
+			EncryptionKey: encryptionKey,
+			Links:         map[string]json.RawMessage{},
+		})
+		require.NoError(t, err)
+
+		_, err = os.Stat(stale)
+		assert.True(t, os.IsNotExist(err), "stale resource.enc should be removed")
+	})
 }

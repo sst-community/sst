@@ -227,6 +227,8 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		resourcePath := filepath.Join(result.Out, "resource.enc")
 		if input.Bundle != "" {
 			resourcePath = filepath.Join(result.Out, ".sst", input.FunctionID, "resource.enc")
+			// a bundle deployed by an older version still has the shared file
+			os.Remove(filepath.Join(result.Out, "resource.enc"))
 			if err := os.MkdirAll(filepath.Dir(resourcePath), 0755); err != nil {
 				return nil, err
 			}
