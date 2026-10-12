@@ -148,4 +148,19 @@ describe("Function role trust policy", function () {
       AWS: ["arn:aws:iam::111111111111:root"],
     });
   });
+
+  it("keeps the account root in sst dev for a function with dev: false", async () => {
+    // the dev server of a site is created like this, and the CLI assumes its role
+    // @ts-ignore
+    global.$dev = true;
+    new Function("DevOff", {
+      handler: "index.handler",
+      bundle: out,
+      dev: false,
+    });
+    expect(await trustOf("DevOff")).toEqual({
+      Service: ["lambda.amazonaws.com"],
+      AWS: ["arn:aws:iam::111111111111:root"],
+    });
+  });
 });

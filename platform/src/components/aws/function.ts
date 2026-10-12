@@ -2301,36 +2301,36 @@ export class Function extends Component implements Link.Linkable {
           args.transform?.role,
           `${name}Role`,
           {
-            // `dev` is an Output, resolve it before choosing the policy. Only
-            // `sst dev` trusts the account root, a deployed role trusts
-            // the Lambda service alone.
-            assumeRolePolicy: dev.apply((dev) =>
-              iam.getPolicyDocumentOutput({
-                statements: [
-                  {
-                    actions: ["sts:AssumeRole"],
-                    principals: [
-                      {
-                        type: "Service",
-                        identifiers: ["lambda.amazonaws.com"],
-                      },
-                      ...(dev
-                        ? [
-                            {
-                              type: "AWS",
-                              identifiers: [
-                                interpolate`arn:${partition}:iam::${
-                                  getCallerIdentityOutput({}, opts).accountId
-                                }:root`,
-                              ],
-                            },
-                          ]
-                        : []),
-                    ],
-                  },
-                ],
-              }).json,
-            ),
+            // Only `sst dev` trusts the account root, so the CLI can assume the
+            // role. This goes by `$dev` and not by this function's own `dev`,
+            // as the dev server of a site is created with `dev: false` and its
+            // role is still assumed by the CLI. A deployed role trusts the
+            // Lambda service alone.
+            assumeRolePolicy: iam.getPolicyDocumentOutput({
+              statements: [
+                {
+                  actions: ["sts:AssumeRole"],
+                  principals: [
+                    {
+                      type: "Service",
+                      identifiers: ["lambda.amazonaws.com"],
+                    },
+                    ...($dev
+                      ? [
+                          {
+                            type: "AWS",
+                            identifiers: [
+                              interpolate`arn:${partition}:iam::${
+                                getCallerIdentityOutput({}, opts).accountId
+                              }:root`,
+                            ],
+                          },
+                        ]
+                      : []),
+                  ],
+                },
+              ],
+            }).json,
             // if there are no statements, do not add an inline policy.
             // adding an inline policy with no statements will cause an error.
             inlinePolicies: policy.apply(({ statements }) =>
