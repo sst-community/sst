@@ -10,7 +10,7 @@ import { RandomPassword } from "@pulumi/random";
 import { Component, Transform, transform } from "../component.js";
 import { Link } from "../link.js";
 import { Input } from "../input.js";
-import { elasticache, secretsmanager, ssm } from "@pulumi/aws";
+import { elasticache, secretsmanager } from "@pulumi/aws";
 import { Vpc } from "./vpc.js";
 import { toGBs } from "../size.js";
 import { VisibleError } from "../error.js";
@@ -168,23 +168,16 @@ export interface RedisArgs {
     | boolean
     | {
         /**
-         * Protect the cache with a password. SST generates one for the `default` user, links
-         * it as `password`, and keeps a copy in an encrypted SSM parameter so you can read it
-         * with the AWS CLI. Without a password, anything that can reach the cache inside the
-         * VPC can read and write it.
+         * Protect the cache with a password. SST generates one for the `default` user and links
+         * it as `password`, like a provisioned cluster. Without a password, anything that can
+         * reach the cache inside the VPC can read and write it.
          *
          * Set this to `false` for a cache with no password. Then the link has `host`, `port` and
          * `username`, and no `password`.
          *
-         * To read the password:
-         *
-         * ```bash
-         * aws ssm get-parameter --with-decryption \
-         *   --name /sst/redis/<cache id>/password --query Parameter.Value --output text
-         * ```
-         *
-         * The cache id is the `clusterId` output. The deploy role needs `ssm:PutParameter`,
-         * `ssm:DeleteParameter` and `ssm:AddTagsToResource` for the parameter.
+         * Linked resources get the password, and `sst shell` has it in `Resource.MyRedis.password`.
+         * The deploy role needs the ElastiCache actions to create, update and delete users and
+         * user groups.
          *
          * :::danger
          * Turning this on or off for an existing cache changes how clients connect, so apps
@@ -520,9 +513,7 @@ export class Redis extends Component implements Link.Linkable {
     if (serverless) {
       const auth = serverless.password ? createServerlessAuth() : undefined;
       this._authToken = auth?.password;
-      const cache = createServerlessCache(serverless, auth?.userGroup);
-      this.serverlessCache = cache;
-      if (auth) storeServerlessPassword(cache, auth.password);
+      this.serverlessCache = createServerlessCache(serverless, auth?.userGroup);
       return;
     }
     const instance = output(args.instance).apply((v) => v ?? "t4g.micro");
@@ -865,24 +856,6 @@ Listening on "${dev.host}:${dev.port}"...`,
       );
 
       return { password, userGroup };
-    }
-
-    function storeServerlessPassword(
-      cache: elasticache.ServerlessCache,
-      password: Output<string>,
-    ) {
-      // A copy of the password for people. Nothing reads it at runtime, the
-      // linked functions get the password in their encrypted resource file.
-      new ssm.Parameter(
-        `${name}PasswordParameter`,
-        {
-          name: interpolate`/sst/redis/${cache.id}/password`,
-          description: "Password of the serverless Redis, managed by SST",
-          type: ssm.ParameterType.SecureString,
-          value: password,
-        },
-        { parent: self },
-      );
     }
 
     function createServerlessCache(

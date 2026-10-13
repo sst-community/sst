@@ -134,9 +134,8 @@ describe("Redis serverless", function () {
     expect(group.inputs.engine).toBe("redis");
     const [cache] = ofType("aws:elasticache/serverlessCache:ServerlessCache");
     expect(cache.inputs.userGroupId).toBeDefined();
-    // a copy for people, as a SecureString
-    const [param] = ofType("aws:ssm/parameter:Parameter");
-    expect(param.inputs.type).toBe("SecureString");
+    // the password is not written to SSM
+    expect(ofType("aws:ssm/parameter:Parameter")).toHaveLength(0);
     expect(redis.password).toBeDefined();
     const properties = (redis.getSSTLink() as any).properties;
     expect(Object.keys(properties).sort()).toEqual([
@@ -156,7 +155,7 @@ describe("Redis serverless", function () {
     );
   });
 
-  it("has no password, user, group or parameter with password: false", async () => {
+  it("has no password, user or group with password: false", async () => {
     const redis = new Redis("NoPw", { vpc, serverless: { password: false } });
     await settle();
     expect(ofType("aws:elasticache/user:User")).toHaveLength(0);
