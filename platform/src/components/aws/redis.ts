@@ -176,8 +176,12 @@ export interface RedisArgs {
          * `username`, and no `password`.
          *
          * Linked resources get the password, and `sst shell` has it in `Resource.MyRedis.password`.
-         * The deploy role needs the ElastiCache actions to create, update and delete users and
-         * user groups.
+         *
+         * With a password, the deploy role needs these ElastiCache actions, on top of the ones for
+         * the cache: `elasticache:CreateUser`, `elasticache:DescribeUsers`, `elasticache:DeleteUser`,
+         * `elasticache:CreateUserGroup`, `elasticache:DescribeUserGroups` and
+         * `elasticache:DeleteUserGroup`. Changing a setting later may also call the matching
+         * `Modify` actions.
          *
          * :::danger
          * Turning this on or off for an existing cache changes how clients connect, so apps
@@ -646,7 +650,7 @@ Listening on "${dev.host}:${dev.port}"...`,
           .apply(([min, max]) => {
             const minimum = min ? Math.ceil(toGBs(min)) : undefined;
             const maximum = max ? Math.ceil(toGBs(max)) : 10;
-            checkRange(name, "storage", "GB", minimum, maximum);
+            checkRange(name, "storage", "GB", minimum, maximum, !max);
             return { minimum, maximum };
           }),
         ecpuPerSecond: output(options.ecpuPerSecond)
@@ -654,7 +658,7 @@ Listening on "${dev.host}:${dev.port}"...`,
           .apply(([min, max]) => {
             const minimum = min;
             const maximum = max ?? 5000;
-            checkRange(name, "ecpuPerSecond", "", minimum, maximum);
+            checkRange(name, "ecpuPerSecond", "", minimum, maximum, max === undefined);
             return { minimum, maximum };
           }),
       };
@@ -666,6 +670,7 @@ Listening on "${dev.host}:${dev.port}"...`,
       unit: string,
       minimum: number | undefined,
       maximum: number,
+      maximumIsDefault: boolean,
     ) {
       const suffix = unit ? ` ${unit}` : "";
       for (const [limit, value] of [
@@ -679,7 +684,7 @@ Listening on "${dev.host}:${dev.port}"...`,
       }
       if (minimum !== undefined && minimum > maximum)
         throw new VisibleError(
-          `In the Redis component "${name}", \`serverless.${key}.minimum\` (${minimum}${suffix}) is above \`serverless.${key}.maximum\` (${maximum}${suffix}).`,
+          `In the Redis component "${name}", \`serverless.${key}.minimum\` (${minimum}${suffix}) is above \`serverless.${key}.maximum\` (${maximum}${suffix}${maximumIsDefault ? ", the default" : ""}). Set a \`maximum\` that is at least the \`minimum\`.`,
         );
     }
 
@@ -1022,6 +1027,11 @@ Listening on "${dev.host}:${dev.port}"...`,
    *
    * :::tip
    * You can use the `static get` method to share Redis clusters across stages.
+   * :::
+   *
+   * :::caution
+   * This only works with a provisioned cluster. The `clusterId` of a cache created with
+   * `serverless` can't be used here and fails with a "Failed to lookup secret" error.
    * :::
    *
    * @param name The name of the component.
