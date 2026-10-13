@@ -71,3 +71,48 @@ func TestHandlerFileExistsDottedDirectory(t *testing.T) {
 		t.Fatal("handler.mjs exists, want true")
 	}
 }
+
+func TestHandlerFileExistsIgnoresSourceMap(t *testing.T) {
+	out := t.TempDir()
+	build := &runtime.BuildOutput{Out: out, Handler: "bundle.handler"}
+	if err := os.WriteFile(filepath.Join(out, "bundle.mjs.map"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if handlerFileExists(build) {
+		t.Fatal("only the source map is left, want false")
+	}
+}
+
+func TestHandlerFileExistsIgnoresDirectoryWithTheName(t *testing.T) {
+	out := t.TempDir()
+	build := &runtime.BuildOutput{Out: out, Handler: "index.handler"}
+	if err := os.MkdirAll(filepath.Join(out, "index.d"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if handlerFileExists(build) {
+		t.Fatal("a folder is not a handler file, want false")
+	}
+}
+
+func TestReusableBuild(t *testing.T) {
+	out := t.TempDir()
+	build := &runtime.BuildOutput{Out: out, Handler: "index.handler"}
+	file := filepath.Join(out, "index.mjs")
+	if err := os.WriteFile(file, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if reusableBuild(nil, true) {
+		t.Fatal("no build, want false")
+	}
+	if !reusableBuild(build, true) {
+		t.Fatal("handler is there, want true")
+	}
+	os.Remove(file)
+	if reusableBuild(build, true) {
+		t.Fatal("handler was written and is gone, want false (build again)")
+	}
+	if !reusableBuild(build, false) {
+		t.Fatal("handler never was in the output folder, want true (nothing to check)")
+	}
+}

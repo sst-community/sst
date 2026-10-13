@@ -229,8 +229,7 @@ func function(ctx context.Context, input input) {
 	getBuildOutput := func(functionID string) *runtime.BuildOutput {
 		build := builds[functionID]
 		if build != nil {
-			// a build whose handler file has gone is built again
-			if !handlerBuilt[functionID] || handlerFileExists(build) {
+			if reusableBuild(build, handlerBuilt[functionID]) {
 				return build
 			}
 			log.Info("build output missing, rebuilding", "functionID", functionID, "handler", build.Handler)
@@ -512,8 +511,9 @@ func fileLogger(p *project.Project) {
 	}
 }
 
-// handlerFileExists tells whether the handler of a build is in its output folder,
-// with any extension, or without one for compiled binaries.
+// handlerFileExists tells whether the handler of a build is in its output folder:
+// a file named like the handler with an extension, or without one for compiled
+// binaries. A source map next to a missing bundle doesn't count.
 func handlerFileExists(build *runtime.BuildOutput) bool {
 	// the method comes after the last dot of the file name, not of the whole path
 	handlerFile := build.Handler
@@ -521,9 +521,30 @@ func handlerFileExists(build *runtime.BuildOutput) bool {
 	if i := strings.LastIndex(base, "."); i > 0 {
 		handlerFile = filepath.Join(filepath.Dir(handlerFile), base[:i])
 	}
-	if matches, _ := filepath.Glob(filepath.Join(build.Out, handlerFile+".*")); len(matches) > 0 {
-		return true
+	name := filepath.Base(handlerFile)
+	entries, err := os.ReadDir(filepath.Join(build.Out, filepath.Dir(handlerFile)))
+	if err != nil {
+		return false
 	}
-	_, err := os.Stat(filepath.Join(build.Out, handlerFile))
-	return err == nil
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		file := entry.Name()
+		if file == name || (strings.HasPrefix(file, name+".") && !strings.HasSuffix(file, ".map")) {
+			return true
+		}
+	}
+	return false
+}
+
+// reusableBuild tells whether a cached build can be used again. A build that wrote
+// its handler into the output folder is built again once that file is gone. One that
+// didn't, such as Python in dev where the handler stays in the source, has nothing
+// to check.
+func reusableBuild(build *runtime.BuildOutput, handlerBuilt bool) bool {
+	if build == nil {
+		return false
+	}
+	return !handlerBuilt || handlerFileExists(build)
 }

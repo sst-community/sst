@@ -172,7 +172,9 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 			if input.Dev {
 				// a dev rebuild keeps the folder, so replace a link that points somewhere else
 				if target, err := os.Readlink(dest); err == nil && target != from {
-					os.Remove(dest)
+					if err := os.Remove(dest); err != nil {
+						slog.Warn("could not replace the copyFiles link", "path", dest, "error", err)
+					}
 				}
 				if err := os.Symlink(from, dest); err != nil {
 					if !os.IsExist(err) {
