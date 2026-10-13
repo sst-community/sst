@@ -278,6 +278,11 @@ export interface FunctionArgs {
    * In `sst dev` a _stub_ version of your function is deployed.
    * :::
    *
+   * In `sst dev` the role that SST creates for the function also trusts the root of your AWS
+   * account, so you can assume it from your machine. A deployed role trusts only Lambda. If
+   * you run `sst dev` on a stage that is also deployed, the account root is added back to
+   * the role until the next `sst deploy`, so each switch updates the role.
+   *
    * This shows under the **Functions** tab in the multiplexer sidebar where your invocations
    * are logged. You can turn this off by setting `dev` to `false`.
    *
@@ -2298,31 +2303,36 @@ export class Function extends Component implements Link.Linkable {
           args.transform?.role,
           `${name}Role`,
           {
-            assumeRolePolicy: !dev
-              ? iam.assumeRolePolicyForPrincipal({
-                  Service: "lambda.amazonaws.com",
-                })
-              : iam.getPolicyDocumentOutput({
-                  statements: [
+            // Only `sst dev` trusts the account root, so the CLI can assume the
+            // role. This goes by `$dev` and not by this function's own `dev`,
+            // as the dev server of a site is created with `dev: false` and its
+            // role is still assumed by the CLI. A deployed role trusts the
+            // Lambda service alone.
+            assumeRolePolicy: iam.getPolicyDocumentOutput({
+              statements: [
+                {
+                  actions: ["sts:AssumeRole"],
+                  principals: [
                     {
-                      actions: ["sts:AssumeRole"],
-                      principals: [
-                        {
-                          type: "Service",
-                          identifiers: ["lambda.amazonaws.com"],
-                        },
-                        {
-                          type: "AWS",
-                          identifiers: [
-                            interpolate`arn:${partition}:iam::${
-                              getCallerIdentityOutput({}, opts).accountId
-                            }:root`,
-                          ],
-                        },
-                      ],
+                      type: "Service",
+                      identifiers: ["lambda.amazonaws.com"],
                     },
+                    ...($dev
+                      ? [
+                          {
+                            type: "AWS",
+                            identifiers: [
+                              interpolate`arn:${partition}:iam::${
+                                getCallerIdentityOutput({}, opts).accountId
+                              }:root`,
+                            ],
+                          },
+                        ]
+                      : []),
                   ],
-                }).json,
+                },
+              ],
+            }).json,
             // if there are no statements, do not add an inline policy.
             // adding an inline policy with no statements will cause an error.
             inlinePolicies: policy.apply(({ statements }) =>

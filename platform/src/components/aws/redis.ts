@@ -12,6 +12,7 @@ import { Link } from "../link.js";
 import { Input } from "../input.js";
 import { elasticache, secretsmanager } from "@pulumi/aws";
 import { Vpc } from "./vpc.js";
+import { toGBs } from "../size.js";
 import { VisibleError } from "../error.js";
 import { DevCommand } from "../experimental/dev-command.js";
 import { Redis as RedisV1 } from "./redis-v1";
@@ -116,6 +117,126 @@ export interface RedisArgs {
    * ```
    */
   parameters?: Input<Record<string, Input<string>>>;
+  /**
+   * Use [Amazon ElastiCache Serverless](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.serverless.html)
+   * instead of a provisioned cluster. It scales with your usage and you pay for the data
+   * stored and the compute you use.
+   *
+   * A serverless cache needs `version` 7 or later, which the defaults are. A lower `version`
+   * fails with an error. Only the major part of `version` is used, so `"7.2"` is sent as `"7"`
+   * and ElastiCache picks the minor version.
+   *
+   * When this is set, `instance`, `cluster`, `nodes` and `parameters` are ignored, and
+   * `transform.subnetGroup`, `transform.parameterGroup` and `transform.cluster` don't run.
+   * Use `transform.serverlessCache` instead. The password is set through an ElastiCache user
+   * and user group that SST creates for the cache.
+   *
+   * :::danger
+   * Turning this on or off for an existing Redis replaces it with a different kind of cache,
+   * and its data is lost.
+   * :::
+   *
+   * A serverless cache always uses TLS. By default SST also gives it a generated password for
+   * the `default` user, like a provisioned cluster, so the linked resource has the same `host`,
+   * `port`, `username` and `password`, and the code that connects to it doesn't change. Turn it
+   * off with `password: false`.
+   *
+   * :::note
+   * `Redis.get` only works with provisioned clusters.
+   * :::
+   *
+   * @default `false`
+   * @example
+   * Use the default limits.
+   * ```js
+   * {
+   *   serverless: true
+   * }
+   * ```
+   *
+   * Set your own limits. These cap how far the cache scales, and so what it can cost.
+   * ```js
+   * {
+   *   serverless: {
+   *     storage: { maximum: "100 GB" },
+   *     ecpuPerSecond: { maximum: 50000 }
+   *   }
+   * }
+   * ```
+   */
+  serverless?:
+    | boolean
+    | {
+        /**
+         * Protect the cache with a password. SST generates one for the `default` user and links
+         * it as `password`, like a provisioned cluster. Without a password, anything that can
+         * reach the cache inside the VPC can read and write it.
+         *
+         * Set this to `false` for a cache with no password. Then the link has `host`, `port` and
+         * `username`, and no `password`.
+         *
+         * Linked resources get the password, and `sst shell` has it in `Resource.MyRedis.password`.
+         *
+         * With a password, the deploy role needs these ElastiCache actions, on top of the ones for
+         * the cache: `elasticache:CreateUser`, `elasticache:DescribeUsers`, `elasticache:DeleteUser`,
+         * `elasticache:CreateUserGroup`, `elasticache:DescribeUserGroups` and
+         * `elasticache:DeleteUserGroup`. Changing a setting later may also call the matching
+         * `Modify` actions.
+         *
+         * :::danger
+         * Turning this on or off for an existing cache changes how clients connect, so apps
+         * that were linked before have to be deployed again.
+         * :::
+         *
+         * @default `true`
+         */
+        password?: boolean;
+        /**
+         * The amount of data the cache can store, in whole GB. A fraction is rounded up. A
+         * `minimum` and a `maximum` have to be at least `1 GB`, and the `minimum` can't be above
+         * the `maximum`.
+         *
+         * @default `{ maximum: "10 GB" }`
+         * @example
+         * ```js
+         * {
+         *   storage: { minimum: "1 GB", maximum: "100 GB" }
+         * }
+         * ```
+         */
+        storage?: Input<{
+          /**
+           * The smallest amount of storage the cache keeps available.
+           */
+          minimum?: Input<`${number} GB`>;
+          /**
+           * The most data the cache can store.
+           */
+          maximum?: Input<`${number} GB`>;
+        }>;
+        /**
+         * The ElastiCache Processing Units (ECPU) the cache can use per second. A `minimum` and
+         * a `maximum` have to be at least `1`, and the `minimum` can't be above the `maximum`.
+         *
+         * @default `{ maximum: 5000 }`
+         * @example
+         * ```js
+         * {
+         *   ecpuPerSecond: { minimum: 1000, maximum: 50000 }
+         * }
+         * ```
+         */
+        ecpuPerSecond?: Input<{
+          /**
+           * The smallest number of ECPUs per second the cache keeps available.
+           */
+          minimum?: Input<number>;
+          /**
+           * The most ECPUs per second the cache can use.
+           */
+          maximum?: Input<number>;
+        }>;
+      };
   /**
    * The VPC to use for the Redis instance.
    *
@@ -223,6 +344,10 @@ export interface RedisArgs {
      * Transform the Redis cluster.
      */
     cluster?: Transform<elasticache.ReplicationGroupArgs>;
+    /**
+     * Transform the Redis serverless cache.
+     */
+    serverlessCache?: Transform<elasticache.ServerlessCacheArgs>;
   };
 }
 
@@ -242,6 +367,32 @@ interface RedisRef {
  * ```js title="sst.config.ts"
  * const vpc = new sst.aws.Vpc("MyVpc");
  * const redis = new sst.aws.Redis("MyRedis", { vpc });
+ * ```
+ *
+ * #### Create a serverless Redis
+ *
+ * You can also create a serverless Redis instance that automatically scales based on usage.
+ * Check out the [serverless example](/docs/examples/#aws-redis-serverless). It connects with the same
+ * `username` and `password` as a provisioned Redis.
+ *
+ * ```js title="sst.config.ts"
+ * const vpc = new sst.aws.Vpc("MyVpc");
+ * const redis = new sst.aws.Redis("MyRedis", {
+ *   vpc,
+ *   serverless: true
+ * });
+ * ```
+ *
+ * Configure serverless limits.
+ *
+ * ```js title="sst.config.ts"
+ * const redis = new sst.aws.Redis("MyRedis", {
+ *   vpc,
+ *   serverless: {
+ *     storage: { maximum: "100 GB" },
+ *     ecpuPerSecond: { maximum: 50000 }
+ *   }
+ * });
  * ```
  *
  * #### Link to a resource
@@ -316,11 +467,17 @@ interface RedisRef {
  *
  * Adjust this for the `instance` type and number of `nodes` you are using.
  *
+ * With `serverless`, you pay for the data stored and the ECPUs used instead. A serverless cache
+ * is billed for at least 1 GB of storage, even when idle, and setting a `minimum` raises that floor.
+ * The `maximum` limits cap what it can cost. Check out the
+ * [ElastiCache Serverless pricing](https://aws.amazon.com/elasticache/pricing/).
+ *
  * The above are rough estimates for _us-east-1_, check out the
  * [ElastiCache pricing](https://aws.amazon.com/elasticache/pricing/) for more details.
  */
 export class Redis extends Component implements Link.Linkable {
   private cluster?: Output<elasticache.ReplicationGroup>;
+  private serverlessCache?: elasticache.ServerlessCache;
   private _authToken?: Output<string>;
   private dev?: {
     enabled: boolean;
@@ -348,9 +505,6 @@ export class Redis extends Component implements Link.Linkable {
     const version = all([engine, args.version]).apply(
       ([engine, v]) => v ?? (engine === "redis" ? "7.1" : "7.2"),
     );
-    const instance = output(args.instance).apply((v) => v ?? "t4g.micro");
-    const argsCluster = normalizeCluster();
-    const vpc = normalizeVpc();
 
     const dev = registerDev();
     if (dev?.enabled) {
@@ -358,13 +512,25 @@ export class Redis extends Component implements Link.Linkable {
       return;
     }
 
+    const vpc = normalizeVpc();
+    const serverless = normalizeServerless();
+    if (serverless) {
+      const auth = serverless.password ? createServerlessAuth() : undefined;
+      this._authToken = auth?.password;
+      this.serverlessCache = createServerlessCache(serverless, auth?.userGroup);
+      return;
+    }
+    const instance = output(args.instance).apply((v) => v ?? "t4g.micro");
+    const argsCluster = normalizeCluster();
+
     const { authToken, secret } = createAuthToken();
+    this._authToken = authToken;
+
     const subnetGroup = createSubnetGroup();
     const parameterGroup = createParameterGroup();
     const cluster = createCluster();
 
     this.cluster = cluster;
-    this._authToken = authToken;
 
     function reference() {
       const ref = args as unknown as RedisRef;
@@ -470,6 +636,56 @@ Listening on "${dev.host}:${dev.port}"...`,
         }
         return v;
       });
+    }
+
+    function normalizeServerless() {
+      const v = args.serverless;
+      if (!v) return undefined;
+      const options = v === true ? {} : v;
+      return {
+        password: options.password ?? true,
+        // The limits can be outputs, so flatten them before reading any value
+        storage: output(options.storage)
+          .apply((v) => all([v?.minimum, v?.maximum]))
+          .apply(([min, max]) => {
+            const minimum = min ? Math.ceil(toGBs(min)) : undefined;
+            const maximum = max ? Math.ceil(toGBs(max)) : 10;
+            checkRange(name, "storage", "GB", minimum, maximum, !max);
+            return { minimum, maximum };
+          }),
+        ecpuPerSecond: output(options.ecpuPerSecond)
+          .apply((v) => all([v?.minimum, v?.maximum]))
+          .apply(([min, max]) => {
+            const minimum = min;
+            const maximum = max ?? 5000;
+            checkRange(name, "ecpuPerSecond", "", minimum, maximum, max === undefined);
+            return { minimum, maximum };
+          }),
+      };
+    }
+
+    function checkRange(
+      name: string,
+      key: string,
+      unit: string,
+      minimum: number | undefined,
+      maximum: number,
+      maximumIsDefault: boolean,
+    ) {
+      const suffix = unit ? ` ${unit}` : "";
+      for (const [limit, value] of [
+        ["minimum", minimum],
+        ["maximum", maximum],
+      ] as const) {
+        if (value !== undefined && value < 1)
+          throw new VisibleError(
+            `In the Redis component "${name}", \`serverless.${key}.${limit}\` has to be at least 1${suffix}.`,
+          );
+      }
+      if (minimum !== undefined && minimum > maximum)
+        throw new VisibleError(
+          `In the Redis component "${name}", \`serverless.${key}.minimum\` (${minimum}${suffix}) is above \`serverless.${key}.maximum\` (${maximum}${suffix}${maximumIsDefault ? ", the default" : ""}). Set a \`maximum\` that is at least the \`minimum\`.`,
+        );
     }
 
     function createAuthToken() {
@@ -605,13 +821,104 @@ Listening on "${dev.host}:${dev.port}"...`,
           ),
       );
     }
+
+    function createServerlessAuth() {
+      const password = new RandomPassword(
+        `${name}AuthToken`,
+        {
+          length: 32,
+          special: true,
+          overrideSpecial: "!&#$^<>-",
+        },
+        { parent: self },
+      ).result;
+
+      // A serverless cache takes its passwords from a user group. The group needs
+      // a user named "default", this one has the password.
+      const user = new elasticache.User(
+        `${name}User`,
+        {
+          // the id is named by SST, an empty string leaves it to the naming rule
+          userId: "",
+          userName: "default",
+          engine,
+          accessString: "on ~* +@all",
+          authenticationMode: {
+            type: "password",
+            passwords: [password],
+          },
+        },
+        { parent: self },
+      );
+      const userGroup = new elasticache.UserGroup(
+        `${name}UserGroup`,
+        {
+          userGroupId: "",
+          engine,
+          userIds: [user.userId],
+        },
+        { parent: self },
+      );
+
+      return { password, userGroup };
+    }
+
+    function createServerlessCache(
+      serverless: NonNullable<ReturnType<typeof normalizeServerless>>,
+      userGroup: elasticache.UserGroup | undefined,
+    ) {
+      return new elasticache.ServerlessCache(
+        ...transform(
+          args.transform?.serverlessCache,
+          `${name}ServerlessCache`,
+          {
+            description: "Managed by SST",
+            engine,
+            majorEngineVersion: version.apply((v) => {
+              const major = v.split(".")[0];
+              if (parseInt(major) < 7)
+                throw new VisibleError(
+                  `In the Redis component "${name}", \`serverless\` needs version 7 or later, but \`version\` is "${v}".`,
+                );
+              return major;
+            }),
+            cacheUsageLimits: all([
+              serverless.storage,
+              serverless.ecpuPerSecond,
+            ]).apply(([storage, ecpu]) => ({
+              dataStorage: {
+                minimum: storage.minimum,
+                maximum: storage.maximum,
+                unit: "GB",
+              },
+              ecpuPerSeconds: [
+                {
+                  minimum: ecpu.minimum,
+                  maximum: ecpu.maximum,
+                },
+              ],
+            })),
+            securityGroupIds: vpc.securityGroups,
+            subnetIds: vpc.subnets,
+            userGroupId: userGroup?.userGroupId,
+            tags: {
+              "sst:component-version": _version.toString(),
+            },
+          },
+          { parent: self },
+        ),
+      );
+    }
   }
 
   /**
-   * The ID of the Redis cluster.
+   * The ID of the Redis cluster, or of the serverless cache when `serverless` is set.
+   * `Redis.get` only works with the ID of a cluster.
    */
   public get clusterId() {
-    return this.dev ? output("placeholder") : this.cluster!.id;
+    if (this.dev) return output("placeholder");
+    if (this.serverlessCache) return this.serverlessCache.id;
+    return this.cluster!.id;
   }
 
   /**
@@ -622,9 +929,10 @@ Listening on "${dev.host}:${dev.port}"...`,
   }
 
   /**
-   * The password to connect to the Redis cluster.
+   * The password to connect to the Redis cluster. This is `undefined` for a serverless cache
+   * with `password: false`.
    */
-  public get password() {
+  public get password(): Output<string> | undefined {
     return this.dev ? this.dev.password ?? output("") : this._authToken;
   }
 
@@ -632,20 +940,35 @@ Listening on "${dev.host}:${dev.port}"...`,
    * The host to connect to the Redis cluster.
    */
   public get host() {
-    return this.dev
-      ? this.dev.host
-      : this.cluster!.clusterEnabled.apply((enabled) =>
-          enabled
-            ? this.cluster!.configurationEndpointAddress
-            : this.cluster!.primaryEndpointAddress,
-        );
+    if (this.dev) return this.dev.host;
+    if (this.serverlessCache) {
+      return this.serverlessCache.endpoints.apply((endpoints) => {
+        const address = endpoints?.[0]?.address;
+        if (!address)
+          throw new VisibleError(
+            "The serverless Redis cache has no endpoint address yet.",
+          );
+        return address;
+      });
+    }
+    return this.cluster!.clusterEnabled.apply((enabled) =>
+      enabled
+        ? this.cluster!.configurationEndpointAddress
+        : this.cluster!.primaryEndpointAddress,
+    );
   }
 
   /**
    * The port to connect to the Redis cluster.
    */
   public get port() {
-    return this.dev ? this.dev.port : this.cluster!.port.apply((v) => v!);
+    if (this.dev) return this.dev.port;
+    if (this.serverlessCache) {
+      return this.serverlessCache.endpoints.apply(
+        (endpoints) => endpoints?.[0]?.port ?? 6379,
+      );
+    }
+    return this.cluster!.port.apply((v) => v!);
   }
 
   /**
@@ -655,12 +978,32 @@ Listening on "${dev.host}:${dev.port}"...`,
     const _this = this;
     return {
       /**
-       * The ElastiCache Redis cluster.
+       * The ElastiCache Redis cluster. This throws when `serverless` is set, use
+       * `serverlessCache` instead.
        */
       get cluster() {
         if (_this.dev)
           throw new VisibleError("Cannot access `nodes.cluster` in dev mode.");
+        if (_this.serverlessCache)
+          throw new VisibleError(
+            "Cannot access `nodes.cluster` when `serverless` is set, use `nodes.serverlessCache`.",
+          );
         return _this.cluster!;
+      },
+      /**
+       * The ElastiCache Redis serverless cache. This throws when `serverless` is not set, use
+       * `cluster` instead.
+       */
+      get serverlessCache() {
+        if (_this.dev)
+          throw new VisibleError(
+            "Cannot access `nodes.serverlessCache` in dev mode.",
+          );
+        if (!_this.serverlessCache)
+          throw new VisibleError(
+            "Cannot access `nodes.serverlessCache` when `serverless` is not set, use `nodes.cluster`.",
+          );
+        return _this.serverlessCache;
       },
     };
   }
@@ -672,7 +1015,7 @@ Listening on "${dev.host}:${dev.port}"...`,
         host: this.host,
         port: this.port,
         username: this.username,
-        password: this.password,
+        ...(this.password ? { password: this.password } : {}),
       },
     };
   }
@@ -684,6 +1027,11 @@ Listening on "${dev.host}:${dev.port}"...`,
    *
    * :::tip
    * You can use the `static get` method to share Redis clusters across stages.
+   * :::
+   *
+   * :::caution
+   * This only works with a provisioned cluster. The `clusterId` of a cache created with
+   * `serverless` can't be used here and fails with a "Failed to lookup secret" error.
    * :::
    *
    * @param name The name of the component.
