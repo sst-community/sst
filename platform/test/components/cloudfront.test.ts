@@ -374,6 +374,28 @@ describe("CloudFront router", () => {
     });
   });
 
+  it("leaves the origin timeouts alone when the route sets none", async () => {
+    const { event, handler } = loadHandler({
+      uri: "/",
+      headers: {
+        host: { value: "example.com" },
+      },
+      routes: ["url,route0,,/"],
+      metadata: {
+        route0: {
+          host: "gateway-origin.example.com",
+        },
+      },
+    });
+
+    await handler(event);
+
+    const origin = event.request.origin as Record<string, unknown>;
+    expect(origin.domainName).toBe("gateway-origin.example.com");
+    expect(origin.timeouts).toBeUndefined();
+    expect(origin.connectionAttempts).toBeUndefined();
+  });
+
   describe("header sizing", () => {
     it("counts request headers and cookies", async () => {
       const { getRequestHeaderSize, routeSite } = loadRouteSite({
