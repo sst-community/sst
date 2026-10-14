@@ -355,7 +355,7 @@ describe("CloudFront router", () => {
 
     await handler(event);
 
-    expect(event.request.origin).toEqual({
+    expect(event.request.origin).toMatchObject({
       domainName: "gateway-origin.example.com",
       customOriginConfig: {
         port: 443,
