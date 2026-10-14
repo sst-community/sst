@@ -409,7 +409,8 @@ export interface RouterUrlRouteArgs extends RouteArgs {
    *
    * The Router applies this timeout dynamically to matching requests through
    * its CloudFront Function. It does not change the distribution's static
-   * origin configuration.
+   * origin configuration. When you don't set it, the requests use the 20 seconds
+   * of the distribution's origin.
    *
    * @default `"20 seconds"`
    * @example
@@ -427,7 +428,8 @@ export interface RouterUrlRouteArgs extends RouteArgs {
    *
    * The Router applies this timeout dynamically to matching requests through
    * its CloudFront Function. It does not change the distribution's static
-   * origin configuration.
+   * origin configuration. When you don't set it, the requests use the 5 seconds
+   * of the distribution's origin.
    *
    * @default `"5 seconds"`
    * @example

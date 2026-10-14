@@ -331,69 +331,71 @@ describe("CloudFront router", () => {
     });
   });
 
-  it("sets URL route origin timeouts dynamically", async () => {
-    const { event, handler } = loadHandler({
-      uri: "/",
-      headers: {
-        host: { value: "example.com" },
-      },
-      routes: ["url,route0,,/"],
-      metadata: {
-        route0: {
-          host: "gateway-origin.example.com",
-          origin: {
-            connectionAttempts: 2,
-            timeouts: {
-              connectionTimeout: 3,
-              readTimeout: 60,
-              keepAliveTimeout: 60,
+  describe("origin overrides", () => {
+    it("sets URL route origin timeouts dynamically", async () => {
+      const { event, handler } = loadHandler({
+        uri: "/",
+        headers: {
+          host: { value: "example.com" },
+        },
+        routes: ["url,route0,,/"],
+        metadata: {
+          route0: {
+            host: "gateway-origin.example.com",
+            origin: {
+              connectionAttempts: 2,
+              timeouts: {
+                connectionTimeout: 3,
+                readTimeout: 60,
+                keepAliveTimeout: 60,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    await handler(event);
+      await handler(event);
 
-    expect(event.request.origin).toMatchObject({
-      domainName: "gateway-origin.example.com",
-      customOriginConfig: {
-        port: 443,
-        protocol: "https",
-        sslProtocols: ["TLSv1.2"],
-      },
-      originAccessControlConfig: {
-        enabled: false,
-      },
-      connectionAttempts: 2,
-      timeouts: {
-        connectionTimeout: 3,
-        readTimeout: 60,
-        keepAliveTimeout: 60,
-      },
-    });
-  });
-
-  it("leaves the origin timeouts alone when the route sets none", async () => {
-    const { event, handler } = loadHandler({
-      uri: "/",
-      headers: {
-        host: { value: "example.com" },
-      },
-      routes: ["url,route0,,/"],
-      metadata: {
-        route0: {
-          host: "gateway-origin.example.com",
+      expect(event.request.origin).toMatchObject({
+        domainName: "gateway-origin.example.com",
+        customOriginConfig: {
+          port: 443,
+          protocol: "https",
+          sslProtocols: ["TLSv1.2"],
         },
-      },
+        originAccessControlConfig: {
+          enabled: false,
+        },
+        connectionAttempts: 2,
+        timeouts: {
+          connectionTimeout: 3,
+          readTimeout: 60,
+          keepAliveTimeout: 60,
+        },
+      });
     });
 
-    await handler(event);
+    it("leaves the origin timeouts alone when the route sets none", async () => {
+      const { event, handler } = loadHandler({
+        uri: "/",
+        headers: {
+          host: { value: "example.com" },
+        },
+        routes: ["url,route0,,/"],
+        metadata: {
+          route0: {
+            host: "gateway-origin.example.com",
+          },
+        },
+      });
 
-    const origin = event.request.origin as Record<string, unknown>;
-    expect(origin.domainName).toBe("gateway-origin.example.com");
-    expect(origin.timeouts).toBeUndefined();
-    expect(origin.connectionAttempts).toBeUndefined();
+      await handler(event);
+
+      const origin = event.request.origin as Record<string, unknown>;
+      expect(origin.domainName).toBe("gateway-origin.example.com");
+      expect(origin.timeouts).toBeUndefined();
+      expect(origin.connectionAttempts).toBeUndefined();
+    });
   });
 
   describe("header sizing", () => {
