@@ -412,7 +412,7 @@ export interface RouterUrlRouteArgs extends RouteArgs {
    * The Router applies this timeout dynamically to matching requests through
    * its CloudFront Function. It does not change the distribution's static
    * origin configuration. When you don't set it, the requests use the 20 seconds
-   * of the distribution's origin.
+   * that the Router sets on the distribution's origin by default.
    *
    * @default `"20 seconds"`
    * @example
@@ -429,9 +429,9 @@ export interface RouterUrlRouteArgs extends RouteArgs {
    * between 1 and 60 seconds
    *
    * The Router passes this value to CloudFront with each matching request, but
-   * CloudFront does not apply it. It keeps the connection for the keep-alive
-   * timeout of the distribution's origin, which is 5 seconds, whatever you set
-   * here.
+   * CloudFront currently does not apply it. It keeps the connection for the
+   * keep-alive timeout of the distribution's origin, which is 5 seconds by
+   * default, whatever you set here.
    *
    * @default `"5 seconds"`
    * @example
@@ -3183,8 +3183,10 @@ export type RouterRouteArgs = {
    * The number of seconds that CloudFront waits for a response after routing a
    * request to the destination. Must be between 1 and 60 seconds.
    *
-   * When compared to the `connectionTimeout`, this is the total time for the
-   * request.
+   * When compared to the `connectionTimeout`, this is the time CloudFront waits
+   * for each connection attempt. If the destination doesn't respond, CloudFront
+   * tries again, up to `connectionAttempts` times (3 by default), so the request
+   * can take that many times this value to fail.
    *
    * @default `"20 seconds"`
    * @example
