@@ -3,6 +3,7 @@ package resource
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -106,7 +107,11 @@ func (r *Run) executeCommand(input *RunInputs) error {
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Error("failed to read command output", "error", err, "cmd", cmd.String())
-		bus.Publish(&common.StdoutEvent{Line: "A line of the command's output is longer than 1 MB. The rest of its output is not shown."})
+		if errors.Is(err, bufio.ErrTooLong) {
+			bus.Publish(&common.StdoutEvent{Line: fmt.Sprintf("A line of the command's output is longer than %d MB. The rest of its output is not shown.", maxOutputLine/(1024*1024))})
+		} else {
+			bus.Publish(&common.StdoutEvent{Line: "The command's output could not be read to the end: " + err.Error()})
+		}
 		// Keep reading, or the command blocks on a full pipe once nobody reads it,
 		// and Wait below never returns.
 		io.Copy(io.Discard, reader)

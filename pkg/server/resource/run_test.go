@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,9 @@ func collectOutput(t *testing.T, command string) []string {
 
 func runWithTimeout(t *testing.T, command string) (error, bool) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the commands need sh, head and tr")
+	}
 	r := NewRun()
 	done := make(chan error, 1)
 	go func() { done <- r.executeCommand(&RunInputs{Command: command}) }()
