@@ -50,31 +50,6 @@ const db = planetscale.getDatabaseVitessOutput({
 This guide uses the Vitess resources. PlanetScale also supports Postgres with equivalent resources and functions: `PostgresBranch`, `PostgresBranchRole`, `getDatabasePostgresOutput`, and `getPostgresBranchOutput`.
 :::
 
-For branch-per-stage Postgres roles, set `successor` to another role that should
-receive ownership of database objects before PlanetScale deletes the role. This
-is especially important in preview and branch-per-stage workflows where
-non-production roles are removed automatically after they may have created or
-modified objects.
-
-```ts title="sst.config.ts"
-const role = new planetscale.PostgresBranchRole("DatabaseRole", {
-  database: db.name,
-  organization: db.organization,
-  branch: branch.name,
-  name: `${$app.name}-${$app.stage}`,
-  inheritedRoles: [
-    "pg_read_all_data",
-    "pg_write_all_data",
-    "postgres", // Only needed for pushing schema changes
-  ],
-  successor: "postgres",
-});
-```
-
-Runtime-only roles that never own database objects do not need a `successor`,
-but setting one makes branch cleanup robust if the role later creates or owns
-objects.
-
 ---
 
 ## Branch per stage
@@ -106,6 +81,31 @@ Configure [Autodeploy](/docs/console/#autodeploy) in the SST Console to do this 
 :::
 
 This is a pattern used in production by [terminal.shop](https://github.com/terminaldotshop/terminal) and [OpenCode](https://github.com/anomalyco/opencode).
+
+---
+
+## Postgres role successors
+
+When you remove a stage whose resources have `removal` set to `"remove"`, SST deletes its Postgres branch roles. A role that owns database objects, because your app or a migration tool created them, can't be deleted unless PlanetScale knows which role should take those objects over. Without one, the delete fails with a 422.
+
+Set `successor` to the role that should receive them. This continues from the `branch` above.
+
+```ts title="sst.config.ts"
+const role = new planetscale.PostgresBranchRole("DatabaseRole", {
+  database: db.name,
+  organization: db.organization,
+  branch: branch.name,
+  name: `${$app.name}-${$app.stage}`,
+  inheritedRoles: [
+    "pg_read_all_data",
+    "pg_write_all_data",
+    "postgres", // Only needed for pushing schema changes
+  ],
+  successor: "postgres",
+});
+```
+
+Set it on every role you create, including runtime-only roles that own nothing yet, since they may create or own objects later.
 
 ---
 
