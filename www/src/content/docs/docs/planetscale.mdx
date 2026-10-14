@@ -86,9 +86,9 @@ This is a pattern used in production by [terminal.shop](https://github.com/termi
 
 ## Postgres role successors
 
-When you remove a stage whose resources have `removal` set to `"remove"`, SST deletes its Postgres branch roles. A role that owns database objects, because your app or a migration tool created them, can't be deleted unless PlanetScale knows which role should take those objects over. Without one, the delete fails with a 422.
+When you remove a stage whose resources have their [removal policy](/docs/reference/config/#removal) set to `"remove"`, SST deletes its Postgres branch roles. A role that owns database objects, because your app or a migration tool created them, can't be deleted unless PlanetScale knows which role should take those objects over. Without one, the delete fails with a 422.
 
-Set `successor` to the role that should receive them. This continues from the `branch` above.
+Set `successor` to the role that should receive them. Here `db` and `branch` are the Postgres ones, from `getDatabasePostgresOutput` and a `PostgresBranch` or `getPostgresBranchOutput`, in place of the Vitess ones above.
 
 ```ts title="sst.config.ts"
 const role = new planetscale.PostgresBranchRole("DatabaseRole", {
