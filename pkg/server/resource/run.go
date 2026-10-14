@@ -82,19 +82,22 @@ func (r *Run) executeCommand(input *RunInputs) error {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 	}
-	stdout, err := cmd.StdoutPipe()
+	// One pipe for both. Reading stdout to its end before stderr (a MultiReader)
+	// blocks the command once it writes more than a pipe holds to stderr, since
+	// nobody reads that while stdout is still open.
+	reader, writer, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return err
-	}
-	reader := io.MultiReader(stdout, stderr)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
 	err = cmd.Start()
+	writer.Close()
 	if err != nil {
+		reader.Close()
 		return err
 	}
+	defer reader.Close()
 	scanner := bufio.NewScanner(reader)
 	// a line can be longer than the 64 KB a scanner takes by default
 	scanner.Buffer(make([]byte, 0, 64*1024), maxOutputLine)
@@ -103,6 +106,7 @@ func (r *Run) executeCommand(input *RunInputs) error {
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Error("failed to read command output", "error", err, "cmd", cmd.String())
+		bus.Publish(&common.StdoutEvent{Line: "A line of the command's output is longer than 1 MB. The rest of its output is not shown."})
 		// Keep reading, or the command blocks on a full pipe once nobody reads it,
 		// and Wait below never returns.
 		io.Copy(io.Discard, reader)

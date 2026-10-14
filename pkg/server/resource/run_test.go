@@ -41,17 +41,6 @@ func runWithTimeout(t *testing.T, command string) (error, bool) {
 	}
 }
 
-func TestRunWithALongLine(t *testing.T) {
-	// one line of 200 KB, longer than the 64 KB a bufio.Scanner takes by default, then more output
-	err, finished := runWithTimeout(t, `head -c 200000 /dev/zero | tr '\0' a; echo; echo after`)
-	if !finished {
-		t.Fatal("the command never finished")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestRunWithNormalOutput(t *testing.T) {
 	err, finished := runWithTimeout(t, `echo `+strings.Repeat("x", 100)+`; echo done`)
 	if !finished || err != nil {
@@ -60,13 +49,18 @@ func TestRunWithNormalOutput(t *testing.T) {
 }
 
 func TestRunWithALineOverTheLimit(t *testing.T) {
-	// 3 MB on one line is dropped with an error in the log, and the command still ends
-	err, finished := runWithTimeout(t, `head -c 3000000 /dev/zero | tr '\0' a; echo; echo after`)
-	if !finished {
-		t.Fatal("the command never finished")
+	// 3 MB on one line is dropped with a note, and the command still ends
+	lines := collectOutput(t, `head -c 3000000 /dev/zero | tr '\0' a; echo; echo after`)
+	if len(lines) != 1 || !strings.Contains(lines[0], "longer than 1 MB") {
+		t.Fatalf("got %d lines: %q", len(lines), lines)
 	}
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestRunWithALotOfStderr(t *testing.T) {
+	// more on stderr than a pipe holds, while stdout stays open
+	lines := collectOutput(t, `head -c 300000 /dev/zero | tr '\0' e >&2; echo; sleep 0.2; echo after`)
+	if len(lines) == 0 || lines[len(lines)-1] != "after" {
+		t.Fatalf("got %d lines, last %q", len(lines), lines[len(lines)-1:])
 	}
 }
 
