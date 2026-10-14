@@ -33,6 +33,8 @@ func TestBuildDoesNotDependOnTheCommit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
+	// an ambient GOFLAGS=-buildvcs=false would make this pass without the fix
+	t.Setenv("GOFLAGS", "")
 	dir := t.TempDir()
 	write := func(name, content string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {

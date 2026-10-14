@@ -84,7 +84,9 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 	args := []string{"build"}
 	env := os.Environ()
 	if !input.Dev {
-		args = append(args, "-ldflags", "-s -w", "-buildvcs=false")
+		args = append(args, "-ldflags", "-s -w")
+		// no revision or commit time in the binary, or every commit changes it
+		args = append(args, "-buildvcs=false")
 		env = append(env, "CGO_ENABLED=0")
 		env = append(env, "GOOS=linux")
 		env = append(env, "GOARCH=amd64")
