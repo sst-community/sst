@@ -16,6 +16,10 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+// The longest line of command output that is passed on, 1 MB. A longer line is
+// logged and the rest of the output is read and dropped.
+const maxOutputLine = 1024 * 1024
+
 // Semaphore to limit concurrent executions
 type Run struct {
 	lock *semaphore.Weighted
@@ -92,11 +96,16 @@ func (r *Run) executeCommand(input *RunInputs) error {
 		return err
 	}
 	scanner := bufio.NewScanner(reader)
+	// a line can be longer than the 64 KB a scanner takes by default
+	scanner.Buffer(make([]byte, 0, 64*1024), maxOutputLine)
 	for scanner.Scan() {
 		bus.Publish(&common.StdoutEvent{Line: scanner.Text()})
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Error("failed to read command output", "error", err, "cmd", cmd.String())
+		// Keep reading, or the command blocks on a full pipe once nobody reads it,
+		// and Wait below never returns.
+		io.Copy(io.Discard, reader)
 	}
 	slog.Info("waiting for command to finish", "cmd", cmd.String())
 	cmd.Wait()
