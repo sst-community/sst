@@ -47,6 +47,7 @@ interface Registered {
   type: string;
   name: string;
   id?: string;
+  inputs: any;
 }
 
 let registered: Registered[] = [];
@@ -54,7 +55,12 @@ let registered: Registered[] = [];
 pulumi.runtime.setMocks(
   {
     newResource: function (args: pulumi.runtime.MockResourceArgs) {
-      registered.push({ type: args.type, name: args.name, id: args.id });
+      registered.push({
+        type: args.type,
+        name: args.name,
+        id: args.id,
+        inputs: args.inputs,
+      });
       return {
         id: args.id ?? `${args.name}_id`,
         state: { ...args.inputs, arn: `arn:aws:test:::${args.name}` },
@@ -132,6 +138,7 @@ describe("Function role", function () {
     await settle();
     const lambda = registered.find((r) => r.type === "aws:lambda/function:Function");
     expect(lambda).toBeDefined();
+    expect(await new Promise((resolve) => pulumi.output(lambda!.inputs.role).apply(resolve as any))).toBe(roleArn);
     expect(roles("Wired")).toHaveLength(0);
   });
 
@@ -139,7 +146,7 @@ describe("Function role", function () {
     const fn = new Function("Own", { handler: "index.handler", bundle: out });
     await settle();
     expect(roles("Own")).toHaveLength(1);
-    expect(roles("Own")[0].id).toBeFalsy();
+    expect(roles("Own")[0].inputs.assumeRolePolicy).toBeDefined();
 
     const role = fn.nodes.role;
     expect(fn.nodes.role).toBe(role);
