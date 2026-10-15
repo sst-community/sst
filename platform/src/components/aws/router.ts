@@ -3183,10 +3183,8 @@ export type RouterRouteArgs = {
    * The number of seconds that CloudFront waits for a response after routing a
    * request to the destination. Must be between 1 and 60 seconds.
    *
-   * When compared to the `connectionTimeout`, this is the time CloudFront waits
-   * for each connection attempt. If the destination doesn't respond, CloudFront
-   * tries again, up to `connectionAttempts` times (3 by default), so the request
-   * can take that many times this value to fail.
+   * When compared to the `connectionTimeout`, this is the total time for the
+   * request.
    *
    * @default `"20 seconds"`
    * @example
