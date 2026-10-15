@@ -2261,14 +2261,14 @@ export class Function extends Component implements Link.Linkable {
       // share one role across many functions pay that lookup once per function today.
       if (args.role) {
         const roleArn = args.role;
-        return lazy(() =>
-          iam.Role.get(
+        let existing: iam.Role | undefined;
+        return () =>
+          (existing ??= iam.Role.get(
             `${name}Role`,
             output(roleArn).apply(parseRoleArn).roleName,
             {},
             { parent },
-          ),
-        );
+          ));
       }
 
       const policy = all([args.permissions || [], linkPermissions, dev]).apply(
@@ -3029,7 +3029,8 @@ export class Function extends Component implements Link.Linkable {
     const self = this;
     return {
       /**
-       * The IAM Role the function will use.
+       * The IAM Role the function will use. If you passed in a `role`, it's read from
+       * AWS the first time you access this.
        */
       get role() {
         return self.role();
