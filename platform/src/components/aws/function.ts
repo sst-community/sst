@@ -3047,7 +3047,8 @@ export class Function extends Component implements Link.Linkable {
     return {
       /**
        * The IAM Role the function will use. If you passed in a `role`, it's read from
-       * AWS the first time you access this.
+       * AWS the first time you access this, including through `const { role } = fn.nodes`
+       * or `{ ...fn.nodes }`, and the deploy fails if that role doesn't exist.
        */
       get role() {
         return self.role();
