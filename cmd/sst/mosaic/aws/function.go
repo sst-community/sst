@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -253,17 +254,9 @@ func function(ctx context.Context, input input) {
 	// the Python runtime in dev for one doesn't, its handler stays in the source
 	handlerBuilt := map[string]bool{}
 
-	getBuildOutput := func(functionID string) *runtime.BuildOutput {
-		build := builds[functionID]
-		if build != nil {
-			if reusableBuild(build, handlerBuilt[functionID]) {
-				return build
-			}
-			log.Info("build output missing, rebuilding", "functionID", functionID, "handler", build.Handler)
-			delete(builds, functionID)
-		}
-		target, _ := targets[functionID]
-		build, err := input.project.Runtime.Build(ctx, target)
+	// keeps what a build gave for the function and says how it went; it gives
+	// the build, or nil when it failed
+	record := func(functionID string, build *runtime.BuildOutput, err error) *runtime.BuildOutput {
 		if err == nil {
 			bus.Publish(&FunctionBuildEvent{
 				FunctionID: functionID,
@@ -282,6 +275,35 @@ func function(ctx context.Context, input input) {
 		builds[functionID] = build
 		handlerBuilt[functionID] = handlerFileExists(build)
 		return build
+	}
+
+	getBuildOutput := func(functionID string) *runtime.BuildOutput {
+		build := builds[functionID]
+		if build != nil {
+			if reusableBuild(build, handlerBuilt[functionID]) {
+				return build
+			}
+			log.Info("build output missing, rebuilding", "functionID", functionID, "handler", build.Handler)
+			delete(builds, functionID)
+		}
+		target, _ := targets[functionID]
+		build, err := input.project.Runtime.Build(ctx, target)
+		return record(functionID, build, err)
+	}
+
+	// builds the functions at once and keeps what each gave, and tells which
+	// ones failed
+	buildEach := func(toBuild []*runtime.BuildInput) map[string]bool {
+		failed := map[string]bool{}
+		results := buildAll(toBuild, func(target *runtime.BuildInput) (*runtime.BuildOutput, error) {
+			return input.project.Runtime.Build(ctx, target)
+		})
+		for _, result := range results {
+			if record(result.FunctionID, result.Output, result.Err) == nil {
+				failed[result.FunctionID] = true
+			}
+		}
+		return failed
 	}
 
 	startWorker := func(functionID string, workerID string) bool {
@@ -358,6 +380,50 @@ func function(ctx context.Context, input input) {
 		}
 	}
 
+	// Files that changed since the last rebuild. One save can change several,
+	// as a formatter or a checkout does, so they're taken together a moment
+	// later, and a function is built once for all of them.
+	changed := map[string]bool{}
+	var rebuildChanged <-chan time.Time
+
+	rebuild := func(paths map[string]bool) {
+		toBuild := []*runtime.BuildInput{}
+		for functionID := range builds {
+			target, ok := targets[functionID]
+			if !ok {
+				continue
+			}
+			for path := range paths {
+				if !input.project.Runtime.ShouldRebuild(target.Runtime, target.FunctionID, path) {
+					continue
+				}
+				for _, worker := range workers {
+					if worker.FunctionID == functionID {
+						log.Info("stopping", "workerID", worker.WorkerID, "functionID", worker.FunctionID)
+						worker.Worker.Stop()
+					}
+				}
+				delete(builds, functionID)
+				toBuild = append(toBuild, target)
+				break
+			}
+		}
+		if len(toBuild) == 0 {
+			return
+		}
+
+		failed := buildEach(toBuild)
+		rebuilt := map[string]bool{}
+		for _, target := range toBuild {
+			rebuilt[target.FunctionID] = !failed[target.FunctionID]
+		}
+		for workerID, info := range workers {
+			if rebuilt[info.FunctionID] {
+				restartOrDeferWorker(workerID, info)
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -427,6 +493,11 @@ func function(ctx context.Context, input input) {
 				continue
 			}
 
+		case <-rebuildChanged:
+			paths := changed
+			changed = map[string]bool{}
+			rebuildChanged = nil
+			rebuild(paths)
 		case info := <-workerShutdownChan:
 			log.Info("worker died", "workerID", info.WorkerID)
 			stateMu.Lock()
@@ -457,43 +528,29 @@ func function(ctx context.Context, input input) {
 					info.Worker.Stop()
 				}
 				builds = map[string]*runtime.BuildOutput{}
+				// the functions whose workers start again now are built at once,
+				// not one by one as each starts
+				toBuild := []*runtime.BuildInput{}
+				for _, info := range workers {
+					target, ok := targets[info.FunctionID]
+					if !ok || slices.Contains(toBuild, target) || !input.project.Runtime.ShouldRunEagerly(target.Runtime) {
+						continue
+					}
+					toBuild = append(toBuild, target)
+				}
+				failed := buildEach(toBuild)
 				for workerID, info := range workers {
-					restartOrDeferWorker(workerID, info)
+					if !failed[info.FunctionID] {
+						restartOrDeferWorker(workerID, info)
+					}
 				}
 			case *runtime.BuildInput:
 				targets[evt.FunctionID] = evt
 			case *watcher.FileChangedEvent:
 				log.Info("checking if code needs to be rebuilt", "file", evt.Path)
-				toBuild := map[string]bool{}
-
-				for functionID := range builds {
-					target, ok := targets[functionID]
-					if !ok {
-						continue
-					}
-					if input.project.Runtime.ShouldRebuild(target.Runtime, target.FunctionID, evt.Path) {
-						for _, worker := range workers {
-							if worker.FunctionID == functionID {
-								log.Info("stopping", "workerID", worker.WorkerID, "functionID", worker.FunctionID)
-								worker.Worker.Stop()
-							}
-						}
-						delete(builds, functionID)
-						toBuild[functionID] = true
-					}
-				}
-
-				for functionID := range toBuild {
-					output := getBuildOutput(functionID)
-					if output == nil {
-						delete(toBuild, functionID)
-					}
-				}
-
-				for workerID, info := range workers {
-					if toBuild[info.FunctionID] {
-						restartOrDeferWorker(workerID, info)
-					}
+				changed[evt.Path] = true
+				if rebuildChanged == nil {
+					rebuildChanged = time.After(rebuildDelay)
 				}
 				break
 			}
@@ -576,6 +633,33 @@ func reusableBuild(build *runtime.BuildOutput, handlerBuilt bool) bool {
 		return false
 	}
 	return !handlerBuilt || handlerFileExists(build)
+}
+
+// How long after a file changes the functions that use it are built again. The
+// files that change in that time are taken together.
+const rebuildDelay = 100 * time.Millisecond
+
+type functionBuild struct {
+	FunctionID string
+	Output     *runtime.BuildOutput
+	Err        error
+}
+
+// buildAll builds the functions at once and gives what each build returned, in
+// the order of targets. A change to a file that several functions import would
+// otherwise build them one after the other. The runtimes limit how many builds
+// run together.
+func buildAll(targets []*runtime.BuildInput, build func(*runtime.BuildInput) (*runtime.BuildOutput, error)) []functionBuild {
+	results := make([]functionBuild, len(targets))
+	var wg sync.WaitGroup
+	for i, target := range targets {
+		wg.Go(func() {
+			output, err := build(target)
+			results[i] = functionBuild{FunctionID: target.FunctionID, Output: output, Err: err}
+		})
+	}
+	wg.Wait()
+	return results
 }
 
 // How many more times a reply to a bridge is sent after the first, and how far

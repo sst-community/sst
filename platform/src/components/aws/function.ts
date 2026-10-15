@@ -1075,6 +1075,21 @@ export interface FunctionArgs {
      * Check out the _JS tab_ in the code snippets in the esbuild docs for the
      * [`BuildOptions`](https://esbuild.github.io/api/#build).
      * :::
+     *
+     * For example, a function builds faster in `sst dev` when the AWS SDK is left out of
+     * its bundle there. It's loaded from your `node_modules` instead, so the packages you
+     * import have to be installed. A deploy still bundles them.
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     esbuild: {
+     *       external: $dev ? ["@aws-sdk/*", "@smithy/*"] : []
+     *     }
+     *   }
+     * }
+     * ```
      */
     esbuild?: Input<EsbuildOptions>;
     /**

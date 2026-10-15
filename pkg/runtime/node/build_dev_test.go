@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -184,5 +185,55 @@ func TestDevBuildDefaultCap(t *testing.T) {
 	r.contextsLock.Unlock()
 	if got != DefaultContextCap {
 		t.Errorf("live esbuild contexts = %d, want %d", got, DefaultContextCap)
+	}
+}
+
+// A change to a function's config, such as its esbuild options, is used by its
+// next build in dev. The context made from the old options isn't kept.
+func TestDevBuildUsesChangedOptions(t *testing.T) {
+	dir := t.TempDir()
+	r := New("dev")
+	input := devBuildInput(t, dir, "fn")
+
+	build := func(input *runtime.BuildInput) string {
+		t.Helper()
+		output, err := r.Build(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(output.Errors) > 0 {
+			t.Fatal(output.Errors)
+		}
+		bundle, err := os.ReadFile(filepath.Join(input.Out(), "bundle.mjs"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(bundle)
+	}
+	contextOf := func() any {
+		r.contextsLock.Lock()
+		defer r.contextsLock.Unlock()
+		if len(r.contexts) != 1 {
+			t.Fatalf("live esbuild contexts = %d, want 1", len(r.contexts))
+		}
+		return r.contexts["fn"].context
+	}
+
+	if strings.Contains(build(input), "changed-banner") {
+		t.Fatal("the banner is there before it's set")
+	}
+	first := contextOf()
+	build(input)
+	if contextOf() != first {
+		t.Error("a build from the same options made a new context")
+	}
+
+	changed := *input
+	changed.Properties = json.RawMessage(`{"banner":"// changed-banner"}`)
+	if !strings.Contains(build(&changed), "changed-banner") {
+		t.Error("the build after the options changed used the old ones")
+	}
+	if contextOf() == first {
+		t.Error("the context made from the old options was kept")
 	}
 }

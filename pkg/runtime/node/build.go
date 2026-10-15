@@ -201,13 +201,16 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 	}
 
 	if input.Dev {
-		buildContext, ctxErr := r.acquireContext(input.FunctionID, options)
+		// the options are made from these, so a change to any of them, as to the
+		// function's config, needs a new context
+		key := strings.Join([]string{input.Runtime, file, target, string(input.Properties)}, "\x00")
+		buildContext, release, ctxErr := r.acquireContext(input.FunctionID, key, options)
 		if ctxErr != nil {
 			return nil, ctxErr
 		}
 		func() {
 			// release even if the rebuild panics, or the context stays pinned
-			defer r.releaseContext(input.FunctionID)
+			defer release()
 			result = buildContext.Rebuild()
 		}()
 		r.storeInputs(input.FunctionID, result.Metafile)
