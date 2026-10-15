@@ -133,6 +133,22 @@ describe("Function role", function () {
     expect(roles("Passed")).toHaveLength(1);
   });
 
+  it("registers the role once when nodes.role is read inside an apply", async () => {
+    const fn = new Function("InApply", {
+      handler: "index.handler",
+      bundle: out,
+      role: roleArn,
+    });
+    await settle();
+    expect(roles("InApply")).toHaveLength(0);
+
+    await new Promise((resolve) =>
+      pulumi.output(fn.arn).apply(() => resolve(fn.nodes.role)),
+    );
+    await settle();
+    expect(roles("InApply")).toHaveLength(1);
+  });
+
   it("uses the passed-in role for the function", async () => {
     new Function("Wired", { handler: "index.handler", bundle: out, role: roleArn });
     await settle();

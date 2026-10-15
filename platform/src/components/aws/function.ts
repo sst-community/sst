@@ -798,9 +798,9 @@ export interface FunctionArgs {
    *
    * However, if you pass in a role, you'll need to update it manually if you add `permissions` or `link` resources.
    *
-   * SST does not read the role on each deploy. If the role is deleted, a deploy with
-   * nothing to change still succeeds, and AWS rejects the function when it's next
-   * created or updated.
+   * SST does not read the role on each deploy. If the role is deleted, a deploy of an
+   * existing function still succeeds, and the function fails when it runs because
+   * Lambda can no longer assume the role.
    *
    * @default Creates a new role
    * @example
