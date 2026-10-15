@@ -2261,14 +2261,27 @@ export class Function extends Component implements Link.Linkable {
       // share one role across many functions pay that lookup once per function today.
       if (args.role) {
         const roleArn = args.role;
-        let existing: iam.Role | undefined;
-        return () =>
-          (existing ??= iam.Role.get(
-            `${name}Role`,
-            output(roleArn).apply(parseRoleArn).roleName,
-            {},
-            { parent },
-          ));
+        let existing: { role: iam.Role } | { error: unknown } | undefined;
+        return () => {
+          // Reads once. If the read throws, later accesses throw the same error
+          // and don't register the role again.
+          if (!existing) {
+            try {
+              existing = {
+                role: iam.Role.get(
+                  `${name}Role`,
+                  output(roleArn).apply(parseRoleArn).roleName,
+                  {},
+                  { parent },
+                ),
+              };
+            } catch (error) {
+              existing = { error };
+            }
+          }
+          if ("error" in existing) throw existing.error;
+          return existing.role;
+        };
       }
 
       const policy = all([args.permissions || [], linkPermissions, dev]).apply(
