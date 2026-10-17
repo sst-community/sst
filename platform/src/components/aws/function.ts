@@ -284,7 +284,27 @@ export interface FunctionArgs {
    * the role until the next `sst deploy`, so each switch updates the role.
    *
    * This shows under the **Functions** tab in the multiplexer sidebar where your invocations
-   * are logged. You can turn this off by setting `dev` to `false`.
+   * are logged.
+   *
+   * A function that's _Live_ makes a round trip to your machine for each invocation. You can
+   * turn this off by setting `dev` to `false`, which makes its invocations faster. It's worth
+   * doing for a function you aren't working on, such as an authorizer, which runs before
+   * each request to its routes that it doesn't have a cached result for.
+   *
+   * ```js
+   * api.addAuthorizer({
+   *   name: "MyAuthorizer",
+   *   lambda: {
+   *     function: {
+   *       handler: "src/authorizer.handler",
+   *       dev: false
+   *     }
+   *   }
+   * });
+   * ```
+   *
+   * The function then runs in AWS as it's deployed, so it can't reach anything that only
+   * runs on your machine.
    *
    * Read more about [Live](/docs/live/) and [`sst dev`](/docs/reference/cli/#dev).
    *
