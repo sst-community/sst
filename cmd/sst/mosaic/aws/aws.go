@@ -71,6 +71,7 @@ func Start(
 	}
 
 	in.msg = functionsChan
+	go fileLogger(p)
 	go function(ctx, in)
 
 	in.msg = tasksChan

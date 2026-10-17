@@ -120,7 +120,6 @@ func function(ctx context.Context, input input) {
 		})
 	}
 	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{}, &FunctionInvokedEvent{})
-	go fileLogger(input.project)
 
 	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/next`, func(w http.ResponseWriter, r *http.Request) {
 		log.Info("got next request", "workerID", r.PathValue("workerID"))
@@ -496,45 +495,6 @@ func function(ctx context.Context, input input) {
 					}
 				}
 				break
-			}
-		}
-	}
-}
-
-func fileLogger(p *project.Project) {
-	evts := bus.Subscribe(&FunctionLogEvent{}, &FunctionInvokedEvent{}, &FunctionResponseEvent{}, &FunctionErrorEvent{}, &FunctionBuildEvent{})
-	logs := map[string]*os.File{}
-
-	getLog := func(functionID string, requestID string) *os.File {
-		log, ok := logs[requestID]
-		if !ok {
-			path := p.PathLog(fmt.Sprintf("lambda/%s/%d-%s", functionID, time.Now().Unix(), requestID))
-			os.MkdirAll(filepath.Dir(path), 0755)
-			log, _ = os.Create(path)
-			logs[requestID] = log
-		}
-		return log
-	}
-
-	for range evts {
-		for evt := range evts {
-			switch evt := evt.(type) {
-			case *FunctionInvokedEvent:
-				log := getLog(evt.FunctionID, evt.RequestID)
-				log.WriteString("invocation " + evt.RequestID + "\n")
-				log.WriteString(string(evt.Input))
-				log.WriteString("\n")
-			case *FunctionLogEvent:
-				getLog(evt.FunctionID, evt.RequestID).WriteString(evt.Line + "\n")
-			case *FunctionResponseEvent:
-				log := getLog(evt.FunctionID, evt.RequestID)
-				log.WriteString("response " + evt.RequestID + "\n")
-				log.WriteString(string(evt.Output))
-				log.WriteString("\n")
-				delete(logs, evt.RequestID)
-			case *FunctionErrorEvent:
-				getLog(evt.FunctionID, evt.RequestID).WriteString(evt.ErrorType + ": " + evt.ErrorMessage + "\n")
-				delete(logs, evt.RequestID)
 			}
 		}
 	}
