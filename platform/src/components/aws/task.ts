@@ -128,6 +128,10 @@ export interface TaskArgs extends FargateBaseArgs {
    * Since the stub version runs while your task is running, you are charged for the time it
    * takes to run. This is roughly **$0.02 per hour**.
    *
+   * What the `dev.command` prints shows in the **Tasks** tab. To also print it in the
+   * task's log group, through the stub, set `SST_DEV_CLOUDWATCH_LOGS=true` when you run
+   * `sst dev`. [Read more about logs](/docs/live/#logs).
+   *
    * To disable this and deploy your task in `sst dev`, pass in `false`. Read more about
    * [Live](/docs/live/) and [`sst dev`](/docs/reference/cli/#dev).
    */

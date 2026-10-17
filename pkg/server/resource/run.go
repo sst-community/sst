@@ -1,7 +1,6 @@
 package resource
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -98,7 +97,7 @@ func (r *Run) executeCommand(input *RunInputs) error {
 		return err
 	}
 	defer reader.Close()
-	err = readLines(
+	err = process.ReadLines(
 		reader,
 		maxOutputLine,
 		func(line string) { bus.Publish(&common.StdoutEvent{Line: line}) },
@@ -119,39 +118,4 @@ func (r *Run) executeCommand(input *RunInputs) error {
 		return fmt.Errorf("command exited with code %d", cmd.ProcessState.ExitCode())
 	}
 	return nil
-}
-
-// readLines passes each line of r to onLine. A line longer than max bytes is not
-// passed on: onTooLong is called once for it, and reading goes on with the next
-// line, so the output after it is not lost.
-func readLines(r io.Reader, max int, onLine func(string), onTooLong func()) error {
-	reader := bufio.NewReader(r)
-	var line []byte
-	tooLong := false
-	for {
-		part, isPrefix, err := reader.ReadLine()
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-		if !tooLong {
-			if len(line)+len(part) > max {
-				tooLong = true
-				line = nil
-				onTooLong()
-			} else {
-				line = append(line, part...)
-			}
-		}
-		if isPrefix {
-			continue
-		}
-		if !tooLong {
-			onLine(string(line))
-		}
-		line = line[:0]
-		tooLong = false
-	}
 }

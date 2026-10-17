@@ -69,6 +69,10 @@ There are a couple of quirks with this setup that are worth noting.
 
    You can fix this by running `sst deploy` and it'll deploy the real version of your app. But the next time you run `sst dev` it'll need to deploy the stub back. This'll take a couple of minutes. So we recommend only using your personal stages for `sst dev`. And avoid flipping back and forth between `dev` and `deploy`.
 
+3. **Logs in CloudWatch**
+
+   Your functions' log groups only get the stub's own lines, unless you [turn on CloudWatch logs](#logs).
+
 ---
 
 ### Live mode
@@ -198,6 +202,33 @@ You need to start a new terminal **in VS Code** after enabling Auto Attach.
 :::
 
 Now open a new terminal in VS Code, run `sst dev`, set a breakpoint in a function, and invoke the function.
+
+---
+
+## Logs
+
+What your functions print shows in the **Functions** tab of `sst dev`. It's also written to `.sst/log/lambda/`, a file for each invocation.
+
+In CloudWatch, a function's log group only gets the lines of the stub that runs in its place. To print what your functions print there too, set `SST_DEV_CLOUDWATCH_LOGS` when you run `sst dev`. It's off by default.
+
+```bash frame="none"
+SST_DEV_CLOUDWATCH_LOGS=true sst dev
+```
+
+With it on:
+
+- Each line is printed in the invocation it belongs to, under its request ID. So CloudWatch Logs Insights, metric filters and log subscriptions see it as they would when the function is deployed.
+- When a function fails, its error is printed after its output, as `ERROR Invoke Error {...}`, or `ERROR Init Error {...}` when it fails to load.
+- What a function prints after it returns shows in its next invocation, as it would when deployed.
+- Up to 256 KB is sent for each invocation. Past that, a note says how many lines were left out.
+- It works for durable functions and [`Workflow`](/docs/component/aws/workflow/) too.
+- For a [`Task`](/docs/component/aws/task/) with a `dev.command`, what the command prints is sent to the task's log group every second, through its stub.
+
+The stub waits for a function's output after the function responds, and prints it before it takes the next invocation. Whatever invoked the function gets the response as soon as before. The stub runs about a tenth of a second longer for each invocation, and it's one more message through AppSync.
+
+:::note
+A line longer than 1 MB isn't shown, in `sst dev` or in CloudWatch. A note says so, and the lines after it are.
+:::
 
 ---
 

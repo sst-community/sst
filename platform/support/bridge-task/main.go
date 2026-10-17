@@ -28,6 +28,18 @@ var ENV_BLACKLIST = map[string]bool{
 	"PATH": true,
 }
 
+// messageLogs is bridge.MessageLogs: what the task's command printed in sst dev,
+// sent when SST_DEV_CLOUDWATCH_LOGS is set. This module builds against an older
+// copy of the CLI's bridge package, which doesn't have it. Its number is kept by
+// TestMessageTypesKeepTheirNumbers in that package.
+const messageLogs bridge.MessageType = 10
+
+// logsBody is the part of bridge.LogsBody a task's logs use.
+type logsBody struct {
+	Lines   []string `json:"lines"`
+	Dropped int      `json:"dropped"`
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Println(err)
@@ -76,6 +88,29 @@ func run() error {
 	writer.Close()
 	slog.Info("sent init")
 
+	// What the command printed goes to this container's output, so it reaches the
+	// task's log group. It's printed in the order it arrives, away from the loop,
+	// so a message in several packets doesn't hold the loop up. When the task
+	// completes, what's left is printed first.
+	queue := make(chan bridge.Message, 100)
+	printed := make(chan struct{})
+	go func() {
+		defer close(printed)
+		for msg := range queue {
+			var body logsBody
+			if err := json.NewDecoder(msg.Body).Decode(&body); err != nil {
+				slog.Error("failed to read the task's output", "err", err)
+				continue
+			}
+			for _, line := range body.Lines {
+				fmt.Println(line)
+			}
+			if body.Dropped > 0 {
+				fmt.Printf("[sst dev] %d more lines were left out, over the limit for one second.\n", body.Dropped)
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -88,8 +123,16 @@ func run() error {
 			case bridge.MessagePing:
 				slog.Info("got ping")
 				continue
+			case messageLogs:
+				queue <- msg
+				continue
 			case bridge.MessageTaskComplete:
 				slog.Info("task complete")
+				close(queue)
+				select {
+				case <-printed:
+				case <-time.After(2 * time.Second):
+				}
 				return nil
 			}
 		case <-time.After(time.Second * 10):

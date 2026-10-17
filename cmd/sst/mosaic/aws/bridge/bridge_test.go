@@ -87,3 +87,32 @@ func TestSortedOrdersPackets(t *testing.T) {
 		t.Fatalf("passed on %v, want %v", got, want)
 	}
 }
+
+// A bridge already deployed reads message types by number, so the ones it knows
+// keep theirs, and a new one goes at the end.
+func TestMessageTypesKeepTheirNumbers(t *testing.T) {
+	if MessageProbe != 9 || MessageLogs != 10 {
+		t.Fatalf("MessageProbe is %d and MessageLogs %d, want 9 and 10", MessageProbe, MessageLogs)
+	}
+}
+
+// A reply says its logs follow on every packet, and a packet from a CLI from
+// before it says they don't.
+func TestSortedPassesOnLogsFollow(t *testing.T) {
+	withFlag, _ := json.Marshal(Packet{Type: MessageResponse, ID: "r4", Final: true, LogsFollow: true})
+	sub := make(chan string, 2)
+	sub <- string(withFlag)
+	sub <- packet("r5", 0, "", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := map[string]bool{}
+	for p := range sorted(ctx, sub) {
+		got[p.ID] = p.LogsFollow
+		if len(got) == 2 {
+			break
+		}
+	}
+	if !got["r4"] || got["r5"] {
+		t.Fatalf("logsFollow was %v, want r4 true and r5 false", got)
+	}
+}

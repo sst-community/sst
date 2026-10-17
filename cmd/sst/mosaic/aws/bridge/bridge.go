@@ -19,6 +19,9 @@ type Packet struct {
 	Index  int         `json:"index"`
 	Data   string      `json:"data"`
 	Final  bool        `json:"final"`
+	// LogsFollow says a MessageLogs follows this reply, with what the function
+	// printed. A bridge from before it ignores it.
+	LogsFollow bool `json:"logsFollow,omitempty"`
 }
 
 type MessageType int
@@ -36,13 +39,18 @@ const (
 	MessageTaskComplete
 
 	MessageProbe
+
+	// MessageLogs carries what a function printed in sst dev, for its bridge to
+	// print in the function's log stream. A bridge from before it ignores it.
+	MessageLogs
 )
 
 type Message struct {
-	ID     string
-	Type   MessageType
-	Source string
-	Body   io.Reader
+	ID         string
+	Type       MessageType
+	Source     string
+	Body       io.Reader
+	LogsFollow bool
 }
 
 type Writer struct {
@@ -56,6 +64,17 @@ type Writer struct {
 	index     int
 	id        string
 	streaming bool
+
+	// set on every packet, as the bridge reads it from the first that arrives
+	logsFollow bool
+}
+
+// LogsBody is the body of a MessageLogs: the lines a worker printed up to the
+// reply with the ID ReplyID, and how many more were left out.
+type LogsBody struct {
+	ReplyID string   `json:"replyID"`
+	Lines   []string `json:"lines"`
+	Dropped int      `json:"dropped,omitempty"`
 }
 
 type InitBody struct {
@@ -98,6 +117,10 @@ func (w *Writer) SetStreaming(streaming bool) {
 	w.streaming = streaming
 }
 
+func (w *Writer) SetLogsFollow(logsFollow bool) {
+	w.logsFollow = logsFollow
+}
+
 const BUFFER_SIZE = 1024 * 128
 
 func (w *Writer) Write(p []byte) (int, error) {
@@ -135,6 +158,8 @@ func (w *Writer) Flush(final bool) error {
 		Source: w.source,
 		Data:   encoded,
 		Final:  final,
+
+		LogsFollow: w.logsFollow,
 	})
 	w.index++
 	if err != nil {
@@ -174,10 +199,11 @@ func NewClient(ctx context.Context, as *appsync.Connection, source string, prefi
 				pending = make(chan []byte, 100)
 				result.pending[packet.ID] = pending
 				result.out <- Message{
-					Type:   packet.Type,
-					ID:     packet.ID,
-					Source: packet.Source,
-					Body:   NewChannelReader(ctx, pending),
+					Type:       packet.Type,
+					ID:         packet.ID,
+					Source:     packet.Source,
+					Body:       NewChannelReader(ctx, pending),
+					LogsFollow: packet.LogsFollow,
 				}
 			}
 			bytes, err := base64.StdEncoding.DecodeString(packet.Data)

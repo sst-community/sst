@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -110,9 +112,12 @@ func run() error {
 		}
 		init.Environment = append(init.Environment, e)
 	}
-	writer := client.NewWriter(bridge.MessageInit, prefix+"/in")
-	json.NewEncoder(writer).Encode(init)
-	writer.Close()
+	sendInit := func() {
+		writer := client.NewWriter(bridge.MessageInit, prefix+"/in")
+		json.NewEncoder(writer).Encode(init)
+		writer.Close()
+	}
+	sendInit()
 
 	notRunning, _ := json.Marshal(map[string]string{
 		"statusCode": "500",
@@ -130,6 +135,7 @@ func run() error {
 			return err
 		}
 		requestID := resp.Header.Get("lambda-runtime-aws-request-id")
+		deadline := deadlineOf(resp)
 		if timedOut || time.Since(lastActive) > 10*time.Second {
 			waitForSubscription(ctx, conn, client, prefix+"/"+workerID+"/in")
 			timedOut = false
@@ -153,6 +159,11 @@ func run() error {
 			case <-ctx.Done():
 				return nil
 			case msg := <-client.Read():
+				if msg.Type == bridge.MessageLogs {
+					// a body in several packets can wait for a copy of one that was lost
+					go func() { printLogs(readLogs(msg), true) }()
+					continue
+				}
 				fmt.Println("got message", msg.Type)
 				if msg.Type == bridge.MessageResponse && msg.ID == requestID {
 					responseURL := "http://" + LAMBDA_RUNTIME_API + "/2018-06-01/runtime/invocation/" + requestID + "/response"
@@ -171,20 +182,25 @@ func run() error {
 					} else {
 						http.Post(responseURL, "application/json", msg.Body)
 					}
+					awaitLogs(ctx, client, msg, deadline, sendInit)
 					break loop
 				}
 				if msg.Type == bridge.MessageError && msg.ID == requestID {
-					http.Post("http://"+LAMBDA_RUNTIME_API+"/2018-06-01/runtime/invocation/"+requestID+"/error", "application/json", msg.Body)
+					var body bytes.Buffer
+					http.Post("http://"+LAMBDA_RUNTIME_API+"/2018-06-01/runtime/invocation/"+requestID+"/error", "application/json", io.TeeReader(msg.Body, &body))
+					awaitLogs(ctx, client, msg, deadline, sendInit)
+					printError(msg, "Invoke Error", body.Bytes())
 					break loop
 				}
 				if msg.Type == bridge.MessageInitError {
-					http.Post("http://"+LAMBDA_RUNTIME_API+"/2018-06-01/runtime/invocation/"+requestID+"/error", "application/json", msg.Body)
+					var body bytes.Buffer
+					http.Post("http://"+LAMBDA_RUNTIME_API+"/2018-06-01/runtime/invocation/"+requestID+"/error", "application/json", io.TeeReader(msg.Body, &body))
+					awaitLogs(ctx, client, msg, deadline, sendInit)
+					printError(msg, "Init Error", body.Bytes())
 					break loop
 				}
 				if msg.Type == bridge.MessageReboot {
-					writer := client.NewWriter(bridge.MessageInit, prefix+"/in")
-					json.NewEncoder(writer).Encode(init)
-					writer.Close()
+					sendInit()
 					continue
 				}
 				if msg.Type == bridge.MessagePing {
@@ -201,6 +217,104 @@ func run() error {
 		lastActive = time.Now().Round(0)
 	}
 
+}
+
+// awaitLogs prints what the function printed up to a reply, when the CLI says it
+// follows the reply. Lambda freezes the bridge once it asks for the next
+// invocation, so this is the last moment to print it in this invocation. It
+// waits up to logsWait, and never past the invocation's deadline. The output of
+// a reply that comes later is printed in a later invocation, marked as late.
+func awaitLogs(ctx context.Context, client *bridge.Client, reply bridge.Message, deadline time.Time, sendInit func()) {
+	if !reply.LogsFollow {
+		return
+	}
+	wait := logsWait
+	if !deadline.IsZero() {
+		wait = min(wait, time.Until(deadline)-100*time.Millisecond)
+	}
+	if wait <= 0 {
+		return
+	}
+	timeout := time.After(wait)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-client.Read():
+			if msg.Type == bridge.MessageReboot {
+				sendInit()
+				continue
+			}
+			if msg.Type != bridge.MessageLogs {
+				continue
+			}
+			// a body in several packets can wait for a copy of one that was lost,
+			// so it's read without holding up the wait
+			read := make(chan bridge.LogsBody, 1)
+			go func() { read <- readLogs(msg) }()
+			select {
+			case body := <-read:
+				if body.ReplyID == reply.ID {
+					printLogs(body, false)
+					return
+				}
+				printLogs(body, true)
+			case <-timeout:
+				slog.Warn("the function's output didn't arrive in time", "replyID", reply.ID)
+				go func() { printLogs(<-read, true) }()
+				return
+			}
+		case <-timeout:
+			slog.Warn("the function's output didn't arrive in time", "replyID", reply.ID)
+			return
+		}
+	}
+}
+
+const logsWait = 2 * time.Second
+
+func readLogs(msg bridge.Message) bridge.LogsBody {
+	var body bridge.LogsBody
+	if err := json.NewDecoder(msg.Body).Decode(&body); err != nil {
+		slog.Error("failed to read the function's output", "err", err)
+	}
+	return body
+}
+
+func printLogs(body bridge.LogsBody, late bool) {
+	if late && (len(body.Lines) > 0 || body.Dropped > 0) {
+		fmt.Printf("[sst dev] What an earlier invocation printed, which arrived late (%s):\n", body.ReplyID)
+	}
+	for _, line := range body.Lines {
+		fmt.Println(line)
+	}
+	if body.Dropped > 0 {
+		fmt.Printf("[sst dev] %d more lines were left out, over the limit for one invocation.\n", body.Dropped)
+	}
+}
+
+// printError prints a function's error after what it printed, as Lambda's
+// Node.js runtime does, when the CLI sends what the function printed.
+func printError(reply bridge.Message, kind string, body []byte) {
+	if !reply.LogsFollow {
+		return
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, body); err != nil {
+		compact.Reset()
+		compact.Write(bytes.ReplaceAll(bytes.TrimSpace(body), []byte("\n"), []byte(" ")))
+	}
+	fmt.Printf("ERROR\t%s\t%s\n", kind, compact.String())
+}
+
+// deadlineOf reads when Lambda ends the invocation, from the response to a
+// request for the next one.
+func deadlineOf(resp *http.Response) time.Time {
+	ms, err := strconv.ParseInt(resp.Header.Get("Lambda-Runtime-Deadline-Ms"), 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
 }
 
 // waitForSubscription publishes probes to the bridge's own channel until one

@@ -32,6 +32,11 @@ var SST_VERBOSE = isTrue("SST_VERBOSE")
 var SST_EXPERIMENTAL = isTrue("SST_EXPERIMENTAL") || isTrue("SST_EXPERIMENTAL_RUN")
 var SST_RUN_ID = os.Getenv("SST_RUN_ID")
 var SST_SKIP_APPSYNC = isTrue("SST_SKIP_APPSYNC")
+
+// SST_DEV_CLOUDWATCH_LOGS has sst dev send what functions and tasks print
+// locally to the stubs deployed in their place, which print it in their log
+// groups.
+var SST_DEV_CLOUDWATCH_LOGS = isTrue("SST_DEV_CLOUDWATCH_LOGS")
 var SST_NO_BUN = isTrue("NO_BUN") || isTrue("SST_NO_BUN")
 
 func isTrue(name string) bool {
