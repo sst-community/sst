@@ -45,8 +45,16 @@ type Message struct {
 	Body   io.Reader
 }
 
+// Conn is what the bridge needs from its AppSync connection.
+type Conn interface {
+	Publish(ctx context.Context, channel string, event interface{}) error
+	Subscribe(ctx context.Context, channel string) (chan string, error)
+}
+
+var _ Conn = (*appsync.Connection)(nil)
+
 type Writer struct {
-	conn      *appsync.Connection
+	conn      Conn
 	message   MessageType
 	source    string
 	channel   string
@@ -77,7 +85,7 @@ type PingBody struct {
 type RebootBody struct {
 }
 
-func newWriter(conn *appsync.Connection, source string, channel string, message MessageType) *Writer {
+func newWriter(conn Conn, source string, channel string, message MessageType) *Writer {
 	return &Writer{
 		id:       id.Ascending(),
 		conn:     conn,
@@ -150,14 +158,14 @@ func (w *Writer) Close() error {
 }
 
 type Client struct {
-	as      *appsync.Connection
+	as      Conn
 	prefix  string
 	pending map[string]chan []byte
 	out     chan Message
 	source  string
 }
 
-func NewClient(ctx context.Context, as *appsync.Connection, source string, prefix string) *Client {
+func NewClient(ctx context.Context, as Conn, source string, prefix string) *Client {
 	slog.Info("subscribing to", "prefix", prefix+"/in")
 	sub, _ := as.Subscribe(ctx, prefix+"/in")
 	result := &Client{
