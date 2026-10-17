@@ -269,6 +269,9 @@ func (u *UI) Event(unknown interface{}) {
 	case *typescript.WarningEvent:
 		u.printEvent(TEXT_WARNING, "Warning", evt.Message)
 
+	case *aws.ConcurrencyWarningEvent:
+		u.printEvent(TEXT_WARNING, "Warning", evt.Message)
+
 	case *project.StackCommandEvent:
 		u.reset()
 		u.header(evt.Version, evt.App, evt.Stage)

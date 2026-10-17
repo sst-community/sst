@@ -26,6 +26,7 @@ func Start(
 	uncasted, _ := p.Provider("aws")
 	prov := uncasted.(*provider.AwsProvider)
 	config := prov.Config()
+	go warnLowConcurrency(ctx, config.Region, accountSettings(config))
 	slog.Info("getting endpoint")
 	prefix := fmt.Sprintf("/sst/%s/%s", p.App().Name, p.App().Stage)
 
