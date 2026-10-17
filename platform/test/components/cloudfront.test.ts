@@ -774,14 +774,17 @@ describe("minified function code", () => {
   });
 
   // The function is limited to 10,240 bytes and the user's injection goes in the
-  // same space. The pieces and the function around them leave this much for it;
-  // if a change takes more, it's a choice to make on purpose.
+  // same space. REQUEST_HANDLER_CODE is the handler as the router builds it, with
+  // the lookup and without an injection or the block; the import and the closing
+  // brace are what `createRequestFunction` adds around it. If a change takes more
+  // of the space, it's a choice to make on purpose.
   it("leaves room for the user's injection", () => {
-    const wrapper = 100;
-    const used = Object.values(pieces).reduce(
-      (sum, code) => sum + Buffer.byteLength(code),
-      wrapper,
-    );
+    const used = [
+      'import cf from "cloudfront";\n',
+      REQUEST_HANDLER_CODE,
+      "\n}",
+      CF_BLOCK_CLOUDFRONT_URL_INJECTION,
+    ].reduce((sum, code) => sum + Buffer.byteLength(code), 0);
     expect(10240 - used).toBeGreaterThanOrEqual(2000);
   });
 

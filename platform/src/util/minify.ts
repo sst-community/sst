@@ -7,9 +7,9 @@ const options = {
 } as const;
 
 /**
- * Minifies a module. The template is read raw, with `String.raw`: `\\.` stays
- * two characters. `minifyBody` below reads its template the other way, so don't
- * move code with escapes from one to the other without changing them.
+ * Minifies a module. The template is read raw, with `String.raw`: what you write
+ * is the code. `minifyBody` below reads its template the other way, so code moved
+ * between the two needs every backslash doubled or halved.
  */
 export function minify(strings: TemplateStringsArray, ...values: unknown[]) {
   const code = String.raw(strings, ...values);
@@ -25,8 +25,10 @@ const WRAPPER = "async function __sst_minify__(){";
  * function that is then unwrapped.
  *
  * The template is read the way an ordinary template literal is, so code that
- * used to go through `interpolate` means the same after: `\\.` is `\.`, where
- * `String.raw` would keep both backslashes and change a regex.
+ * used to go through `interpolate` means the same after. Every backslash in the
+ * source is doubled for it: `\\.` is `\.` and `\\d+` is `\d+`, where `\d+` would
+ * be read as `d+` and a regex would stop matching digits, and `String.raw` would
+ * keep both backslashes and change the regex the other way.
  */
 export function minifyBody(
   strings: TemplateStringsArray,
@@ -37,7 +39,7 @@ export function minifyBody(
       out + string + (i < values.length ? String(values[i]) : ""),
     "",
   );
-  const minified = transformSync(`${WRAPPER}${code}}`, options).code.trim();
+  const minified = transformSync(`${WRAPPER}${code}\n}`, options).code.trim();
   if (!minified.startsWith(WRAPPER) || !minified.endsWith("}")) {
     throw new Error(`minifyBody: unexpected esbuild output:\n${minified}`);
   }
