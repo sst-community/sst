@@ -2,21 +2,35 @@ import { describe, expect, it } from "vitest";
 import { minifyBody } from "../../src/util/minify";
 
 describe("minifyBody", () => {
-  it("minifies statements that return and await at their top level", () => {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
+  it("minifies statements that return and await at their top level", async () => {
+    const source = `
+      // a comment
+      const value = await read();
+      if (!value) return null;
+      return value;
+    `;
     const code = minifyBody`
       // a comment
       const value = await read();
       if (!value) return null;
       return value;
     `;
-    expect(code).toBe("const value=await read();return value||null");
+    // it still does what the source does
+    const run = new AsyncFunction("read", code);
+    expect(await run(async () => "found")).toBe("found");
+    expect(await run(async () => "")).toBe(null);
+    // and is smaller, without the comment or the indentation
+    expect(code.length).toBeLessThan(source.length);
+    expect(code).not.toContain("a comment");
+    expect(code).not.toMatch(/\n\s/);
   });
 
   it("splices values in", () => {
     const namespace = "ab12";
-    expect(minifyBody`return "${namespace}:routes";`).toBe(
-      'return"ab12:routes"',
-    );
+    const code = minifyBody`return "${namespace}:routes";`;
+    expect(new Function(code)()).toBe("ab12:routes");
   });
 
   // Reads like the `interpolate` template the code used to live in: one

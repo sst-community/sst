@@ -6,6 +6,11 @@ const options = {
   target: "es2018",
 } as const;
 
+/**
+ * Minifies a module. The template is read raw, with `String.raw`: `\\.` stays
+ * two characters. `minifyBody` below reads its template the other way, so don't
+ * move code with escapes from one to the other without changing them.
+ */
 export function minify(strings: TemplateStringsArray, ...values: unknown[]) {
   const code = String.raw(strings, ...values);
   return transformSync(code, options).code;

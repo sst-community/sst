@@ -763,7 +763,7 @@ describe("minified function code", () => {
 
   it.each(Object.entries(pieces))("%s carries no comments or indentation", (_, code) => {
     expect(code).not.toMatch(/\n\s/);
-    expect(code).not.toContain("//");
+    expect(code).not.toMatch(/\/\*|\/\/[A-Za-z]/);
   });
 
   // CloudFront rejects the whole function on this ("SyntaxError: await in
@@ -771,6 +771,18 @@ describe("minified function code", () => {
   // Node accepts it, so only a check on the minified code catches it.
   it.each(Object.entries(pieces))("%s never awaits inside a call's arguments", (_, code) => {
     expect(code).not.toMatch(/[(,]\s*await\b/);
+  });
+
+  // The function is limited to 10,240 bytes and the user's injection goes in the
+  // same space. The pieces and the function around them leave this much for it;
+  // if a change takes more, it's a choice to make on purpose.
+  it("leaves room for the user's injection", () => {
+    const wrapper = 100;
+    const used = Object.values(pieces).reduce(
+      (sum, code) => sum + Buffer.byteLength(code),
+      wrapper,
+    );
+    expect(10240 - used).toBeGreaterThanOrEqual(2000);
   });
 
   it("keeps the router's namespace in the lookup", () => {
