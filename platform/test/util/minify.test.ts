@@ -33,6 +33,12 @@ describe("minifyBody", () => {
     expect(new Function(code)()).toBe("ab12:routes");
   });
 
+  // `\u` and `\x` without hex digits, and octal escapes, have no cooked value
+  // and would land in the code as the text "undefined".
+  it("throws on an escape the template can't read", () => {
+    expect(() => minifyBody`return "\unicode";`).toThrow(/invalid escape/);
+  });
+
   // Reads like the `interpolate` template the code used to live in: one
   // backslash in the output for two in the source. String.raw would keep two,
   // and /\\./ would stop matching a dot.

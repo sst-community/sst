@@ -2650,6 +2650,8 @@ Router.__pulumiType = __pulumiType;
 const CLOUDFRONT_FUNCTION_SAFE_HEADER_LIMIT = 10240 - 512;
 
 // NOTE: This string is size-sensitive — CloudFront Functions have a 10KB limit.
+// The 403 body is plain text on purpose: it keeps the block small, and it is the
+// body upstream chose. Don't put the HTML page back to look like a web server's.
 export const CF_BLOCK_CLOUDFRONT_URL_INJECTION = minifyBody`
 if (event.request.headers.host.value.includes('cloudfront.net')) {
   return {

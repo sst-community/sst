@@ -34,6 +34,13 @@ export function minifyBody(
   strings: TemplateStringsArray,
   ...values: unknown[]
 ) {
+  // an invalid escape (`\u` or `\x` without hex digits, or an octal one) has no
+  // cooked value, and would land in the code as the text "undefined"
+  if (strings.some((string) => string === undefined)) {
+    throw new Error(
+      "minifyBody: a template segment has an invalid escape. Double its backslash.",
+    );
+  }
   const code = strings.reduce(
     (out, string, i) =>
       out + string + (i < values.length ? String(values[i]) : ""),
