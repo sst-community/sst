@@ -94,6 +94,9 @@ type Connection struct {
 	// subscriptionsLock guards subscriptions, which the reader goroutine reads
 	// while subscribe swaps entries. Never hold it while sending on Out.
 	subscriptionsLock sync.Mutex
+
+	// made once, so publishes through a proxy reuse their connections
+	httpClient *http.Client
 }
 
 type SubscriptionInfo struct {
@@ -119,6 +122,7 @@ func Dial(
 		cfg:              cfg,
 		httpEndpoint:     httpEndpoint,
 		realtimeEndpoint: realtimeEndpoint,
+		httpClient:       getHTTPClient(),
 		subscriptions:    map[string]SubscriptionInfo{},
 	}
 
@@ -410,11 +414,25 @@ func (c *Connection) getAuth(ctx context.Context, body interface{}) (interface{}
 	return auth, nil
 }
 
-func (c *Connection) Publish(ctx context.Context, channel string, event interface{}) error {
-	credentials, err := c.cfg.Credentials.Retrieve(ctx)
-	if err != nil {
-		return err
+// How long Publish waits before each retry of a publish that was throttled or
+// failed with a server or network error, 1.4 seconds in all, how long one
+// attempt can take, and how long a publish can take with its retries. The
+// bridge sends at most 128 KB at a time, and AppSync answers in well under a
+// second, so an attempt that takes longer has most likely hung.
+var (
+	publishRetries = []time.Duration{
+		100 * time.Millisecond,
+		300 * time.Millisecond,
+		time.Second,
 	}
+	publishAttemptTimeout = 5 * time.Second
+	publishTimeout        = 10 * time.Second
+)
+
+// Publish sends an event to a channel. AppSync throttles a burst of events and
+// sometimes fails a request, so a publish answered with a 429 or a 5xx, or that
+// fails to connect, is tried again. Any other error is returned as is.
+func (c *Connection) Publish(ctx context.Context, channel string, event interface{}) error {
 	eventJson, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -426,9 +444,34 @@ func (c *Connection) Publish(ctx context.Context, channel string, event interfac
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("POST", "https://"+c.httpEndpoint+"/event", bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(ctx, publishTimeout)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		retry, err := c.publish(ctx, channel, body)
+		if err == nil || !retry || attempt == len(publishRetries) {
+			return err
+		}
+		log.Warn("publish failed, trying again", "channel", channel, "attempt", attempt+1, "err", err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(publishRetries[attempt]):
+		}
+	}
+}
+
+// publish makes one attempt at a publish, and says whether a failed one is worth
+// trying again. Each attempt is signed again, as a signature is for one time.
+func (c *Connection) publish(ctx context.Context, channel string, body []byte) (bool, error) {
+	credentials, err := c.cfg.Credentials.Retrieve(ctx)
 	if err != nil {
-		return err
+		return false, err
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, publishAttemptTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(attemptCtx, "POST", "https://"+c.httpEndpoint+"/event", bytes.NewReader(body))
+	if err != nil {
+		return false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	signer := v4.NewSigner()
@@ -437,20 +480,20 @@ func (c *Connection) Publish(ctx context.Context, channel string, event interfac
 	payloadHash := hex.EncodeToString(h.Sum(nil))
 	err = signer.SignHTTP(ctx, credentials, req, payloadHash, "appsync", c.cfg.Region, time.Now())
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	// Use HTTP client that respects proxy settings
-	client := getHTTPClient()
-	resp, err := client.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		// an attempt that timed out is tried again, but not once the caller is done
+		return ctx.Err() == nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return retry, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	// Say when AppSync answers that it didn't publish the event. Only logged, so
@@ -460,7 +503,7 @@ func (c *Connection) Publish(ctx context.Context, channel string, event interfac
 		log.Error("event not published", "channel", channel, "response", string(bodyBytes))
 	}
 
-	return nil
+	return false, nil
 }
 
 // failedEvents counts the events a publish response lists as failed. A response
