@@ -2490,6 +2490,7 @@ async function buildComponents() {
       "../platform/src/components/aws/efs.ts",
       "../platform/src/components/aws/email.ts",
       "../platform/src/components/aws/function.ts",
+      "../platform/src/components/aws/web-function.ts",
       "../platform/src/components/aws/mysql.ts",
       "../platform/src/components/aws/postgres.ts",
       "../platform/src/components/aws/postgres-v1.ts",
