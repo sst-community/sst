@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 
-import { CF_ROUTER_INJECTION } from "../../src/components/aws/router";
+import {
+  CF_BLOCK_CLOUDFRONT_URL_INJECTION,
+  CF_ROUTER_INJECTION,
+  routerLookupCode,
+} from "../../src/components/aws/router";
 
 const require = createRequire(import.meta.url);
 const routerSource = readFileSync(
@@ -88,6 +92,7 @@ const REQUEST_HANDLER_CODE = extractTemplateCode(
     userInjection: "",
     blockCloudfrontUrlInjection: "",
     CF_ROUTER_INJECTION,
+    routerLookupCode,
     kvNamespace: "router",
   },
 );
@@ -746,5 +751,54 @@ describe("CloudFront router", () => {
 
       expect(origin.domainName).toBe("server.lambda-url.us-east-1.on.aws");
     });
+  });
+});
+
+describe("minified function code", () => {
+  const pieces = {
+    CF_BLOCK_CLOUDFRONT_URL_INJECTION,
+    CF_ROUTER_INJECTION,
+    routerLookupCode: routerLookupCode("router"),
+  };
+
+  it.each(Object.entries(pieces))("%s carries no comments or indentation", (_, code) => {
+    expect(code).not.toMatch(/\n\s/);
+    expect(code).not.toMatch(/\/\*|\/\/[A-Za-z]/);
+  });
+
+  // CloudFront rejects the whole function on this ("SyntaxError: await in
+  // arguments not supported"), and every request on the distribution fails.
+  // Node accepts it, so only a check on the minified code catches it.
+  it.each(Object.entries(pieces))("%s never awaits inside a call's arguments", (_, code) => {
+    expect(code).not.toMatch(/[(,]\s*await\b/);
+  });
+
+  // The function is limited to 10,240 bytes and the user's injection goes in the
+  // same space. REQUEST_HANDLER_CODE is the handler as the router builds it, with
+  // the lookup and without an injection or the block; the import and the closing
+  // brace are what `createRequestFunction` adds around it. If a change takes more
+  // of the space, it's a choice to make on purpose.
+  it("leaves room for the user's injection", () => {
+    const used = [
+      'import cf from "cloudfront";\n',
+      REQUEST_HANDLER_CODE,
+      "\n}",
+      CF_BLOCK_CLOUDFRONT_URL_INJECTION,
+    ].reduce((sum, code) => sum + Buffer.byteLength(code), 0);
+    expect(10240 - used).toBeGreaterThanOrEqual(2000);
+  });
+
+  it("keeps the router's namespace in the lookup", () => {
+    expect(routerLookupCode("ab12")).toContain('"ab12"');
+  });
+
+  it("answers the cloudfront.net URL with a 403", async () => {
+    const run = new Function(
+      "event",
+      `return (async () => {${CF_BLOCK_CLOUDFRONT_URL_INJECTION}; return "routed"})();`,
+    );
+    const blocked = await run({ request: { headers: { host: { value: "d1.cloudfront.net" } } } });
+    expect(blocked.statusCode).toBe(403);
+    expect(await run({ request: { headers: { host: { value: "example.com" } } } })).toBe("routed");
   });
 });

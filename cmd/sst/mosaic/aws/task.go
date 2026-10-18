@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -160,8 +162,6 @@ func task(ctx context.Context, input input) {
 				cmd := process.Command(fields[0], fields[1:]...)
 				cmd.Dir = task.Directory
 				cmd.Env = append(os.Environ(), body.Environment...)
-				stdout, _ := cmd.StdoutPipe()
-				stderr, _ := cmd.StderrPipe()
 				onLine := func(line string) {
 					if cloudLogs != nil {
 						cloudLogs.add(msg.Source, line)
@@ -172,31 +172,21 @@ func task(ctx context.Context, input input) {
 						Line:     line,
 					})
 				}
-				var readers sync.WaitGroup
-				read := func(r io.Reader) {
-					defer readers.Done()
-					err := process.ReadLines(r, maxOutputLine, onLine, func() { onLine(tooLongNote("task")) })
-					if err != nil {
-						log.Error("failed to read task output", "taskID", body.TaskID, "err", err)
-						// Keep reading, or the command blocks on a full pipe.
-						io.Copy(io.Discard, r)
-					}
-				}
-				readers.Add(2)
-				go read(stdout)
-				go read(stderr)
 				go func() {
 					done := make(chan struct{})
-					cmd.Start()
+					wait, err := startWithOutput(cmd, onLine, func(err error) {
+						log.Error("failed to read task output", "taskID", body.TaskID, "err", err)
+					})
+					if err != nil {
+						log.Error("failed to start task", "taskID", body.TaskID, "err", err)
+					}
 					bus.Publish(&TaskStartEvent{
 						TaskID:   body.TaskID,
 						WorkerID: msg.Source,
 						Command:  cmd.String(),
 					})
 					go func() {
-						// Wait closes the pipes, so the output is read to its end first.
-						readers.Wait()
-						cmd.Wait()
+						wait()
 						done <- struct{}{}
 					}()
 					ping := func() {
@@ -247,4 +237,73 @@ func task(ctx context.Context, input input) {
 			break
 		}
 	}
+}
+
+// How long a task's output is still read after its command exits. What's left
+// in the pipes takes far less. A process the command started in the background
+// can keep them open, and the task is done without waiting for it.
+var taskOutputGrace = time.Second
+
+// startWithOutput starts cmd and passes each line it prints, on stdout or
+// stderr, to onLine. The wait it returns waits for cmd to exit, then for the
+// rest of its output, up to taskOutputGrace. When cmd can't start, wait
+// returns at once.
+func startWithOutput(cmd *exec.Cmd, onLine func(string), onReadError func(error)) (wait func(), err error) {
+	// The pipes are made here, not with StdoutPipe, as Wait closes those once
+	// the command exits, which can lose the last of its output.
+	readers := []*os.File{}
+	writers := []*os.File{}
+	closeAll := func(files []*os.File) {
+		for _, f := range files {
+			f.Close()
+		}
+	}
+	for range 2 {
+		r, w, err := os.Pipe()
+		if err != nil {
+			closeAll(readers)
+			closeAll(writers)
+			return func() {}, err
+		}
+		readers = append(readers, r)
+		writers = append(writers, w)
+	}
+	cmd.Stdout, cmd.Stderr = writers[0], writers[1]
+	err = cmd.Start()
+	// the command has its own copies
+	closeAll(writers)
+	if err != nil {
+		closeAll(readers)
+		return func() {}, err
+	}
+
+	var reading sync.WaitGroup
+	for _, r := range readers {
+		reading.Go(func() {
+			err := process.ReadLines(r, maxOutputLine, onLine, func() { onLine(tooLongNote("task")) })
+			if err != nil && !errors.Is(err, os.ErrClosed) {
+				onReadError(err)
+				// Keep reading, or the command blocks on a full pipe.
+				io.Copy(io.Discard, r)
+			}
+		})
+	}
+	read := make(chan struct{})
+	go func() {
+		reading.Wait()
+		close(read)
+	}()
+	return func() {
+		cmd.Wait()
+		select {
+		case <-read:
+		case <-time.After(taskOutputGrace):
+			// something the command started holds its output open
+			closeAll(readers)
+			select {
+			case <-read:
+			case <-time.After(taskOutputGrace):
+			}
+		}
+	}, nil
 }

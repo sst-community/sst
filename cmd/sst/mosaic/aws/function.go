@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -82,6 +83,9 @@ func function(ctx context.Context, input input) {
 		CurrentRequestID string
 		Env              []string
 		Streaming        bool
+		// Polled is whether the worker has asked for an invocation, so it
+		// started. One that exits before then failed as it started.
+		Polled bool
 	}
 	workerShutdownChan := make(chan *WorkerInfo, 1000)
 	nextChan := map[string]chan io.Reader{}
@@ -101,17 +105,63 @@ func function(ctx context.Context, input input) {
 		}
 		return ch
 	}
+	// workersNow copies the workers, for a loop over them that starts them
+	// again, which changes the map as it goes
+	workersNow := func() map[string]*WorkerInfo {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		return maps.Clone(workers)
+	}
 	loadWorker := func(workerID string) (*WorkerInfo, bool) {
 		stateMu.Lock()
 		defer stateMu.Unlock()
 		info, ok := workers[workerID]
 		return info, ok
 	}
+	// queueNext queues an invocation for a worker, and says whether the worker
+	// is running. Both under the lock, so a worker that exits sees the
+	// invocation queued, or the invocation sees the worker gone.
+	queueNext := func(workerID string, body io.Reader) bool {
+		stateMu.Lock()
+		ch, ok := nextChan[workerID]
+		if !ok {
+			ch = make(chan io.Reader, 100)
+			nextChan[workerID] = ch
+		}
+		_, running := workers[workerID]
+		select {
+		case ch <- body:
+			stateMu.Unlock()
+		default:
+			// a full queue is waited on without holding up everything else
+			stateMu.Unlock()
+			select {
+			case ch <- body:
+			case <-ctx.Done():
+			}
+		}
+		return running
+	}
 	// AppSync can accept an event and not deliver it, as in the seconds after a
 	// Lambda cold-starts and subscribes. The bridge has had the ping by then, so it
 	// would wait until Lambda times the invocation out. So a reply to a bridge is
 	// sent again a few times, with the ID of the first. The bridge passes on the
 	// first copy with that ID, and a later one only fills in packets it's missing.
+	//
+	// A bridge only sends its next invocation once it's done with the one before,
+	// so its reply's resends stop then. What the function printed is sent after
+	// the reply, as a message of its own, so a worker's resends are kept by
+	// message: the output's don't stop the reply's.
+	type resending struct{ cancel context.CancelFunc }
+	resends := map[string]map[string]*resending{}
+	stopResending := func(workerID string) {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		for _, r := range resends[workerID] {
+			r.cancel()
+		}
+		delete(resends, workerID)
+	}
 	var cloudLogs *pendingLogs
 	if flag.SST_DEV_CLOUDWATCH_LOGS {
 		cloudLogs = newPendingLogs()
@@ -125,13 +175,42 @@ func function(ctx context.Context, input input) {
 		return writer
 	}
 	resendReply := func(message bridge.MessageType, workerID, messageID string, body []byte) {
-		go resend(ctx, replyResends, replyResendEvery, func() {
-			writer := newReply(message, workerID, messageID)
-			if err := sendMessage(writer, bytes.NewReader(body)); err != nil {
-				log.Error("failed to resend reply", "workerID", workerID, "messageID", messageID, "err", err)
+		resendCtx, cancel := context.WithCancel(ctx)
+		r := &resending{cancel}
+		stateMu.Lock()
+		// a new reply means the bridge is past the ones before
+		if message != bridge.MessageLogs {
+			for _, previous := range resends[workerID] {
+				previous.cancel()
 			}
-		})
+			delete(resends, workerID)
+		}
+		if resends[workerID] == nil {
+			resends[workerID] = map[string]*resending{}
+		}
+		resends[workerID][messageID] = r
+		stateMu.Unlock()
+		go func() {
+			resend(resendCtx, replyResends, replyResendEvery, func() {
+				writer := newReply(message, workerID, messageID)
+				if err := sendMessage(writer, bytes.NewReader(body)); err != nil {
+					log.Error("failed to resend reply", "workerID", workerID, "messageID", messageID, "err", err)
+				}
+			})
+			stateMu.Lock()
+			if resends[workerID][messageID] == r {
+				delete(resends[workerID], messageID)
+				if len(resends[workerID]) == 0 {
+					delete(resends, workerID)
+				}
+			}
+			stateMu.Unlock()
+			cancel()
+		}()
 	}
+	// a worker whose invocation was put back in its queue, for the loop to start
+	// it again if it's gone
+	requeued := make(chan string, 100)
 	// sendLogs sends the bridge what the worker printed up to a reply, after it,
 	// so the reply isn't held up. It's sent when there's nothing too, so the
 	// bridge stops waiting. A copy arrives after the bridge has stopped waiting,
@@ -154,26 +233,49 @@ func function(ctx context.Context, input input) {
 				return
 			}
 			messageID := id.Ascending()
-			if err := sendMessage(newReply(bridge.MessageLogs, workerID, messageID), bytes.NewReader(body)); err != nil {
-				log.Error("failed to send logs", "workerID", workerID, "replyID", replyID, "err", err)
-			}
+			// the resends are set before the first copy goes, as for a reply
 			if len(lines) > 0 || dropped > 0 {
 				resendReply(bridge.MessageLogs, workerID, messageID, body)
+			}
+			if err := sendMessage(newReply(bridge.MessageLogs, workerID, messageID), bytes.NewReader(body)); err != nil {
+				log.Error("failed to send logs", "workerID", workerID, "replyID", replyID, "err", err)
 			}
 		}()
 	}
 	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{}, &FunctionInvokedEvent{})
-	go fileLogger(input.project)
 
 	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/next`, func(w http.ResponseWriter, r *http.Request) {
 		log.Info("got next request", "workerID", r.PathValue("workerID"))
 		workerID := r.PathValue("workerID")
+		// A first request that comes before the worker is recorded, just after
+		// it starts, doesn't count. It still takes what's queued, and the
+		// worker asks again once it has answered, which does.
+		stateMu.Lock()
+		if info, ok := workers[workerID]; ok {
+			info.Polled = true
+		}
+		stateMu.Unlock()
 		ch := loadNextChan(workerID)
 		select {
 		case <-r.Context().Done():
 			log.Info("worker disconnected", "workerID", workerID)
 			return
 		case reader := <-ch:
+			// the worker can go, as when it exits on idle, as the invocation
+			// arrives. Put it back for the next one, or it's lost.
+			if r.Context().Err() != nil {
+				log.Info("worker disconnected, putting its invocation back", "workerID", workerID)
+				queueNext(workerID, reader)
+				// the loop can be busy building, and the worker's runtime doesn't
+				// wait for this
+				go func() {
+					select {
+					case requeued <- workerID:
+					case <-ctx.Done():
+					}
+				}()
+				return
+			}
 			log.Info("worker got next request", "workerID", workerID)
 			resp, _ := http.ReadResponse(bufio.NewReader(reader), r)
 			requestID := resp.Header.Get("lambda-runtime-aws-request-id")
@@ -207,12 +309,16 @@ func function(ctx context.Context, input input) {
 		messageID := id.Ascending()
 		writer := newReply(bridge.MessageInitError, workerID, messageID)
 		var buf bytes.Buffer
-		tee := io.TeeReader(r.Body, &buf)
-		if err := sendMessage(writer, tee); err != nil {
+		if _, err := buf.ReadFrom(r.Body); err != nil {
+			log.Error("failed to read init error", "workerID", workerID, "err", err)
+		}
+		// the resends are set before the first copy goes, as the bridge can
+		// send its next invocation, which stops them, before the publish returns
+		resendReply(bridge.MessageInitError, workerID, messageID, buf.Bytes())
+		if err := sendMessage(writer, bytes.NewReader(buf.Bytes())); err != nil {
 			log.Error("failed to send init error", "workerID", workerID, "err", err)
 		}
 		w.WriteHeader(200)
-		resendReply(bridge.MessageInitError, workerID, messageID, buf.Bytes())
 		sendLogs(workerID, messageID)
 		info, ok := loadWorker(workerID)
 		if ok {
@@ -246,8 +352,11 @@ func function(ctx context.Context, input input) {
 			})
 		} else {
 			var buf bytes.Buffer
-			tee := io.TeeReader(r.Body, &buf)
-			if err := sendMessage(writer, tee); err != nil {
+			if _, err := buf.ReadFrom(r.Body); err != nil {
+				log.Error("failed to read response", "workerID", workerID, "requestID", requestID, "err", err)
+			}
+			resendReply(bridge.MessageResponse, workerID, requestID, buf.Bytes())
+			if err := sendMessage(writer, bytes.NewReader(buf.Bytes())); err != nil {
 				log.Error("failed to send response", "workerID", workerID, "requestID", requestID, "err", err)
 			}
 			w.WriteHeader(202)
@@ -259,7 +368,6 @@ func function(ctx context.Context, input input) {
 					Output:     buf.Bytes(),
 				})
 			}
-			resendReply(bridge.MessageResponse, workerID, requestID, buf.Bytes())
 		}
 	})
 
@@ -269,12 +377,14 @@ func function(ctx context.Context, input input) {
 		log.Info("got error", "workerID", workerID, "requestID", r.PathValue("requestID"))
 		writer := newReply(bridge.MessageError, workerID, requestID)
 		var buf bytes.Buffer
-		tee := io.TeeReader(r.Body, &buf)
-		if err := sendMessage(writer, tee); err != nil {
+		if _, err := buf.ReadFrom(r.Body); err != nil {
+			log.Error("failed to read error", "workerID", workerID, "requestID", requestID, "err", err)
+		}
+		resendReply(bridge.MessageError, workerID, requestID, buf.Bytes())
+		if err := sendMessage(writer, bytes.NewReader(buf.Bytes())); err != nil {
 			log.Error("failed to send error", "workerID", workerID, "requestID", requestID, "err", err)
 		}
 		w.WriteHeader(202)
-		resendReply(bridge.MessageError, workerID, requestID, buf.Bytes())
 		sendLogs(workerID, requestID)
 		info, ok := loadWorker(workerID)
 		if ok {
@@ -289,6 +399,8 @@ func function(ctx context.Context, input input) {
 	})
 
 	workerEnv := map[string][]string{}
+	// the function of each worker, kept after it exits, to start it again
+	workerFunction := map[string]string{}
 	builds := map[string]*runtime.BuildOutput{}
 	targets := map[string]*runtime.BuildInput{}
 
@@ -416,6 +528,37 @@ func function(ctx context.Context, input input) {
 		return true
 	}
 
+	// restart starts a worker again for the invocations queued for it. If it
+	// can't start, as when its build fails, the queue is dropped and the bridge
+	// sent an init error, so the invocation fails now instead of at Lambda's
+	// timeout, and isn't handed to the next worker the bridge gets.
+	restart := func(functionID string, workerID string) {
+		log.Info("starting worker again for its queued invocations", "workerID", workerID)
+		if startWorker(functionID, workerID) {
+			return
+		}
+		stateMu.Lock()
+		delete(nextChan, workerID)
+		stateMu.Unlock()
+		// the worker is gone, so the init error handler can't say whose it is
+		bus.Publish(&FunctionErrorEvent{
+			FunctionID:   functionID,
+			WorkerID:     workerID,
+			ErrorMessage: "Function failed to start",
+		})
+		// sent from its own goroutine, as the handler publishes it to AppSync,
+		// and the loop doesn't wait on that
+		go func() {
+			client := http.Client{Timeout: 10 * time.Second}
+			result, err := client.Post("http://"+server+workerID+"/2018-06-01/runtime/init/error", "application/json", strings.NewReader(`{"errorMessage":"Function failed to start"}`))
+			if err != nil {
+				log.Error("failed to report a worker that didn't start", "workerID", workerID, "err", err)
+				return
+			}
+			result.Body.Close()
+		}()
+	}
+
 	restartOrDeferWorker := func(workerID string, info *WorkerInfo) {
 		target, ok := targets[info.FunctionID]
 		if !ok {
@@ -427,10 +570,64 @@ func function(ctx context.Context, input input) {
 			log.Info("lazy startup: deferring worker restart until invoked", "workerID", workerID, "functionID", info.FunctionID)
 			stateMu.Lock()
 			delete(workers, workerID)
+			// the stopped worker's exit isn't seen as this worker's any more, so
+			// an invocation already queued for it is started here
+			queued := len(nextChan[workerID]) > 0
 			stateMu.Unlock()
+			if queued {
+				restart(info.FunctionID, workerID)
+			}
 		}
 	}
 
+	// next pings the bridge that sent an invocation and queues the invocation
+	// for its worker, or asks the bridge to start one. It runs outside the loop,
+	// which builds functions, so a long build doesn't keep other bridges from
+	// their ping past the 16 seconds they wait for it.
+	next := func(msg bridge.Message) {
+		// The ping is published while the worker starts on the invocation, not
+		// before, as publishing it takes a round trip. So it can reach the
+		// bridge after the reply. It carries the ID of the bridge's message, so
+		// a late one isn't taken for the ping of the bridge's next invocation.
+		go func() {
+			writer := input.client.NewWriter(bridge.MessagePing, input.prefix+"/"+msg.Source+"/in")
+			writer.SetID(msg.ID)
+			if err := sendJSON(writer, bridge.PingBody{}); err != nil {
+				log.Error("failed to send ping", "workerID", msg.Source, "err", err)
+			}
+		}()
+		if queueNext(msg.Source, msg.Body) {
+			return
+		}
+		log.Info("asking for reboot", "workerID", msg.Source)
+		writer := input.client.NewWriter(bridge.MessageReboot, input.prefix+"/"+msg.Source+"/in")
+		if err := sendJSON(writer, bridge.RebootBody{}); err != nil {
+			log.Error("failed to send reboot", "workerID", msg.Source, "err", err)
+		}
+	}
+	loopMsg := make(chan bridge.Message, 1000)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg := <-input.msg:
+				if msg.Type == bridge.MessageNext {
+					stopResending(msg.Source)
+					go next(msg)
+					continue
+				}
+				select {
+				case loopMsg <- msg:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	// the loop ends with ctx, as in tests, which run it again and again
+	defer bus.Unsubscribe(evts)
 	// Files that changed since the last rebuild. One save can change several,
 	// as a formatter or a checkout does, so they're taken together a moment
 	// later, and a function is built once for all of them.
@@ -468,7 +665,7 @@ func function(ctx context.Context, input input) {
 		for _, target := range toBuild {
 			rebuilt[target.FunctionID] = !failed[target.FunctionID]
 		}
-		for workerID, info := range workers {
+		for workerID, info := range workersNow() {
 			if rebuilt[info.FunctionID] {
 				restartOrDeferWorker(workerID, info)
 			}
@@ -479,7 +676,7 @@ func function(ctx context.Context, input input) {
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-input.msg:
+		case msg := <-loopMsg:
 			switch msg.Type {
 			case bridge.MessageInit:
 				loadNextChan(msg.Source)
@@ -496,6 +693,7 @@ func function(ctx context.Context, input input) {
 				}
 				log.Info("worker init", "workerID", msg.Source, "functionID", init.FunctionID)
 				workerEnv[workerID] = init.Environment
+				workerFunction[workerID] = init.FunctionID
 				if ok := startWorker(init.FunctionID, workerID); !ok {
 					result, err := http.Post("http://"+server+workerID+"/runtime/init/error", "application/json", strings.NewReader(`{"errorMessage":"Function failed to build"}`))
 					if err != nil {
@@ -526,22 +724,6 @@ func function(ctx context.Context, input input) {
 						log.Info("error", "body", string(body), "status", result.StatusCode)
 					}
 				}
-			case bridge.MessageNext:
-				writer := input.client.NewWriter(bridge.MessagePing, input.prefix+"/"+msg.Source+"/in")
-				if err := sendJSON(writer, bridge.PingBody{}); err != nil {
-					log.Error("failed to send ping", "workerID", msg.Source, "err", err)
-				}
-				ch := loadNextChan(msg.Source)
-				_, ok := loadWorker(msg.Source)
-				if !ok {
-					log.Info("asking for reboot", "workerID", msg.Source)
-					writer := input.client.NewWriter(bridge.MessageReboot, input.prefix+"/"+msg.Source+"/in")
-					if err := sendJSON(writer, bridge.RebootBody{}); err != nil {
-						log.Error("failed to send reboot", "workerID", msg.Source, "err", err)
-					}
-				}
-				ch <- msg.Body
-				continue
 			}
 
 		case <-rebuildChanged:
@@ -554,13 +736,34 @@ func function(ctx context.Context, input input) {
 			stateMu.Lock()
 			existing, ok := workers[info.WorkerID]
 			// only delete if a new worker hasn't already been started
+			queued := false
 			if ok && existing == info {
 				log.Info("deleting worker", "workerID", info.WorkerID)
 				delete(workers, info.WorkerID)
-				delete(nextChan, info.WorkerID)
+				// an invocation can be queued for a worker that's exiting, as it
+				// still counted as running when the invocation arrived. Its bridge
+				// has had the ping, so it would wait until Lambda times it out.
+				// A worker that never asked for one failed as it started, and
+				// has sent its bridge an init error, so it isn't started again.
+				queued = info.Polled && len(nextChan[info.WorkerID]) > 0
+				if !queued {
+					delete(nextChan, info.WorkerID)
+				}
 			}
 			stateMu.Unlock()
+			if queued {
+				restart(info.FunctionID, info.WorkerID)
+			}
 			break
+		case workerID := <-requeued:
+			stateMu.Lock()
+			_, running := workers[workerID]
+			queued := len(nextChan[workerID]) > 0
+			stateMu.Unlock()
+			functionID, ok := workerFunction[workerID]
+			if !running && queued && ok {
+				restart(functionID, workerID)
+			}
 		case unknown := <-evts:
 			switch evt := unknown.(type) {
 			case *FunctionInvokedEvent:
@@ -590,7 +793,7 @@ func function(ctx context.Context, input input) {
 					toBuild = append(toBuild, target)
 				}
 				failed := buildEach(toBuild)
-				for workerID, info := range workers {
+				for workerID, info := range workersNow() {
 					if !failed[info.FunctionID] {
 						restartOrDeferWorker(workerID, info)
 					}
@@ -604,45 +807,6 @@ func function(ctx context.Context, input input) {
 					rebuildChanged = time.After(rebuildDelay)
 				}
 				break
-			}
-		}
-	}
-}
-
-func fileLogger(p *project.Project) {
-	evts := bus.Subscribe(&FunctionLogEvent{}, &FunctionInvokedEvent{}, &FunctionResponseEvent{}, &FunctionErrorEvent{}, &FunctionBuildEvent{})
-	logs := map[string]*os.File{}
-
-	getLog := func(functionID string, requestID string) *os.File {
-		log, ok := logs[requestID]
-		if !ok {
-			path := p.PathLog(fmt.Sprintf("lambda/%s/%d-%s", functionID, time.Now().Unix(), requestID))
-			os.MkdirAll(filepath.Dir(path), 0755)
-			log, _ = os.Create(path)
-			logs[requestID] = log
-		}
-		return log
-	}
-
-	for range evts {
-		for evt := range evts {
-			switch evt := evt.(type) {
-			case *FunctionInvokedEvent:
-				log := getLog(evt.FunctionID, evt.RequestID)
-				log.WriteString("invocation " + evt.RequestID + "\n")
-				log.WriteString(string(evt.Input))
-				log.WriteString("\n")
-			case *FunctionLogEvent:
-				getLog(evt.FunctionID, evt.RequestID).WriteString(evt.Line + "\n")
-			case *FunctionResponseEvent:
-				log := getLog(evt.FunctionID, evt.RequestID)
-				log.WriteString("response " + evt.RequestID + "\n")
-				log.WriteString(string(evt.Output))
-				log.WriteString("\n")
-				delete(logs, evt.RequestID)
-			case *FunctionErrorEvent:
-				getLog(evt.FunctionID, evt.RequestID).WriteString(evt.ErrorType + ": " + evt.ErrorMessage + "\n")
-				delete(logs, evt.RequestID)
 			}
 		}
 	}

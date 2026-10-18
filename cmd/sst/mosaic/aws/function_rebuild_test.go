@@ -70,14 +70,22 @@ func TestBuildAll(t *testing.T) {
 // once, at the same time, and their workers start again.
 func TestFunctionRebuildsChangedFilesTogether(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	dir := t.TempDir()
-	fake := &fakeRuntime{started: make(chan string, 16)}
+	fake := &rebuildRuntime{started: make(chan string, 16)}
 	proj := &project.Project{Runtime: runtime.NewCollection("", fake)}
 	srv := &server.Server{Mux: http.NewServeMux()}
 	msg := make(chan bridge.Message)
-	go function(ctx, input{server: srv, msg: msg, project: proj})
+	// the loop takes events from the bus, so it's stopped before the next test
+	stopped := make(chan struct{})
+	go func() {
+		function(ctx, input{server: srv, msg: msg, project: proj})
+		close(stopped)
+	}()
+	defer func() {
+		cancel()
+		<-stopped
+	}()
 
 	send := func(workerID, functionID string) {
 		select {
@@ -148,7 +156,7 @@ func TestFunctionRebuildsChangedFilesTogether(t *testing.T) {
 	}
 }
 
-type fakeRuntime struct {
+type rebuildRuntime struct {
 	mu          sync.Mutex
 	built       map[string]int
 	building    atomic.Int32
@@ -156,15 +164,15 @@ type fakeRuntime struct {
 	started     chan string
 }
 
-func (f *fakeRuntime) builds(functionID string) int {
+func (f *rebuildRuntime) builds(functionID string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.built[functionID]
 }
 
-func (f *fakeRuntime) Match(runtime string) bool { return runtime == "fake" }
+func (f *rebuildRuntime) Match(runtime string) bool { return runtime == "fake" }
 
-func (f *fakeRuntime) Build(ctx context.Context, input *runtime.BuildInput) (*runtime.BuildOutput, error) {
+func (f *rebuildRuntime) Build(ctx context.Context, input *runtime.BuildInput) (*runtime.BuildOutput, error) {
 	building := f.building.Add(1)
 	defer f.building.Add(-1)
 	for {
@@ -189,23 +197,23 @@ func (f *fakeRuntime) Build(ctx context.Context, input *runtime.BuildInput) (*ru
 	return &runtime.BuildOutput{Handler: "index.handler", Errors: []string{}}, nil
 }
 
-func (f *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Worker, error) {
+func (f *rebuildRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Worker, error) {
 	logs, writer := io.Pipe()
 	f.started <- input.FunctionID
-	return &fakeWorker{logs: logs, writer: writer}, nil
+	return &rebuildWorker{logs: logs, writer: writer}, nil
 }
 
-func (f *fakeRuntime) ShouldRebuild(functionID string, path string) bool {
+func (f *rebuildRuntime) ShouldRebuild(functionID string, path string) bool {
 	return strings.HasSuffix(path, ".ts")
 }
 
-func (f *fakeRuntime) ShouldRunEagerly() bool { return true }
+func (f *rebuildRuntime) ShouldRunEagerly() bool { return true }
 
-type fakeWorker struct {
+type rebuildWorker struct {
 	logs   *io.PipeReader
 	writer *io.PipeWriter
 }
 
-func (w *fakeWorker) Stop() { w.writer.Close() }
+func (w *rebuildWorker) Stop() { w.writer.Close() }
 
-func (w *fakeWorker) Logs() io.ReadCloser { return w.logs }
+func (w *rebuildWorker) Logs() io.ReadCloser { return w.logs }

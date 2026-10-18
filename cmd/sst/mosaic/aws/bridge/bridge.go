@@ -53,14 +53,20 @@ type Message struct {
 	LogsFollow bool
 }
 
+// Conn is what the bridge needs from its AppSync connection.
+type Conn interface {
+	Publish(ctx context.Context, channel string, event interface{}) error
+	Subscribe(ctx context.Context, channel string) (chan string, error)
+}
+
+var _ Conn = (*appsync.Connection)(nil)
+
 type Writer struct {
-	conn      *appsync.Connection
+	conn      Conn
 	message   MessageType
 	source    string
 	channel   string
-	event     string
 	buffer    []byte
-	position  int
 	index     int
 	id        string
 	streaming bool
@@ -96,16 +102,14 @@ type PingBody struct {
 type RebootBody struct {
 }
 
-func newWriter(conn *appsync.Connection, source string, channel string, message MessageType) *Writer {
+func newWriter(conn Conn, source string, channel string, message MessageType) *Writer {
 	return &Writer{
-		id:       id.Ascending(),
-		conn:     conn,
-		source:   source,
-		message:  message,
-		channel:  channel,
-		buffer:   make([]byte, BUFFER_SIZE),
-		position: 0,
-		index:    0,
+		id:      id.Ascending(),
+		conn:    conn,
+		source:  source,
+		message: message,
+		channel: channel,
+		index:   0,
 	}
 }
 
@@ -123,22 +127,23 @@ func (w *Writer) SetLogsFollow(logsFollow bool) {
 
 const BUFFER_SIZE = 1024 * 128
 
+// Write adds p to the message, publishing a packet each time BUFFER_SIZE
+// bytes are waiting. The buffer grows as it's written, so a small message
+// allocates about what it holds.
 func (w *Writer) Write(p []byte) (int, error) {
 	total := 0
 
 	for total < len(p) {
-		space := cap(w.buffer) - w.position
-		toWrite := min(space, len(p)-total)
-		copy(w.buffer[w.position:], p[total:total+toWrite])
-		w.position += toWrite
+		toWrite := min(BUFFER_SIZE-len(w.buffer), len(p)-total)
+		w.buffer = append(w.buffer, p[total:total+toWrite]...)
 		total += toWrite
-		if w.position == len(w.buffer) {
+		if len(w.buffer) == BUFFER_SIZE {
 			if err := w.Flush(false); err != nil {
 				return total, err
 			}
 		}
 	}
-	if w.streaming && w.position > 0 {
+	if w.streaming && len(w.buffer) > 0 {
 		if err := w.Flush(false); err != nil {
 			return total, err
 		}
@@ -147,10 +152,10 @@ func (w *Writer) Write(p []byte) (int, error) {
 }
 
 func (w *Writer) Flush(final bool) error {
-	if !final && w.position == 0 {
+	if !final && len(w.buffer) == 0 {
 		return nil
 	}
-	encoded := base64.StdEncoding.EncodeToString(w.buffer[:w.position])
+	encoded := base64.StdEncoding.EncodeToString(w.buffer)
 	err := w.conn.Publish(context.Background(), w.channel, Packet{
 		ID:     w.id,
 		Index:  w.index,
@@ -165,8 +170,8 @@ func (w *Writer) Flush(final bool) error {
 	if err != nil {
 		return err
 	}
-	w.buffer = make([]byte, BUFFER_SIZE)
-	w.position = 0
+	// the packet holds its own copy, so the buffer is reused for the next one
+	w.buffer = w.buffer[:0]
 	return nil
 }
 
@@ -174,15 +179,20 @@ func (w *Writer) Close() error {
 	return w.Flush(true)
 }
 
+// ID is the ID the message is published with.
+func (w *Writer) ID() string {
+	return w.id
+}
+
 type Client struct {
-	as      *appsync.Connection
+	as      Conn
 	prefix  string
 	pending map[string]chan []byte
 	out     chan Message
 	source  string
 }
 
-func NewClient(ctx context.Context, as *appsync.Connection, source string, prefix string) *Client {
+func NewClient(ctx context.Context, as Conn, source string, prefix string) *Client {
 	slog.Info("subscribing to", "prefix", prefix+"/in")
 	sub, _ := as.Subscribe(ctx, prefix+"/in")
 	result := &Client{

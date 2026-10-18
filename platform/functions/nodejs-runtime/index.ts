@@ -47,6 +47,86 @@ let request: any;
 let response: any;
 let context: LambdaContext;
 
+// Calls the runtime API that sst dev serves. It uses http.request, not fetch.
+// On Node.js 26.7, fetch holds a request on a kept-alive connection until a
+// timer in undici fires: up to half a second, and seconds after a longer pause.
+// Every invocation makes two of these calls.
+function runtimeAPI(method: "GET" | "POST", endpoint: string, body?: string) {
+  return new Promise<{
+    headers: { get(name: string): string | null };
+    json(): any;
+  }>((resolve, reject) => {
+    let responded = false;
+    const req = http.request(
+      AWS_LAMBDA_RUNTIME_API + endpoint,
+      {
+        method,
+        // as fetch sent them, also for a handler that returns nothing
+        headers:
+          method === "GET"
+            ? {}
+            : {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(body ?? ""),
+              },
+      },
+      (res) => {
+        responded = true;
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("error", (ex) => {
+          // its socket is closed, not left half-read
+          res.destroy();
+          reject(ex);
+        });
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString();
+          resolve({
+            headers: {
+              get(name) {
+                const value = res.headers[name.toLowerCase()];
+                if (value === undefined) return null;
+                return Array.isArray(value) ? value.join(", ") : value;
+              },
+            },
+            json: () => JSON.parse(text),
+          });
+        });
+      },
+    );
+    // An error before the response began, as on a kept-alive connection sst
+    // dev closed while it was idle, says so, for the caller to send it again
+    req.on("error", (ex: any) => {
+      if (!responded) ex.beforeResponse = true;
+      reject(ex);
+    });
+    // A POST gives up 300 s after it's sent, as fetch did through undici, and
+    // the caller sends it again. Not the request for the next invocation,
+    // which waits until there is one.
+    if (method === "POST") {
+      const timer = setTimeout(
+        () => req.destroy(new Error("the runtime API didn't answer")),
+        300_000,
+      );
+      req.on("close", () => clearTimeout(timer));
+    }
+    req.end(body ?? "");
+  });
+}
+
+// Asks sst dev for the next invocation. A kept-alive connection that sst dev
+// closed while it was idle fails the first request on it, before any
+// response, so a request that failed that way is sent again, once, instead of
+// being reported as an error. Nothing was handed over, so it's safe to.
+async function nextInvocation() {
+  try {
+    return await runtimeAPI("GET", `/runtime/invocation/next`);
+  } catch (ex: any) {
+    if (!ex.beforeResponse) throw ex;
+    return runtimeAPI("GET", `/runtime/invocation/next`);
+  }
+}
+
 async function error(ex: any) {
   const errorType = ex instanceof Error ? ex.name : "Error";
   const errorMessage = ex instanceof Error ? ex.message : String(ex);
@@ -56,18 +136,12 @@ async function error(ex: any) {
     errorMessage,
     trace,
   });
-  await fetch(
-    AWS_LAMBDA_RUNTIME_API +
-      (!context
-        ? `/runtime/init/error`
-        : `/runtime/invocation/${context.awsRequestId}/error`),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body,
-    },
+  await runtimeAPI(
+    "POST",
+    !context
+      ? `/runtime/init/error`
+      : `/runtime/invocation/${context.awsRequestId}/error`,
+    body,
   );
 }
 process.on("unhandledRejection", error);
@@ -98,9 +172,7 @@ while (true) {
   );
 
   try {
-    const result = await fetch(
-      AWS_LAMBDA_RUNTIME_API + `/runtime/invocation/next`,
-    );
+    const result = await nextInvocation();
     clearTimeout(timeout);
     context = {
       awsRequestId: result.headers.get("lambda-runtime-aws-request-id") || "",
@@ -154,7 +226,6 @@ while (true) {
     };
     request = await result.json();
   } catch (ex: any) {
-    if (ex.code === "UND_ERR_HEADERS_TIMEOUT") continue;
     await error(ex);
     continue;
   }
@@ -238,16 +309,10 @@ while (true) {
 
     while (true) {
       try {
-        await fetch(
-          AWS_LAMBDA_RUNTIME_API +
-            `/runtime/invocation/${context.awsRequestId}/response`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(response),
-          },
+        await runtimeAPI(
+          "POST",
+          `/runtime/invocation/${context.awsRequestId}/response`,
+          JSON.stringify(response),
         );
         break;
       } catch (ex) {

@@ -61,7 +61,7 @@ There are a couple of quirks with this setup that are worth noting.
 
 2. **Live mode persists**
 
-   If you kill the `sst dev` CLI, your functions are not run locally anymore but the stub function in AWS are still there. This means that it'll attempt to proxy requests to your machine and timeout.
+   If you kill the `sst dev` CLI, your functions are not run locally anymore but the stub function in AWS are still there. This means that it'll attempt to proxy requests to your machine and time out. After 16 seconds, a request from API Gateway or a function URL gets a `500` saying `sst dev` didn't answer, and any other invocation fails with an `SstDevUnavailable` error, so an event source, like a queue, retries it. A function with a timeout shorter than that times out first.
 
    :::tip
    Only use `sst dev` in your personal stage.

@@ -119,39 +119,46 @@ func run() error {
 	}
 	sendInit()
 
-	notRunning, _ := json.Marshal(map[string]string{
-		"statusCode": "500",
-		"body":       "sst dev is not running (worker: " + workerID + ")",
-	})
+	pingTimeout := pingTimeoutOf(SST_FUNCTION_TIMEOUT)
 
 	// Wall clock, so time spent frozen between invocations always counts.
 	lastActive := time.Now().Round(0)
 	timedOut := false
 	for {
 		resp, err := http.Get("http://" + LAMBDA_RUNTIME_API + "/2018-06-01/runtime/invocation/next")
-		fmt.Println("status", resp.Status)
 		if err != nil {
 			cancel()
 			return err
 		}
+		fmt.Println("status", resp.Status)
 		requestID := resp.Header.Get("lambda-runtime-aws-request-id")
 		deadline := deadlineOf(resp)
 		if timedOut || time.Since(lastActive) > 10*time.Second {
 			waitForSubscription(ctx, conn, client, prefix+"/"+workerID+"/in")
 			timedOut = false
 		}
+		// read whole first, to tell how to answer the invocation if sst dev
+		// doesn't, even when sending it fails partway
+		event, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(event))
 		writer := client.NewWriter(bridge.MessageNext, prefix+"/in")
-		err = resp.Write(writer)
+		if err == nil {
+			err = resp.Write(writer)
+		}
+		if err == nil {
+			err = writer.Close()
+		}
 		if err != nil {
-			slog.Error("failed to write message", slog.String("requestID", requestID), slog.String("error", err.Error()))
+			// sst dev never got the invocation, so fail it now instead of
+			// leaving it to Lambda's timeout
+			slog.Error("failed to send invocation", slog.String("requestID", requestID), slog.String("error", err.Error()))
+			unavailable(requestID, event, "sst dev couldn't be reached to run this invocation (worker: "+workerID+"): "+err.Error())
+			timedOut = true
+			lastActive = time.Now().Round(0)
 			continue
 		}
-		err = writer.Close()
-		if err != nil {
-			slog.Error("failed to close message", slog.String("requestID", requestID), slog.String("error", err.Error()))
-			continue
-		}
-		timeout := time.Second * 16
+		timeout := pingTimeout
 
 	loop:
 		for {
@@ -204,12 +211,14 @@ func run() error {
 					continue
 				}
 				if msg.Type == bridge.MessagePing {
-					timeout = time.Minute * 15
+					if isPingFor(msg, writer.ID()) {
+						timeout = time.Minute * 15
+					}
 					continue
 				}
 			case <-time.After(timeout):
 				fmt.Println("timeout", requestID)
-				http.Post("http://"+LAMBDA_RUNTIME_API+"/2018-06-01/runtime/invocation/"+requestID+"/response", "application/json", bytes.NewReader(notRunning))
+				unavailable(requestID, event, "sst dev didn't answer within "+timeout.String()+" (worker: "+workerID+"). Check that `sst dev` is running for this stage.")
 				timedOut = true
 				break loop
 			}
@@ -217,6 +226,74 @@ func run() error {
 		lastActive = time.Now().Round(0)
 	}
 
+}
+
+// How long the bridge waits for sst dev to ping it after it hands over an
+// invocation, unless SST_FUNCTION_TIMEOUT sets it in milliseconds. After the
+// ping it waits until Lambda times the invocation out.
+const defaultPingTimeout = 16 * time.Second
+
+func pingTimeoutOf(value string) time.Duration {
+	ms, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || ms <= 0 {
+		return defaultPingTimeout
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// The error type of an invocation that failed because sst dev didn't run it.
+const unavailableErrorType = "SstDevUnavailable"
+
+// unavailable answers an invocation that sst dev didn't run. A request from API
+// Gateway, a function URL or a load balancer gets a 500 response with the
+// message, which its caller shows. A function error there would only show as a
+// bare 502. Anything else, a direct invoke or an event source, gets an error,
+// so the invoke fails and an event source retries it instead of counting it
+// as done.
+func unavailable(requestID string, event []byte, message string) {
+	path := "/response"
+	errorType := ""
+	body, _ := json.Marshal(map[string]any{
+		"statusCode": 500,
+		"body":       message,
+	})
+	if !isHTTPEvent(event) {
+		path = "/error"
+		errorType = unavailableErrorType
+		body, _ = json.Marshal(map[string]any{
+			"errorType":    unavailableErrorType,
+			"errorMessage": message,
+			"stackTrace":   []string{},
+		})
+	}
+	req, err := http.NewRequest("POST", "http://"+LAMBDA_RUNTIME_API+"/2018-06-01/runtime/invocation/"+requestID+path, bytes.NewReader(body))
+	if err != nil {
+		slog.Error("failed to answer invocation", "requestID", requestID, "err", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if errorType != "" {
+		req.Header.Set("Lambda-Runtime-Function-Error-Type", errorType)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Error("failed to answer invocation", "requestID", requestID, "err", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// isHTTPEvent tells whether an event is a request from API Gateway, a function
+// URL or a load balancer, all of which have a requestContext. A WebSocket API
+// event has one too, and API Gateway reads its answer as a response as well.
+func isHTTPEvent(event []byte) bool {
+	var e struct {
+		RequestContext json.RawMessage `json:"requestContext"`
+	}
+	if json.Unmarshal(event, &e) != nil {
+		return false
+	}
+	return len(e.RequestContext) > 0 && string(e.RequestContext) != "null"
 }
 
 // awaitLogs prints what the function printed up to a reply, when the CLI says it
@@ -353,4 +430,13 @@ func waitForSubscription(ctx context.Context, conn *appsync.Connection, client *
 		}
 	}
 	slog.Error("subscription never delivered a probe, continuing anyway")
+}
+
+// isPingFor says whether a ping is for the invocation sent as the message with
+// nextID. sst dev pings while its worker runs the invocation, so a ping can
+// arrive after the reply, and be read while the bridge waits on its next
+// invocation. Taken for that one's, it would wait 15 minutes for a sst dev that
+// isn't there.
+func isPingFor(msg bridge.Message, nextID string) bool {
+	return msg.Type == bridge.MessagePing && msg.ID == nextID
 }

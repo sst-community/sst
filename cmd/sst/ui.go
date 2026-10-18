@@ -88,6 +88,7 @@ func CmdUI(c *cli.Cli) error {
 			apitype.DiagnosticEvent{},
 			project.CompleteEvent{},
 			typescript.WarningEvent{},
+			aws.ConcurrencyWarningEvent{},
 		)
 	}
 	evts, err := dev.Stream(c.Context, url, types...)
