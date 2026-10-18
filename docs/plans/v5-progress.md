@@ -294,7 +294,7 @@ The merge left the v5 `Function` without #116: it still looked the role up on ev
 
 ### Faster rebuilds in `sst dev`
 
-The same change is #118 on `main`, a draft for now.
+The same change is #118 on `main`, merged on 2026-10-18.
 
 | Commit | What |
 | --- | --- |
@@ -354,13 +354,46 @@ In `sst dev`, a function's log group only got the stub's own lines. With `SST_DE
 - **Functions:** the CLI sends a function's output to its bridge after each reply, as a new message (`MessageLogs`), and marks the reply as having output to follow. The bridge waits for it, up to 2 seconds and never past the invocation's deadline, prints it, then asks Lambda for the next invocation. So each line is in the invocation it belongs to. An error is printed after it, as `ERROR Invoke Error {...}`. Up to 256 KB is sent per invocation.
 - **Durable functions and `Workflow`:** their stub ran the bridge with `execFile`, which kept everything the bridge printed in memory and stopped the bridge past 1 MB. It now runs it with its output passed on. That's a fix on its own: their log groups now get the bridge's lines too, as other functions' do.
 - **Tasks:** the CLI sends what a task's `dev.command` prints every second, and before the task completes. The `bridge-task` image prints it in order. That module builds against an older, pinned copy of the CLI's bridge package, so it names the message's number itself; a test keeps that number.
-- **Lines over 64 KB:** a function's or a task's output was read with a `bufio.Scanner`, which stops at a line over 64 KB. For a function, the worker was then taken for dead while it still ran. `Run`'s `readLines` (#110) is now `process.ReadLines`, used for all three. A line over 1 MB is left out with a note, and the lines after it come through. A task's output is now read to its end before the CLI waits for the command, as `os/exec` requires.
+- **Lines over 64 KB:** a function's or a task's output was read with a `bufio.Scanner`, which stops at a line over 64 KB. For a function, the worker was then taken for dead while it still ran. `Run`'s `readLines` (#110) is now `process.ReadLines`, used for all three. A line over 1 MB is left out with a note, and the lines after it come through. A task completes when its command exits, and what's left of its output is read for up to a second after (2026-10-18; reading it to its end first kept a task that left a process in the background from completing).
 
 An older bridge or CLI ignores the new message and the new field on a reply, so a mixed pair works as before.
 
 Checked in AWS, with test apps removed after: functions (output, stderr, JSON, an error, a failure to load, output after the reply, the limit), a durable function before and after the stub fix, a `Workflow` using the SDK, a `Task` in ECS with a test build of the `bridge-task` image, and lines of 100 KB from a function and a task. Callers saw no difference: a median of 0.33s with it on and 0.36s off, over 40 calls each. The stub runs about 110ms longer per invocation (363ms against 251ms).
 
 **Task output needs a new `bridge-task` image.** Every version's `sst dev` runs `ghcr.io/sst-community/sst/bridge-task:latest`, and only a release from `main` pushes it. Until then, an older image ignores the output, so this part takes effect through `main`.
+
+## 2026-10-18
+
+### `main` merged in, with the `sst dev` fixes
+
+The merge brings in v4.21.2, v4.21.3 and ten pull requests to `sst dev` merged into `main` the same day. Two of them, #118 and #120, were already on v5 as their own commits. The other eight are rogueturnip's, from #125 (concurrent Live invocations that failed or hung) and #136 (time spent outside the handler).
+
+| Pull request | What |
+| --- | --- |
+| #128 | A publish to AppSync that's throttled, gets a 5xx or fails to connect is tried again, for up to 10 seconds. |
+| #129 | When `sst dev` doesn't answer, an event or direct invoke fails with `SstDevUnavailable`, and an HTTP request gets a 500 that says so. An event source then retries the event instead of counting it as handled. |
+| #130 | An invocation is no longer lost when its worker exits on idle as it arrives, a build no longer keeps other functions' bridges from their ping, the ping goes alongside the invocation, and a reply stops being resent once its bridge moves on. Adds a test harness for the function loop. |
+| #131 | The invocation logs are closed, and only the newest 100 of each function are kept. |
+| #132 | A warning when the account's Lambda concurrency is under 100. |
+| #133 | The `dev` docs say when to turn it off, as for an authorizer. |
+| #137 | The Node.js worker calls the runtime API with `http.request`. On Node.js 26.7, `fetch` held each call about 300ms. |
+| #138 | A bridge message's buffer grows as it's written, instead of 256 KB for each. |
+| #118 | Changed files are rebuilt together, at once. |
+| #120 | Output in CloudWatch, with two fixes made for the merge: a reply's resends are kept apart from the output's (#130 kept one per worker, so the output's stopped the reply's), and a task completes when its command exits. |
+
+Five files conflicted. `function.go`, its rebuild test, `task.go` and the bridge take `main`'s, which is v5's with the other pull requests and those two fixes. `pkg/flag` keeps `SST_SKIP_UPDATE_CHECK`. The commit after the merge gives the V5 `Function`'s `dev` docs #133's note.
+
+Checked on #125's repro in AWS (an `ApiGatewayV1` route with a Live request authorizer that takes 200ms and a Live handler that takes 300ms), with a CLI built from `main` before the pull requests and one with all ten, on the same stage:
+
+| | Before | After |
+| --- | --- | --- |
+| 20 requests, a second apart | p50 1.05s, p90 1.23s | p50 1.05s, p90 1.08s |
+| 100 at once, warm | 100/100, p50 11.7s, max 15.1s | 100/100, p50 2.3s, max 2.8s |
+| 100 at once after 75s idle | 100/100, p50 21.8s, max 22.5s | 100/100, p50 2.1s, max 2.6s |
+
+Also with all ten: 50 at once with a shared file saved 150ms in, all answered by the new build; with `SST_DEV_CLOUDWATCH_LOGS` on, bursts timed the same and every line was in its invocation; with `sst dev` stopped, a direct invoke failed with `SstDevUnavailable` after 16 seconds; the invocation logs held 100 a function. The app was removed, with its passphrase and state files.
+
+Still open: #139 (a function whose build fails waits for Lambda's timeout, as its init error goes to the wrong URL), #135 (workers that exit on their own aren't reaped, and a rebuild drops a running invocation) and #134 (memory in a long session).
 
 ## What the harness can and can't see
 
