@@ -301,6 +301,12 @@ export interface FunctionArgs
    * _stub_ version of your function is deployed, instead of the real function. You can
    * turn this off by setting `dev` to `false`. It has to be a plain value.
    *
+   * A function that's _Live_ makes a round trip to your machine for each invocation, so
+   * turning it off makes its invocations faster. It's worth doing for a function you
+   * aren't working on, such as an authorizer, which runs before each request to its
+   * routes that it doesn't have a cached result for. The function then runs in AWS as
+   * it's deployed, so it can't reach anything that only runs on your machine.
+   *
    * @default `true`
    * @example
    * ```js
