@@ -1,6 +1,6 @@
 # v5 components: plan and status
 
-Branch `v5`, started 2026-09-30. Last updated 2026-10-16.
+Branch `v5`, started 2026-09-30. Last updated 2026-10-18.
 
 ## Goal
 
@@ -48,20 +48,20 @@ Since 2026-10-09 a 4.x file can change, so `git diff --stat main -- platform/src
 
 ## Status
 
-**Ported (20, plus the Cognito client):** `Alb`, `ApiGatewayV2`, `AppSync`, `Aurora`, `Bucket`, `Bus`, `Cluster`, `CognitoUserPool` (with `CognitoUserPoolClient`), `CronV2`, `Dsql`, `Dynamo`, `Efs`, `Function`, `Mysql`, `Postgres`, `Queue`, `Redis`, `Service`, `SnsTopic`, `Task`.
+**Ported (21, plus the Cognito client):** `Alb`, `ApiGatewayV2`, `AppSync`, `Aurora`, `Bucket`, `Bus`, `Cluster`, `CognitoUserPool` (with `CognitoUserPoolClient`), `CronV2`, `Dsql`, `Dynamo`, `Efs`, `Email`, `Function`, `Mysql`, `Postgres`, `Queue`, `Redis`, `Service`, `SnsTopic`, `Task`.
 
 **Not ported yet:**
 
 - The sites: `Nextjs`, `Astro`, `Remix`, `SvelteKit`, `SolidStart`, `Nuxt`, `React`, `Analog`, `TanStackStart`, and `StaticSite`.
 - `Vpc`, `Router`, `Cdn`.
 - `MicroVm`, new in 4.x on 2026-10-10.
-- `ApiGatewayV1`, `ApiGatewayWebSocket`, `Auth`, `CognitoIdentityPool`, `Email`, `KinesisStream`, `OpenSearch`, `OpenControl`, `Realtime`, `StepFunctions`, `Vector`, `Workflow`.
+- `ApiGatewayV1`, `ApiGatewayWebSocket`, `Auth`, `CognitoIdentityPool`, `KinesisStream`, `OpenSearch`, `OpenControl`, `Realtime`, `StepFunctions`, `Vector`, `Workflow`.
 - `Cron` (deprecated in 4.x; see Open questions).
 - The Cloudflare and Vercel components.
 
 **How it's been checked:**
 
-- 1,667 tests under a mock of the deploy engine (2026-10-15). Each port runs its takeover cases three ways (as it is, inside another component, with another provider) and has to keep everything the 4.x component deployed, with the same inputs, options, registered outputs, function build inputs and teardown order.
+- 1,712 tests under a mock of the deploy engine (2026-10-18). Each port runs its takeover cases three ways (as it is, inside another component, with another provider) and has to keep everything the 4.x component deployed, with the same inputs, options, registered outputs, function build inputs and teardown order.
 - One run in a real AWS account on 2026-10-01: all 19 deployed with 4.x, switched, and removed. See [the report](v5-aws-test-2026-10-01.md).
 
 **Where things stand (2026-10-01):** everything above is committed and pushed. `git log origin/v5` has the latest.

@@ -399,6 +399,12 @@ Still open: #139 (a function whose build fails waits for Lambda's timeout, as it
 
 `existing` with an id looks a part up with its class's `get`. That call gave the options fourth, as a resource's `get(name, id, state, opts)` takes them. A component's `get(name, id, opts)` takes them third, so a part that's a component, like a `Dynamo` given by its table's name, lost its parent and its provider. It sat at the top of the app, and since `nodes` records a part when it's created under the component, each `existingPart()` or `part()` looked it up again: two components of the same name, which a real deploy refuses. A component's `get` now gets its options third. No V5 component of SST's has a component as a part that can be looked up, so none was affected. It showed up in a package component that has a `CognitoUserPool` and three `Dynamo` tables as parts. Tested in `component.test.ts`, "looks up a component part by id, under the component, once".
 
+### `Email`
+
+The 21st port, ahead of the ones on the plan's order, because a package component needs it: email is what a SaaS app's sign-up, password resets and invitations go through. See the [port notes](v5-port-notes.md#email).
+
+Deployed in the lab with 4.x, a domain sender with DMARC, a custom MAIL FROM domain and two events, one of them `deliveries`. After the switch `sst diff` showed no changes, and the deploy changed nothing in AWS. 19 resources before and after, each with the id it had; the `deliveries` destination moved to its V5 name through the takeover map. A second diff showed no changes. The stage was removed, with its passphrase and state files.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.

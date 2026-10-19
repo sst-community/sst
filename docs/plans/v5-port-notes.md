@@ -191,3 +191,13 @@ The default version, `8.0.40`, is no longer offered by RDS. See Open questions i
 - The load balancer depends on its certificate, so it's removed first.
 - `_certArn`, internal and read by nothing, is not carried over. `dns: false` without `cert` is refused; 4.x crashed.
 - A 4.x `Service` refuses the v5 `Alb`.
+
+## Email
+
+- **Parts:** `identity`, `configurationSet` (named `Config`, as 4.x named it), `mailFromAttributes` (named `MailFrom`), `verification`, and by event name `event`.
+- **Plain:** `sender`, `dns`, `mailFrom` with its fields, `events`, and each event's `name`. Whether `sender` is a domain decides what's created to verify it.
+- The DNS records (DKIM, DMARC and the MAIL FROM domain's) are the DNS adapter's, created with `delegateOpts()` under the names 4.x gave them. They aren't parts. The DKIM records are created once the identity's tokens are known.
+- The checks 4.x made inside `.apply()` (`dns`, `dmarc` or `mailFrom` with an email address, a MAIL FROM domain outside the sender's) throw at once.
+- An event's destination is named the way any part with an id is. For a name V5 writes differently, like `deliveries`, the map gives the name 4.x used.
+- `get(name, sender)` is `existing: { identity }`, and its configuration set is looked up with `lookupPart()`.
+- **In AWS (2026-10-18):** a domain sender with DMARC, a MAIL FROM domain and two events, deployed with 4.x and switched. `sst diff` showed no changes, the deploy changed nothing in AWS, every resource kept its id, and the one event whose name V5 writes differently kept its destination under the new name. Removed afterwards.
