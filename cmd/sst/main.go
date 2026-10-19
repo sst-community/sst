@@ -95,6 +95,9 @@ func main() {
 			}
 		}
 		telemetry.Close()
+		// os.Exit skips the deferred Cleanup, and a function's workers in sst
+		// dev run in process groups of their own, so they'd be left running
+		process.Cleanup()
 		os.Exit(1)
 		return
 	}

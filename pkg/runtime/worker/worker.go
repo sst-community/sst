@@ -315,7 +315,7 @@ func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 	return false
 }
 
-// ShouldRunEagerly returns true for Cloudflare Workers - workers restart immediately after rebuild.
+// ShouldRunEagerly returns true for Cloudflare Workers - the worker invoked last restarts immediately after rebuild.
 // Workers use esbuild's metafile for precise per-function dependency tracking.
 func (r *Runtime) ShouldRunEagerly() bool {
 	return true

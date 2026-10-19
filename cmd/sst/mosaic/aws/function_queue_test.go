@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -250,4 +251,78 @@ func TestBuildDoesNotHoldUpOtherFunctions(t *testing.T) {
 		}
 	}
 	close(slow)
+}
+
+// A worker that exited, as a Node.js worker does after a minute without work, is
+// started again for its environment's next invocation with the environment its
+// bridge sent before. Asking the bridge to send it again took a round trip.
+func TestWorkerThatExitedStartsWithoutAReboot(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo, idle: 100 * time.Millisecond})
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	if _, err := b.invoke("x"); err != nil {
+		t.Fatal(err)
+	}
+	reboots := b.reboots.Load()
+	// the worker exits without work
+	time.Sleep(500 * time.Millisecond)
+
+	got, err := b.invoke("y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "echo y" {
+		t.Fatalf("got %q, want %q", got, "echo y")
+	}
+	if n := b.reboots.Load() - reboots; n > 0 {
+		t.Fatalf("the bridge was asked to say it's there again %d times, when sst dev knew it", n)
+	}
+	if starts := h.runtime.starts.Load(); starts != 2 {
+		t.Fatalf("started %d workers, want 2", starts)
+	}
+}
+
+// A second init for a worker that's running, as a bridge sends when it's asked
+// for its init again after its first invocation was handled before its first
+// init, doesn't start another worker.
+func TestSecondInitForARunningWorker(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo})
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	if _, err := b.invoke("x"); err != nil {
+		t.Fatal(err)
+	}
+	b.init()
+	time.Sleep(100 * time.Millisecond)
+	got, err := b.invoke("y")
+	if err != nil || got != "echo y" {
+		t.Fatalf("got %q, %v, want %q", got, err, "echo y")
+	}
+	if starts := h.runtime.starts.Load(); starts != 1 {
+		t.Fatalf("started %d workers, want 1", starts)
+	}
+}
+
+// A function whose worker can't start, as when its build fails, fails its
+// invocation straight away with an init error, not at Lambda's timeout. The
+// next invocation, once the worker can start, runs.
+func TestInvocationFailsWhenTheWorkerCantStart(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo})
+	h.runtime.failRuns.Store(true)
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	start := time.Now()
+	_, err := b.invoke("x")
+	if err == nil || !strings.Contains(err.Error(), "function failed to start") || !strings.Contains(err.Error(), "Function failed to build") {
+		t.Fatalf("invoke() = %v, want the init error for a build that failed", err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the init error took %v", took)
+	}
+
+	h.runtime.failRuns.Store(false)
+	got, err := b.invoke("y")
+	if err != nil || got != "echo y" {
+		t.Fatalf("invoke() after the worker can start = %q, %v, want its answer", got, err)
+	}
 }

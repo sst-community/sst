@@ -411,13 +411,19 @@ func (vt *VT) print(r rune) {
 	}
 }
 
+// maxScrollback is how many lines that scrolled off a pane are kept. A line is
+// a row of cells of about 100 bytes each, so a long session of function output
+// held gigabytes when they were all kept.
+var maxScrollback = 10_000
+
 // scrollUp shifts all text upward by n rows. Semantically, this is backwards -
 // usually scroll up would mean you shift rows down
 func (vt *VT) scrollUp(n int) {
 	for i := 0; i < n; i += 1 {
-		history := make([]cell, len(vt.activeScreen[i]))
-		copy(history, vt.activeScreen[i])
-		vt.primaryScrollback = append(vt.primaryScrollback, history)
+		vt.primaryScrollback = append(vt.primaryScrollback, historyRow(vt.activeScreen[i]))
+	}
+	if over := len(vt.primaryScrollback) - maxScrollback; over > 0 {
+		vt.dropScrollback(over)
 	}
 	for row := range vt.activeScreen {
 		if row > int(vt.margin.bottom) {
@@ -474,6 +480,35 @@ func (vt *VT) Detach() {
 
 func (vt *VT) postEvent(ev tcell.Event) {
 	vt.events <- ev
+}
+
+// historyRow copies a row for the scrollback, without the blank cells at its
+// end, which most lines of output have most of
+func historyRow(row []cell) []cell {
+	end := len(row)
+	for end > 0 && row[end-1].blank() {
+		end--
+	}
+	history := make([]cell, end)
+	copy(history, row[:end])
+	return history
+}
+
+// dropScrollback drops the oldest lines of the scrollback. What's scrolled to
+// and what's selected stay on the same lines.
+func (vt *VT) dropScrollback(n int) {
+	// the rows dropped are freed, not kept by the slice's array
+	clear(vt.primaryScrollback[:n])
+	vt.primaryScrollback = vt.primaryScrollback[n:]
+	if vt.IsScrolling() {
+		vt.scroll = max(0, vt.scroll-n)
+	}
+	if vt.selection != nil {
+		vt.selection.startY -= n
+		if vt.selection.endY != -1 {
+			vt.selection.endY -= n
+		}
+	}
 }
 
 func (vt *VT) SetSurface(srf Surface) {
@@ -570,6 +605,10 @@ func (vt *VT) drawRow(row int, cols []cell) {
 			w = 1
 		}
 		col += 1
+	}
+	// a row from the scrollback has no blank cells at its end
+	for col := len(cols); col < vt.width(); col++ {
+		vt.surface.SetContent(col, row, ' ', nil, tcell.StyleDefault)
 	}
 	if builder.Len() > 0 {
 		vt.selection.content.WriteString(strings.TrimRight(builder.String(), " "))

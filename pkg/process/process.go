@@ -48,9 +48,21 @@ func Cleanup() error {
 	processes := make([]*exec.Cmd, len(cmds))
 	copy(processes, cmds)
 	lock.Unlock()
+	workersLock.Lock()
+	running := make([]*Worker, 0, len(workers))
+	for w := range workers {
+		running = append(running, w)
+	}
+	workersLock.Unlock()
 
 	var wg sync.WaitGroup
 	errors := make(chan error, len(processes))
+	for _, w := range running {
+		wg.Go(func() {
+			w.Stop()
+			<-w.done
+		})
+	}
 
 	for _, cmd := range processes {
 		if cmd.Process == nil {
@@ -135,6 +147,18 @@ func forceKill(process *os.Process, done <-chan struct{}) error {
 	case <-time.After(killWait):
 		slog.Info("timed out waiting for kill", "pid", process.Pid)
 		return syscall.ETIMEDOUT
+	}
+}
+
+// untrackCommand stops tracking a command, as when it's tracked another way
+func untrackCommand(cmd *exec.Cmd) {
+	lock.Lock()
+	defer lock.Unlock()
+	for i, tracked := range cmds {
+		if tracked == cmd {
+			cmds = append(cmds[:i], cmds[i+1:]...)
+			return
+		}
 	}
 }
 

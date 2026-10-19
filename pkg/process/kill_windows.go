@@ -15,3 +15,6 @@ func sendTermSignal(process *os.Process) error {
 func sendKillSignal(process *os.Process) error {
 	return process.Kill()
 }
+
+// Windows has no process groups to stop.
+func stopGroup(pgid int) {}

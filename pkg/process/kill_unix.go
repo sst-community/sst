@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"syscall"
+	"time"
 )
 
 func sendSignal(process *os.Process, sig syscall.Signal) error {
@@ -41,4 +42,22 @@ func sendTermSignal(process *os.Process) error {
 
 func sendKillSignal(process *os.Process) error {
 	return sendSignal(process, syscall.SIGKILL)
+}
+
+// stopGroup stops what's left of a process group whose leader has exited: it's
+// asked to stop, and killed if it hasn't a moment later. The group's ID isn't
+// given to another process while anything is left in it.
+func stopGroup(pgid int) {
+	if pgid <= 0 || syscall.Kill(-pgid, 0) != nil {
+		return
+	}
+	syscall.Kill(-pgid, syscall.SIGTERM)
+	for deadline := time.Now().Add(killWait); time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		if syscall.Kill(-pgid, 0) != nil {
+			return
+		}
+	}
+	slog.Info("killing what an exited process started", "pgid", pgid)
+	syscall.Kill(-pgid, syscall.SIGKILL)
 }

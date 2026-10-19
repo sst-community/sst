@@ -24,7 +24,8 @@ type Runtime interface {
 	// or lazily on first invocation.
 	//
 	// Background: When a file changes, SST stops all affected workers and rebuilds them.
-	// By default (returning true), workers are restarted immediately after rebuild.
+	// By default (returning true), the function's worker that was invoked last is
+	// restarted immediately after rebuild, and the others when they're invoked.
 	// This works well for runtimes like Node.js where esbuild provides precise per-function
 	// dependency tracking, so only a few functions rebuild on each change.
 	//

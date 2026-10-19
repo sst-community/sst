@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -233,35 +232,8 @@ func (r *Runtime) storeInputs(functionID string, metafile string) {
 }
 
 type Worker struct {
-	stdout io.ReadCloser
-	stderr io.ReadCloser
-	cmd    *exec.Cmd
-}
-
-func (w *Worker) Stop() {
-	process.Kill(w.cmd.Process)
-}
-
-func (w *Worker) Logs() io.ReadCloser {
-	reader, writer := io.Pipe()
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(writer, w.stdout)
-	}()
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(writer, w.stderr)
-	}()
-
-	go func() {
-		wg.Wait()
-		defer writer.Close()
-	}()
-
-	return reader
+	*process.Worker
+	cmd *exec.Cmd
 }
 
 type NodeProperties struct {
@@ -397,21 +369,18 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 	cmd.Env = append(cmd.Env, "AWS_LAMBDA_RUNTIME_API="+input.Server)
 	slog.Info("starting worker", "server", input.Server)
 	cmd.Dir = input.Build.Out
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-	cmd.Start()
-	return &Worker{
-		stdout,
-		stderr,
-		cmd,
-	}, nil
+	worker, err := process.StartWorker(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return &Worker{worker, cmd}, nil
 }
 
 func (r *Runtime) Match(runtime string) bool {
 	return strings.HasPrefix(runtime, "node")
 }
 
-// ShouldRunEagerly returns true for Node.js - workers restart immediately after rebuild.
+// ShouldRunEagerly returns true for Node.js - the worker invoked last restarts immediately after rebuild.
 // Node.js uses esbuild's metafile for precise per-function dependency tracking,
 // so only functions that actually import a changed file will rebuild.
 func (r *Runtime) ShouldRunEagerly() bool {

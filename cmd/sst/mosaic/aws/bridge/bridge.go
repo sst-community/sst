@@ -7,6 +7,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"slices"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/appsync"
 	"github.com/sst/sst/v3/pkg/id"
@@ -22,6 +23,10 @@ type Packet struct {
 	// LogsFollow says a MessageLogs follows this reply, with what the function
 	// printed. A bridge from before it ignores it.
 	LogsFollow bool `json:"logsFollow,omitempty"`
+
+	// dropped is passed on by sorted for a message whose first packets were
+	// passed on, and that it dropped before it was whole
+	dropped bool
 }
 
 type MessageType int
@@ -205,6 +210,15 @@ func NewClient(ctx context.Context, as Conn, source string, prefix string) *Clie
 	go func() {
 		for packet := range sorted(ctx, sub) {
 			pending, ok := result.pending[packet.ID]
+			if packet.dropped {
+				if ok {
+					// its body ends with an error
+					pending <- nil
+					close(pending)
+					delete(result.pending, packet.ID)
+				}
+				continue
+			}
 			if !ok {
 				pending = make(chan []byte, 100)
 				result.pending[packet.ID] = pending
@@ -263,6 +277,12 @@ func (r *ChannelReader) Read(p []byte) (n int, err error) {
 			if !ok {
 				return 0, io.EOF
 			}
+			// nil, not an empty packet's data, is sent for a message that was
+			// dropped before it was whole
+			if chunk == nil {
+				r.err = io.ErrUnexpectedEOF
+				return 0, r.err
+			}
 			r.buffer = chunk
 		case <-r.ctx.Done():
 			return 0, io.EOF
@@ -280,10 +300,40 @@ func (r *ChannelReader) Read(p []byte) (n int, err error) {
 	return 0, io.EOF
 }
 
+// A copy of a message that was passed on whole is dropped, as the CLI sends a
+// reply more than once, over 15 seconds. So the IDs of the messages passed on
+// are kept, in two sets of finishedPerSet, the older dropped when the newer is
+// full: for at least the last finishedPerSet messages.
+var finishedPerSet = 10_000
+
+// A message is passed on a packet at a time, in order, and is kept until its
+// last packet comes. One that a packet is missing from waits for it, holding
+// the packets that came after. At most maxWaiting messages are kept, the ones
+// coming in as well as the ones waiting, holding at most maxWaitingBytes of
+// packet data, as it's sent, in base64. Past either, the one kept longest is
+// dropped. It isn't counted as finished, so a whole copy of it, as the CLI
+// sends of a reply, is still passed on.
+var (
+	maxWaiting      = 10_000
+	maxWaitingBytes = 8 << 20
+)
+
+// waiting is a message that's being passed on, or waits for a packet.
+type waiting struct {
+	// next is the index of the packet to pass on next
+	next  int
+	held  map[int]Packet
+	bytes int
+}
+
 func sorted(ctx context.Context, sub chan string) iter.Seq[Packet] {
 	return func(yield func(Packet) bool) {
-		history := make(map[string]map[int]Packet)
-		next := map[string]int{}
+		perSet, mostWaiting, mostBytes := finishedPerSet, maxWaiting, maxWaitingBytes
+		finished, finishedBefore := map[string]bool{}, map[string]bool{}
+		messages := map[string]*waiting{}
+		// the messages that have waited, the first first, some since finished
+		order := []string{}
+		heldBytes := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -292,35 +342,73 @@ func sorted(ctx context.Context, sub chan string) iter.Seq[Packet] {
 				var packet Packet
 				json.Unmarshal([]byte(msg), &packet)
 				slog.Info("got packet", "id", packet.ID, "type", packet.Type, "from", packet.Source)
-				// A packet behind the cursor is a copy of one already passed on, as
-				// the CLI sends a reply more than once. Drop it, so a copy only fills
-				// in packets that are missing, and a finished message isn't kept.
-				if packet.Index < next[packet.ID] {
+				if finished[packet.ID] || finishedBefore[packet.ID] {
 					continue
 				}
-				unprocessed, ok := history[packet.ID]
-				if !ok {
-					unprocessed = map[int]Packet{}
-					history[packet.ID] = unprocessed
+				message, known := messages[packet.ID]
+				if !known {
+					message = &waiting{held: map[int]Packet{}}
+					messages[packet.ID] = message
 				}
-				unprocessed[packet.Index] = packet
+				// A packet behind the cursor, or one held already, is a copy of
+				// one already here. Drop it, so a copy only fills in packets that
+				// are missing.
+				if _, held := message.held[packet.Index]; held || packet.Index < message.next {
+					continue
+				}
+				message.held[packet.Index] = packet
+				message.bytes += len(packet.Data)
+				heldBytes += len(packet.Data)
 				for {
-					index := next[packet.ID]
-					envelope, ok := unprocessed[index]
+					envelope, ok := message.held[message.next]
 					if !ok {
 						break
 					}
-					delete(unprocessed, index)
-					next[envelope.ID] = index + 1
+					delete(message.held, message.next)
+					message.bytes -= len(envelope.Data)
+					heldBytes -= len(envelope.Data)
+					message.next++
 					if !yield(envelope) {
 						return
 					}
 					if envelope.Final {
-						delete(history, envelope.ID)
+						heldBytes -= message.bytes
+						delete(messages, envelope.ID)
+						if len(finished) >= perSet {
+							finished, finishedBefore = map[string]bool{}, finished
+						}
+						finished[envelope.ID] = true
+						break
 					}
 				}
+				if _, waits := messages[packet.ID]; waits && !known {
+					order = append(order, packet.ID)
+				}
+				for len(order) > 0 && (len(messages) > mostWaiting || heldBytes > mostBytes) {
+					id := order[0]
+					order = order[1:]
+					message, ok := messages[id]
+					if !ok {
+						continue
+					}
+					slog.Warn("dropping a message that never finished", "id", id, "passedOn", message.next, "held", len(message.held))
+					delete(messages, id)
+					heldBytes -= message.bytes
+					// its first packets were passed on, so it's ended, as one that
+					// won't be whole
+					if message.next > 0 {
+						if !yield(Packet{ID: id, dropped: true}) {
+							return
+						}
+					}
+				}
+				if len(order) > 2*len(messages)+64 {
+					order = slices.DeleteFunc(order, func(id string) bool {
+						_, waits := messages[id]
+						return !waits
+					})
+				}
 			}
-
 		}
 	}
 }

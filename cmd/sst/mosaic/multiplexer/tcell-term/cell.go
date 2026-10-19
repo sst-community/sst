@@ -17,6 +17,12 @@ func (c *cell) rune() rune {
 	return c.content
 }
 
+// blank is whether the cell shows nothing: no character, and no style that
+// shows, as a background color does
+func (c *cell) blank() bool {
+	return (c.content == 0 || c.content == ' ') && len(c.combining) == 0 && c.attrs == tcell.StyleDefault
+}
+
 // Erasing removes characters from the screen without affecting other characters
 // on the screen. Erased characters are lost. The cursor position does not
 // change when erasing characters or lines. Erasing resets the attributes, but
