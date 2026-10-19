@@ -428,6 +428,12 @@ The Go tests pass on the merge, and the CLI builds. #157 was checked on #125's r
 
 Still open: the rest of #134 (forgetting an environment a while after its worker exits, the Node.js workers' memory, the UI's maps, `sst.log`).
 
+### `main` merged in again, with #159
+
+#159 forgets a Lambda environment's variables and function 15 to 16.5 minutes after its worker stops, as when it exits after a minute without work, isn't started again after a rebuild, or fails to start. An environment invoked after that asks its bridge for them again. Before, `sst dev` kept every environment it had seen for as long as it ran: 12.8 MB after 1,000 environments with 10 KB of variables each. Nothing conflicted, and the Go tests pass on the merge.
+
+Still open in #134: the Node.js workers' memory, the UI's maps and `sst.log`.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
