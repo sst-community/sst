@@ -413,6 +413,21 @@ Deployed in the lab with 4.x, a domain sender with DMARC, a custom MAIL FROM dom
 
 The guide's "Test it" also says to pin `google-protobuf` to `3.21.2` in the package's repo, as SST's `package.json` files do. `@pulumi/pulumi` asks for `^3.21.4`, and with that every resource `mock()` registers fails with `c.g is not a function`. The first package component, `@sst-community/saas`, ran into it.
 
+### `main` merged in again, with four more `sst dev` fixes
+
+The merge brings in four pull requests merged into `main` the same day, for #139, #154, #135 and part of #134. Nothing conflicted: they change only the CLI's Go, which v5 shares with `main`.
+
+| Pull request | What |
+| --- | --- |
+| #155 | A function whose worker can't start, as when its build fails, fails its invocation at once with an init error, posted to the right URL, instead of at Lambda's timeout. |
+| #156 | A second init for a worker that's running, which a bridge sends when its first invocation was handled before its init, is logged at info, not as an error. |
+| #157 | A worker runs in a process group of its own, is waited for as it exits, and is stopped without holding up the loop, with what it started. A save leaves a running invocation to finish and then replaces its worker, and starts again only each function's worker invoked last. The others start when they're invoked, with the environment their bridge sent before, without a round trip to it. |
+| #158 | A multiplexer pane keeps its last 10,000 lines, and the bridge client remembers a bounded number of finished messages and drops ones that never finish. |
+
+The Go tests pass on the merge, and the CLI builds. #157 was checked on #125's repro in AWS against `main` before it: a save during a burst of 20 requests answered all 20, where `main` failed them with a 502 at the function's timeout, and it started 2 workers, where `main` started 40.
+
+Still open: the rest of #134 (forgetting an environment a while after its worker exits, the Node.js workers' memory, the UI's maps, `sst.log`).
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
