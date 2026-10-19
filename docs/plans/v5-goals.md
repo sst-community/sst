@@ -28,7 +28,7 @@ The rest of that list only happens when a component is given a `provider`, or us
 
 **Where it stands (2026-10-16):**
 
-- 20 components are ported, each with its takeover suite. 1,667 tests pass (2026-10-15).
+- 21 components are ported, each with its takeover suite. 1,712 tests pass (2026-10-18).
 - In AWS on 2026-10-01, 19 components were deployed with 4.x and switched. Every AWS resource kept its id. Only the code of eleven renamed functions was uploaded again ([the report](v5-aws-test-2026-10-01.md)).
 - In AWS on 2026-10-13, 62 of 65 resources kept their ids. Two subscribers' code was uploaded again, and a default bus 4.x had looked up left the state.
 
@@ -99,7 +99,7 @@ A V5 component declares every resource it creates as a part. From that list it o
 
 **Where it stands (2026-10-16):**
 
-- It holds for the 20 ports.
+- It holds for the 21 ports (2026-10-18).
 - Not ported yet: the sites, `Vpc`, `Router`, `Cdn`, `MicroVm`, the Cloudflare and Vercel components, and others. See the [plan](v5-components.md#status).
 - `existing` hasn't been tried against real resources.
 
