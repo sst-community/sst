@@ -337,6 +337,10 @@ export function tenancy(args: TenancyArgs) {
     }));
   }
 
+  // The permissions a role grants, as the config lists them: `["*"]` for
+  // every permission
+  const listed = (role: string) => [...(roles[role] ?? [])];
+
   // A role can only be given, or an invitation with it changed, by someone
   // with all its permissions
   function canGive(
@@ -363,16 +367,21 @@ export function tenancy(args: TenancyArgs) {
     platformAdmin,
 
     /** The user, the tenant they're in, and their role in it. */
-    async me(identity: Identity) {
+    /**
+     * The user, and the tenant the request is for, or else their current
+     * one, with their role in it and the permissions it grants.
+     */
+    async me(identity: Identity, tenantId?: string) {
       const user = await actor(identity);
-      const tenantId = user.activeTenantId;
+      tenantId ??= user.activeTenantId;
       if (!tenantId) return { user };
       const [tenant, membership] = await Promise.all([
         store.getTenant(tenantId),
         store.getMembership(tenantId, user.id),
       ]);
       if (!tenant || (!membership && !user.platformAdmin)) return { user };
-      return { user, tenant, role: membership?.role ?? ownerRole };
+      const role = membership?.role ?? ownerRole;
+      return { user, tenant, role, permissions: listed(role) };
     },
 
     async updateMe(identity: Identity, patch: { name?: unknown }) {
@@ -395,7 +404,10 @@ export function tenancy(args: TenancyArgs) {
       return { tenant, role: granted.role };
     },
 
-    /** The tenants the user is a member of, with their role in each. */
+    /**
+     * The tenants the user is a member of, with their role in each and the
+     * permissions it grants.
+     */
     async tenantsOf(identity: Identity) {
       await actor(identity);
       const memberships = await store.listMemberships(identity.id);
@@ -406,7 +418,9 @@ export function tenancy(args: TenancyArgs) {
       );
       return memberships.flatMap((m) => {
         const tenant = tenants.get(m.tenantId);
-        return tenant ? [{ ...tenant, role: m.role }] : [];
+        return tenant
+          ? [{ ...tenant, role: m.role, permissions: listed(m.role) }]
+          : [];
       });
     },
 

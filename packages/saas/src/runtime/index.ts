@@ -2,7 +2,6 @@
 // own routes use. Nothing here loads Pulumi.
 
 export {
-  ALL_SCOPE,
   CLAIMS,
   DEFAULT_MESSAGES,
   DEFAULT_ROLES,
@@ -10,7 +9,7 @@ export {
   PERMISSIONS,
   PLATFORM_ADMIN_SCOPE,
   ROUTES,
-  scopeOf,
+  TENANT_HEADER,
   type BuiltInMessage,
   type BuiltInPermission,
   type BuiltInRoute,

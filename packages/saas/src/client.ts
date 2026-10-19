@@ -2,7 +2,7 @@
 // calls the API. It only uses `fetch`, and imports only types and the
 // config's constants, so it brings nothing else into a bundle.
 
-import { ALL_SCOPE, CLAIMS, scopeOf } from "./config";
+import { CLAIMS, TENANT_HEADER } from "./config";
 import type {
   Invitation,
   Member,
@@ -14,22 +14,31 @@ import type {
 
 export type { Invitation, Member, Metadata, Page, Tenant, User };
 
-/** A tenant the user is a member of, with their role in it. */
-export type MyTenant = Tenant & { role: string };
+/**
+ * A role's permissions, as the component's `roles` list them: `["*"]` for
+ * every permission.
+ */
+export type Permissions = string[];
 
-/** `GET /me`: the user, and the tenant they're in, with their role in it. */
+/** A tenant the user is a member of, with their role in it. */
+export type MyTenant = Tenant & { role: string; permissions: Permissions };
+
+/**
+ * `GET /me`: the user, and the tenant the request is for, with their role in
+ * it and what it lets them do. No tenant when they're in none.
+ */
 export interface Me {
   user: User;
   tenant?: Tenant;
   role?: string;
+  permissions?: Permissions;
 }
 
 /** What the user's access token says. Read from the token, not checked: the API checks it. */
 export interface TokenClaims {
   userId: string;
-  /** The tenant the token is for. */
+  /** The user's current tenant, when the token was issued. */
   tenantId?: string;
-  role?: string;
   platformAdmin: boolean;
   scopes: string[];
 }
@@ -41,8 +50,7 @@ export interface SaasClientOptions {
   path?: string;
   /**
    * The user's access token, from whatever signs them in, like Amplify's
-   * `fetchAuthSession()`. Not the ID token: only the access token has the
-   * scopes the API checks.
+   * `fetchAuthSession()`. Not the ID token: the API takes the access token.
    */
   token(): string | undefined | Promise<string | undefined>;
   /**
@@ -51,6 +59,11 @@ export interface SaasClientOptions {
    * forceRefresh: true })`.
    */
   refresh(): unknown;
+  /**
+   * The tenant this client's requests are for, in place of the one in the
+   * token. `useTenant()` changes it.
+   */
+  tenantId?: string;
   /** In place of the global `fetch`. */
   fetch?: typeof fetch;
 }
@@ -69,8 +82,13 @@ export class SaasError extends Error {
 
 /**
  * A client for the built-in routes. It sends the user's access token with
- * each request, turns an error into a `SaasError`, and refreshes the tokens
- * after a change to the tenant they're in, which the tokens say.
+ * each request, and the tenant the client is in, and turns an error into a
+ * `SaasError`.
+ *
+ * Its requests are for the tenant in the user's token, their current one,
+ * unless `useTenant()` names another: then they're for that one, with no
+ * new tokens, so each tab can be in a tenant of its own. Either way the
+ * API checks that the user is a member.
  *
  * ```ts
  * const saas = saasClient({
@@ -78,13 +96,17 @@ export class SaasError extends Error {
  *   token: async () => (await fetchAuthSession()).tokens?.accessToken?.toString(),
  *   refresh: () => fetchAuthSession({ forceRefresh: true }),
  * });
- * await saas.switchTenant(tenantId);
+ * saas.useTenant(tenantId);
  * ```
  */
 export function saasClient(options: SaasClientOptions) {
   const api = options.url.replace(/\/+$/, "");
   const prefix = slash(options.path ?? "").replace(/\/+$/, "");
   const segment = encodeURIComponent;
+  let current = options.tenantId;
+  // What the user can do in each tenant, from `GET /me`, until it may have
+  // changed
+  const known = new Map<string, Promise<Me>>();
 
   // A built-in route, under the component's path
   const call = <T>(method: string, path: string, body?: unknown) =>
@@ -98,6 +120,7 @@ export function saasClient(options: SaasClientOptions) {
     const token = await options.token();
     const headers: Record<string, string> = {};
     if (token) headers.authorization = `Bearer ${token}`;
+    if (current) headers[TENANT_HEADER] = current;
     if (body !== undefined) headers["content-type"] = "application/json";
     const response = await (options.fetch ?? fetch)(api + slash(path), {
       method,
@@ -110,69 +133,126 @@ export function saasClient(options: SaasClientOptions) {
     return value as T;
   }
 
-  const refresh = async () => {
-    await options.refresh();
-  };
-
   async function claims(): Promise<TokenClaims | undefined> {
     const token = await options.token();
     return token ? claimsOf(token) : undefined;
   }
 
+  async function tenantId() {
+    return current ?? (await claims())?.tenantId;
+  }
+
+  async function refresh() {
+    known.clear();
+    await options.refresh();
+  }
+
+  async function me() {
+    const tenant = (await tenantId()) ?? "";
+    let found = known.get(tenant);
+    if (!found) {
+      found = call<Me>("GET", "/me");
+      known.set(tenant, found);
+      // Asked again next time, when it failed
+      found.catch(() => known.delete(tenant));
+    }
+    return found;
+  }
+
+  // A change that can change what the user can do
+  const changes = async <T>(done: Promise<T>) => {
+    try {
+      return await done;
+    } finally {
+      known.clear();
+    }
+  };
+
   return {
     /**
      * Call a route of your own on the same API, with the user's access
-     * token, like `request("GET", "/projects")`. The path is from the API's
-     * root, where `saas.route()` puts routes, not under the component's.
+     * token and the client's tenant, like `request("GET", "/projects")`.
+     * The path is from the API's root, where `saas.route()` puts routes,
+     * not under the component's.
      */
     request,
 
     /**
      * Get new tokens. The user takes up any invitation to their email, and
-     * the tokens have their role as it is now.
+     * the tokens are for their current tenant.
      */
     refresh,
 
     /** What the user's access token says. Nothing when they're not signed in. */
     claims,
 
+    /** The tenant the client's requests are for: the one it uses, or else the one in the token. */
+    tenantId,
+
     /**
-     * Whether the user's role, in the tenant their token is for, has a
-     * permission. It reads the token, to show or hide parts of your UI: the
-     * API checks the store.
+     * Send the client's requests for this tenant, without new tokens, or
+     * for the one in the token again with nothing. The tenant isn't
+     * checked until a request: one the user isn't in is a `no_tenant`.
      */
-    async can(permission: string) {
-      const scopes = (await claims())?.scopes ?? [];
-      return scopes.includes(ALL_SCOPE) || scopes.includes(scopeOf(permission));
+    useTenant(tenantId: string | undefined) {
+      current = tenantId || undefined;
     },
 
-    me: () => call<Me>("GET", "/me"),
-    updateMe: (patch: { name?: string | null }) =>
-      call<User>("PATCH", "/me", patch),
+    /**
+     * The user, and the tenant the client is in, with their role and its
+     * permissions. Kept until a change that could change them, or a
+     * `refresh()`.
+     */
+    me,
 
-    /** The tenants the user is a member of, with their role in each. */
+    /**
+     * Whether the user's role in the tenant the client is in has a
+     * permission, for showing or hiding parts of your UI. It's read from
+     * the API, and kept like `me()`. The API checks it again for each
+     * request.
+     */
+    async can(permission: string) {
+      const permissions = (await me()).permissions ?? [];
+      return permissions.includes("*") || permissions.includes(permission);
+    },
+
+    updateMe: (patch: { name?: string | null }) =>
+      changes(call<User>("PATCH", "/me", patch)),
+
+    /** The tenants the user is a member of, with their role in each and its permissions. */
     tenants: () => call<MyTenant[]>("GET", "/tenants"),
     /** Create a tenant, with the user as its owner. It doesn't switch to it. */
     createTenant: (input: { name: string }) =>
       call<MyTenant>("POST", "/tenants", input),
-    /** Make a tenant the one the user is in, and refresh the tokens for it. */
+    /**
+     * Make a tenant the user's current one, in this client and in their
+     * tokens, which it refreshes: for other tabs and devices, and for
+     * whatever else reads the tokens. To change only this client's, use
+     * `useTenant()`.
+     */
     async switchTenant(tenantId: string) {
       const switched = await call<{ tenant: Tenant; role: string }>(
         "PUT",
         "/me/tenant",
         { tenantId },
       );
+      current = tenantId;
       await refresh();
       return switched;
     },
 
-    /** The tenant the user is in. */
+    /** The tenant the client is in. */
     tenant: () => call<Tenant>("GET", "/tenant"),
     updateTenant: (patch: { name: string }) =>
       call<Tenant>("PATCH", "/tenant", patch),
-    /** Delete the tenant the user is in, and refresh the tokens for the one they're moved to. */
+    /**
+     * Delete the tenant the client is in. The client goes back to the
+     * tenant in the user's tokens, which it refreshes, as the user is moved
+     * to another.
+     */
     async deleteTenant() {
       await call("DELETE", "/tenant");
+      current = undefined;
       await refresh();
     },
 
@@ -182,17 +262,21 @@ export function saasClient(options: SaasClientOptions) {
       input: ({ email: string } | { userId: string }) & { role?: string },
     ) => call<Member>("POST", "/tenant/members", input),
     changeRole: (userId: string, role: string) =>
-      call<Member>("PATCH", `/tenant/members/${segment(userId)}`, { role }),
+      changes(
+        call<Member>("PATCH", `/tenant/members/${segment(userId)}`, { role }),
+      ),
     removeMember: (userId: string) =>
-      call<void>("DELETE", `/tenant/members/${segment(userId)}`),
-    /** Leave the tenant the user is in, and refresh the tokens for the one they're moved to. */
+      changes(call<void>("DELETE", `/tenant/members/${segment(userId)}`)),
+    /**
+     * Leave the tenant the client is in. The client goes back to the tenant
+     * in the user's tokens, which it refreshes, as the user is moved to
+     * another.
+     */
     async leave() {
-      const token = await options.token();
-      if (!token) throw new SaasError(401, "unauthorized", "Sign in first.");
-      await call(
-        "DELETE",
-        `/tenant/members/${segment(claimsOf(token).userId)}`,
-      );
+      const signedIn = await claims();
+      if (!signedIn) throw new SaasError(401, "unauthorized", "Sign in first.");
+      await call("DELETE", `/tenant/members/${segment(signedIn.userId)}`);
+      current = undefined;
       await refresh();
     },
 
@@ -215,7 +299,8 @@ export function saasClient(options: SaasClientOptions) {
           platformAdmin?: boolean;
           metadata?: Metadata | null;
         },
-      ) => call<User>("PATCH", `/admin/users/${segment(userId)}`, patch),
+      ) =>
+        changes(call<User>("PATCH", `/admin/users/${segment(userId)}`, patch)),
       tenants: (page?: PageQuery) =>
         call<Page<Tenant>>("GET", `/admin/tenants${query(page)}`),
       updateTenant: (
@@ -223,7 +308,7 @@ export function saasClient(options: SaasClientOptions) {
         patch: { name?: string; metadata?: Metadata | null },
       ) => call<Tenant>("PATCH", `/admin/tenants/${segment(tenantId)}`, patch),
       deleteTenant: (tenantId: string) =>
-        call<void>("DELETE", `/admin/tenants/${segment(tenantId)}`),
+        changes(call<void>("DELETE", `/admin/tenants/${segment(tenantId)}`)),
     },
   };
 }
@@ -277,7 +362,6 @@ function claimsOf(token: string): TokenClaims {
   return {
     userId: String(claims.sub),
     tenantId: text(claims[CLAIMS.tenant]),
-    role: text(claims[CLAIMS.role]),
     platformAdmin: String(claims[CLAIMS.platformAdmin]) === "true",
     scopes: text(claims.scope)?.split(" ") ?? [],
   };

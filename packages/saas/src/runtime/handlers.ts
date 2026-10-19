@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { handle, type LambdaContext, type LambdaEvent } from "@hono/aws-lambda";
-import { ALL_SCOPE, CLAIMS, PLATFORM_ADMIN_SCOPE, scopeOf } from "../config";
+import { CLAIMS, PLATFORM_ADMIN_SCOPE } from "../config";
 import { saasApp, type SaasAppOptions } from "./app";
 import { lazySetup } from "./env";
 import type { Membership, Store, User } from "./store/types";
@@ -36,8 +36,9 @@ export interface ClaimsInput {
 
 export interface HandlerOptions extends SaasAppOptions {
   /**
-   * Claims of your own for both tokens, like the tenant's plan. Keep it to
-   * a read or two: Cognito gives the trigger 5 seconds.
+   * Claims of your own for both tokens, like the tenant's plan, or the
+   * user's `role` in it if something that only sees the token needs it.
+   * Keep it to a read or two: Cognito gives the trigger 5 seconds.
    */
   claims?(input: ClaimsInput): Claims | Promise<Claims>;
 }
@@ -145,21 +146,20 @@ export function createHandlers(options: HandlerOptions = {}) {
     },
 
     /**
-     * Adds the tenant, the user's role in it and whether they're a platform
-     * admin to both tokens, and the scopes of the role's permissions to the
-     * access token. Creates the user when they're new, so a user the other
-     * trigger missed gets created here.
+     * Adds the user's current tenant and whether they're a platform admin to
+     * both tokens, and `platform/admin` to a platform admin's access token.
+     * What their role lets them do isn't added: it's read from the store,
+     * as it can change while the tokens are valid. Creates the user when
+     * they're new, so a user the other trigger missed gets created here, and
+     * takes up the invitations to their email.
      */
     async preTokenGeneration(event: CognitoTriggerEvent) {
       const { store, tenancy } = setup();
       const session = await tenancy.session(identityOf(event));
-      const { user, tenantId, role, membership, permissions } = session;
+      const { user, tenantId, role, membership } = session;
 
       const claims: Claims = {};
-      if (tenantId && role) {
-        claims[CLAIMS.tenant] = tenantId;
-        claims[CLAIMS.role] = role;
-      }
+      if (tenantId) claims[CLAIMS.tenant] = tenantId;
       if (user.platformAdmin) claims[CLAIMS.platformAdmin] = "true";
       Object.assign(
         claims,
@@ -173,10 +173,7 @@ export function createHandlers(options: HandlerOptions = {}) {
         }),
       );
 
-      const scopes = [
-        ...(permissions === "*" ? [ALL_SCOPE] : [...permissions].map(scopeOf)),
-        ...(user.platformAdmin ? [PLATFORM_ADMIN_SCOPE] : []),
-      ];
+      const scopes = user.platformAdmin ? [PLATFORM_ADMIN_SCOPE] : [];
 
       // Version 1 of the event can only add claims to the ID token, as text
       if (event.version === "1") {
@@ -194,7 +191,7 @@ export function createHandlers(options: HandlerOptions = {}) {
           idTokenGeneration: { claimsToAddOrOverride: claims },
           accessTokenGeneration: {
             claimsToAddOrOverride: claims,
-            scopesToAdd: scopes,
+            ...(scopes.length > 0 && { scopesToAdd: scopes }),
           },
         },
       };

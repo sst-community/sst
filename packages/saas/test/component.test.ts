@@ -350,11 +350,9 @@ describe("Saas", () => {
   });
 
   describe("route()", () => {
-    it("adds a route behind the authorizer, with the permission as a scope", async () => {
+    it("adds a route behind the authorizer, which only checks a platform admin's scope", async () => {
       const saas = new Saas("App");
-      saas.route("POST /projects", "src/projects.create", {
-        permission: "projects:write",
-      });
+      saas.route("POST /projects", "src/projects.create");
       saas.route(
         "GET /stats",
         { handler: "src/stats.handler", memory: "256 MB" },
@@ -370,10 +368,11 @@ describe("Saas", () => {
           r.inputs,
         ]),
       );
+      // The function checks the permission: the token doesn't have it
       expect(routes["POST /projects"]).toMatchObject({
         authorizationType: "JWT",
-        authorizationScopes: ["tenant/projects:write", "tenant/*"],
       });
+      expect(routes["POST /projects"].authorizationScopes).toBeUndefined();
       expect(routes["GET /stats"].authorizationScopes).toEqual([
         "platform/admin",
       ]);
@@ -398,13 +397,6 @@ describe("Saas", () => {
         ]);
         expect(configOf(`${fn.name}Function`).store.type).toBe("dynamo");
       }
-    });
-
-    it("checks the permission's name", () => {
-      const saas = new Saas("App");
-      expect(() =>
-        saas.route("GET /x", "src/x.handler", { permission: "*" }),
-      ).toThrow(`The permission "*"`);
     });
   });
 

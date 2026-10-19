@@ -24,10 +24,8 @@ import {
   DEFAULT_ROLES,
   MESSAGES,
   PLATFORM_ADMIN_SCOPE,
-  permissionProblem,
   rolesProblem,
   ROUTES,
-  scopesOf,
   secondsOf,
   type BuiltInMessage,
   type BuiltInRoute,
@@ -309,9 +307,10 @@ export interface SaasArgs extends ComponentArgs<typeof parts> {
 }
 
 export interface SaasRouteArgs {
-  /** A permission the caller has to have in the tenant their token is for. */
-  permission?: string;
-  /** Only platform admins. */
+  /**
+   * Only platform admins: the API turns away anyone else's token before the
+   * function runs.
+   */
   platformAdmin?: boolean;
 }
 
@@ -585,21 +584,19 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
 
   /**
    * Add a route of your own to the API, behind the same authorizer. Its
-   * function is linked to the tables, and can use `route()` or
-   * `authorized()` from `@sst-community/saas/runtime` to read the caller and
-   * check their permissions.
+   * function is linked to the tables, and uses `route()` or `authorized()`
+   * from `@sst-community/saas/runtime` to read the caller and check their
+   * permission against the store.
    *
-   * With a `permission`, the API also turns away a token whose role doesn't
-   * have it, before the function runs. A permission that's changed since
-   * the token was issued is only seen by the function.
+   * The API only checks that the caller is signed in, or is a platform
+   * admin with `platformAdmin`. Check the permission in the function: the
+   * token doesn't have it.
    *
    * A route on the path of a built-in one takes its place.
    *
    * @example
    * ```ts
-   * saas.route("POST /projects", "src/projects.create", {
-   *   permission: "projects:write",
-   * });
+   * saas.route("POST /projects", "src/projects.create");
    * ```
    */
   public route(
@@ -607,10 +604,13 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
     handler: RouteHandler,
     args: SaasRouteArgs = {},
   ) {
-    const problem = args.permission && permissionProblem(args.permission);
-    if (problem) throw new Error(`The route "${rawRoute}": ${problem}`);
     this.nodes.api.route(rawRoute, this.withSaas(handler), {
-      auth: { jwt: { authorizer: this.authorizerId, scopes: scopesOf(args) } },
+      auth: {
+        jwt: {
+          authorizer: this.authorizerId,
+          scopes: args.platformAdmin ? [PLATFORM_ADMIN_SCOPE] : undefined,
+        },
+      },
     });
     return this;
   }

@@ -47,7 +47,8 @@ export function saasApp(options: SaasAppOptions = {}) {
     BuiltInRoute,
     (c: Context<SaasEnv>) => Promise<Response>
   > = {
-    "GET /me": async (c) => c.json(await rules(c).me(who(c))),
+    "GET /me": async (c) =>
+      c.json(await rules(c).me(who(c), c.var.saas.auth.tenantId)),
     "PATCH /me": async (c) =>
       c.json(await rules(c).updateMe(who(c), await body(c))),
     "PUT /me/tenant": async (c) =>

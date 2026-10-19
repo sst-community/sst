@@ -20,7 +20,12 @@ const decode = (token: string) =>
 
 describe("saasClient()", () => {
   let store: ReturnType<typeof memoryStore>;
-  let requests: { method: string; path: string; authorization?: string }[];
+  let requests: {
+    method: string;
+    path: string;
+    authorization?: string;
+    tenant?: string;
+  }[];
   let gateway: typeof fetch;
   let handlers: ReturnType<typeof createHandlers>;
 
@@ -35,15 +40,20 @@ describe("saasClient()", () => {
       .get("/projects", (c) => c.json([{ name: "Rocket" }]));
 
     // What API Gateway does: turn away a request without a token, and pass
-    // the token's claims to the function
+    // the token's claims and the headers, in lowercase, to the function
     gateway = async (input, init) => {
       const url = new URL(String(input));
-      const authorization = (init?.headers as Record<string, string>)
-        ?.authorization;
+      const headers = Object.fromEntries(
+        Object.entries((init?.headers ?? {}) as Record<string, string>).map(
+          ([name, value]) => [name.toLowerCase(), value],
+        ),
+      );
+      const authorization = headers.authorization;
       requests.push({
         method: init?.method ?? "GET",
         path: url.pathname + url.search,
         authorization,
+        tenant: headers["x-tenant-id"],
       });
       if (!authorization)
         return new Response(JSON.stringify({ message: "Unauthorized" }), {
@@ -51,7 +61,7 @@ describe("saasClient()", () => {
         });
       const claims = decode(authorization.slice("Bearer ".length));
       return api.request(url.pathname + url.search, init, {
-        event: { requestContext: { authorizer: { jwt: { claims } } } },
+        event: { headers, requestContext: { authorizer: { jwt: { claims } } } },
       });
     };
   });
@@ -82,20 +92,23 @@ describe("saasClient()", () => {
       token = jwt({
         sub,
         ...access.claimsToAddOrOverride,
-        scope: ["aws.cognito.signin.user.admin", ...access.scopesToAdd].join(
-          " ",
-        ),
+        scope: [
+          "aws.cognito.signin.user.admin",
+          ...(access.scopesToAdd ?? []),
+        ].join(" "),
       });
     };
     await issue();
-    const client = saasClient({
-      url: "https://api.example.com/",
-      path: "/saas/",
-      token: () => token,
-      refresh: issue,
-      fetch: gateway,
-    });
-    return Object.assign(client, { signOut: () => (token = undefined) });
+    // A tab: a client of its own, with the tokens every tab shares
+    const tab = () =>
+      saasClient({
+        url: "https://api.example.com/",
+        path: "/saas/",
+        token: () => token,
+        refresh: issue,
+        fetch: gateway,
+      });
+    return Object.assign(tab(), { tab, signOut: () => (token = undefined) });
   }
 
   it("sends the access token, and refreshes it when it switches tenants", async () => {
@@ -107,7 +120,10 @@ describe("saasClient()", () => {
 
     await ann.switchTenant(acme.id);
     expect((await ann.claims())!.tenantId).toBe(acme.id);
+    expect(await ann.tenantId()).toBe(acme.id);
     expect((await ann.tenant()).name).toBe("Acme");
+    // A tab of its own follows the token
+    expect((await ann.tab().tenant()).name).toBe("Acme");
     expect(requests.find((r) => r.method === "PUT")).toMatchObject({
       path: "/saas/me/tenant",
       authorization: expect.stringMatching(/^Bearer ey/),
@@ -116,18 +132,18 @@ describe("saasClient()", () => {
 
   it("reads what the token says", async () => {
     const ann = await signIn("ann");
+    // The tenant, and nothing of what the role lets her do
     expect(await ann.claims()).toEqual({
       userId: "ann",
       tenantId: expect.any(String),
-      role: "owner",
       platformAdmin: false,
-      scopes: ["aws.cognito.signin.user.admin", "tenant/*"],
+      scopes: ["aws.cognito.signin.user.admin"],
     });
     ann.signOut();
     expect(await ann.claims()).toBeUndefined();
   });
 
-  it("says whether the user's role has a permission, from the token", async () => {
+  it("says whether the user's role has a permission, from the API", async () => {
     const ann = await signIn("ann");
     const bob = await signIn("bob");
     // An owner has every permission, ones of the app's own too
@@ -136,12 +152,53 @@ describe("saasClient()", () => {
     const acme = await ann.createTenant({ name: "Acme" });
     await ann.switchTenant(acme.id);
     await ann.addMember({ userId: "bob" });
-    await bob.switchTenant(acme.id);
+    bob.useTenant(acme.id);
     expect(await bob.can("members:read")).toBe(true);
     expect(await bob.can("members:write")).toBe(false);
+    const asked = requests.filter((r) => r.path === "/saas/me").length;
+    await bob.can("members:read");
+    // Kept, not asked again
+    expect(requests.filter((r) => r.path === "/saas/me").length).toBe(asked);
 
-    bob.signOut();
-    expect(await bob.can("members:read")).toBe(false);
+    // Ann makes him an admin: his client sees it at its next refresh
+    await ann.changeRole("bob", "admin");
+    expect(await bob.can("members:write")).toBe(false);
+    await bob.refresh();
+    expect(await bob.can("members:write")).toBe(true);
+  });
+
+  it("puts each tab in a tenant of its own, without new tokens", async () => {
+    const ann = await signIn("ann");
+    const acme = await ann.createTenant({ name: "Acme" });
+    const own = (await ann.tenant()).id;
+    const tab = ann.tab();
+    tab.useTenant(acme.id);
+
+    expect((await tab.tenant()).name).toBe("Acme");
+    expect(requests.at(-1)).toMatchObject({
+      path: "/saas/tenant",
+      tenant: acme.id,
+    });
+    expect(await tab.tenantId()).toBe(acme.id);
+    // The first tab, and the token, are where they were
+    expect((await ann.tenant()).id).toBe(own);
+    expect(requests.at(-1)!.tenant).toBeUndefined();
+    expect((await ann.claims())!.tenantId).toBe(own);
+
+    // Back to the token's
+    tab.useTenant(undefined);
+    expect((await tab.tenant()).id).toBe(own);
+  });
+
+  it("is turned away from a tenant the user isn't in", async () => {
+    const ann = await signIn("ann");
+    const bob = await signIn("bob");
+    bob.useTenant((await ann.claims())!.tenantId);
+    await expect(bob.tenant()).rejects.toMatchObject({
+      status: 404,
+      code: "no_tenant",
+    });
+    expect(await bob.can("tenant:read")).toBe(false);
   });
 
   it("invites someone, who joins at their next refresh", async () => {
@@ -190,6 +247,15 @@ describe("saasClient()", () => {
 
     await bob.leave();
     expect((await bob.claims())!.tenantId).toBe(own);
+    expect(await bob.tenantId()).toBe(own);
+    expect(await store.getMembership(acme.id, "bob")).toBeUndefined();
+
+    // From a tab that only uses the tenant, the same
+    await ann.addMember({ userId: "bob" });
+    const tab = bob.tab();
+    tab.useTenant(acme.id);
+    await tab.leave();
+    expect(await tab.tenantId()).toBe(own);
     expect(await store.getMembership(acme.id, "bob")).toBeUndefined();
   });
 

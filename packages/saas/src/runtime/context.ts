@@ -31,7 +31,7 @@ export const noActiveTenant = () =>
   new HttpError(
     409,
     "no_active_tenant",
-    "Your token isn't for a tenant. Switch to one with PUT /me/tenant, then refresh your tokens.",
+    "The request isn't for a tenant. Name one in the x-tenant-id header, or switch to one with PUT /me/tenant and refresh your tokens.",
   );
 
 /** Who's calling, checked against what the route asks for. */

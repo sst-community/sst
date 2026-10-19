@@ -6,7 +6,7 @@ Users, tenants and roles for a SaaS app on AWS, as one SST component.
 const { Saas } = await import("@sst-community/saas");
 
 const saas = new Saas("App");
-saas.route("GET /projects", "src/projects.list", { permission: "projects:read" });
+saas.route("GET /projects", "src/projects.list");
 ```
 
 That gives you:
@@ -15,7 +15,7 @@ That gives you:
 - an **HTTP API** with a JWT authorizer for the user pool, and the built-in routes on it;
 - **four DynamoDB tables**: users, tenants, memberships and invitations;
 - a **post confirmation trigger** that creates each user, with a tenant of their own;
-- a **pre token generation trigger** that puts the user's current tenant, their role in it and what it lets them do in their tokens;
+- a **pre token generation trigger** that puts the user's current tenant in their tokens;
 - with `email`, **email through Amazon SES** from your own domain, for Cognito's emails and the app's.
 
 A user signs up and gets their own tenant. They can create more, switch between them, and invite the people they work with by email. A platform admin can see and change every user and tenant.
@@ -34,21 +34,27 @@ When someone confirms their account, the post confirmation trigger creates their
 
 ### What's in a token
 
-Every token the user pool issues has these claims, in both the ID token and the access token:
+The token says who the user is and which tenant they're in. The store says what they can do. Every token the user pool issues has these claims, in both the ID token and the access token:
 
 | Claim | What it is |
 | --- | --- |
-| `tenant_id` | The tenant the token is for: the user's current one. |
-| `tenant_role` | The user's role in it. |
+| `tenant_id` | The user's current tenant, from their record in the store. |
 | `platform_admin` | `"true"` for a platform admin. Not there otherwise. |
 
-The access token also has a **scope for each permission** of the role, like `tenant/members:write`, or `tenant/*` for a role with every permission, and `platform/admin` for a platform admin. The API checks these before a function runs.
+A platform admin's access token also has the scope `platform/admin`, which the API checks for `/admin`.
 
-Send the **access token** to the API. The ID token has the claims but not the scopes.
+**Their role, and what it lets them do, isn't in the tokens.** A token is good for an hour by default, and a role can change in that time, or the member can be removed. So every route checks the caller's membership and role in the store, for each request. If something that only sees the token needs the role, add it with the `claims` hook in [`handlers`](#hooks-claims-and-a-store-of-your-own-handlers), knowing it's as it was when the token was issued.
 
-### Switching tenants
+Send the **access token** to the API.
 
-`PUT /me/tenant` with `{ "tenantId": "..." }` changes the user's current tenant. Then the client refreshes its tokens, and the new ones are for that tenant. [The client](#the-client)'s `switchTenant()` does both. The current tenant is kept on the user, so it's the same in every tab and on every device.
+### Which tenant a request is for
+
+A request is for the tenant in the `x-tenant-id` header when it has one, and for the one in the token when it doesn't. Either way, the route checks that the caller is a member, so the header only says which tenant: someone who names a tenant they're not in gets a `404`.
+
+- **To switch for good**, `PUT /me/tenant` with `{ "tenantId": "..." }` changes the user's current tenant, kept on their record, and the client refreshes its tokens to get it in them. It's then the same in every tab and on every device, and for whatever else reads the tokens. [The client](#the-client)'s `switchTenant()` does both.
+- **For one tab, or at once**, send the header. Each tab can be in a tenant of its own, and switching needs no new tokens. The client's `useTenant()` does this.
+
+Something else that reads the token, like an AppSync resolver, sees the user's current tenant, which can be another tab's. Each tab's requests to this API are for the tab's.
 
 ### Roles and permissions
 
@@ -82,7 +88,7 @@ The rules:
 - A personal tenant can't be deleted, except by a platform admin.
 - A platform admin can do anything in any tenant, and switch into one they're not a member of.
 
-**Every route checks the store, not just the token.** If a role changed after a token was issued, the function sees the change straight away. The API's scope check only sees it once the token is refreshed.
+**Every route checks the store.** If a role changed, or a member was removed, it counts at their next request, whatever their token says.
 
 **Changing the roles is a deploy**, and every tenant gets the change at once. A member keeps the name of their role in the memberships table, so a role you rename or remove leaves its members with no permissions, and when it's `ownerRole`, leaves their tenants with no owner. The functions log a warning when they find one. To rename a role:
 
@@ -142,7 +148,7 @@ They're under `path`, which is the root of the API unless you set one. API Gatew
 | `PATCH /admin/tenants/{tenantId}` | Platform admins | `{ name, metadata }` |
 | `DELETE /admin/tenants/{tenantId}` | Platform admins | |
 
-The `/tenant` routes act on the tenant the token is for. An error comes back as `{ "error": { "code", "message" } }`. The codes your client might match on: `no_active_tenant`, `no_tenant`, `no_user`, `no_member`, `member_exists`, `last_owner`, `personal_tenant`, `no_invitation`, `too_many_invitations`, and `too_soon` (a `429`).
+The `/tenant` routes act on the tenant the request is for: the one in the `x-tenant-id` header, or else the one in the token. `GET /me` says which, with the user's role in it and its `permissions`, and `GET /tenants` lists each of the user's tenants with the same. An error comes back as `{ "error": { "code", "message" } }`. The codes your client might match on: `no_active_tenant`, `no_tenant`, `no_user`, `no_member`, `member_exists`, `last_owner`, `personal_tenant`, `no_invitation`, `too_many_invitations`, and `too_soon` (a `429`).
 
 `POST /tenant/members` adds someone who has already signed up, found by email or user id, straight away. Only a verified email is kept, so only a verified email finds anyone. Unlike an invitation, it tells the caller whether an email has signed up: if that matters to you, turn it off with `routes: { "POST /tenant/members": false }` and invite people instead.
 
@@ -150,7 +156,7 @@ The `/tenant` routes act on the tenant the token is for. An error comes back as 
 
 ## The client
 
-`@sst-community/saas/client` calls the built-in routes from your frontend, or any other code. It sends the user's access token with each request, turns an error into a `SaasError` with its `code`, and refreshes the tokens after a change to the tenant the user is in. It uses only `fetch`, and is about 1 KB gzipped.
+`@sst-community/saas/client` calls the built-in routes from your frontend, or any other code. It sends the user's access token with each request, and the tenant the client is in, turns an error into a `SaasError` with its `code`, and refreshes the tokens after a change to the user's current tenant. It uses only `fetch`, and is about 1 KB gzipped.
 
 It doesn't sign anyone in. Give it the access token from whatever does, and a way to refresh it. With Amplify:
 
@@ -167,10 +173,13 @@ export const saas = saasClient({
 ```
 
 ```ts
-const { user, tenant, role } = await saas.me();
-const tenants = await saas.tenants(); // with the user's role in each
+const { user, tenant, role, permissions } = await saas.me();
+const tenants = await saas.tenants(); // with the user's role in each, and its permissions
 
-await saas.switchTenant(tenants[1].id); // switches, then refreshes the tokens
+saas.useTenant(tenants[1].id); // this tab, at once, with no new tokens
+await saas.switchTenant(tenants[1].id); // the user's current tenant, everywhere: refreshes the tokens
+
+if (await saas.can("members:write")) showInviteButton();
 await saas.invite({ email: "dan@example.com", role: "admin" });
 await saas.changeRole(userId, "member");
 await saas.leave(); // leaves the tenant the user is in, then refreshes
@@ -184,12 +193,13 @@ try {
 }
 ```
 
+- **`useTenant(id)`** sends the client's requests for that tenant, in the `x-tenant-id` header, until it's given another, or nothing to go back to the token's. Make a client for each tab, and each is in a tenant of its own. `tenantId()` says which one the client is in.
+- **`can(permission)`** says whether the user's role, in the tenant the client is in, has a permission, to show or hide parts of your UI. It asks `GET /me`, and keeps the answer until the client changes something that could change it, or `refresh()`. A role someone else changed shows at the next refresh, and the API checks it at once either way.
 - **`refresh()`** gets new tokens. Someone who's signed in takes up an invitation to their email this way, without waiting for their next sign-in: call it when they open your app from the invitation's link.
-- **`can(permission)`** says whether the user's role has a permission, from the token's scopes, to show or hide parts of your UI. The API checks the store, so a role changed since the token was issued counts there first.
-- **`claims()`** reads the access token: the user's id, the tenant it's for, their role, whether they're a platform admin, and its scopes. It's read, not checked: the API checks it.
+- **`claims()`** reads the access token: the user's id, their current tenant, whether they're a platform admin, and its scopes. It's read, not checked: the API checks it.
 - **`request(method, path, body)`** calls a route of your own on the same API, with the same token. Its path is from the API's root, where `saas.route()` puts routes, not under `path`.
 - **`admin`** has the `/admin` routes, for platform admins.
-- `switchTenant()`, `deleteTenant()` and `leave()` refresh the tokens. The rest don't, so after `createTenant()`, switch to it if the user should be in it.
+- `switchTenant()`, `deleteTenant()` and `leave()` refresh the tokens. After `deleteTenant()` or `leave()`, the client is in the user's current tenant again. The rest don't refresh, so after `createTenant()`, switch to it or use it if the user should be in it.
 
 The types, like `User`, `Tenant`, `Member` and `Invitation`, come with it.
 
@@ -200,15 +210,15 @@ The types, like `User`, `Tenant`, `Member` and `Invitation`, come with it.
 ### On the API, with `route()`
 
 ```ts title="sst.config.ts"
-saas.route("POST /projects", "src/projects.create", { permission: "projects:write" });
+saas.route("POST /projects", "src/projects.create");
 saas.route("GET /reports", { handler: "src/reports.handler", memory: "1 GB" }, {
   platformAdmin: true,
 });
 ```
 
-The route is behind the same authorizer. The API turns away a token without the permission's scope. The function is linked to the tables, and told what the runtime needs.
+The route is behind the same authorizer. The API checks only that the caller is signed in, or with `platformAdmin`, that they're a platform admin. The function is linked to the tables, and told what the runtime needs.
 
-In the function, `route()` reads the caller and checks the permission against the store:
+**Check the permission in the function**: the token doesn't have it, so the API can't. `route()` reads the caller and the tenant the request is for, and checks the permission against the store:
 
 ```ts title="src/projects.ts"
 import { route, badRequest } from "@sst-community/saas/runtime";
@@ -310,7 +320,7 @@ saas.nodes.users.nodes.table; // the aws.dynamodb.Table
 new Saas("App", { existing: { api: myApi }, path: "/saas" });
 ```
 
-**A user pool you already have.** Pass its id. The component doesn't change the pool. It creates the two triggers and lets the pool invoke them, and you point the pool's triggers at `saas.nodes.postConfirmation` and `saas.nodes.preTokenGeneration` where the pool is managed. Use version 2 of the pre token generation event, on the Essentials or Plus tier, for the access token to get the scopes. On version 1, only the ID token gets the claims. With `email`, the custom message trigger is created and allowed in the same way, as `saas.nodes.customMessage`. Point the pool's custom message trigger at it, and its email settings at the SES identity, `saas.nodes.email.nodes.identity`.
+**A user pool you already have.** Pass its id. The component doesn't change the pool. It creates the two triggers and lets the pool invoke them, and you point the pool's triggers at `saas.nodes.postConfirmation` and `saas.nodes.preTokenGeneration` where the pool is managed. Use version 2 of the pre token generation event, on the Essentials or Plus tier, for the access token to get the claims. On version 1, only the ID token gets them. With `email`, the custom message trigger is created and allowed in the same way, as `saas.nodes.customMessage`. Point the pool's custom message trigger at it, and its email settings at the SES identity, `saas.nodes.email.nodes.identity`.
 
 **Tables you already have.** Pass their names, as `existing: { users: "..." }`. They need the keys and indexes described under [Storage](#storage).
 
@@ -529,10 +539,10 @@ The component is the control plane. It does what needs its own data or its own w
 
 ## Things to know
 
-- **Access tokens with scopes need the Essentials tier** of Cognito, which costs more per monthly active user than Lite. The component sets it on the user pool it creates. On Lite, a version 1 trigger can only add claims to the ID token.
+- **Claims in the access token need the Essentials tier** of Cognito, which costs more per monthly active user than Lite. The component sets it on the user pool it creates. On Lite, a version 1 trigger can only add claims to the ID token.
 - **Invitations email any address you're given, from your domain.** The limit for each tenant and the minute between sends slow down someone who'd use them to send spam, but with `tenants.selfServe` on, anyone who signs up can create a tenant and invite. If your app is open to anyone, watch SES's bounce and complaint rates, and think about a rate limit in front of the API, like AWS WAF.
 - **Cognito gives a trigger 5 seconds.** The pre token generation trigger does three reads for most sign-ins: the user, their membership, and the invitations to their email. A `claims` hook adds to that. In `sst dev` the triggers run on your machine, so a slow first build can make a sign-in fail. Try again once it's built.
-- **A token is as it was when it was issued.** The routes check the store, but a scope check at the API uses the token. Keep access tokens short-lived if that matters.
+- **A token is as it was when it was issued.** The routes check the store, so that only matters to what reads the token itself: its tenant, and whether the user is a platform admin, for `/admin` at the API. Keep access tokens short-lived if that matters.
 - **Removal.** The tables and the user pool hold your data. Set the app's `removal` to `"retain"` for production stages, as with any SST app.
 
 ---

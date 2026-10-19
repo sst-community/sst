@@ -38,12 +38,14 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 | 2026-10-18 | **Branding is a logo and a link color, and the rest is a `layout`.** Those two are what every app changes. A footer, fonts, legal text or dark mode would each be a setting to keep working in every email client, so they're a layout of the app's own, one function that every email goes through, Cognito's too. Templates are given the layout, so one the app replaces still matches. The logo is a URL the app hosts: the component doesn't upload or serve images. |
 | 2026-10-18 | **`notify()` finds the people and sends, and nothing more**: users by id, or a tenant's members whose role has a permission, at their verified email, one at a time, reporting who was sent, skipped and failed. What to notify about, preferences, unsubscribing, digests and queues are the app's. |
 | 2026-10-18 | **The package is the control plane**, in the terms of AWS's SaaS Lens and SaaS Builder Toolkit: the shared services that run the app as a business (identity, onboarding, tenants, users and roles, invitations, platform admin, the system's emails). The application plane, the product and its data and how that's kept apart by tenant, is the app's. What the package gives the application plane is the tenant context of a request: the tenant in the token, `route()` and `authorized()`, the check against the store. This is the scope rule above, said another way. |
+| 2026-10-18 | **The token says who and where; the store says what they can do.** Changed the same day, with the user, from the decision above that put the role and a scope for each permission in the token. Those were out of date for as long as a token lasts, an hour by default; they grew with the roles; and the functions checked the store anyway, so nothing could trust them. Now the trigger adds only `tenant_id`, the user's current tenant from their record, and `platform_admin`, with the `platform/admin` scope for `/admin` at the API. `tenant_id` stays for whatever else only sees the token, like an AppSync resolver or another API. `saas.route()` takes no `permission` any more: the function checks it, with `route()` or `authorized()`. `GET /me` and `GET /tenants` give the role's `permissions`, which the client's `can()` reads. An app that wants the role in the token adds it with the `claims` hook. |
+| 2026-10-18 | **A request can name its tenant**, in the `x-tenant-id` header, in place of the token's. It's checked against the store like the token's, so it only says which tenant. Each tab can be in a tenant of its own, and switching in one needs no new tokens; `PUT /me/tenant` still changes the user's current tenant, for every tab and device and for what reads the token. Settles the open question of one tenant for each user, not each tab. The user pool stays on Essentials, as `tenant_id` is in the access token. |
 | 2026-10-18 | **A client for the frontend, `@sst-community/saas/client`**, agreed with the user. It's typed calls for the built-in routes, `SaasError` with the routes' codes, and the token refreshes that a change to the user's tenant needs: `switchTenant()`, `deleteTenant()` and `leave()` refresh, and `refresh()` takes up an invitation at once. It doesn't sign in or keep tokens: the app gives it `token()` and `refresh()` from whatever it signs in with. No UI and no framework bindings. It imports only types and `config.ts`, so it bundles alone, about 1 KB gzipped. |
 | 2026-10-18 | **Invitations can be sent to any address, so they're limited**: at most `invitations.limit` waiting in a tenant (100), and the same address no more than once a minute (`429 too_soon`). They expire after `invitations.expiresIn` (7 days). Inviting again replaces the invitation and sends it again. `POST /tenant/members` stays, for adding someone who has signed up, at once. The `invitation` email is on by default, and `memberAdded` isn't sent to someone who took up an invitation. |
 
 ## Status
 
-**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, invitations, branding, `notify()`, the client, and 144 tests: 50 of the tenancy rules on the in-memory store, 23 of the Hono app, `route()` and the triggers, 23 of the component under `mock()`, 28 of email, 10 of the DynamoDB store against a fake client, and 10 of the client against the Hono app, with tokens from the pre token generation trigger. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
+**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, invitations, branding, `notify()`, the client, the tenant in a header, and 148 tests: 50 of the tenancy rules on the in-memory store, 26 of the Hono app, `route()` and the triggers, 22 of the component under `mock()`, 28 of email, 10 of the DynamoDB store against a fake client, and 12 of the client against the Hono app, with tokens from the pre token generation trigger. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
 
 **Fixed on `v5` on the way** (`e53329841`): a part that's a component, looked up by id, lost its parent and was looked up twice. See the [log](https://github.com/sst-community/sst/blob/v5/docs/plans/v5-progress.md). The package still works around it, as it builds against `5.0.0-alpha.2`.
 
@@ -88,7 +90,7 @@ The package is the control plane. The application plane is the app's: its routes
 | --- | --- | --- |
 | The user pool, its clients and triggers, the API and its authorizer | AWS wiring that has to fit together | `transform`, `existing` |
 | Users, tenants, memberships, invitations, and the rules on them | The data model everything else reads | `store`, `routes`, hooks |
-| Tokens with the tenant, role and scopes | Needs the records, at sign-in | `claims`, `handlers` |
+| Tokens with the user's current tenant | Needs the records, at sign-in | `claims`, `handlers` |
 | Sending email: SES, Cognito's emails, the emails about its own changes | Wired to the user pool and to its own changes | `send`, `templates`, `messages` |
 | One plain layout, with a logo and a color | Every app needs its emails to look like it | `layout` |
 | `notify()` | Only it knows who's in a tenant, with which role | Your own lookup and `send` |
@@ -162,11 +164,19 @@ In the lab account on 2026-10-18, with `sst5` built from `v5` at `e53329841`. Th
 - SES sent the invitation to each address, and no "You were added" email to the two who took theirs up.
 - No function logged an error. The pre token generation trigger took 10 to 26 ms warm, and 84 ms for the refresh that took up an invitation; post confirmation took 301 ms for the sign-up that took one up and sent a welcome email. `sst diff` then showed no changes.
 
+**The tenant in a header**, in a fourth deploy on 2026-10-19, with the same `sst5`:
+
+- Both tokens had `tenant_id`, and no role or permission scopes: the access token's `scope` was Cognito's own. A platform admin's had `platform_admin` and `platform/admin` once they refreshed, and `/admin` went from `403` at the API to `200`.
+- With `x-tenant-id` for another of the user's tenants, `GET /tenant`, `GET /me` and a route of the app's own acted on it, while the token stayed on the user's current one. A header naming a tenant the user wasn't in got a `404 no_tenant`.
+- A member made an admin could do what an admin can at their next request, with the same token, and one removed was turned away at their next request.
+- CORS: API Gateway answers a preflight with `access-control-allow-headers: *`, as `ApiGatewayV2`'s default `allowHeaders: ["*"]` says. The CORS spec says `*` doesn't cover `Authorization`, which has to be named, but Chrome 153 let a request from another origin through with `Authorization` and `x-tenant-id`. Firefox and Safari weren't tried.
+
 Still not checked: a user pool and an API passed in `existing`, the hosted UI and federated sign-in, an email-address `sender`, DynamoDB removing an expired invitation (it can take a few days), and the AWS SDK's retries under load.
 
 ## Next
 
 - **`5.0.0-alpha.3`**, then the package's `sst` dev dependency moves to it and the workaround for the lookup goes.
+- **CORS in Firefox and Safari**, with `Authorization` under `allowHeaders: ["*"]`. If either refuses it, `ApiGatewayV2`'s default should name `authorization` as well as `*`, on `v5`.
 - **The package doesn't load in plain Node.** `tsc` emits its relative imports as they're written, without `.js`, and Node's ESM loader won't resolve `./config`. Every entry fails with `ERR_MODULE_NOT_FOUND` under `node`. Bundlers resolve them, so SST's builds, Vite and Next work, and the lab didn't notice. To decide: `.js` on the package's relative imports, with `module: "NodeNext"` so `tsc` checks them, or bundling `dist`.
 - **The Postgres store.**
 - **Events on a bus**, as well as the hooks.
@@ -176,7 +186,6 @@ Still not checked: a user pool and an API passed in `existing`, the hosted UI an
 ## Open questions
 
 - **The name.** `Saas` and `@sst-community/saas` are working names.
-- **One current tenant for each user**, not for each tab. A tenant given with each request would need its own check, as the scopes in the token would be for another tenant.
 - **Adding a member by email tells the caller whether that email has signed up.** Invitations don't, so an app that cares can turn `POST /tenant/members` off. Should it be off by default?
 - **Nothing tells the one who invited** that their invitation was taken up. An `invitationAccepted` email, off by default, would.
 - **No accept or decline** for someone who has signed up already: they join at their next token. An app that wants them to choose would need `GET /me/invitations` and routes to accept and decline.

@@ -14,9 +14,10 @@ import { config } from "./helpers";
 const event = (claims: Record<string, string> = {}) => ({
   requestContext: { authorizer: { jwt: { claims, scopes: null } } },
 });
+// The claims of a token the authorizer passed
 const token = (sub: string, tenantId?: string) => ({
   sub,
-  ...(tenantId ? { tenant_id: tenantId, tenant_role: "owner" } : {}),
+  ...(tenantId ? { tenant_id: tenantId } : {}),
 });
 
 const trigger = (
@@ -123,6 +124,79 @@ describe("the built-in routes", () => {
     const removed = await request("DELETE", "/tenant/members/bob", ann);
     expect(removed.status).toBe(204);
     expect(await store.getMembership(tenant.id, "bob")).toBeUndefined();
+  });
+
+  it("act on the tenant in the x-tenant-id header, in place of the token's", async () => {
+    const own = (await (await request("GET", "/me", token("ann"))).json())
+      .tenant.id;
+    const acme = await (
+      await request("POST", "/tenants", token("ann"), { name: "Acme" })
+    ).json();
+    const inAcme = (method: string, path: string, body?: unknown) =>
+      app.request(
+        path,
+        {
+          method,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        },
+        // The token is for Ann's own tenant, and the header for Acme
+        {
+          event: {
+            ...event(token("ann", own)),
+            headers: { "x-tenant-id": acme.id },
+          } as any,
+        },
+      );
+
+    expect((await (await inAcme("GET", "/tenant")).json()).name).toBe("Acme");
+    const me = await (await inAcme("GET", "/me")).json();
+    expect(me).toMatchObject({
+      tenant: { id: acme.id },
+      role: "owner",
+      permissions: ["*"],
+    });
+    // Her current tenant is the same
+    expect((await store.getUser("ann"))!.activeTenantId).toBe(own);
+  });
+
+  it("check a tenant in the header against the store, as the token's", async () => {
+    const bob = await (await request("GET", "/me", token("bob"))).json();
+    const res = await app.request(
+      "/tenant",
+      {},
+      {
+        event: {
+          ...event(token("ann")),
+          headers: { "x-tenant-id": bob.tenant.id },
+        } as any,
+      },
+    );
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe("no_tenant");
+  });
+
+  it("list the tenants with the role in each, and what it lets them do", async () => {
+    const acme = await (
+      await request("POST", "/tenants", token("bob"), { name: "Acme" })
+    ).json();
+    await request("GET", "/me", token("ann"));
+    await request("POST", "/tenant/members", token("bob", acme.id), {
+      userId: "ann",
+      role: "admin",
+    });
+    const tenants = await (
+      await request("GET", "/tenants", token("ann"))
+    ).json();
+    expect(
+      tenants.map((t: any) => [t.name, t.role, t.permissions]).sort(),
+    ).toEqual([
+      [
+        "Acme",
+        "admin",
+        ["tenant:read", "tenant:update", "members:read", "members:write"],
+      ],
+      ["My workspace", "owner", ["*"]],
+    ]);
   });
 
   it("invite by email, list the invitations and revoke one", async () => {
@@ -316,35 +390,28 @@ describe("the triggers", () => {
     expect((await store.getUser("ann"))?.email).toBeUndefined();
   });
 
-  it("put the tenant, role and scopes in the tokens", async () => {
+  it("put the tenant in the tokens, and not what the role lets them do", async () => {
     const { preTokenGeneration } = createHandlers({
       store,
       config: config(),
-      claims: ({ role }) => ({ plan: "pro", admin: role === "owner" }),
+      // The role, for something that only sees the token
+      claims: ({ role }) => ({ plan: "pro", tenant_role: role! }),
     });
     const result = await preTokenGeneration(
       trigger("TokenGeneration_Authentication", ann),
     );
     const tenantId = (await store.getUser("ann"))!.activeTenantId;
 
-    const claims = {
-      tenant_id: tenantId,
-      tenant_role: "owner",
-      plan: "pro",
-      admin: true,
-    };
+    const claims = { tenant_id: tenantId, plan: "pro", tenant_role: "owner" };
     expect(result.response).toEqual({
       claimsAndScopeOverrideDetails: {
         idTokenGeneration: { claimsToAddOrOverride: claims },
-        accessTokenGeneration: {
-          claimsToAddOrOverride: claims,
-          scopesToAdd: ["tenant/*"],
-        },
+        accessTokenGeneration: { claimsToAddOrOverride: claims },
       },
     });
   });
 
-  it("give each permission of a role as a scope, and platform admins theirs", async () => {
+  it("give a platform admin their scope, and no one a permission's", async () => {
     const { preTokenGeneration } = createHandlers({ store, config: config() });
     const { tenancy } = await import("../src/runtime/tenancy");
     const t = tenancy({ store, config: config() });
@@ -365,16 +432,9 @@ describe("the triggers", () => {
       result.response.claimsAndScopeOverrideDetails.accessTokenGeneration;
     expect(access.claimsToAddOrOverride).toEqual({
       tenant_id: tenant.id,
-      tenant_role: "admin",
       platform_admin: "true",
     });
-    expect(access.scopesToAdd).toEqual([
-      "tenant/tenant:read",
-      "tenant/tenant:update",
-      "tenant/members:read",
-      "tenant/members:write",
-      "platform/admin",
-    ]);
+    expect(access.scopesToAdd).toEqual(["platform/admin"]);
   });
 
   it("put the tenant someone was invited to in their first tokens", async () => {
@@ -398,7 +458,8 @@ describe("the triggers", () => {
     expect(
       result.response.claimsAndScopeOverrideDetails.accessTokenGeneration
         .claimsToAddOrOverride,
-    ).toEqual({ tenant_id: tenant.id, tenant_role: "admin" });
+    ).toEqual({ tenant_id: tenant.id });
+    expect((await store.getMembership(tenant.id, "ann"))?.role).toBe("admin");
   });
 
   it("answer version 1 of the event with text claims in the ID token", async () => {
@@ -410,12 +471,12 @@ describe("the triggers", () => {
     const result: any = await preTokenGeneration(
       trigger("TokenGeneration_Authentication", ann, "1"),
     );
-    expect(
-      result.response.claimsOverrideDetails.claimsToAddOrOverride,
-    ).toMatchObject({
-      tenant_role: "owner",
-      seats: "5",
-    });
+    expect(result.response.claimsOverrideDetails.claimsToAddOrOverride).toEqual(
+      {
+        tenant_id: (await store.getUser("ann"))!.activeTenantId,
+        seats: "5",
+      },
+    );
   });
 });
 

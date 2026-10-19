@@ -24,19 +24,26 @@ export const DEFAULT_ROLES: Roles = {
   member: ["tenant:read", "members:read"],
 };
 
-/** The claims the pre token generation trigger adds to both tokens. */
+/**
+ * The claims the pre token generation trigger adds to both tokens: the
+ * user's current tenant, and whether they're a platform admin. What their
+ * role lets them do isn't in the tokens, as it can change while they're
+ * valid: it's read from the store.
+ */
 export const CLAIMS = {
   tenant: "tenant_id",
-  role: "tenant_role",
   platformAdmin: "platform_admin",
 } as const;
 
-/** The scope a permission is checked with at the API, in the access token. */
-export const scopeOf = (permission: string) => `tenant/${permission}`;
-/** The scope of a role that grants every permission. */
-export const ALL_SCOPE = scopeOf("*");
-/** The scope a platform admin's access token has. */
+/** The scope a platform admin's access token has, which the API checks for `/admin`. */
 export const PLATFORM_ADMIN_SCOPE = "platform/admin";
+
+/**
+ * The header a request names its tenant in, in place of the one in the
+ * token. It's checked against the store like the token's: it only says
+ * which tenant, not what the caller can do in it.
+ */
+export const TENANT_HEADER = "x-tenant-id";
 
 /** Where the store keeps its records. */
 export type StoreConfig =
@@ -163,16 +170,6 @@ export const ROUTES = [
 
 export type BuiltInRoute = (typeof ROUTES)[number];
 
-/** The scopes a route of your own needs at the API, any one of them. */
-export function scopesOf(auth: {
-  permission?: string;
-  platformAdmin?: boolean;
-}): string[] | undefined {
-  if (auth.platformAdmin) return [PLATFORM_ADMIN_SCOPE];
-  if (auth.permission) return [scopeOf(auth.permission), ALL_SCOPE];
-  return undefined;
-}
-
 const NAME = /^[a-z][a-z0-9_-]*$/;
 const PERMISSION = /^(\*|[a-z0-9][a-z0-9:._-]*)$/;
 
@@ -205,12 +202,5 @@ export function rolesProblem(
     return `"defaultRole" is "${defaultRole}", which isn't one of the roles: ${names.join(
       ", ",
     )}.`;
-  return undefined;
-}
-
-/** Check a permission name a route is given. */
-export function permissionProblem(permission: string) {
-  if (permission === "*" || !PERMISSION.test(permission))
-    return `The permission "${permission}" can only have lowercase letters, numbers, ":", ".", "-" and "_".`;
   return undefined;
 }

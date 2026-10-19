@@ -1,6 +1,6 @@
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { CLAIMS } from "../config";
+import { CLAIMS, TENANT_HEADER } from "../config";
 
 /** What API Gateway sends a function behind an HTTP API with a JWT authorizer. Only what's read here. */
 export interface ApiEvent {
@@ -106,13 +106,15 @@ export function bodyOf(event: ApiEvent): Record<string, unknown> {
   return body as Record<string, unknown>;
 }
 
-/** Who's calling, and the tenant their token is for, from the token's claims. */
+/** Who's calling, and the tenant the request is for. */
 export interface Auth {
   userId: string;
-  /** The tenant the token is for. */
+  /**
+   * The tenant the request is for: the one in the `x-tenant-id` header, or
+   * else the one in the token. Not checked yet: `authorize()` checks it
+   * against the store.
+   */
   tenantId?: string;
-  /** The user's role in it, when the token was issued. */
-  role?: string;
   /** Whether the user was a platform admin when the token was issued. */
   platformAdmin: boolean;
   /** The token's scopes. */
@@ -122,8 +124,9 @@ export interface Auth {
 }
 
 /**
- * Who's calling, from the claims of the token the API checked. These are as
- * they were when the token was issued; `authorize()` checks the store.
+ * Who's calling, from the claims of the token the API checked, and the
+ * tenant the request is for. The claims are as they were when the token was
+ * issued; `authorize()` checks the store.
  */
 export function auth(event: ApiEvent): Auth {
   const jwt = event.requestContext?.authorizer?.jwt;
@@ -134,10 +137,11 @@ export function auth(event: ApiEvent): Auth {
     return typeof value === "string" && value !== "" ? value : undefined;
   };
   const scope = text("scope");
+  // API Gateway sends header names in lowercase
+  const header = event.headers?.[TENANT_HEADER]?.trim();
   return {
     userId: String(claims.sub),
-    tenantId: text(CLAIMS.tenant),
-    role: text(CLAIMS.role),
+    tenantId: header || text(CLAIMS.tenant),
     platformAdmin: String(claims[CLAIMS.platformAdmin]) === "true",
     scopes: jwt?.scopes ?? (scope ? scope.split(" ") : []),
     claims,
