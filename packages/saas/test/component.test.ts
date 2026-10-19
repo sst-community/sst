@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { mock } from "sst/testing";
 
 const app = await mock();
-const { Saas } = await import("../src/index");
+const { Saas } = await import("../src/index.js");
 const { v5 } = await import("sst/components/aws");
 
 const find = (name: string) => app.resources.find((r) => r.name === name);

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_ROLES, type SaasConfig } from "../src/config";
-import { config } from "./helpers";
-import { memoryStore } from "../src/runtime/store/memory";
-import { tenancy, type TenancyHooks } from "../src/runtime/tenancy";
-import { HttpError } from "../src/runtime/http";
+import { DEFAULT_ROLES, type SaasConfig } from "../src/config.js";
+import { config } from "./helpers.js";
+import { memoryStore } from "../src/runtime/store/memory.js";
+import { tenancy, type TenancyHooks } from "../src/runtime/tenancy.js";
+import { HttpError } from "../src/runtime/http.js";
 
 const ann = { id: "ann", email: "Ann@Example.com", name: "Ann" };
 const bob = { id: "bob", email: "bob@example.com" };

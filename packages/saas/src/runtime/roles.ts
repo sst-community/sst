@@ -1,4 +1,4 @@
-import type { Roles } from "../config";
+import type { Roles } from "../config.js";
 
 /** What a role lets a member do: every permission, or the ones listed. */
 export type Permissions = "*" | ReadonlySet<string>;

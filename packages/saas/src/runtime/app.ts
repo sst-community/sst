@@ -1,14 +1,14 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { LambdaContext, LambdaEvent } from "@hono/aws-lambda";
-import { ROUTES, type BuiltInRoute } from "../config";
+import { ROUTES, type BuiltInRoute } from "../config.js";
 import {
   contextOf,
   noActiveTenant,
   type Requirement,
   type SaasContext,
-} from "./context";
-import { lazySetup, type SetupArgs } from "./env";
-import { badRequest, HttpError, type ApiEvent } from "./http";
+} from "./context.js";
+import { lazySetup, type SetupArgs } from "./env.js";
+import { badRequest, HttpError, type ApiEvent } from "./http.js";
 
 /** What a Hono app behind API Gateway is given, with `@hono/aws-lambda`. */
 export interface SaasBindings {

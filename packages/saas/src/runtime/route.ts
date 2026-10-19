@@ -1,12 +1,12 @@
-import { contextOf, type Requirement, type SaasContext } from "./context";
-import { lazySetup, type SetupArgs } from "./env";
+import { contextOf, type Requirement, type SaasContext } from "./context.js";
+import { lazySetup, type SetupArgs } from "./env.js";
 import {
   errorResult,
   isResult,
   json,
   type ApiEvent,
   type ApiResult,
-} from "./http";
+} from "./http.js";
 
 export interface RouteOptions extends Requirement, SetupArgs {}
 

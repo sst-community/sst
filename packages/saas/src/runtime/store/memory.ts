@@ -7,7 +7,7 @@ import type {
   Store,
   Tenant,
   User,
-} from "./types";
+} from "./types.js";
 
 // The order the lists are in, as the DynamoDB store's indexes keep it
 const userOrder = (user: User) => `${user.email ?? "~"} #${user.id}`;

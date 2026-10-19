@@ -2,7 +2,7 @@
 // calls the API. It only uses `fetch`, and imports only types and the
 // config's constants, so it brings nothing else into a bundle.
 
-import { CLAIMS, TENANT_HEADER } from "./config";
+import { CLAIMS, TENANT_HEADER } from "./config.js";
 import type {
   Invitation,
   Member,
@@ -10,7 +10,7 @@ import type {
   Page,
   Tenant,
   User,
-} from "./runtime/store/types";
+} from "./runtime/store/types.js";
 
 export type { Invitation, Member, Metadata, Page, Tenant, User };
 

@@ -1,6 +1,6 @@
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { CLAIMS, TENANT_HEADER } from "../config";
+import { CLAIMS, TENANT_HEADER } from "../config.js";
 
 /** What API Gateway sends a function behind an HTTP API with a JWT authorizer. Only what's read here. */
 export interface ApiEvent {

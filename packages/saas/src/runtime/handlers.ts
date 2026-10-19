@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { handle, type LambdaContext, type LambdaEvent } from "@hono/aws-lambda";
-import { CLAIMS, PLATFORM_ADMIN_SCOPE } from "../config";
-import { saasApp, type SaasAppOptions } from "./app";
-import { lazySetup } from "./env";
-import type { Membership, Store, User } from "./store/types";
+import { CLAIMS, PLATFORM_ADMIN_SCOPE } from "../config.js";
+import { saasApp, type SaasAppOptions } from "./app.js";
+import { lazySetup } from "./env.js";
+import type { Membership, Store, User } from "./store/types.js";
 
 /** What Cognito sends a trigger. Only what's read here. */
 export interface CognitoTriggerEvent {

@@ -1,14 +1,14 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import { CONFIG_ENV, type SaasConfig } from "../src/config";
-import { authorized, saasApp, type SaasEnv } from "../src/runtime/app";
+import { CONFIG_ENV, type SaasConfig } from "../src/config.js";
+import { authorized, saasApp, type SaasEnv } from "../src/runtime/app.js";
 import {
   createHandlers,
   type CognitoTriggerEvent,
-} from "../src/runtime/handlers";
-import { route } from "../src/runtime/route";
-import { memoryStore } from "../src/runtime/store/memory";
-import { config } from "./helpers";
+} from "../src/runtime/handlers.js";
+import { route } from "../src/runtime/route.js";
+import { memoryStore } from "../src/runtime/store/memory.js";
+import { config } from "./helpers.js";
 
 // What API Gateway sends after its JWT authorizer passed the token
 const event = (claims: Record<string, string> = {}) => ({
@@ -415,7 +415,7 @@ describe("the triggers", () => {
 
   it("give a platform admin their scope, and no one a permission's", async () => {
     const { preTokenGeneration } = createHandlers({ store, config: config() });
-    const { tenancy } = await import("../src/runtime/tenancy");
+    const { tenancy } = await import("../src/runtime/tenancy.js");
     const t = tenancy({ store, config: config() });
     await t.provision({ id: "bob" });
     const tenant = await t.createTenant({ id: "bob" }, { name: "Team" });
@@ -440,7 +440,7 @@ describe("the triggers", () => {
   });
 
   it("put the tenant someone was invited to in their first tokens", async () => {
-    const { tenancy } = await import("../src/runtime/tenancy");
+    const { tenancy } = await import("../src/runtime/tenancy.js");
     const t = tenancy({ store, config: config() });
     await t.provision({ id: "bob" });
     const tenant = await t.createTenant({ id: "bob" }, { name: "Team" });
@@ -540,7 +540,7 @@ describe("the api handler", () => {
 
   it("reads an email in the path as API Gateway sends it", async () => {
     const store = memoryStore();
-    const { tenancy } = await import("../src/runtime/tenancy");
+    const { tenancy } = await import("../src/runtime/tenancy.js");
     const t = tenancy({ store, config: config() });
     const { tenant } = await t.provision({ id: "ann" });
     await t.invite({ id: "ann" }, tenant!.id, { email: "dan+x@example.com" });
@@ -560,13 +560,13 @@ describe("the api handler", () => {
   });
 
   it("says what's missing when it isn't set up", async () => {
-    const { loadConfig } = await import("../src/runtime/env");
+    const { loadConfig } = await import("../src/runtime/env.js");
     delete process.env[CONFIG_ENV];
     expect(() => loadConfig()).toThrow(`${CONFIG_ENV} isn't set`);
   });
 
   it("reads its config from the environment", async () => {
-    const { loadConfig } = await import("../src/runtime/env");
+    const { loadConfig } = await import("../src/runtime/env.js");
     const value: SaasConfig = config({ path: "/x" });
     process.env[CONFIG_ENV] = JSON.stringify(value);
     expect(loadConfig().path).toBe("/x");

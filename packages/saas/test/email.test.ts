@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_MESSAGES, type EmailConfig } from "../src/config";
+import { DEFAULT_MESSAGES, type EmailConfig } from "../src/config.js";
 import {
   escape,
   mailer,
@@ -7,14 +7,14 @@ import {
   type Layout,
   type Mail,
   type Templates,
-} from "../src/runtime/email";
-import { createMailer } from "../src/runtime/env";
+} from "../src/runtime/email.js";
+import { createMailer } from "../src/runtime/env.js";
 import {
   createHandlers,
   type CognitoTriggerEvent,
-} from "../src/runtime/handlers";
-import { memoryStore } from "../src/runtime/store/memory";
-import { config } from "./helpers";
+} from "../src/runtime/handlers.js";
+import { memoryStore } from "../src/runtime/store/memory.js";
+import { config } from "./helpers.js";
 
 const email = (patch: Partial<EmailConfig> = {}): EmailConfig => ({
   from: "Acme <hello@acme.com>",
@@ -295,9 +295,9 @@ describe("the app's emails", () => {
 
   // The routes, through tenancy, with the same setup the handlers have
   async function team(patch: Partial<EmailConfig> = {}) {
-    const { tenancy } = await import("../src/runtime/tenancy");
+    const { tenancy } = await import("../src/runtime/tenancy.js");
     const { composeHooks, emailHooks, mailer } = await import(
-      "../src/runtime/email"
+      "../src/runtime/email.js"
     );
     const mail = mailer(email(patch), { send });
     const t = tenancy({
@@ -383,9 +383,9 @@ describe("the app's emails", () => {
 
   it("don't fail the change when sending fails", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { tenancy } = await import("../src/runtime/tenancy");
+    const { tenancy } = await import("../src/runtime/tenancy.js");
     const { composeHooks, emailHooks, mailer } = await import(
-      "../src/runtime/email"
+      "../src/runtime/email.js"
     );
     const failing = mailer(email(), {
       send: async () => {
@@ -414,9 +414,9 @@ describe("the app's emails", () => {
 
   it("run before your own hooks", async () => {
     const order: string[] = [];
-    const { tenancy } = await import("../src/runtime/tenancy");
+    const { tenancy } = await import("../src/runtime/tenancy.js");
     const { composeHooks, emailHooks, mailer } = await import(
-      "../src/runtime/email"
+      "../src/runtime/email.js"
     );
     const mail = mailer(email(), {
       send: async () => void order.push("email"),
@@ -487,7 +487,7 @@ describe("notify()", () => {
   beforeEach(async () => {
     sent = [];
     store = memoryStore();
-    const { tenancy } = await import("../src/runtime/tenancy");
+    const { tenancy } = await import("../src/runtime/tenancy.js");
     const t = tenancy({ store, config: config({ roles }) });
     await t.provision({ id: "ann", email: "ann@example.com", name: "Ann" });
     await t.provision({ id: "bob", email: "bob@example.com", name: "Bob" });

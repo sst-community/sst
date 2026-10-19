@@ -35,7 +35,7 @@ import {
   type Roles,
   type SaasConfig,
   type StoreConfig,
-} from "./config";
+} from "./config.js";
 
 const PACKAGE = "@sst-community/saas";
 

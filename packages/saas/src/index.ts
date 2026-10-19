@@ -1,4 +1,4 @@
-export { Saas, type SaasArgs, type SaasRouteArgs } from "./component";
+export { Saas, type SaasArgs, type SaasRouteArgs } from "./component.js";
 export {
   DEFAULT_ROLES,
   PERMISSIONS,
@@ -6,4 +6,4 @@ export {
   type BuiltInPermission,
   type BuiltInRoute,
   type Roles,
-} from "./config";
+} from "./config.js";

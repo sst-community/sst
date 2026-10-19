@@ -1,4 +1,4 @@
-import { DEFAULT_ROLES, type SaasConfig } from "../src/config";
+import { DEFAULT_ROLES, type SaasConfig } from "../src/config.js";
 
 /** What the component would tell its functions, with any of it changed. */
 export const config = (patch: Partial<SaasConfig> = {}): SaasConfig => ({

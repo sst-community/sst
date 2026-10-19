@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dynamoStore, fromItem, toItem } from "../src/runtime/store/dynamo";
+import { dynamoStore, fromItem, toItem } from "../src/runtime/store/dynamo.js";
 
 const tables = {
   users: "Users",

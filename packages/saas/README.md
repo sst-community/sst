@@ -566,6 +566,8 @@ npm run typecheck
 
 The component is tested with `mock()` from `sst/testing`, and the runtime against `memoryStore()` and a fake DynamoDB client. `package.json` pins `google-protobuf` to `3.21.2` through `overrides`, as the SST repo does: with 3.21.4, which `@pulumi/pulumi` gets otherwise, every resource `mock()` registers fails with `c.g is not a function`.
 
+Relative imports end in `.js`, as Node needs for a package of ES modules: `./config.js` for `config.ts`. A bundler would find either, but a script or server run with plain `node` wouldn't. `test/load.test.ts` loads each entry in `package.json` with `node`, so one without it fails the tests.
+
 It has four runtime dependencies: `@aws-sdk/client-dynamodb` and `@aws-sdk/client-sesv2`, `hono` and `@hono/aws-lambda`. Hono has none of its own.
 
 `email` uses the V5 `Email`, which is in SST from `5.0.0-alpha.3`. Until that's published, build `sst` from the SST repo and install it without saving it:

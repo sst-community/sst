@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import { saasClient, SaasError, type SaasClient } from "../src/client";
-import { saasApp } from "../src/runtime/app";
+import { saasClient, SaasError, type SaasClient } from "../src/client.js";
+import { saasApp } from "../src/runtime/app.js";
 import {
   createHandlers,
   type CognitoTriggerEvent,
-} from "../src/runtime/handlers";
-import { memoryStore } from "../src/runtime/store/memory";
-import { config } from "./helpers";
+} from "../src/runtime/handlers.js";
+import { memoryStore } from "../src/runtime/store/memory.js";
+import { config } from "./helpers.js";
 
 // An unsigned JWT: the client only reads it, and the "gateway" below trusts it
 const jwt = (claims: object) =>
@@ -310,8 +310,8 @@ describe("saasClient()", () => {
         ([, type, from]) => `${type ? "type " : ""}${from}`,
       );
     expect(imports(source("client.ts"))).toEqual([
-      "./config",
-      "type ./runtime/store/types",
+      "./config.js",
+      "type ./runtime/store/types.js",
     ]);
     expect(imports(source("config.ts"))).toEqual([]);
   });

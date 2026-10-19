@@ -1,9 +1,9 @@
 import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
-import type { EmailConfig, Roles } from "../config";
-import { allows, permissionsOf } from "./roles";
-import { collect } from "./store";
-import type { Membership, Store, Tenant, User } from "./store/types";
-import type { TenancyHooks } from "./tenancy";
+import type { EmailConfig, Roles } from "../config.js";
+import { allows, permissionsOf } from "./roles.js";
+import { collect } from "./store/index.js";
+import type { Membership, Store, Tenant, User } from "./store/types.js";
+import type { TenancyHooks } from "./tenancy.js";
 
 /** An email to send: its subject, and its body as HTML and as text. */
 export interface Message {

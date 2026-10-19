@@ -21,7 +21,7 @@ import type {
   Store,
   Tenant,
   User,
-} from "./types";
+} from "./types.js";
 
 type Item = Record<string, AttributeValue>;
 

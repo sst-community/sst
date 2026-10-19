@@ -1,10 +1,10 @@
-import type { StoreConfig } from "../../config";
-import { dynamoStore } from "./dynamo";
-import type { Page, PageArgs, Store } from "./types";
+import type { StoreConfig } from "../../config.js";
+import { dynamoStore } from "./dynamo.js";
+import type { Page, PageArgs, Store } from "./types.js";
 
-export * from "./types";
-export { dynamoStore, type DynamoStoreArgs } from "./dynamo";
-export { memoryStore } from "./memory";
+export * from "./types.js";
+export { dynamoStore, type DynamoStoreArgs } from "./dynamo.js";
+export { memoryStore } from "./memory.js";
 
 /** Every page of a list, one after another. */
 export async function collect<T>(

@@ -17,24 +17,24 @@ export {
   type EmailConfig,
   type SaasConfig,
   type StoreConfig,
-} from "../config";
+} from "../config.js";
 export {
   saasApp,
   authorized,
   type SaasAppOptions,
   type SaasBindings,
   type SaasEnv,
-} from "./app";
+} from "./app.js";
 export {
   createHandlers,
   type Claims,
   type ClaimsInput,
   type CognitoTriggerEvent,
   type HandlerOptions,
-} from "./handlers";
-export { route, type RouteOptions } from "./route";
-export type { Requirement, SaasContext } from "./context";
-export { createMailer, loadConfig, type SetupArgs } from "./env";
+} from "./handlers.js";
+export { route, type RouteOptions } from "./route.js";
+export type { Requirement, SaasContext } from "./context.js";
+export { createMailer, loadConfig, type SetupArgs } from "./env.js";
 export {
   defaultLayout,
   defaultTemplates,
@@ -55,7 +55,7 @@ export {
   type Send,
   type TemplateContext,
   type Templates,
-} from "./email";
+} from "./email.js";
 export {
   auth,
   badRequest,
@@ -68,8 +68,8 @@ export {
   type ApiEvent,
   type ApiResult,
   type Auth,
-} from "./http";
-export { allows, covers, permissionsOf, type Permissions } from "./roles";
+} from "./http.js";
+export { allows, covers, permissionsOf, type Permissions } from "./roles.js";
 export {
   tenancy,
   type Access,
@@ -78,5 +78,5 @@ export {
   type Tenancy,
   type TenancyArgs,
   type TenancyHooks,
-} from "./tenancy";
-export * from "./store";
+} from "./tenancy.js";
+export * from "./store/index.js";

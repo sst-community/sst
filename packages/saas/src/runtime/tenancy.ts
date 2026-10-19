@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { DEFAULT_INVITATIONS, type SaasConfig } from "../config";
-import { badRequest, conflict, forbidden, HttpError, notFound } from "./http";
-import { allows, covers, permissionsOf, type Permissions } from "./roles";
+import { DEFAULT_INVITATIONS, type SaasConfig } from "../config.js";
+import {
+  badRequest,
+  conflict,
+  forbidden,
+  HttpError,
+  notFound,
+} from "./http.js";
+import { allows, covers, permissionsOf, type Permissions } from "./roles.js";
 import type {
   Invitation,
   Member,
@@ -12,7 +18,7 @@ import type {
   Store,
   Tenant,
   User,
-} from "./store/types";
+} from "./store/types.js";
 
 /** Who's acting: a user's `sub`, and what the user pool knows of them. */
 export interface Identity {

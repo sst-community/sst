@@ -1,8 +1,8 @@
-import type { SaasConfig } from "../config";
-import type { lazySetup } from "./env";
-import { auth, HttpError, type ApiEvent, type Auth } from "./http";
-import type { Store } from "./store/types";
-import type { Access, Identity, Tenancy } from "./tenancy";
+import type { SaasConfig } from "../config.js";
+import type { lazySetup } from "./env.js";
+import { auth, HttpError, type ApiEvent, type Auth } from "./http.js";
+import type { Store } from "./store/types.js";
+import type { Access, Identity, Tenancy } from "./tenancy.js";
 
 /** What a route is given about the request. */
 export interface SaasContext {

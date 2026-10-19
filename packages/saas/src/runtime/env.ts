@@ -1,14 +1,14 @@
-import { CONFIG_ENV, type SaasConfig } from "../config";
+import { CONFIG_ENV, type SaasConfig } from "../config.js";
 import {
   composeHooks,
   emailHooks,
   mailer,
   type Mailer,
   type MailerArgs,
-} from "./email";
-import { createStore } from "./store";
-import type { Store } from "./store/types";
-import { tenancy, type Tenancy, type TenancyArgs } from "./tenancy";
+} from "./email.js";
+import { createStore } from "./store/index.js";
+import type { Store } from "./store/types.js";
+import { tenancy, type Tenancy, type TenancyArgs } from "./tenancy.js";
 
 let config: SaasConfig | undefined;
 
