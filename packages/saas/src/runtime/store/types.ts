@@ -80,6 +80,14 @@ export interface PageArgs {
   limit?: number;
 }
 
+export interface SearchArgs extends PageArgs {
+  /**
+   * Only those whose email, for users, or name, for tenants, starts with
+   * this, in any case.
+   */
+  search?: string;
+}
+
 /**
  * Where users, tenants and memberships are kept. The built-in handlers only
  * reach storage through this, so another database is another `Store`.
@@ -102,7 +110,8 @@ export interface Store {
   ): Promise<boolean>;
   /** Returns the user as changed, or nothing when there's no such user. */
   updateUser(id: string, patch: UserPatch): Promise<User | undefined>;
-  listUsers(page?: PageArgs): Promise<Page<User>>;
+  /** Users in the order of their email, those with none last. */
+  listUsers(page?: SearchArgs): Promise<Page<User>>;
 
   getTenant(id: string): Promise<Tenant | undefined>;
   getTenants(ids: string[]): Promise<Tenant[]>;
@@ -111,14 +120,24 @@ export interface Store {
   updateTenant(id: string, patch: TenantPatch): Promise<Tenant | undefined>;
   /** Delete a tenant, its memberships and its invitations. */
   deleteTenant(id: string): Promise<void>;
-  listTenants(page?: PageArgs): Promise<Page<Tenant>>;
+  /** Tenants in the order of their name. */
+  listTenants(page?: SearchArgs): Promise<Page<Tenant>>;
 
   getMembership(
     tenantId: string,
     userId: string,
   ): Promise<Membership | undefined>;
   /** Every member of a tenant. */
-  listMembers(tenantId: string): Promise<Membership[]>;
+  listMembers(tenantId: string, page?: PageArgs): Promise<Page<Membership>>;
+  /**
+   * A tenant's members with a role, read as they are now, not as an index
+   * had them: the rule that a tenant keeps an owner reads it.
+   */
+  membersWithRole(
+    tenantId: string,
+    role: string,
+    page?: PageArgs,
+  ): Promise<Page<Membership>>;
   /** Every tenant a user is a member of. */
   listMemberships(userId: string): Promise<Membership[]>;
   /** Add a member, or change their role. */

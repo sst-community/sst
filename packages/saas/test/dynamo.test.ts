@@ -216,16 +216,112 @@ describe("the DynamoDB store", () => {
   });
 
   it("pages with a cursor it can read back", async () => {
-    const { store, sent } = fake(() => ({
-      Items: [toItem(user)],
-      LastEvaluatedKey: { id: { S: "ann" } },
-    }));
+    const last = {
+      id: { S: "ann" },
+      listed: { S: "all" },
+      sortKey: { S: "ann@example.com #ann" },
+    };
+    const { store, sent } = fake((name) =>
+      name === "Query"
+        ? { Items: [last], LastEvaluatedKey: last }
+        : { Responses: { Users: [toItem(user)] } },
+    );
     const page = await store.listUsers({ limit: 1 });
     expect(page.cursor).toBeTypeOf("string");
     await store.listUsers({ cursor: page.cursor });
-    expect(sent[1].input.ExclusiveStartKey).toEqual({ id: { S: "ann" } });
+    expect(sent[2].input.ExclusiveStartKey).toEqual(last);
     await expect(store.listUsers({ cursor: "%%%" })).rejects.toMatchObject({
       name: "InvalidCursor",
+    });
+  });
+
+  it("lists users in order from the sorted index, then reads them", async () => {
+    const keys = ["bob", "gone", "ann"].map((id) => ({
+      id: { S: id },
+      listed: { S: "all" },
+      sortKey: { S: `${id}@example.com #${id}` },
+    }));
+    const { store, sent } = fake((name, input) =>
+      name === "Query"
+        ? { Items: keys }
+        : {
+            // In any order, and not one deleted since
+            Responses: {
+              Users: input.RequestItems.Users.Keys.filter(
+                (k: any) => k.id.S !== "gone",
+              )
+                .reverse()
+                .map((k: any) =>
+                  toItem({ ...user, id: k.id.S, listed: "all", sortKey: "x" }),
+                ),
+            },
+          },
+    );
+    const page = await store.listUsers({ search: " Ann", limit: 3 });
+    expect(sent[0].input).toMatchObject({
+      IndexName: "sorted",
+      KeyConditionExpression:
+        "#listed = :listed AND begins_with(#sortKey, :prefix)",
+      ExpressionAttributeValues: {
+        ":listed": { S: "all" },
+        ":prefix": { S: "ann" },
+      },
+      Limit: 3,
+    });
+    // In the index's order, without what only the index reads
+    expect(page.items.map((u) => u.id)).toEqual(["bob", "ann"]);
+    expect(page.items[0]).not.toHaveProperty("sortKey");
+    expect(page.items[0]).not.toHaveProperty("listed");
+  });
+
+  it("keeps the sort key in step with an email or a name", async () => {
+    const { store, sent } = fake((name) =>
+      name === "UpdateItem" ? { Attributes: toItem(user) } : {},
+    );
+    await store.createUser(user);
+    expect(sent[0].input.Item).toMatchObject({
+      listed: { S: "all" },
+      sortKey: { S: "ann@example.com #ann" },
+    });
+
+    await store.updateUser("ann", { email: "ann@new.example.com" });
+    expect(
+      Object.values(sent[1].input.ExpressionAttributeValues),
+    ).toContainEqual({ S: "ann@new.example.com #ann" });
+    await store.updateUser("ann", { email: null });
+    expect(
+      Object.values(sent[2].input.ExpressionAttributeValues),
+    ).toContainEqual({ S: "~ #ann" });
+    // Not when the email isn't changed
+    await store.updateUser("ann", { name: "Ann" });
+    expect(sent[3].input.ExpressionAttributeNames).not.toHaveProperty("#f1");
+
+    await store.updateTenant("t", { name: "Acme Labs" });
+    expect(
+      Object.values(sent[4].input.ExpressionAttributeValues),
+    ).toContainEqual({ S: "acme labs #t" });
+  });
+
+  it("reads a tenant's members with a role from the local index, consistently", async () => {
+    const { store, sent } = fake(() => ({ Items: [] }));
+    await store.membersWithRole("t", "owner", { limit: 2 });
+    expect(sent[0].input).toMatchObject({
+      TableName: "Memberships",
+      IndexName: "byRole",
+      KeyConditionExpression: "#tenantId = :tenantId AND #role = :role",
+      ConsistentRead: true,
+      Limit: 2,
+    });
+  });
+
+  it("lists a tenant's members a page at a time, consistently", async () => {
+    const { store, sent } = fake(() => ({ Items: [] }));
+    await store.listMembers("t", { limit: 10 });
+    expect(sent[0].input).toMatchObject({
+      TableName: "Memberships",
+      KeyConditionExpression: "#tenantId = :tenantId",
+      ConsistentRead: true,
+      Limit: 10,
     });
   });
 

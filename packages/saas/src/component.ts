@@ -39,6 +39,16 @@ import {
 
 const PACKAGE = "@sst-community/saas";
 
+// The index that keeps users in the order of their email, and tenants in
+// the order of their name, for the admin lists and their search. It has only
+// the keys, so that it's written to only when those change.
+const sortedFields = { listed: "string", sortKey: "string" } as const;
+const sortedIndex = {
+  hashKey: "listed",
+  rangeKey: "sortKey",
+  projection: "keys-only",
+} as const;
+
 // The methods the built-in routes answer. Not `OPTIONS`: see `route`.
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 
@@ -55,13 +65,21 @@ const parts = {
   client: many(v5.CognitoUserPoolClient),
   /** The HTTP API the built-in routes are on, with a JWT authorizer for the user pool. */
   api: v5.ApiGatewayV2,
-  /** The users table, keyed by `id`, with an index `byEmail`. Not created when `storage` is `"custom"`. */
+  /**
+   * The users table, keyed by `id`, with an index `byEmail`, and one,
+   * `sorted`, in the order of their email. Not created when `storage` is
+   * `"custom"`.
+   */
   users: optional(v5.Dynamo),
-  /** The tenants table, keyed by `id`. Not created when `storage` is `"custom"`. */
+  /**
+   * The tenants table, keyed by `id`, with an index, `sorted`, in the order
+   * of their name. Not created when `storage` is `"custom"`.
+   */
   tenants: optional(v5.Dynamo),
   /**
    * The memberships table, keyed by `tenantId` and `userId`, with an index
-   * `byUser`. Not created when `storage` is `"custom"`.
+   * `byUser`, and a local index `byRole`. Not created when `storage` is
+   * `"custom"`.
    */
   memberships: optional(v5.Dynamo),
   /**
@@ -377,20 +395,27 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       storage === "dynamo"
         ? {
             users: this.part("users", {
-              fields: { id: "string", email: "string" },
+              fields: { id: "string", email: "string", ...sortedFields },
               primaryIndex: { hashKey: "id" },
-              globalIndexes: { byEmail: { hashKey: "email" } },
+              globalIndexes: {
+                byEmail: { hashKey: "email" },
+                sorted: sortedIndex,
+              },
             }),
             tenants: this.part("tenants", {
-              fields: { id: "string" },
+              fields: { id: "string", ...sortedFields },
               primaryIndex: { hashKey: "id" },
+              globalIndexes: { sorted: sortedIndex },
             }),
             memberships: this.part("memberships", {
-              fields: { tenantId: "string", userId: "string" },
+              fields: { tenantId: "string", userId: "string", role: "string" },
               primaryIndex: { hashKey: "tenantId", rangeKey: "userId" },
               globalIndexes: {
                 byUser: { hashKey: "userId", rangeKey: "tenantId" },
               },
+              // Local, so that the rule that a tenant keeps an owner reads
+              // it as it is now
+              localIndexes: { byRole: { rangeKey: "role" } },
             }),
             invitations: this.part("invitations", {
               fields: { tenantId: "string", email: "string" },

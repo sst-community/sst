@@ -218,7 +218,7 @@ describe("tenancy", () => {
       await fails(t.deleteTenant(bob, tenant.id), 403);
       await t.deleteTenant(ann, tenant.id);
       expect(await store.getTenant(tenant.id)).toBeUndefined();
-      expect(await store.listMembers(tenant.id)).toEqual([]);
+      expect((await store.listMembers(tenant.id)).items).toEqual([]);
       expect(events).toContain("tenantDeleted Acme");
 
       await fails(t.deleteTenant(ann, own!.id), 409, "personal_tenant");
@@ -246,10 +246,26 @@ describe("tenancy", () => {
       });
       expect(events).toContain("memberAdded bob member");
       const members = await t.members(bob, tenantId);
-      expect(members.map((m) => `${m.userId} ${m.role}`).sort()).toEqual([
+      expect(members.items.map((m) => `${m.userId} ${m.role}`)).toEqual([
         "ann owner",
         "bob member",
       ]);
+    });
+
+    it("are listed a page at a time, in the order of their ids", async () => {
+      const { t, tenantId } = await team();
+      for (const userId of ["bob", "cat"])
+        await t.addMember(ann, tenantId, { userId });
+
+      const first = await t.members(ann, tenantId, { limit: 2 });
+      expect(first.items.map((m) => m.userId)).toEqual(["ann", "bob"]);
+      expect(first.items[1]).toMatchObject({ email: "bob@example.com" });
+      const second = await t.members(ann, tenantId, {
+        limit: 2,
+        cursor: first.cursor,
+      });
+      expect(second.items.map((m) => m.userId)).toEqual(["cat"]);
+      expect(second.cursor).toBeUndefined();
     });
 
     it("can't be someone who hasn't signed up", async () => {
@@ -339,7 +355,7 @@ describe("tenancy", () => {
       await t.addMember(cat, tenantId, { userId: "bob", role: "owner" });
       await t.changeRole(cat, tenantId, "ann", { role: "member" });
       expect(
-        (await t.members(cat, tenantId)).map((m) => m.role).sort(),
+        (await t.members(cat, tenantId)).items.map((m) => m.role).sort(),
       ).toEqual(["member", "owner"]);
     });
   });
@@ -421,6 +437,24 @@ describe("tenancy", () => {
       });
       // They stay in the tenant they're in
       expect(session.tenantId).toBe(own);
+    });
+
+    it("move someone whose tenant is gone to the one they've just joined", async () => {
+      const { t, tenantId } = await team({ personal: false });
+      // Bob is in Shared, which is then deleted
+      const shared = await t.createTenant(bob, { name: "Shared" });
+      await t.switchTenant(bob, shared.id);
+      await t.deleteTenant(bob, shared.id);
+      await t.invite(ann, tenantId, { email: "bob@example.com" });
+      // The index doesn't list the membership yet
+      const listed = store.listMemberships;
+      store.listMemberships = async () => [];
+
+      const session = await t.session(bob);
+      store.listMemberships = listed;
+      expect(session.tenantId).toBe(tenantId);
+      expect(session.role).toBe("member");
+      expect((await store.getUser("bob"))!.activeTenantId).toBe(tenantId);
     });
 
     it("are for a verified email", async () => {
@@ -714,6 +748,37 @@ describe("tenancy", () => {
       });
       expect(second.items).toHaveLength(1);
       expect(second.cursor).toBeUndefined();
+    });
+
+    it("lists users in the order of their email, and finds them by its start", async () => {
+      const t = make();
+      for (const user of [cat, ann, bob, { id: "dan" }])
+        await t.provision(user);
+      await store.updateUser("ann", { platformAdmin: true });
+
+      const all = await t.admin.users(ann);
+      // One with no email is last
+      expect(all.items.map((u) => u.id)).toEqual(["ann", "bob", "cat", "dan"]);
+      const found = await t.admin.users(ann, { search: " BO" });
+      expect(found.items.map((u) => u.email)).toEqual(["bob@example.com"]);
+    });
+
+    it("lists tenants in the order of their name, and finds them by its start", async () => {
+      const t = make({ personal: false });
+      await t.provision(ann);
+      await store.updateUser("ann", { platformAdmin: true });
+      for (const name of ["beta", "Acme", "acme labs", "Zed"])
+        await t.createTenant(ann, { name });
+
+      const all = await t.admin.tenants(ann);
+      expect(all.items.map((t) => t.name)).toEqual([
+        "Acme",
+        "acme labs",
+        "beta",
+        "Zed",
+      ]);
+      const found = await t.admin.tenants(ann, { search: "ACME" });
+      expect(found.items.map((t) => t.name)).toEqual(["Acme", "acme labs"]);
     });
 
     it("deletes a personal tenant", async () => {

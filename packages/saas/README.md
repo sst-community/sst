@@ -135,16 +135,16 @@ They're under `path`, which is the root of the API unless you set one. API Gatew
 | `GET /tenant` | `tenant:read` | |
 | `PATCH /tenant` | `tenant:update` | `{ name }` |
 | `DELETE /tenant` | `tenant:delete` | |
-| `GET /tenant/members` | `members:read` | |
+| `GET /tenant/members` | `members:read`: a page of them, in the order of their ids | `?limit=&cursor=` |
 | `POST /tenant/members` | `members:write` | `{ email }` or `{ userId }`, and `role` |
 | `PATCH /tenant/members/{userId}` | `members:write` | `{ role }` |
 | `DELETE /tenant/members/{userId}` | `members:write`, or the member themselves | |
 | `GET /tenant/invitations` | `members:read`: the invitations waiting | |
 | `POST /tenant/invitations` | `members:write` | `{ email, role }` |
 | `DELETE /tenant/invitations/{email}` | `members:write` | |
-| `GET /admin/users` | Platform admins | `?limit=&cursor=` |
+| `GET /admin/users` | Platform admins: in the order of their email, or those whose email starts with `search` | `?search=&limit=&cursor=` |
 | `PATCH /admin/users/{userId}` | Platform admins | `{ name, platformAdmin, metadata }` |
-| `GET /admin/tenants` | Platform admins | `?limit=&cursor=` |
+| `GET /admin/tenants` | Platform admins: in the order of their name, or those whose name starts with `search` | `?search=&limit=&cursor=` |
 | `PATCH /admin/tenants/{tenantId}` | Platform admins | `{ name, metadata }` |
 | `DELETE /admin/tenants/{tenantId}` | Platform admins | |
 
@@ -198,7 +198,8 @@ try {
 - **`refresh()`** gets new tokens. Someone who's signed in takes up an invitation to their email this way, without waiting for their next sign-in: call it when they open your app from the invitation's link.
 - **`claims()`** reads the access token: the user's id, their current tenant, whether they're a platform admin, and its scopes. It's read, not checked: the API checks it.
 - **`request(method, path, body)`** calls a route of your own on the same API, with the same token. Its path is from the API's root, where `saas.route()` puts routes, not under `path`.
-- **`admin`** has the `/admin` routes, for platform admins.
+- **`members({ limit, cursor })`** gives a page of members, as `{ items, cursor }`: pass the `cursor` back for the next page.
+- **`admin`** has the `/admin` routes, for platform admins. `admin.users({ search: "ann" })` and `admin.tenants({ search: "acme" })` find them by the start of an email or a name.
 - `switchTenant()`, `deleteTenant()` and `leave()` refresh the tokens. After `deleteTenant()` or `leave()`, the client is in the user's current tenant again. The rest don't refresh, so after `createTenant()`, switch to it or use it if the user should be in it.
 
 The types, like `User`, `Tenant`, `Member` and `Invitation`, come with it.
@@ -489,12 +490,17 @@ The `email` part is an `Email` like any other: `transform: { email: { events: [.
 
 The built-in code reaches storage only through a `Store`, an interface of about twenty-five methods in `@sst-community/saas/runtime`. `storage: "dynamo"` (the default) creates four tables:
 
-| Table | Key | Index |
+| Table | Key | Indexes |
 | --- | --- | --- |
-| users | `id` | `byEmail`: `email` |
-| tenants | `id` | |
-| memberships | `tenantId`, `userId` | `byUser`: `userId`, `tenantId` |
+| users | `id` | `byEmail`: `email`. `sorted`: `listed`, `sortKey`, keys only |
+| tenants | `id` | `sorted`: `listed`, `sortKey`, keys only |
+| memberships | `tenantId`, `userId` | `byUser`: `userId`, `tenantId`. `byRole`, local: `tenantId`, `role` |
 | invitations | `tenantId`, `email` | `byEmail`: `email`, `tenantId`. A TTL on `expires`, in seconds |
+
+Every lookup the routes and triggers make is a read by key or a query on one of these: none reads a whole table. Each request reads the caller's user and their membership, and each token adds a query for invitations.
+
+- **`sorted`** keeps users in the order of their email and tenants in the order of their name, for the admin lists and their `search`. `listed` and `sortKey` are the store's own attributes, kept on each user and tenant and left out of the records it returns. The index has only the keys, so a change to a user or tenant writes to it only when their email or name changes.
+- **`byRole`** is a local index, so the rule that a tenant keeps an owner reads it as it is now. A local index can only be added when a table is created.
 
 To keep the records somewhere else, write a `Store` for it, pass it to `createHandlers({ store })`, and set `storage: "custom"` so no tables are created. `link` the component to whatever your store needs. A Postgres store, for RDS or Aurora, is planned, so you can give the component a database you already have.
 
@@ -542,6 +548,7 @@ The component is the control plane. It does what needs its own data or its own w
 - **Claims in the access token need the Essentials tier** of Cognito, which costs more per monthly active user than Lite. The component sets it on the user pool it creates. On Lite, a version 1 trigger can only add claims to the ID token.
 - **Invitations email any address you're given, from your domain.** The limit for each tenant and the minute between sends slow down someone who'd use them to send spam, but with `tenants.selfServe` on, anyone who signs up can create a tenant and invite. If your app is open to anyone, watch SES's bounce and complaint rates, and think about a rate limit in front of the API, like AWS WAF.
 - **Cognito gives a trigger 5 seconds.** The pre token generation trigger does three reads for most sign-ins: the user, their membership, and the invitations to their email. A `claims` hook adds to that. In `sst dev` the triggers run on your machine, so a slow first build can make a sign-in fail. Try again once it's built.
+- **A global index is a moment behind its table**, well under a second as a rule. A tenant just joined can be missing from `GET /tenants` for that long, a user just signed up from finding by email, and a change from the admin lists and their search. What has to be exact reads the table, or the local `byRole` index: the checks on each request, the last owner, taking up an invitation, and moving someone to a tenant they've just joined.
 - **A token is as it was when it was issued.** The routes check the store, so that only matters to what reads the token itself: its tenant, and whether the user is a platform admin, for `/admin` at the API. Keep access tokens short-lived if that matters.
 - **Removal.** The tables and the user pool hold your data. Set the app's `removal` to `"retain"` for production stages, as with any SST app.
 

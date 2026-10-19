@@ -151,13 +151,24 @@ describe("Saas", () => {
     const tables = Object.fromEntries(
       ofType("aws:dynamodb/table:Table").map((r) => [r.name, r.inputs]),
     );
+    // In order for the admin lists, with only the keys
+    const sorted = expect.objectContaining({
+      name: "sorted",
+      hashKey: "listed",
+      rangeKey: "sortKey",
+      projectionType: "KEYS_ONLY",
+    });
     expect(tables.AppUsersTable).toMatchObject({
       hashKey: "id",
       globalSecondaryIndexes: [
         expect.objectContaining({ name: "byEmail", hashKey: "email" }),
+        sorted,
       ],
     });
-    expect(tables.AppTenantsTable).toMatchObject({ hashKey: "id" });
+    expect(tables.AppTenantsTable).toMatchObject({
+      hashKey: "id",
+      globalSecondaryIndexes: [sorted],
+    });
     expect(tables.AppMembershipsTable).toMatchObject({
       hashKey: "tenantId",
       rangeKey: "userId",
@@ -167,6 +178,10 @@ describe("Saas", () => {
           hashKey: "userId",
           rangeKey: "tenantId",
         }),
+      ],
+      // Local, so it's read consistently
+      localSecondaryIndexes: [
+        expect.objectContaining({ name: "byRole", rangeKey: "role" }),
       ],
     });
     // DynamoDB removes an invitation once it has expired

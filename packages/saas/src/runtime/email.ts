@@ -1,7 +1,8 @@
 import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
 import type { EmailConfig, Roles } from "../config";
 import { allows, permissionsOf } from "./roles";
-import type { Store, Tenant, User } from "./store/types";
+import { collect } from "./store";
+import type { Membership, Store, Tenant, User } from "./store/types";
 import type { TenancyHooks } from "./tenancy";
 
 /** An email to send: its subject, and its body as HTML and as text. */
@@ -458,11 +459,23 @@ export function mailer(
       if ("userIds" in to)
         users = await store.getUsers([...new Set(to.userIds)]);
       else {
-        const members = (await store.listMembers(to.tenantId)).filter(
-          (m) =>
-            to.permission === undefined ||
-            allows(permissionsOf(directory.roles, m.role), to.permission),
-        );
+        // Only the members whose role has the permission are read
+        const { tenantId, permission } = to;
+        let members: Membership[];
+        if (permission === undefined)
+          members = await collect((page) => store.listMembers(tenantId, page));
+        else {
+          const roles = Object.keys(directory.roles).filter((role) =>
+            allows(permissionsOf(directory.roles, role), permission),
+          );
+          members = (
+            await Promise.all(
+              roles.map((role) =>
+                collect((page) => store.membersWithRole(tenantId, role, page)),
+              ),
+            )
+          ).flat();
+        }
         users = await store.getUsers(members.map((m) => m.userId));
       }
 

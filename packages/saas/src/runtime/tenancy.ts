@@ -8,6 +8,7 @@ import type {
   Membership,
   Metadata,
   PageArgs,
+  SearchArgs,
   Store,
   Tenant,
   User,
@@ -190,31 +191,26 @@ export function tenancy(args: TenancyArgs) {
     const email = lower(identity.email);
     if (email && email !== user.email)
       user = (await store.updateUser(user.id, { email })) ?? user;
-    if (!created) {
-      const joined = await takeUpInvitations(user);
-      // The index may not list a membership that was just added
-      if (joined.length > 0 && !user.activeTenantId)
-        user =
-          (await store.updateUser(user.id, {
-            activeTenantId: joined[joined.length - 1].tenantId,
-          })) ?? user;
-    }
-
     let tenantId = user.activeTenantId;
-    let membership = tenantId
-      ? await store.getMembership(tenantId, user.id)
-      : undefined;
+    // A new user's were taken up as they were created. The others are taken
+    // up while the membership is read.
+    const [joined, current] = await Promise.all([
+      created ? [] : takeUpInvitations(user),
+      tenantId ? store.getMembership(tenantId, user.id) : undefined,
+    ]);
+    let membership = current;
     const stays =
       membership !== undefined ||
       (tenantId !== undefined &&
         user.platformAdmin === true &&
         (await store.getTenant(tenantId)) !== undefined);
     if (!stays) {
-      // The index can still list the membership that's gone
+      // The tenant they've just joined, as the index may not list it yet.
+      // The index can still list a membership that's gone.
       const others = (await store.listMemberships(user.id)).filter(
         (m) => m.tenantId !== tenantId,
       );
-      membership = first(others);
+      membership = joined[joined.length - 1] ?? first(others);
       if (membership?.tenantId !== tenantId) {
         tenantId = membership?.tenantId;
         user =
@@ -311,11 +307,12 @@ export function tenancy(args: TenancyArgs) {
     return value;
   }
 
-  // A tenant always keeps a member with the owner role
+  // A tenant always keeps a member with the owner role. Two are enough to
+  // know whether there's another.
   async function keepsAnOwner(tenantId: string, without: string) {
-    const owners = (await store.listMembers(tenantId)).filter(
-      (m) => m.role === ownerRole && m.userId !== without,
-    );
+    const owners = (
+      await store.membersWithRole(tenantId, ownerRole, { limit: 2 })
+    ).items.filter((m) => m.userId !== without);
     if (owners.length === 0)
       throw conflict(
         `A tenant needs at least one member with the "${ownerRole}" role.`,
@@ -475,9 +472,11 @@ export function tenancy(args: TenancyArgs) {
       await deleteTenant(tenant, user);
     },
 
-    async members(identity: Identity, tenantId: string) {
+    /** A page of a tenant's members, in the order of their ids. */
+    async members(identity: Identity, tenantId: string, page?: PageArgs) {
       await authorize(identity, tenantId, "members:read");
-      return withUsers(await store.listMembers(tenantId));
+      const found = await paged(() => store.listMembers(tenantId, page));
+      return { items: await withUsers(found.items), cursor: found.cursor };
     },
 
     /**
@@ -652,7 +651,8 @@ export function tenancy(args: TenancyArgs) {
     },
 
     admin: {
-      async users(identity: Identity, page?: PageArgs) {
+      /** A page of users, in the order of their email, or those whose email starts with `search`. */
+      async users(identity: Identity, page?: SearchArgs) {
         await platformAdmin(identity);
         return paged(() => store.listUsers(page));
       },
@@ -680,7 +680,8 @@ export function tenancy(args: TenancyArgs) {
         return user;
       },
 
-      async tenants(identity: Identity, page?: PageArgs) {
+      /** A page of tenants, in the order of their name, or those whose name starts with `search`. */
+      async tenants(identity: Identity, page?: SearchArgs) {
         await platformAdmin(identity);
         return paged(() => store.listTenants(page));
       },

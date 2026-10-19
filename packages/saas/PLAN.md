@@ -40,12 +40,13 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 | 2026-10-18 | **The package is the control plane**, in the terms of AWS's SaaS Lens and SaaS Builder Toolkit: the shared services that run the app as a business (identity, onboarding, tenants, users and roles, invitations, platform admin, the system's emails). The application plane, the product and its data and how that's kept apart by tenant, is the app's. What the package gives the application plane is the tenant context of a request: the tenant in the token, `route()` and `authorized()`, the check against the store. This is the scope rule above, said another way. |
 | 2026-10-18 | **The token says who and where; the store says what they can do.** Changed the same day, with the user, from the decision above that put the role and a scope for each permission in the token. Those were out of date for as long as a token lasts, an hour by default; they grew with the roles; and the functions checked the store anyway, so nothing could trust them. Now the trigger adds only `tenant_id`, the user's current tenant from their record, and `platform_admin`, with the `platform/admin` scope for `/admin` at the API. `tenant_id` stays for whatever else only sees the token, like an AppSync resolver or another API. `saas.route()` takes no `permission` any more: the function checks it, with `route()` or `authorized()`. `GET /me` and `GET /tenants` give the role's `permissions`, which the client's `can()` reads. An app that wants the role in the token adds it with the `claims` hook. |
 | 2026-10-18 | **A request can name its tenant**, in the `x-tenant-id` header, in place of the token's. It's checked against the store like the token's, so it only says which tenant. Each tab can be in a tenant of its own, and switching in one needs no new tokens; `PUT /me/tenant` still changes the user's current tenant, for every tab and device and for what reads the token. Settles the open question of one tenant for each user, not each tab. The user pool stays on Essentials, as `tenant_id` is in the access token. |
+| 2026-10-19 | **Every lookup is by key or on an index, and the lists are paged**, asked for by the user after a review of the lookups. The member list is a page, with a cursor; `notify()` and deleting a tenant read every page. The rule that a tenant keeps an owner reads a local index, `byRole` on the memberships table, two at a time, consistently: a global index can be behind, and could let the last owner go. The admin lists read a keys-only global index, `sorted`, on the users and tenants tables, in the order of email and of name, with a prefix `search`; its keys, `listed` and `sortKey`, are the store's own. Keys only, so that an update leaving the email or name as it was doesn't write to it. One value of `listed` puts every user, and every tenant, in one partition of the index: fine for the writes it gets, sign-ups and renames, well short of a partition's 1,000 a second. The token trigger takes up invitations while it reads the membership, and someone whose tenant is gone is moved to one they've just joined, whatever the index says. |
 | 2026-10-18 | **A client for the frontend, `@sst-community/saas/client`**, agreed with the user. It's typed calls for the built-in routes, `SaasError` with the routes' codes, and the token refreshes that a change to the user's tenant needs: `switchTenant()`, `deleteTenant()` and `leave()` refresh, and `refresh()` takes up an invitation at once. It doesn't sign in or keep tokens: the app gives it `token()` and `refresh()` from whatever it signs in with. No UI and no framework bindings. It imports only types and `config.ts`, so it bundles alone, about 1 KB gzipped. |
 | 2026-10-18 | **Invitations can be sent to any address, so they're limited**: at most `invitations.limit` waiting in a tenant (100), and the same address no more than once a minute (`429 too_soon`). They expire after `invitations.expiresIn` (7 days). Inviting again replaces the invitation and sends it again. `POST /tenant/members` stays, for adding someone who has signed up, at once. The `invitation` email is on by default, and `memberAdded` isn't sent to someone who took up an invitation. |
 
 ## Status
 
-**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, invitations, branding, `notify()`, the client, the tenant in a header, and 148 tests: 50 of the tenancy rules on the in-memory store, 26 of the Hono app, `route()` and the triggers, 22 of the component under `mock()`, 28 of email, 10 of the DynamoDB store against a fake client, and 12 of the client against the Hono app, with tokens from the pre token generation trigger. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
+**Done (2026-10-19):** the component, the runtime, the shipped handlers, the README, email, invitations, branding, `notify()`, the client, the tenant in a header, paged and sorted lists, and 156 tests: 54 of the tenancy rules on the in-memory store, 26 of the Hono app, `route()` and the triggers, 22 of the component under `mock()`, 28 of email, 14 of the DynamoDB store against a fake client, and 12 of the client against the Hono app, with tokens from the pre token generation trigger. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
 
 **Fixed on `v5` on the way** (`e53329841`): a part that's a component, looked up by id, lost its parent and was looked up twice. See the [log](https://github.com/sst-community/sst/blob/v5/docs/plans/v5-progress.md). The package still works around it, as it builds against `5.0.0-alpha.2`.
 
@@ -75,8 +76,8 @@ What the functions are told is one JSON value in `SAAS_CONFIG`: where the store 
 
 | Record | Key | Fields |
 | --- | --- | --- |
-| User | `id`, the user's `sub` | `email` (verified, lowercase), `name`, `activeTenantId`, `platformAdmin`, `metadata` |
-| Tenant | `id`, a UUID | `name`, `personal`, `createdBy`, `metadata` |
+| User | `id`, the user's `sub` | `email` (verified, lowercase), `name`, `activeTenantId`, `platformAdmin`, `metadata`. In DynamoDB, also `listed` and `sortKey`, for the `sorted` index |
+| Tenant | `id`, a UUID | `name`, `personal`, `createdBy`, `metadata`. In DynamoDB, also `listed` and `sortKey` |
 | Membership | `tenantId`, `userId` | `role` |
 | Invitation | `tenantId`, `email` (lowercase) | `role`, `invitedBy`, `expiresAt`. In DynamoDB, also `expires`, the same time in seconds, for the TTL |
 
@@ -113,6 +114,9 @@ create table memberships (tenant_id text references tenants on delete cascade, u
   role text not null, created_at timestamptz not null, updated_at timestamptz not null,
   primary key (tenant_id, user_id));
 create index memberships_user on memberships (user_id);
+create index memberships_role on memberships (tenant_id, role);
+create index users_sorted on users (email, id);
+create index tenants_sorted on tenants (lower(name), id);
 create table invitations (tenant_id text references tenants on delete cascade, email text,
   role text not null, invited_by text not null, expires_at timestamptz not null,
   created_at timestamptz not null, updated_at timestamptz not null,
@@ -170,6 +174,14 @@ In the lab account on 2026-10-18, with `sst5` built from `v5` at `e53329841`. Th
 - With `x-tenant-id` for another of the user's tenants, `GET /tenant`, `GET /me` and a route of the app's own acted on it, while the token stayed on the user's current one. A header naming a tenant the user wasn't in got a `404 no_tenant`.
 - A member made an admin could do what an admin can at their next request, with the same token, and one removed was turned away at their next request.
 - CORS: API Gateway answers a preflight with `access-control-allow-headers: *`, as `ApiGatewayV2`'s default `allowHeaders: ["*"]` says. The CORS spec says `*` doesn't cover `Authorization`, which has to be named, but Chrome 153 let a request from another origin through with `Authorization` and `x-tenant-id`. Firefox and Safari weren't tried.
+
+**Paged and sorted lists**, in a fifth deploy the same day:
+
+- The tables had the indexes as designed: `sorted`, keys only, on users and tenants, next to `byEmail` on users, and the local `byRole` on memberships, next to `byUser`.
+- `GET /tenant/members?limit=2` gave two members and a cursor, then the third and none.
+- The last owner was turned away (`409 last_owner`). Once another member was made an owner, the first could step down in the next request, which the consistent read of `byRole` sees; the new one, then the last, couldn't.
+- `GET /admin/users` paged in the order of email, and `search=SUCCESS%2BB` found the one user, in any case. `GET /admin/tenants` was in the order of name, "Acme" before "acme labs", and `search=acme` found both. No record had `listed` or `sortKey` in it; the table's items had both. A renamed tenant was found by its new name in the next request.
+- No function logged an error. The pre token generation trigger took 12 to 35 ms warm.
 
 Still not checked: a user pool and an API passed in `existing`, the hosted UI and federated sign-in, an email-address `sender`, DynamoDB removing an expired invitation (it can take a few days), and the AWS SDK's retries under load.
 

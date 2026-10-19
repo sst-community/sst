@@ -88,7 +88,9 @@ describe("the built-in routes", () => {
       "/tenant/members",
       token("ann", tenantId),
     );
-    expect((await members.json()).map((m: any) => m.userId)).toEqual(["ann"]);
+    expect((await members.json()).items.map((m: any) => m.userId)).toEqual([
+      "ann",
+    ]);
   });
 
   it("create a tenant and switch to it", async () => {

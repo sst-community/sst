@@ -6,7 +6,6 @@ import {
   GetItemCommand,
   PutItemCommand,
   QueryCommand,
-  ScanCommand,
   TransactWriteItemsCommand,
   UpdateItemCommand,
   type AttributeValue,
@@ -18,6 +17,7 @@ import type {
   Membership,
   Page,
   PageArgs,
+  SearchArgs,
   Store,
   Tenant,
   User,
@@ -42,6 +42,21 @@ export const EMAIL_INDEX = "byEmail";
 /** The index on the memberships table, by user. */
 export const USER_INDEX = "byUser";
 /**
+ * The local index on the memberships table, by tenant and role. It's local
+ * so that it can be read as it is now, not as it was a moment ago.
+ */
+export const ROLE_INDEX = "byRole";
+/**
+ * The index on the users table, and the one on the tenants table, that
+ * keeps them in order, of email and of name. It has only the keys, so that
+ * a change to a record that leaves its email or name as it was doesn't
+ * write to it.
+ */
+export const SORTED_INDEX = "sorted";
+/** That index's keys: the same value on every record, and what it's sorted by. */
+export const LISTED_ATTRIBUTE = "listed";
+export const SORT_ATTRIBUTE = "sortKey";
+/**
  * The invitations table's TTL attribute: when an invitation expires, in
  * seconds since 1970, so that DynamoDB removes it.
  */
@@ -50,12 +65,17 @@ export const TTL_ATTRIBUTE = "expires";
 /**
  * A store on four DynamoDB tables:
  *
- * - users, keyed by `id`, with an index on `email`
- * - tenants, keyed by `id`
+ * - users, keyed by `id`, with an index on `email`, and one, `sorted`, on
+ *   `listed` and `sortKey`
+ * - tenants, keyed by `id`, with an index, `sorted`, on `listed` and
+ *   `sortKey`
  * - memberships, keyed by `tenantId` and `userId`, with an index on
- *   `userId` and `tenantId`
+ *   `userId` and `tenantId`, and a local index on `tenantId` and `role`
  * - invitations, keyed by `tenantId` and `email`, with an index on `email`
  *   and `tenantId`, and a TTL on `expires`
+ *
+ * `listed` and `sortKey` are the store's own, and aren't in the records it
+ * returns.
  */
 export function dynamoStore(args: DynamoStoreArgs): Store {
   const { tables } = args;
@@ -84,12 +104,12 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
         }),
       );
       const item = result.Items?.[0];
-      return item && (fromItem(item) as User);
+      return item && (recordOf(item) as User);
     },
     async createUser(user, personal) {
       const putUser = {
         TableName: tables.users,
-        Item: toItem(user),
+        Item: toItem({ ...user, ...sortedBy(userOrder(user)) }),
         ConditionExpression: "attribute_not_exists(#id)",
         ExpressionAttributeNames: { "#id": "id" },
       };
@@ -125,10 +145,19 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
       }
     },
     async updateUser(id, patch) {
-      return update<User>(tables.users, { id: { S: id } }, patch);
+      return update<User>(
+        tables.users,
+        { id: { S: id } },
+        {
+          ...patch,
+          ...(patch.email !== undefined && {
+            [SORT_ATTRIBUTE]: userOrder({ id, email: patch.email }),
+          }),
+        },
+      );
     },
     async listUsers(page) {
-      return scan<User>(tables.users, page);
+      return sorted<User>(tables.users, page);
     },
 
     async getTenant(id) {
@@ -151,11 +180,20 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
       );
     },
     async updateTenant(id, patch) {
-      return update<Tenant>(tables.tenants, { id: { S: id } }, patch);
+      return update<Tenant>(
+        tables.tenants,
+        { id: { S: id } },
+        {
+          ...patch,
+          ...(typeof patch.name === "string" && {
+            [SORT_ATTRIBUTE]: tenantOrder({ id, name: patch.name }),
+          }),
+        },
+      );
     },
     async deleteTenant(id) {
       const [members, invitations] = await Promise.all([
-        this.listMembers(id),
+        query<Membership>(membersOf(id)),
         this.listInvitations(id),
       ]);
       await batchWrite(
@@ -183,7 +221,7 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
       );
     },
     async listTenants(page) {
-      return scan<Tenant>(tables.tenants, page);
+      return sorted<Tenant>(tables.tenants, page);
     },
 
     async getMembership(tenantId, userId) {
@@ -192,14 +230,28 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
         userId: { S: userId },
       });
     },
-    async listMembers(tenantId) {
-      return query<Membership>({
-        TableName: tables.memberships,
-        KeyConditionExpression: "#tenantId = :tenantId",
-        ExpressionAttributeNames: { "#tenantId": "tenantId" },
-        ExpressionAttributeValues: { ":tenantId": { S: tenantId } },
-        ConsistentRead: true,
-      });
+    async listMembers(tenantId, page) {
+      return pageOf<Membership>(membersOf(tenantId), page);
+    },
+    async membersWithRole(tenantId, role, page) {
+      // A local index can be read consistently
+      return pageOf<Membership>(
+        {
+          TableName: tables.memberships,
+          IndexName: ROLE_INDEX,
+          KeyConditionExpression: "#tenantId = :tenantId AND #role = :role",
+          ExpressionAttributeNames: {
+            "#tenantId": "tenantId",
+            "#role": "role",
+          },
+          ExpressionAttributeValues: {
+            ":tenantId": { S: tenantId },
+            ":role": { S: role },
+          },
+          ConsistentRead: true,
+        },
+        page,
+      );
     },
     async listMemberships(userId) {
       // An index is only read eventually consistent
@@ -328,10 +380,20 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
     return invitation as unknown as Invitation;
   }
 
+  function membersOf(tenantId: string): QueryCommandInput {
+    return {
+      TableName: tables.memberships,
+      KeyConditionExpression: "#tenantId = :tenantId",
+      ExpressionAttributeNames: { "#tenantId": "tenantId" },
+      ExpressionAttributeValues: { ":tenantId": { S: tenantId } },
+      ConsistentRead: true,
+    };
+  }
+
   function newTenant(tenant: Tenant) {
     return {
       TableName: tables.tenants,
-      Item: toItem(tenant),
+      Item: toItem({ ...tenant, ...sortedBy(tenantOrder(tenant)) }),
       ConditionExpression: "attribute_not_exists(#id)",
       ExpressionAttributeNames: { "#id": "id" },
     };
@@ -341,7 +403,7 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
     const result = await db().send(
       new GetItemCommand({ TableName: table, Key: key, ConsistentRead: true }),
     );
-    return result.Item && (fromItem(result.Item) as T);
+    return result.Item && (recordOf(result.Item) as T);
   }
 
   async function batchGet<T>(table: string, keys: Item[]) {
@@ -359,7 +421,7 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
           }),
         );
         for (const item of result.Responses?.[table] ?? [])
-          found.push(fromItem(item) as T);
+          found.push(recordOf(item) as T);
         pending = result.UnprocessedKeys?.[table]?.Keys ?? [];
       }
     }
@@ -392,17 +454,59 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
     return items;
   }
 
-  async function scan<T>(table: string, page: PageArgs = {}): Promise<Page<T>> {
+  // One page of a query, from the cursor
+  async function pageOf<T>(
+    input: QueryCommandInput,
+    page: PageArgs = {},
+  ): Promise<Page<T>> {
     const result = await db().send(
-      new ScanCommand({
-        TableName: table,
+      new QueryCommand({
+        ...input,
         Limit: page.limit ?? 50,
         ExclusiveStartKey: page.cursor ? decodeCursor(page.cursor) : undefined,
       }),
     );
     return {
-      items: (result.Items ?? []).map((item) => fromItem(item) as T),
+      items: (result.Items ?? []).map((item) => recordOf(item) as T),
       cursor: result.LastEvaluatedKey && encodeCursor(result.LastEvaluatedKey),
+    };
+  }
+
+  // A page of users or tenants in order, from the index that has only their
+  // keys, then the records themselves
+  async function sorted<T extends { id: string }>(
+    table: string,
+    page: SearchArgs = {},
+  ): Promise<Page<T>> {
+    const prefix = page.search?.trim().toLowerCase();
+    const keys = await pageOf<{ id: string }>(
+      {
+        TableName: table,
+        IndexName: SORTED_INDEX,
+        KeyConditionExpression: prefix
+          ? "#listed = :listed AND begins_with(#sortKey, :prefix)"
+          : "#listed = :listed",
+        ExpressionAttributeNames: prefix
+          ? { "#listed": LISTED_ATTRIBUTE, "#sortKey": SORT_ATTRIBUTE }
+          : { "#listed": LISTED_ATTRIBUTE },
+        ExpressionAttributeValues: prefix
+          ? { ":listed": { S: LISTED }, ":prefix": { S: prefix } }
+          : { ":listed": { S: LISTED } },
+      },
+      page,
+    );
+    const records = new Map(
+      (
+        await batchGet<T>(
+          table,
+          keys.items.map(({ id }) => ({ id: { S: id } })),
+        )
+      ).map((record) => [record.id, record]),
+    );
+    return {
+      // One deleted since the index was read is left out
+      items: keys.items.flatMap(({ id }) => records.get(id) ?? []),
+      cursor: keys.cursor,
     };
   }
 
@@ -445,12 +549,35 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
           ReturnValues: "ALL_NEW",
         }),
       );
-      return result.Attributes && (fromItem(result.Attributes) as T);
+      return result.Attributes && (recordOf(result.Attributes) as T);
     } catch (error: any) {
       if (error?.name === "ConditionalCheckFailedException") return undefined;
       throw error;
     }
   }
+}
+
+// What the sorted indexes keep users and tenants in order of, unique as it
+// ends with the id. The space comes before anything a name goes on with, so
+// "acme" is before "acme labs".
+const LISTED = "all";
+const userOrder = (user: { id: string; email?: string | null }) =>
+  `${user.email ?? "~"} #${user.id}`;
+const tenantOrder = (tenant: { id: string; name: string }) =>
+  `${tenant.name.toLowerCase()} #${tenant.id}`;
+const sortedBy = (key: string) => ({
+  [LISTED_ATTRIBUTE]: LISTED,
+  [SORT_ATTRIBUTE]: key,
+});
+
+// A record, without what only the store's indexes read
+function recordOf(item: Item) {
+  const {
+    [LISTED_ATTRIBUTE]: _listed,
+    [SORT_ATTRIBUTE]: _sort,
+    ...record
+  } = fromItem(item);
+  return record;
 }
 
 function backoff(attempt: number) {

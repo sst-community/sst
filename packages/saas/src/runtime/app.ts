@@ -67,7 +67,7 @@ export function saasApp(options: SaasAppOptions = {}) {
     },
 
     "GET /tenant/members": async (c) =>
-      c.json(await rules(c).members(who(c), tenantOf(c))),
+      c.json(await rules(c).members(who(c), tenantOf(c), page(c))),
     "POST /tenant/members": async (c) =>
       c.json(await rules(c).addMember(who(c), tenantOf(c), await body(c)), 201),
     "PATCH /tenant/members/{userId}": async (c) =>
@@ -215,5 +215,9 @@ function page(c: Context<SaasEnv>) {
     (!Number.isInteger(parsed) || parsed < 1 || parsed > 100)
   )
     throw badRequest(`"limit" has to be a whole number from 1 to 100.`);
-  return { cursor: c.req.query("cursor") || undefined, limit: parsed };
+  return {
+    cursor: c.req.query("cursor") || undefined,
+    limit: parsed,
+    search: c.req.query("search") || undefined,
+  };
 }

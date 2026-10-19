@@ -256,7 +256,9 @@ export function saasClient(options: SaasClientOptions) {
       await refresh();
     },
 
-    members: () => call<Member[]>("GET", "/tenant/members"),
+    /** A page of the members of the tenant the client is in, in the order of their ids. */
+    members: (page?: PageQuery) =>
+      call<Page<Member>>("GET", `/tenant/members${query(page)}`),
     /** Add someone who has signed up. To add anyone else, `invite()` them. */
     addMember: (
       input: ({ email: string } | { userId: string }) & { role?: string },
@@ -290,7 +292,8 @@ export function saasClient(options: SaasClientOptions) {
 
     /** For platform admins. */
     admin: {
-      users: (page?: PageQuery) =>
+      /** A page of users, in the order of their email: `search` finds those whose email starts with it. */
+      users: (page?: SearchQuery) =>
         call<Page<User>>("GET", `/admin/users${query(page)}`),
       updateUser: (
         userId: string,
@@ -301,7 +304,8 @@ export function saasClient(options: SaasClientOptions) {
         },
       ) =>
         changes(call<User>("PATCH", `/admin/users/${segment(userId)}`, patch)),
-      tenants: (page?: PageQuery) =>
+      /** A page of tenants, in the order of their name: `search` finds those whose name starts with it. */
+      tenants: (page?: SearchQuery) =>
         call<Page<Tenant>>("GET", `/admin/tenants${query(page)}`),
       updateTenant: (
         tenantId: string,
@@ -320,13 +324,19 @@ export interface PageQuery {
   cursor?: string;
 }
 
+export interface SearchQuery extends PageQuery {
+  /** The start of an email, for users, or a name, for tenants, in any case. */
+  search?: string;
+}
+
 const slash = (path: string) =>
   path === "" || path.startsWith("/") ? path : `/${path}`;
 
-function query(page: PageQuery = {}) {
+function query(page: SearchQuery = {}) {
   const params = new URLSearchParams();
   if (page.limit !== undefined) params.set("limit", String(page.limit));
   if (page.cursor) params.set("cursor", page.cursor);
+  if (page.search) params.set("search", page.search);
   const text = params.toString();
   return text ? `?${text}` : "";
 }

@@ -220,7 +220,7 @@ describe("saasClient()", () => {
     expect(
       (await bob.tenants()).map((t) => `${t.name} ${t.role}`).sort(),
     ).toEqual(["Acme member", "Bob's workspace owner"]);
-    expect((await ann.members()).map((m) => m.email).sort()).toEqual([
+    expect((await ann.members()).items.map((m) => m.email).sort()).toEqual([
       "ann@example.com",
       "bob@example.com",
     ]);

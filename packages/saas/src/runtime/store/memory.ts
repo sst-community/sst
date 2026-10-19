@@ -9,6 +9,11 @@ import type {
   User,
 } from "./types";
 
+// The order the lists are in, as the DynamoDB store's indexes keep it
+const userOrder = (user: User) => `${user.email ?? "~"} #${user.id}`;
+const tenantOrder = (tenant: Tenant) =>
+  `${tenant.name.toLowerCase()} #${tenant.id}`;
+
 /**
  * A store that keeps everything in memory, for tests. It behaves as the
  * DynamoDB one does, apart from being consistent at once.
@@ -63,8 +68,8 @@ export function memoryStore(): Store & {
       users.set(id, updated);
       return copy(updated);
     },
-    async listUsers(page) {
-      return paginate([...users.values()], page);
+    async listUsers(page = {}) {
+      return paginate([...users.values()], userOrder, page, page.search);
     },
 
     async getTenant(id) {
@@ -93,17 +98,28 @@ export function memoryStore(): Store & {
         if (invitation.tenantId === id) invitations.delete(k);
       tenants.delete(id);
     },
-    async listTenants(page) {
-      return paginate([...tenants.values()], page);
+    async listTenants(page = {}) {
+      return paginate([...tenants.values()], tenantOrder, page, page.search);
     },
 
     async getMembership(tenantId, userId) {
       return copy(memberships.get(key(tenantId, userId)));
     },
-    async listMembers(tenantId) {
-      return [...memberships.values()]
-        .filter((membership) => membership.tenantId === tenantId)
-        .map((membership) => copy(membership)!);
+    async listMembers(tenantId, page) {
+      return paginate(
+        [...memberships.values()].filter((m) => m.tenantId === tenantId),
+        (m) => m.userId,
+        page,
+      );
+    },
+    async membersWithRole(tenantId, role, page) {
+      return paginate(
+        [...memberships.values()].filter(
+          (m) => m.tenantId === tenantId && m.role === role,
+        ),
+        (m) => m.userId,
+        page,
+      );
     },
     async listMemberships(userId) {
       return [...memberships.values()]
@@ -167,21 +183,29 @@ export function memoryStore(): Store & {
     return updated as T;
   }
 
-  function paginate<T extends { id: string }>(
+  // A page of items in the order of their keys, from after the cursor,
+  // which is the last key of the page before
+  function paginate<T>(
     items: T[],
+    keyOf: (item: T) => string,
     page: PageArgs = {},
+    search?: string,
   ): Page<T> {
-    const sorted = items.sort((a, b) => a.id.localeCompare(b.id));
+    const prefix = search?.trim().toLowerCase();
+    const sorted = items
+      .map((item) => ({ item, key: keyOf(item) }))
+      .filter(({ key }) => !prefix || key.startsWith(prefix))
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const start = page.cursor
-      ? sorted.findIndex((item) => item.id > page.cursor!)
+      ? sorted.findIndex(({ key }) => key > page.cursor!)
       : 0;
     if (start < 0) return { items: [] };
     const limit = page.limit ?? 50;
     const slice = sorted.slice(start, start + limit);
     const more = start + limit < sorted.length;
     return {
-      items: slice.map((item) => copy(item)!),
-      cursor: more ? slice[slice.length - 1].id : undefined,
+      items: slice.map(({ item }) => copy(item)!),
+      cursor: more ? slice[slice.length - 1].key : undefined,
     };
   }
 }
