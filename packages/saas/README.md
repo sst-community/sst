@@ -13,12 +13,12 @@ That gives you:
 
 - a **Cognito user pool**, signed in to by email, and a client for your web app;
 - an **HTTP API** with a JWT authorizer for the user pool, and the built-in routes on it;
-- **three DynamoDB tables**: users, tenants and memberships;
+- **four DynamoDB tables**: users, tenants, memberships and invitations;
 - a **post confirmation trigger** that creates each user, with a tenant of their own;
 - a **pre token generation trigger** that puts the user's current tenant, their role in it and what it lets them do in their tokens;
 - with `email`, **email through Amazon SES** from your own domain, for Cognito's emails and the app's.
 
-A user signs up and gets their own tenant. They can create more, switch between them, and add the people they work with. A platform admin can see and change every user and tenant.
+A user signs up and gets their own tenant. They can create more, switch between them, and invite the people they work with by email. A platform admin can see and change every user and tenant.
 
 It needs SST version 5, `5.0.0-alpha.3` or later (`sst@npm:@sst-community/sst@^5.0.0-0`).
 
@@ -82,6 +82,29 @@ The rules:
 
 **Every route checks the store, not just the token.** If a role changed after a token was issued, the function sees the change straight away. The API's scope check only sees it once the token is refreshed.
 
+### Invitations
+
+A member with `members:write` invites someone by email, with a role:
+
+```http
+POST /tenant/invitations
+{ "email": "dan@example.com", "role": "admin" }
+```
+
+They join the tenant when they sign up with that email and confirm it. Someone who has signed up already joins the next time the user pool issues them tokens: when they sign in, or when the client refreshes its tokens, which it can do straight away. Only a verified email takes up an invitation.
+
+- **The answer is the same whether or not the email has signed up**, so inviting doesn't tell anyone who has an account.
+- **Someone who signs up through an invitation starts in that tenant.** They still get a tenant of their own when `tenants.personal` is on.
+- **With `email`, the invitation is emailed to them**, from your domain.
+- **An invitation expires** after `invitations.expiresIn`, 7 days by default, and DynamoDB removes it.
+- **Inviting the same email again** replaces the invitation, with the new role, and sends it again. Not more than once a minute.
+- **A tenant can have at most `invitations.limit` waiting**, 100 by default, so it can't send a great many emails from your domain.
+- The same role rules apply as for adding a member: a member can only invite with a role whose permissions they all have, and only change or revoke an invitation with such a role.
+
+```ts
+new Saas("App", { invitations: { expiresIn: "3 days", limit: 20 } });
+```
+
 ---
 
 ## The built-in routes
@@ -102,15 +125,18 @@ They're under `path`, which is the root of the API unless you set one. API Gatew
 | `POST /tenant/members` | `members:write` | `{ email }` or `{ userId }`, and `role` |
 | `PATCH /tenant/members/{userId}` | `members:write` | `{ role }` |
 | `DELETE /tenant/members/{userId}` | `members:write`, or the member themselves | |
+| `GET /tenant/invitations` | `members:read`: the invitations waiting | |
+| `POST /tenant/invitations` | `members:write` | `{ email, role }` |
+| `DELETE /tenant/invitations/{email}` | `members:write` | |
 | `GET /admin/users` | Platform admins | `?limit=&cursor=` |
 | `PATCH /admin/users/{userId}` | Platform admins | `{ name, platformAdmin, metadata }` |
 | `GET /admin/tenants` | Platform admins | `?limit=&cursor=` |
 | `PATCH /admin/tenants/{tenantId}` | Platform admins | `{ name, metadata }` |
 | `DELETE /admin/tenants/{tenantId}` | Platform admins | |
 
-The `/tenant` routes act on the tenant the token is for. An error comes back as `{ "error": { "code", "message" } }`. The codes your client might match on: `no_active_tenant`, `no_tenant`, `no_user`, `no_member`, `member_exists`, `last_owner`, `personal_tenant`.
+The `/tenant` routes act on the tenant the token is for. An error comes back as `{ "error": { "code", "message" } }`. The codes your client might match on: `no_active_tenant`, `no_tenant`, `no_user`, `no_member`, `member_exists`, `last_owner`, `personal_tenant`, `no_invitation`, `too_many_invitations`, and `too_soon` (a `429`).
 
-There are no invitations yet. `POST /tenant/members` adds someone who has already signed up, found by email or user id. Only a verified email is kept, so only a verified email finds anyone. It also tells the caller whether an email has signed up.
+`POST /tenant/members` adds someone who has already signed up, found by email or user id, straight away. Only a verified email is kept, so only a verified email finds anyone. Unlike an invitation, it tells the caller whether an email has signed up: if that matters to you, turn it off with `routes: { "POST /tenant/members": false }` and invite people instead.
 
 ---
 
@@ -187,7 +213,7 @@ From the lightest change to the heaviest.
 
 ### Args
 
-`roles`, `ownerRole`, `defaultRole`, `tenants.personal`, `tenants.selfServe`, `path`, `routes`, `clients`, `link`, `email`. See [Roles and permissions](#roles-and-permissions) and [Email](#email).
+`roles`, `ownerRole`, `defaultRole`, `tenants.personal`, `tenants.selfServe`, `invitations`, `path`, `routes`, `clients`, `link`, `email`. See [Roles and permissions](#roles-and-permissions), [Invitations](#invitations) and [Email](#email).
 
 ### `transform`, `existing` and `nodes`
 
@@ -216,7 +242,7 @@ saas.nodes.users.nodes.table; // the aws.dynamodb.Table
 | `client` | A `CognitoUserPoolClient` for each name in `clients` |
 | `api` | The `ApiGatewayV2` |
 | `route`, `integration`, `permission` | The API's routes to `apiFunction`, the integration they share, and the permission that lets API Gateway invoke it |
-| `users`, `tenants`, `memberships` | The `Dynamo` tables |
+| `users`, `tenants`, `memberships`, `invitations` | The `Dynamo` tables |
 | `apiFunction` | The function behind the built-in routes |
 | `postConfirmation`, `preTokenGeneration` | The triggers |
 | `triggerPermission` | Created only for a user pool passed in `existing` |
@@ -260,7 +286,7 @@ export const { api, postConfirmation, preTokenGeneration } = createHandlers({
 new Saas("App", { handlers: "src/saas.ts", link: [stripeKey] });
 ```
 
-The hooks are `userCreated`, `tenantCreated`, `tenantDeleted`, `memberAdded`, `memberChanged` and `memberRemoved`. Each runs after its change is made. A hook that throws fails the request, but the change stays made. If `userCreated` throws, the sign-up fails.
+The hooks are `userCreated`, `tenantCreated`, `tenantDeleted`, `memberAdded`, `memberChanged`, `memberRemoved`, `invitationCreated` and `invitationRevoked`. `memberAdded` has the `invitation` when the member took one up, and `by` is then whoever invited them. Each runs after its change is made. A hook that throws fails the request, but the change stays made. If `userCreated` throws, the sign-up fails.
 
 `tenancy()` is the set of rules the routes use, and it's yours to call too: `tenancy({ store, config }).addMember(...)` checks exactly what the route checks.
 
@@ -289,7 +315,8 @@ What that sets up:
 | Email | When | Default |
 | --- | --- | --- |
 | `welcome` | A user signs up | Off |
-| `memberAdded` | Someone is added to a tenant | On |
+| `invitation` | Someone is invited to a tenant | On |
+| `memberAdded` | Someone is added to a tenant, but not when they take up an invitation | On |
 | `roleChanged` | A member's role changes | On |
 | `memberRemoved` | Someone else removes a member | On |
 
@@ -299,23 +326,51 @@ new Saas("App", {
 });
 ```
 
-An email goes to a verified address only, and a send that fails is logged. The change it's about is made all the same.
+An invitation goes to the address it's for. Every other email goes to a verified address only. A send that fails is logged, and the change it's about is made all the same.
 
-### Your own templates, and another provider
+### Your logo and color
 
-The templates are plain functions that return `{ subject, html, text }`. Replace any of them, or the sender, in your `handlers` file:
+```ts
+new Saas("App", {
+  email: {
+    from: "Acme <hello@acme.com>",
+    logo: "https://acme.com/email-logo.png",
+    color: "#ff6600", // the links
+  },
+});
+```
+
+Every email shows the logo at the top, 40 pixels high: Cognito's, the app's and yours. Use a PNG or JPEG at a public `https` URL. Most email clients don't show SVG, or an image attached to the email. `logo` takes an output too, like the URL of a file in a `Bucket` of yours.
+
+That's all the branding the component has settings for. For anything more, like a footer, other fonts or a layout of your own, replace the layout.
+
+### Your own layout, templates and provider
+
+Every email is put together by one layout: a function that takes the heading, the paragraphs and a link, and returns the HTML and the text. The templates say what each email says, and the layout how it looks. Replace either, or the sender, in your `handlers` file:
 
 ```ts title="src/saas.ts"
-import { createHandlers, escape } from "@sst-community/saas/runtime";
+import { createHandlers, defaultLayout, escape } from "@sst-community/saas/runtime";
 
 export const { api, customMessage, postConfirmation, preTokenGeneration } =
   createHandlers({
     email: {
+      // How every email looks: the built-in ones and yours
+      layout: (input) => {
+        const { html, text } = defaultLayout(input);
+        return {
+          html: html + `<p style="color:#6b7280;font-size:12px">Acme Inc, 1 Main St</p>`,
+          text: text + "\n\nAcme Inc, 1 Main St",
+        };
+      },
+      // What one says
       templates: {
-        memberAdded: ({ tenant, by, app }) => ({
-          subject: `Join ${tenant.name} on ${app.name}`,
-          html: `<p>${escape(by.name ?? "Someone")} added you to ${escape(tenant.name)}.</p>`,
-          text: `${by.name ?? "Someone"} added you to ${tenant.name}.`,
+        memberAdded: ({ tenant, by, layout }) => ({
+          subject: `Welcome to ${tenant.name}`,
+          ...layout({
+            heading: `You're in ${escape(tenant.name)}`,
+            html: [`${escape(by.name ?? "Someone")} added you.`],
+            text: [`${by.name ?? "Someone"} added you.`],
+          }),
         }),
       },
       // To send with another provider, like Resend or Postmark:
@@ -324,25 +379,40 @@ export const { api, customMessage, postConfirmation, preTokenGeneration } =
   });
 ```
 
-Escape what people wrote, like a tenant's name, in the HTML. A template for one of Cognito's emails has to include the `code` it's given, a placeholder Cognito fills in, and `adminInvitation` the `username` too. If one leaves it out, Cognito sends its own.
+A template is given `layout`, so one you replace still looks like the rest. The heading and paragraphs are HTML: escape what people wrote in them, like a tenant's name. A template for one of Cognito's emails has to include the `code` it's given, a placeholder Cognito fills in, and `adminInvitation` the `username` too. If one leaves it out, or a layout of yours does, Cognito sends its own.
 
 Cognito always sends its emails through SES. A `send` of your own sends the app's.
 
-### Emails of your own
+### Emails of your own, like notifications
 
-`createMailer()` sends with the same sender and templates, from any function that links the component:
+`createMailer()` sends from any function that links the component, with the same sender, layout and logo. `notify()` sends to users, or to a tenant's members, at their verified email:
 
-```ts
-import { createMailer } from "@sst-community/saas/runtime";
+```ts title="src/invoices.ts"
+import { createMailer, escape } from "@sst-community/saas/runtime";
 
 const mail = createMailer();
-await mail.send({
-  to: "ann@example.com",
-  subject: "Your report is ready",
-  html: "<p>It's ready.</p>",
-  text: "It's ready.",
-});
+
+export async function invoiceReady(tenantId: string, month: string, url: string) {
+  const result = await mail.notify({
+    // Members whose role has the permission. Or { userIds: [...] }
+    to: { tenantId, permission: "billing:read" },
+    message: (user) => ({
+      subject: `Your ${month} invoice is ready`,
+      ...mail.layout({
+        heading: `Your ${escape(month)} invoice is ready`,
+        html: [`Hi ${escape(user.name ?? "there")}, it's ready to view.`],
+        text: [`Hi ${user.name ?? "there"}, it's ready to view.`],
+        action: { label: "View the invoice", url },
+      }),
+    }),
+  });
+  // result.sent, result.skipped (no verified email, or no message), result.failed
+}
 ```
+
+`message` is called for each of them, and can return nothing to leave one out. It sends one at a time and keeps going when one fails. For a large tenant, send from a queue. `mail.send({ to, subject, html, text })` sends to any address.
+
+What to notify people about, when, and whether they want it, is up to your app. See [What it doesn't do](#what-it-doesnt-do).
 
 The `email` part is an `Email` like any other: `transform: { email: { events: [...] } }` sends SES's events to SNS or EventBridge, and `existing: { email }` uses one you already have.
 
@@ -352,13 +422,14 @@ The `email` part is an `Email` like any other: `transform: { email: { events: [.
 
 ## Storage
 
-The built-in code reaches storage only through a `Store`, an interface of about twenty methods in `@sst-community/saas/runtime`. `storage: "dynamo"` (the default) creates three tables:
+The built-in code reaches storage only through a `Store`, an interface of about twenty-five methods in `@sst-community/saas/runtime`. `storage: "dynamo"` (the default) creates four tables:
 
 | Table | Key | Index |
 | --- | --- | --- |
 | users | `id` | `byEmail`: `email` |
 | tenants | `id` | |
 | memberships | `tenantId`, `userId` | `byUser`: `userId`, `tenantId` |
+| invitations | `tenantId`, `email` | `byEmail`: `email`, `tenantId`. A TTL on `expires`, in seconds |
 
 To keep the records somewhere else, write a `Store` for it, pass it to `createHandlers({ store })`, and set `storage: "custom"` so no tables are created. `link` the component to whatever your store needs. A Postgres store, for RDS or Aurora, is planned, so you can give the component a database you already have.
 
@@ -385,10 +456,26 @@ There's no admin UI. The `/admin` routes are what one would be built on.
 
 ---
 
+## What it doesn't do
+
+The component does what needs its own data or its own wiring: the user pool and its triggers, users, tenants, roles and invitations, and sending email. What's a decision about your product is left to you, with a place to plug it in:
+
+| Not in the component | Where it goes |
+| --- | --- |
+| Which notifications to send, notification settings, unsubscribing, digests | Your code, with `notify()` and the hooks |
+| Sending in bulk, or later | A queue of yours, whose subscriber calls `notify()` |
+| In-app notifications, live updates | Components of your own, started from the hooks |
+| How emails look, beyond a logo and a color | A `layout` |
+| An admin UI, or UI components for the frontend | Your frontend, on the built-in routes |
+| Billing and plans | Your code: `tenantCreated` and `metadata` |
+
+---
+
 ## Things to know
 
 - **Access tokens with scopes need the Essentials tier** of Cognito, which costs more per monthly active user than Lite. The component sets it on the user pool it creates. On Lite, a version 1 trigger can only add claims to the ID token.
-- **Cognito gives a trigger 5 seconds.** The pre token generation trigger does two reads for most sign-ins. A `claims` hook adds to that. In `sst dev` the triggers run on your machine, so a slow first build can make a sign-in fail. Try again once it's built.
+- **Invitations email any address you're given, from your domain.** The limit for each tenant and the minute between sends slow down someone who'd use them to send spam, but with `tenants.selfServe` on, anyone who signs up can create a tenant and invite. If your app is open to anyone, watch SES's bounce and complaint rates, and think about a rate limit in front of the API, like AWS WAF.
+- **Cognito gives a trigger 5 seconds.** The pre token generation trigger does three reads for most sign-ins: the user, their membership, and the invitations to their email. A `claims` hook adds to that. In `sst dev` the triggers run on your machine, so a slow first build can make a sign-in fail. Try again once it's built.
 - **A token is as it was when it was issued.** The routes check the store, but a scope check at the API uses the token. Keep access tokens short-lived if that matters.
 - **Removal.** The tables and the user pool hold your data. Set the app's `removal` to `"retain"` for production stages, as with any SST app.
 

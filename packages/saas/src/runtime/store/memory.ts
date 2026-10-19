@@ -1,4 +1,5 @@
 import type {
+  Invitation,
   Membership,
   Page,
   PageArgs,
@@ -16,11 +17,13 @@ export function memoryStore(): Store & {
   users: Map<string, User>;
   tenants: Map<string, Tenant>;
   memberships: Map<string, Membership>;
+  invitations: Map<string, Invitation>;
 } {
   const users = new Map<string, User>();
   const tenants = new Map<string, Tenant>();
   const memberships = new Map<string, Membership>();
-  const key = (tenantId: string, userId: string) => `${tenantId}\n${userId}`;
+  const invitations = new Map<string, Invitation>();
+  const key = (tenantId: string, other: string) => `${tenantId}\n${other}`;
   const copy = <T>(value: T | undefined) =>
     value === undefined ? undefined : structuredClone(value);
   const now = () => new Date().toISOString();
@@ -29,6 +32,7 @@ export function memoryStore(): Store & {
     users,
     tenants,
     memberships,
+    invitations,
 
     async getUser(id) {
       return copy(users.get(id));
@@ -85,6 +89,8 @@ export function memoryStore(): Store & {
     async deleteTenant(id) {
       for (const [k, membership] of memberships)
         if (membership.tenantId === id) memberships.delete(k);
+      for (const [k, invitation] of invitations)
+        if (invitation.tenantId === id) invitations.delete(k);
       tenants.delete(id);
     },
     async listTenants(page) {
@@ -112,6 +118,38 @@ export function memoryStore(): Store & {
     },
     async deleteMembership(tenantId, userId) {
       memberships.delete(key(tenantId, userId));
+    },
+
+    async getInvitation(tenantId, email) {
+      return copy(invitations.get(key(tenantId, email.toLowerCase())));
+    },
+    async listInvitations(tenantId) {
+      return [...invitations.values()]
+        .filter((invitation) => invitation.tenantId === tenantId)
+        .map((invitation) => copy(invitation)!);
+    },
+    async findInvitations(email) {
+      const lower = email.toLowerCase();
+      return [...invitations.values()]
+        .filter((invitation) => invitation.email === lower)
+        .map((invitation) => copy(invitation)!);
+    },
+    async putInvitation(invitation) {
+      invitations.set(
+        key(invitation.tenantId, invitation.email),
+        copy(invitation)!,
+      );
+    },
+    async deleteInvitation(tenantId, email) {
+      invitations.delete(key(tenantId, email.toLowerCase()));
+    },
+    async acceptInvitation(invitation, membership) {
+      const invited = key(invitation.tenantId, invitation.email);
+      const member = key(membership.tenantId, membership.userId);
+      if (!invitations.has(invited) || memberships.has(member)) return false;
+      invitations.delete(invited);
+      memberships.set(member, copy(membership)!);
+      return true;
     },
   };
 

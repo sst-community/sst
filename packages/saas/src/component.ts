@@ -19,6 +19,7 @@ import {
 import { permission, v5 } from "sst/components/aws";
 import {
   CONFIG_ENV,
+  DEFAULT_INVITATIONS,
   DEFAULT_MESSAGES,
   DEFAULT_ROLES,
   MESSAGES,
@@ -27,9 +28,12 @@ import {
   rolesProblem,
   ROUTES,
   scopesOf,
+  secondsOf,
   type BuiltInMessage,
   type BuiltInRoute,
+  type Duration,
   type EmailConfig,
+  type InvitationConfig,
   type Roles,
   type SaasConfig,
   type StoreConfig,
@@ -62,6 +66,12 @@ const parts = {
    * `byUser`. Not created when `storage` is `"custom"`.
    */
   memberships: optional(v5.Dynamo),
+  /**
+   * The invitations table, keyed by `tenantId` and `email`, with an index
+   * `byEmail`, and a TTL on `expires` that removes an invitation once it
+   * has expired. Not created when `storage` is `"custom"`.
+   */
+  invitations: optional(v5.Dynamo),
   /** The function behind every built-in route. */
   apiFunction: v5.Function,
   /**
@@ -158,6 +168,24 @@ export interface SaasArgs extends ComponentArgs<typeof parts> {
     selfServe?: boolean;
   };
   /**
+   * How invitations work. A member with `members:write` invites someone by
+   * email, and they join the tenant when they sign up, or sign in, with
+   * that email.
+   */
+  invitations?: {
+    /**
+     * How long an invitation can be taken up for.
+     * @default `"7 days"`
+     */
+    expiresIn?: Duration;
+    /**
+     * How many invitations a tenant can have waiting at once. It keeps a
+     * tenant from sending a great many emails from your domain.
+     * @default `100`
+     */
+    limit?: number;
+  };
+  /**
    * Where the built-in routes go on the API, like `/saas`. They're at the
    * root of the API by default. Required with an API you pass in
    * `existing`, so they don't catch its other paths; `"/"` puts them at its
@@ -193,8 +221,8 @@ export interface SaasArgs extends ComponentArgs<typeof parts> {
    */
   handlers?: string;
   /**
-   * Where users, tenants and memberships are kept. `"dynamo"` creates three
-   * tables. `"custom"` creates none: pass your own store to
+   * Where users, tenants, memberships and invitations are kept. `"dynamo"`
+   * creates four tables. `"custom"` creates none: pass your own store to
    * `createHandlers()` in `handlers`, and `link` what it needs.
    * @default `"dynamo"`
    */
@@ -208,7 +236,8 @@ export interface SaasArgs extends ComponentArgs<typeof parts> {
    *
    * Cognito's emails, like the sign-up code and a password reset, are sent
    * from it, from the same templates as the app's. The app sends its own when
-   * someone is added to a tenant, their role changes or they're removed.
+   * someone is invited or added to a tenant, their role changes or they're
+   * removed.
    * Change what any of them says with `templates` in `createHandlers()`.
    *
    * Without it, the user pool sends Cognito's emails itself, which allows
@@ -257,8 +286,23 @@ export interface SaasArgs extends ComponentArgs<typeof parts> {
     /** Your app's URL, which the emails link to. */
     url?: Input<string>;
     /**
+     * The URL of your logo, shown at the top of each email. Use a PNG or
+     * JPEG at a public `https` URL: most email clients don't show SVG, or
+     * an image that's part of the email. It's shown 40 pixels high.
+     *
+     * For more than a logo and a color, give `createHandlers()` a `layout`
+     * of your own.
+     * @example `"https://acme.com/logo.png"`
+     */
+    logo?: Input<string>;
+    /**
+     * The color of the links, as a hex color.
+     * @default `"#2563eb"`
+     */
+    color?: string;
+    /**
      * The app's own emails, each on or off.
-     * @default `{ welcome: false, memberAdded: true, roleChanged: true, memberRemoved: true }`
+     * @default `{ welcome: false, invitation: true, memberAdded: true, roleChanged: true, memberRemoved: true }`
      */
     messages?: { [message in BuiltInMessage]?: boolean };
   };
@@ -324,6 +368,10 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
           ", ",
         )}.`,
       );
+    const invitations = invitationsOf(
+      plain(args.invitations ?? {}, "invitations"),
+      name,
+    );
 
     // The tables
     const tables =
@@ -345,6 +393,14 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
                 byUser: { hashKey: "userId", rangeKey: "tenantId" },
               },
             }),
+            invitations: this.part("invitations", {
+              fields: { tenantId: "string", email: "string" },
+              primaryIndex: { hashKey: "tenantId", rangeKey: "email" },
+              globalIndexes: {
+                byEmail: { hashKey: "email", rangeKey: "tenantId" },
+              },
+              ttl: "expires",
+            }),
           }
         : undefined;
 
@@ -354,9 +410,10 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
           tables.users.name,
           tables.tenants.name,
           tables.memberships.name,
-        ]).apply(([users, tenants, memberships]) => ({
+          tables.invitations.name,
+        ]).apply(([users, tenants, memberships, invitations]) => ({
           type: "dynamo" as const,
-          tables: { users, tenants, memberships },
+          tables: { users, tenants, memberships, invitations },
         }))
       : output({ type: "custom" as const });
     // Email
@@ -371,11 +428,12 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
         selfServe: args.tenants?.selfServe ?? true,
         path,
         disabled,
+        invitations,
         email,
       } satisfies SaasConfig),
     );
     this.links = [
-      ...(tables ? [tables.users, tables.tenants, tables.memberships] : []),
+      ...(tables ? Object.values(tables) : []),
       ...(mail ? [mail.email] : []),
       ...(plain(args.link, "link") ?? []),
     ];
@@ -567,6 +625,7 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       this.nodes.users,
       this.nodes.tenants,
       this.nodes.memberships,
+      this.nodes.invitations,
     ].filter((table) => table !== undefined);
     return {
       properties: {
@@ -624,15 +683,22 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       ? all([email.nodes.identity.arn, verification.id]).apply(([arn]) => arn)
       : email.nodes.identity.arn;
     const appName = args.name ?? displayNameOf(from) ?? name;
+    const color = plain(args.color, "email.color");
+    if (color !== undefined && !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(color))
+      throw new Error(
+        `The "${name}" Saas component's "email.color" has to be a hex color, like "#2563eb".`,
+      );
     return {
       email,
-      config: all([email.configSet, args.url]).apply(
-        ([configurationSet, url]): EmailConfig => ({
+      config: all([email.configSet, args.url, args.logo]).apply(
+        ([configurationSet, url, logo]): EmailConfig => ({
           from,
           replyTo: args.replyTo,
           configurationSet,
           appName,
           url,
+          logo,
+          color,
           messages,
         }),
       ),
@@ -667,6 +733,26 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       ),
     };
   }
+}
+
+function invitationsOf(
+  args: NonNullable<SaasArgs["invitations"]>,
+  name: string,
+): InvitationConfig {
+  const expiresIn =
+    args.expiresIn === undefined
+      ? DEFAULT_INVITATIONS.expiresIn
+      : secondsOf(args.expiresIn);
+  if (!expiresIn)
+    throw new Error(
+      `The "${name}" Saas component's "invitations.expiresIn" has to be a number of hours or days, like "7 days".`,
+    );
+  const limit = args.limit ?? DEFAULT_INVITATIONS.limit;
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new Error(
+      `The "${name}" Saas component's "invitations.limit" has to be a whole number, 1 or more.`,
+    );
+  return { expiresIn, limit };
 }
 
 // The address in "Acme <hello@acme.com>", or "hello@acme.com" as it is

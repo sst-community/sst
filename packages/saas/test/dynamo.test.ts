@@ -5,6 +5,7 @@ const tables = {
   users: "Users",
   tenants: "Tenants",
   memberships: "Memberships",
+  invitations: "Invitations",
 };
 
 // A client that records each command, and answers with what `reply` returns
@@ -24,6 +25,16 @@ function fake(reply: (name: string, input: any) => any = () => ({})) {
 
 const error = (name: string, extra: object = {}) =>
   Object.assign(new Error(name), { name, ...extra });
+
+const invitation = {
+  tenantId: "t",
+  email: "dan@example.com",
+  role: "member",
+  invitedBy: "ann",
+  expiresAt: "2026-10-25T00:00:00.000Z",
+  createdAt: "2026-10-18T00:00:00.000Z",
+  updatedAt: "2026-10-18T00:00:00.000Z",
+};
 
 const user = {
   id: "ann",
@@ -169,29 +180,39 @@ describe("the DynamoDB store", () => {
     expect(calls).toBe(2);
   });
 
-  it("deletes a tenant's memberships, then the tenant", async () => {
-    const { store, sent } = fake((name) =>
-      name === "Query"
-        ? {
-            Items: ["ann", "bob"].map((userId) =>
-              toItem({
-                tenantId: "t",
-                userId,
-                role: "owner",
-                createdAt: "",
-                updatedAt: "",
-              }),
-            ),
-          }
-        : {},
-    );
+  it("deletes a tenant's memberships and invitations, then the tenant", async () => {
+    const { store, sent } = fake((name, input) => {
+      if (name !== "Query") return {};
+      if (input.TableName === "Invitations")
+        return { Items: [toItem({ ...invitation, tenantId: "t" })] };
+      return {
+        Items: ["ann", "bob"].map((userId) =>
+          toItem({
+            tenantId: "t",
+            userId,
+            role: "owner",
+            createdAt: "",
+            updatedAt: "",
+          }),
+        ),
+      };
+    });
     await store.deleteTenant("t");
     expect(sent.map((s) => s.name)).toEqual([
       "Query",
+      "Query",
+      "BatchWriteItem",
       "BatchWriteItem",
       "DeleteItem",
     ]);
-    expect(sent[1].input.RequestItems.Memberships).toHaveLength(2);
+    expect(sent[2].input.RequestItems.Memberships).toHaveLength(2);
+    expect(sent[3].input.RequestItems.Invitations).toEqual([
+      {
+        DeleteRequest: {
+          Key: { tenantId: { S: "t" }, email: { S: "dan@example.com" } },
+        },
+      },
+    ]);
   });
 
   it("pages with a cursor it can read back", async () => {
@@ -215,5 +236,72 @@ describe("the DynamoDB store", () => {
       IndexName: "byEmail",
       ExpressionAttributeValues: { ":email": { S: "ann@example.com" } },
     });
+  });
+
+  it("keeps an invitation with when it expires for the TTL, and reads it back without it", async () => {
+    const { store, sent } = fake((name) =>
+      name === "GetItem"
+        ? { Item: sent[0].input.Item }
+        : name === "Query"
+          ? { Items: [sent[0].input.Item] }
+          : {},
+    );
+    await store.putInvitation(invitation);
+    expect(sent[0].input).toMatchObject({ TableName: "Invitations" });
+    // Seconds since 1970
+    expect(sent[0].input.Item.expires).toEqual({ N: "1792886400" });
+
+    expect(await store.getInvitation("t", "Dan@Example.com")).toEqual(
+      invitation,
+    );
+    expect(sent[1].input.Key).toEqual({
+      tenantId: { S: "t" },
+      email: { S: "dan@example.com" },
+    });
+    expect(await store.findInvitations("Dan@Example.com")).toEqual([
+      invitation,
+    ]);
+    expect(sent[2].input).toMatchObject({
+      IndexName: "byEmail",
+      ExpressionAttributeValues: { ":email": { S: "dan@example.com" } },
+    });
+  });
+
+  it("takes up an invitation in one transaction, only once", async () => {
+    const membership = {
+      tenantId: "t",
+      userId: "dan",
+      role: "member",
+      createdAt: "",
+      updatedAt: "",
+    };
+    const { store, sent } = fake();
+    expect(await store.acceptInvitation(invitation, membership)).toBe(true);
+    const [remove, put] = sent[0].input.TransactItems;
+    expect(remove.Delete).toMatchObject({
+      TableName: "Invitations",
+      ConditionExpression: "attribute_exists(#email)",
+    });
+    expect(put.Put).toMatchObject({
+      TableName: "Memberships",
+      ConditionExpression: "attribute_not_exists(#userId)",
+    });
+
+    // Taken up already, or they're a member
+    const taken = fake(() =>
+      error("TransactionCanceledException", {
+        CancellationReasons: [
+          { Code: "ConditionalCheckFailed" },
+          { Code: "None" },
+        ],
+      }),
+    );
+    expect(await taken.store.acceptInvitation(invitation, membership)).toBe(
+      false,
+    );
+    const failing = fake(() => error("ProvisionedThroughputExceededException"));
+    await expect(
+      failing.store.acceptInvitation(invitation, membership),
+    ).rejects.toThrow();
   });
 });

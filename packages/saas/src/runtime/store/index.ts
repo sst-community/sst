@@ -13,7 +13,7 @@ export function createStore(config: StoreConfig): Store {
       return dynamoStore({ tables: config.tables });
     case "custom":
       throw new Error(
-        `The component's "storage" is "custom", so it has no store of its own. Pass yours to createHandlers({ store }) or route(handler, { store }).`,
+        `The component's "storage" is "custom", so it has no store of its own. Pass yours to createHandlers({ store }), route(handler, { store }) or createMailer({ store }).`,
       );
   }
 }

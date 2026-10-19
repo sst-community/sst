@@ -35,6 +35,25 @@ export interface Membership {
   updatedAt: string;
 }
 
+/**
+ * Someone invited to a tenant by email, who becomes a member when they sign
+ * in with that email, verified. There's one for each email in a tenant.
+ */
+export interface Invitation {
+  tenantId: string;
+  /** Lowercase. */
+  email: string;
+  /** The role they'll have. */
+  role: string;
+  /** The user who invited them, the last time. */
+  invitedBy: string;
+  /** When it can no longer be taken up. */
+  expiresAt: string;
+  createdAt: string;
+  /** When it was last sent. */
+  updatedAt: string;
+}
+
 /** A change to a record. A field set to `null` is removed. */
 export type Patch<T> = { [K in keyof T]?: T[K] | null };
 
@@ -84,7 +103,7 @@ export interface Store {
   /** Create a tenant with its first member, all or nothing. */
   createTenant(tenant: Tenant, owner: Membership): Promise<void>;
   updateTenant(id: string, patch: TenantPatch): Promise<Tenant | undefined>;
-  /** Delete a tenant and its memberships. */
+  /** Delete a tenant, its memberships and its invitations. */
   deleteTenant(id: string): Promise<void>;
   listTenants(page?: PageArgs): Promise<Page<Tenant>>;
 
@@ -99,4 +118,26 @@ export interface Store {
   /** Add a member, or change their role. */
   putMembership(membership: Membership): Promise<void>;
   deleteMembership(tenantId: string, userId: string): Promise<void>;
+
+  getInvitation(
+    tenantId: string,
+    email: string,
+  ): Promise<Invitation | undefined>;
+  /** Every invitation to a tenant, expired ones too until they're removed. */
+  listInvitations(tenantId: string): Promise<Invitation[]>;
+  /** Every invitation to an email, in any tenant. */
+  findInvitations(email: string): Promise<Invitation[]>;
+  /** Invite someone, or invite them again: it replaces one to the same email. */
+  putInvitation(invitation: Invitation): Promise<void>;
+  deleteInvitation(tenantId: string, email: string): Promise<void>;
+  /**
+   * Turn an invitation into a membership, all or nothing. Returns `false`,
+   * and changes nothing, when the invitation is gone or there's a
+   * membership already, so that two triggers taking it up at once add the
+   * member once.
+   */
+  acceptInvitation(
+    invitation: Invitation,
+    membership: Membership,
+  ): Promise<boolean>;
 }

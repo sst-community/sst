@@ -86,7 +86,7 @@ export function createHandlers(options: HandlerOptions = {}) {
     async customMessage(event: CognitoTriggerEvent) {
       const { config, mail } = setup();
       if (!mail || !config.email) return event;
-      const { app, templates } = mail;
+      const { templates } = mail;
       const attributes = event.request.userAttributes;
       const user = { email: attributes.email, name: attributes.name };
       const code = event.request.codeParameter ?? "{####}";
@@ -96,21 +96,20 @@ export function createHandlers(options: HandlerOptions = {}) {
         switch (event.triggerSource) {
           case "CustomMessage_SignUp":
           case "CustomMessage_ResendCode":
-            return templates.signUp({ code, user, app });
+            return templates.signUp({ code, user });
           case "CustomMessage_ForgotPassword":
-            return templates.forgotPassword({ code, user, app });
+            return templates.forgotPassword({ code, user });
           case "CustomMessage_AdminCreateUser":
             return templates.adminInvitation({
               username,
               password: code,
               user,
-              app,
             });
           case "CustomMessage_UpdateUserAttribute":
           case "CustomMessage_VerifyUserAttribute":
-            return templates.verifyEmail({ code, user, app });
+            return templates.verifyEmail({ code, user });
           case "CustomMessage_Authentication":
-            return templates.signInCode({ code, user, app });
+            return templates.signInCode({ code, user });
         }
       })();
       if (!message) return event;

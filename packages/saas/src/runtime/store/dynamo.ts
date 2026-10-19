@@ -13,29 +13,49 @@ import {
   type QueryCommandInput,
   type WriteRequest,
 } from "@aws-sdk/client-dynamodb";
-import type { Membership, Page, PageArgs, Store, Tenant, User } from "./types";
+import type {
+  Invitation,
+  Membership,
+  Page,
+  PageArgs,
+  Store,
+  Tenant,
+  User,
+} from "./types";
 
 type Item = Record<string, AttributeValue>;
 
 export interface DynamoStoreArgs {
-  /** The names of the three tables. */
-  tables: { users: string; tenants: string; memberships: string };
+  /** The names of the four tables. */
+  tables: {
+    users: string;
+    tenants: string;
+    memberships: string;
+    invitations: string;
+  };
   /** The client to use. One is created for the region the code runs in. */
   client?: DynamoDBClient;
 }
 
-/** The index on the users table, by email. */
+/** The index on the users table, and the one on the invitations table, by email. */
 export const EMAIL_INDEX = "byEmail";
 /** The index on the memberships table, by user. */
 export const USER_INDEX = "byUser";
+/**
+ * The invitations table's TTL attribute: when an invitation expires, in
+ * seconds since 1970, so that DynamoDB removes it.
+ */
+export const TTL_ATTRIBUTE = "expires";
 
 /**
- * A store on three DynamoDB tables:
+ * A store on four DynamoDB tables:
  *
  * - users, keyed by `id`, with an index on `email`
  * - tenants, keyed by `id`
  * - memberships, keyed by `tenantId` and `userId`, with an index on
  *   `userId` and `tenantId`
+ * - invitations, keyed by `tenantId` and `email`, with an index on `email`
+ *   and `tenantId`, and a TTL on `expires`
  */
 export function dynamoStore(args: DynamoStoreArgs): Store {
   const { tables } = args;
@@ -134,7 +154,10 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
       return update<Tenant>(tables.tenants, { id: { S: id } }, patch);
     },
     async deleteTenant(id) {
-      const members = await this.listMembers(id);
+      const [members, invitations] = await Promise.all([
+        this.listMembers(id),
+        this.listInvitations(id),
+      ]);
       await batchWrite(
         tables.memberships,
         members.map((membership) => ({
@@ -144,6 +167,12 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
               userId: { S: membership.userId },
             },
           },
+        })),
+      );
+      await batchWrite(
+        tables.invitations,
+        invitations.map((invitation) => ({
+          DeleteRequest: { Key: invitationKey(invitation) },
         })),
       );
       await db().send(
@@ -198,7 +227,106 @@ export function dynamoStore(args: DynamoStoreArgs): Store {
         }),
       );
     },
+
+    async getInvitation(tenantId, email) {
+      const item = await get<Record<string, unknown>>(
+        tables.invitations,
+        invitationKey({ tenantId, email }),
+      );
+      return item && invitationOf(item);
+    },
+    async listInvitations(tenantId) {
+      const items = await query<Record<string, unknown>>({
+        TableName: tables.invitations,
+        KeyConditionExpression: "#tenantId = :tenantId",
+        ExpressionAttributeNames: { "#tenantId": "tenantId" },
+        ExpressionAttributeValues: { ":tenantId": { S: tenantId } },
+        ConsistentRead: true,
+      });
+      return items.map(invitationOf);
+    },
+    async findInvitations(email) {
+      // An index is only read eventually consistent
+      const items = await query<Record<string, unknown>>({
+        TableName: tables.invitations,
+        IndexName: EMAIL_INDEX,
+        KeyConditionExpression: "#email = :email",
+        ExpressionAttributeNames: { "#email": "email" },
+        ExpressionAttributeValues: { ":email": { S: email.toLowerCase() } },
+      });
+      return items.map(invitationOf);
+    },
+    async putInvitation(invitation) {
+      await db().send(
+        new PutItemCommand({
+          TableName: tables.invitations,
+          Item: toItem({
+            ...invitation,
+            [TTL_ATTRIBUTE]: Math.floor(
+              new Date(invitation.expiresAt).getTime() / 1000,
+            ),
+          }),
+        }),
+      );
+    },
+    async deleteInvitation(tenantId, email) {
+      await db().send(
+        new DeleteItemCommand({
+          TableName: tables.invitations,
+          Key: invitationKey({ tenantId, email }),
+        }),
+      );
+    },
+    async acceptInvitation(invitation, membership) {
+      try {
+        await db().send(
+          new TransactWriteItemsCommand({
+            TransactItems: [
+              {
+                Delete: {
+                  TableName: tables.invitations,
+                  Key: invitationKey(invitation),
+                  ConditionExpression: "attribute_exists(#email)",
+                  ExpressionAttributeNames: { "#email": "email" },
+                },
+              },
+              {
+                Put: {
+                  TableName: tables.memberships,
+                  Item: toItem(membership),
+                  ConditionExpression: "attribute_not_exists(#userId)",
+                  ExpressionAttributeNames: { "#userId": "userId" },
+                },
+              },
+            ],
+          }),
+        );
+        return true;
+      } catch (error: any) {
+        if (
+          error?.name === "TransactionCanceledException" &&
+          error.CancellationReasons?.some(
+            (reason: any) => reason?.Code === "ConditionalCheckFailed",
+          )
+        )
+          return false;
+        throw error;
+      }
+    },
   };
+
+  function invitationKey(invitation: { tenantId: string; email: string }) {
+    return {
+      tenantId: { S: invitation.tenantId },
+      email: { S: invitation.email.toLowerCase() },
+    };
+  }
+
+  // The record, without the attribute only DynamoDB reads
+  function invitationOf(item: Record<string, unknown>) {
+    const { [TTL_ATTRIBUTE]: _, ...invitation } = item;
+    return invitation as unknown as Invitation;
+  }
 
   function newTenant(tenant: Tenant) {
     return {

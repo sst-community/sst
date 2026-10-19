@@ -30,10 +30,18 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 | 2026-10-18 | **SES by default, with a sender you can replace.** `createHandlers({ email: { send } })` sends the app's emails with another provider. Cognito's always go through SES. |
 | 2026-10-18 | **`Email` was ported to V5 first**, so the component takes it as a part, with `transform` and `existing` like any other. It went on `v5` as its own commit (`6328b507d`). |
 | 2026-10-18 | **One set of templates for Cognito's emails and the app's**: plain functions that return `{ subject, html, text }`, with no templating library. Built in: `memberAdded`, `roleChanged` and `memberRemoved` on, `welcome` off. A send that fails is logged, and never fails the change it's about. |
+| 2026-10-18 | **Invitations are records of their own, in a fourth table**, keyed by `tenantId` and `email`, with an index `byEmail` and a TTL. This goes past the three tables decided at the start, in the same way: a table for each kind of record. Keeping them in the memberships table would have meant a membership whose `userId` is an email, which the Postgres store couldn't hold with a foreign key to users. A tenant's invitations go with it when it's deleted. |
+| 2026-10-18 | **An invitation is taken up when the user pool issues tokens to that email, verified**: on sign-up, through the post confirmation trigger, and at every sign-in and refresh, through the pre token generation trigger. That's the same for someone who has signed up already, so the answer to `POST /tenant/invitations` never says whether an email has an account. It costs one query of the index at each token. There's no accepting or declining: signing in is the acceptance, as being added already was. The client can refresh its tokens to join at once. |
+| 2026-10-18 | **Taking one up is a transaction**: delete the invitation if it's there, and put the membership if there's none. The two triggers can both try, and the member is added, and told, once. |
+| 2026-10-18 | **Someone who signs up through an invitation starts in that tenant**, the most recent one if there are several, even with a personal tenant. Someone who had signed up already stays where they are. |
+| 2026-10-18 | **What's in the package, and what the app brings**, asked for by the user: everything packaged is ours to maintain, so it shouldn't be opinionated. The rule: the package does what needs its own data or its own wiring (the user pool and triggers, the records and their rules, invitations, sending email, and finding who to email in a tenant). A decision about the product is left to the app, with a place to plug it in: hooks, `handlers`, `templates`, `layout`, `send`, `store`, `routes`, `transform`. Each thing it ships has one way to replace it, and it doesn't grow a setting where replacing will do. See [What's in the package](#whats-in-the-package). |
+| 2026-10-18 | **Branding is a logo and a link color, and the rest is a `layout`.** Those two are what every app changes. A footer, fonts, legal text or dark mode would each be a setting to keep working in every email client, so they're a layout of the app's own, one function that every email goes through, Cognito's too. Templates are given the layout, so one the app replaces still matches. The logo is a URL the app hosts: the component doesn't upload or serve images. |
+| 2026-10-18 | **`notify()` finds the people and sends, and nothing more**: users by id, or a tenant's members whose role has a permission, at their verified email, one at a time, reporting who was sent, skipped and failed. What to notify about, preferences, unsubscribing, digests and queues are the app's. |
+| 2026-10-18 | **Invitations can be sent to any address, so they're limited**: at most `invitations.limit` waiting in a tenant (100), and the same address no more than once a minute (`429 too_soon`). They expire after `invitations.expiresIn` (7 days). Inviting again replaces the invitation and sends it again. `POST /tenant/members` stays, for adding someone who has signed up, at once. The `invitation` email is on by default, and `memberAdded` isn't sent to someone who took up an invitation. |
 
 ## Status
 
-**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, and 99 tests: 32 of the tenancy rules on the in-memory store, 20 of the Hono app, `route()` and the triggers, 23 of the component under `mock()`, 16 of email, and 8 of the DynamoDB store against a fake client. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
+**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, invitations, branding, `notify()`, and 132 tests: 48 of the tenancy rules on the in-memory store, 23 of the Hono app, `route()` and the triggers, 23 of the component under `mock()`, 28 of email, and 10 of the DynamoDB store against a fake client. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
 
 **Fixed on `v5` on the way** (`e53329841`): a part that's a component, looked up by id, lost its parent and was looked up twice. See the [log](https://github.com/sst-community/sst/blob/v5/docs/plans/v5-progress.md). The package still works around it, as it builds against `5.0.0-alpha.2`.
 
@@ -50,14 +58,14 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 | `userPool` | `v5.CognitoUserPool`, with the two triggers |
 | `client` | `many(v5.CognitoUserPoolClient)`, one for each name in `clients`, `Web` by default |
 | `api` | `v5.ApiGatewayV2`, with a JWT authorizer whose audiences are the clients |
-| `users`, `tenants`, `memberships` | `optional(v5.Dynamo)`, not created for `"custom"` storage |
+| `users`, `tenants`, `memberships`, `invitations` | `optional(v5.Dynamo)`, not created for `"custom"` storage |
 | `apiFunction`, `postConfirmation`, `preTokenGeneration` | `v5.Function` |
 | `route`, `integration`, `permission` | `many(apigatewayv2.Route)`, one for each method under `{path}` and `{path}/admin`; the one `apigatewayv2.Integration` they send requests to; and the `lambda.Permission` that lets API Gateway invoke `apiFunction` |
 | `triggerPermission` | `many(lambda.Permission)`, only for a user pool passed in `existing` |
 
 The functions are linked to the tables, not to the component: a part that waits for its own component is never created. `saas.route()` does the same for routes of the app's own. A function outside the component can link it, and gets `SAAS_CONFIG` and access to the tables.
 
-What the functions are told is one JSON value in `SAAS_CONFIG`: where the store is, the roles, the tenant settings, the path and the routes turned off.
+What the functions are told is one JSON value in `SAAS_CONFIG`: where the store is, the roles, the tenant settings, how invitations work, the path, the routes turned off, and how emails are sent.
 
 ### Records
 
@@ -66,8 +74,23 @@ What the functions are told is one JSON value in `SAAS_CONFIG`: where the store 
 | User | `id`, the user's `sub` | `email` (verified, lowercase), `name`, `activeTenantId`, `platformAdmin`, `metadata` |
 | Tenant | `id`, a UUID | `name`, `personal`, `createdBy`, `metadata` |
 | Membership | `tenantId`, `userId` | `role` |
+| Invitation | `tenantId`, `email` (lowercase) | `role`, `invitedBy`, `expiresAt`. In DynamoDB, also `expires`, the same time in seconds, for the TTL |
 
 Each has `createdAt` and `updatedAt`. `metadata` is for the app's own fields, and only platform admins and the app's code change it. Creating a user with their personal tenant is one transaction, and so is creating a tenant with its owner. A user created twice, as the two triggers can do at once, is created once.
+
+### What's in the package
+
+| In the package | Why it's here | Replaced with |
+| --- | --- | --- |
+| The user pool, its clients and triggers, the API and its authorizer | AWS wiring that has to fit together | `transform`, `existing` |
+| Users, tenants, memberships, invitations, and the rules on them | The data model everything else reads | `store`, `routes`, hooks |
+| Tokens with the tenant, role and scopes | Needs the records, at sign-in | `claims`, `handlers` |
+| Sending email: SES, Cognito's emails, the emails about its own changes | Wired to the user pool and to its own changes | `send`, `templates`, `messages` |
+| One plain layout, with a logo and a color | Every app needs its emails to look like it | `layout` |
+| `notify()` | Only it knows who's in a tenant, with which role | Your own lookup and `send` |
+| A typed client for its routes (next) | It's the API's own shape | Calling the routes yourself |
+
+Not in the package: which notifications to send, notification settings, unsubscribing, digests, queues, in-app notifications, an admin UI, UI components, billing. Each is the app's, started from the hooks, or from events once there are some.
 
 ### A Postgres store
 
@@ -84,7 +107,14 @@ create table memberships (tenant_id text references tenants on delete cascade, u
   role text not null, created_at timestamptz not null, updated_at timestamptz not null,
   primary key (tenant_id, user_id));
 create index memberships_user on memberships (user_id);
+create table invitations (tenant_id text references tenants on delete cascade, email text,
+  role text not null, invited_by text not null, expires_at timestamptz not null,
+  created_at timestamptz not null, updated_at timestamptz not null,
+  primary key (tenant_id, email));
+create index invitations_email on invitations (email);
 ```
+
+Postgres has no TTL, so expired invitations are left until they're found, or a scheduled `delete ... where expires_at < now()`.
 
 Two ways to reach it, to choose between when it's built:
 
@@ -119,13 +149,21 @@ In the lab account on 2026-10-18, with `sst5` built from `v5` at `e53329841`. Th
 - No function logged an error. The custom message trigger took 2 to 8 ms warm. `sst diff` then showed no changes.
 - Cognito sends one email of its own to `success@simulator.amazonses.com` when a user pool is set up with SES.
 
-Still not checked: a user pool and an API passed in `existing`, the hosted UI and federated sign-in, an email-address `sender`, and the AWS SDK's retries under load.
+**Invitations**, in a third deploy the same day, with `sst5` built from `v5` at `6328b507d`, again sending only to the mailbox simulator. The lab confirms sign-ups without a code, so it marked each email verified, as entering the code does.
+
+- The invitations table had its `byEmail` index and the TTL on `expires`, and each item's `expires` was its `expiresAt` in seconds.
+- An invitation to someone who had signed up came back the same as one to someone who hadn't. Sending one again at once got a `429`, a role that isn't one and an address that isn't one a `400`, and revoking one, with the email encoded in the path, a `204`, then a `404`.
+- Someone who signed up with an invited email was a member once the post confirmation trigger had run, and their first tokens were for that tenant, with the invitation's role.
+- Someone who had signed up already joined at their next token refresh, through the pre token generation trigger, and their tokens stayed on the tenant they were in.
+- SES sent the invitation to each address, and no "You were added" email to the two who took theirs up.
+- No function logged an error. The pre token generation trigger took 10 to 26 ms warm, and 84 ms for the refresh that took up an invitation; post confirmation took 301 ms for the sign-up that took one up and sent a welcome email. `sst diff` then showed no changes.
+
+Still not checked: a user pool and an API passed in `existing`, the hosted UI and federated sign-in, an email-address `sender`, DynamoDB removing an expired invitation (it can take a few days), and the AWS SDK's retries under load.
 
 ## Next
 
 - **`5.0.0-alpha.3`**, then the package's `sst` dev dependency moves to it and the workaround for the lookup goes.
-- **Invitations**: a pending membership by email, taken up when that email is verified, sent with the `email` the component has.
-- **A frontend client**, with typed calls for the built-in routes and a `switchTenant()` that refreshes the tokens.
+- **A frontend client**, with typed calls for the built-in routes, a `switchTenant()` that refreshes the tokens, and a way to refresh them to take up an invitation without waiting for the next refresh.
 - **The Postgres store.**
 - **Events on a bus**, as well as the hooks.
 - **A template for package repos**, made from this one, and the `google-protobuf` pin in the package guide.
@@ -135,6 +173,8 @@ Still not checked: a user pool and an API passed in `existing`, the hosted UI an
 
 - **The name.** `Saas` and `@sst-community/saas` are working names.
 - **One current tenant for each user**, not for each tab. A tenant given with each request would need its own check, as the scopes in the token would be for another tenant.
-- **Adding a member by email tells the caller whether that email has signed up.** Fine for most B2B apps. It would go with invitations.
+- **Adding a member by email tells the caller whether that email has signed up.** Invitations don't, so an app that cares can turn `POST /tenant/members` off. Should it be off by default?
+- **Nothing tells the one who invited** that their invitation was taken up. An `invitationAccepted` email, off by default, would.
+- **No accept or decline** for someone who has signed up already: they join at their next token. An app that wants them to choose would need `GET /me/invitations` and routes to accept and decline.
 - **The AWS SDK is bundled** into each function. Leaving `@aws-sdk/*` out of the bundle would use the runtime's copy and cut it to a tenth, at the cost of running a version the package wasn't tested with.
 - **The first platform admin** is made by hand, with a command in the README. An arg naming them would be easier, and would put an email in the config.

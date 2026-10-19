@@ -83,6 +83,15 @@ export function saasApp(options: SaasAppOptions = {}) {
       return c.body(null, 204);
     },
 
+    "GET /tenant/invitations": async (c) =>
+      c.json(await rules(c).invitations(who(c), tenantOf(c))),
+    "POST /tenant/invitations": async (c) =>
+      c.json(await rules(c).invite(who(c), tenantOf(c), await body(c)), 201),
+    "DELETE /tenant/invitations/{email}": async (c) => {
+      await rules(c).revokeInvitation(who(c), tenantOf(c), param(c, "email"));
+      return c.body(null, 204);
+    },
+
     "GET /admin/users": async (c) =>
       c.json(await rules(c).admin.users(who(c), page(c))),
     "PATCH /admin/users/{userId}": async (c) =>

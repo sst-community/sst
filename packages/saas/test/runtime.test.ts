@@ -125,6 +125,37 @@ describe("the built-in routes", () => {
     expect(await store.getMembership(tenant.id, "bob")).toBeUndefined();
   });
 
+  it("invite by email, list the invitations and revoke one", async () => {
+    const tenant = await (
+      await request("POST", "/tenants", token("ann"), { name: "Acme" })
+    ).json();
+    const ann = token("ann", tenant.id);
+
+    const sent = await request("POST", "/tenant/invitations", ann, {
+      email: "dan+test@example.com",
+      role: "admin",
+    });
+    expect(sent.status).toBe(201);
+    expect(await sent.json()).toMatchObject({
+      email: "dan+test@example.com",
+      role: "admin",
+      invitedBy: "ann",
+    });
+    const listed = await request("GET", "/tenant/invitations", ann);
+    expect((await listed.json()).map((i: any) => i.email)).toEqual([
+      "dan+test@example.com",
+    ]);
+
+    // The email is in the path, encoded
+    const revoked = await request(
+      "DELETE",
+      `/tenant/invitations/${encodeURIComponent("dan+test@example.com")}`,
+      ann,
+    );
+    expect(revoked.status).toBe(204);
+    expect(store.invitations.size).toBe(0);
+  });
+
   it("answer with the error's status and code", async () => {
     const res = await request("POST", "/tenants", token("ann"), { name: "" });
     expect(res.status).toBe(400);
@@ -346,6 +377,30 @@ describe("the triggers", () => {
     ]);
   });
 
+  it("put the tenant someone was invited to in their first tokens", async () => {
+    const { tenancy } = await import("../src/runtime/tenancy");
+    const t = tenancy({ store, config: config() });
+    await t.provision({ id: "bob" });
+    const tenant = await t.createTenant({ id: "bob" }, { name: "Team" });
+    await t.invite({ id: "bob" }, tenant.id, {
+      email: "ann@example.com",
+      role: "admin",
+    });
+
+    const { postConfirmation, preTokenGeneration } = createHandlers({
+      store,
+      config: config(),
+    });
+    await postConfirmation(trigger("PostConfirmation_ConfirmSignUp", ann));
+    const result: any = await preTokenGeneration(
+      trigger("TokenGeneration_Authentication", ann),
+    );
+    expect(
+      result.response.claimsAndScopeOverrideDetails.accessTokenGeneration
+        .claimsToAddOrOverride,
+    ).toEqual({ tenant_id: tenant.id, tenant_role: "admin" });
+  });
+
   it("answer version 1 of the event with text claims in the ID token", async () => {
     const { preTokenGeneration } = createHandlers({
       store,
@@ -371,10 +426,14 @@ describe("the api handler", () => {
     else process.env[CONFIG_ENV] = original;
   });
 
-  // What API Gateway sends for a GET to a path, through `GET /saas/{proxy+}`
-  const gatewayEvent = (path: string) => ({
+  // What API Gateway sends for a request to a path, through `{method} /saas/{proxy+}`
+  const gatewayEvent = (
+    path: string,
+    method = "GET",
+    claims: Record<string, string> = { sub: "ann" },
+  ) => ({
     version: "2.0",
-    routeKey: "GET /saas/{proxy+}",
+    routeKey: `${method} /saas/{proxy+}`,
     rawPath: path,
     rawQueryString: "",
     headers: { host: "api.example.com" },
@@ -386,18 +445,18 @@ describe("the api handler", () => {
       domainName: "api.example.com",
       domainPrefix: "api",
       http: {
-        method: "GET",
+        method,
         path,
         protocol: "HTTP/1.1",
         sourceIp: "127.0.0.1",
         userAgent: "test",
       },
       requestId: "id",
-      routeKey: "GET /saas/{proxy+}",
+      routeKey: `${method} /saas/{proxy+}`,
       stage: "$default",
       time: "",
       timeEpoch: 0,
-      authorizer: { jwt: { claims: { sub: "ann" }, scopes: null } },
+      authorizer: { jwt: { claims, scopes: null } },
     } as any,
   });
 
@@ -414,6 +473,27 @@ describe("the api handler", () => {
     const missing = await api(gatewayEvent("/saas/nope"));
     expect(missing.statusCode).toBe(404);
     expect(JSON.parse(missing.body).error.code).toBe("not_found");
+  });
+
+  it("reads an email in the path as API Gateway sends it", async () => {
+    const store = memoryStore();
+    const { tenancy } = await import("../src/runtime/tenancy");
+    const t = tenancy({ store, config: config() });
+    const { tenant } = await t.provision({ id: "ann" });
+    await t.invite({ id: "ann" }, tenant!.id, { email: "dan+x@example.com" });
+
+    const { api } = createHandlers({
+      store,
+      config: config({ path: "/saas" }),
+    });
+    const result = await api(
+      gatewayEvent("/saas/tenant/invitations/dan%2Bx%40example.com", "DELETE", {
+        sub: "ann",
+        tenant_id: tenant!.id,
+      }),
+    );
+    expect(result.statusCode).toBe(204);
+    expect(store.invitations.size).toBe(0);
   });
 
   it("says what's missing when it isn't set up", async () => {

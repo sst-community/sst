@@ -42,7 +42,12 @@ export const PLATFORM_ADMIN_SCOPE = "platform/admin";
 export type StoreConfig =
   | {
       type: "dynamo";
-      tables: { users: string; tenants: string; memberships: string };
+      tables: {
+        users: string;
+        tenants: string;
+        memberships: string;
+        invitations: string;
+      };
     }
   | { type: "custom" };
 
@@ -60,13 +65,38 @@ export interface SaasConfig {
   path: string;
   /** The built-in routes that are turned off. */
   disabled: BuiltInRoute[];
+  /** How invitations work. The defaults when it isn't set. */
+  invitations?: InvitationConfig;
   /** How emails are sent, when the component has `email`. */
   email?: EmailConfig;
+}
+
+export interface InvitationConfig {
+  /** How long an invitation can be taken up for, in seconds. */
+  expiresIn: number;
+  /** How many invitations a tenant can have waiting at once. */
+  limit: number;
+}
+
+export const DEFAULT_INVITATIONS: InvitationConfig = {
+  expiresIn: 7 * 24 * 60 * 60,
+  limit: 100,
+};
+
+/** A length of time, like `"7 days"`. */
+export type Duration = `${number} ${"hour" | "hours" | "day" | "days"}`;
+
+/** A duration in seconds, or nothing when it isn't one. */
+export function secondsOf(duration: string): number | undefined {
+  const match = duration.match(/^(\d+) (hour|day)s?$/);
+  if (!match) return undefined;
+  return Number(match[1]) * (match[2] === "hour" ? 3600 : 86400);
 }
 
 /** The emails the component sends itself, after the change each is about. */
 export const MESSAGES = [
   "welcome",
+  "invitation",
   "memberAdded",
   "roleChanged",
   "memberRemoved",
@@ -77,6 +107,7 @@ export type BuiltInMessage = (typeof MESSAGES)[number];
 /** Which of them are sent unless the component says otherwise. */
 export const DEFAULT_MESSAGES: Record<BuiltInMessage, boolean> = {
   welcome: false,
+  invitation: true,
   memberAdded: true,
   roleChanged: true,
   memberRemoved: true,
@@ -92,6 +123,10 @@ export interface EmailConfig {
   appName: string;
   /** The app's URL, for the links in the emails. */
   url?: string;
+  /** The URL of the image at the top of each email. */
+  logo?: string;
+  /** The color of the emails' links. */
+  color?: string;
   messages: Record<BuiltInMessage, boolean>;
 }
 
@@ -116,6 +151,9 @@ export const ROUTES = [
   "POST /tenant/members",
   "PATCH /tenant/members/{userId}",
   "DELETE /tenant/members/{userId}",
+  "GET /tenant/invitations",
+  "POST /tenant/invitations",
+  "DELETE /tenant/invitations/{email}",
   "GET /admin/users",
   "PATCH /admin/users/{userId}",
   "GET /admin/tenants",

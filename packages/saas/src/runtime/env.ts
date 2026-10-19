@@ -52,7 +52,12 @@ export function lazySetup(args: SetupArgs = {}) {
     if (made) return made;
     const config = args.config ?? loadConfig();
     const store = args.store ?? createStore(config.store);
-    const mail = config.email && mailer(config.email, args.email);
+    const mail =
+      config.email &&
+      mailer(config.email, args.email, {
+        store: () => store,
+        roles: config.roles,
+      });
     const hooks = mail
       ? composeHooks(
           emailHooks(mail, store, config.email!.messages),
@@ -69,26 +74,46 @@ export function lazySetup(args: SetupArgs = {}) {
 }
 
 /**
- * Send emails of your own, with the component's sender and templates. It
- * reads the config the first time it's used.
+ * Send emails of your own, from any function that links the component: with
+ * its sender, in its layout, to its users. It reads the config the first
+ * time it's used.
  *
  * ```ts
  * const mail = createMailer();
- * await mail.send({ to, ...mail.templates.welcome({ user, app: mail.app }) });
+ * await mail.notify({
+ *   to: { tenantId, permission: "billing:read" },
+ *   message: () => ({
+ *     subject: "Your invoice is ready",
+ *     ...mail.layout({
+ *       heading: "Your invoice is ready",
+ *       html: ["It's for October."],
+ *       text: ["It's for October."],
+ *       action: { label: "View it", url: invoiceUrl },
+ *     }),
+ *   }),
+ * });
  * ```
  */
 export function createMailer(
-  args: MailerArgs & { config?: SaasConfig } = {},
+  args: MailerArgs & {
+    config?: SaasConfig;
+    /** Where `notify()` finds users. The component's store when it isn't given. */
+    store?: Store;
+  } = {},
 ): Mailer {
   let made: Mailer | undefined;
+  let store = args.store;
   const get = () => {
     if (made) return made;
-    const email = (args.config ?? loadConfig()).email;
-    if (!email)
+    const config = args.config ?? loadConfig();
+    if (!config.email)
       throw new Error(
         `The Saas component has no "email", so there's nothing to send emails from.`,
       );
-    return (made = mailer(email, args));
+    return (made = mailer(config.email, args, {
+      store: () => (store ??= createStore(config.store)),
+      roles: config.roles,
+    }));
   };
   return {
     get app() {
@@ -97,6 +122,8 @@ export function createMailer(
     get templates() {
       return get().templates;
     },
+    layout: (body) => get().layout(body),
     send: (mail) => get().send(mail),
+    notify: (input) => get().notify(input),
   };
 }

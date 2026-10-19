@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ROLES, type SaasConfig } from "../src/config";
 import { config } from "./helpers";
 import { memoryStore } from "../src/runtime/store/memory";
@@ -25,13 +25,20 @@ describe("tenancy", () => {
   const hooks: TenancyHooks = {
     userCreated: ({ user }) => events.push(`userCreated ${user.id}`),
     tenantCreated: ({ tenant }) => events.push(`tenantCreated ${tenant.name}`),
-    memberAdded: ({ membership }) =>
-      events.push(`memberAdded ${membership.userId} ${membership.role}`),
+    memberAdded: ({ membership, by, invitation }) =>
+      events.push(
+        `memberAdded ${membership.userId} ${membership.role}` +
+          (invitation ? `, invited by ${by.id}` : ""),
+      ),
     memberChanged: ({ membership, previous }) =>
       events.push(`memberChanged ${previous.role} ${membership.role}`),
     memberRemoved: ({ membership }) =>
       events.push(`memberRemoved ${membership.userId}`),
     tenantDeleted: ({ tenant }) => events.push(`tenantDeleted ${tenant.name}`),
+    invitationCreated: ({ invitation }) =>
+      events.push(`invitationCreated ${invitation.email}`),
+    invitationRevoked: ({ invitation }) =>
+      events.push(`invitationRevoked ${invitation.email}`),
   };
   const make = (patch?: Partial<SaasConfig>) =>
     tenancy({ store, config: config(patch), hooks });
@@ -334,6 +341,256 @@ describe("tenancy", () => {
       expect(
         (await t.members(cat, tenantId)).map((m) => m.role).sort(),
       ).toEqual(["member", "owner"]);
+    });
+  });
+
+  describe("invitations", () => {
+    const dan = { id: "dan", email: "dan@example.com", name: "Dan" };
+
+    async function team(patch?: Partial<SaasConfig>) {
+      const t = make(patch);
+      for (const user of [ann, bob]) await t.provision(user);
+      const tenant = await t.createTenant(ann, { name: "Team" });
+      events = [];
+      return { t, tenantId: tenant.id };
+    }
+    // Time moves on, for `Date` only
+    const later = (ms: number) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + ms);
+    };
+    afterEach(() => vi.useRealTimers());
+
+    it("are sent to an email, with the default role", async () => {
+      const { t, tenantId } = await team();
+      const invitation = await t.invite(ann, tenantId, {
+        email: " Dan@Example.com ",
+      });
+
+      expect(invitation).toMatchObject({
+        tenantId,
+        email: "dan@example.com",
+        role: "member",
+        invitedBy: "ann",
+      });
+      const days = (Date.parse(invitation.expiresAt) - Date.now()) / 86_400_000;
+      expect(Math.round(days)).toBe(7);
+      expect(events).toEqual(["invitationCreated dan@example.com"]);
+      expect((await t.invitations(ann, tenantId)).map((i) => i.email)).toEqual([
+        "dan@example.com",
+      ]);
+    });
+
+    it("are taken up when someone signs up with the email", async () => {
+      const { t, tenantId } = await team();
+      await t.invite(ann, tenantId, {
+        email: "dan@example.com",
+        role: "admin",
+      });
+      const { user } = await t.provision(dan);
+
+      expect(await store.getMembership(tenantId, "dan")).toMatchObject({
+        role: "admin",
+      });
+      // They start in the tenant they were invited to, not their own
+      expect(user.activeTenantId).toBe(tenantId);
+      expect((await store.getUser("dan"))?.activeTenantId).toBe(tenantId);
+      expect(store.invitations.size).toBe(0);
+      expect(events).toEqual([
+        "invitationCreated dan@example.com",
+        "userCreated dan",
+        "memberAdded dan admin, invited by ann",
+      ]);
+    });
+
+    it("are taken up by someone who has signed up, at their next session", async () => {
+      const { t, tenantId } = await team();
+      const own = (await store.getUser("bob"))!.activeTenantId;
+      const toBob = await t.invite(ann, tenantId, { email: "bob@example.com" });
+      const toNobody = await t.invite(ann, tenantId, {
+        email: "nobody@example.com",
+      });
+
+      // Nothing tells the one inviting that Bob has signed up
+      expect(Object.keys(toBob).sort()).toEqual(Object.keys(toNobody).sort());
+      expect(await store.getMembership(tenantId, "bob")).toBeUndefined();
+
+      const session = await t.session(bob);
+      expect(await store.getMembership(tenantId, "bob")).toMatchObject({
+        role: "member",
+      });
+      // They stay in the tenant they're in
+      expect(session.tenantId).toBe(own);
+    });
+
+    it("are for a verified email", async () => {
+      const { t, tenantId } = await team();
+      await t.invite(ann, tenantId, { email: "dan@example.com" });
+      // The triggers leave out an email that isn't verified
+      await t.provision({ id: "dan" });
+      expect(await store.getMembership(tenantId, "dan")).toBeUndefined();
+
+      await t.session(dan);
+      expect(await store.getMembership(tenantId, "dan")).toBeDefined();
+    });
+
+    it("are taken up once when both triggers run at once", async () => {
+      const { t, tenantId } = await team();
+      await t.invite(ann, tenantId, { email: "dan@example.com" });
+      await Promise.all([t.provision(dan), t.session(dan)]);
+
+      expect(await store.getMembership(tenantId, "dan")).toBeDefined();
+      expect(events.filter((e) => e.startsWith("memberAdded"))).toHaveLength(1);
+    });
+
+    it("can't be for a member", async () => {
+      const { t, tenantId } = await team();
+      await t.addMember(ann, tenantId, { userId: "bob" });
+      await fails(
+        t.invite(ann, tenantId, { email: "bob@example.com" }),
+        409,
+        "member_exists",
+      );
+    });
+
+    it("are done with when the person is added", async () => {
+      const { t, tenantId } = await team();
+      await t.invite(ann, tenantId, { email: "bob@example.com" });
+      await t.addMember(ann, tenantId, { userId: "bob" });
+      expect(await t.invitations(ann, tenantId)).toEqual([]);
+    });
+
+    it("need an email, and a role that's one", async () => {
+      const { t, tenantId } = await team();
+      await fails(t.invite(ann, tenantId, {}), 400);
+      await fails(t.invite(ann, tenantId, { email: "dan" }), 400);
+      await fails(
+        t.invite(ann, tenantId, { email: "dan@example.com", role: "boss" }),
+        400,
+      );
+    });
+
+    it("can only give, change or revoke roles the one inviting has every permission of", async () => {
+      const { t, tenantId } = await team();
+      await t.addMember(ann, tenantId, { userId: "bob", role: "admin" });
+      await fails(
+        t.invite(bob, tenantId, { email: "dan@example.com", role: "owner" }),
+        403,
+      );
+
+      await t.invite(ann, tenantId, {
+        email: "dan@example.com",
+        role: "owner",
+      });
+      await fails(
+        t.invite(bob, tenantId, { email: "dan@example.com", role: "member" }),
+        403,
+      );
+      await fails(t.revokeInvitation(bob, tenantId, "dan@example.com"), 403);
+    });
+
+    it("need members:write to send, and members:read to see", async () => {
+      const { t, tenantId } = await team();
+      await t.addMember(ann, tenantId, { userId: "bob" });
+      await fails(t.invite(bob, tenantId, { email: "dan@example.com" }), 403);
+      await expect(t.invitations(bob, tenantId)).resolves.toEqual([]);
+      await t.provision(cat);
+      await fails(t.invitations(cat, tenantId), 404, "no_tenant");
+    });
+
+    it("are sent again, at most once a minute", async () => {
+      const { t, tenantId } = await team();
+      const first = await t.invite(ann, tenantId, { email: "dan@example.com" });
+      await fails(
+        t.invite(ann, tenantId, { email: "dan@example.com" }),
+        429,
+        "too_soon",
+      );
+
+      later(61_000);
+      const again = await t.invite(ann, tenantId, {
+        email: "dan@example.com",
+        role: "admin",
+      });
+      expect(again.role).toBe("admin");
+      expect(again.createdAt).toBe(first.createdAt);
+      expect(again.expiresAt > first.expiresAt).toBe(true);
+      expect(store.invitations.size).toBe(1);
+      expect(events).toEqual([
+        "invitationCreated dan@example.com",
+        "invitationCreated dan@example.com",
+      ]);
+    });
+
+    it("expire", async () => {
+      const { t, tenantId } = await team({
+        invitations: { expiresIn: 3600, limit: 100 },
+      });
+      await t.invite(ann, tenantId, { email: "dan@example.com" });
+
+      later(3601_000);
+      expect(await t.invitations(ann, tenantId)).toEqual([]);
+      await fails(
+        t.revokeInvitation(ann, tenantId, "dan@example.com"),
+        404,
+        "no_invitation",
+      );
+      await t.provision(dan);
+      expect(await store.getMembership(tenantId, "dan")).toBeUndefined();
+      // Removed once it's found
+      expect(store.invitations.size).toBe(0);
+    });
+
+    it("are sent as new when the last one expired", async () => {
+      const { t, tenantId } = await team({
+        invitations: { expiresIn: 3600, limit: 100 },
+      });
+      await t.addMember(ann, tenantId, { userId: "bob", role: "admin" });
+      const first = await t.invite(ann, tenantId, {
+        email: "dan@example.com",
+        role: "owner",
+      });
+
+      later(3601_000);
+      // An admin can't give the owner role, but that invitation is gone
+      const again = await t.invite(bob, tenantId, { email: "dan@example.com" });
+      expect(again.role).toBe("member");
+      expect(again.createdAt).not.toBe(first.createdAt);
+    });
+
+    it("are limited for each tenant", async () => {
+      const { t, tenantId } = await team({
+        invitations: { expiresIn: 3600, limit: 2 },
+      });
+      await t.invite(ann, tenantId, { email: "a@example.com" });
+      await t.invite(ann, tenantId, { email: "b@example.com" });
+      await fails(
+        t.invite(ann, tenantId, { email: "c@example.com" }),
+        409,
+        "too_many_invitations",
+      );
+
+      await t.revokeInvitation(ann, tenantId, "a@example.com");
+      await expect(
+        t.invite(ann, tenantId, { email: "c@example.com" }),
+      ).resolves.toBeTruthy();
+    });
+
+    it("are revoked", async () => {
+      const { t, tenantId } = await team();
+      await t.invite(ann, tenantId, { email: "dan@example.com" });
+      await t.revokeInvitation(ann, tenantId, "Dan@Example.com");
+
+      expect(events).toContain("invitationRevoked dan@example.com");
+      await t.provision(dan);
+      expect(await store.getMembership(tenantId, "dan")).toBeUndefined();
+    });
+
+    it("go with their tenant", async () => {
+      const { t, tenantId } = await team();
+      await t.invite(ann, tenantId, { email: "dan@example.com" });
+      await t.deleteTenant(ann, tenantId);
+      expect(store.invitations.size).toBe(0);
     });
   });
 

@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { SaasConfig } from "../config";
-import { badRequest, conflict, forbidden, notFound } from "./http";
+import { DEFAULT_INVITATIONS, type SaasConfig } from "../config";
+import { badRequest, conflict, forbidden, HttpError, notFound } from "./http";
 import { allows, covers, permissionsOf, type Permissions } from "./roles";
 import type {
+  Invitation,
   Membership,
   Metadata,
   PageArgs,
@@ -14,6 +15,10 @@ import type {
 /** Who's acting: a user's `sub`, and what the user pool knows of them. */
 export interface Identity {
   id: string;
+  /**
+   * Only once it's verified: members are added and invitations taken up
+   * by it.
+   */
   email?: string;
   name?: string;
 }
@@ -26,13 +31,28 @@ export interface TenancyHooks {
   userCreated?(event: { user: User; tenant?: Tenant }): unknown;
   tenantCreated?(event: { tenant: Tenant; by: User }): unknown;
   tenantDeleted?(event: { tenant: Tenant; by: User }): unknown;
-  memberAdded?(event: { membership: Membership; by: User }): unknown;
+  /**
+   * `invitation` is set when they took one up, and `by` is then who
+   * invited them.
+   */
+  memberAdded?(event: {
+    membership: Membership;
+    by: User;
+    invitation?: Invitation;
+  }): unknown;
   memberChanged?(event: {
     membership: Membership;
     previous: Membership;
     by: User;
   }): unknown;
   memberRemoved?(event: { membership: Membership; by: User }): unknown;
+  /** Someone was invited, or invited again. */
+  invitationCreated?(event: {
+    invitation: Invitation;
+    tenant: Tenant;
+    by: User;
+  }): unknown;
+  invitationRevoked?(event: { invitation: Invitation; by: User }): unknown;
 }
 
 export interface TenancyArgs {
@@ -72,6 +92,7 @@ export type Tenancy = ReturnType<typeof tenancy>;
 export function tenancy(args: TenancyArgs) {
   const { store, config, hooks = {} } = args;
   const { roles, ownerRole, defaultRole } = config;
+  const invitationConfig = config.invitations ?? DEFAULT_INVITATIONS;
   const now = () => new Date().toISOString();
   const personalTenantName =
     args.personalTenantName ??
@@ -115,7 +136,50 @@ export function tenancy(args: TenancyArgs) {
       throw new Error(`The user "${identity.id}" couldn't be created.`);
     }
     await hooks.userCreated?.({ user, tenant: personal?.tenant });
-    return { user, tenant: personal?.tenant, created: true };
+
+    // Someone who signed up because they were invited starts in that tenant
+    const joined = await takeUpInvitations(user);
+    const latest = joined[joined.length - 1];
+    const updated =
+      latest &&
+      (await store.updateUser(user.id, { activeTenantId: latest.tenantId }));
+    return { user: updated || user, tenant: personal?.tenant, created: true };
+  }
+
+  /**
+   * Make the user a member of each tenant their email was invited to. It's
+   * done when they sign up, and each time they're issued tokens, so someone
+   * who has signed up already joins at their next sign-in or refresh.
+   * Returns the memberships, the most recent invitation's last.
+   */
+  async function takeUpInvitations(user: User) {
+    if (!user.email) return [];
+    const found = (await store.findInvitations(user.email)).sort((a, b) =>
+      a.updatedAt.localeCompare(b.updatedAt),
+    );
+    const joined: Membership[] = [];
+    for (const invitation of found) {
+      const [tenant, membership] = await Promise.all([
+        store.getTenant(invitation.tenantId),
+        store.getMembership(invitation.tenantId, user.id),
+      ]);
+      if (expired(invitation) || !tenant || membership) {
+        await store.deleteInvitation(invitation.tenantId, invitation.email);
+        continue;
+      }
+      const added = member(
+        invitation.tenantId,
+        user.id,
+        invitation.role,
+        now(),
+      );
+      // Taken up already, by the other trigger
+      if (!(await store.acceptInvitation(invitation, added))) continue;
+      joined.push(added);
+      const by = (await store.getUser(invitation.invitedBy)) ?? user;
+      await hooks.memberAdded?.({ membership: added, by, invitation });
+    }
+    return joined;
   }
 
   /**
@@ -124,10 +188,19 @@ export function tenancy(args: TenancyArgs) {
    * moves them to another of their tenants when they've left theirs.
    */
   async function session(identity: Identity) {
-    let { user } = await provision(identity);
+    let { user, created } = await provision(identity);
     const email = lower(identity.email);
     if (email && email !== user.email)
       user = (await store.updateUser(user.id, { email })) ?? user;
+    if (!created) {
+      const joined = await takeUpInvitations(user);
+      // The index may not list a membership that was just added
+      if (joined.length > 0 && !user.activeTenantId)
+        user =
+          (await store.updateUser(user.id, {
+            activeTenantId: joined[joined.length - 1].tenantId,
+          })) ?? user;
+    }
 
     let tenantId = user.activeTenantId;
     let membership = tenantId
@@ -249,6 +322,17 @@ export function tenancy(args: TenancyArgs) {
     }));
   }
 
+  // A role can only be given, or an invitation with it changed, by someone
+  // with all its permissions
+  function canGive(
+    granted: Access,
+    role: string,
+    what = `give the "${role}" role`,
+  ) {
+    if (!covers(granted.permissions, permissionsOf(roles, role)))
+      throw forbidden(`You can't ${what}: it has permissions yours doesn't.`);
+  }
+
   async function deleteTenant(tenant: Tenant, by: User) {
     await store.deleteTenant(tenant.id);
     await hooks.tenantDeleted?.({ tenant, by });
@@ -257,6 +341,7 @@ export function tenancy(args: TenancyArgs) {
   return {
     provision,
     session,
+    takeUpInvitations,
     actor,
     access,
     authorize,
@@ -367,8 +452,8 @@ export function tenancy(args: TenancyArgs) {
     },
 
     /**
-     * Add a user who has signed up, by email or id. There are no
-     * invitations: someone who hasn't signed up yet can't be added.
+     * Add a user who has signed up, by email or id. To add someone who
+     * hasn't, invite them.
      */
     async addMember(
       identity: Identity,
@@ -377,10 +462,7 @@ export function tenancy(args: TenancyArgs) {
     ) {
       const granted = await authorize(identity, tenantId, "members:write");
       const role = roleOf(input.role);
-      if (!covers(granted.permissions, permissionsOf(roles, role)))
-        throw forbidden(
-          `You can't give the "${role}" role: it has permissions yours doesn't.`,
-        );
+      canGive(granted, role);
       let user: User | undefined;
       if (typeof input.userId === "string" && input.userId !== "")
         user = await store.getUser(input.userId);
@@ -397,6 +479,8 @@ export function tenancy(args: TenancyArgs) {
 
       const membership = member(tenantId, user.id, role, now());
       await store.putMembership(membership);
+      // An invitation they had to it is done with
+      if (user.email) await store.deleteInvitation(tenantId, user.email);
       await hooks.memberAdded?.({ membership, by: granted.user });
       return (await withUsers([membership]))[0];
     },
@@ -447,6 +531,95 @@ export function tenancy(args: TenancyArgs) {
 
       await store.deleteMembership(tenantId, userId);
       await hooks.memberRemoved?.({ membership, by: granted.user });
+    },
+
+    /** The invitations to a tenant that can still be taken up. */
+    async invitations(identity: Identity, tenantId: string) {
+      await authorize(identity, tenantId, "members:read");
+      return (await store.listInvitations(tenantId))
+        .filter((invitation) => !expired(invitation))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+
+    /**
+     * Invite someone by email. They become a member when they sign up, or
+     * sign in, with that email, verified. The answer is the same whether
+     * or not anyone has signed up with it. Inviting the same email again
+     * replaces the invitation and sends it again.
+     */
+    async invite(
+      identity: Identity,
+      tenantId: string,
+      input: { email?: unknown; role?: unknown },
+    ) {
+      const granted = await authorize(identity, tenantId, "members:write");
+      const email = emailOf(input.email);
+      const role = roleOf(input.role);
+      canGive(granted, role);
+      const [tenant, existing, waiting] = await Promise.all([
+        existingTenant(tenantId),
+        store.findUserByEmail(email),
+        store.listInvitations(tenantId),
+      ]);
+      // They can see who's a member already
+      if (existing && (await store.getMembership(tenantId, existing.id)))
+        throw conflict("They're a member already.", "member_exists");
+      const live = waiting.filter((invitation) => !expired(invitation));
+      const previous = live.find((invitation) => invitation.email === email);
+      if (previous) {
+        canGive(
+          granted,
+          previous.role,
+          `change an invitation with the "${previous.role}" role`,
+        );
+        if (Date.now() - Date.parse(previous.updatedAt) < RESEND_AFTER)
+          throw new HttpError(
+            429,
+            "too_soon",
+            "They were invited less than a minute ago.",
+          );
+      } else if (live.length >= invitationConfig.limit)
+        throw conflict(
+          `A tenant can have at most ${invitationConfig.limit} invitations waiting.`,
+          "too_many_invitations",
+        );
+
+      const time = now();
+      const invitation: Invitation = {
+        tenantId,
+        email,
+        role,
+        invitedBy: granted.user.id,
+        expiresAt: new Date(
+          Date.now() + invitationConfig.expiresIn * 1000,
+        ).toISOString(),
+        createdAt: previous?.createdAt ?? time,
+        updatedAt: time,
+      };
+      await store.putInvitation(invitation);
+      await hooks.invitationCreated?.({ invitation, tenant, by: granted.user });
+      return invitation;
+    },
+
+    async revokeInvitation(
+      identity: Identity,
+      tenantId: string,
+      email: string,
+    ) {
+      const granted = await authorize(identity, tenantId, "members:write");
+      const invitation = await store.getInvitation(
+        tenantId,
+        lower(email) ?? "",
+      );
+      if (!invitation || expired(invitation))
+        throw notFound("There's no such invitation.", "no_invitation");
+      canGive(
+        granted,
+        invitation.role,
+        `revoke an invitation with the "${invitation.role}" role`,
+      );
+      await store.deleteInvitation(tenantId, invitation.email);
+      await hooks.invitationRevoked?.({ invitation, by: granted.user });
     },
 
     admin: {
@@ -533,6 +706,19 @@ function first(memberships: Membership[]) {
 
 function lower(email: string | undefined) {
   return email ? email.trim().toLowerCase() : undefined;
+}
+
+// Someone can't be sent an invitation more often than this
+const RESEND_AFTER = 60 * 1000;
+
+const expired = (invitation: Invitation) =>
+  Date.parse(invitation.expiresAt) <= Date.now();
+
+function emailOf(value: unknown): string {
+  const email = typeof value === "string" ? lower(value) : undefined;
+  if (!email || email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+    throw badRequest(`"email" has to be an email address.`);
+  return email;
 }
 
 function nameOf(value: unknown): string {

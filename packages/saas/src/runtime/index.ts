@@ -37,16 +37,24 @@ export { route, type RouteOptions } from "./route";
 export type { Requirement, SaasContext } from "./context";
 export { createMailer, loadConfig, type SetupArgs } from "./env";
 export {
+  defaultLayout,
   defaultTemplates,
   escape,
   sesSender,
   type App,
+  type Body,
+  type BoundTemplates,
+  type Layout,
   type Mail,
   type Mailer,
   type MailerArgs,
   type Message,
+  type NotifyInput,
+  type NotifyResult,
   type Person,
+  type Recipients,
   type Send,
+  type TemplateContext,
   type Templates,
 } from "./email";
 export {

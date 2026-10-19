@@ -22,7 +22,7 @@ const buildOf = (name: string) =>
 describe("Saas", () => {
   beforeEach(() => app.reset());
 
-  it("creates a user pool, a client, an API, three tables and three functions", async () => {
+  it("creates a user pool, a client, an API, four tables and three functions", async () => {
     new Saas("App");
     await app.settle();
 
@@ -34,6 +34,7 @@ describe("Saas", () => {
       "sst:aws:ApiGatewayV2 AppApi",
       "sst:aws:CognitoUserPool AppUserPool",
       "sst:aws:CognitoUserPoolClient AppClientWeb",
+      "sst:aws:Dynamo AppInvitations",
       "sst:aws:Dynamo AppMemberships",
       "sst:aws:Dynamo AppTenants",
       "sst:aws:Dynamo AppUsers",
@@ -122,6 +123,7 @@ describe("Saas", () => {
         "users",
         "tenants",
         "memberships",
+        "invitations",
       ]);
       expect(config).toMatchObject({
         ownerRole: "owner",
@@ -130,8 +132,10 @@ describe("Saas", () => {
         selfServe: true,
         path: "",
         disabled: [],
+        invitations: { expiresIn: 7 * 24 * 3600, limit: 100 },
       });
       expect(Object.keys(buildOf(fn)!.links).sort()).toEqual([
+        "AppInvitations",
         "AppMemberships",
         "AppTenants",
         "AppUsers",
@@ -165,6 +169,19 @@ describe("Saas", () => {
         }),
       ],
     });
+    // DynamoDB removes an invitation once it has expired
+    expect(tables.AppInvitationsTable).toMatchObject({
+      hashKey: "tenantId",
+      rangeKey: "email",
+      globalSecondaryIndexes: [
+        expect.objectContaining({
+          name: "byEmail",
+          hashKey: "email",
+          rangeKey: "tenantId",
+        }),
+      ],
+      ttl: { attributeName: "expires", enabled: true },
+    });
   });
 
   it("takes roles, tenant settings, a path and routes to turn off", async () => {
@@ -173,12 +190,14 @@ describe("Saas", () => {
       ownerRole: "boss",
       defaultRole: "viewer",
       tenants: { personal: false, selfServe: false },
+      invitations: { expiresIn: "36 hours", limit: 10 },
       path: "/saas/",
       routes: { "DELETE /tenant": false },
     });
     await app.settle();
 
     expect(configOf("AppApiFunctionFunction")).toMatchObject({
+      invitations: { expiresIn: 36 * 3600, limit: 10 },
       roles: { boss: ["*"], viewer: ["tenant:read"] },
       ownerRole: "boss",
       defaultRole: "viewer",
@@ -211,6 +230,12 @@ describe("Saas", () => {
     expect(
       () => new Saas("App", { routes: { "GET /nope": false } as any }),
     ).toThrow(`has no route "GET /nope"`);
+    expect(
+      () => new Saas("App", { invitations: { expiresIn: "1 week" as any } }),
+    ).toThrow(`"invitations.expiresIn" has to be a number of hours or days`);
+    expect(() => new Saas("App", { invitations: { limit: 0 } })).toThrow(
+      `"invitations.limit" has to be a whole number`,
+    );
   });
 
   it("runs the functions from a file of the app's", async () => {
@@ -366,6 +391,7 @@ describe("Saas", () => {
       ]);
       for (const fn of fns) {
         expect(Object.keys(fn.build!.links).sort()).toEqual([
+          "AppInvitations",
           "AppMemberships",
           "AppTenants",
           "AppUsers",
@@ -399,6 +425,7 @@ describe("Saas", () => {
     );
     expect(policy).toContain("dynamodb:*");
     expect(policy).toContain("AppUsersTable");
+    expect(policy).toContain("AppInvitationsTable");
   });
 
   describe("email", () => {
@@ -445,6 +472,8 @@ describe("Saas", () => {
         email: {
           from: "Acme <hello@acme.com>",
           url: "https://app.acme.com",
+          logo: "https://acme.com/logo.png",
+          color: "#FF6600",
           messages: { welcome: true, memberRemoved: false },
         },
       });
@@ -455,8 +484,11 @@ describe("Saas", () => {
         configurationSet: find("AppEmailConfig")!.inputs.configurationSetName,
         appName: "Acme",
         url: "https://app.acme.com",
+        logo: "https://acme.com/logo.png",
+        color: "#FF6600",
         messages: {
           welcome: true,
+          invitation: true,
           memberAdded: true,
           roleChanged: true,
           memberRemoved: false,
@@ -513,6 +545,12 @@ describe("Saas", () => {
             },
           }),
       ).toThrow(`has no email "invite"`);
+      expect(
+        () =>
+          new Saas("C", {
+            email: { from: "hello@acme.com", color: "orange" },
+          }),
+      ).toThrow(`"email.color" has to be a hex color`);
     });
 
     it("gives a function that links it permission to send", async () => {
