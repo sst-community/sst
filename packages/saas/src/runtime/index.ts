@@ -4,14 +4,18 @@
 export {
   ALL_SCOPE,
   CLAIMS,
+  DEFAULT_MESSAGES,
   DEFAULT_ROLES,
+  MESSAGES,
   PERMISSIONS,
   PLATFORM_ADMIN_SCOPE,
   ROUTES,
   scopeOf,
+  type BuiltInMessage,
   type BuiltInPermission,
   type BuiltInRoute,
   type Roles,
+  type EmailConfig,
   type SaasConfig,
   type StoreConfig,
 } from "../config";
@@ -31,7 +35,20 @@ export {
 } from "./handlers";
 export { route, type RouteOptions } from "./route";
 export type { Requirement, SaasContext } from "./context";
-export { loadConfig, type SetupArgs } from "./env";
+export { createMailer, loadConfig, type SetupArgs } from "./env";
+export {
+  defaultTemplates,
+  escape,
+  sesSender,
+  type App,
+  type Mail,
+  type Mailer,
+  type MailerArgs,
+  type Message,
+  type Person,
+  type Send,
+  type Templates,
+} from "./email";
 export {
   auth,
   badRequest,

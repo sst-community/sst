@@ -60,6 +60,39 @@ export interface SaasConfig {
   path: string;
   /** The built-in routes that are turned off. */
   disabled: BuiltInRoute[];
+  /** How emails are sent, when the component has `email`. */
+  email?: EmailConfig;
+}
+
+/** The emails the component sends itself, after the change each is about. */
+export const MESSAGES = [
+  "welcome",
+  "memberAdded",
+  "roleChanged",
+  "memberRemoved",
+] as const;
+
+export type BuiltInMessage = (typeof MESSAGES)[number];
+
+/** Which of them are sent unless the component says otherwise. */
+export const DEFAULT_MESSAGES: Record<BuiltInMessage, boolean> = {
+  welcome: false,
+  memberAdded: true,
+  roleChanged: true,
+  memberRemoved: true,
+};
+
+export interface EmailConfig {
+  /** Who the emails are from, like `Acme <hello@acme.com>`. */
+  from: string;
+  replyTo?: string;
+  /** The SES configuration set the emails are sent with. */
+  configurationSet?: string;
+  /** The app's name, in the emails' subjects and text. */
+  appName: string;
+  /** The app's URL, for the links in the emails. */
+  url?: string;
+  messages: Record<BuiltInMessage, boolean>;
 }
 
 export const CONFIG_ENV = "SAAS_CONFIG";

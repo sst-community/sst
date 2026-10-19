@@ -400,4 +400,135 @@ describe("Saas", () => {
     expect(policy).toContain("dynamodb:*");
     expect(policy).toContain("AppUsersTable");
   });
+
+  describe("email", () => {
+    const pool = () => ofType("aws:cognito/userPool:UserPool")[0].inputs;
+
+    it("sends Cognito's emails through SES, from the domain of the address", async () => {
+      new Saas("App", {
+        email: {
+          from: "Acme <hello@acme.com>",
+          replyTo: "support@acme.com",
+          url: "https://app.acme.com",
+        },
+      });
+      await app.settle();
+
+      expect(find("AppEmail")!.type).toBe("sst:aws:Email");
+      expect(find("AppEmailIdentity")!.inputs.emailIdentity).toBe("acme.com");
+      expect(find("AppEmailVerification")!.inputs.domain).toBe("acme.com");
+      expect(pool().emailConfiguration).toMatchObject({
+        emailSendingAccount: "DEVELOPER",
+        fromEmailAddress: "Acme <hello@acme.com>",
+        replyToEmailAddress: "support@acme.com",
+        configurationSet: find("AppEmailConfig")!.inputs.configurationSetName,
+      });
+      expect(pool().emailConfiguration.sourceArn).toContain("AppEmailIdentity");
+      // The user pool waits for SES to verify the domain
+      expect(app.dependsOn("AppUserPoolUserPool", "AppEmailVerification")).toBe(
+        true,
+      );
+    });
+
+    it("writes Cognito's emails with a trigger of its own", async () => {
+      new Saas("App", { email: { from: "hello@acme.com" } });
+      await app.settle();
+
+      expect(pool().lambdaConfig.customMessage).toContain("AppCustomMessage");
+      expect(buildOf("AppCustomMessage")!.handler).toMatch(
+        /dist\/handlers\.customMessage$/,
+      );
+    });
+
+    it("tells the functions how to send, and lets them", async () => {
+      new Saas("App", {
+        email: {
+          from: "Acme <hello@acme.com>",
+          url: "https://app.acme.com",
+          messages: { welcome: true, memberRemoved: false },
+        },
+      });
+      await app.settle();
+
+      expect(configOf("AppApiFunctionFunction").email).toEqual({
+        from: "Acme <hello@acme.com>",
+        configurationSet: find("AppEmailConfig")!.inputs.configurationSetName,
+        appName: "Acme",
+        url: "https://app.acme.com",
+        messages: {
+          welcome: true,
+          memberAdded: true,
+          roleChanged: true,
+          memberRemoved: false,
+        },
+      });
+      for (const fn of [
+        "AppApiFunction",
+        "AppPostConfirmation",
+        "AppCustomMessage",
+      ])
+        expect(Object.keys(buildOf(fn)!.links)).toContain("AppEmail");
+    });
+
+    it("names the app after the component when the address has no name", async () => {
+      new Saas("App", { email: { from: "hello@acme.com" } });
+      await app.settle();
+      expect(configOf("AppApiFunctionFunction").email.appName).toBe("App");
+    });
+
+    it("verifies an address when it's the sender", async () => {
+      new Saas("App", {
+        email: { from: "Acme <hello@acme.com>", sender: "hello@acme.com" },
+      });
+      await app.settle();
+
+      expect(find("AppEmailIdentity")!.inputs.emailIdentity).toBe(
+        "hello@acme.com",
+      );
+      expect(find("AppEmailVerification")).toBeUndefined();
+    });
+
+    it("leaves the user pool to Cognito's own email without it", async () => {
+      new Saas("App");
+      await app.settle();
+
+      expect(pool().emailConfiguration).toEqual({
+        emailSendingAccount: "COGNITO_DEFAULT",
+      });
+      expect(pool().lambdaConfig.customMessage).toBeUndefined();
+      expect(find("AppEmail")).toBeUndefined();
+      expect(configOf("AppApiFunctionFunction").email).toBeUndefined();
+    });
+
+    it("says what's wrong with its args", () => {
+      expect(() => new Saas("A", { email: { from: "Acme" } })).toThrow(
+        `"email.from" has to be an email address`,
+      );
+      expect(
+        () =>
+          new Saas("B", {
+            email: {
+              from: "hello@acme.com",
+              messages: { invite: true } as any,
+            },
+          }),
+      ).toThrow(`has no email "invite"`);
+    });
+
+    it("gives a function that links it permission to send", async () => {
+      const saas = new Saas("App", { email: { from: "hello@acme.com" } });
+      new v5.Function("Worker", {
+        handler: "src/worker.handler",
+        link: [saas],
+      });
+      await app.settle();
+
+      const policy = JSON.stringify(
+        app.resources
+          .filter((r) => r.name.startsWith("WorkerRole"))
+          .map((r) => r.inputs),
+      );
+      expect(policy).toContain("ses:SendEmail");
+    });
+  });
 });

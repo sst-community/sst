@@ -15,11 +15,12 @@ That gives you:
 - an **HTTP API** with a JWT authorizer for the user pool, and the built-in routes on it;
 - **three DynamoDB tables**: users, tenants and memberships;
 - a **post confirmation trigger** that creates each user, with a tenant of their own;
-- a **pre token generation trigger** that puts the user's current tenant, their role in it and what it lets them do in their tokens.
+- a **pre token generation trigger** that puts the user's current tenant, their role in it and what it lets them do in their tokens;
+- with `email`, **email through Amazon SES** from your own domain, for Cognito's emails and the app's.
 
 A user signs up and gets their own tenant. They can create more, switch between them, and add the people they work with. A platform admin can see and change every user and tenant.
 
-It needs SST version 5 (`sst@npm:@sst-community/sst@^5.0.0-0`).
+It needs SST version 5, `5.0.0-alpha.3` or later (`sst@npm:@sst-community/sst@^5.0.0-0`).
 
 ---
 
@@ -186,7 +187,7 @@ From the lightest change to the heaviest.
 
 ### Args
 
-`roles`, `ownerRole`, `defaultRole`, `tenants.personal`, `tenants.selfServe`, `path`, `routes`, `clients`, `link`. See [Roles and permissions](#roles-and-permissions).
+`roles`, `ownerRole`, `defaultRole`, `tenants.personal`, `tenants.selfServe`, `path`, `routes`, `clients`, `link`, `email`. See [Roles and permissions](#roles-and-permissions) and [Email](#email).
 
 ### `transform`, `existing` and `nodes`
 
@@ -219,6 +220,8 @@ saas.nodes.users.nodes.table; // the aws.dynamodb.Table
 | `apiFunction` | The function behind the built-in routes |
 | `postConfirmation`, `preTokenGeneration` | The triggers |
 | `triggerPermission` | Created only for a user pool passed in `existing` |
+| `email` | The `Email` the emails are sent from, with `email` |
+| `customMessage` | The trigger that writes Cognito's emails, with `email` |
 
 **An API you already have.** Pass a V5 `ApiGatewayV2` and give a `path`, so the built-in routes don't catch every path on it:
 
@@ -226,7 +229,7 @@ saas.nodes.users.nodes.table; // the aws.dynamodb.Table
 new Saas("App", { existing: { api: myApi }, path: "/saas" });
 ```
 
-**A user pool you already have.** Pass its id. The component doesn't change the pool. It creates the two triggers and lets the pool invoke them, and you point the pool's triggers at `saas.nodes.postConfirmation` and `saas.nodes.preTokenGeneration` where the pool is managed. Use version 2 of the pre token generation event, on the Essentials or Plus tier, for the access token to get the scopes. On version 1, only the ID token gets the claims.
+**A user pool you already have.** Pass its id. The component doesn't change the pool. It creates the two triggers and lets the pool invoke them, and you point the pool's triggers at `saas.nodes.postConfirmation` and `saas.nodes.preTokenGeneration` where the pool is managed. Use version 2 of the pre token generation event, on the Essentials or Plus tier, for the access token to get the scopes. On version 1, only the ID token gets the claims. With `email`, the custom message trigger is created and allowed in the same way, as `saas.nodes.customMessage`. Point the pool's custom message trigger at it, and its email settings at the SES identity, `saas.nodes.email.nodes.identity`.
 
 **Tables you already have.** Pass their names, as `existing: { users: "..." }`. They need the keys and indexes described under [Storage](#storage).
 
@@ -260,6 +263,90 @@ new Saas("App", { handlers: "src/saas.ts", link: [stripeKey] });
 The hooks are `userCreated`, `tenantCreated`, `tenantDeleted`, `memberAdded`, `memberChanged` and `memberRemoved`. Each runs after its change is made. A hook that throws fails the request, but the change stays made. If `userCreated` throws, the sign-up fails.
 
 `tenancy()` is the set of rules the routes use, and it's yours to call too: `tenancy({ store, config }).addMember(...)` checks exactly what the route checks.
+
+---
+
+## Email
+
+Without `email`, Cognito sends its own emails, like the sign-up code and a password reset, and allows only a few a day. With it, every email goes through Amazon SES, from your domain:
+
+```ts title="sst.config.ts"
+new Saas("App", {
+  email: {
+    from: "Acme <hello@acme.com>",
+    replyTo: "support@acme.com",
+    url: "https://app.acme.com", // the emails link here
+  },
+});
+```
+
+What that sets up:
+
+- **An `Email` for the domain of `from`**, `acme.com`, with its DKIM and DMARC records in Route 53 (or another `dns`), so any address on it can send. The first deploy waits for SES to verify the domain, a minute or two. Give `sender: "hello@acme.com"` to verify only the address, by a link SES emails to it, before the user pool can send.
+- **The user pool sends Cognito's emails from it**, and a custom message trigger writes them from the same templates as the app's: the sign-up code, a password reset, the temporary password of a user an admin created, a changed email's code and a sign-in code.
+- **The app sends its own**, after the change each is about:
+
+| Email | When | Default |
+| --- | --- | --- |
+| `welcome` | A user signs up | Off |
+| `memberAdded` | Someone is added to a tenant | On |
+| `roleChanged` | A member's role changes | On |
+| `memberRemoved` | Someone else removes a member | On |
+
+```ts
+new Saas("App", {
+  email: { from: "hello@acme.com", messages: { welcome: true, memberRemoved: false } },
+});
+```
+
+An email goes to a verified address only, and a send that fails is logged. The change it's about is made all the same.
+
+### Your own templates, and another provider
+
+The templates are plain functions that return `{ subject, html, text }`. Replace any of them, or the sender, in your `handlers` file:
+
+```ts title="src/saas.ts"
+import { createHandlers, escape } from "@sst-community/saas/runtime";
+
+export const { api, customMessage, postConfirmation, preTokenGeneration } =
+  createHandlers({
+    email: {
+      templates: {
+        memberAdded: ({ tenant, by, app }) => ({
+          subject: `Join ${tenant.name} on ${app.name}`,
+          html: `<p>${escape(by.name ?? "Someone")} added you to ${escape(tenant.name)}.</p>`,
+          text: `${by.name ?? "Someone"} added you to ${tenant.name}.`,
+        }),
+      },
+      // To send with another provider, like Resend or Postmark:
+      // send: async ({ to, subject, html, text, replyTo }) => { ... },
+    },
+  });
+```
+
+Escape what people wrote, like a tenant's name, in the HTML. A template for one of Cognito's emails has to include the `code` it's given, a placeholder Cognito fills in, and `adminInvitation` the `username` too. If one leaves it out, Cognito sends its own.
+
+Cognito always sends its emails through SES. A `send` of your own sends the app's.
+
+### Emails of your own
+
+`createMailer()` sends with the same sender and templates, from any function that links the component:
+
+```ts
+import { createMailer } from "@sst-community/saas/runtime";
+
+const mail = createMailer();
+await mail.send({
+  to: "ann@example.com",
+  subject: "Your report is ready",
+  html: "<p>It's ready.</p>",
+  text: "It's ready.",
+});
+```
+
+The `email` part is an `Email` like any other: `transform: { email: { events: [...] } }` sends SES's events to SNS or EventBridge, and `existing: { email }` uses one you already have.
+
+> **Note:** a new AWS account's SES only sends to addresses it has verified, until you [request production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html), once in each region. To try it out without that, sign up with an address of SES's mailbox simulator, like `success+ann@simulator.amazonses.com`: SES accepts what's sent to it, and no one gets it.
 
 ---
 
@@ -319,4 +406,14 @@ npm run typecheck
 
 The component is tested with `mock()` from `sst/testing`, and the runtime against `memoryStore()` and a fake DynamoDB client. `package.json` pins `google-protobuf` to `3.21.2` through `overrides`, as the SST repo does: with 3.21.4, which `@pulumi/pulumi` gets otherwise, every resource `mock()` registers fails with `c.g is not a function`.
 
-It has three runtime dependencies: `@aws-sdk/client-dynamodb`, `hono` and `@hono/aws-lambda`. Hono has none of its own.
+It has four runtime dependencies: `@aws-sdk/client-dynamodb` and `@aws-sdk/client-sesv2`, `hono` and `@hono/aws-lambda`. Hono has none of its own.
+
+`email` uses the V5 `Email`, which is in SST from `5.0.0-alpha.3`. Until that's published, build `sst` from the SST repo and install it without saving it:
+
+```bash
+# in the SST repo, on v5
+(cd platform && npx tsc -p tsconfig.types.json && (cd src && find . -name "*.d.ts" -exec sh -c 'mkdir -p "../dist/types/$(dirname "$1")" && cp "$1" "../dist/types/$1"' _ {} \;))
+(cd sdk/js && bun -e 'import { copyPlatform } from "./scripts/platform"; await copyPlatform();' && bun run build && npm pack)
+# here
+npm install --no-save ../../sdk/js/sst-0.0.0.tgz
+```

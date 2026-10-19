@@ -5,6 +5,7 @@ import {
   Output,
   output,
   type ComponentResourceOptions,
+  type Input,
 } from "@pulumi/pulumi";
 import { apigatewayv2, lambda } from "@pulumi/aws";
 import {
@@ -18,13 +19,17 @@ import {
 import { permission, v5 } from "sst/components/aws";
 import {
   CONFIG_ENV,
+  DEFAULT_MESSAGES,
   DEFAULT_ROLES,
+  MESSAGES,
   PLATFORM_ADMIN_SCOPE,
   permissionProblem,
   rolesProblem,
   ROUTES,
   scopesOf,
+  type BuiltInMessage,
   type BuiltInRoute,
+  type EmailConfig,
   type Roles,
   type SaasConfig,
   type StoreConfig,
@@ -82,6 +87,17 @@ const parts = {
    * triggers at the functions yourself.
    */
   triggerPermission: many(lambda.Permission),
+  /**
+   * What the emails are sent from, when `email` is set: an `Email` for the
+   * domain of `email.from`, verified with DNS records. The user pool sends
+   * Cognito's emails from it, and the functions the app's.
+   */
+  email: optional(v5.Email),
+  /**
+   * The trigger that writes the emails Cognito sends from the same
+   * templates as the app's, when `email` is set.
+   */
+  customMessage: optional(v5.Function),
 };
 
 // What a route's function can be: a handler, or its args
@@ -187,6 +203,65 @@ export interface SaasArgs extends ComponentArgs<typeof parts> {
    * More to link to the three functions, like what your hooks use.
    */
   link?: Links;
+  /**
+   * Send email through Amazon SES, from your own domain.
+   *
+   * Cognito's emails, like the sign-up code and a password reset, are sent
+   * from it, from the same templates as the app's. The app sends its own when
+   * someone is added to a tenant, their role changes or they're removed.
+   * Change what any of them says with `templates` in `createHandlers()`.
+   *
+   * Without it, the user pool sends Cognito's emails itself, which allows
+   * only a few a day, and the app sends none.
+   *
+   * A new AWS account can only send to addresses it has verified, until you
+   * [request production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html)
+   * for Amazon SES, once in each region.
+   *
+   * @example
+   * ```ts
+   * {
+   *   email: {
+   *     from: "Acme <hello@acme.com>",
+   *     url: "https://app.acme.com"
+   *   }
+   * }
+   * ```
+   */
+  email?: {
+    /**
+     * Who the emails are from: an address, with a name if you like.
+     * @example `"Acme <hello@acme.com>"`
+     */
+    from: string;
+    /**
+     * What Amazon SES verifies. By default it's the domain of `from`, so any
+     * address on it can send, verified with DNS records. An address is
+     * verified by a link SES emails to it, before the user pool can send.
+     * @default The domain of `from`
+     */
+    sender?: string;
+    /**
+     * The DNS adapter for the domain's records, or `false` to add them
+     * yourself.
+     * @default `sst.aws.dns`
+     */
+    dns?: v5.EmailArgs["dns"];
+    /** Where replies go. */
+    replyTo?: string;
+    /**
+     * The app's name, in the emails' subjects and text.
+     * @default The name in `from`, or the component's name
+     */
+    name?: string;
+    /** Your app's URL, which the emails link to. */
+    url?: Input<string>;
+    /**
+     * The app's own emails, each on or off.
+     * @default `{ welcome: false, memberAdded: true, roleChanged: true, memberRemoved: true }`
+     */
+    messages?: { [message in BuiltInMessage]?: boolean };
+  };
 }
 
 export interface SaasRouteArgs {
@@ -284,7 +359,9 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
           tables: { users, tenants, memberships },
         }))
       : output({ type: "custom" as const });
-    this.config = store.apply((store) =>
+    // Email
+    const mail = this.createEmail(name, args.email);
+    this.config = all([store, mail?.config]).apply(([store, email]) =>
       JSON.stringify({
         store,
         roles,
@@ -294,10 +371,12 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
         selfServe: args.tenants?.selfServe ?? true,
         path,
         disabled,
+        email,
       } satisfies SaasConfig),
     );
     this.links = [
       ...(tables ? [tables.users, tables.tenants, tables.memberships] : []),
+      ...(mail ? [mail.email] : []),
       ...(plain(args.link, "link") ?? []),
     ];
 
@@ -305,7 +384,11 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
     // that waits for its own component is never created.
     const module = handlerModule(args.handlers);
     const fn = (
-      key: "apiFunction" | "postConfirmation" | "preTokenGeneration",
+      key:
+        | "apiFunction"
+        | "postConfirmation"
+        | "preTokenGeneration"
+        | "customMessage",
       exported: string,
       description: string,
     ) =>
@@ -326,6 +409,9 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       `Puts the tenant in the tokens of ${name}`,
     );
     const apiFunction = fn("apiFunction", "api", `The routes of ${name}`);
+    const customMessage =
+      mail &&
+      fn("customMessage", "customMessage", `Writes the emails of ${name}`);
 
     // The user pool. Whether one was passed is read from the args: up to
     // SST 5.0.0-alpha.2, `existingPart()` looks a pool given by its id up a
@@ -341,15 +427,22 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
               postConfirmation: postConfirmation.arn,
               preTokenGeneration: preTokenGeneration.arn,
               preTokenGenerationVersion: "v2",
+              ...(customMessage && { customMessage: customMessage.arn }),
             },
-            // What a V2 trigger puts in the access token needs this tier
-            transform: { userPool: { userPoolTier: "ESSENTIALS" } },
+            transform: {
+              userPool: {
+                // What a V2 trigger puts in the access token needs this tier
+                userPoolTier: "ESSENTIALS",
+                ...(mail && { emailConfiguration: mail.userPool }),
+              },
+            },
           },
     );
     if (existingPool)
       for (const [trigger, fn] of [
         ["postConfirmation", postConfirmation],
         ["preTokenGeneration", preTokenGeneration],
+        ...(customMessage ? [["customMessage", customMessage] as const] : []),
       ] as const)
         this.part("triggerPermission", trigger, {
           action: "lambda:InvokeFunction",
@@ -483,6 +576,7 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       },
       include: [
         env({ [CONFIG_ENV]: this.config }),
+        ...(this.nodes.email?.link().include ?? []),
         ...tables.map((table) =>
           permission({
             actions: ["dynamodb:*"],
@@ -496,6 +590,62 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
   // A function of the user's, given what the runtime reads. Its handler or
   // args are added to as they are, so that what the function is doesn't wait
   // on a value only known on deploy.
+  // What the emails are sent from, and what the user pool and the functions
+  // are told of it
+  private createEmail(name: string, args: SaasArgs["email"]) {
+    if (!args) return undefined;
+    plain(args, "email");
+    const from = plain(args.from, "email.from");
+    const address = addressOf(from, name);
+    const sender =
+      plain(args.sender, "email.sender") ??
+      address.slice(address.indexOf("@") + 1);
+    const messages = {
+      ...DEFAULT_MESSAGES,
+      ...plain(args.messages, "email.messages"),
+    };
+    const unknown = Object.keys(messages).find(
+      (message) => !MESSAGES.includes(message as BuiltInMessage),
+    );
+    if (unknown)
+      throw new Error(
+        `The "${name}" Saas component has no email "${unknown}". Its emails are: ${MESSAGES.join(
+          ", ",
+        )}.`,
+      );
+
+    const email = this.part("email", {
+      sender,
+      ...(args.dns !== undefined && { dns: args.dns }),
+    });
+    // Cognito won't send from an identity SES hasn't verified yet
+    const verification = email.nodes.verification;
+    const identityArn = verification
+      ? all([email.nodes.identity.arn, verification.id]).apply(([arn]) => arn)
+      : email.nodes.identity.arn;
+    const appName = args.name ?? displayNameOf(from) ?? name;
+    return {
+      email,
+      config: all([email.configSet, args.url]).apply(
+        ([configurationSet, url]): EmailConfig => ({
+          from,
+          replyTo: args.replyTo,
+          configurationSet,
+          appName,
+          url,
+          messages,
+        }),
+      ),
+      userPool: {
+        emailSendingAccount: "DEVELOPER",
+        sourceArn: identityArn,
+        fromEmailAddress: from,
+        replyToEmailAddress: args.replyTo,
+        configurationSet: email.configSet,
+      },
+    };
+  }
+
   private withSaas(handler: RouteHandler): RouteHandler {
     if (
       Output.isInstance(handler) ||
@@ -517,6 +667,21 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       ),
     };
   }
+}
+
+// The address in "Acme <hello@acme.com>", or "hello@acme.com" as it is
+function addressOf(from: string, name: string) {
+  const address = (from.match(/<([^>]+)>\s*$/)?.[1] ?? from).trim();
+  if (!/^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/.test(address))
+    throw new Error(
+      `The "${name}" Saas component's "email.from" has to be an email address, like "Acme <hello@acme.com>".`,
+    );
+  return address;
+}
+
+// The name in "Acme <hello@acme.com>"
+function displayNameOf(from: string) {
+  return from.match(/^\s*"?([^"<]+?)"?\s*</)?.[1];
 }
 
 function plain<T>(value: T, what: string): T {

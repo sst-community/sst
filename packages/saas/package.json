@@ -37,12 +37,13 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3",
+    "@aws-sdk/client-sesv2": "^3",
     "@hono/aws-lambda": "^1",
     "hono": "^4.13.9"
   },
   "peerDependencies": {
     "@pulumi/aws": "^7",
-    "sst": ">=5.0.0-0"
+    "sst": ">=5.0.0-alpha.3"
   },
   "peerDependenciesMeta": {
     "@pulumi/aws": {

@@ -11,7 +11,13 @@ export interface CognitoTriggerEvent {
   triggerSource: string;
   userPoolId: string;
   userName: string;
-  request: { userAttributes: Record<string, string> };
+  request: {
+    userAttributes: Record<string, string>;
+    /** In a custom message: the placeholder Cognito replaces with the code. */
+    codeParameter?: string;
+    /** In a custom message to a user an admin created: the placeholder for the username. */
+    usernameParameter?: string;
+  };
   response: Record<string, unknown>;
 }
 
@@ -69,6 +75,67 @@ export function createHandlers(options: HandlerOptions = {}) {
         );
       }
       return api(event, context);
+    },
+
+    /**
+     * Writes the emails Cognito sends, from the same templates as the app's:
+     * the sign-up code, a password reset, a new user's temporary password,
+     * a changed email's code and a sign-in code. Deployed when the component
+     * has `email`.
+     */
+    async customMessage(event: CognitoTriggerEvent) {
+      const { config, mail } = setup();
+      if (!mail || !config.email) return event;
+      const { app, templates } = mail;
+      const attributes = event.request.userAttributes;
+      const user = { email: attributes.email, name: attributes.name };
+      const code = event.request.codeParameter ?? "{####}";
+      const username = event.request.usernameParameter ?? "{username}";
+
+      const message = (() => {
+        switch (event.triggerSource) {
+          case "CustomMessage_SignUp":
+          case "CustomMessage_ResendCode":
+            return templates.signUp({ code, user, app });
+          case "CustomMessage_ForgotPassword":
+            return templates.forgotPassword({ code, user, app });
+          case "CustomMessage_AdminCreateUser":
+            return templates.adminInvitation({
+              username,
+              password: code,
+              user,
+              app,
+            });
+          case "CustomMessage_UpdateUserAttribute":
+          case "CustomMessage_VerifyUserAttribute":
+            return templates.verifyEmail({ code, user, app });
+          case "CustomMessage_Authentication":
+            return templates.signInCode({ code, user, app });
+        }
+      })();
+      if (!message) return event;
+
+      // Cognito refuses a message without its placeholders. Its own is
+      // better than none.
+      const needs =
+        event.triggerSource === "CustomMessage_AdminCreateUser"
+          ? [code, username]
+          : [code];
+      const missing = needs.filter((part) => !message.html.includes(part));
+      if (missing.length > 0) {
+        console.error(
+          `The "${event.triggerSource}" email leaves out ${missing.join(
+            " and ",
+          )}, so Cognito sends its own.`,
+        );
+        return event;
+      }
+      event.response = {
+        ...event.response,
+        emailSubject: message.subject,
+        emailMessage: message.html,
+      };
+      return event;
     },
 
     /** Creates the user, and their own tenant, once they've confirmed their account. */

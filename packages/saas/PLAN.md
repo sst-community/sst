@@ -26,14 +26,20 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 | 2026-10-18 | **No admin UI in the component.** It would bring a frontend framework and a build, which the dependency rule is there to avoid; a site to host it on, and the sites aren't ported to v5 yet; and a sign-in flow of its own. It's also what people would most want to change. The `/admin` routes are what one would be built on, as a package of its own or an example. |
 | 2026-10-18 | **Changing it, from light to heavy:** args; `transform`, `existing` and `nodes` on every part; a `handlers` file made with `createHandlers()` (hooks, claims of your own, a store of your own); `routes` turned off or replaced; `link` for the functions. |
 | 2026-10-18 | **The user pool signs in by email, on the Essentials tier.** Claims and scopes in the access token need Essentials or Plus. |
+| 2026-10-18 | **Email is a foundation, not part of invitations.** Cognito's own sender allows too few emails a day for production, and email MFA and sign-in codes need SES. So `email` sends everything through SES: Cognito's emails, from a custom message trigger, and the app's. |
+| 2026-10-18 | **SES by default, with a sender you can replace.** `createHandlers({ email: { send } })` sends the app's emails with another provider. Cognito's always go through SES. |
+| 2026-10-18 | **`Email` was ported to V5 first**, so the component takes it as a part, with `transform` and `existing` like any other. It went on `v5` as its own commit (`6328b507d`). |
+| 2026-10-18 | **One set of templates for Cognito's emails and the app's**: plain functions that return `{ subject, html, text }`, with no templating library. Built in: `memberAdded`, `roleChanged` and `memberRemoved` on, `welcome` off. A send that fails is logged, and never fails the change it's about. |
 
 ## Status
 
-**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, and 75 tests: 32 of the tenancy rules on the in-memory store, 20 of the Hono app, `route()` and the triggers, 15 of the component under `mock()`, and 8 of the DynamoDB store against a fake client. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
+**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, and 99 tests: 32 of the tenancy rules on the in-memory store, 20 of the Hono app, `route()` and the triggers, 23 of the component under `mock()`, 16 of email, and 8 of the DynamoDB store against a fake client. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
 
 **Fixed on `v5` on the way** (`e53329841`): a part that's a component, looked up by id, lost its parent and was looked up twice. See the [log](https://github.com/sst-community/sst/blob/v5/docs/plans/v5-progress.md). The package still works around it, as it builds against `5.0.0-alpha.2`.
 
-**Deployed in the lab on 2026-10-18**, and removed. See [Checked in AWS](#checked-in-aws).
+**Deployed in the lab on 2026-10-18**, twice, and removed. See [Checked in AWS](#checked-in-aws).
+
+**Needs `5.0.0-alpha.3`**, for the V5 `Email` and the fix above. Until it's published, the package is built and tested against `sst` built from `v5`, installed without saving it; the README says how. Its peer dependency already asks for `>=5.0.0-alpha.3`.
 
 ## Design
 
@@ -106,11 +112,20 @@ In the lab account on 2026-10-18, with `sst5` built from `v5` at `e53329841`. Th
 - **CORS.** With `ANY` routes the preflight got a 401. With a route for each method it gets a 204 with the CORS headers, under `/admin` and on routes of the app's own too.
 - **Timing.** The pre token generation trigger took 140 ms on a cold start (257 ms to start) and 55 ms warm; post confirmation 169 ms (416 ms to start). In `sst dev`, the CLI built the shipped handlers from the package in `node_modules` and ran them on the machine: a sign-in took 2 seconds in all, its trigger 181 to 348 ms.
 
-Still not checked: a user pool and an API passed in `existing`, the hosted UI and federated sign-in, and the AWS SDK's retries under load.
+**Email**, in a second deploy with `email` from a lab subdomain, sending only to SES's mailbox simulator. A queue read SES's own events, through an event destination the lab added with `transform: { email: { events } }`.
+
+- The user pool was created once SES had verified the domain, about a minute in, sending through SES from it with the configuration set and the custom message trigger.
+- Every email was sent and delivered: from Cognito, the sign-up code, the password reset and an admin-created user's temporary password, with the templates' subjects; from the app, welcome (to the user the pre token generation trigger created), added to a tenant, role changed and removed.
+- No function logged an error. The custom message trigger took 2 to 8 ms warm. `sst diff` then showed no changes.
+- Cognito sends one email of its own to `success@simulator.amazonses.com` when a user pool is set up with SES.
+
+Still not checked: a user pool and an API passed in `existing`, the hosted UI and federated sign-in, an email-address `sender`, and the AWS SDK's retries under load.
 
 ## Next
 
-- **Invitations**: a pending membership by email, taken up when that email is verified, and an event for the app to send the email.
+- **`5.0.0-alpha.3`**, then the package's `sst` dev dependency moves to it and the workaround for the lookup goes.
+- **Invitations**: a pending membership by email, taken up when that email is verified, sent with the `email` the component has.
+- **A frontend client**, with typed calls for the built-in routes and a `switchTenant()` that refreshes the tokens.
 - **The Postgres store.**
 - **Events on a bus**, as well as the hooks.
 - **A template for package repos**, made from this one, and the `google-protobuf` pin in the package guide.
