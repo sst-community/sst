@@ -395,6 +395,10 @@ Also with all ten: 50 at once with a shared file saved 150ms in, all answered by
 
 Still open: #139 (a function whose build fails waits for Lambda's timeout, as its init error goes to the wrong URL), #135 (workers that exit on their own aren't reaped, and a rebuild drops a running invocation) and #134 (memory in a long session).
 
+### A component part looked up by id stays under its component
+
+`existing` with an id looks a part up with its class's `get`. That call gave the options fourth, as a resource's `get(name, id, state, opts)` takes them. A component's `get(name, id, opts)` takes them third, so a part that's a component, like a `Dynamo` given by its table's name, lost its parent and its provider. It sat at the top of the app, and since `nodes` records a part when it's created under the component, each `existingPart()` or `part()` looked it up again: two components of the same name, which a real deploy refuses. A component's `get` now gets its options third. No V5 component of SST's has a component as a part that can be looked up, so none was affected. It showed up in a package component that has a `CognitoUserPool` and three `Dynamo` tables as parts. Tested in `component.test.ts`, "looks up a component part by id, under the component, once".
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.

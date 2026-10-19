@@ -4,6 +4,7 @@ import {
   type Input,
   type Inputs,
   type ResourceTransformationArgs,
+  ComponentResource,
   output,
 } from "@pulumi/pulumi";
 import { Component } from "./component";
@@ -568,10 +569,16 @@ export class PartsComponent<P extends Parts> extends Component {
       throw new VisibleError(
         `The "${this.componentName}" component can't look up its "${key}" by id. Pass the resource itself in "existing".`,
       );
-    return lookup.get(this.nameOf(key, id), resourceId, undefined, {
-      ...opts,
-      parent: this,
-    });
+    const name = this.nameOf(key, id);
+    const lookupOpts = { ...opts, parent: this };
+    // A component's `get` takes its options third, like
+    // `Dynamo.get(name, tableName, opts)`. A resource's takes its state
+    // there, and its options fourth.
+    const isComponent =
+      (lookup as unknown as Function).prototype instanceof ComponentResource;
+    return isComponent
+      ? lookup.get(name, resourceId, lookupOpts)
+      : lookup.get(name, resourceId, undefined, lookupOpts);
   }
 
   // Where a part's resource lived in the component this one takes over from

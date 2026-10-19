@@ -561,6 +561,49 @@ describe("Component parts", () => {
       expect(pulumi.resources.filter((r) => r.kind === "register").length).toBe(1);
     });
 
+    // A component's `get` takes its options third, where a resource's takes
+    // its state. Given there, they'd be lost: the component would sit at the
+    // top of the app, and be looked up again each time it's asked for.
+    it("looks up a component part by id, under the component, once", async () => {
+      class Table extends component("acme:index:Table", {
+        table: aws.dynamodb.Table,
+      }) {
+        constructor(name: string, args: object, opts?: object) {
+          super(name, args, opts);
+          this.part("table", { attributes: [], hashKey: "id" });
+        }
+        static get(name: string, tableName: string, opts?: object) {
+          return new Table(name, { existing: { table: tableName } }, opts);
+        }
+      }
+      class Store extends component("acme:index:Store", { table: Table }) {
+        constructor(
+          name: string,
+          args: import("../../src/components/parts-component").ComponentArgs<{
+            table: typeof Table;
+          }>,
+        ) {
+          super(name, args);
+          this.existingPart("table");
+          this.part("table", {});
+        }
+      }
+
+      const store = new Store("S", { existing: { table: "my-table" } });
+      await pulumi.settle();
+
+      const tables = pulumi.resources.filter(
+        (r) => r.type === "acme:index:Table",
+      );
+      expect(tables.map((r) => r.name)).toEqual(["STable"]);
+      expect(tables[0].parent).toMatch(/acme:index:Store::S$/);
+      expect(store.nodes.table).toBeInstanceOf(Table);
+      const read = pulumi.resources.filter((r) => r.kind === "read");
+      expect(read.map((r) => [r.name, r.options.id])).toEqual([
+        ["STableTable", "my-table"],
+      ]);
+    });
+
     // A component that references something already deployed finds the ids
     // of its other parts itself: here, from the queue it's given.
     it("looks a part up by an id the component works out", async () => {
