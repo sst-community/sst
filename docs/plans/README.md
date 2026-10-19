@@ -12,6 +12,7 @@ Where the fork's larger pieces of work are planned and tracked. `CLAUDE.md` hold
 | [v5-sharing.md](v5-sharing.md) | Sharing components as npm packages: the design, what's been checked, what it takes, and the open questions. |
 | [v5-sharing-host.md](v5-sharing-host.md) | How sharing was finished, step by step: SST keeps the runtime, a package builds against the `sst` npm package, and an app without a `package.json` can use one. |
 | [v5-providers-in-package-json.md](v5-providers-in-package-json.md) | Installing the providers in the app's `package.json`. Tried, and not taken. |
+| [saas-component.md](saas-component.md) | The SaaS component, `@sst-community/saas`: users, tenants, roles and platform admins in one package component. The decisions, the design, what's been checked and what's next. |
 | [policies-experiment.md](policies-experiment.md) | Policies made easier to use: rules in the config, exceptions, tests under `mock()`, and a CDK-NAG style rules package. Tried, not acted on. Also four policy bugs in SST today. |
 
 The rules for writing a v5 component are not here. They're in [`platform/src/components/README.md`](../../platform/src/components/README.md), which ships with the CLI.

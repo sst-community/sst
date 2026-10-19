@@ -1,0 +1,67 @@
+{
+  "name": "@sst-community/saas",
+  "description": "Users, tenants and roles for a SaaS app on AWS, as one SST component.",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sst-community/sst.git",
+    "directory": "packages/saas"
+  },
+  "bugs": "https://github.com/sst-community/sst/issues",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
+    },
+    "./handlers": {
+      "types": "./dist/handlers.d.ts",
+      "default": "./dist/handlers.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3",
+    "@hono/aws-lambda": "^1",
+    "hono": "^4.13.9"
+  },
+  "peerDependencies": {
+    "@pulumi/aws": "^7",
+    "sst": ">=5.0.0-0"
+  },
+  "peerDependenciesMeta": {
+    "@pulumi/aws": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@pulumi/aws": "^7.48.0",
+    "@pulumi/command": "^1.2.1",
+    "@pulumi/docker-build": "^0.0.22",
+    "@pulumi/pulumi": "^3.267.0",
+    "@pulumi/random": "^4.21.2",
+    "@pulumi/tls": "^5.6.1",
+    "@types/node": "^22.20.5",
+    "sst": "npm:@sst-community/sst@^5.0.0-alpha.2",
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "google-protobuf": "3.21.2"
+  }
+}
