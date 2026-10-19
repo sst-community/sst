@@ -136,7 +136,7 @@ On the component's side it's one more value of `storage`, like `{ postgres: db }
 
 ## Found on the way
 
-- **The package guide doesn't say a package's repo has to pin `google-protobuf`.** `@pulumi/pulumi` brings in 3.21.4, and with it every resource `mock()` registers fails with `c.g is not a function`. The SST repo pins 3.21.2 with `overrides`, and so does this package. [Write a Package Component](https://github.com/sst-community/sst/blob/v5/www/src/content/docs/docs/write-a-package-component.mdx) should say so, or `sst` should take care of it.
+- **The package guide doesn't say a package's repo has to pin `google-protobuf`.** `@pulumi/pulumi` brings in 3.21.4, and with it every resource `mock()` registers fails with `c.g is not a function`. The SST repo pins 3.21.2 with `overrides`, and so does this package. [Write a Package Component](https://github.com/sst-community/sst/blob/v5/www/src/content/docs/docs/write-a-package-component.mdx) says so in "Test it" since 2026-10-19. `sst` can't do it for a package: npm only reads `overrides` in the `package.json` it's installing for, not in a dependency's.
 - **`build` is only in `app.graph()`, not in `app.resources`**, though `RecordedResource` documents it for both.
 - **Hono's Lambda adapter moved** to `@hono/aws-lambda`. `hono/aws-lambda` goes in Hono 5.
 
@@ -192,7 +192,7 @@ Still not checked: a user pool and an API passed in `existing`, the hosted UI an
 - **CORS in Firefox and Safari**, with `Authorization` under `allowHeaders: ["*"]`. If either refuses it, `ApiGatewayV2`'s default should name `authorization` as well as `*`, on `v5`.
 - **The Postgres store.**
 - **Events on a bus**, as well as the hooks.
-- **A template for package repos**, made from this one, and the `google-protobuf` pin in the package guide.
+- **A template for package repos**, made from this one.
 - **Its own repo**, once the API has settled.
 
 ## Open questions
