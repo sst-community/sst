@@ -618,6 +618,53 @@ describe("tenancy", () => {
     });
   });
 
+  describe("a role that's renamed", () => {
+    it("leaves its members with no permissions, and says so once", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const before = make();
+      const { tenant } = await before.provision(ann);
+
+      // The owner role is renamed "boss" in the config, and redeployed
+      const after = make({
+        roles: { boss: ["*"], member: ["tenant:read"] },
+        ownerRole: "boss",
+      });
+      const session = await after.session(ann);
+      expect(session.role).toBe("owner");
+      expect(session.permissions).toEqual(new Set());
+      await fails(after.getTenant(ann, tenant!.id), 403);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain(
+        `Members have the role "owner", which isn't one of the roles any more (boss, member)`,
+      );
+      warn.mockRestore();
+    });
+
+    it("is renamed by adding the new one, moving its members, then removing it", async () => {
+      await make().provision(ann);
+      const tenantId = (await store.getUser("ann"))!.activeTenantId!;
+
+      // 1. Add "boss", as the owner role, and keep "owner" for now
+      const step1 = make({
+        roles: { ...DEFAULT_ROLES, boss: ["*"] },
+        ownerRole: "boss",
+      });
+      // 2. Move the owners to it: the last owner can, as "owner" isn't the owner role any more
+      await step1.changeRole(ann, tenantId, "ann", { role: "boss" });
+      // 3. Remove "owner"
+      const step3 = make({
+        roles: {
+          boss: ["*"],
+          admin: DEFAULT_ROLES.admin,
+          member: DEFAULT_ROLES.member,
+        },
+        ownerRole: "boss",
+      });
+      expect((await step3.session(ann)).permissions).toBe("*");
+    });
+  });
+
   describe("admin", () => {
     it("is only for platform admins", async () => {
       const t = make();

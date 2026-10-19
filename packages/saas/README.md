@@ -20,6 +20,8 @@ That gives you:
 
 A user signs up and gets their own tenant. They can create more, switch between them, and invite the people they work with by email. A platform admin can see and change every user and tenant.
 
+It's your SaaS app's **control plane**: the services that run the app as a business, one for every tenant. Your product is the **application plane**: its routes, its data, and how it keeps each tenant's data apart. The component gives your routes the tenant a request is for and checks the caller against it, and leaves the rest to you. See [What it doesn't do](#what-it-doesnt-do).
+
 It needs SST version 5, `5.0.0-alpha.3` or later (`sst@npm:@sst-community/sst@^5.0.0-0`).
 
 ---
@@ -46,7 +48,7 @@ Send the **access token** to the API. The ID token has the claims but not the sc
 
 ### Switching tenants
 
-`PUT /me/tenant` with `{ "tenantId": "..." }` changes the user's current tenant. Then the client refreshes its tokens, and the new ones are for that tenant. The current tenant is kept on the user, so it's the same in every tab and on every device.
+`PUT /me/tenant` with `{ "tenantId": "..." }` changes the user's current tenant. Then the client refreshes its tokens, and the new ones are for that tenant. [The client](#the-client)'s `switchTenant()` does both. The current tenant is kept on the user, so it's the same in every tab and on every device.
 
 ### Roles and permissions
 
@@ -82,6 +84,12 @@ The rules:
 
 **Every route checks the store, not just the token.** If a role changed after a token was issued, the function sees the change straight away. The API's scope check only sees it once the token is refreshed.
 
+**Changing the roles is a deploy**, and every tenant gets the change at once. A member keeps the name of their role in the memberships table, so a role you rename or remove leaves its members with no permissions, and when it's `ownerRole`, leaves their tenants with no owner. The functions log a warning when they find one. To rename a role:
+
+1. Add the new role next to the old one. If it's the owner role, make the new one `ownerRole` too. Deploy.
+2. Move the members to it, with `PATCH /tenant/members/{userId}` or a script of your own over the memberships table.
+3. Remove the old role, and deploy.
+
 ### Invitations
 
 A member with `members:write` invites someone by email, with a role:
@@ -91,7 +99,7 @@ POST /tenant/invitations
 { "email": "dan@example.com", "role": "admin" }
 ```
 
-They join the tenant when they sign up with that email and confirm it. Someone who has signed up already joins the next time the user pool issues them tokens: when they sign in, or when the client refreshes its tokens, which it can do straight away. Only a verified email takes up an invitation.
+They join the tenant when they sign up with that email and confirm it. Someone who has signed up already joins the next time the user pool issues them tokens: when they sign in, or when the client refreshes its tokens, which it can do straight away, with `refresh()` in [the client](#the-client). Only a verified email takes up an invitation.
 
 - **The answer is the same whether or not the email has signed up**, so inviting doesn't tell anyone who has an account.
 - **Someone who signs up through an invitation starts in that tenant.** They still get a tenant of their own when `tenants.personal` is on.
@@ -137,6 +145,53 @@ They're under `path`, which is the root of the API unless you set one. API Gatew
 The `/tenant` routes act on the tenant the token is for. An error comes back as `{ "error": { "code", "message" } }`. The codes your client might match on: `no_active_tenant`, `no_tenant`, `no_user`, `no_member`, `member_exists`, `last_owner`, `personal_tenant`, `no_invitation`, `too_many_invitations`, and `too_soon` (a `429`).
 
 `POST /tenant/members` adds someone who has already signed up, found by email or user id, straight away. Only a verified email is kept, so only a verified email finds anyone. Unlike an invitation, it tells the caller whether an email has signed up: if that matters to you, turn it off with `routes: { "POST /tenant/members": false }` and invite people instead.
+
+---
+
+## The client
+
+`@sst-community/saas/client` calls the built-in routes from your frontend, or any other code. It sends the user's access token with each request, turns an error into a `SaasError` with its `code`, and refreshes the tokens after a change to the tenant the user is in. It uses only `fetch`, and is about 1 KB gzipped.
+
+It doesn't sign anyone in. Give it the access token from whatever does, and a way to refresh it. With Amplify:
+
+```ts title="src/saas.ts"
+import { fetchAuthSession } from "aws-amplify/auth";
+import { saasClient, SaasError } from "@sst-community/saas/client";
+
+export const saas = saasClient({
+  url: import.meta.env.VITE_SAAS_URL, // the component's `url`
+  // path: "/saas", // the component's `path`, if it has one
+  token: async () => (await fetchAuthSession()).tokens?.accessToken?.toString(),
+  refresh: () => fetchAuthSession({ forceRefresh: true }),
+});
+```
+
+```ts
+const { user, tenant, role } = await saas.me();
+const tenants = await saas.tenants(); // with the user's role in each
+
+await saas.switchTenant(tenants[1].id); // switches, then refreshes the tokens
+await saas.invite({ email: "dan@example.com", role: "admin" });
+await saas.changeRole(userId, "member");
+await saas.leave(); // leaves the tenant the user is in, then refreshes
+
+try {
+  await saas.tenant();
+} catch (error) {
+  if (error instanceof SaasError && error.code === "no_active_tenant") {
+    // show the tenant picker
+  }
+}
+```
+
+- **`refresh()`** gets new tokens. Someone who's signed in takes up an invitation to their email this way, without waiting for their next sign-in: call it when they open your app from the invitation's link.
+- **`can(permission)`** says whether the user's role has a permission, from the token's scopes, to show or hide parts of your UI. The API checks the store, so a role changed since the token was issued counts there first.
+- **`claims()`** reads the access token: the user's id, the tenant it's for, their role, whether they're a platform admin, and its scopes. It's read, not checked: the API checks it.
+- **`request(method, path, body)`** calls a route of your own on the same API, with the same token. Its path is from the API's root, where `saas.route()` puts routes, not under `path`.
+- **`admin`** has the `/admin` routes, for platform admins.
+- `switchTenant()`, `deleteTenant()` and `leave()` refresh the tokens. The rest don't, so after `createTenant()`, switch to it if the user should be in it.
+
+The types, like `User`, `Tenant`, `Member` and `Invitation`, come with it.
 
 ---
 
@@ -458,7 +513,7 @@ There's no admin UI. The `/admin` routes are what one would be built on.
 
 ## What it doesn't do
 
-The component does what needs its own data or its own wiring: the user pool and its triggers, users, tenants, roles and invitations, and sending email. What's a decision about your product is left to you, with a place to plug it in:
+The component is the control plane. It does what needs its own data or its own wiring: the user pool and its triggers, users, tenants, roles and invitations, and sending email. The application plane is yours: your routes, your tables, and how your data is kept apart by tenant, whether that's `tenantId` in a key, a table for each tenant or an account for each. What's a decision about your product is left to you too, with a place to plug it in:
 
 | Not in the component | Where it goes |
 | --- | --- |
@@ -466,7 +521,8 @@ The component does what needs its own data or its own wiring: the user pool and 
 | Sending in bulk, or later | A queue of yours, whose subscriber calls `notify()` |
 | In-app notifications, live updates | Components of your own, started from the hooks |
 | How emails look, beyond a logo and a color | A `layout` |
-| An admin UI, or UI components for the frontend | Your frontend, on the built-in routes |
+| Signing in, and keeping the tokens | Amplify, or whatever your frontend signs in with: [the client](#the-client) takes its tokens |
+| An admin UI, or UI components for the frontend | Your frontend, with the client |
 | Billing and plans | Your code: `tenantCreated` and `metadata` |
 
 ---

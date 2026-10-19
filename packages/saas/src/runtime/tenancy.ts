@@ -4,6 +4,7 @@ import { badRequest, conflict, forbidden, HttpError, notFound } from "./http";
 import { allows, covers, permissionsOf, type Permissions } from "./roles";
 import type {
   Invitation,
+  Member,
   Membership,
   Metadata,
   PageArgs,
@@ -63,12 +64,6 @@ export interface TenancyArgs {
   personalTenantName?(user: User): string;
 }
 
-/** A member of a tenant, with who they are. */
-export interface Member extends Membership {
-  email?: string;
-  name?: string;
-}
-
 /** What a user can do in a tenant. */
 export interface Access {
   user: User;
@@ -79,6 +74,8 @@ export interface Access {
   permissions: Permissions;
   can(permission: string): boolean;
 }
+
+export type { Member };
 
 export type Tenancy = ReturnType<typeof tenancy>;
 
@@ -93,6 +90,7 @@ export function tenancy(args: TenancyArgs) {
   const { store, config, hooks = {} } = args;
   const { roles, ownerRole, defaultRole } = config;
   const invitationConfig = config.invitations ?? DEFAULT_INVITATIONS;
+  const unknownRoles = new Set<string>();
   const now = () => new Date().toISOString();
   const personalTenantName =
     args.personalTenantName ??
@@ -232,8 +230,25 @@ export function tenancy(args: TenancyArgs) {
       tenantId,
       membership,
       role,
-      permissions: role ? permissionsOf(roles, role) : new Set<string>(),
+      permissions: role ? permissionsFor(role) : new Set<string>(),
     };
+  }
+
+  /**
+   * What a member's role lets them do. A role that isn't in the config any
+   * more, because it was renamed or removed, lets them do nothing, and is
+   * logged once.
+   */
+  function permissionsFor(role: string) {
+    if (!(role in roles) && !unknownRoles.has(role)) {
+      unknownRoles.add(role);
+      console.warn(
+        `Members have the role "${role}", which isn't one of the roles any more (${Object.keys(
+          roles,
+        ).join(", ")}), so they can do nothing. Move them to another role.`,
+      );
+    }
+    return permissionsOf(roles, role);
   }
 
   /** The user who's acting, created when they're new. */
@@ -250,7 +265,7 @@ export function tenancy(args: TenancyArgs) {
     if (!membership && !user.platformAdmin)
       throw notFound("There's no such tenant.", "no_tenant");
     const role = membership?.role ?? ownerRole;
-    const permissions = permissionsOf(roles, role);
+    const permissions = permissionsFor(role);
     return {
       user,
       membership,

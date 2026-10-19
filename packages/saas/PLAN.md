@@ -37,11 +37,13 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 | 2026-10-18 | **What's in the package, and what the app brings**, asked for by the user: everything packaged is ours to maintain, so it shouldn't be opinionated. The rule: the package does what needs its own data or its own wiring (the user pool and triggers, the records and their rules, invitations, sending email, and finding who to email in a tenant). A decision about the product is left to the app, with a place to plug it in: hooks, `handlers`, `templates`, `layout`, `send`, `store`, `routes`, `transform`. Each thing it ships has one way to replace it, and it doesn't grow a setting where replacing will do. See [What's in the package](#whats-in-the-package). |
 | 2026-10-18 | **Branding is a logo and a link color, and the rest is a `layout`.** Those two are what every app changes. A footer, fonts, legal text or dark mode would each be a setting to keep working in every email client, so they're a layout of the app's own, one function that every email goes through, Cognito's too. Templates are given the layout, so one the app replaces still matches. The logo is a URL the app hosts: the component doesn't upload or serve images. |
 | 2026-10-18 | **`notify()` finds the people and sends, and nothing more**: users by id, or a tenant's members whose role has a permission, at their verified email, one at a time, reporting who was sent, skipped and failed. What to notify about, preferences, unsubscribing, digests and queues are the app's. |
+| 2026-10-18 | **The package is the control plane**, in the terms of AWS's SaaS Lens and SaaS Builder Toolkit: the shared services that run the app as a business (identity, onboarding, tenants, users and roles, invitations, platform admin, the system's emails). The application plane, the product and its data and how that's kept apart by tenant, is the app's. What the package gives the application plane is the tenant context of a request: the tenant in the token, `route()` and `authorized()`, the check against the store. This is the scope rule above, said another way. |
+| 2026-10-18 | **A client for the frontend, `@sst-community/saas/client`**, agreed with the user. It's typed calls for the built-in routes, `SaasError` with the routes' codes, and the token refreshes that a change to the user's tenant needs: `switchTenant()`, `deleteTenant()` and `leave()` refresh, and `refresh()` takes up an invitation at once. It doesn't sign in or keep tokens: the app gives it `token()` and `refresh()` from whatever it signs in with. No UI and no framework bindings. It imports only types and `config.ts`, so it bundles alone, about 1 KB gzipped. |
 | 2026-10-18 | **Invitations can be sent to any address, so they're limited**: at most `invitations.limit` waiting in a tenant (100), and the same address no more than once a minute (`429 too_soon`). They expire after `invitations.expiresIn` (7 days). Inviting again replaces the invitation and sends it again. `POST /tenant/members` stays, for adding someone who has signed up, at once. The `invitation` email is on by default, and `memberAdded` isn't sent to someone who took up an invitation. |
 
 ## Status
 
-**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, invitations, branding, `notify()`, and 132 tests: 48 of the tenancy rules on the in-memory store, 23 of the Hono app, `route()` and the triggers, 23 of the component under `mock()`, 28 of email, and 10 of the DynamoDB store against a fake client. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
+**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, email, invitations, branding, `notify()`, the client, and 144 tests: 50 of the tenancy rules on the in-memory store, 23 of the Hono app, `route()` and the triggers, 23 of the component under `mock()`, 28 of email, 10 of the DynamoDB store against a fake client, and 10 of the client against the Hono app, with tokens from the pre token generation trigger. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
 
 **Fixed on `v5` on the way** (`e53329841`): a part that's a component, looked up by id, lost its parent and was looked up twice. See the [log](https://github.com/sst-community/sst/blob/v5/docs/plans/v5-progress.md). The package still works around it, as it builds against `5.0.0-alpha.2`.
 
@@ -80,6 +82,8 @@ Each has `createdAt` and `updatedAt`. `metadata` is for the app's own fields, an
 
 ### What's in the package
 
+The package is the control plane. The application plane is the app's: its routes, its data, and how it keeps tenants' data apart. Between them, the package gives the application plane the tenant context of each request. Events on a bus, when they come, are how the control plane tells the application plane what changed, which is how AWS's SaaS Builder Toolkit joins the two.
+
 | In the package | Why it's here | Replaced with |
 | --- | --- | --- |
 | The user pool, its clients and triggers, the API and its authorizer | AWS wiring that has to fit together | `transform`, `existing` |
@@ -88,7 +92,7 @@ Each has `createdAt` and `updatedAt`. `metadata` is for the app's own fields, an
 | Sending email: SES, Cognito's emails, the emails about its own changes | Wired to the user pool and to its own changes | `send`, `templates`, `messages` |
 | One plain layout, with a logo and a color | Every app needs its emails to look like it | `layout` |
 | `notify()` | Only it knows who's in a tenant, with which role | Your own lookup and `send` |
-| A typed client for its routes (next) | It's the API's own shape | Calling the routes yourself |
+| A typed client for its routes | It's the API's own shape, and the refreshes it needs | Calling the routes yourself |
 
 Not in the package: which notifications to send, notification settings, unsubscribing, digests, queues, in-app notifications, an admin UI, UI components, billing. Each is the app's, started from the hooks, or from events once there are some.
 
@@ -163,7 +167,7 @@ Still not checked: a user pool and an API passed in `existing`, the hosted UI an
 ## Next
 
 - **`5.0.0-alpha.3`**, then the package's `sst` dev dependency moves to it and the workaround for the lookup goes.
-- **A frontend client**, with typed calls for the built-in routes, a `switchTenant()` that refreshes the tokens, and a way to refresh them to take up an invitation without waiting for the next refresh.
+- **The package doesn't load in plain Node.** `tsc` emits its relative imports as they're written, without `.js`, and Node's ESM loader won't resolve `./config`. Every entry fails with `ERR_MODULE_NOT_FOUND` under `node`. Bundlers resolve them, so SST's builds, Vite and Next work, and the lab didn't notice. To decide: `.js` on the package's relative imports, with `module: "NodeNext"` so `tsc` checks them, or bundling `dist`.
 - **The Postgres store.**
 - **Events on a bus**, as well as the hooks.
 - **A template for package repos**, made from this one, and the `google-protobuf` pin in the package guide.

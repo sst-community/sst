@@ -35,6 +35,12 @@ export interface Membership {
   updatedAt: string;
 }
 
+/** A member of a tenant, with who they are. */
+export interface Member extends Membership {
+  email?: string;
+  name?: string;
+}
+
 /**
  * Someone invited to a tenant by email, who becomes a member when they sign
  * in with that email, verified. There's one for each email in a tenant.

@@ -25,6 +25,10 @@
       "types": "./dist/handlers.d.ts",
       "default": "./dist/handlers.js"
     },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
