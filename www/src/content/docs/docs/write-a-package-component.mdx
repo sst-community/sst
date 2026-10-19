@@ -162,7 +162,7 @@ It finds the file wherever the app installed the package: in its `node_modules`,
 
 ## Test it
 
-Test the component with `mock()` from `sst/testing`, as in [Test it](/docs/write-a-local-component/#test-it) for a local component. It works in vitest, `bun test` and `node --test`, with nothing to set up.
+Test the component with `mock()` from `sst/testing`, as in [Test it](/docs/write-a-local-component/#test-it) for a local component. It works in vitest, `bun test` and `node --test`, with one thing to set up, below.
 
 ```ts title="test/email-domain.test.ts"
 import { expect, test } from "vitest";
@@ -182,6 +182,16 @@ test("verifies the domain in Cloudflare", async () => {
 ```
 
 `mock()` gives the test `sst` with the components of each provider whose packages are installed, like `sst.aws`. Using one that isn't fails, and says what to install.
+
+Pin `google-protobuf`, which `@pulumi/pulumi` brings in, to `3.21.2`, as SST does. With `3.21.4`, which it gets otherwise, every resource `mock()` registers fails with `c.g is not a function`.
+
+```json title="package.json"
+"overrides": {
+  "google-protobuf": "3.21.2"
+}
+```
+
+That's npm's field, and Bun's. With pnpm it's `pnpm.overrides`, and with Yarn `resolutions`.
 
 ---
 
