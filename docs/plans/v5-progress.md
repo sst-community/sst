@@ -411,6 +411,8 @@ Deployed in the lab with 4.x, a domain sender with DMARC, a custom MAIL FROM dom
 
 *Write a Package Component* now says why its `tsconfig.json` has `moduleResolution: "bundler"`, that an app needs it too, and which of a package's code needs `.js` on its imports. Checked with `tsc` against the `sst` package: in a package's repo under `NodeNext`, `component`, `optional` and `many` from `sst/components` are `any`, and `plain` and `v5.Function` don't exist, with nothing to say why while `skipLibCheck` is on. The 4.x components, like `Bucket`, keep their types. In an app, `sst/components` isn't found through the paths in `.sst/tsconfig.json`. With `bundler`, both are typed. See the decision of 2026-10-19 in [v5-components.md](v5-components.md#decisions).
 
+The guide's "Test it" also says to pin `google-protobuf` to `3.21.2` in the package's repo, as SST's `package.json` files do. `@pulumi/pulumi` asks for `^3.21.4`, and with that every resource `mock()` registers fails with `c.g is not a function`. The first package component, `@sst-community/saas`, ran into it.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
