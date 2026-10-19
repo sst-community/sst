@@ -405,6 +405,12 @@ The 21st port, ahead of the ones on the plan's order, because a package componen
 
 Deployed in the lab with 4.x, a domain sender with DMARC, a custom MAIL FROM domain and two events, one of them `deliveries`. After the switch `sst diff` showed no changes, and the deploy changed nothing in AWS. 19 resources before and after, each with the id it had; the `deliveries` destination moved to its V5 name through the takeover map. A second diff showed no changes. The stage was removed, with its passphrase and state files.
 
+## 2026-10-19
+
+### A package component builds with `bundler`
+
+*Write a Package Component* now says why its `tsconfig.json` has `moduleResolution: "bundler"`, that an app needs it too, and which of a package's code needs `.js` on its imports. Checked with `tsc` against the `sst` package: in a package's repo under `NodeNext`, `component`, `optional` and `many` from `sst/components` are `any`, and `plain` and `v5.Function` don't exist, with nothing to say why while `skipLibCheck` is on. The 4.x components, like `Bucket`, keep their types. In an app, `sst/components` isn't found through the paths in `.sst/tsconfig.json`. With `bundler`, both are typed. See the decision of 2026-10-19 in [v5-components.md](v5-components.md#decisions).
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.

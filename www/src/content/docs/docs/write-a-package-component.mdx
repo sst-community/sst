@@ -37,6 +37,10 @@ npm install -D sst@npm:@sst-community/sst@^5.0.0-0 @pulumi/pulumi @pulumi/aws @p
 }
 ```
 
+Keep `moduleResolution` on `bundler`. SST's types import their own files without an extension, which TypeScript doesn't follow under `NodeNext`. There, `component()` and the V5 components come out as `any` or missing, and `skipLibCheck` hides why.
+
+The component's imports can leave out `.js` too: the app bundles the component when it deploys, and bundles a handler the package ships when it builds the function. Only code that Node loads without a bundler needs it, like a library the package exports for a server started with `node`. `tsc` writes an import as it is, and Node doesn't find `./config` without its extension.
+
 ---
 
 ## Write it
@@ -231,6 +235,8 @@ For TypeScript to read the package's types, the app's `tsconfig.json` extends `.
   }
 }
 ```
+
+Set the app's `moduleResolution` to `bundler` as well. Under `NodeNext`, TypeScript doesn't find SST's types through those paths.
 
 :::note
 `paths` in your own `tsconfig.json` replace the ones it extends. If you have some, add the entries from `.sst/tsconfig.json` to yours. `sst install` changes them when you add a provider.
