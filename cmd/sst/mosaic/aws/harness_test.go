@@ -66,6 +66,14 @@ func (f *fakeAppSync) Publish(ctx context.Context, channel string, event interfa
 	return nil
 }
 
+// unsubscribe removes the channel's subscribers, as when a bridge's Lambda
+// environment goes away.
+func (f *fakeAppSync) unsubscribe(channel string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.subs, channel)
+}
+
 func (f *fakeAppSync) Subscribe(ctx context.Context, channel string) (chan string, error) {
 	sub := make(chan string, 1000)
 	f.mu.Lock()
@@ -242,34 +250,23 @@ type harness struct {
 	envs          atomic.Int32
 }
 
-// testLog keeps what sst dev logs during a test, to print if it fails.
-type testLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *testLog) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
-}
-
-func (l *testLog) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.String()
-}
-
 func newHarness(t *testing.T, rt *fakeRuntime) *harness {
 	t.Helper()
-	// registered first, so it runs after the loop has stopped
-	logs := &testLog{}
+	// What sst dev logs is kept, to print if the test fails. It's kept in a
+	// file, so the tests of what sst dev holds in memory don't count it.
+	logs, err := os.Create(filepath.Join(t.TempDir(), "sst.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	// registered before the loop's, so it runs after the loop has stopped
 	t.Cleanup(func() {
 		slog.SetDefault(previous)
+		logs.Close()
 		if t.Failed() {
-			t.Logf("what sst dev logged:\n%s", logs.String())
+			logged, _ := os.ReadFile(logs.Name())
+			t.Logf("what sst dev logged:\n%s", logged)
 		}
 	})
 	mux := http.NewServeMux()
@@ -349,7 +346,9 @@ type fakeBridge struct {
 	h          *harness
 	functionID string
 	workerID   string
+	env        []string
 	client     *bridge.Client
+	cancel     context.CancelFunc
 	requests   atomic.Int32
 	// pinged is sent to when sst dev pings the bridge
 	pinged chan struct{}
@@ -361,21 +360,35 @@ type fakeBridge struct {
 
 // bridge starts a bridge for the function, which tells sst dev it's there.
 func (h *harness) bridge(functionID string) *fakeBridge {
+	return h.bridgeWithEnv(functionID, []string{})
+}
+
+// bridgeWithEnv starts a bridge whose Lambda environment has the variables.
+func (h *harness) bridgeWithEnv(functionID string, env []string) *fakeBridge {
 	workerID := fmt.Sprintf("%032d", h.envs.Add(1))
+	ctx, cancel := context.WithCancel(h.ctx)
 	b := &fakeBridge{
 		h:          h,
 		functionID: functionID,
 		workerID:   workerID,
-		client:     bridge.NewClient(h.ctx, h.appsync, workerID, h.prefix+"/"+workerID),
+		env:        env,
+		client:     bridge.NewClient(ctx, h.appsync, workerID, h.prefix+"/"+workerID),
+		cancel:     cancel,
 		pinged:     make(chan struct{}, 100),
 	}
 	b.init()
 	return b
 }
 
+// close stops the bridge, as when Lambda removes its environment.
+func (b *fakeBridge) close() {
+	b.cancel()
+	b.h.appsync.unsubscribe(b.h.prefix + "/" + b.workerID + "/in")
+}
+
 func (b *fakeBridge) init() {
 	writer := b.client.NewWriter(bridge.MessageInit, b.h.prefix+"/in")
-	if err := sendJSON(writer, bridge.InitBody{FunctionID: b.functionID, Environment: []string{}}); err != nil {
+	if err := sendJSON(writer, bridge.InitBody{FunctionID: b.functionID, Environment: b.env}); err != nil {
 		b.h.t.Error(err)
 	}
 }
