@@ -57,7 +57,16 @@ export function createHandlers(options: HandlerOptions = {}) {
     api(event: LambdaEvent, context?: LambdaContext) {
       if (!api) {
         const { config } = setup();
-        api = handle(new Hono().route(config.path || "/", saasApp(options)));
+        api = handle(
+          new Hono().route(config.path || "/", saasApp(options)).notFound((c) =>
+            c.json(
+              {
+                error: { code: "not_found", message: "There's no such route." },
+              },
+              404,
+            ),
+          ),
+        );
       }
       return api(event, context);
     },

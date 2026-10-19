@@ -371,42 +371,49 @@ describe("the api handler", () => {
     else process.env[CONFIG_ENV] = original;
   });
 
+  // What API Gateway sends for a GET to a path, through `GET /saas/{proxy+}`
+  const gatewayEvent = (path: string) => ({
+    version: "2.0",
+    routeKey: "GET /saas/{proxy+}",
+    rawPath: path,
+    rawQueryString: "",
+    headers: { host: "api.example.com" },
+    body: null,
+    isBase64Encoded: false,
+    requestContext: {
+      accountId: "123456789012",
+      apiId: "api",
+      domainName: "api.example.com",
+      domainPrefix: "api",
+      http: {
+        method: "GET",
+        path,
+        protocol: "HTTP/1.1",
+        sourceIp: "127.0.0.1",
+        userAgent: "test",
+      },
+      requestId: "id",
+      routeKey: "GET /saas/{proxy+}",
+      stage: "$default",
+      time: "",
+      timeEpoch: 0,
+      authorizer: { jwt: { claims: { sub: "ann" }, scopes: null } },
+    } as any,
+  });
+
   it("serves the routes under the component's path, from an API Gateway event", async () => {
     const store = memoryStore();
     const { api } = createHandlers({
       store,
       config: config({ path: "/saas" }),
     });
-    const result = await api({
-      version: "2.0",
-      routeKey: "ANY /saas/{proxy+}",
-      rawPath: "/saas/me",
-      rawQueryString: "",
-      headers: { host: "api.example.com" },
-      body: null,
-      isBase64Encoded: false,
-      requestContext: {
-        accountId: "123456789012",
-        apiId: "api",
-        domainName: "api.example.com",
-        domainPrefix: "api",
-        http: {
-          method: "GET",
-          path: "/saas/me",
-          protocol: "HTTP/1.1",
-          sourceIp: "127.0.0.1",
-          userAgent: "test",
-        },
-        requestId: "id",
-        routeKey: "ANY /saas/{proxy+}",
-        stage: "$default",
-        time: "",
-        timeEpoch: 0,
-        authorizer: { jwt: { claims: { sub: "ann" }, scopes: null } },
-      } as any,
-    });
+    const result = await api(gatewayEvent("/saas/me"));
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body).user.id).toBe("ann");
+
+    const missing = await api(gatewayEvent("/saas/nope"));
+    expect(missing.statusCode).toBe(404);
+    expect(JSON.parse(missing.body).error.code).toBe("not_found");
   });
 
   it("says what's missing when it isn't set up", async () => {

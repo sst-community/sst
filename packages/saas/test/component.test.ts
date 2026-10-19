@@ -10,6 +10,12 @@ const ofType = (type: string) => app.resources.filter((r) => r.type === type);
 const configOf = (fn: string) =>
   JSON.parse(find(fn)!.inputs.environment.variables.SAAS_CONFIG);
 // What the CLI builds a function from: only the graph has it
+// The route keys the component adds under a path, one for each method
+const builtIn = (path = "") =>
+  ["GET", "POST", "PUT", "PATCH", "DELETE"].flatMap((method) => [
+    `${method} ${path}/admin/{proxy+}`,
+    `${method} ${path}/{proxy+}`,
+  ]);
 const buildOf = (name: string) =>
   app.graph().find((r) => r.name === name)?.build;
 
@@ -68,14 +74,29 @@ describe("Saas", () => {
         r.inputs.authorizationScopes,
       ])
       .sort();
-    expect(routes).toEqual([
-      ["ANY /admin/{proxy+}", "JWT", ["platform/admin"]],
-      ["ANY /{proxy+}", "JWT", undefined],
-    ]);
+    expect(routes).toEqual(
+      builtIn()
+        .map((key) => [
+          key,
+          "JWT",
+          key.includes("/admin/") ? ["platform/admin"] : undefined,
+        ])
+        .sort(),
+    );
+    // No route takes OPTIONS, so API Gateway answers a CORS preflight itself
+    expect(routes.some(([key]) => /^(ANY|OPTIONS) /.test(key))).toBe(false);
+
+    // One integration and one permission for all of them
     const integrations = ofType("aws:apigatewayv2/integration:Integration");
-    expect(integrations).toHaveLength(2);
-    for (const integration of integrations)
-      expect(integration.inputs.integrationUri).toContain("AppApiFunction");
+    expect(integrations.map((r) => r.name)).toEqual(["AppIntegration"]);
+    expect(integrations[0].inputs.integrationUri).toContain("AppApiFunction");
+    for (const route of ofType("aws:apigatewayv2/route:Route"))
+      expect(route.inputs.target).toBe(
+        `integrations/${integrations[0].name}_id`,
+      );
+    const invoke = find("AppPermission")!.inputs;
+    expect(invoke).toMatchObject({ principal: "apigateway.amazonaws.com" });
+    expect(invoke.sourceArn).toMatch(/\/\*$/);
 
     const authorizer = ofType("aws:apigatewayv2/authorizer:Authorizer")[0]
       .inputs;
@@ -170,7 +191,7 @@ describe("Saas", () => {
       ofType("aws:apigatewayv2/route:Route")
         .map((r) => r.inputs.routeKey)
         .sort(),
-    ).toEqual(["ANY /saas/admin/{proxy+}", "ANY /saas/{proxy+}"]);
+    ).toEqual(builtIn("/saas").sort());
   });
 
   it("checks its roles", () => {
@@ -245,11 +266,7 @@ describe("Saas", () => {
       ofType("aws:apigatewayv2/route:Route")
         .map((r) => r.inputs.routeKey)
         .sort(),
-    ).toEqual([
-      "ANY /saas/admin/{proxy+}",
-      "ANY /saas/{proxy+}",
-      "GET /health",
-    ]);
+    ).toEqual([...builtIn("/saas"), "GET /health"].sort());
   });
 
   it("lets a user pool that's passed in invoke the triggers, and leaves it as it is", async () => {

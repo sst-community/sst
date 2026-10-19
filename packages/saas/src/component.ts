@@ -6,7 +6,7 @@ import {
   output,
   type ComponentResourceOptions,
 } from "@pulumi/pulumi";
-import { lambda } from "@pulumi/aws";
+import { apigatewayv2, lambda } from "@pulumi/aws";
 import {
   component,
   env,
@@ -32,6 +32,9 @@ import {
 
 const PACKAGE = "@sst-community/saas";
 
+// The methods the built-in routes answer. Not `OPTIONS`: see `route`.
+const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
+
 const parts = {
   /**
    * The user pool people sign up and sign in with, by email. Its triggers are
@@ -56,6 +59,16 @@ const parts = {
   memberships: optional(v5.Dynamo),
   /** The function behind every built-in route. */
   apiFunction: v5.Function,
+  /**
+   * The API's routes to `apiFunction`, by route key: `{path}/{proxy+}` and
+   * `{path}/admin/{proxy+}`, for each method but `OPTIONS`, so that API
+   * Gateway answers a CORS preflight itself.
+   */
+  route: many(apigatewayv2.Route),
+  /** What the routes send requests to: `apiFunction`. */
+  integration: apigatewayv2.Integration,
+  /** Lets API Gateway invoke `apiFunction`. */
+  permission: lambda.Permission,
   /** The trigger that creates a user, and their own tenant, when they confirm their account. */
   postConfirmation: v5.Function,
   /**
@@ -363,15 +376,40 @@ export class Saas extends component("sst-community:saas:Saas", parts) {
       name,
       jwt: { issuer, audiences: clients.map((client) => client.id) },
     }).id;
-    // Each route checks the rest itself, against the store
-    api.route(`ANY ${path}/{proxy+}`, apiFunction.arn, {
-      auth: { jwt: { authorizer: this.authorizerId } },
+    // One route for each method, all to one integration. `ANY` would take
+    // the CORS preflight too, and the authorizer would turn it away. Each
+    // route checks the rest itself, against the store.
+    const permission = this.part("permission", {
+      action: "lambda:InvokeFunction",
+      function: apiFunction.arn,
+      principal: "apigateway.amazonaws.com",
+      sourceArn: interpolate`${api.nodes.api.executionArn}/*`,
     });
-    api.route(`ANY ${path}/admin/{proxy+}`, apiFunction.arn, {
-      auth: {
-        jwt: { authorizer: this.authorizerId, scopes: [PLATFORM_ADMIN_SCOPE] },
+    const integration = this.part(
+      "integration",
+      {
+        apiId: api.nodes.api.id,
+        integrationType: "AWS_PROXY",
+        integrationUri: apiFunction.arn,
+        payloadFormatVersion: "2.0",
       },
-    });
+      { dependsOn: [permission] },
+    );
+    for (const [prefix, scopes] of [
+      [path, undefined],
+      [`${path}/admin`, [PLATFORM_ADMIN_SCOPE]],
+    ] as const)
+      for (const method of METHODS) {
+        const routeKey = `${method} ${prefix}/{proxy+}`;
+        this.part("route", routeKey, {
+          apiId: api.nodes.api.id,
+          routeKey,
+          target: interpolate`integrations/${integration.id}`,
+          authorizationType: "JWT",
+          authorizerId: this.authorizerId,
+          authorizationScopes: scopes && [...scopes],
+        });
+      }
   }
 
   /** The URL of the API. */

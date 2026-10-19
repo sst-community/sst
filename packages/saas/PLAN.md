@@ -6,17 +6,18 @@ Branch `v5-saas`, started 2026-10-18. Last updated 2026-10-18.
 
 One component that sets up what most SaaS apps build first: sign-up and sign-in, users, tenants (workspaces), roles in them, and platform admins. It should take one line to start with, and every piece of it should still be yours to change, down to the storage.
 
-It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it moves to a repo of its own. The package's own guide is its [README](../../packages/saas/README.md).
+It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it moves to a repo of its own. The package's own guide is its [README](README.md).
 
 ## Decisions
 
 | Date | Decision |
 | --- | --- |
-| 2026-10-18 | **A package component, not `sst.aws.v5.Saas`.** `aws/v5/` holds ports of 4.x components, and `v5-components.test.ts` checks each one has an original. The component ships handler code and a data model, so it needs its own versions. It's also the first real use of [goal 3](v5-goals.md#3-anyone-can-write-a-component-and-share-it-as-a-package). |
+| 2026-10-18 | **A package component, not `sst.aws.v5.Saas`.** `aws/v5/` holds ports of 4.x components, and `v5-components.test.ts` checks each one has an original. The component ships handler code and a data model, so it needs its own versions. It's also the first real use of [goal 3](https://github.com/sst-community/sst/blob/v5/docs/plans/v5-goals.md#3-anyone-can-write-a-component-and-share-it-as-a-package). |
 | 2026-10-18 | **It lives in `packages/saas` on a branch for now**, with npm and a lockfile of its own, like the adapters there. It builds and tests against the published `sst` package (`@sst-community/sst@5.0.0-alpha.2`), as a repo of its own would. Its type is `sst-community:saas:Saas`. |
 | 2026-10-18 | **Three DynamoDB tables**, users, tenants and memberships. Everything reaches them through a `Store` interface, so another database is another `Store`. `storage: "custom"` creates no tables, for a store of the app's own. A Postgres store, for RDS or Aurora or a database the app already has, comes later. |
 | 2026-10-18 | **Few runtime dependencies**: `@aws-sdk/client-dynamodb`, `hono` and `@hono/aws-lambda`. Hono has no dependencies of its own. Items are converted by hand rather than with `@aws-sdk/util-dynamodb`, and the event types are declared in the package rather than taken from `@types/aws-lambda`. `hono/aws-lambda` is deprecated and goes in Hono 5, so the adapter is `@hono/aws-lambda`, which takes Hono 4.13.9 and 5. |
-| 2026-10-18 | **The built-in routes are a Hono app, in one function, behind two proxy routes**: `ANY {path}/{proxy+}`, open to anyone signed in, and `ANY {path}/admin/{proxy+}`, which needs the `platform/admin` scope. That's six resources where a gateway route for each of the 17 would be about fifty. The app can be mounted in an app of your own (`saasApp()`). A route on the same path takes a built-in one's place at the API, and `routes: { X: false }` turns one off. |
+| 2026-10-18 | **The built-in routes are a Hono app, in one function, behind proxy routes**: `{path}/{proxy+}`, open to anyone signed in, and `{path}/admin/{proxy+}`, which needs the `platform/admin` scope. The app can be mounted in an app of your own (`saasApp()`). A route on the same path takes a built-in one's place at the API, and `routes: { X: false }` turns one off. |
+| 2026-10-18 | **A proxy route for each method, not `ANY`**, changed the same day after the first deploy. An `ANY` route matches a CORS preflight too, so the JWT authorizer turned it away with a 401, and a browser can't call the API from another origin. With a route for GET, POST, PUT, PATCH and DELETE, nothing matches `OPTIONS`, and API Gateway answers the preflight itself without calling the function. The component creates the ten routes itself, all to one integration with one invoke permission: twelve resources, where a gateway route for each of the 17 built-in routes would be about fifty. AWS suggests an `OPTIONS /{proxy+}` route without authorization instead, which would send each preflight to the function. |
 | 2026-10-18 | **Every route checks the store.** The token says who's calling and which tenant they're in, but whether they can do something is read from the memberships, so a change of role counts at once. The scopes in the access token are a first check at the API, for `/admin` and for routes added with a `permission`. |
 | 2026-10-18 | **The current tenant is in the token.** The pre token generation trigger (version 2 of its event) adds `tenant_id`, `tenant_role` and `platform_admin` to both tokens, and a scope for each permission of the role to the access token. It's kept on the user (`activeTenantId`), so `PUT /me/tenant` and a token refresh switch it. |
 | 2026-10-18 | **Roles are lists of permissions**, configurable, with `"*"` for every permission. `ownerRole` is what a tenant's creator gets, and a tenant always keeps one. `defaultRole` is what a member is added with. A member can only give, change or remove a role whose permissions they all have. |
@@ -28,11 +29,11 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 
 ## Status
 
-**Done (2026-10-18), not committed:** the component, the runtime, the shipped handlers, the README, and 75 tests: 32 of the tenancy rules on the in-memory store, 20 of the Hono app, `route()` and the triggers, 15 of the component under `mock()`, and 8 of the DynamoDB store against a fake client. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
+**Done (2026-10-18):** the component, the runtime, the shipped handlers, the README, and 75 tests: 32 of the tenancy rules on the in-memory store, 20 of the Hono app, `route()` and the triggers, 15 of the component under `mock()`, and 8 of the DynamoDB store against a fake client. `tsc` is clean, and the shipped handlers bundle with esbuild (565 KB minified, most of it the AWS SDK) and load.
 
-**Fixed on `v5` on the way** (`e53329841`): a part that's a component, looked up by id, lost its parent and was looked up twice. See the [log](v5-progress.md). The package still works around it, as it builds against `5.0.0-alpha.2`.
+**Fixed on `v5` on the way** (`e53329841`): a part that's a component, looked up by id, lost its parent and was looked up twice. See the [log](https://github.com/sst-community/sst/blob/v5/docs/plans/v5-progress.md). The package still works around it, as it builds against `5.0.0-alpha.2`.
 
-**Not deployed yet.** Nothing here has run in AWS. See [Not verified](#not-verified).
+**Deployed in the lab on 2026-10-18**, and removed. See [Checked in AWS](#checked-in-aws).
 
 ## Design
 
@@ -45,6 +46,7 @@ It's `Saas` in the package `@sst-community/saas`, in `packages/saas` until it mo
 | `api` | `v5.ApiGatewayV2`, with a JWT authorizer whose audiences are the clients |
 | `users`, `tenants`, `memberships` | `optional(v5.Dynamo)`, not created for `"custom"` storage |
 | `apiFunction`, `postConfirmation`, `preTokenGeneration` | `v5.Function` |
+| `route`, `integration`, `permission` | `many(apigatewayv2.Route)`, one for each method under `{path}` and `{path}/admin`; the one `apigatewayv2.Integration` they send requests to; and the `lambda.Permission` that lets API Gateway invoke `apiFunction` |
 | `triggerPermission` | `many(lambda.Permission)`, only for a user pool passed in `existing` |
 
 The functions are linked to the tables, not to the component: a part that waits for its own component is never created. `saas.route()` does the same for routes of the app's own. A function outside the component can link it, and gets `SAAS_CONFIG` and access to the tables.
@@ -87,27 +89,32 @@ On the component's side it's one more value of `storage`, like `{ postgres: db }
 
 ## Found on the way
 
-- **The package guide doesn't say a package's repo has to pin `google-protobuf`.** `@pulumi/pulumi` brings in 3.21.4, and with it every resource `mock()` registers fails with `c.g is not a function`. The SST repo pins 3.21.2 with `overrides`, and so does this package. [Write a Package Component](../../www/src/content/docs/docs/write-a-package-component.mdx) should say so, or `sst` should take care of it.
+- **The package guide doesn't say a package's repo has to pin `google-protobuf`.** `@pulumi/pulumi` brings in 3.21.4, and with it every resource `mock()` registers fails with `c.g is not a function`. The SST repo pins 3.21.2 with `overrides`, and so does this package. [Write a Package Component](https://github.com/sst-community/sst/blob/v5/www/src/content/docs/docs/write-a-package-component.mdx) should say so, or `sst` should take care of it.
 - **`build` is only in `app.graph()`, not in `app.resources`**, though `RecordedResource` documents it for both.
 - **Hono's Lambda adapter moved** to `@hono/aws-lambda`. `hono/aws-lambda` goes in Hono 5.
 
-## Not verified
+## Checked in AWS
 
-All of it needs a deploy. In the lab account, on a stage of its own:
+In the lab account on 2026-10-18, with `sst5` built from `v5` at `e53329841`. The app installed the package from the tarball `npm pack` writes, as it would from npm, and ran on a stage of its own. Everything was removed afterwards, along with the stage's passphrase, state files and sourcemaps.
 
-- That a version 2 pre token generation trigger's `scopesToAdd` reaches the access token of a sign-in with SRP, not only with the hosted UI, and that the API's scope check sees them.
-- That `tenant_id`, `tenant_role` and `platform_admin` can be added to the access token.
-- That API Gateway answers a CORS preflight on the proxy routes before the JWT authorizer.
-- That the user pool is created on the Essentials tier, and both triggers answer within 5 seconds, in a deploy and in `sst dev`.
-- That the app's build finds the shipped handlers with `createRequire()`, and bundles the package's dependencies.
-- The DynamoDB store against real tables: the transactions, the conditions, and the indexes.
-- A user pool and an API passed in `existing`.
+- **Deploy and diff.** It deployed on the first try (65 resources), and `sst diff` then showed no changes. So did a second diff after the change of routes.
+- **The user pool** is on the Essentials tier, signs in by email, and has both triggers, with version 2 of the pre token generation event.
+- **Signing up.** A user who signed up and was confirmed was created by the post confirmation trigger, with a tenant of their own and the owner role. Their email was kept once it was verified, on their next sign-in. A user an admin created, which that trigger never sees, was created by the pre token generation trigger.
+- **Tokens.** On a sign-in through the user pool's API (`USER_PASSWORD_AUTH`, which goes the same way as SRP), both tokens had `tenant_id`, `tenant_role` and, for a platform admin, `platform_admin`. The access token's `scope` had `tenant/*` for an owner, a scope for each permission of other roles, and `platform/admin`.
+- **The API's checks.** It turned away a route of the app's own when the token's role didn't have its permission (`403` from API Gateway), and `/admin` for anyone but a platform admin. The function turned away built-in routes the role didn't allow. When a member was made an admin, their old token could rename the tenant at once, as the function reads the store. The API's own check on a route of the app's let them through only once the token was refreshed.
+- **Tenants and members.** Creating a tenant, switching to it with a refresh, adding a member by email, changing their role, and paging the admin lists with a cursor all worked, against real tables.
+- **CORS.** With `ANY` routes the preflight got a 401. With a route for each method it gets a 204 with the CORS headers, under `/admin` and on routes of the app's own too.
+- **Timing.** The pre token generation trigger took 140 ms on a cold start (257 ms to start) and 55 ms warm; post confirmation 169 ms (416 ms to start). In `sst dev`, the CLI built the shipped handlers from the package in `node_modules` and ran them on the machine: a sign-in took 2 seconds in all, its trigger 181 to 348 ms.
+
+Still not checked: a user pool and an API passed in `existing`, the hosted UI and federated sign-in, and the AWS SDK's retries under load.
 
 ## Next
 
-1. Deploy it in the lab and check the list above.
-2. Commit it on `v5-saas`.
-3. Then, in some order: invitations (a pending membership by email, taken up when that email is verified, and an event for the app to send the email); the Postgres store; events on a bus as well as the hooks; a template for package repos made from this one.
+- **Invitations**: a pending membership by email, taken up when that email is verified, and an event for the app to send the email.
+- **The Postgres store.**
+- **Events on a bus**, as well as the hooks.
+- **A template for package repos**, made from this one, and the `google-protobuf` pin in the package guide.
+- **Its own repo**, once the API has settled.
 
 ## Open questions
 

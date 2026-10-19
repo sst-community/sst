@@ -85,7 +85,7 @@ The rules:
 
 ## The built-in routes
 
-They're under `path`, which is the root of the API unless you set one. API Gateway sends them all to one function, which runs a [Hono](https://hono.dev) app.
+They're under `path`, which is the root of the API unless you set one. API Gateway sends them all to one function, which runs a [Hono](https://hono.dev) app. It has a proxy route for each method but `OPTIONS`, so it answers a CORS preflight itself, before the authorizer.
 
 | Route | Who | Body |
 | --- | --- | --- |
@@ -166,7 +166,7 @@ const app = new Hono<SaasEnv>()
 export const handler = handle(app);
 ```
 
-Then point the component's API function at it, with `transform: { apiFunction: { handler: "src/api.handler" } }`. Mount `saasApp()` at the component's `path`: `"/"` here, as it has none. Every path on the API reaches this function, so your routes need no gateway routes of their own.
+Then point the component's API function at it, with `transform: { apiFunction: { handler: "src/api.handler" } }`. Mount `saasApp()` at the component's `path`: `"/"` here, as it has none. Every path on the API reaches this function, so your routes need no gateway routes of their own. They're only checked by the authorizer, though: check permissions with `authorized()`.
 
 ### Anywhere else
 
@@ -214,6 +214,7 @@ saas.nodes.users.nodes.table; // the aws.dynamodb.Table
 | `userPool` | The `CognitoUserPool` |
 | `client` | A `CognitoUserPoolClient` for each name in `clients` |
 | `api` | The `ApiGatewayV2` |
+| `route`, `integration`, `permission` | The API's routes to `apiFunction`, the integration they share, and the permission that lets API Gateway invoke it |
 | `users`, `tenants`, `memberships` | The `Dynamo` tables |
 | `apiFunction` | The function behind the built-in routes |
 | `postConfirmation`, `preTokenGeneration` | The triggers |
@@ -308,7 +309,7 @@ There's no admin UI. The `/admin` routes are what one would be built on.
 
 ## Working on this package
 
-It lives in the sst-community repo for now, in `packages/saas`, and uses npm with its own lockfile.
+It lives in the sst-community repo for now, in `packages/saas`, and uses npm with its own lockfile. Everything about it is in this folder, so it can move to a repo of its own as it is. The decisions, the design, what's been checked in AWS and what's next are in [PLAN.md](PLAN.md).
 
 ```bash
 npm install
