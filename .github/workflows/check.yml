@@ -75,7 +75,7 @@ jobs:
           node-version: "24"
 
       - name: Run platform tests
-        run: cd platform && npx vitest run --pool=forks
+        run: bun run test:platform
 
       - name: Build CLI
         run: go build -o sst ./cmd/sst

@@ -29,7 +29,7 @@ jobs:
   review:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
       pull-requests: write
@@ -38,7 +38,8 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number }}
-      MODEL: opencode/space-bunny-free
+      MODEL: opencode/deepseek-v4.1-flash-free
+      OPENCODE: opencode-ai@1.19.3
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -52,6 +53,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # opencode starts from a list of models that can be older than MODEL,
+      # and then doesn't find it. This fetches the current list from
+      # models.dev. No token here either.
+      - name: Refresh opencode's models
+        continue-on-error: true
+        timeout-minutes: 5
+        run: npx -y "$OPENCODE" models opencode --refresh >/dev/null
+
       # No token here. A failure, such as the free model being unavailable,
       # still posts the checks.
       - name: Review with opencode
@@ -59,7 +68,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 15
         run: |
-          npx -y opencode-ai@1.18.34 run --pure --agent review --model "$MODEL" \
+          npx -y "$OPENCODE" run --pure --agent review --model "$MODEL" \
             -f "$OUT/pr.md" -f "$OUT/pr.diff" -- "$(cat .github/review/prompt.md)" \
             </dev/null >"$OUT/review.raw"
         env:

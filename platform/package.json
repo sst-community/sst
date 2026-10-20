@@ -4,7 +4,7 @@
   "type": "module",
   "prettier": {},
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --pool=forks",
     "dev": "tsc --watch --noEmit",
     "build": "bash ./scripts/build"
   },

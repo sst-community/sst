@@ -28,12 +28,15 @@ For the docs site, run `bun run docs:generate` and then `bun run docs:dev`.
 
 ## Before you open a pull request
 
-Run the type check and the Go tests:
+Run the type check, the Go tests and the components' tests:
 
 ```bash
 bun run typecheck
 bun run test:cli
+bun run test:platform
 ```
+
+The components' tests need Node 22 or later.
 
 If the change affects what gets deployed or how `sst dev` behaves, try it on an example app and say what you ran in the pull request.
 

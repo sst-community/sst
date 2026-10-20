@@ -27,8 +27,8 @@ export interface MysqlArgs {
    * causing downtime. Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
    * :::
    *
-   * Without it, RDS creates the database with its current minor version of MySQL 8.0, and
-   * a deployed database keeps the version it has.
+   * Without it, RDS creates the database with its current minor version of MySQL 8.0.
+   * Changing this default doesn't change the version of a database that's already deployed.
    *
    * @default `"8.0"`
    * @example

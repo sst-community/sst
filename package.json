@@ -11,6 +11,7 @@
     "build:cli": "go build -ldflags \"-X github.com/sst/sst/v3/cmd/sst/mosaic/ui.Distribution=sst-community-v5\" -o dist/sst5 ./cmd/sst",
     "build:sdk": "bun run --cwd ./sdk/js build",
     "test:cli": "go test ./...",
+    "test:platform": "bun run --filter @sst/platform test",
     "typecheck": "bun run typecheck:platform && bun run typecheck:sdk",
     "typecheck:platform": "tsc --noEmit -p platform/tsconfig.json",
     "typecheck:sdk": "tsc --noEmit -p sdk/js/tsconfig.json",
