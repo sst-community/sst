@@ -10,9 +10,10 @@ import (
 )
 
 func TestNewestInMajor(t *testing.T) {
-	published := []string{"4.17.2", "4.17.3", "4.18.0", "5.0.0-alpha.1", "5.0.0-alpha.2", "not-a-version"}
+	published := []string{"4.17.2", "4.17.3", "4.18.0", "4.19.0-beta.1", "5.0.0-alpha.1", "5.0.0-alpha.2", "not-a-version"}
 
 	cases := []struct{ current, want string }{
+		// Not 4.19.0-beta.1, as it isn't a prerelease
 		{"4.17.2", "4.18.0"},
 		{"5.0.0-alpha.1", "5.0.0-alpha.2"},
 	}
@@ -33,16 +34,28 @@ func TestNewestInMajor(t *testing.T) {
 	assert.False(t, ok)
 	assert.NoError(t, err)
 
+	// Nor is a snapshot build, though 0.x has a placeholder
+	_, ok, err = NewestInMajor("0.0.0-1760000000", append(published, "0.0.0-placeholder.0"))
+	assert.False(t, ok)
+	assert.NoError(t, err)
+
 	// Nothing in its major
 	_, ok, err = NewestInMajor("6.0.0", published)
+	assert.True(t, ok)
+	assert.Error(t, err)
+
+	// Only prereleases in its major, which a release doesn't move to
+	_, ok, err = NewestInMajor("5.0.0", published)
 	assert.True(t, ok)
 	assert.Error(t, err)
 }
 
 func TestNewest(t *testing.T) {
+	listed := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/@acme/cli":
+			listed++
 			w.Write([]byte(`{"versions":{"4.17.3":{},"4.18.0":{},"5.0.0-alpha.1":{}}}`))
 		case "/@acme/cli/latest":
 			w.Write([]byte(`{"name":"@acme/cli","version":"4.18.0"}`))
@@ -61,7 +74,12 @@ func TestNewest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "4.18.0", newest)
 
-	newest, err = Newest(registry, "@acme/cli", "dev")
-	require.NoError(t, err)
-	assert.Equal(t, "4.18.0", newest)
+	// A dev or snapshot build doesn't list the versions it won't pick from
+	for _, current := range []string{"dev", "0.0.0-1760000000"} {
+		listed = 0
+		newest, err = Newest(registry, "@acme/cli", current)
+		require.NoError(t, err)
+		assert.Equal(t, "4.18.0", newest, "from %s", current)
+		assert.Equal(t, 0, listed, "from %s", current)
+	}
 }

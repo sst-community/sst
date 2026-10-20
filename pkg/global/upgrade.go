@@ -95,11 +95,13 @@ func Upgrade(existingVersion string, nextVersion string) (string, error) {
 	return nextVersion, nil
 }
 
+var githubAPI = "https://api.github.com"
+
 // The newest release in the same major version as the one installed. A build
 // that isn't a release gets the latest release.
 func newestRelease(existingVersion string) (string, error) {
 	get := func(path string, into any) error {
-		resp, err := http.Get("https://api.github.com/repos/" + ReleaseRepo + path)
+		resp, err := http.Get(githubAPI + "/repos/" + ReleaseRepo + path)
 		if err != nil {
 			return err
 		}
@@ -110,22 +112,30 @@ func newestRelease(existingVersion string) (string, error) {
 		return json.NewDecoder(resp.Body).Decode(into)
 	}
 
-	var releases []struct {
-		TagName string `json:"tag_name"`
-		Draft   bool   `json:"draft"`
-	}
-	if err := get("/releases?per_page=100", &releases); err != nil {
-		return "", err
-	}
-	tags := []string{}
-	for _, release := range releases {
-		if !release.Draft {
-			tags = append(tags, release.TagName)
+	if npm.IsRelease(existingVersion) {
+		// Every page, so a major older than the newest 100 releases is found
+		tags := []string{}
+		for page := 1; ; page++ {
+			var releases []struct {
+				TagName string `json:"tag_name"`
+				Draft   bool   `json:"draft"`
+			}
+			if err := get(fmt.Sprintf("/releases?per_page=100&page=%d", page), &releases); err != nil {
+				return "", err
+			}
+			for _, release := range releases {
+				if !release.Draft {
+					tags = append(tags, release.TagName)
+				}
+			}
+			if len(releases) < 100 {
+				break
+			}
 		}
-	}
-	newest, ok, err := npm.NewestInMajor(existingVersion, tags)
-	if ok {
-		return newest, err
+		newest, ok, err := npm.NewestInMajor(existingVersion, tags)
+		if ok {
+			return newest, err
+		}
 	}
 
 	var latest struct {

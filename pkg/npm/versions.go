@@ -10,13 +10,12 @@ import (
 
 // The newest of the candidates in the same major version as current, so an
 // upgrade never crosses into a major with breaking changes. Prereleases count
-// only when current is one. ok is false when current isn't a version, like a
-// dev build.
+// only when current is one. ok is false when current isn't a release.
 func NewestInMajor(current string, candidates []string) (newest string, ok bool, err error) {
-	v, err := semver.NewVersion(current)
-	if err != nil {
+	if !IsRelease(current) {
 		return "", false, nil
 	}
+	v := semver.MustParse(current)
 	var found *semver.Version
 	for _, candidate := range candidates {
 		c, err := semver.NewVersion(candidate)
@@ -36,16 +35,25 @@ func NewestInMajor(current string, candidates []string) (newest string, ok bool,
 	return found.Original(), true, nil
 }
 
+// Whether version is a release: not a dev build, and not a snapshot build's
+// 0.0.0-<timestamp>. npm has a 0.0.0-placeholder.0, so 0.x isn't empty there.
+func IsRelease(version string) bool {
+	v, err := semver.NewVersion(version)
+	return err == nil && v.Major() != 0
+}
+
 // The newest version of a package in the same major version as current. A
-// current that isn't a version gets the one tagged latest.
+// current that isn't a release gets the one tagged latest.
 func Newest(registry Registry, name string, current string) (string, error) {
-	versions, err := Versions(registry, name)
-	if err != nil {
-		return "", err
-	}
-	newest, ok, err := NewestInMajor(current, versions)
-	if ok {
-		return newest, err
+	if IsRelease(current) {
+		versions, err := Versions(registry, name)
+		if err != nil {
+			return "", err
+		}
+		newest, ok, err := NewestInMajor(current, versions)
+		if ok {
+			return newest, err
+		}
 	}
 	pkg, err := Get(registry, name, "latest")
 	if err != nil {

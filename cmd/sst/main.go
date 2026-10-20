@@ -889,7 +889,7 @@ var root = &cli.Command{
 			Description: cli.Description{
 				Short: "Upgrade the CLI",
 				Long: strings.Join([]string{
-					"Upgrade the CLI to the latest version. Or optionally, pass in a version to upgrade to.",
+					"Upgrade the CLI to the newest version in its major version, so a 4.x CLI stays on 4.x. Or optionally, pass in a version to upgrade to, which can be in another major version.",
 					"",
 					"```bash frame=\"none\"",
 					"sst upgrade 0.10",

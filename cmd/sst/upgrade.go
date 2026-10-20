@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/fatih/color"
 	"github.com/sst/sst/v3/cmd/sst/cli"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
@@ -58,7 +59,12 @@ func CmdUpgrade(c *cli.Cli) error {
 	newVersion = strings.TrimPrefix(newVersion, "v")
 	fmt.Print(ui.TEXT_SUCCESS_BOLD.Render(ui.IconCheck))
 	if newVersion == version {
-		color.New(color.FgWhite).Printf("  Already on latest %s\n", version)
+		// The newest in its major, which isn't latest once a newer major is out
+		if v, err := semver.NewVersion(version); err == nil && c.Positional(0) == "" {
+			color.New(color.FgWhite).Printf("  Already on the newest %d.x, %s\n", v.Major(), version)
+		} else {
+			color.New(color.FgWhite).Printf("  Already on %s\n", version)
+		}
 	} else {
 		color.New(color.FgWhite).Printf("  Upgraded %s ➜ ", version)
 		color.New(color.FgCyan, color.Bold).Println(newVersion)
