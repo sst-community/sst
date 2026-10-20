@@ -434,6 +434,16 @@ Still open: the rest of #134 (forgetting an environment a while after its worker
 
 Still open in #134: the Node.js workers' memory, the UI's maps and `sst.log`.
 
+### `main` merged in again, with the components' tests in CI
+
+- #140: CI runs the components' tests with `bun run test:platform`, `@sst/platform`'s own `test` script. The ALB and service tests wait for their outputs before checking them; one had passed with a security group id of `undefined_id`.
+- #165: the ALB tests' mocks name a resource read with `.get()` after itself. `v5` doesn't give a read a `name` input, so with #140's mocks a referenced load balancer's URL was `http://undefined…` here.
+- #141: the 4.x `Mysql` defaults to `"8.0"`, as the V5 one already did.
+- #143: the CLI installs `.sst/platform` with bun 1.4.2, which `v5` already had.
+- #160 to #162: the AI review uses `deepseek-v4.1-flash-free` on `opencode-ai` 1.19.3 and refreshes OpenCode's model list first.
+
+Three files conflicted. `check.yml` keeps the lines that run it for `v5` and takes `main`'s test command. `mysql.ts`'s doc and `alb.test.ts` take `main`'s. The platform typechecks, its 1,714 tests in 54 files pass, and so do the Go tests for `pkg/global` and `pkg/project`.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
