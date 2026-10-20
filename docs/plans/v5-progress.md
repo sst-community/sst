@@ -444,6 +444,16 @@ Still open in #134: the Node.js workers' memory, the UI's maps and `sst.log`.
 
 Three files conflicted. `check.yml` keeps the lines that run it for `v5` and takes `main`'s test command. `mysql.ts`'s doc and `alb.test.ts` take `main`'s. The platform typechecks, its 1,714 tests in 54 files pass, and so do the Go tests for `pkg/global` and `pkg/project`.
 
+### `main` merged in again, with #142
+
+`v5` has had #142's change, `sst upgrade` and `sst init` staying in the CLI's major version, since 2026-10-07. Its review on `main` added:
+- reading every page of the GitHub releases, not only the newest 100;
+- treating a snapshot build's `0.0.0-<timestamp>` like a dev build, by its major, since npm has a `0.0.0-placeholder.0`;
+- not listing the versions for a build that isn't a release;
+- the help text and "Already on" line saying it stays in the major.
+
+`pkg/global/upgrade.go`, `pkg/npm/versions.go` and its test conflicted, since both branches had the change. `v5`'s copies were #142 as first opened, so they take `main`'s. The Go tests for `pkg/npm`, `pkg/global`, `pkg/project` and `cmd/sst` pass.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
