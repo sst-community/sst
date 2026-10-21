@@ -51,6 +51,7 @@ func CmdUI(c *cli.Cli) error {
 			aws.FunctionErrorEvent{},
 			aws.FunctionLogEvent{},
 			aws.FunctionBuildEvent{},
+			aws.FunctionWorkerForgottenEvent{},
 		)
 	}
 	if filter == "task" || filter == "" {
@@ -89,6 +90,7 @@ func CmdUI(c *cli.Cli) error {
 			project.CompleteEvent{},
 			typescript.WarningEvent{},
 			aws.ConcurrencyWarningEvent{},
+			project.PolicyAdvisoryEvent{},
 		)
 	}
 	evts, err := dev.Stream(c.Context, url, types...)

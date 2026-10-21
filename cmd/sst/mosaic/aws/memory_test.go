@@ -86,6 +86,36 @@ func TestEnvironmentIsForgottenAWhileAfterItsWorkerExits(t *testing.T) {
 	invoke("forgotten", 1)
 }
 
+// The UI is told when an environment is forgotten, to forget what it keeps for
+// the worker too.
+func TestForgottenEnvironmentIsPublished(t *testing.T) {
+	forgetSoon(t, 200*time.Millisecond)
+	forgotten := bus.Subscribe(&FunctionWorkerForgottenEvent{})
+	t.Cleanup(func() { bus.Unsubscribe(forgotten) })
+	h := newHarness(t, &fakeRuntime{handle: echo, idle: 50 * time.Millisecond})
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	if _, err := b.invoke("first"); err != nil {
+		t.Fatal(err)
+	}
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case evt := <-forgotten:
+			got := evt.(*FunctionWorkerForgottenEvent)
+			if got.WorkerID != b.workerID {
+				continue
+			}
+			if got.FunctionID != "Fn" {
+				t.Fatalf("got function %q, want Fn", got.FunctionID)
+			}
+			return
+		case <-timeout:
+			t.Fatal("forgetting the environment wasn't published")
+		}
+	}
+}
+
 // A worker that's running when the time its environment is kept for is up,
 // started again since it exited, keeps it.
 func TestEnvironmentOfARunningWorkerIsKept(t *testing.T) {

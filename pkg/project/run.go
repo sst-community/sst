@@ -2,6 +2,7 @@ package project
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -343,7 +344,13 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	case "refresh":
 		args = append([]string{"refresh", "--yes", "--run-program"}, args...)
 	case "deploy":
-		args = append([]string{"up", "--yes", "-f"}, args...)
+		if input.PolicyPath != "" {
+			// Preview first, so a mandatory policy stops the deploy before
+			// anything is changed
+			args = append([]string{"up", "--yes"}, args...)
+		} else {
+			args = append([]string{"up", "--yes", "-f"}, args...)
+		}
 	case "remove":
 		args = append([]string{"destroy", "--yes", "-f"}, args...)
 	}
@@ -400,6 +407,24 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	hasPolicyFlag := input.PolicyPath != ""
 	hasPolicyEvents := false
 	hasPolicyViolations := false
+	// A deploy with a policy pack runs Pulumi's preview before the update. The
+	// preview's events aren't passed on, as they'd show each resource as
+	// changed before anything is. Pulumi starts the event log again for the
+	// update, and can do so before the preview's last events are read. It
+	// opens the same file again with O_TRUNC (startEventLogger in its
+	// backend/display), which this relies on: check a deploy with --policy
+	// when Pulumi is updated.
+	previewing := input.Command == "deploy" && input.PolicyPath != ""
+	// the preview's log up to its first planned step, which the update's
+	// log doesn't have
+	var previewStart []byte
+	planned := false
+	var read int64
+	// what the program logged in the preview, shown only if the update
+	// doesn't run, as the update logs it again
+	var previewDiagnostics []*apitype.DiagnosticEvent
+	// The preview and the update each report an advisory policy
+	advisories := map[string]bool{}
 
 	partial := make(chan int, 1000)
 	partialContext, partialCancel := context.WithCancel(ctx)
@@ -468,13 +493,40 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	}()
 
 	reader := bufio.NewReader(eventlog)
+	// Reads the update's event log from its start. What was taken from it as
+	// the preview's is dropped: a preview that passed leaves no errors.
+	readUpdate := func() error {
+		log.Info("reading the update's event log")
+		if _, err := eventlog.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		reader.Reset(eventlog)
+		read = 0
+		previewing = false
+		previewDiagnostics = nil
+		errors = []Error{}
+		importDiffs = map[string][]ImportDiff{}
+		hasPolicyViolations = false
+		return nil
+	}
 
 	eofs := 0
 loop:
 	for {
 		bytes, err := reader.ReadBytes('\n')
+		read += int64(len(bytes))
+		// every byte read, a part of a line too, so it's the file's start
+		if previewing && !planned {
+			previewStart = append(previewStart, bytes...)
+		}
 		if err != nil {
 			if err == io.EOF {
+				if previewing && len(previewStart) > 0 && eventLogRestarted(eventlog, read, previewStart) {
+					if err := readUpdate(); err != nil {
+						return err
+					}
+					continue
+				}
 				select {
 				case <-exited:
 					log.Info("eof and exited", "eofs", eofs)
@@ -498,6 +550,21 @@ loop:
 			continue
 		}
 
+		if previewing {
+			pre, outputs := event.ResourcePreEvent, event.ResOutputsEvent
+			// A step the update took, read from where the preview's log
+			// ended, before the log was seen to start again
+			if (pre != nil && !pre.Planning) || (outputs != nil && !outputs.Planning) {
+				if err := readUpdate(); err != nil {
+					return err
+				}
+				continue
+			}
+			if pre != nil && pre.Planning {
+				planned = true
+			}
+		}
+
 		if event.PolicyEvent != nil {
 			hasPolicyEvents = true
 			message := fmt.Sprintf("Policy: %s\n%s",
@@ -519,16 +586,21 @@ loop:
 					"policy", event.PolicyEvent.PolicyName,
 					"urn", event.PolicyEvent.ResourceURN)
 
-				bus.Publish(&PolicyAdvisoryEvent{
-					Policy:  event.PolicyEvent.PolicyName,
-					Message: strings.TrimSpace(event.PolicyEvent.Message),
-					URN:     event.PolicyEvent.ResourceURN,
-				})
+				message := strings.TrimSpace(event.PolicyEvent.Message)
+				key := event.PolicyEvent.PolicyName + "\x00" + event.PolicyEvent.ResourceURN + "\x00" + message
+				if !advisories[key] {
+					advisories[key] = true
+					bus.Publish(&PolicyAdvisoryEvent{
+						Policy:  event.PolicyEvent.PolicyName,
+						Message: message,
+						URN:     event.PolicyEvent.ResourceURN,
+					})
+				}
 			}
 		}
 
 		if event.DiagnosticEvent != nil && event.DiagnosticEvent.Severity == "error" {
-			if strings.HasPrefix(event.DiagnosticEvent.Message, "update failed") || strings.HasPrefix(event.DiagnosticEvent.Message, "update cancelled") || strings.Contains(event.DiagnosticEvent.Message, "failed to register new resource") {
+			if strings.HasPrefix(event.DiagnosticEvent.Message, "update failed") || (input.Command == "deploy" && (strings.TrimSpace(event.DiagnosticEvent.Message) == "preview failed" || strings.TrimSpace(event.DiagnosticEvent.Message) == "preview canceled")) || strings.HasPrefix(event.DiagnosticEvent.Message, "update cancelled") || strings.Contains(event.DiagnosticEvent.Message, "failed to register new resource") {
 				continue
 			}
 
@@ -578,6 +650,13 @@ loop:
 			}
 		}
 
+		if previewing {
+			if event.DiagnosticEvent != nil && event.DiagnosticEvent.Severity != "debug" {
+				previewDiagnostics = append(previewDiagnostics, event.DiagnosticEvent)
+			}
+			continue
+		}
+
 		if input.Command != "diff" && (event.ResOutputsEvent != nil || event.CancelEvent != nil || event.SummaryEvent != nil) {
 			partial <- 1
 		}
@@ -591,6 +670,11 @@ loop:
 		}
 	}
 
+	// The update didn't run, so what the preview logged is shown
+	for _, diagnostic := range previewDiagnostics {
+		bus.Publish(diagnostic)
+	}
+
 	// fallback: re-read the event log if the tailing loop missed SummaryEvent
 	if !finished {
 		if data, err := os.ReadFile(eventlogPath); err == nil {
@@ -599,10 +683,15 @@ loop:
 					continue
 				}
 				var ev events.EngineEvent
-				if json.Unmarshal([]byte(line), &ev) == nil && ev.SummaryEvent != nil {
-					finished = true
-					break
+				if json.Unmarshal([]byte(line), &ev) != nil || ev.SummaryEvent == nil {
+					continue
 				}
+				// a deploy's preview finishing isn't the deploy finishing
+				if input.Command == "deploy" && ev.SummaryEvent.IsPreview {
+					continue
+				}
+				finished = true
+				break
 			}
 		}
 	}
@@ -705,4 +794,24 @@ loop:
 		return ErrStackRunFailed
 	}
 	return nil
+}
+
+// Whether Pulumi has started the event log again, as it does for the update
+// after a preview: it's shorter than what was read of it, or it doesn't start
+// with the preview's start. Through its first planned step, which the update
+// doesn't log, the preview's start is unlike any update's.
+func eventLogRestarted(file *os.File, read int64, previewStart []byte) bool {
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	if info.Size() < read {
+		return true
+	}
+	start := make([]byte, len(previewStart))
+	// it's at least as long as what was read, so a failed read isn't one
+	if _, err := file.ReadAt(start, 0); err != nil {
+		return false
+	}
+	return !bytes.Equal(start, previewStart)
 }

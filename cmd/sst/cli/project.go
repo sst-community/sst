@@ -18,14 +18,22 @@ import (
 	"github.com/sst/sst/v3/pkg/project"
 )
 
+// the temp log what's logged goes to until InitProject makes sst.log
+var tempLogPath string
+
 var logFile = (func() *os.File {
 	tmpPath := flag.SST_LOG
 	if tmpPath == "" {
 		tmpPath = filepath.Join(os.TempDir(), fmt.Sprintf("sst-%s.log", time.Now().Format("2006-01-02-15-04-05")))
+		tempLogPath = tmpPath
 	}
 	logFile, err := os.Create(tmpPath)
 	if err != nil {
 		panic(err)
+	}
+	if flag.SST_LOG != "" {
+		// what an earlier run's log moved there past its cap
+		os.Remove(tmpPath + ".1")
 	}
 	return logFile
 })()
@@ -79,8 +87,11 @@ func (c *Cli) InitProject() (*project.Project, error) {
 	godotenv.Load(filepath.Join(p.PathRoot(), ".env"))
 
 	if flag.SST_LOG == "" {
+		// what's logged meanwhile waits for the new file
+		logMu.Lock()
 		_, err = logFile.Seek(0, 0)
 		if err != nil {
+			logMu.Unlock()
 			return nil, err
 		}
 		sstLog := p.PathLog("sst")
@@ -88,20 +99,33 @@ func (c *Cli) InitProject() (*project.Project, error) {
 		os.MkdirAll(logPath, 0755)
 		nextLogFile, err := os.Create(sstLog)
 		if err != nil {
+			logMu.Unlock()
 			return nil, util.NewReadableError(err, "Could not create log file")
 		}
+		// what an earlier run's log moved there past its cap
+		os.Remove(sstLog + ".1")
 		_, err = io.Copy(nextLogFile, logFile)
 		if err != nil {
+			logMu.Unlock()
 			return nil, util.NewReadableError(err, "Could not copy log file")
 		}
 		logFile.Close()
+		// its name is taken now, as logFile can change once it's unlocked
+		tmpLog := logFile.Name()
 		defer func() {
-			err = os.RemoveAll(filepath.Join(os.TempDir(), logFile.Name()))
+			// only the temp log, not an sst.log a second call would have here
+			if tmpLog != tempLogPath {
+				return
+			}
+			err = os.Remove(tmpLog)
 			if err != nil {
 				slog.Error("failed to remove temp log file", "err", err)
 			}
+			// were it ever past the cap before sst.log
+			os.Remove(tmpLog + ".1")
 		}()
 		logFile = nextLogFile
+		logMu.Unlock()
 	}
 	c.configureLog()
 
@@ -138,15 +162,16 @@ func (c *Cli) InitProject() (*project.Project, error) {
 }
 
 func (c *Cli) configureLog() {
-	writers := []io.Writer{logFile}
+	writer := logWriters{cappedLog{}}
 	if c.Bool("print-logs") || flag.SST_PRINT_LOGS {
-		writers = append(writers, os.Stderr)
+		writer = append(writer, os.Stderr)
 	}
-	writer := io.MultiWriter(writers...)
 	slog.SetDefault(
 		slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})),
 	)
+	logMu.Lock()
 	debug.SetCrashOutput(logFile, debug.CrashOptions{})
+	logMu.Unlock()
 }

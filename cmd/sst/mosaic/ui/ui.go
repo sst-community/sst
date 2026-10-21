@@ -51,6 +51,8 @@ type UI struct {
 	parents    map[string]string
 	workerTime map[string]time.Time
 	colors     map[string]lipgloss.Style
+	// the palette index workerColor looks from next
+	colorIndex int
 	complete   *project.CompleteEvent
 	footer     *footer
 	buffer     []interface{}
@@ -193,6 +195,8 @@ func (u *UI) Event(unknown interface{}) {
 		u.printWorkerEvent(evt.WorkerID, evt.TaskID, formattedDuration, evt.Line)
 
 	case *aws.TaskCompleteEvent:
+		// nothing more prints for its worker, though the filter hides it
+		defer u.forgetWorker(evt.WorkerID)
 		if !u.matchFilter(evt.TaskID) {
 			return
 		}
@@ -205,6 +209,9 @@ func (u *UI) Event(unknown interface{}) {
 			return
 		}
 		u.printEvent(TEXT_DANGER, fmt.Sprintf("%-11s", "Missing"), fmt.Sprintf("Dev command not configured for the \"%s\" task. Set `dev.command` to configure how the task works in `sst dev`.", evt.Name))
+
+	case *aws.FunctionWorkerForgottenEvent:
+		u.forgetWorker(evt.WorkerID)
 
 	case *aws.FunctionInvokedEvent:
 		if !u.matchFilter(evt.FunctionID) {
@@ -615,16 +622,35 @@ func GetColor(input string) lipgloss.Style {
 	return Colors[hash%len(Colors)]
 }
 
-// workerColor hands out palette colors in first-seen order, so workers that
-// start together (concurrent cold starts) never share a color until more than
-// len(Colors) are active. GetColor's hash can collide with just two.
+// workerColor hands out the next palette color in turn that no worker it
+// keeps has, so workers seen together (concurrent cold starts) don't share a
+// color while it keeps fewer than len(Colors). Past that, it takes the next in
+// turn. GetColor's hash can collide with just two.
 func (u *UI) workerColor(workerID string) lipgloss.Style {
-	style, ok := u.colors[workerID]
-	if !ok {
-		style = Colors[len(u.colors)%len(Colors)]
-		u.colors[workerID] = style
+	if style, ok := u.colors[workerID]; ok {
+		return style
 	}
-	return style
+	taken := map[lipgloss.TerminalColor]bool{}
+	for _, style := range u.colors {
+		taken[style.GetForeground()] = true
+	}
+	next := u.colorIndex % len(Colors)
+	for i := range len(Colors) {
+		candidate := (u.colorIndex + i) % len(Colors)
+		if !taken[Colors[candidate].GetForeground()] {
+			next = candidate
+			break
+		}
+	}
+	u.colorIndex = next + 1
+	u.colors[workerID] = Colors[next]
+	return Colors[next]
+}
+
+// forgetWorker drops what's kept for a worker that won't print again
+func (u *UI) forgetWorker(workerID string) {
+	delete(u.workerTime, workerID)
+	delete(u.colors, workerID)
 }
 
 func (u *UI) functionName(functionID string) string {

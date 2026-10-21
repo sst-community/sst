@@ -51,6 +51,8 @@ sst deploy --policy ./policy-pack
 
 If any resource violates a mandatory policy, the deploy is blocked.
 
+With `--policy`, `sst deploy` runs a preview first, so a mandatory policy blocks the deploy before anything is created or changed. Your app's config runs twice, once for the preview and once for the deploy, so it takes longer than without `--policy`.
+
 ---
 
 ## Enforcement levels

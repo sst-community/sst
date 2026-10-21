@@ -64,6 +64,13 @@ type FunctionLogEvent struct {
 	Line       string
 }
 
+// The environment of a worker that stopped is forgotten, so the UI can forget
+// what it keeps for the worker too
+type FunctionWorkerForgottenEvent struct {
+	FunctionID string
+	WorkerID   string
+}
+
 type input struct {
 	config  aws.Config
 	project *project.Project
@@ -932,6 +939,10 @@ func function(ctx context.Context, input input) {
 					continue
 				}
 				log.Info("forgetting the environment of a worker that stopped", "workerID", workerID)
+				bus.Publish(&FunctionWorkerForgottenEvent{
+					FunctionID: workerFunction[workerID],
+					WorkerID:   workerID,
+				})
 				delete(stoppedAt, workerID)
 				delete(workerEnv, workerID)
 				delete(workerFunction, workerID)
