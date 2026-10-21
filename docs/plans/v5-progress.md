@@ -454,6 +454,19 @@ Three files conflicted. `check.yml` keeps the lines that run it for `v5` and tak
 
 `pkg/global/upgrade.go`, `pkg/npm/versions.go` and its test conflicted, since both branches had the change. `v5`'s copies were #142 as first opened, so they take `main`'s. The Go tests for `pkg/npm`, `pkg/global`, `pkg/project` and `cmd/sst` pass.
 
+## 2026-10-20
+
+### `main` merged in again, with #166 to #169
+
+- #166: `sst dev` shows a policy pack's advisory warnings, which its event filter had dropped.
+- #167: a deploy with `--policy` runs Pulumi's preview before the update, so a mandatory violation stops it before anything changes, as the policy packs page says. The update's own steps and logs are shown once, and the preview's only when the update doesn't run.
+- #168: the function loop says when it forgets an environment, and the UI deletes that worker's start time and color. A new worker takes the first color no kept worker has.
+- #169: `.sst/log/sst.log` moves to `sst.log.1` at 50 MB and starts again, and a command no longer leaves its temporary log in the system's temp folder.
+
+Nothing conflicted. `cmd/sst/cli/project.go`, `cmd/sst/mosaic/ui/ui.go` and `pkg/project/run.go` merged on their own, and `v5`'s changes in them (the notice of a newer SST, the build's globals and `checkPackages`) are as they were. The CLI builds and the Go tests pass.
+
+That closes #134 except its item 2, one Node.js worker per Lambda environment, which is #125's P8.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
