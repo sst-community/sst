@@ -305,7 +305,7 @@ describe("Map state with an empty resultWriter prefix", () => {
     for (const prefix of ["", "/", "//"])
       expect(() =>
         map({ resultWriter: { bucket: "out", prefix } }).serialize(),
-      ).toThrow(/needs a "prefix", which can't be empty/);
+      ).toThrow(/needs a "prefix", which can't be empty or only slashes/);
   });
 });
 
@@ -507,7 +507,7 @@ describe("Map state permissions", () => {
     ).toThrow(/needs "maxItemsPerBatch", "maxInputBytesPerBatch" or both/);
     expect(() =>
       map({ resultWriter: { bucket: "out", prefix: "" } }).getPermissions(),
-    ).toThrow(/needs a "prefix", which can't be empty/);
+    ).toThrow(/needs a "prefix", which can't be empty or only slashes/);
   });
 
   it("keeps the permissions of the processor, and of the states around it", async () => {

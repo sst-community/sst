@@ -283,7 +283,7 @@ export interface MapArgs extends StateArgs {
     bucket: Input<string>;
     /**
      * The prefix of the keys the results are written under, such as `results/read`. The
-     * results are written to `<prefix>/<id of the run>/`. It can't be empty. Takes a prefix or
+     * results are written to `<prefix>/<id of the run>/`. It can't be empty or only slashes. Takes a prefix or
      * a JSONata expression that evaluates to one. When it's an expression, the state
      * machine can write to any object in the `bucket`.
      */
@@ -406,7 +406,7 @@ function resultPrefix(name: string, prefix: Input<string>) {
   const assertPrefix = (prefix: string) => {
     if (!isJSONata(prefix) && !prefix.replace(/\/+$/, ""))
       throw new Error(
-        `The resultWriter of the "${name}" Map state needs a "prefix", which can't be empty.`,
+        `The resultWriter of the "${name}" Map state needs a "prefix", which can't be empty or only slashes.`,
       );
     return prefix;
   };
