@@ -6,6 +6,7 @@ sst-community is a community-maintained fork of [SST](https://github.com/anomaly
 
 - **A bug:** open an [issue](https://github.com/sst-community/sst/issues), or pick one that's open. If the bug is in SST itself, link the upstream issue or pull request when there is one. For an upstream issue that your pull request fixes, add `Closes <the issue's URL>` to the description, so the pull request shows under Development on that issue.
 - **A larger change:** talk it through first, in an issue or on [Discord](https://discord.gg/DQWT3WGVm2), so the work isn't wasted.
+- **A new integration,** a component for a service or provider that isn't here yet: from version 5, which is in pre-release, write it as a [package component](www/src/content/docs/docs/write-a-package-component.mdx) and publish it yourself, instead of adding it here. [`examples/component-package`](examples/component-package) is a package to copy. An app installs it like any other package, and you release it when it's ready. A fix to a component that's already here is a pull request, as usual.
 - **A question:** ask on Discord.
 - **A vote:** add a 👍 to an issue you want fixed. The [open issues, most-wanted first](https://github.com/sst-community/sst/issues?q=is%3Aissue+is%3Aopen+sort%3Areactions-%2B1-desc) are a good place to pick up work. Votes show what's wanted, and maintainers decide what's done and in what order.
 

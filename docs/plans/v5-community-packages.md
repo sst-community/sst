@@ -94,5 +94,5 @@ Open: which files a rebuild watches, whether the build can run in a container, a
 | 0. The v5 docs on the site | Waits for 5.0 |
 | 1. A template package | Built 2026-10-22 (`6ce09bd6d`), not merged. Not deployed to AWS. |
 | 2. A stable API | Not started |
-| 3. Finding packages | Not started |
+| 3. Finding packages | The rule in `CONTRIBUTING.md` (2026-10-22), and the keyword in the template. The page waits for step 0. |
 | 4. Runtimes in packages | Not started |
