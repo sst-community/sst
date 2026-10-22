@@ -1,3 +1,4 @@
+import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -13,7 +14,7 @@ pulumi.runtime.setMocks(
     newResource: (args) => ({ id: `${args.name}_id`, state: args.inputs }),
     call: (args) => {
       if (args.token === "aws:index/getPartition:getPartition")
-        return { partition };
+        return { partition: args.provider ? "aws-cn" : partition };
       return args.inputs;
     },
   },
@@ -32,10 +33,15 @@ type MapArgs = ConstructorParameters<MapState>[0];
 
 let Map: MapState;
 let Pass: typeof import("../../src/components/aws/step-functions/pass").Pass;
+let Task: typeof import("../../src/components/aws/step-functions/task").Task;
+let Parallel: typeof import("../../src/components/aws/step-functions/parallel").Parallel;
 
 beforeAll(async () => {
   Map = (await import("../../src/components/aws/step-functions/map")).Map;
   Pass = (await import("../../src/components/aws/step-functions/pass")).Pass;
+  Task = (await import("../../src/components/aws/step-functions/task")).Task;
+  Parallel = (await import("../../src/components/aws/step-functions/parallel"))
+    .Parallel;
 });
 
 function map(args: Partial<MapArgs> = {}) {
@@ -195,16 +201,24 @@ describe("Map state with an itemReader", () => {
     ).toThrow(/only apply to the "csv" type/);
   });
 
-  it("rejects a JSONata expression as the bucket", async () => {
-    await expect(
-      definition({
+  it("rejects a JSONata expression as the bucket of the reader", () => {
+    expect(() =>
+      map({
         itemReader: {
           ...reader,
           bucket: "{% $states.input.bucket %}",
           key: "a",
         },
-      }),
-    ).rejects.toThrow(/must be a bucket name, not a JSONata expression/);
+      }).serialize(),
+    ).toThrow(/must be a bucket name, not a JSONata expression/);
+  });
+
+  it("rejects a JSONata expression as the bucket of the writer", () => {
+    expect(() =>
+      map({
+        resultWriter: { bucket: "{% $states.input.bucket %}", prefix: "r" },
+      }).serialize(),
+    ).toThrow(/must be a bucket name, not a JSONata expression/);
   });
 });
 
@@ -483,12 +497,62 @@ describe("Map state permissions", () => {
     ).toThrow(/needs a "prefix", which can't be empty/);
   });
 
-  it("keeps the permissions of the processor", async () => {
-    const perms = await permissions({
-      processor: new Pass({ name: "Process" }),
+  it("keeps the permissions of the processor, and of the states around it", async () => {
+    const processor = new Task({
+      name: "Process",
+      resource: "arn:aws:states:::lambda:invoke",
+      permissions: [
+        { actions: ["lambda:InvokeFunction"], resources: ["arn:fn"] },
+      ],
+    });
+    const after = new Task({
+      name: "After",
+      resource: "arn:aws:states:::sns:publish",
+      permissions: [{ actions: ["sns:Publish"], resources: ["arn:topic"] }],
+    });
+    const state = map({
+      processor,
       itemReader: { ...reader, key: "a.jsonl" },
       resultWriter: { bucket: "out", prefix: "r" },
     });
-    expect(perms).toHaveLength(2);
+    state.next(after);
+
+    const perms = JSON.parse(
+      JSON.stringify(await resolve(state.getPermissions())),
+    );
+    expect(perms.map((p: any) => p.actions[0]).sort()).toEqual([
+      "lambda:InvokeFunction",
+      "s3:GetObject",
+      "s3:PutObject",
+      "sns:Publish",
+    ]);
+  });
+
+  it("resolves the partition with the options of the component", async () => {
+    const provider = new aws.Provider("other", { region: "cn-north-1" });
+
+    // directly, through a state that comes before it, and in a branch of a Parallel
+    const direct = map({ itemReader: { ...reader, key: "a.jsonl" } });
+    const first = new Pass({ name: "First" });
+    first.next(
+      map({ name: "Next", itemReader: { ...reader, key: "a.jsonl" } }),
+    );
+    const parallel = new Parallel({ name: "Branches" });
+    parallel.branch(
+      map({ name: "InBranch", itemReader: { ...reader, key: "a.jsonl" } }),
+    );
+
+    for (const state of [direct, first, parallel]) {
+      const perms = JSON.parse(
+        JSON.stringify(await resolve(state.getPermissions({ provider }))),
+      );
+      expect(perms[0].resources).toEqual(["arn:aws-cn:s3:::data/a.jsonl"]);
+    }
+
+    // without them, it's the partition of the default provider
+    const perms = await permissions({
+      itemReader: { ...reader, key: "a.jsonl" },
+    });
+    expect(perms[0].resources).toEqual(["arn:aws:s3:::data/a.jsonl"]);
   });
 });

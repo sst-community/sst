@@ -1,3 +1,4 @@
+import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { Input } from "../../input";
 import {
   CatchArgs,
@@ -139,10 +140,10 @@ export class Parallel extends State implements Nextable, Failable {
   /**
    * @internal
    */
-  public getPermissions() {
+  public getPermissions(opts?: ComponentResourceOptions) {
     return [
-      ...this.branches.flatMap((b) => b.getPermissions()),
-      ...super.getPermissions(),
+      ...this.branches.flatMap((b) => b.getPermissions(opts)),
+      ...super.getPermissions(opts),
     ];
   }
 

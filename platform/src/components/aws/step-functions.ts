@@ -295,7 +295,7 @@ export class StepFunctions extends Component implements Link.Linkable {
                     ],
                     resources: ["*"],
                   },
-                  ...args.definition.getRoot().getPermissions(),
+                  ...args.definition.getRoot().getPermissions(opts),
                 ],
               }).json,
             },

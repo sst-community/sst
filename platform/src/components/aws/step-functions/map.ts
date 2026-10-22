@@ -1,5 +1,5 @@
 import { getPartitionOutput } from "@pulumi/aws";
-import { interpolate, output } from "@pulumi/pulumi";
+import { ComponentResourceOptions, interpolate, output } from "@pulumi/pulumi";
 import { Input } from "../../input";
 import { FunctionPermissionArgs } from "../function.js";
 import {
@@ -415,8 +415,8 @@ function resultPrefix(name: string, prefix: Input<string>) {
     : output(prefix).apply(assertPrefix);
 }
 
-function bucketArn(bucket: Input<string>) {
-  const partition = getPartitionOutput().partition;
+function bucketArn(bucket: Input<string>, opts?: ComponentResourceOptions) {
+  const partition = getPartitionOutput({}, opts).partition;
   const name = output(bucketName(bucket)).apply(escapeIam);
   return interpolate`arn:${partition}:s3:::${name}`;
 }
@@ -428,12 +428,13 @@ function bucketArn(bucket: Input<string>) {
 function objectArn(
   bucket: Input<string>,
   path: Input<string | undefined>,
+  opts?: ComponentResourceOptions,
   wildcard = "",
 ) {
   const key = output(path).apply((path) =>
     path === undefined || isJSONata(path) ? "*" : escapeIam(path) + wildcard,
   );
-  return interpolate`${bucketArn(bucket)}/${key}`;
+  return interpolate`${bucketArn(bucket, opts)}/${key}`;
 }
 
 /**
@@ -546,17 +547,19 @@ export class Map extends State implements Nextable, Failable {
   /**
    * @internal
    */
-  public getPermissions() {
+  public getPermissions(opts?: ComponentResourceOptions) {
     this.check();
     return [
-      ...this.processor.getPermissions(),
-      ...this.getItemReaderPermissions(),
-      ...this.getResultWriterPermissions(),
-      ...super.getPermissions(),
+      ...this.processor.getPermissions(opts),
+      ...this.getItemReaderPermissions(opts),
+      ...this.getResultWriterPermissions(opts),
+      ...super.getPermissions(opts),
     ];
   }
 
-  private getItemReaderPermissions(): FunctionPermissionArgs[] {
+  private getItemReaderPermissions(
+    opts?: ComponentResourceOptions,
+  ): FunctionPermissionArgs[] {
     const reader = this.checkedItemReader();
     if (!reader) return [];
 
@@ -564,7 +567,7 @@ export class Map extends State implements Nextable, Failable {
       return [
         {
           actions: ["s3:GetObject"],
-          resources: [objectArn(reader.bucket, reader.key)],
+          resources: [objectArn(reader.bucket, reader.key, opts)],
         },
       ];
     }
@@ -572,7 +575,7 @@ export class Map extends State implements Nextable, Failable {
     return [
       {
         actions: ["s3:ListBucket"],
-        resources: [bucketArn(reader.bucket)],
+        resources: [bucketArn(reader.bucket, opts)],
         conditions: output(reader.prefix).apply((prefix) =>
           prefix === undefined || isJSONata(prefix)
             ? []
@@ -587,12 +590,14 @@ export class Map extends State implements Nextable, Failable {
       },
       {
         actions: ["s3:GetObject"],
-        resources: [objectArn(reader.bucket, reader.prefix ?? "", "*")],
+        resources: [objectArn(reader.bucket, reader.prefix ?? "", opts, "*")],
       },
     ];
   }
 
-  private getResultWriterPermissions(): FunctionPermissionArgs[] {
+  private getResultWriterPermissions(
+    opts?: ComponentResourceOptions,
+  ): FunctionPermissionArgs[] {
     const writer = this.checkedResultWriter();
     if (!writer) return [];
 
@@ -611,6 +616,7 @@ export class Map extends State implements Nextable, Failable {
             output(writer.prefix).apply((prefix) =>
               isJSONata(prefix) ? prefix : prefix.replace(/\/+$/, "") + "/",
             ),
+            opts,
             "*",
           ),
         ],

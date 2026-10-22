@@ -1,4 +1,5 @@
 import { randomBytes } from "crypto";
+import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { Duration, toSeconds } from "../../duration";
 import { Input } from "../../input";
 import { FunctionPermissionArgs } from "../function.js";
@@ -327,13 +328,16 @@ export abstract class State {
   }
 
   /**
-   * Get the permissions required for the state.
+   * Get the permissions required for the state. The `opts` are the ones of the
+   * `StepFunctions` component, for the permissions that depend on its provider.
    * @internal
    */
-  public getPermissions(): FunctionPermissionArgs[] {
+  public getPermissions(
+    opts?: ComponentResourceOptions,
+  ): FunctionPermissionArgs[] {
     return [
-      ...(this._nextState?.getPermissions() || []),
-      ...(this._catches || []).flatMap((c) => c.next.getPermissions()),
+      ...(this._nextState?.getPermissions(opts) || []),
+      ...(this._catches || []).flatMap((c) => c.next.getPermissions(opts)),
     ];
   }
 
