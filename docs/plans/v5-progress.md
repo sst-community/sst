@@ -467,6 +467,18 @@ Nothing conflicted. `cmd/sst/cli/project.go`, `cmd/sst/mosaic/ui/ui.go` and `pkg
 
 That closes #134 except its item 2, one Node.js worker per Lambda environment, which is #125's P8.
 
+## 2026-10-21
+
+### `main` merged in again, with v4.22.0
+
+`main` as released in v4.22.0, which adds:
+- #153: `sst dev` sends the first copy of a function's reply over the AppSync WebSocket it already has open, about 50 ms sooner than over HTTPS. At most 15 a second go that way, with HTTPS behind each, and `SST_DEV_HTTP_PUBLISH=true` keeps everything on HTTPS. It also reads and replaces the connection's WebSocket under a lock, closes one whose write failed so a reconnect replaces it, and keeps a budget for each socket.
+- #176: the init error says why a worker didn't start, its build or its runtime, whichever of the bridge's init and its invocation was handled first. The tests' fake worker times out only once it has had an invocation.
+- #175: the docs site's changelog lists the fork's releases, then SST's own from before the fork's first, and a release starts the docs workflow from a job of its own.
+- #177: the v4.22.0 notes.
+
+Nothing conflicted. `release.yml`, `MAINTAINING.md`, `pkg/flag/flag.go` and `www/generate.ts` merged on their own. `v5`'s pre-release steps in `release.yml` are as they were, beside the new `docs` job, which for a pre-release rebuilds `main`'s docs, which list no pre-releases. Nothing under `platform/` changed. The Go tests pass, with `-race` for `cmd/sst/mosaic/aws/...`, and the docs generator writes the changelog and the component pages.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
