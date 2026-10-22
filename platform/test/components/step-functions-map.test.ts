@@ -183,6 +183,19 @@ describe("Map state with an itemReader", () => {
     ).toThrow(/Use "prefix" and not "key"/);
   });
 
+  it("rejects empty csvHeaders", () => {
+    expect(() =>
+      map({
+        itemReader: {
+          type: "csv",
+          bucket: "data",
+          key: "a.csv",
+          csvHeaders: [],
+        },
+      }).serialize(),
+    ).toThrow(/has no "csvHeaders". Leave them out to use the first row/);
+  });
+
   it("rejects a type it doesn't know", () => {
     expect(() =>
       map({

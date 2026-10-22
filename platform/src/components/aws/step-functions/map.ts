@@ -688,6 +688,10 @@ export class Map extends State implements Nextable, Failable {
       throw new Error(
         `${where} has "csvHeaders", which only apply to the "csv" type.`,
       );
+    if (csvHeaders?.length === 0)
+      throw new Error(
+        `${where} has no "csvHeaders". Leave them out to use the first row of the file.`,
+      );
     return reader;
   }
 
