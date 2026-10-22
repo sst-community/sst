@@ -11,6 +11,7 @@ Where the fork's larger pieces of work are planned and tracked. `CLAUDE.md` hold
 | [v5-aws-test-2026-10-01.md](v5-aws-test-2026-10-01.md) | The first deploy of the v5 components to a real AWS account: what ran, what it found, what's still untested. |
 | [v5-sharing.md](v5-sharing.md) | Sharing components as npm packages: the design, what's been checked, what it takes, and the open questions. |
 | [v5-sharing-host.md](v5-sharing-host.md) | How sharing was finished, step by step: SST keeps the runtime, a package builds against the `sst` npm package, and an app without a `package.json` can use one. |
+| [v5-community-packages.md](v5-community-packages.md) | What's left before integrations can be sent as packages instead of to this repo: a template, a stable `sst/components`, a page that lists packages, and runtimes in packages. |
 | [v5-providers-in-package-json.md](v5-providers-in-package-json.md) | Installing the providers in the app's `package.json`. Tried, and not taken. |
 | [policies-experiment.md](policies-experiment.md) | Policies made easier to use: rules in the config, exceptions, tests under `mock()`, and a CDK-NAG style rules package. Tried, not acted on. Also four policy bugs in SST today. |
 
