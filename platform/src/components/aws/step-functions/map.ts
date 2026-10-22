@@ -132,7 +132,8 @@ export interface MapArgs extends StateArgs {
    * `items`. Learn more about [`ItemReader`](https://docs.aws.amazon.com/step-functions/latest/dg/input-output-itemreader.html).
    *
    * The bucket must be in the same AWS account and Region as the state machine. The
-   * permissions to read it are added to the role of the state machine.
+   * permissions to read it are added to the role of the state machine. If the bucket is
+   * encrypted with a KMS key that you manage, the role also needs access to the key.
    *
    * @example
    *
@@ -243,8 +244,8 @@ export interface MapArgs extends StateArgs {
      */
     maxInputBytesPerBatch?: Input<JSONata | number>;
     /**
-     * A value to pass on with every batch, as `BatchInput`. This takes any JSON value,
-     * and a JSONata expression anywhere inside it.
+     * An object to pass on with every batch, as `BatchInput`. It can have JSONata
+     * expressions in it, or be one.
      */
     batchInput?: Input<JSONata | Record<string, any>>;
   };
@@ -401,6 +402,19 @@ function bucketName(bucket: Input<string>) {
     : output(bucket).apply(assertName);
 }
 
+function resultPrefix(name: string, prefix: Input<string>) {
+  const assertPrefix = (prefix: string) => {
+    if (!isJSONata(prefix) && !prefix.replace(/\/+$/, ""))
+      throw new Error(
+        `The resultWriter of the "${name}" Map state needs a "prefix", which can't be empty.`,
+      );
+    return prefix;
+  };
+  return typeof prefix === "string"
+    ? assertPrefix(prefix)
+    : output(prefix).apply(assertPrefix);
+}
+
 function bucketArn(bucket: Input<string>) {
   const partition = getPartitionOutput().partition;
   const name = output(bucketName(bucket)).apply(escapeIam);
@@ -512,9 +526,28 @@ export class Map extends State implements Nextable, Failable {
   }
 
   /**
+   * Check the args that are known when the state is defined, so that an invalid state
+   * adds neither a permission nor a definition.
+   */
+  private check() {
+    if (this.args.items !== undefined && this.args.itemReader)
+      throw new Error(
+        `The "${this.name}" Map state has both "items" and "itemReader". Items come from one or the other.`,
+      );
+
+    this.checkedItemReader();
+    this.checkedItemBatcher();
+    this.checkedResultWriter();
+
+    const mode = this.args.mode ?? "inline";
+    if (typeof mode === "string") this.assertMode(mode);
+  }
+
+  /**
    * @internal
    */
   public getPermissions() {
+    this.check();
     return [
       ...this.processor.getPermissions(),
       ...this.getItemReaderPermissions(),
@@ -585,26 +618,30 @@ export class Map extends State implements Nextable, Failable {
     ];
   }
 
+  // the options that only the distributed modes have
+  private assertMode(mode: "inline" | "standard" | "express") {
+    if (mode !== "inline") return;
+
+    const used = DISTRIBUTED_ARGS.filter((arg) => this.args[arg] !== undefined);
+    if (used.length)
+      throw new Error(
+        `The "${this.name}" Map state uses ${used
+          .map((arg) => `"${arg}"`)
+          .join(", ")}, which ${
+          used.length > 1 ? "need" : "needs"
+        } the "standard" or "express" mode.`,
+      );
+  }
+
   private processorConfig() {
     const config = (mode: "inline" | "standard" | "express") => {
-      if (mode !== "inline")
-        return { Mode: "DISTRIBUTED", ExecutionType: mode.toUpperCase() };
-
-      const used = DISTRIBUTED_ARGS.filter(
-        (arg) => this.args[arg] !== undefined,
-      );
-      if (used.length)
-        throw new Error(
-          `The "${this.name}" Map state uses ${used
-            .map((arg) => `"${arg}"`)
-            .join(", ")}, which ${
-            used.length > 1 ? "need" : "needs"
-          } the "standard" or "express" mode.`,
-        );
-      return { Mode: "INLINE" };
+      this.assertMode(mode);
+      return mode === "inline"
+        ? { Mode: "INLINE" }
+        : { Mode: "DISTRIBUTED", ExecutionType: mode.toUpperCase() };
     };
 
-    // fail while the state machine is defined, when the mode is known by then
+    // an output is only known later, but a mode is usually written in the config
     const mode = this.args.mode ?? "inline";
     return typeof mode === "string" ? config(mode) : output(mode).apply(config);
   }
@@ -673,7 +710,7 @@ export class Map extends State implements Nextable, Failable {
     };
   }
 
-  private serializeItemBatcher() {
+  private checkedItemBatcher() {
     const batcher = this.args.itemBatcher;
     if (!batcher) return undefined;
 
@@ -684,6 +721,12 @@ export class Map extends State implements Nextable, Failable {
       throw new Error(
         `The itemBatcher of the "${this.name}" Map state needs "maxItemsPerBatch", "maxInputBytesPerBatch" or both.`,
       );
+    return batcher;
+  }
+
+  private serializeItemBatcher() {
+    const batcher = this.checkedItemBatcher();
+    if (!batcher) return undefined;
 
     return {
       MaxItemsPerBatch: batcher.maxItemsPerBatch,
@@ -699,15 +742,7 @@ export class Map extends State implements Nextable, Failable {
     const writer = this.args.resultWriter;
     if (!writer) return undefined;
 
-    if (
-      typeof writer.prefix === "string" &&
-      !isJSONata(writer.prefix) &&
-      !writer.prefix.replace(/\/+$/, "")
-    )
-      throw new Error(
-        `The resultWriter of the "${this.name}" Map state needs a "prefix", which can't be empty.`,
-      );
-    return writer;
+    return { ...writer, prefix: resultPrefix(this.name, writer.prefix) };
   }
 
   private serializeResultWriter() {
@@ -730,11 +765,7 @@ export class Map extends State implements Nextable, Failable {
    * Serialize the state into JSON state definition.
    */
   protected toJSON() {
-    if (this.args.items !== undefined && this.args.itemReader) {
-      throw new Error(
-        `The "${this.name}" Map state has both "items" and "itemReader". Items come from one or the other.`,
-      );
-    }
+    this.check();
 
     return {
       Type: "Map",

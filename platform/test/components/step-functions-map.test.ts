@@ -459,6 +459,30 @@ describe("Map state permissions", () => {
     expect(perms[0].resources).toEqual(["arn:aws:s3:::out/*"]);
   });
 
+  it("adds none for a state that is not valid", () => {
+    expect(() =>
+      map({
+        mode: "inline",
+        itemReader: { ...reader, key: "a.jsonl" },
+      }).getPermissions(),
+    ).toThrow(/"itemReader", which needs the "standard" or "express" mode/);
+    expect(() =>
+      map({
+        items: [1],
+        itemReader: { ...reader, key: "a.jsonl" },
+      }).getPermissions(),
+    ).toThrow(/both "items" and "itemReader"/);
+    expect(() =>
+      map({
+        itemBatcher: {},
+        resultWriter: { bucket: "out", prefix: "r" },
+      }).getPermissions(),
+    ).toThrow(/needs "maxItemsPerBatch", "maxInputBytesPerBatch" or both/);
+    expect(() =>
+      map({ resultWriter: { bucket: "out", prefix: "" } }).getPermissions(),
+    ).toThrow(/needs a "prefix", which can't be empty/);
+  });
+
   it("keeps the permissions of the processor", async () => {
     const perms = await permissions({
       processor: new Pass({ name: "Process" }),
