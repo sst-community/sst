@@ -403,7 +403,8 @@ function bucketName(bucket: Input<string>) {
 
 function bucketArn(bucket: Input<string>) {
   const partition = getPartitionOutput().partition;
-  return interpolate`arn:${partition}:s3:::${bucketName(bucket)}`;
+  const name = output(bucketName(bucket)).apply(escapeIam);
+  return interpolate`arn:${partition}:s3:::${name}`;
 }
 
 /**

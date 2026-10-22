@@ -381,6 +381,13 @@ describe("Map state permissions", () => {
     ]);
   });
 
+  it("only lets a bucket name match itself", async () => {
+    const perms = await permissions({
+      itemReader: { ...reader, bucket: "data-*", key: "a.jsonl" },
+    });
+    expect(perms[0].resources).toEqual(["arn:aws:s3:::data-${*}/a.jsonl"]);
+  });
+
   it("lists and reads the objects under a prefix", async () => {
     const perms = await permissions({
       itemReader: { type: "objects", bucket: "data", prefix: "docs/" },
