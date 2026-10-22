@@ -47,6 +47,8 @@ type fakeAppSync struct {
 	// pingDelay is how long publishing a ping takes, as a publish to AppSync
 	// takes a round trip
 	pingDelay atomic.Int64
+	// what was published over the socket, by message type
+	overSocket map[bridge.MessageType]int
 }
 
 func (f *fakeAppSync) Publish(ctx context.Context, channel string, event interface{}) error {
@@ -64,6 +66,20 @@ func (f *fakeAppSync) Publish(ctx context.Context, channel string, event interfa
 		sub <- string(data)
 	}
 	return nil
+}
+
+// PublishOverSocket publishes as Publish does, and counts what went this way,
+// by message type.
+func (f *fakeAppSync) PublishOverSocket(ctx context.Context, channel string, event interface{}) error {
+	if p, ok := event.(bridge.Packet); ok {
+		f.mu.Lock()
+		if f.overSocket == nil {
+			f.overSocket = map[bridge.MessageType]int{}
+		}
+		f.overSocket[p.Type]++
+		f.mu.Unlock()
+	}
+	return f.Publish(ctx, channel, event)
 }
 
 // unsubscribe removes the channel's subscribers, as when a bridge's Lambda
@@ -90,8 +106,12 @@ func (f *fakeAppSync) Subscribe(ctx context.Context, channel string) (chan strin
 type fakeRuntime struct {
 	// handle answers an invocation's event
 	handle func(event string) string
-	// idle is how long a worker waits for an invocation before it exits, as
-	// the Node.js runtime does after a minute. Zero waits for good.
+	// idle is how long a worker waits for its next invocation before it exits,
+	// as the Node.js runtime does after a minute. It waits for its first for
+	// good: sst dev takes a worker that exits before its first request for an
+	// invocation reached it for one that failed to start, and in a minute that
+	// request always gets there, but in a test's moment, on a busy machine, it
+	// mightn't. Zero waits for good.
 	idle time.Duration
 	// exitDelay is how long a worker's output stays open after it exits, the
 	// time sst dev takes to notice.
@@ -112,6 +132,8 @@ type fakeRuntime struct {
 	starts atomic.Int32
 	// failRuns makes starting a worker fail, as when its runtime can't run it
 	failRuns atomic.Bool
+	// failBuilds makes a function's build fail
+	failBuilds atomic.Bool
 	// lazy starts a worker only when it's invoked, as the Python runtime does,
 	// instead of again straight after a rebuild
 	lazy bool
@@ -134,6 +156,9 @@ func (r *fakeRuntime) Build(ctx context.Context, input *runtime.BuildInput) (*ru
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+	if r.failBuilds.Load() {
+		return nil, errors.New("the build failed")
 	}
 	if err := os.WriteFile(filepath.Join(input.Out(), "index.mjs"), []byte("export const handler = 1"), 0644); err != nil {
 		return nil, err
@@ -189,10 +214,11 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 			return
 		}
 	}
+	invoked := false
 	for {
 		next, cancel := context.WithCancel(ctx)
 		var idle *time.Timer
-		if w.runtime.idle > 0 {
+		if w.runtime.idle > 0 && invoked {
 			idle = time.AfterFunc(w.runtime.idle, cancel)
 		}
 		go func() {
@@ -215,6 +241,7 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 		event, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
+		invoked = true
 		requestID := resp.Header.Get("lambda-runtime-aws-request-id")
 		answer := w.runtime.handle(string(event))
 		select {

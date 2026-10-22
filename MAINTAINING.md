@@ -91,6 +91,7 @@ The fork numbers its own releases, with semver, because it moves faster than SST
 - publishes `@sst-community/sst` and a `@sst-community/sst-<os>-<cpu>` package for each platform to npm
 - publishes each adapter in `packages/`, `@sst-community/svelte-kit-sst` and `@sst-community/astro-sst`, when the version in its `package.json` isn't on npm yet
 - posts the notes to the Discord announcements channel
+- then, in a job of its own, starts the docs workflow on `main`, so the docs site's changelog lists the release
 
 Things to know:
 
@@ -191,8 +192,9 @@ The tests run without a real provider, so deploy an app with a site, a database,
 
 ## The docs site
 
-`www/` is published to GitHub Pages at https://sst-community.github.io/sst/ by `.github/workflows/docs.yml`. It runs on a push to `main` that touches `www/`, `platform/src/`, `cmd/sst/` or `examples/`.
+`www/` is published to GitHub Pages at https://sst-community.github.io/sst/ by `.github/workflows/docs.yml`. It runs on a push to `main` that touches `www/`, `platform/src/`, `cmd/sst/` or `examples/`, and after each release.
 
+- **The changelog is made when the site is built**, by `www/generate.ts`, from the fork's GitHub releases and, after them, SST's own from before the fork's first. Pre-releases aren't listed. Each release's notes are shown up to their `### Install` heading. A release made by `release.yml` doesn't start other workflows, so its `docs` job starts this one once the release is out.
 - **The site lives under `/sst`.** `www/src/fork-links.mjs` adds that base to root-relative links in Markdown and MDX. Components, redirects, favicons and hero actions add it themselves.
 - **SST's own pages aren't published.** The workflow deletes SST's blog, about and legal pages before it builds. The repo keeps them, and links to them go to sst.dev.
 - **The home page is `www/src/components/ForkLanding.astro`**, which `Hero.astro` renders for the site root. It names no versions and no fixes, so a release doesn't need an edit there. What a release changes goes in its notes.

@@ -349,7 +349,10 @@ function generateCliDoc() {
 async function generateChangelog() {
   console.info(`Generating changelog...`);
 
-  const REPO = "sst/sst";
+  // The fork's releases, then SST's own from before the fork's first one.
+  // SST's later releases are merged into the fork's, whose notes name them.
+  const REPO = "sst-community/sst";
+  const UPSTREAM = "anomalyco/sst";
   const MIN_MAJOR = 4;
   const PER_PAGE = 100;
   const outputFilePath = `src/data/changelog.json`;
@@ -369,6 +372,8 @@ async function generateChangelog() {
     publishedAt: string;
     url: string;
     body: string;
+    // whether it's one of SST's own releases
+    upstream: boolean;
   };
 
   const headers: Record<string, string> = {
@@ -379,64 +384,89 @@ async function generateChangelog() {
   const token = process.env.GITHUB_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const releases: GithubRelease[] = [];
-  for (let page = 1; ; page++) {
-    const url = `https://api.github.com/repos/${REPO}/releases?per_page=${PER_PAGE}&page=${page}`;
-    const res = await fetch(url, { headers });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(
-        `GitHub API ${res.status} ${res.statusText} on ${url}: ${text}`
-      );
-    }
-    const batch = (await res.json()) as GithubRelease[];
-    releases.push(...batch);
-    if (batch.length < PER_PAGE) break;
+  const releases = await fetchReleases(REPO);
+  const first = Math.min(...releases.map(publishedAt));
+  const upstream = (await fetchReleases(UPSTREAM)).filter(
+    (r) => publishedAt(r) < first
+  );
+  console.debug(
+    ` - ${releases.length} releases, and ${upstream.length} of SST's from before them`
+  );
 
-    // Stop early once we've gone past the v4 cutoff to save calls.
-    const passedCutoff = batch.every((r) => {
-      const major = parseMajor(r.tag_name);
-      return major !== null && major < MIN_MAJOR;
-    });
-    if (passedCutoff) break;
-  }
-  console.debug(` - fetched ${releases.length} total releases`);
-
-  const filtered = releases
-    .filter((r) => !r.draft)
-    .filter((r) => {
-      const major = parseMajor(r.tag_name);
-      return major !== null && major >= MIN_MAJOR;
-    })
-    .sort(
-      (a, b) =>
-        new Date(b.published_at).getTime() -
-        new Date(a.published_at).getTime()
-    );
-  console.debug(` - ${filtered.length} releases match v${MIN_MAJOR}+`);
-
-  const entries: ChangelogEntry[] = filtered.map((r) => ({
-    tag: r.tag_name,
-    publishedAt: r.published_at,
-    url: r.html_url,
-    body: cleanBody(r.body),
-  }));
+  const entries: ChangelogEntry[] = [
+    ...releases.map((r) => toEntry(r, REPO)),
+    ...upstream.map((r) => toEntry(r, UPSTREAM)),
+  ].sort(
+    (a, b) =>
+      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+  );
 
   fs.mkdirSync(path.dirname(outputFilePath), { recursive: true });
   fs.writeFileSync(outputFilePath, JSON.stringify(entries, null, 2) + "\n");
+
+  // A repo's published releases from v4 on. Pre-releases, such as 5.0's, are
+  // left to the GitHub releases.
+  async function fetchReleases(repo: string) {
+    const releases: GithubRelease[] = [];
+    for (let page = 1; ; page++) {
+      const url = `https://api.github.com/repos/${repo}/releases?per_page=${PER_PAGE}&page=${page}`;
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(
+          `GitHub API ${res.status} ${res.statusText} on ${url}: ${text}`
+        );
+      }
+      const batch = (await res.json()) as GithubRelease[];
+      releases.push(...batch);
+      if (batch.length < PER_PAGE) break;
+
+      // Stop early once we've gone past the v4 cutoff to save calls.
+      const passedCutoff = batch.every((r) => {
+        const major = parseMajor(r.tag_name);
+        return major !== null && major < MIN_MAJOR;
+      });
+      if (passedCutoff) break;
+    }
+    console.debug(` - fetched ${releases.length} releases of ${repo}`);
+
+    return releases
+      .filter((r) => !r.draft && !r.prerelease)
+      .filter((r) => {
+        const major = parseMajor(r.tag_name);
+        return major !== null && major >= MIN_MAJOR;
+      });
+  }
+
+  function publishedAt(r: GithubRelease) {
+    return new Date(r.published_at).getTime();
+  }
+
+  function toEntry(r: GithubRelease, repo: string): ChangelogEntry {
+    return {
+      tag: r.tag_name,
+      publishedAt: r.published_at,
+      url: r.html_url,
+      body: cleanBody(r.body, repo),
+      upstream: repo === UPSTREAM,
+    };
+  }
 
   function parseMajor(tag: string): number | null {
     const m = /^v(\d+)\./.exec(tag);
     return m ? Number(m[1]) : null;
   }
 
-  function cleanBody(body: string | null): string {
+  function cleanBody(body: string | null, repo: string): string {
     if (!body) return "";
     let text = body.replace(/\r\n/g, "\n");
 
     // Strip the trailing "## Changelog" section heading and any blank lines
     // immediately preceding it, but keep the bullets that follow.
     text = text.replace(/\n*^##\s+Changelog\s*$/im, "");
+
+    // The fork's notes end with how to install that version.
+    text = text.split(/^###\s+Install\s*$/m)[0];
 
     const lines = text.split("\n").map((line) => {
       // Match a leading bullet, an optional [hash](url) or bare hash,
@@ -466,7 +496,7 @@ async function generateChangelog() {
     result = result.replace(
       /(^|[^\[\/\w])#(\d{2,})(?!\])/g,
       (_, prefix, num) =>
-        `${prefix}[#${num}](https://github.com/${REPO}/issues/${num})`
+        `${prefix}[#${num}](https://github.com/${repo}/issues/${num})`
     );
 
     // Unwrap parentheses around inline PR/issue links: "([#1234](url))" → "[#1234](url)".

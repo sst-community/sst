@@ -1,8 +1,19 @@
 import changelog from "../data/changelog.json";
 
 function renderChangelog(): string {
-  return (changelog as Array<{ tag: string; body: string }>)
-    .map((r) => `## ${r.tag.replace(/^v/, "")}\n\n${r.body}`)
+  const releases = changelog as Array<{
+    tag: string;
+    body: string;
+    upstream: boolean;
+  }>;
+  return releases
+    .map(
+      (r, i) =>
+        // the line the page has before SST's own releases
+        (r.upstream && !releases[i - 1]?.upstream
+          ? "SST's own releases, from before the fork's first one.\n\n"
+          : "") + `## ${r.tag.replace(/^v/, "")}\n\n${r.body}`
+    )
     .join("\n\n");
 }
 

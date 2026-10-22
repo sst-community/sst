@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -303,26 +304,38 @@ func TestSecondInitForARunningWorker(t *testing.T) {
 	}
 }
 
-// A function whose worker can't start, as when its build fails, fails its
-// invocation straight away with an init error, not at Lambda's timeout. The
-// next invocation, once the worker can start, runs.
+// A function whose worker can't start fails its invocation straight away with
+// an init error, not at Lambda's timeout. The error says why, its build failed
+// or its runtime couldn't run it, whether the bridge's init or its invocation
+// was handled first. The next invocation, once the worker can start, runs.
 func TestInvocationFailsWhenTheWorkerCantStart(t *testing.T) {
-	h := newHarness(t, &fakeRuntime{handle: echo})
-	h.runtime.failRuns.Store(true)
-	h.addFunction("Fn")
-	b := h.bridge("Fn")
-	start := time.Now()
-	_, err := b.invoke("x")
-	if err == nil || !strings.Contains(err.Error(), "function failed to start") || !strings.Contains(err.Error(), "Function failed to build") {
-		t.Fatalf("invoke() = %v, want the init error for a build that failed", err)
-	}
-	if took := time.Since(start); took > 2*time.Second {
-		t.Fatalf("the init error took %v", took)
-	}
+	for _, c := range []struct {
+		name string
+		why  string
+		fail func(r *fakeRuntime) *atomic.Bool
+	}{
+		{"build", "Function failed to build", func(r *fakeRuntime) *atomic.Bool { return &r.failBuilds }},
+		{"run", "Function failed to start", func(r *fakeRuntime) *atomic.Bool { return &r.failRuns }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, &fakeRuntime{handle: echo})
+			c.fail(h.runtime).Store(true)
+			h.addFunction("Fn")
+			b := h.bridge("Fn")
+			start := time.Now()
+			_, err := b.invoke("x")
+			if err == nil || !strings.Contains(err.Error(), "function failed to start") || !strings.Contains(err.Error(), c.why) {
+				t.Fatalf("invoke() = %v, want the init error saying %q", err, c.why)
+			}
+			if took := time.Since(start); took > 2*time.Second {
+				t.Fatalf("the init error took %v", took)
+			}
 
-	h.runtime.failRuns.Store(false)
-	got, err := b.invoke("y")
-	if err != nil || got != "echo y" {
-		t.Fatalf("invoke() after the worker can start = %q, %v, want its answer", got, err)
+			c.fail(h.runtime).Store(false)
+			got, err := b.invoke("y")
+			if err != nil || got != "echo y" {
+				t.Fatalf("invoke() after the worker can start = %q, %v, want its answer", got, err)
+			}
+		})
 	}
 }

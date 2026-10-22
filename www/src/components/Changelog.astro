@@ -7,6 +7,7 @@ type Entry = {
   publishedAt: string;
   url: string;
   body: string;
+  upstream: boolean;
 };
 
 const entries = data as Entry[];
@@ -41,30 +42,39 @@ const rendered = await Promise.all(
 const releases = rendered.map((entry, index) => ({
   ...entry,
   showDate: entry.formattedDate !== rendered[index - 1]?.formattedDate,
+  // the first of SST's own releases, after the fork's
+  startsUpstream: entry.upstream && !rendered[index - 1]?.upstream,
 }));
 ---
 
 <ul class="changelog">
   {releases.map((entry) => (
-    <li class="release">
-      <div class="meta">
-        <h2 id={entry.anchor}>
-          <a href={`#${entry.anchor}`}>{entry.label}</a>
-        </h2>
-        <time
-          class={`date${entry.showDate ? "" : " hidden"}`}
-          datetime={entry.publishedAt}
-        >
-          {entry.formattedDate}
-        </time>
-      </div>
-      <div class="body">
-        {entry.html
-          ? <Fragment set:html={entry.html} />
-          : <p class="empty"><em>No release notes.</em></p>
-        }
-      </div>
-    </li>
+    <>
+      {entry.startsUpstream && (
+        <li class="source">
+          <p>SST's own releases, from before the fork's first one.</p>
+        </li>
+      )}
+      <li class="release">
+        <div class="meta">
+          <h2 id={entry.anchor}>
+            <a href={`#${entry.anchor}`}>{entry.label}</a>
+          </h2>
+          <time
+            class={`date${entry.showDate ? "" : " hidden"}`}
+            datetime={entry.publishedAt}
+          >
+            {entry.formattedDate}
+          </time>
+        </div>
+        <div class="body">
+          {entry.html
+            ? <Fragment set:html={entry.html} />
+            : <p class="empty"><em>No release notes.</em></p>
+          }
+        </div>
+      </li>
+    </>
   ))}
 </ul>
 
@@ -83,6 +93,18 @@ const releases = rendered.map((entry, index) => ({
   }
   .changelog > li.release::before {
     content: none;
+  }
+  .changelog > li.source {
+    margin: 2.5rem 0 1rem !important;
+    padding: 1.5rem 0 0;
+    border-top: 1px solid var(--sl-color-hairline);
+    color: var(--color-text-dimmed);
+  }
+  .changelog > li.source::before {
+    content: none;
+  }
+  .changelog > li.source p {
+    margin: 0;
   }
   .meta {
     display: flex;

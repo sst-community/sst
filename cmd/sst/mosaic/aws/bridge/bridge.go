@@ -66,6 +66,13 @@ type Conn interface {
 
 var _ Conn = (*appsync.Connection)(nil)
 
+// socketConn is a Conn that can publish over its WebSocket, which is faster.
+type socketConn interface {
+	PublishOverSocket(ctx context.Context, channel string, event interface{}) error
+}
+
+var _ socketConn = (*appsync.Connection)(nil)
+
 type Writer struct {
 	conn      Conn
 	message   MessageType
@@ -78,6 +85,8 @@ type Writer struct {
 
 	// set on every packet, as the bridge reads it from the first that arrives
 	logsFollow bool
+	// publish over the connection's WebSocket where it can
+	overSocket bool
 }
 
 // LogsBody is the body of a MessageLogs: the lines a worker printed up to the
@@ -130,6 +139,13 @@ func (w *Writer) SetLogsFollow(logsFollow bool) {
 	w.logsFollow = logsFollow
 }
 
+// SetOverSocket publishes the message over the AppSync connection's WebSocket
+// where it can, which reaches the bridge sooner, and over HTTPS otherwise. See
+// appsync.Connection.PublishOverSocket.
+func (w *Writer) SetOverSocket(overSocket bool) {
+	w.overSocket = overSocket
+}
+
 const BUFFER_SIZE = 1024 * 128
 
 // Write adds p to the message, publishing a packet each time BUFFER_SIZE
@@ -161,7 +177,11 @@ func (w *Writer) Flush(final bool) error {
 		return nil
 	}
 	encoded := base64.StdEncoding.EncodeToString(w.buffer)
-	err := w.conn.Publish(context.Background(), w.channel, Packet{
+	publish := w.conn.Publish
+	if conn, ok := w.conn.(socketConn); ok && w.overSocket {
+		publish = conn.PublishOverSocket
+	}
+	err := publish(context.Background(), w.channel, Packet{
 		ID:     w.id,
 		Index:  w.index,
 		Type:   w.message,

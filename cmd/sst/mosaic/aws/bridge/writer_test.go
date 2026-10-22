@@ -140,3 +140,62 @@ func BenchmarkWriter(b *testing.B) {
 		})
 	}
 }
+
+// socketPackets is a Conn that can publish over its socket, and says which way
+// each packet went.
+type socketPackets struct {
+	overHTTPS, overSocket int
+}
+
+func (c *socketPackets) Publish(ctx context.Context, channel string, event interface{}) error {
+	c.overHTTPS++
+	return nil
+}
+
+func (c *socketPackets) PublishOverSocket(ctx context.Context, channel string, event interface{}) error {
+	c.overSocket++
+	return nil
+}
+
+func (c *socketPackets) Subscribe(ctx context.Context, channel string) (chan string, error) {
+	return make(chan string), nil
+}
+
+// A message goes over the socket only when its writer is told to, and every
+// packet of it does.
+func TestWriterPublishesOverTheSocketWhenTold(t *testing.T) {
+	conn := &socketPackets{}
+	w := newWriter(conn, "source", "channel", MessageResponse)
+	w.SetOverSocket(true)
+	if _, err := w.Write(bytes.Repeat([]byte("x"), BUFFER_SIZE+5)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if conn.overSocket != 2 || conn.overHTTPS != 0 {
+		t.Fatalf("published %d packets over the socket and %d over HTTPS, want 2 and 0", conn.overSocket, conn.overHTTPS)
+	}
+
+	conn = &socketPackets{}
+	w = newWriter(conn, "source", "channel", MessagePing)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if conn.overSocket != 0 || conn.overHTTPS != 1 {
+		t.Fatalf("a writer not told to published %d over the socket and %d over HTTPS, want 0 and 1", conn.overSocket, conn.overHTTPS)
+	}
+}
+
+// A Conn that can't publish over a socket gets every packet through Publish.
+func TestWriterOverSocketWithoutASocket(t *testing.T) {
+	conn := &publishedPackets{}
+	w := newWriter(conn, "source", "channel", MessageResponse)
+	w.SetOverSocket(true)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(conn.packets) != 1 {
+		t.Fatalf("published %d packets, want 1", len(conn.packets))
+	}
+}

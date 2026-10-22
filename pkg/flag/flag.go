@@ -41,6 +41,11 @@ var SST_SKIP_UPDATE_CHECK = isTrue("SST_SKIP_UPDATE_CHECK")
 // locally to the stubs deployed in their place, which print it in their log
 // groups.
 var SST_DEV_CLOUDWATCH_LOGS = isTrue("SST_DEV_CLOUDWATCH_LOGS")
+
+// SST_DEV_HTTP_PUBLISH has sst dev publish its replies to functions' bridges
+// over HTTPS only, not over its AppSync WebSocket.
+var SST_DEV_HTTP_PUBLISH = isTrue("SST_DEV_HTTP_PUBLISH")
+
 var SST_NO_BUN = isTrue("NO_BUN") || isTrue("SST_NO_BUN")
 
 func isTrue(name string) bool {

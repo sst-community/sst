@@ -43,6 +43,12 @@ This is roughly what the flow looks like:
 5. Next, it runs the local version of the function and publishes an event with the function response as the payload. The local version is run as a Node.js Worker.
 6. Finally, the stub Lambda function receives the event and responds with the payload.
 
+The function's response is published over the WebSocket the CLI already has open, which reaches the stub about 50 ms sooner than a publish over HTTPS. If AppSync doesn't acknowledge it within half a second, throttles it, or the WebSocket has closed, it's published over HTTPS too. To publish everything over HTTPS instead, set `SST_DEV_HTTP_PUBLISH`.
+
+```bash frame="none"
+SST_DEV_HTTP_PUBLISH=true sst dev
+```
+
 ---
 
 ### Quirks

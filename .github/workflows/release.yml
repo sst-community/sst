@@ -249,3 +249,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  # Builds the docs site again once the release is out, as its changelog lists
+  # the releases when it's built. A release made with the workflow's token
+  # doesn't start other workflows itself, but a workflow_dispatch can. It's a
+  # job of its own, so only it can start a workflow. It runs when the release
+  # job failed too, which can be after the GitHub release is out; when nothing
+  # was released, the site is built as it was.
+  docs:
+    needs: goreleaser
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Update the docs site's changelog
+        run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
