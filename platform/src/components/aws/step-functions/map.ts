@@ -182,14 +182,16 @@ export interface MapArgs extends StateArgs {
      * The key of the object to read. Required for the `json`, `jsonl` and `csv` types.
      *
      * Takes a key or a JSONata expression that evaluates to one. When it's an expression,
-     * the state machine can read any object in the `bucket`.
+     * the state machine can read any object in the `bucket`. Not for the `objects` type,
+     * which takes a `prefix`.
      */
     key?: Input<JSONata | string>;
     /**
      * Only use the objects whose key starts with this prefix. Used by the `objects` type.
      *
      * Takes a prefix or a JSONata expression that evaluates to one. When it's an expression,
-     * the state machine can list and read any object in the `bucket`.
+     * the state machine can list and read any object in the `bucket`. Only for the
+     * `objects` type; the other types take a `key`.
      *
      * @default All the objects in the bucket
      */
@@ -202,7 +204,8 @@ export interface MapArgs extends StateArgs {
      */
     maxItems?: Input<JSONata | number>;
     /**
-     * The names of the columns of a `csv` file that doesn't have a header row.
+     * The names of the columns of a `csv` file that doesn't have a header row. Only for the
+     * `csv` type, and it can't be empty.
      *
      * @default The first row of the file is the header
      */
@@ -237,10 +240,9 @@ export interface MapArgs extends StateArgs {
      */
     maxItemsPerBatch?: Input<JSONata | number>;
     /**
-     * The maximum size of a batch in bytes, up to `262144` (256 KiB).
+     * The maximum size of a batch in bytes, up to `262144` (256 KiB), which is also the
+     * size a batch can have when only `maxItemsPerBatch` is set.
      * Takes an integer or a JSONata expression that evaluates to an integer.
-     *
-     * @default `262144`
      */
     maxInputBytesPerBatch?: Input<JSONata | number>;
     /**
@@ -315,7 +317,7 @@ export interface MapArgs extends StateArgs {
    * `toleratedFailureCount`, the state fails when either is exceeded. A value of `100`
    * means the state doesn't fail, even if every iteration fails.
    *
-   * @default `0`
+   * @default If neither this nor `toleratedFailureCount` is set, the state fails when one iteration fails
    * @example
    * ```ts
    * {
@@ -331,7 +333,7 @@ export interface MapArgs extends StateArgs {
    * This requires the `standard` or `express` mode. If you also set
    * `toleratedFailurePercentage`, the state fails when either is exceeded.
    *
-   * @default `0`
+   * @default If neither this nor `toleratedFailurePercentage` is set, the state fails when one iteration fails
    * @example
    * ```ts
    * {
