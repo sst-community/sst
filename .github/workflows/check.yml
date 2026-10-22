@@ -77,6 +77,17 @@ jobs:
       - name: Run platform tests
         run: bun run test:platform
 
+      # The component package an author copies, against `sst` packed from
+      # this commit, so a change that breaks a package fails here
+      - name: Test the component package template
+        run: |
+          mkdir -p "$RUNNER_TEMP/sst"
+          (cd sdk/js && bun run build && bun ./scripts/platform.ts "$RUNNER_TEMP/sst")
+          cd examples/component-package
+          npm install --no-audit --no-fund
+          npm install --no-audit --no-fund --no-save "$RUNNER_TEMP/sst/sst-0.0.0.tgz"
+          npm test
+
       - name: Build CLI
         run: go build -o sst ./cmd/sst
 

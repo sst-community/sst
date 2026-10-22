@@ -7,6 +7,8 @@ A component in a package is written the way a [local component](/docs/write-a-lo
 
 So it can't read the globals an `sst.config.ts` has, like `sst` and `aws`. It imports them. And when an app runs it, what it imports is the app's own SST and providers, not copies of its own.
 
+To start from a package that already does what this page says, with a component, a handler it ships and tests, copy [`examples/component-package`](https://github.com/sst-community/sst/tree/v5/examples/component-package).
+
 ---
 
 ## Set it up
@@ -14,8 +16,10 @@ So it can't read the globals an `sst.config.ts` has, like `sst` and `aws`. It im
 The package's repo installs `sst`, Pulumi and the providers the component uses as dev dependencies. It needs no `sst.config.ts`.
 
 ```bash
-npm install -D sst@npm:@sst-community/sst@^5.0.0-0 @pulumi/pulumi @pulumi/aws @pulumi/cloudflare typescript
+npm install -D sst@npm:@sst-community/sst@^5.0.0-0 @pulumi/pulumi @pulumi/aws @pulumi/cloudflare typescript@^6
 ```
+
+Keep TypeScript on 6. `@pulumi/pulumi` accepts only versions below 7, and npm stops an install that asks for 7.
 
 `sst/components`, `sst/components/aws` and the other groups come from it, with their types, and `sst/testing` too. A component that uses SST's components of a provider, like `sst/components/aws`, also needs the providers that group loads. For `sst/components/aws` they're `@pulumi/aws`, `@pulumi/command`, `@pulumi/docker-build`, `@pulumi/random` and `@pulumi/tls`. `node_modules/sst/platform/package.json` lists each group's under `groups`.
 
