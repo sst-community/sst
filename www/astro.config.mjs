@@ -116,6 +116,7 @@ const sidebar = [
           "docs/component/aws/realtime",
           "docs/component/aws/sns-topic",
           "docs/component/aws/function",
+          "docs/component/aws/web-function",
           "docs/component/aws/postgres",
           "docs/component/aws/app-sync",
           "docs/component/aws/svelte-kit",

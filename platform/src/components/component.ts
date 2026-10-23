@@ -215,6 +215,8 @@ export class Component extends ComponentResource {
             "aws:apigatewayv2/vpcLink:VpcLink": ["name", 128],
             "aws:appautoscaling/policy:Policy": ["name", 255],
             "aws:appsync/graphQLApi:GraphQLApi": ["name", 65536],
+            // WebFunction uses this provider resource for its CloudFormation backend.
+            "aws:cloudformation/stack:Stack": ["name", 128],
             "aws:cloudwatch/eventBus:EventBus": ["name", 256],
             "aws:cloudwatch/eventTarget:EventTarget": ["targetId", 64],
             "aws:cloudwatch/eventRule:EventRule": ["name", 64],
