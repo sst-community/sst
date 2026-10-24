@@ -187,6 +187,48 @@ func TestStreamGetsALostPacketWhileItGoesOn(t *testing.T) {
 	}
 }
 
+// A gap that opens after a stream was quiet, and asked, and backed off, is
+// asked for a gap's wait after, not after that backoff.
+func TestGapAfterAQuietStreamAsksSoon(t *testing.T) {
+	soon(t)
+	with(t, &askAtMost, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub := make(chan string, 100)
+	asks := &asking{on: func() bool { return true }, timing: askTimingNow()}
+	asked := make(chan Packet, 100)
+	go func() {
+		for packet := range sorted(ctx, sub, asks) {
+			if packet.ask != nil {
+				asked <- packet
+			}
+		}
+	}()
+	send := func(index int) {
+		data, _ := json.Marshal(Packet{Type: MessageResponse, ID: "m", Index: index, Streaming: true})
+		sub <- string(data)
+	}
+	send(0)
+	// quiet, so it asks, and asks again after twice as long, and so on
+	for range 3 {
+		select {
+		case <-asked:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a quiet stream never asked")
+		}
+	}
+	// then packet 1 is lost and 2 comes
+	send(2)
+	select {
+	case ask := <-asked:
+		if len(ask.ask.Missing) != 1 || ask.ask.Missing[0] != 1 {
+			t.Fatalf("asked for %v, want 1", ask.ask.Missing)
+		}
+	case <-time.After(4 * askAfterGap):
+		t.Fatal("the gap wasn't asked for within a gap's wait")
+	}
+}
+
 // A streamed response that lost its last packets, its end among them, arrives
 // whole: the bridge asks for what came after the last packet it has once it's
 // heard nothing for a while.

@@ -484,7 +484,10 @@ func sorted(ctx context.Context, sub chan string, asks *asking) iter.Seq[Packet]
 					message.gapSince, message.askAgain, message.askedAfter = time.Time{}, time.Time{}, 0
 				}
 				if len(message.held) > 0 && message.gapSince.IsZero() {
+					// a new gap, so it's asked for a gap's wait after, not after
+					// the backoff of asks while the stream was quiet
 					message.gapSince = message.lastPacket
+					message.askAgain, message.askedAfter = time.Time{}, 0
 				}
 				if _, waits := messages[packet.ID]; waits && !known {
 					order = append(order, packet.ID)
