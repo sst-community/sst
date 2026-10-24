@@ -497,7 +497,7 @@ async function generateExamplesDocs() {
           renderExampleComment(module.children![0].comment?.summary!),
           ...renderRunFunction(module),
           ``,
-          `View the [full example](${config.github}/tree/dev/examples/${
+          `View the [full example](${config.fork}/tree/main/examples/${
             module.name.split("/")[0]
           }).`,
           ``,
@@ -510,7 +510,7 @@ async function generateExamplesDocs() {
 
   function renderIntro() {
     return [
-      `Below is a collection of example SST apps. These are available in the [\`examples/\`](${config.github}/tree/dev/examples) directory of the repo.`,
+      `Below is a collection of example SST apps. These are available in the [\`examples/\`](${config.fork}/tree/main/examples) directory of the repo.`,
       "",
       ":::tip",
       "This doc is best viewed through the site search or through the _AI_.",
@@ -519,7 +519,7 @@ async function generateExamplesDocs() {
       "The descriptions for these examples are generated using the comments in the `sst.config.ts` of the app.",
       "",
       "#### Contributing",
-      `To contribute an example or to edit one, submit a PR to the [repo](${config.github}).`,
+      `To contribute an example or to edit one, submit a PR to the [repo](${config.fork}).`,
       "Make sure to document the `sst.config.ts` in your example.",
       "",
     ];
@@ -660,7 +660,7 @@ async function generateIndividualExampleDocs() {
           `\`\`\``,
         ]),
         ``,
-        `View the [full example](${config.github}/tree/dev/examples/${dirName}).`,
+        `View the [full example](${config.fork}/tree/main/examples/${dirName}).`,
         ``,
       ].join("\n")
     );
