@@ -2,16 +2,23 @@ package appsync
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/gorilla/websocket"
 )
 
 func TestFailedEvents(t *testing.T) {
@@ -236,5 +243,329 @@ func TestPublishGivesUpAfterItsTimeout(t *testing.T) {
 	}
 	if took := time.Since(start); took > 5*time.Second {
 		t.Fatalf("Publish() took %v, want it to stop after %v", took, publishTimeout)
+	}
+}
+
+// dialFake dials the fake with DialWhenReady, as sst dev dials AppSync.
+func dialFake(t *testing.T, f *fakeEventAPI) (*Connection, error) {
+	t.Helper()
+	tlsConfig := dialTLS
+	dialTLS = f.srv.Client().Transport.(*http.Transport).TLSClientConfig
+	t.Cleanup(func() { dialTLS = tlsConfig })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	host := strings.TrimPrefix(f.srv.URL, "https://")
+	return DialWhenReady(ctx, aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "TOKEN"),
+	}, host, host)
+}
+
+func setReadyTimings(t *testing.T, timeout, interval time.Duration) {
+	t.Helper()
+	oldTimeout, oldInterval := readyTimeout, readyInterval
+	readyTimeout, readyInterval = timeout, interval
+	t.Cleanup(func() { readyTimeout, readyInterval = oldTimeout, oldInterval })
+}
+
+func TestDialWhenReadyWaitsForANewEventAPI(t *testing.T) {
+	setReadyTimings(t, 5*time.Second, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	f.refuse = 2
+
+	conn, err := dialFake(t, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn == nil {
+		t.Fatal("no connection")
+	}
+	// and it works
+	out, err := conn.Subscribe(context.Background(), "/sst/app/stage/x")
+	if err != nil || out == nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	waitFor(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.closedRefused == 2
+	})
+	f.mu.Lock()
+	refused := f.refused
+	f.mu.Unlock()
+	if refused != 2 {
+		t.Fatalf("refused %d connects, want 2", refused)
+	}
+}
+
+func TestDialWhenReadyGivesUp(t *testing.T) {
+	setReadyTimings(t, 200*time.Millisecond, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	f.refuse = 1 << 30
+
+	start := time.Now()
+	_, err := dialFake(t, f)
+	if !errors.Is(err, ErrConnectionFailed) {
+		t.Fatalf("got %v, want ErrConnectionFailed", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("gave up after %v", elapsed)
+	}
+	// every refused socket was closed, none left open
+	waitFor(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.refused > 1 && f.closedRefused == f.refused
+	})
+}
+
+func TestDialWhenReadyStopsWithTheContext(t *testing.T) {
+	setReadyTimings(t, time.Minute, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	f.refuse = 1 << 30
+	tlsConfig := dialTLS
+	dialTLS = f.srv.Client().Transport.(*http.Transport).TLSClientConfig
+	t.Cleanup(func() { dialTLS = tlsConfig })
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	host := strings.TrimPrefix(f.srv.URL, "https://")
+	start := time.Now()
+	_, err := DialWhenReady(ctx, aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "TOKEN"),
+	}, host, host)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("stopped after %v", elapsed)
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// failingCredentials can't be retrieved, as with an expired SSO session
+type failingCredentials struct{ calls atomic.Int32 }
+
+func (f *failingCredentials) Retrieve(context.Context) (aws.Credentials, error) {
+	f.calls.Add(1)
+	return aws.Credentials{}, errors.New("token has expired")
+}
+
+func TestDialWhenReadyReturnsAPermanentErrorAtOnce(t *testing.T) {
+	setReadyTimings(t, 5*time.Second, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	creds := &failingCredentials{}
+	host := strings.TrimPrefix(f.srv.URL, "https://")
+	start := time.Now()
+	_, err := DialWhenReady(context.Background(), aws.Config{Region: "us-east-1", Credentials: creds}, host, host)
+	if err == nil || !strings.Contains(err.Error(), "token has expired") {
+		t.Fatalf("got %v, want the credentials' error", err)
+	}
+	if Transient(err) {
+		t.Fatalf("%v counted as transient", err)
+	}
+	if calls := creds.calls.Load(); calls != 1 {
+		t.Fatalf("dialed %d times, want 1", calls)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+}
+
+// Credentials AppSync doesn't take are turned down at the connect, as they
+// are, and that's returned at once, with what AppSync said.
+func TestDialWhenReadyReturnsARefusalThatWontPass(t *testing.T) {
+	setReadyTimings(t, 5*time.Second, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	f.refuse = 1 << 30
+	f.refuseWith = map[string]interface{}{"errorCode": 403, "errorType": "UnrecognizedClientException",
+		"message": "The security token included in the request is invalid."}
+
+	start := time.Now()
+	_, err := dialFake(t, f)
+	if err == nil || !strings.Contains(err.Error(), "UnrecognizedClientException") {
+		t.Fatalf("got %v, want AppSync's error", err)
+	}
+	if !errors.Is(err, ErrConnectionFailed) {
+		t.Fatalf("%v isn't ErrConnectionFailed", err)
+	}
+	if Transient(err) {
+		t.Fatalf("%v counted as transient", err)
+	}
+	f.mu.Lock()
+	refused := f.refused
+	f.mu.Unlock()
+	if refused != 1 {
+		t.Fatalf("dialed %d times, want 1", refused)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+}
+
+func TestTransient(t *testing.T) {
+	for _, err := range []error{
+		ErrConnectionFailed,
+		&ConnectError{Code: 404, Type: "ResourceNotFoundException"},
+		&ConnectError{Code: 429, Type: "LimitExceededError"},
+		&ConnectError{Code: 503, Type: "ServiceUnavailable"},
+		&HandshakeError{Status: 404},
+		&HandshakeError{Status: 502},
+		fmt.Errorf("dial: %w", &net.DNSError{Err: "no such host", Name: "abc.appsync-realtime-api.ca-central-1.amazonaws.com", IsNotFound: true}),
+		&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+		&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNRESET},
+		&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ETIMEDOUT},
+		websocket.ErrBadHandshake,
+	} {
+		if !Transient(err) {
+			t.Errorf("%v: want transient", err)
+		}
+	}
+	for _, err := range []error{
+		&ConnectError{Code: 403, Type: "UnrecognizedClientException"},
+		&ConnectError{Code: 401, Type: "UnauthorizedException"},
+		&HandshakeError{Status: 403},
+		&HandshakeError{Status: 401},
+		&net.OpError{Op: "dial", Net: "tcp", Err: syscall.EACCES},
+		&net.OpError{Op: "dial", Net: "tcp", Err: &tls.CertificateVerificationError{Err: errors.New("bad cert")}},
+		errors.New("token has expired"),
+		context.Canceled,
+		&tls.CertificateVerificationError{Err: errors.New("bad cert")},
+	} {
+		if Transient(err) {
+			t.Errorf("%v: want permanent", err)
+		}
+	}
+}
+
+// A connect that's never answered is given up on and dialed again, so a hung
+// one can't hold sst dev past readyTimeout.
+func TestDialWhenReadyDialsAgainAfterAConnectNobodyAnswers(t *testing.T) {
+	setReadyTimings(t, 5*time.Second, 10*time.Millisecond)
+	old := connectTimeout
+	connectTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { connectTimeout = old })
+	f := newFakeEventAPI(t, "ack")
+	f.silent = 1
+
+	start := time.Now()
+	if _, err := dialFake(t, f); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+}
+
+// A certificate that isn't trusted won't pass on its own, so it's returned at
+// once, not retried for readyTimeout.
+func TestDialWhenReadyReturnsATLSErrorAtOnce(t *testing.T) {
+	setReadyTimings(t, 5*time.Second, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	host := strings.TrimPrefix(f.srv.URL, "https://")
+	start := time.Now()
+	// without the fake's certificate, as dialFake trusts it
+	_, err := DialWhenReady(context.Background(), aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("AKID", "SECRET", "TOKEN"),
+	}, host, host)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if Transient(err) {
+		t.Fatalf("%v (%T) counted as transient", err, err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+}
+
+// A namespace just created turns down the first subscribes to it. Subscribe
+// tries again, so what's published to the channel arrives.
+func TestSubscribeWaitsForANewNamespace(t *testing.T) {
+	setReadyTimings(t, 5*time.Second, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	f.refuseSubscribes = 2
+	conn := f.connection()
+
+	start := time.Now()
+	out, err := conn.Subscribe(context.Background(), "/sst/app/stage/in")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out == nil {
+		t.Fatal("no channel")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+	f.mu.Lock()
+	refused := f.subscribeErrors
+	f.mu.Unlock()
+	if refused != 2 {
+		t.Fatalf("%d subscribes turned down, want 2", refused)
+	}
+}
+
+// A subscribe that's turned down for longer than readyTimeout fails.
+func TestSubscribeGivesUp(t *testing.T) {
+	setReadyTimings(t, 200*time.Millisecond, 10*time.Millisecond)
+	f := newFakeEventAPI(t, "ack")
+	f.refuseSubscribes = 1 << 30
+	conn := f.connection()
+	start := time.Now()
+	if _, err := conn.Subscribe(context.Background(), "/sst/app/stage/in"); !errors.Is(err, ErrSubscriptionFailed) {
+		t.Fatalf("got %v, want ErrSubscriptionFailed", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+}
+
+// A subscribe whose answer is late is tried again, and the late answer, an
+// error here, isn't taken for the next try's.
+func TestSubscribeIgnoresALateAnswer(t *testing.T) {
+	setReadyTimings(t, 10*time.Second, 10*time.Millisecond)
+	old := subscribeTimeout
+	subscribeTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { subscribeTimeout = old })
+	f := newFakeEventAPI(t, "ack")
+	f.lateSubscribe = true
+	conn := f.connection()
+
+	if _, err := conn.Subscribe(context.Background(), "/sst/app/stage/in"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.subscribes != 2 {
+		t.Fatalf("subscribed %d times, want 2: the late error was taken for the second's answer", f.subscribes)
+	}
+}
+
+// A reconnect resubscribes from a copy of the subscriptions, which can hold an
+// ID that Subscribe has dropped since. Subscribing it fails, and doesn't put
+// it back without a channel, which the reader would block on.
+func TestSubscribeOfADroppedIDFails(t *testing.T) {
+	f := newFakeEventAPI(t, "ack")
+	conn := f.connection()
+	conn.setSubscription("dropped", SubscriptionInfo{Channel: "/sst/app/stage/in", Out: make(chan string, 1)})
+	conn.deleteSubscription("dropped")
+
+	if err := conn.subscribe(context.Background(), "/sst/app/stage/in", "dropped"); !errors.Is(err, ErrSubscriptionFailed) {
+		t.Fatalf("got %v, want ErrSubscriptionFailed", err)
+	}
+	if item, ok := conn.subscription("dropped"); ok {
+		t.Fatalf("the dropped ID is back, with %+v", item)
 	}
 }

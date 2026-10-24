@@ -8,14 +8,17 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -114,7 +117,16 @@ type Connection struct {
 type SubscriptionInfo struct {
 	Channel string
 	Out     chan string
+	// pending is whether Out is a subscribe's, waiting for AppSync's answer to
+	// it, not the subscriber's
+	pending bool
 }
+
+// what a subscribe's answer sends on its pending Out
+const (
+	subscribeOK     = "ok"
+	subscribeFailed = "failed"
+)
 
 type SubscribeEvent struct {
 	Type          string      `json:"type"`
@@ -157,6 +169,118 @@ func Dial(
 	return result, nil
 }
 
+// How long DialWhenReady keeps dialing an Event API that turns it down, and
+// how long it waits between dials. One just created turns down the connects of
+// its first second or two after it answers over HTTPS.
+var (
+	readyTimeout  = 10 * time.Second
+	readyInterval = 500 * time.Millisecond
+)
+
+// How long a subscribe waits for the Event API's answer
+var subscribeTimeout = 3 * time.Second
+
+// How long a connect has for its WebSocket handshake, and then for the Event
+// API's answer to it. AppSync answers in well under a second.
+var connectTimeout = 5 * time.Second
+
+// DialWhenReady dials an Event API, and dials it again while it turns the
+// connect down, as one just created does, for up to readyTimeout. An error
+// that won't pass on its own is returned at once.
+func DialWhenReady(
+	ctx context.Context,
+	cfg aws.Config,
+	httpEndpoint string,
+	realtimeEndpoint string,
+) (*Connection, error) {
+	deadline := time.Now().Add(readyTimeout)
+	for {
+		conn, err := Dial(ctx, cfg, httpEndpoint, realtimeEndpoint)
+		if err == nil || !Transient(err) || ctx.Err() != nil || time.Now().After(deadline) {
+			return conn, err
+		}
+		log.Info("appsync not ready, dialing again", "err", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(readyInterval):
+		}
+	}
+}
+
+// ConnectError is an Event API turning a connect down, with what it said.
+type ConnectError struct {
+	Code    int
+	Type    string
+	Message string
+}
+
+func (e *ConnectError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrConnectionFailed, e.Type, e.Message)
+}
+
+func (e *ConnectError) Unwrap() error { return ErrConnectionFailed }
+
+// HandshakeError is a WebSocket handshake the endpoint answered with an HTTP
+// status, not an upgrade.
+type HandshakeError struct {
+	Status int
+}
+
+func (e *HandshakeError) Error() string {
+	return fmt.Sprintf("%v: status %d", websocket.ErrBadHandshake, e.Status)
+}
+
+func (e *HandshakeError) Unwrap() error { return websocket.ErrBadHandshake }
+
+// passes is whether a status AppSync gave can pass on its own: an Event API
+// it can't find yet, a throttle, or an error of its own
+func passes(status int) bool {
+	return status == http.StatusNotFound || status == http.StatusTooManyRequests || status >= 500
+}
+
+// Transient is whether a dial's error can pass on its own: an Event API that
+// can't be found yet, as a new one can't for its first second or two, a
+// throttle or a server error, a name that doesn't resolve yet, or a connection
+// refused, reset or timed out. Credentials AppSync doesn't take, a failure to get them, a TLS
+// problem or a done context won't.
+func Transient(err error) bool {
+	var connectErr *ConnectError
+	var handshakeErr *HandshakeError
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
+	switch {
+	case errors.As(err, &connectErr):
+		return connectErr.Type == "ResourceNotFoundException" || passes(connectErr.Code)
+	case errors.As(err, &handshakeErr):
+		return passes(handshakeErr.Status)
+	case errors.Is(err, ErrConnectionFailed),
+		errors.Is(err, websocket.ErrBadHandshake),
+		errors.As(err, &dnsErr):
+		return true
+	case errors.As(err, &opErr):
+		return opErr.Op == "dial" && (errors.Is(err, syscall.ECONNREFUSED) ||
+			errors.Is(err, syscall.ECONNRESET) || opErr.Timeout())
+	}
+	return false
+}
+
+// connectError reads what an Event API said when it turned a connect down
+func connectError(msg map[string]interface{}) error {
+	errs, _ := msg["errors"].([]interface{})
+	if len(errs) == 0 {
+		return ErrConnectionFailed
+	}
+	first, _ := errs[0].(map[string]interface{})
+	result := &ConnectError{}
+	result.Type, _ = first["errorType"].(string)
+	result.Message, _ = first["message"].(string)
+	if code, ok := first["errorCode"].(float64); ok {
+		result.Code = int(code)
+	}
+	return result
+}
+
 func (c *Connection) connect(ctx context.Context) error {
 	log.Info("connecting")
 	auth, err := c.getAuth(ctx, map[string]interface{}{})
@@ -171,8 +295,9 @@ func (c *Connection) connect(ctx context.Context) error {
 
 	// Configure WebSocket dialer with proxy support
 	dialer := websocket.Dialer{
-		Subprotocols:    []string{"aws-appsync-event-ws", "header-" + auth64},
-		TLSClientConfig: dialTLS,
+		Subprotocols:     []string{"aws-appsync-event-ws", "header-" + auth64},
+		TLSClientConfig:  dialTLS,
+		HandshakeTimeout: connectTimeout,
 	}
 
 	// Add proxy support to WebSocket dialer
@@ -184,8 +309,11 @@ func (c *Connection) connect(ctx context.Context) error {
 		log.Info("using proxy for WebSocket connection", "proxy", proxyURL.String())
 	}
 
-	conn, _, err := dialer.DialContext(ctx, "wss://"+c.realtimeEndpoint+"/event/realtime", nil)
+	conn, resp, err := dialer.DialContext(ctx, "wss://"+c.realtimeEndpoint+"/event/realtime", nil)
 	if err != nil {
+		if errors.Is(err, websocket.ErrBadHandshake) && resp != nil {
+			return &HandshakeError{Status: resp.StatusCode}
+		}
 		return err
 	}
 	conn.WriteJSON(map[string]interface{}{
@@ -196,13 +324,21 @@ func (c *Connection) connect(ctx context.Context) error {
 	c.socketLock.Unlock()
 
 	msg := map[string]interface{}{}
+	conn.SetReadDeadline(time.Now().Add(connectTimeout))
 	err = conn.ReadJSON(&msg)
 	if err != nil {
 		log.Error("write to connection failed", "err", err)
+		conn.Close()
 		return ErrConnectionFailed
 	}
+	conn.SetReadDeadline(time.Time{})
 	log.Info("connect message", "msg", msg)
 	if msg["type"] != "connection_ack" {
+		// AppSync leaves a socket it turned down open
+		conn.Close()
+		if msg["type"] == "connection_error" {
+			return connectError(msg)
+		}
 		return ErrConnectionFailed
 	}
 	duration := time.Millisecond * time.Duration(msg["connectionTimeoutMs"].(float64))
@@ -247,10 +383,20 @@ func (c *Connection) connect(ctx context.Context) error {
 				timer.Reset(duration)
 			}
 
-			if msg["type"] == "subscribe_success" {
-				id := msg["id"].(string)
-				if item, ok := c.subscription(id); ok {
-					item.Out <- "ok"
+			if t := msg["type"]; t == "subscribe_success" || t == "subscribe_error" {
+				id, _ := msg["id"].(string)
+				// an answer that comes after its subscribe gave up isn't
+				// the subscriber's to read
+				if item, ok := c.subscription(id); ok && item.pending {
+					answer := subscribeOK
+					if t == "subscribe_error" {
+						log.Warn("subscribe turned down", "channel", item.Channel, "errors", msg["errors"])
+						answer = subscribeFailed
+					}
+					select {
+					case item.Out <- answer:
+					default:
+					}
 				}
 			}
 			if t := msg["type"]; t == "data" {
@@ -328,15 +474,36 @@ func (c *Connection) Reconnect(ctx context.Context) {
 
 func (c *Connection) Subscribe(ctx context.Context, channel string) (chan string, error) {
 	out := make(chan string, 1000)
-	subscriptionID := id.Ascending()
-	c.setSubscription(subscriptionID, SubscriptionInfo{
-		Channel: channel,
-		Out:     out,
-	})
-	// On error, out is still returned: the subscription stays registered and
-	// is retried on the next reconnect.
-	err := c.subscribe(ctx, channel, subscriptionID)
-	return out, err
+	// A namespace just created turns down subscribes for its first second or
+	// so, as an Event API just created does connects, so a subscribe that's
+	// turned down or not answered is tried again for up to readyTimeout. On
+	// error, out is still returned: the subscription stays registered and is
+	// retried on the next reconnect.
+	// Each try has its own ID, so a late answer to one isn't taken for the
+	// next one's.
+	deadline := time.Now().Add(readyTimeout)
+	for {
+		subscriptionID := id.Ascending()
+		c.setSubscription(subscriptionID, SubscriptionInfo{
+			Channel: channel,
+			Out:     out,
+		})
+		err := c.subscribe(ctx, channel, subscriptionID)
+		if err == nil || !errors.Is(err, ErrSubscriptionFailed) || ctx.Err() != nil || time.Now().After(deadline) {
+			return out, err
+		}
+		// under the lock a subscribe holds, so a reconnect's can't be
+		// halfway through this one
+		c.lock.Lock()
+		c.deleteSubscription(subscriptionID)
+		c.lock.Unlock()
+		log.Info("subscribe failed, trying again", "channel", channel)
+		select {
+		case <-ctx.Done():
+			return out, err
+		case <-time.After(readyInterval):
+		}
+	}
 }
 
 func (c *Connection) subscription(id string) (SubscriptionInfo, bool) {
@@ -344,6 +511,12 @@ func (c *Connection) subscription(id string) (SubscriptionInfo, bool) {
 	defer c.subscriptionsLock.Unlock()
 	item, ok := c.subscriptions[id]
 	return item, ok
+}
+
+func (c *Connection) deleteSubscription(id string) {
+	c.subscriptionsLock.Lock()
+	defer c.subscriptionsLock.Unlock()
+	delete(c.subscriptions, id)
 }
 
 func (c *Connection) setSubscription(id string, item SubscriptionInfo) {
@@ -355,13 +528,18 @@ func (c *Connection) setSubscription(id string, item SubscriptionInfo) {
 func (c *Connection) subscribe(ctx context.Context, channel string, subscriptionID string) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	// a reconnect resubscribes from a copy, which can hold one Subscribe has
+	// dropped since
+	current, ok := c.subscription(subscriptionID)
+	if !ok {
+		return ErrSubscriptionFailed
+	}
 	auth, err := c.getAuth(ctx, map[string]interface{}{
 		"channel": channel,
 	})
 	if err != nil {
 		return err
 	}
-	current, _ := c.subscription(subscriptionID)
 	old := current.Out
 	tmp := make(chan string, 1)
 	defer func() {
@@ -373,6 +551,7 @@ func (c *Connection) subscribe(ctx context.Context, channel string, subscription
 	c.setSubscription(subscriptionID, SubscriptionInfo{
 		Channel: channel,
 		Out:     tmp,
+		pending: true,
 	})
 	conn := c.webSocket()
 	// with a deadline, as a publish's write has, so a stalled one doesn't hold
@@ -388,10 +567,13 @@ func (c *Connection) subscribe(ctx context.Context, channel string, subscription
 	conn.SetWriteDeadline(time.Time{})
 	c.writeLock.Unlock()
 	select {
-	case <-tmp:
+	case answer := <-tmp:
+		if answer != subscribeOK {
+			return ErrSubscriptionFailed
+		}
 		log.Info("subscribed", "channel", channel, "id", subscriptionID)
 		return nil
-	case <-time.After(time.Second * 3):
+	case <-time.After(subscribeTimeout):
 		return ErrSubscriptionFailed
 	}
 }

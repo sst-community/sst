@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/events"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/sst/sst/v3/internal/util"
@@ -761,6 +762,7 @@ loop:
 	}
 
 	if input.Command == "remove" && len(complete.Resources) == 0 {
+		p.removeAppSync()
 		if p.app.State != nil && p.app.State.Purge {
 			if err := provider.Purge(p.home, p.app.Name, p.app.Stage); err != nil {
 				return err
@@ -804,4 +806,37 @@ func eventLogRestarted(file *os.File, read int64, previewStart []byte) bool {
 		return false
 	}
 	return !bytes.Equal(start, previewStart)
+}
+
+// how long sst remove gives AppSync to list the Event APIs and remove the
+// stage's, so one that doesn't answer can't hold the remove up
+var removeAppSyncTimeout = 10 * time.Second
+
+// removeAppSync removes the stage's own Event API, which "dev.appsync" set to
+// "stage" has sst dev create. It's looked for whatever "dev.appsync" is now, as
+// it may have been "stage" when sst dev ran. The remove doesn't fail without
+// it: a stage that never ran sst dev doesn't have one, and its credentials may
+// not reach AppSync.
+func (p *Project) removeAppSync() {
+	unknown, ok := p.Provider("aws")
+	if !ok {
+		return
+	}
+	aws, ok := unknown.(*provider.AwsProvider)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), removeAppSyncTimeout)
+	defer cancel()
+	err := aws.RemoveAppSync(ctx, p.app.Name, p.app.Stage)
+	var apiErr smithy.APIError
+	switch {
+	case err == nil:
+	case errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDeniedException":
+		// credentials for the shared Event API needn't reach AppSync's control
+		// plane, and a stage that never had one of its own has nothing to remove
+		slog.Info("can't look for the stage's appsync event api", "err", err)
+	default:
+		slog.Warn("failed to remove the stage's appsync event api", "err", err)
+	}
 }

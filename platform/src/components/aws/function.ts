@@ -1786,8 +1786,23 @@ export class Function extends Component implements Link.Linkable {
   );
 
   public static readonly appsync = lazy(() =>
-    rpc.call("Provider.Aws.Appsync", {}),
+    rpc.call<{
+      http: string;
+      realtime: string;
+      arn: string;
+      shared: boolean;
+    }>("Provider.Aws.Appsync", {}),
   );
+
+  /**
+   * What of AppSync a stub's role can reach in `sst dev`: any Event API while
+   * it's the shared one, as before, or only the stage's own when `dev.appsync`
+   * is `"stage"`.
+   * @internal
+   */
+  public static appsyncResources(appsync: { arn: string; shared: boolean }) {
+    return appsync.shared ? ["*"] : [appsync.arn, `${appsync.arn}/*`];
+  }
 
   /** @internal */
   public static reset() {
@@ -1980,8 +1995,8 @@ export class Function extends Component implements Link.Linkable {
           : "resource.enc";
         if (dev) {
           result.SST_REGION = process.env.SST_AWS_REGION!;
-          result.SST_APPSYNC_HTTP = appsync.http;
-          result.SST_APPSYNC_REALTIME = appsync.realtime;
+          result.SST_APPSYNC_HTTP = appsync!.http;
+          result.SST_APPSYNC_REALTIME = appsync!.realtime;
           result.SST_FUNCTION_ID = name;
           result.SST_APP = $app.name;
           result.SST_STAGE = $app.stage;
@@ -2323,8 +2338,13 @@ export class Function extends Component implements Link.Linkable {
         };
       }
 
-      const policy = all([args.permissions || [], linkPermissions, dev]).apply(
-        ([argsPermissions, linkPermissions, dev]) =>
+      const policy = all([
+        args.permissions || [],
+        linkPermissions,
+        dev,
+        dev.apply((dev) => (dev ? Function.appsync() : undefined)),
+      ]).apply(
+        ([argsPermissions, linkPermissions, dev, appsync]) =>
           iam.getPolicyDocumentOutput({
             statements: [
               ...argsPermissions,
@@ -2334,7 +2354,7 @@ export class Function extends Component implements Link.Linkable {
                     {
                       effect: "allow",
                       actions: ["appsync:*"],
-                      resources: ["*"],
+                      resources: Function.appsyncResources(appsync!),
                     },
                     {
                       effect: "allow",

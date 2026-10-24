@@ -303,6 +303,56 @@ export interface App {
   watch?: string[] | AppWatch;
 
   /**
+   * Configure `sst dev`.
+   */
+  dev?: {
+    /**
+     * Which AppSync Event API `sst dev` runs your functions and tasks
+     * [_Live_](/docs/live) through, on AWS.
+     *
+     * - `"shared"` uses one Event API, named `sst`, for every app and stage in
+     *   the account and region.
+     * - `"stage"` gives each stage its own Event API, named `sst-<app>-<stage>`.
+     *   `sst dev` creates it the first time it runs for the stage, and
+     *   `sst remove` removes it.
+     *
+     * An Event API takes up to 10,000 events a second, and `sst dev` sends a
+     * few for each invocation. On the shared one, a load test in one
+     * developer's `sst dev` can throttle, delay or drop the events of every
+     * other app and stage in the account. Their own Event API keeps them apart.
+     * It also lets the stubs' IAM policy reach only the stage's own Event API,
+     * not every one in the account.
+     *
+     * :::note
+     * AWS allows 50 Event APIs in a region of an account by default. A team with
+     * more stages in `sst dev` than that needs the quota raised, or the shared
+     * Event API.
+     * :::
+     *
+     * An Event API costs nothing while nothing is sent through it. Running
+     * `sst dev` needs `appsync:ListApis`, `appsync:GetApi`, `appsync:CreateApi`,
+     * `appsync:TagResource`, `appsync:GetChannelNamespace` and
+     * `appsync:CreateChannelNamespace`, and `sst remove` needs
+     * `appsync:ListApis` and `appsync:DeleteApi`.
+     *
+     * @default `"shared"`
+     *
+     * @example
+     *
+     * Give each developer's stage its own Event API.
+     *
+     * ```ts
+     * {
+     *   dev: {
+     *     appsync: "stage"
+     *   }
+     * }
+     * ```
+     */
+    appsync?: "shared" | "stage";
+  };
+
+  /**
    * Configure how your app's state is managed.
    */
   state?: {

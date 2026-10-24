@@ -37,6 +37,7 @@ type App struct {
 	Protect   bool                   `json:"protect"`
 	Watch     Watch                  `json:"watch"`
 	State     *State                 `json:"state"`
+	Dev       *AppDev                `json:"dev"`
 	Types     struct {
 		Ignore []string `json:"ignore"`
 	} `json:"types"`
@@ -57,6 +58,32 @@ func validateState(state *State) error {
 		return util.NewReadableError(nil, `The "state.retention" property must be a positive integer.`)
 	}
 	return nil
+}
+
+type AppDev struct {
+	// AppSync is which Event API sst dev uses on AWS: "shared", the default,
+	// or "stage", the stage's own
+	AppSync string `json:"appsync"`
+}
+
+func validateDev(dev *AppDev) error {
+	if dev == nil {
+		return nil
+	}
+	switch dev.AppSync {
+	case "", "shared", "stage":
+		return nil
+	}
+	return util.NewReadableError(nil, fmt.Sprintf(`The "dev.appsync" property must be "shared" or "stage", not %q.`, dev.AppSync))
+}
+
+// AppSyncScope is which Event API sst dev and its stubs use: the shared one, or
+// the stage's own when "dev.appsync" is "stage".
+func (p *Project) AppSyncScope() provider.AppSyncScope {
+	if p.app.Dev != nil && p.app.Dev.AppSync == "stage" {
+		return provider.AppSyncScope{App: p.app.Name, Stage: p.app.Stage}
+	}
+	return provider.AppSyncScope{}
 }
 
 type Watch struct {
@@ -336,6 +363,10 @@ console.log("~j" + JSON.stringify(await mod.app({
 			}
 
 			if err := validateState(proj.app.State); err != nil {
+				return nil, err
+			}
+
+			if err := validateDev(proj.app.Dev); err != nil {
 				return nil, err
 			}
 

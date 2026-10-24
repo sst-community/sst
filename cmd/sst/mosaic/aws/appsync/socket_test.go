@@ -6,12 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -32,8 +35,29 @@ type fakeEventAPI struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu              sync.Mutex
-	mode            string
+	mu   sync.Mutex
+	mode string
+	// refuse is how many connects to turn down, as a new Event API does
+	refuse int
+	// silent is how many connects to never answer
+	silent int
+	// refuseWith is the error a refused connect gets, AppSync's for an Event
+	// API it can't find yet unless it's set
+	refuseWith map[string]interface{}
+	// refuseSubscribes is how many subscribes to answer with an error, as a
+	// namespace just created does
+	refuseSubscribes int
+	subscribeErrors  int
+	// lateSubscribe leaves the first subscribe unanswered until the next one
+	// comes, and then answers it with an error, just before the next one's
+	// success
+	lateSubscribe bool
+	lateID        interface{}
+	subscribes    int
+	// refused is how many it turned down, and closedRefused how many of those
+	// sockets the client closed
+	refused         int
+	closedRefused   int
 	socketPublishes []map[string]interface{}
 	httpPublishes   []string
 }
@@ -46,7 +70,13 @@ func newFakeEventAPI(t *testing.T, mode string) *fakeEventAPI {
 		if r.URL.Path == "/event/realtime" {
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
-				t.Error(err)
+				// a client that gives up mid-handshake, as one whose context
+				// is done does, closes the connection under it, and that's
+				// no failure. It can happen after the test ends, so it isn't
+				// logged either.
+				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.EPIPE) {
+					t.Error(err)
+				}
 				return
 			}
 			f.serveSocket(conn)
@@ -68,6 +98,34 @@ func (f *fakeEventAPI) serveSocket(conn *websocket.Conn) {
 	if conn.ReadJSON(&init) != nil {
 		return
 	}
+	f.mu.Lock()
+	if f.silent > 0 {
+		f.silent--
+		f.mu.Unlock()
+		var msg map[string]interface{}
+		for conn.ReadJSON(&msg) == nil {
+		}
+		return
+	}
+	if f.refuse > 0 {
+		f.refuse--
+		f.refused++
+		refuseWith := f.refuseWith
+		f.mu.Unlock()
+		if refuseWith == nil {
+			refuseWith = map[string]interface{}{"errorCode": 404, "errorType": "ResourceNotFoundException", "message": "Unable to find the Api."}
+		}
+		conn.WriteJSON(map[string]interface{}{"type": "connection_error", "errors": []map[string]interface{}{refuseWith}})
+		// AppSync leaves the socket open, so it's the client that closes it
+		var msg map[string]interface{}
+		for conn.ReadJSON(&msg) == nil {
+		}
+		f.mu.Lock()
+		f.closedRefused++
+		f.mu.Unlock()
+		return
+	}
+	f.mu.Unlock()
 	conn.WriteJSON(map[string]interface{}{"type": "connection_ack", "connectionTimeoutMs": 300000})
 	f.mu.Lock()
 	stall := f.mode == "stall"
@@ -86,6 +144,33 @@ func (f *fakeEventAPI) serveSocket(conn *websocket.Conn) {
 		}
 		switch msg["type"] {
 		case "subscribe":
+			f.mu.Lock()
+			f.subscribes++
+			late, lateID := f.lateSubscribe, f.lateID
+			if late {
+				f.lateSubscribe = false
+				f.lateID = msg["id"]
+			}
+			f.mu.Unlock()
+			if late {
+				continue
+			}
+			if lateID != nil {
+				conn.WriteJSON(map[string]interface{}{"type": "subscribe_error", "id": lateID,
+					"errors": []map[string]interface{}{{"errorType": "UnauthorizedException", "message": "late"}}})
+			}
+			f.mu.Lock()
+			refuse := f.refuseSubscribes > 0
+			if refuse {
+				f.refuseSubscribes--
+				f.subscribeErrors++
+			}
+			f.mu.Unlock()
+			if refuse {
+				conn.WriteJSON(map[string]interface{}{"type": "subscribe_error", "id": msg["id"],
+					"errors": []map[string]interface{}{{"errorType": "UnauthorizedException", "message": "You are not authorized to make this call."}}})
+				continue
+			}
 			conn.WriteJSON(map[string]interface{}{"type": "subscribe_success", "id": msg["id"]})
 		case "publish":
 			f.mu.Lock()

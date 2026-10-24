@@ -38,6 +38,9 @@ type AppsyncInput struct {
 type AppsyncOutput struct {
 	Http     string `json:"http"`
 	Realtime string `json:"realtime"`
+	Arn      string `json:"arn"`
+	// Shared is whether every app and stage in the account and region uses it
+	Shared bool `json:"shared"`
 }
 
 func (a *aws) Appsync(input *AppsyncInput, output *AppsyncOutput) error {
@@ -46,12 +49,14 @@ func (a *aws) Appsync(input *AppsyncInput, output *AppsyncOutput) error {
 		return fmt.Errorf("aws provider not found")
 	}
 	existing := unknown.(*provider.AwsProvider)
-	http, realtime, err := existing.ResolveAppSync(context.Background())
+	api, err := existing.ResolveAppSync(context.Background(), a.project.AppSyncScope())
 	if err != nil {
 		return err
 	}
-	output.Http = http
-	output.Realtime = realtime
+	output.Http = api.Http
+	output.Realtime = api.Realtime
+	output.Arn = api.Arn
+	output.Shared = api.Shared
 	return nil
 }
 

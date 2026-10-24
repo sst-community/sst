@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/appsync"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
@@ -30,33 +28,23 @@ func Start(
 	slog.Info("getting endpoint")
 	prefix := fmt.Sprintf("/sst/%s/%s", p.App().Name, p.App().Stage)
 
-	rest, realtime, err := prov.ResolveAppSync(ctx)
+	api, err := prov.ResolveAppSync(ctx, p.AppSyncScope())
 	if err != nil {
 		return err
 	}
-	slog.Info("found appsync", "rest", rest, "realtime", realtime)
+	rest, realtime := api.Http, api.Realtime
+	slog.Info("found appsync", "rest", rest, "realtime", realtime, "shared", api.Shared)
 
-	now := time.Now()
-	for {
-		slog.Info("checking if appsync is ready")
-		_, err := http.Get("https://" + rest)
-		if err != nil {
-			slog.Error("appsync not ready", "err", err)
-			if time.Since(now) > time.Second*10 {
-				return ErrAppsyncNotReady
-			}
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(time.Second):
-				continue
-			}
-		}
-		break
-	}
-	conn, err := appsync.Dial(ctx, config, rest, realtime)
+	conn, err := appsync.DialWhenReady(ctx, config, rest, realtime)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return nil
+		}
+		if !appsync.Transient(err) {
+			return err
+		}
+		slog.Error("appsync not ready", "err", err)
+		return ErrAppsyncNotReady
 	}
 	client := bridge.NewClient(ctx, conn, "dev", prefix)
 

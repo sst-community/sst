@@ -34,6 +34,22 @@ Live uses [AWS AppSync Events](https://docs.aws.amazon.com/appsync/latest/eventa
 
 When you run `sst dev`, it [bootstraps](/docs/state#bootstrap) a new AppSync Events API for the region you are using.
 
+By default, every app and stage in the account and region shares this one Event API, named `sst`. It takes up to 10,000 events a second, so a load test in one developer's `sst dev` can throttle, delay or drop the events of everyone else's. To give each stage its own Event API instead, set [`dev.appsync`](/docs/reference/config/#dev-appsync) to `"stage"`.
+
+```ts title="sst.config.ts"
+app(input) {
+  return {
+    name: "my-app",
+    home: "aws",
+    dev: {
+      appsync: "stage"
+    }
+  };
+}
+```
+
+`sst dev` creates the stage's Event API the first time it runs, and `sst remove` removes it.
+
 This is roughly what the flow looks like:
 
 1. When you run `sst dev`, it deploys your app and replaces the Lambda functions with a _stub_ version.
