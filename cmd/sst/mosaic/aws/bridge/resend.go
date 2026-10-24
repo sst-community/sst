@@ -29,11 +29,15 @@ var (
 	askEvery = 250 * time.Millisecond
 	// how many missing packets an ask names at most, a few KB of JSON
 	askAtMostMissing = 1000
+	// how many messages ask each time they're looked at, at most, so a backlog
+	// doesn't add a burst of publishes to an Event API that's losing them
+	askAtMostAtOnce = 20
 )
 
 // askTiming is the ask timings as a Client started, which it keeps.
 type askTiming struct {
 	gap, idle, most, every time.Duration
+	atOnce                 int
 }
 
 // asking is whether a Client asks for what's missing, and when.
@@ -43,7 +47,7 @@ type asking struct {
 }
 
 func askTimingNow() askTiming {
-	return askTiming{gap: askAfterGap, idle: askAfterIdle, most: askAtMost, every: askEvery}
+	return askTiming{gap: askAfterGap, idle: askAfterIdle, most: askAtMost, every: askEvery, atOnce: askAtMostAtOnce}
 }
 
 // The sender keeps a streamed message's packets for keepSent after its last
@@ -75,7 +79,8 @@ type sentMessage struct {
 type sentPackets struct {
 	mu       sync.Mutex
 	messages map[string]*sentMessage
-	// the IDs of the messages kept, the oldest first
+	// the IDs of the messages kept, the one written to longest ago first, so
+	// the ones past keepSent are first
 	order []string
 	bytes int
 }
@@ -91,8 +96,11 @@ func (s *sentPackets) keep(channel string, packet Packet, now time.Time) {
 	if !ok {
 		message = &sentMessage{channel: channel, packets: map[int]Packet{}}
 		s.messages[packet.ID] = message
-		s.order = append(s.order, packet.ID)
+	} else {
+		// it moves to the end, as the one written to last
+		s.order = slices.DeleteFunc(s.order, func(id string) bool { return id == packet.ID })
 	}
+	s.order = append(s.order, packet.ID)
 	if _, kept := message.packets[packet.Index]; !kept {
 		message.packets[packet.Index] = packet
 		message.bytes += len(packet.Data)
@@ -102,9 +110,9 @@ func (s *sentPackets) keep(channel string, packet Packet, now time.Time) {
 	s.forget(now)
 }
 
-// forget drops the messages kept past keepSent, and the oldest while there's
-// more than keepSentBytes. A message that alone is more drops its first
-// packets, which its receiver most likely has.
+// forget drops the messages kept past keepSent, and the one written to longest
+// ago while there's more than keepSentBytes. A message that alone is more drops
+// its first packets, which its receiver most likely has.
 func (s *sentPackets) forget(now time.Time) {
 	for len(s.order) > 0 {
 		id := s.order[0]

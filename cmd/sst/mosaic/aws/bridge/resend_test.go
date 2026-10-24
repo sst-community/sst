@@ -354,6 +354,67 @@ func TestSentPacketsAreKeptForAWhile(t *testing.T) {
 	}
 }
 
+// What's kept is ordered by when it was last written to, so a message past
+// keepSent is dropped though one written to since is ahead of it, and over
+// keepSentBytes, the one still being written is trimmed, not dropped.
+func TestSentPacketsGoInTheOrderTheyWereWritten(t *testing.T) {
+	with(t, &keepSent, time.Minute)
+	with(t, &keepSentBytes, 100)
+	start := time.Unix(1000, 0)
+	packet := func(id string, index, size int) Packet {
+		return Packet{ID: id, Index: index, Data: strings.Repeat("x", size)}
+	}
+	s := newSentPackets()
+	s.keep("a/in", packet("a", 0, 10), start)
+	s.keep("b/in", packet("b", 0, 10), start)
+	// a goes on, b doesn't
+	s.keep("a/in", packet("a", 1, 10), start.Add(90*time.Second))
+	if _, found := s.find(ResendBody{ID: "b", After: -1}, start.Add(90*time.Second)); len(found) != 0 {
+		t.Fatalf("kept %d packets of b, past keepSent behind a", len(found))
+	}
+	if _, found := s.find(ResendBody{ID: "a", After: -1}, start.Add(90*time.Second)); len(found) != 2 {
+		t.Fatalf("kept %d packets of a, written to since, want 2", len(found))
+	}
+
+	// a fresh message over the limit, with an expired one after it in when
+	// they started: the expired one goes, and the fresh one is trimmed
+	s = newSentPackets()
+	s.keep("a/in", packet("a", 0, 60), start)
+	s.keep("b/in", packet("b", 0, 10), start)
+	s.keep("a/in", packet("a", 1, 60), start.Add(90*time.Second))
+	_, found := s.find(ResendBody{ID: "a", After: -1}, start.Add(90*time.Second))
+	if len(found) != 1 || found[0].Index != 1 || s.bytes != 60 {
+		t.Fatalf("kept %d packets of a, and %d bytes, want its last one, 60", len(found), s.bytes)
+	}
+}
+
+// At most askAtMostAtOnce messages ask each time they're looked at.
+func TestAsksAreFewAtOnce(t *testing.T) {
+	soon(t)
+	with(t, &askAtMostAtOnce, 3)
+	// one look in the window below, well after the gaps' wait
+	with(t, &askEvery, 300*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub := make(chan string, 100)
+	asks := &asking{on: func() bool { return true }, timing: askTimingNow()}
+	ticks := make(chan int, 100)
+	go func() {
+		for range sorted(ctx, sub, asks) {
+			ticks <- 1
+		}
+	}()
+	// 10 messages that each hold a packet past a missing first one
+	for i := range 10 {
+		data, _ := json.Marshal(Packet{Type: MessageResponse, ID: fmt.Sprintf("m%d", i), Index: 1})
+		sub <- string(data)
+	}
+	time.Sleep(askEvery + askEvery/2)
+	if n := len(ticks); n != 3 {
+		t.Fatalf("%d messages asked at once, want 3", n)
+	}
+}
+
 // Only a streamed message's packets are kept: a reply is sent again whole.
 func TestOnlyAStreamIsKept(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

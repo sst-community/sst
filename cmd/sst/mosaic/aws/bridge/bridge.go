@@ -412,8 +412,13 @@ func sorted(ctx context.Context, sub chan string, asks *asking) iter.Seq[Packet]
 				if !asks.on() {
 					continue
 				}
+				asked := 0
 				for id, message := range messages {
+					if asked == asks.timing.atOnce {
+						break
+					}
 					if ask, ok := message.askFor(id, now, asks.timing); ok {
+						asked++
 						if !yield(Packet{ID: id, ask: &ask}) {
 							return
 						}
