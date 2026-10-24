@@ -171,7 +171,7 @@ export interface SsrSiteArgs extends BaseSsrSiteArgs {
    *
    * The available options are:
    * - `"none"`: Lambda URLs are publicly accessible.
-   * - `"oac"`: Lambda URLs protected by CloudFront Origin Access Control. Requires manual `x-amz-content-sha256` header for POST requests. Use when you control all POST requests.
+   * - `"oac"`: Lambda URLs protected by CloudFront Origin Access Control. Requires manual `x-amz-content-sha256` header for POST, PUT and PATCH requests. Use when you control all of those requests.
    * - `"oac-with-edge-signing"`: Full protection with automatic header signing via Lambda@Edge. Works with external webhooks and callbacks. Higher cost and latency but works out of the box.
    *
    * :::note

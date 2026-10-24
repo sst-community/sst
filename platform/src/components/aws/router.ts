@@ -1067,7 +1067,7 @@ export interface RouterArgs {
    * The available options are:
    * - `"none"`: Lambda URLs are publicly accessible.
    * - `"oac"`: Lambda URLs protected by CloudFront Origin Access Control. Requires
-   *   manual `x-amz-content-sha256` header for POST requests.
+   *   manual `x-amz-content-sha256` header for POST, PUT and PATCH requests.
    * - `"oac-with-edge-signing"`: Full protection with automatic header signing via
    *   Lambda@Edge. Works with external webhooks and callbacks. Higher cost and latency
    *   but works out of the box.
@@ -1083,6 +1083,21 @@ export interface RouterArgs {
    * When using `"oac-with-edge-signing"`, request bodies are limited to 1MB due to
    * Lambda@Edge payload limits. For file uploads larger than 1MB, consider using
    * presigned S3 URLs or the `"oac"` mode with manual header signing.
+   * :::
+   *
+   * :::note
+   * A Lambda function URL added with `router.route()` is signed too, when its host
+   * looks like `<id>.lambda-url.<region>.on.aws`. To make use of the protection, set the
+   * function URL's authorization to `"iam"`; a public one is signed as well but does not
+   * check the signature. `router.route()` only receives a URL, so it cannot create the
+   * Lambda permissions. Allow the `cloudfront.amazonaws.com` principal to call
+   * `lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` on the function, with
+   * this Router's distribution as the source ARN. Set `invokedViaFunctionUrl: true`
+   * on the `lambda:InvokeFunction` permission. With `"oac"`, `POST`, `PUT` and
+   * `PATCH` requests to a function URL with `"iam"` authorization also need the
+   * `x-amz-content-sha256` header. The signature replaces the `Authorization` header
+   * of the viewer's request, so the function does not receive it. Send tokens in a
+   * different header.
    * :::
    *
    * :::note
@@ -2454,14 +2469,19 @@ async function handler(event) {
    *
    * Here something like `/api/users/profile` will be routed to
    * `https://api.example.com/users/profile`.
+   *
+   * If the Router has [`protection`](#protection) set and the URL is a Lambda function
+   * URL (`<id>.lambda-url.<region>.on.aws`), requests to it are signed with Origin
+   * Access Control. You need to grant CloudFront permission to invoke the function,
+   * as described under `protection`.
    */
   public route(
     pattern: Input<string>,
     url: Input<string>,
     args?: Input<RouterUrlRouteArgs>,
   ) {
-    all([pattern, args, this.hasInlineRoutes]).apply(
-      ([pattern, args, hasInlineRoutes]) => {
+    all([pattern, args, this.hasInlineRoutes, this._protectionMode]).apply(
+      ([pattern, args, hasInlineRoutes, protection]) => {
         if (hasInlineRoutes)
           throw new VisibleError(
             "Cannot use both `routes` and `.route()` function to add routes.",
@@ -2475,6 +2495,7 @@ async function handler(event) {
             pattern,
             url,
             routeArgs: args,
+            protection,
           },
           { provider: this.constructorOpts.provider },
         );
