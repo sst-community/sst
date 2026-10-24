@@ -149,7 +149,7 @@ export interface StepFunctionsArgs {
  * using [AWS Step Functions](https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html).
  *
  * :::note
- * This component is currently in beta. Please [report any issues](https://github.com/sst/sst/issues) you find.
+ * This component is currently in beta. Please [report any issues](https://github.com/sst-community/sst/issues) you find.
  * :::
  *
  * You define your state machine using a collection of states. Where each state

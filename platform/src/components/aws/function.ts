@@ -511,7 +511,7 @@ export interface FunctionArgs {
    *
    * For large dependencies like numpy or pandas, deploy as a container. See [`python.container`](#python-container).
    *
-   * For common project layouts, check out the [Python examples](https://github.com/sst/sst/tree/dev/examples/python-layouts).
+   * For common project layouts, check out the [Python examples](https://github.com/sst-community/sst/tree/main/examples/python-layouts).
    *
    * ##### Golang
    *

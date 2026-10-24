@@ -70,5 +70,5 @@ The SDK reads resource bindings from encrypted environment variables set by SST 
 
 - [SST Documentation](https://sst-community.github.io/sst/docs/)
 - [SDK Reference](https://sst-community.github.io/sst/docs/reference/sdk/#python)
-- [Python Examples](https://github.com/anomalyco/sst/tree/dev/examples/aws-python)
+- [Python Examples](https://github.com/sst-community/sst/tree/main/examples/aws-python)
 - [GitHub](https://github.com/anomalyco/sst)
