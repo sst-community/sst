@@ -142,6 +142,15 @@ type fakeRuntime struct {
 	crash atomic.Bool
 	// prints is a line a worker prints before it answers each invocation
 	prints string
+	// recordedLate has Run return only once its worker has answered its first
+	// invocation and asked for its next, as on a busy machine, where sst dev
+	// records a worker it started a while after the worker is running.
+	// recordedAfterTaking has it return once the worker has taken its first,
+	// while it runs it.
+	recordedLate        bool
+	recordedAfterTaking bool
+	// failInvocations has a worker answer each invocation with an error
+	failInvocations bool
 }
 
 func (r *fakeRuntime) Match(runtime string) bool { return runtime == "fake" }
@@ -172,8 +181,20 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 	}
 	r.starts.Add(1)
 	logs, output := io.Pipe()
-	w := &fakeWorker{runtime: r, api: "http://" + input.Server + "/2018-06-01/runtime", stop: make(chan struct{}), logs: logs}
+	w := &fakeWorker{runtime: r, api: "http://" + input.Server + "/2018-06-01/runtime", stop: make(chan struct{}), logs: logs, askedAgain: make(chan struct{}), took: make(chan struct{})}
 	go w.run(ctx, output)
+	if r.recordedLate || r.recordedAfterTaking {
+		signal := w.askedAgain
+		if r.recordedAfterTaking {
+			signal = w.took
+		}
+		select {
+		case <-signal:
+			// for the request to reach sst dev
+			time.Sleep(100 * time.Millisecond)
+		case <-time.After(2 * time.Second):
+		}
+	}
 	return w, nil
 }
 
@@ -187,6 +208,10 @@ type fakeWorker struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	logs     *io.PipeReader
+	// closed as it asks for its next invocation after answering its first, and
+	// as it takes its first
+	askedAgain chan struct{}
+	took       chan struct{}
 }
 
 func (w *fakeWorker) Stop() { w.stopOnce.Do(func() { close(w.stop) }) }
@@ -229,6 +254,13 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 			case <-next.Done():
 			}
 		}()
+		if invoked {
+			select {
+			case <-w.askedAgain:
+			default:
+				close(w.askedAgain)
+			}
+		}
 		req, _ := http.NewRequestWithContext(next, "GET", w.api+"/invocation/next", nil)
 		resp, err := http.DefaultClient.Do(req)
 		if idle != nil {
@@ -241,6 +273,9 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 		event, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
+		if !invoked {
+			close(w.took)
+		}
 		invoked = true
 		requestID := resp.Header.Get("lambda-runtime-aws-request-id")
 		answer := w.runtime.handle(string(event))
@@ -254,7 +289,12 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 		if w.runtime.prints != "" {
 			fmt.Fprintln(output, w.runtime.prints)
 		}
-		resp, err = http.Post(w.api+"/invocation/"+requestID+"/response", "application/json", strings.NewReader(answer))
+		endpoint := "/response"
+		if w.runtime.failInvocations {
+			endpoint = "/error"
+			answer = `{"errorType":"Error","errorMessage":"` + answer + `"}`
+		}
+		resp, err = http.Post(w.api+"/invocation/"+requestID+endpoint, "application/json", strings.NewReader(answer))
 		if err != nil {
 			return
 		}
