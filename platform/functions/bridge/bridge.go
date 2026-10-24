@@ -99,6 +99,8 @@ func run() error {
 		return err
 	}
 	client := bridge.NewClient(ctx, conn, workerID, prefix+"/"+workerID)
+	// a streamed response is sent once, so a packet AppSync lost is asked for
+	client.AskForMissingOn(prefix + "/in")
 	waitForSubscription(ctx, conn, client, prefix+"/"+workerID+"/in")
 
 	init := bridge.InitBody{

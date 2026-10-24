@@ -8,6 +8,8 @@ import (
 	"iter"
 	"log/slog"
 	"slices"
+	"sync/atomic"
+	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/appsync"
 	"github.com/sst/sst/v3/pkg/id"
@@ -23,10 +25,17 @@ type Packet struct {
 	// LogsFollow says a MessageLogs follows this reply, with what the function
 	// printed. A bridge from before it ignores it.
 	LogsFollow bool `json:"logsFollow,omitempty"`
+	// Streaming says the message is streamed, which its sender keeps to send
+	// again, so its receiver asks for a packet it's missing. A sender from
+	// before it doesn't say, and isn't asked.
+	Streaming bool `json:"streaming,omitempty"`
 
 	// dropped is passed on by sorted for a message whose first packets were
 	// passed on, and that it dropped before it was whole
 	dropped bool
+	// ask is passed on by sorted for a message that's missing packets, for
+	// its Client to ask for
+	ask *ResendBody
 }
 
 type MessageType int
@@ -48,6 +57,11 @@ const (
 	// MessageLogs carries what a function printed in sst dev, for its bridge to
 	// print in the function's log stream. A bridge from before it ignores it.
 	MessageLogs
+
+	// MessageResend asks a message's sender for the packets its receiver is
+	// missing, with a ResendBody. The sender's Client answers it, and one from
+	// before it ignores it.
+	MessageResend
 )
 
 type Message struct {
@@ -87,6 +101,8 @@ type Writer struct {
 	logsFollow bool
 	// publish over the connection's WebSocket where it can
 	overSocket bool
+	// keeps a streamed message's packets, to send again when asked
+	sent *sentPackets
 }
 
 // LogsBody is the body of a MessageLogs: the lines a worker printed up to the
@@ -176,21 +192,26 @@ func (w *Writer) Flush(final bool) error {
 	if !final && len(w.buffer) == 0 {
 		return nil
 	}
-	encoded := base64.StdEncoding.EncodeToString(w.buffer)
-	publish := w.conn.Publish
-	if conn, ok := w.conn.(socketConn); ok && w.overSocket {
-		publish = conn.PublishOverSocket
-	}
-	err := publish(context.Background(), w.channel, Packet{
+	packet := Packet{
 		ID:     w.id,
 		Index:  w.index,
 		Type:   w.message,
 		Source: w.source,
-		Data:   encoded,
+		Data:   base64.StdEncoding.EncodeToString(w.buffer),
 		Final:  final,
 
 		LogsFollow: w.logsFollow,
-	})
+		Streaming:  w.streaming,
+	}
+	// a streamed message is sent once, so its packets are kept to send again
+	if w.streaming && w.sent != nil {
+		w.sent.keep(w.channel, packet, time.Now())
+	}
+	publish := w.conn.Publish
+	if conn, ok := w.conn.(socketConn); ok && w.overSocket {
+		publish = conn.PublishOverSocket
+	}
+	err := publish(context.Background(), w.channel, packet)
 	w.index++
 	if err != nil {
 		return err
@@ -215,6 +236,10 @@ type Client struct {
 	pending map[string]chan []byte
 	out     chan Message
 	source  string
+	// the streamed messages it sent, and the channel it asks for what a
+	// message it gets is missing, if it does
+	sent  *sentPackets
+	askOn atomic.Pointer[string]
 }
 
 func NewClient(ctx context.Context, as Conn, source string, prefix string) *Client {
@@ -226,9 +251,24 @@ func NewClient(ctx context.Context, as Conn, source string, prefix string) *Clie
 		prefix:  prefix,
 		pending: map[string]chan []byte{},
 		out:     make(chan Message, 1000),
+		sent:    newSentPackets(),
+	}
+	asks := &asking{
+		on:     func() bool { return result.askOn.Load() != nil },
+		timing: askTimingNow(),
 	}
 	go func() {
-		for packet := range sorted(ctx, sub) {
+		for packet := range sorted(ctx, sub, asks) {
+			if packet.ask != nil {
+				go result.ask(*packet.ask)
+				continue
+			}
+			if packet.Type == MessageResend {
+				if ask, ok := readAsk(packet); ok {
+					go result.resend(ctx, ask)
+				}
+				continue
+			}
 			pending, ok := result.pending[packet.ID]
 			if packet.dropped {
 				if ok {
@@ -271,6 +311,7 @@ func (c *Client) Read() <-chan Message {
 
 func (c *Client) NewWriter(message MessageType, destination string) *Writer {
 	writer := newWriter(c.as, c.source, destination, message)
+	writer.sent = c.sent
 	return writer
 }
 
@@ -344,9 +385,19 @@ type waiting struct {
 	next  int
 	held  map[int]Packet
 	bytes int
+	// when its last packet came, when the gap it waits on opened, if it does,
+	// and when it asks again for what's missing, after how long
+	lastPacket time.Time
+	gapSince   time.Time
+	// whether it's streamed, so its sender has kept it to send again
+	streamed   bool
+	askAgain   time.Time
+	askedAfter time.Duration
 }
 
-func sorted(ctx context.Context, sub chan string) iter.Seq[Packet] {
+// sorted passes on, as well, an ask for what a message is missing, when asks
+// says the Client asks for it. With asks nil, it never does.
+func sorted(ctx context.Context, sub chan string, asks *asking) iter.Seq[Packet] {
 	return func(yield func(Packet) bool) {
 		perSet, mostWaiting, mostBytes := finishedPerSet, maxWaiting, maxWaitingBytes
 		finished, finishedBefore := map[string]bool{}, map[string]bool{}
@@ -354,10 +405,32 @@ func sorted(ctx context.Context, sub chan string) iter.Seq[Packet] {
 		// the messages that have waited, the first first, some since finished
 		order := []string{}
 		heldBytes := 0
+		var tick <-chan time.Time
+		if asks != nil {
+			ticker := time.NewTicker(asks.timing.every)
+			defer ticker.Stop()
+			tick = ticker.C
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case now := <-tick:
+				if !asks.on() {
+					continue
+				}
+				asked := 0
+				for id, message := range messages {
+					if asked == asks.timing.atOnce {
+						break
+					}
+					if ask, ok := message.askFor(id, now, asks.timing); ok {
+						asked++
+						if !yield(Packet{ID: id, ask: &ask}) {
+							return
+						}
+					}
+				}
 			case msg := <-sub:
 				var packet Packet
 				json.Unmarshal([]byte(msg), &packet)
@@ -377,6 +450,9 @@ func sorted(ctx context.Context, sub chan string) iter.Seq[Packet] {
 					continue
 				}
 				message.held[packet.Index] = packet
+				message.streamed = message.streamed || packet.Streaming
+				message.lastPacket = time.Now()
+				passedOn := message.next
 				message.bytes += len(packet.Data)
 				heldBytes += len(packet.Data)
 				for {
@@ -400,6 +476,18 @@ func sorted(ctx context.Context, sub chan string) iter.Seq[Packet] {
 						finished[envelope.ID] = true
 						break
 					}
+				}
+				// A gap is timed from when it opened, not from the last packet, as
+				// a stream goes on sending past one. Once the message moves on,
+				// it's a new gap, if any, and it asks soon again.
+				if message.next > passedOn {
+					message.gapSince, message.askAgain, message.askedAfter = time.Time{}, time.Time{}, 0
+				}
+				if len(message.held) > 0 && message.gapSince.IsZero() {
+					// a new gap, so it's asked for a gap's wait after, not after
+					// the backoff of asks while the stream was quiet
+					message.gapSince = message.lastPacket
+					message.askAgain, message.askedAfter = time.Time{}, 0
 				}
 				if _, waits := messages[packet.ID]; waits && !known {
 					order = append(order, packet.ID)

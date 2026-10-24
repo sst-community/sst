@@ -33,7 +33,7 @@ func TestSortedForgetsFinishedMessages(t *testing.T) {
 	sub := make(chan string, 1024)
 	seen := make(chan string, 1024)
 	go func() {
-		for p := range sorted(ctx, sub) {
+		for p := range sorted(ctx, sub, nil) {
 			select {
 			case seen <- p.ID:
 			default:
@@ -67,7 +67,7 @@ func TestSortedDropsMessagesThatNeverFinish(t *testing.T) {
 	sub := make(chan string, 1024)
 	seen := make(chan string, 16)
 	go func() {
-		for p := range sorted(ctx, sub) {
+		for p := range sorted(ctx, sub, nil) {
 			seen <- p.ID
 		}
 	}()
