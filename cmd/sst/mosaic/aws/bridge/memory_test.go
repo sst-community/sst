@@ -62,6 +62,7 @@ func TestSortedForgetsFinishedMessages(t *testing.T) {
 // A message that lost a packet is kept until it's whole, with the data of every
 // packet that did arrive. One that never becomes whole is kept for good.
 func TestSortedDropsMessagesThatNeverFinish(t *testing.T) {
+	with(t, &maxWaitingBytes, 8<<20)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sub := make(chan string, 1024)

@@ -193,7 +193,8 @@ func function(ctx context.Context, input input) {
 	}
 	// firstReply makes the writer for the first copy of a reply, which goes
 	// over the AppSync connection's WebSocket where it can, as the bridge is
-	// waiting on it. Its resends, and every other message, go over HTTPS.
+	// waiting on it, if it holds no more than a packet. Its resends, a longer
+	// reply, and every other message, go over HTTPS.
 	firstReply := func(message bridge.MessageType, workerID, messageID string) *bridge.Writer {
 		writer := newReply(message, workerID, messageID)
 		writer.SetOverSocket(!flag.SST_DEV_HTTP_PUBLISH)
@@ -1099,8 +1100,9 @@ const (
 )
 
 // sendMessage writes a message's body and publishes what's left of it, and returns
-// the first error. The writer publishes each time its buffer fills, so the copy can
-// fail as well as the close.
+// the first error. The writer publishes its packets as they fill, in the
+// background, so a request that failed can come back from the copy as well as
+// the close.
 func sendMessage(writer *bridge.Writer, body io.Reader) error {
 	_, err := io.Copy(writer, body)
 	if closeErr := writer.Close(); err == nil {

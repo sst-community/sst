@@ -2,11 +2,14 @@ package appsync
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,6 +116,65 @@ func TestPublishRetriesThrottlesAndServerErrors(t *testing.T) {
 	}
 }
 
+// A batch is one request, holding each event as a string of JSON, in order, and
+// a retry sends it whole again.
+func TestPublishBatchSendsItsEventsInOneRequest(t *testing.T) {
+	conn, srv := connect(t, 429)
+	events := []interface{}{map[string]int{"index": 0}, map[string]int{"index": 1}, map[string]int{"index": 2}}
+	if err := conn.PublishBatch(context.Background(), "c", events); err != nil {
+		t.Fatal(err)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.bodies) != 2 || srv.bodies[1] != srv.bodies[0] {
+		t.Fatalf("made %d attempts, want 2 with the same body", len(srv.bodies))
+	}
+	var body struct {
+		Events []string `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(srv.bodies[0]), &body); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`{"index":0}`, `{"index":1}`, `{"index":2}`}
+	if !slices.Equal(body.Events, want) {
+		t.Errorf("sent events %q, want %q", body.Events, want)
+	}
+}
+
+// More events than AppSync takes in a publish, or none, are an error, without
+// a request.
+func TestPublishBatchTakesOneToFive(t *testing.T) {
+	if MaxBatch != 5 {
+		t.Fatalf("MaxBatch is %d, but AppSync takes 5 events in a publish", MaxBatch)
+	}
+	conn, srv := connect(t)
+	events := []interface{}{1, 2, 3, 4, 5, 6}
+	if err := conn.PublishBatch(context.Background(), "c", events); err == nil {
+		t.Fatal("PublishBatch() of 6 events = nil, want an error")
+	}
+	if got := srv.count(); got != 0 {
+		t.Fatalf("made %d requests, want none", got)
+	}
+	if err := conn.PublishBatchOverSocket(context.Background(), "c", events); err == nil {
+		t.Fatal("PublishBatchOverSocket() of 6 events = nil, want an error")
+	}
+	if got := srv.count(); got != 0 {
+		t.Fatalf("made %d requests, want none", got)
+	}
+	if err := conn.PublishBatch(context.Background(), "c", nil); err == nil {
+		t.Fatal("PublishBatch() of no events = nil, want an error")
+	}
+	if err := conn.PublishBatchOverSocket(context.Background(), "c", nil); err == nil {
+		t.Fatal("PublishBatchOverSocket() of no events = nil, want an error")
+	}
+	if got := srv.count(); got != 0 {
+		t.Fatalf("made %d requests, want none", got)
+	}
+	if err := conn.PublishBatch(context.Background(), "c", events[:5]); err != nil {
+		t.Fatalf("PublishBatch() of 5 events = %v", err)
+	}
+}
+
 func TestPublishRetriesADroppedConnection(t *testing.T) {
 	conn, srv := connect(t, 0)
 	if err := conn.Publish(context.Background(), "c", "event"); err != nil {
@@ -180,6 +242,54 @@ func TestPublishRetriesAnAttemptThatHangs(t *testing.T) {
 	defer mu.Unlock()
 	if attempts != 2 {
 		t.Fatalf("made %d attempts, want 2", attempts)
+	}
+}
+
+// A large request has longer to send, as a batch over a slow uplink needs. Here
+// the times are a tenth of what they are, and 4 batches of 875 KB, as many as a
+// message has in flight, share a link of 4 MB/s, so each takes about 0.9 s.
+// That's half the 1.9 s it has, 0.5 s and 875 KB at 640 KB/s, though well over
+// the 0.5 s a small publish has.
+func TestPublishGivesALargeRequestLongerToSend(t *testing.T) {
+	conn, _ := connect(t)
+	minRate := publishMinRate
+	t.Cleanup(func() { publishMinRate = minRate })
+	publishAttemptTimeout, publishTimeout, publishMinRate = 500*time.Millisecond, time.Second, 640<<10
+	var link sync.Mutex
+	var attempts atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		buf := make([]byte, 25<<10)
+		for {
+			// the link carries 25 KB every 6 ms, for every request at once
+			link.Lock()
+			n, err := io.ReadFull(r.Body, buf)
+			time.Sleep(time.Duration(n) * time.Second / (4 << 20))
+			link.Unlock()
+			if err != nil {
+				break
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	conn.httpEndpoint = strings.TrimPrefix(srv.URL, "https://")
+	conn.httpClient = srv.Client()
+
+	event := strings.Repeat("A", 175<<10)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := conn.PublishBatch(context.Background(), "c", []interface{}{event, event, event, event, event}); err != nil {
+				t.Errorf("PublishBatch() = %v, want nil", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := attempts.Load(); got != 4 {
+		t.Errorf("made %d attempts, want 4, one for each", got)
 	}
 }
 
