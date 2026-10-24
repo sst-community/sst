@@ -91,8 +91,8 @@ func TestSortedOrdersPackets(t *testing.T) {
 // A bridge already deployed reads message types by number, so the ones it knows
 // keep theirs, and a new one goes at the end.
 func TestMessageTypesKeepTheirNumbers(t *testing.T) {
-	if MessageProbe != 9 || MessageLogs != 10 {
-		t.Fatalf("MessageProbe is %d and MessageLogs %d, want 9 and 10", MessageProbe, MessageLogs)
+	if MessageProbe != 9 || MessageLogs != 10 || MessageResend != 11 {
+		t.Fatalf("MessageProbe is %d, MessageLogs %d and MessageResend %d, want 9, 10 and 11", MessageProbe, MessageLogs, MessageResend)
 	}
 }
 

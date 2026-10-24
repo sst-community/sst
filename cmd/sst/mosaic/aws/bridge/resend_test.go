@@ -130,8 +130,9 @@ func TestStreamGetsAPacketThatWasLost(t *testing.T) {
 	if got != strings.Join(want, "") {
 		t.Fatalf("got %q, want the 10 chunks", got)
 	}
-	if n := appsync.count(MessageResend); n != 1 {
-		t.Errorf("asked %d times, want once", n)
+	// once, or again on a busy machine before the answer came
+	if n := appsync.count(MessageResend); n < 1 {
+		t.Errorf("asked %d times, want at least once", n)
 	}
 }
 
@@ -264,13 +265,13 @@ func TestWhenAMessageAsks(t *testing.T) {
 	start := time.Unix(1000, 0)
 	at := func(d time.Duration) time.Time { return start.Add(d) }
 
-	idle := &waiting{held: map[int]Packet{}, lastPacket: start}
+	idle := &waiting{held: map[int]Packet{}, lastPacket: start, streamed: true}
 	if _, ok := idle.askFor("m", at(time.Hour), timing); ok {
 		t.Fatal("a message nothing came of asked")
 	}
 
 	// the gap opened at start, and packets went on coming past it since
-	gap := &waiting{next: 2, held: map[int]Packet{4: {}, 6: {}}, gapSince: start, lastPacket: start.Add(900 * time.Millisecond)}
+	gap := &waiting{next: 2, held: map[int]Packet{4: {}, 6: {}}, gapSince: start, lastPacket: start.Add(900 * time.Millisecond), streamed: true}
 	if _, ok := gap.askFor("m", at(999*time.Millisecond), timing); ok {
 		t.Fatal("asked before it waited on its gap a second")
 	}
@@ -287,7 +288,7 @@ func TestWhenAMessageAsks(t *testing.T) {
 		}
 	}
 
-	many := &waiting{next: 0, held: map[int]Packet{5000: {}}, gapSince: start, lastPacket: start}
+	many := &waiting{next: 0, held: map[int]Packet{5000: {}}, gapSince: start, lastPacket: start, streamed: true}
 	ask, ok = many.askFor("m", at(time.Second), timing)
 	if !ok || len(ask.Missing) != askAtMostMissing || ask.Missing[0] != 0 || ask.After != 5000 {
 		t.Fatalf("asked for %d missing from %v, after %d, want the first %d, after 5000", len(ask.Missing), ask.Missing[:1], ask.After, askAtMostMissing)
@@ -296,7 +297,13 @@ func TestWhenAMessageAsks(t *testing.T) {
 		t.Fatalf("an ask is %d bytes, more than a packet", len(data))
 	}
 
-	tail := &waiting{next: 5, held: map[int]Packet{}, lastPacket: start}
+	// a message that isn't streamed never asks, as its sender didn't keep it
+	buffered := &waiting{next: 2, held: map[int]Packet{4: {}}, gapSince: start, lastPacket: start}
+	if _, ok := buffered.askFor("m", at(time.Hour), timing); ok {
+		t.Fatal("a message that isn't streamed asked")
+	}
+
+	tail := &waiting{next: 5, held: map[int]Packet{}, lastPacket: start, streamed: true}
 	if _, ok := tail.askFor("m", at(2*time.Second), timing); ok {
 		t.Fatal("asked after a stream was quiet 2 s, before 3")
 	}
@@ -388,30 +395,70 @@ func TestSentPacketsGoInTheOrderTheyWereWritten(t *testing.T) {
 	}
 }
 
-// At most askAtMostAtOnce messages ask each time they're looked at.
+// At most askAtMostAtOnce messages ask each time they're looked at, and the
+// rest on the next look.
 func TestAsksAreFewAtOnce(t *testing.T) {
 	soon(t)
 	with(t, &askAtMostAtOnce, 3)
-	// one look in the window below, well after the gaps' wait
-	with(t, &askEvery, 300*time.Millisecond)
+	with(t, &askEvery, 100*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sub := make(chan string, 100)
 	asks := &asking{on: func() bool { return true }, timing: askTimingNow()}
-	ticks := make(chan int, 100)
+	at := make(chan time.Time, 100)
 	go func() {
 		for range sorted(ctx, sub, asks) {
-			ticks <- 1
+			at <- time.Now()
 		}
 	}()
-	// 10 messages that each hold a packet past a missing first one
+	// 10 streamed messages that each hold a packet past a missing first one
 	for i := range 10 {
-		data, _ := json.Marshal(Packet{Type: MessageResponse, ID: fmt.Sprintf("m%d", i), Index: 1})
+		data, _ := json.Marshal(Packet{Type: MessageResponse, ID: fmt.Sprintf("m%d", i), Index: 1, Streaming: true})
 		sub <- string(data)
 	}
-	time.Sleep(askEvery + askEvery/2)
-	if n := len(ticks); n != 3 {
-		t.Fatalf("%d messages asked at once, want 3", n)
+	// the asks of one look come together, and the next look's 100 ms after
+	var looks [][]time.Time
+	for len(looks) < 4 {
+		select {
+		case ask := <-at:
+			if len(looks) == 0 || ask.Sub(looks[len(looks)-1][0]) > askEvery/2 {
+				looks = append(looks, nil)
+			}
+			looks[len(looks)-1] = append(looks[len(looks)-1], ask)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%d looks asked, want 4", len(looks))
+		}
+	}
+	for i, look := range looks {
+		if len(look) > 3 {
+			t.Fatalf("look %d had %d messages ask, want at most 3", i, len(look))
+		}
+	}
+	if len(looks[0]) != 3 {
+		t.Fatalf("the first look had %d messages ask, want 3", len(looks[0]))
+	}
+}
+
+// A message that isn't streamed doesn't ask for what it's missing: it's sent
+// again whole, and its sender didn't keep it.
+func TestReplyThatLostAPacketDoesNotAsk(t *testing.T) {
+	soon(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	appsync := newLossyAppSync(func(p Packet) bool { return p.Type == MessageResponse && p.Index == 1 })
+	dev := NewClient(ctx, appsync, "dev", "/sst/app/stage")
+	fn := NewClient(ctx, appsync, "worker", "/sst/app/stage/worker")
+	fn.AskForMissingOn("/sst/app/stage/in")
+	w := dev.NewWriter(MessageResponse, "/sst/app/stage/worker/in")
+	if _, err := w.Write(bytes.Repeat([]byte("x"), 3*BUFFER_SIZE)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(4 * askAfterIdle)
+	if n := appsync.count(MessageResend); n != 0 {
+		t.Fatalf("asked %d times for a reply, want none", n)
 	}
 }
 

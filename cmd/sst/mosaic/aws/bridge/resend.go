@@ -227,8 +227,9 @@ func (m *waiting) askFor(id string, now time.Time, timing askTiming) (ResendBody
 	if len(m.held) > 0 {
 		waitedFor, since = timing.gap, m.gapSince
 	}
-	if m.next == 0 && len(m.held) == 0 {
-		// nothing came yet, so there's nothing to ask about
+	if !m.streamed || (m.next == 0 && len(m.held) == 0) {
+		// a message that isn't streamed is sent again whole, and its sender
+		// didn't keep it, and one nothing came of yet has nothing to ask about
 		return ResendBody{}, false
 	}
 	if now.Sub(since) < waitedFor || now.Before(m.askAgain) {

@@ -25,6 +25,10 @@ type Packet struct {
 	// LogsFollow says a MessageLogs follows this reply, with what the function
 	// printed. A bridge from before it ignores it.
 	LogsFollow bool `json:"logsFollow,omitempty"`
+	// Streaming says the message is streamed, which its sender keeps to send
+	// again, so its receiver asks for a packet it's missing. A sender from
+	// before it doesn't say, and isn't asked.
+	Streaming bool `json:"streaming,omitempty"`
 
 	// dropped is passed on by sorted for a message whose first packets were
 	// passed on, and that it dropped before it was whole
@@ -197,6 +201,7 @@ func (w *Writer) Flush(final bool) error {
 		Final:  final,
 
 		LogsFollow: w.logsFollow,
+		Streaming:  w.streaming,
 	}
 	// a streamed message is sent once, so its packets are kept to send again
 	if w.streaming && w.sent != nil {
@@ -384,6 +389,8 @@ type waiting struct {
 	// and when it asks again for what's missing, after how long
 	lastPacket time.Time
 	gapSince   time.Time
+	// whether it's streamed, so its sender has kept it to send again
+	streamed   bool
 	askAgain   time.Time
 	askedAfter time.Duration
 }
@@ -443,6 +450,7 @@ func sorted(ctx context.Context, sub chan string, asks *asking) iter.Seq[Packet]
 					continue
 				}
 				message.held[packet.Index] = packet
+				message.streamed = message.streamed || packet.Streaming
 				message.lastPacket = time.Now()
 				passedOn := message.next
 				message.bytes += len(packet.Data)
