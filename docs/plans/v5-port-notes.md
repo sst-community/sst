@@ -18,6 +18,7 @@ The hardest component, and the test of whether the framework holds.
 - **It shares two app-wide resources with 4.x** through the 4.x class's private statics: `LambdaEncryptionKey` and the dev bridge code object.
 - **A function on a shared `bundle` reads its linked resources from `.sst/<name>/resource.enc`**, where the CLI writes them, and its zip leaves out the other functions' folders. It's what 4.x does since `main`'s #89 (2026-10-12). The comparison can't see the zip, so a test reads it.
 - **It trusts the account root only in `sst dev`**, as 4.x does since `main`'s #95 (2026-10-12). Before that, both trusted it in every role (see Decisions in the plan).
+- **Its stub reaches only the stage's own Event API with `dev.appsync: "stage"`**, and any one on the shared Event API, through the 4.x class's `appsyncResources()`, as 4.x does since `main`'s #187 (2026-10-30). The takeover tests see the shared one, which the mock answers with, and `test/components/v5/dev-appsync.test.ts` the stage's.
 - **The built code depends on nothing.** It's built from the function's links, and a link's name is read from the linked component; depending on a component is depending on everything in it. The build result is passed through `withoutDependencies()`. Without it a function part that links its own component waits for itself.
 - **What's made from a function's name changes when a function part is renamed:** its description, the key its code is uploaded under, and the router namespace of a URL behind a `Router`.
 - A function part's class can't be told by `constructor.name` (both are `Function`). Tests use `toBeInstanceOf`.
@@ -147,6 +148,7 @@ The default version, `8.0.40`, is no longer offered by RDS. See Open questions i
 - `existing.image` is rejected with a pointer.
 - Registered as `_task`, which the CLI reads by output name (`pkg/project/completed.go`), not by type.
 - `publicIp`, deprecated, is kept: it isn't the same as `public`.
+- **In `sst dev` its stub reaches the Event API as the V5 Function's does**: only the stage's own with `dev.appsync: "stage"`, as 4.x does since `main`'s #187.
 
 ## Service
 

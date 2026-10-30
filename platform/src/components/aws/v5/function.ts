@@ -1011,10 +1011,15 @@ export class Function extends component("sst:aws:Function", parts) {
         "aws.permission",
         args.link,
       );
-      // In `sst dev` the stub talks to the CLI through AppSync and the asset bucket
+      // In `sst dev` the stub talks to the CLI through AppSync, any Event API
+      // while it's the shared one or only the stage's own, and the asset bucket
       const devPermissions = dev
-        ? [
-            { effect: "allow", actions: ["appsync:*"], resources: ["*"] },
+        ? output(OriginalFunction.appsync()).apply((appsync) => [
+            {
+              effect: "allow",
+              actions: ["appsync:*"],
+              resources: OriginalFunction.appsyncResources(appsync),
+            },
             {
               effect: "allow",
               actions: ["s3:*"],
@@ -1023,10 +1028,14 @@ export class Function extends component("sst:aws:Function", parts) {
                 interpolate`arn:${partition}:s3:::${assetBucket}/*`,
               ],
             },
-          ]
+          ])
         : [];
-      const policy = all([args.permissions || [], linkPermissions]).apply(
-        ([argsPermissions, linkPermissions]) =>
+      const policy = all([
+        args.permissions || [],
+        linkPermissions,
+        devPermissions,
+      ]).apply(
+        ([argsPermissions, linkPermissions, devPermissions]) =>
           iam.getPolicyDocumentOutput({
             statements: [
               ...argsPermissions,

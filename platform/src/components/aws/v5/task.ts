@@ -372,8 +372,16 @@ export class Task extends component("sst:aws:Task", parts) {
         args,
         opts,
         dev,
-        // The stub reaches the user's machine over AppSync
-        dev ? [{ actions: ["appsync:*"], resources: ["*"] }] : [],
+        // The stub reaches the user's machine over AppSync: any Event API
+        // while it's the shared one, or only the stage's own
+        dev
+          ? output(OriginalFunction.appsync()).apply((appsync) => [
+              {
+                actions: ["appsync:*"],
+                resources: OriginalFunction.appsyncResources(appsync),
+              },
+            ])
+          : [],
       ),
     );
     const executionRole = this.part(
