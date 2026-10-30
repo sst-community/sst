@@ -479,6 +479,27 @@ That closes #134 except its item 2, one Node.js worker per Lambda environment, w
 
 Nothing conflicted. `release.yml`, `MAINTAINING.md`, `pkg/flag/flag.go` and `www/generate.ts` merged on their own. `v5`'s pre-release steps in `release.yml` are as they were, beside the new `docs` job, which for a pre-release rebuilds `main`'s docs, which list no pre-releases. Nothing under `platform/` changed. The Go tests pass, with `-race` for `cmd/sst/mosaic/aws/...`, and the docs generator writes the changelog and the component pages.
 
+## 2026-10-30
+
+### `main` merged in again, with v4.23.0
+
+`main` as released in v4.23.0, which adds:
+- #178: a `StepFunctions` Map reads its items from S3, batches them, writes its results to S3 and tolerates failed items, with S3 permissions scoped to the bucket and key or prefix.
+- #185: `router.route()` signs requests to a Lambda function URL with `protection: true`.
+- #196: `StaticSite` is served straight from its bucket with `edgeRouting: false`, with no CloudFront Function or KeyValueStore.
+- #187: `dev: { appsync: "stage" }` gives each stage its own AppSync Event API in `sst dev`, `sst-<app>-<stage>`, which `sst remove` removes, and the function and task stubs' `appsync:*` reaches only it. `sst dev` also waits up to 10 seconds for a new Event API to take its connection and subscription, on the shared one too.
+- #191, #193, #195: `sst dev` sends a large message 5 packets to a request and 4 requests at once, a bridge asks again for the packets of a stream AppSync lost, and a worker is recorded before it starts.
+- #183: the file watcher keeps delivering events after an fsnotify error.
+- #181: the docs link the examples to the fork's repo. #188 and #192 steady tests, #197 gives the `document-component` skill its frontmatter, and #198 is the v4.23.0 notes.
+
+`pkg/project/project.go` conflicted: `main` checks `dev.appsync` where `v5` checks the config's `packages`, so both are kept, the config's own values first. `platform/src/components/aws/function.ts`, `platform/src/config.ts`, `pkg/project/run.go` and `www/generate.ts` merged on their own, and `v5`'s release files are as they were.
+
+#187 types what `Function.appsync()` returns, so the merge has two changes of its own: the V5 Function reads it as `main`'s 4.x Function now does, and the mock answers `Provider.Aws.Appsync` with an `arn` and `shared: true`, as `sst dev` does on the shared Event API. Without the second, the 4.x Function's dev policy was on `[null, "undefined/*"]` in the mock, and 15 takeover tests of the V5 Function and Task failed.
+
+Then the V5 Function and Task got #187's policy, in a commit of their own: their stubs reach any Event API while it's the shared one, as before, and only the stage's own with `"stage"`, through the 4.x class's `appsyncResources()`. The takeover tests see the shared one, and `test/components/v5/dev-appsync.test.ts` the stage's, in a file of its own as `Function.appsync()` keeps its first answer. Undoing either change fails it. `Router`, `StaticSite` and `StepFunctions` have no V5 component yet, so #178, #185 and #196 have nothing to port.
+
+The Go tests pass, with `-race` for `cmd/sst/mosaic/aws/...`, and so do the platform's 1,783 tests in 60 files. The docs generator writes the component pages.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
