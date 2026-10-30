@@ -110,10 +110,13 @@ export function mockPulumi(input?: MockInput) {
         sourcemaps: input?.sourcemaps?.(args.functionID) ?? [],
       };
     if (method === "Runtime.AddTarget") return {};
+    // The account's shared Event API, as `sst dev` uses by default
     if (method === "Provider.Aws.Appsync")
       return {
         http: "appsync.example.com",
         realtime: "appsync-realtime.example.com",
+        arn: "arn:aws:appsync:us-east-1:123456789012:apis/sst",
+        shared: true,
       };
     if (method === "Provider.Aws.Bootstrap")
       return {

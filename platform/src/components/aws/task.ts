@@ -326,12 +326,12 @@ export class Task extends Component implements Link.Linkable {
       self,
       dev,
       dev
-        ? [
+        ? output(Function.appsync()).apply((appsync) => [
             {
               actions: ["appsync:*"],
-              resources: ["*"],
+              resources: Function.appsyncResources(appsync),
             },
-          ]
+          ])
         : [],
     );
     this.dev = dev;

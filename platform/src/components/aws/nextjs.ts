@@ -391,7 +391,7 @@ export interface NextjsArgs extends SsrSiteArgs {
    *
    * By default, SST auto-detects the Next.js version from your `package.json` and picks a compatible OpenNext version. For Next.js 15+, it uses `3.9.14`. For Next.js 14, it uses `3.6.6` since newer versions of OpenNext dropped Next.js 14 support. If set, this overrides the auto-detection.
    *
-   * You can [find the defaults in the source](https://github.com/sst/sst/blob/dev/platform/src/components/aws/nextjs.ts#L30) under `DEFAULT_OPEN_NEXT_VERSION`.
+   * You can [find the defaults in the source](https://github.com/sst-community/sst/blob/main/platform/src/components/aws/nextjs.ts#L16) under `DEFAULT_OPEN_NEXT_VERSION`.
    * OpenNext changed its package name from `open-next` to `@opennextjs/aws` in version `3.1.4`. SST will choose the correct one based on the version you provide.
    *
    * @default Auto-detected based on your Next.js version.

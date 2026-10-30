@@ -6,12 +6,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -32,8 +36,29 @@ type fakeEventAPI struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu              sync.Mutex
-	mode            string
+	mu   sync.Mutex
+	mode string
+	// refuse is how many connects to turn down, as a new Event API does
+	refuse int
+	// silent is how many connects to never answer
+	silent int
+	// refuseWith is the error a refused connect gets, AppSync's for an Event
+	// API it can't find yet unless it's set
+	refuseWith map[string]interface{}
+	// refuseSubscribes is how many subscribes to answer with an error, as a
+	// namespace just created does
+	refuseSubscribes int
+	subscribeErrors  int
+	// lateSubscribe leaves the first subscribe unanswered until the next one
+	// comes, and then answers it with an error, just before the next one's
+	// success
+	lateSubscribe bool
+	lateID        interface{}
+	subscribes    int
+	// refused is how many it turned down, and closedRefused how many of those
+	// sockets the client closed
+	refused         int
+	closedRefused   int
 	socketPublishes []map[string]interface{}
 	httpPublishes   []string
 }
@@ -46,7 +71,13 @@ func newFakeEventAPI(t *testing.T, mode string) *fakeEventAPI {
 		if r.URL.Path == "/event/realtime" {
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
-				t.Error(err)
+				// a client that gives up mid-handshake, as one whose context
+				// is done does, closes the connection under it, and that's
+				// no failure. It can happen after the test ends, so it isn't
+				// logged either.
+				if !errors.Is(err, net.ErrClosed) && !errors.Is(err, syscall.ECONNRESET) && !errors.Is(err, syscall.EPIPE) {
+					t.Error(err)
+				}
 				return
 			}
 			f.serveSocket(conn)
@@ -68,6 +99,34 @@ func (f *fakeEventAPI) serveSocket(conn *websocket.Conn) {
 	if conn.ReadJSON(&init) != nil {
 		return
 	}
+	f.mu.Lock()
+	if f.silent > 0 {
+		f.silent--
+		f.mu.Unlock()
+		var msg map[string]interface{}
+		for conn.ReadJSON(&msg) == nil {
+		}
+		return
+	}
+	if f.refuse > 0 {
+		f.refuse--
+		f.refused++
+		refuseWith := f.refuseWith
+		f.mu.Unlock()
+		if refuseWith == nil {
+			refuseWith = map[string]interface{}{"errorCode": 404, "errorType": "ResourceNotFoundException", "message": "Unable to find the Api."}
+		}
+		conn.WriteJSON(map[string]interface{}{"type": "connection_error", "errors": []map[string]interface{}{refuseWith}})
+		// AppSync leaves the socket open, so it's the client that closes it
+		var msg map[string]interface{}
+		for conn.ReadJSON(&msg) == nil {
+		}
+		f.mu.Lock()
+		f.closedRefused++
+		f.mu.Unlock()
+		return
+	}
+	f.mu.Unlock()
 	conn.WriteJSON(map[string]interface{}{"type": "connection_ack", "connectionTimeoutMs": 300000})
 	f.mu.Lock()
 	stall := f.mode == "stall"
@@ -86,6 +145,33 @@ func (f *fakeEventAPI) serveSocket(conn *websocket.Conn) {
 		}
 		switch msg["type"] {
 		case "subscribe":
+			f.mu.Lock()
+			f.subscribes++
+			late, lateID := f.lateSubscribe, f.lateID
+			if late {
+				f.lateSubscribe = false
+				f.lateID = msg["id"]
+			}
+			f.mu.Unlock()
+			if late {
+				continue
+			}
+			if lateID != nil {
+				conn.WriteJSON(map[string]interface{}{"type": "subscribe_error", "id": lateID,
+					"errors": []map[string]interface{}{{"errorType": "UnauthorizedException", "message": "late"}}})
+			}
+			f.mu.Lock()
+			refuse := f.refuseSubscribes > 0
+			if refuse {
+				f.refuseSubscribes--
+				f.subscribeErrors++
+			}
+			f.mu.Unlock()
+			if refuse {
+				conn.WriteJSON(map[string]interface{}{"type": "subscribe_error", "id": msg["id"],
+					"errors": []map[string]interface{}{{"errorType": "UnauthorizedException", "message": "You are not authorized to make this call."}}})
+				continue
+			}
 			conn.WriteJSON(map[string]interface{}{"type": "subscribe_success", "id": msg["id"]})
 		case "publish":
 			f.mu.Lock()
@@ -171,10 +257,16 @@ func TestPublishOverSocket(t *testing.T) {
 	if id, _ := msg["id"].(string); !regexp.MustCompile(`^[a-zA-Z0-9-_+]{1,128}$`).MatchString(id) {
 		t.Fatalf("the publish's id %q isn't one AppSync takes", msg["id"])
 	}
-	// AppSync checks the signature against the channel and the events
+	checkSigned(t, conn, msg, "/sst/app/stage/in", []string{`{"a":"b"}`})
+}
+
+// checkSigned checks a socket publish's authorization is signed over the
+// channel and the events, as AppSync checks it.
+func checkSigned(t *testing.T, conn *Connection, msg map[string]interface{}, channel string, events []string) {
+	t.Helper()
 	auth, _ := msg["authorization"].(map[string]interface{})
 	date, _ := time.Parse("20060102T150405Z", auth["x-amz-date"].(string))
-	body, _ := json.Marshal(map[string]interface{}{"channel": "/sst/app/stage/in", "events": []string{`{"a":"b"}`}})
+	body, _ := json.Marshal(map[string]interface{}{"channel": channel, "events": events})
 	req, _ := http.NewRequest("POST", "https://"+conn.httpEndpoint+"/event", bytes.NewReader(body))
 	req.Header.Set("accept", "application/json, text/javascript")
 	req.Header.Set("content-encoding", "amz-1.0")
@@ -186,6 +278,50 @@ func TestPublishOverSocket(t *testing.T) {
 	}
 	if auth["Authorization"] != req.Header.Get("Authorization") || auth["X-Amz-Security-Token"] != "TOKEN" {
 		t.Fatalf("authorization %v isn't signed over the channel and the events", auth)
+	}
+}
+
+// A batch over the socket is one publish, with every event, in order, and its
+// authorization covers all of them. When AppSync turns it down, the whole
+// batch goes over HTTPS.
+func TestPublishBatchOverSocket(t *testing.T) {
+	f := newFakeEventAPI(t, "ack")
+	conn := f.connection()
+	batch := []interface{}{"one", "two", "three"}
+	want := []string{`"one"`, `"two"`, `"three"`}
+	if err := conn.PublishBatchOverSocket(context.Background(), "c", batch); err != nil {
+		t.Fatal(err)
+	}
+	if socket, https := f.counts(); socket != 1 || https != 0 {
+		t.Fatalf("published %d over the socket and %d over HTTPS, want 1 and 0", socket, https)
+	}
+	msg := f.socketPublishes[0]
+	events, _ := msg["events"].([]interface{})
+	if len(events) != len(want) {
+		t.Fatalf("published %v, want %d events", events, len(want))
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("published %v, want %v", events, want)
+		}
+	}
+	checkSigned(t, conn, msg, "c", want)
+
+	f.setMode("error")
+	if err := conn.PublishBatchOverSocket(context.Background(), "c", batch); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.httpPublishes) != 1 {
+		t.Fatalf("published %d over HTTPS after an error, want 1", len(f.httpPublishes))
+	}
+	var body struct {
+		Events []string `json:"events"`
+	}
+	json.Unmarshal([]byte(f.httpPublishes[0]), &body)
+	if !slices.Equal(body.Events, want) {
+		t.Fatalf("published %q over HTTPS, want the whole batch, %q", body.Events, want)
 	}
 }
 
@@ -361,8 +497,8 @@ func TestPublishOverSocketStaysUnderAppSyncsLimit(t *testing.T) {
 	}
 	wg.Wait()
 	socket, https := f.counts()
-	if socket > socketPublishesPerSecond || socket == 0 || socket+https != 40 {
-		t.Fatalf("published %d over the socket and %d over HTTPS, want at most %d over the socket and 40 in all", socket, https, socketPublishesPerSecond)
+	if socket > socketEventsPerSecond || socket == 0 || socket+https != 40 {
+		t.Fatalf("published %d over the socket and %d over HTTPS, want at most %d over the socket and 40 in all", socket, https, socketEventsPerSecond)
 	}
 }
 
@@ -408,22 +544,33 @@ func TestSocketPublishesAndSubscribesAtOnce(t *testing.T) {
 func TestSocketBudget(t *testing.T) {
 	var b socketBudget
 	now := time.Now()
-	for i := range socketPublishesPerSecond {
-		if !b.take(now.Add(time.Duration(i) * time.Millisecond)) {
+	for i := range socketEventsPerSecond {
+		if !b.take(now.Add(time.Duration(i)*time.Millisecond), 1) {
 			t.Fatalf("publish %d refused, under the limit", i)
 		}
 	}
-	if b.take(now.Add(500 * time.Millisecond)) {
+	if b.take(now.Add(500*time.Millisecond), 1) {
 		t.Fatal("a publish over the limit was let through")
 	}
-	if !b.take(now.Add(1100 * time.Millisecond)) {
+	if !b.take(now.Add(1100*time.Millisecond), 1) {
 		t.Fatal("a publish a second later was refused")
 	}
 	b.pause(now.Add(1100*time.Millisecond), time.Minute)
-	if b.take(now.Add(5 * time.Second)) {
+	if b.take(now.Add(5*time.Second), 1) {
 		t.Fatal("a publish while paused was let through")
 	}
-	if !b.take(now.Add(2 * time.Minute)) {
+	if !b.take(now.Add(2*time.Minute), 1) {
 		t.Fatal("a publish after the pause was refused")
+	}
+
+	// a publish of several events counts each
+	b = socketBudget{}
+	for i := range socketEventsPerSecond / 2 {
+		if !b.take(now.Add(time.Duration(i)*time.Millisecond), 2) {
+			t.Fatalf("publish %d of 2 events refused, under the limit", i)
+		}
+	}
+	if b.take(now.Add(500*time.Millisecond), 2) {
+		t.Fatalf("a publish of 2 events was let through with %d of %d taken", 2*(socketEventsPerSecond/2), socketEventsPerSecond)
 	}
 }

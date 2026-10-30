@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sst/sst/v3/cmd/sst/mosaic/watcher"
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/project"
 )
@@ -39,6 +40,183 @@ func TestWorkerExitWithQueuedInvocation(t *testing.T) {
 	}
 	if got := h.runtime.starts.Load(); got != 2 {
 		t.Fatalf("started %d workers, want 2", got)
+	}
+}
+
+// A worker that's running before sst dev has recorded it, as on a busy
+// machine, counts what it does then: it asked for an invocation, so it started,
+// and when it exits with one queued it's started again for it. Before, its
+// requests went uncounted, it was taken for one that failed as it started, and
+// the invocation was dropped with it.
+func TestWorkerRecordedLateIsStartedAgainForItsQueue(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo, idle: 100 * time.Millisecond, exitDelay: time.Second, recordedLate: true})
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	if _, err := b.invoke("first"); err != nil {
+		t.Fatal(err)
+	}
+	// the worker exits on idle, and sst dev hasn't noticed yet
+	time.Sleep(300 * time.Millisecond)
+	got, err := b.invoke("second")
+	if err != nil {
+		t.Fatalf("invocation after a worker recorded late exited: %v", err)
+	}
+	if got != "echo second" {
+		t.Fatalf("got %q, want %q", got, "echo second")
+	}
+	// by a worker started again, not the one that exited
+	if got := h.runtime.starts.Load(); got != 2 {
+		t.Fatalf("started %d workers, want 2", got)
+	}
+}
+
+// What a worker prints as it runs an invocation is tied to that invocation,
+// though sst dev's loop is held up, here building another function. Before, the
+// loop tied a worker's lines to its invocation from an event it hadn't got to,
+// so they went with the invocation before, or with none.
+func TestLinesAreTiedToTheirInvocationWhileTheLoopIsBusy(t *testing.T) {
+	slow := make(chan struct{})
+	held := make(chan string, 1)
+	h := newHarness(t, &fakeRuntime{handle: echo, prints: "working on it", builds: map[string]chan struct{}{"Slow": slow}, held: held})
+	defer close(slow)
+	h.addFunction("Fast")
+	h.addFunction("Slow")
+	lines := bus.Subscribe(&FunctionLogEvent{})
+	defer bus.Unsubscribe(lines)
+	fast := h.bridge("Fast")
+	if _, err := fast.invoke("warm"); err != nil {
+		t.Fatal(err)
+	}
+	// the warm invocation's line, so the next is the second's
+	select {
+	case <-lines:
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing was printed")
+	}
+
+	// the Slow function starts building, and holds up the loop till it's let
+	h.bridge("Slow")
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Slow function's build never started")
+	}
+	if _, err := fast.invoke("x"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case evt := <-lines:
+		line := evt.(*FunctionLogEvent)
+		if want := fast.workerID + "-2"; line.RequestID != want {
+			t.Fatalf("%q was tied to invocation %q, want %q", line.Line, line.RequestID, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing was printed")
+	}
+}
+
+// A worker that takes its first invocation before sst dev has recorded it is
+// running it, so a rebuild leaves it to finish. Before, sst dev didn't know it
+// was busy, stopped it, and the invocation was never answered.
+func TestWorkerRecordedLateIsLeftToFinishThroughARebuild(t *testing.T) {
+	release := make(chan struct{})
+	h := newHarness(t, &fakeRuntime{rebuild: true, recordedAfterTaking: true, handle: func(event string) string {
+		if event == "first" {
+			<-release
+		}
+		return echo(event)
+	}})
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	reply := make(chan error, 1)
+	go func() {
+		got, err := b.invoke("first")
+		if err == nil && got != "echo first" {
+			err = errors.New("got " + got)
+		}
+		reply <- err
+	}()
+	// the worker has the invocation, and sst dev has recorded it since
+	for start := time.Now(); h.runtime.starts.Load() == 0; time.Sleep(time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("the worker never started")
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	bus.Publish(&watcher.FileChangedEvent{Path: "src/handler.ts"})
+	time.Sleep(500 * time.Millisecond)
+	close(release)
+	if err := <-reply; err != nil {
+		t.Fatalf("the invocation running through a rebuild: %v", err)
+	}
+}
+
+// A rebuild whose worker can't be started again leaves what was recorded as it
+// was, so once a worker can start, the next invocation gets one and is
+// answered. A worker left recorded without a process would have its invocations
+// queued for good.
+func TestRebuildThatCantStartAWorkerRecoversOnTheNextInvocation(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo, rebuild: true})
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	if _, err := b.invoke("first"); err != nil {
+		t.Fatal(err)
+	}
+	h.runtime.failRuns.Store(true)
+	bus.Publish(&watcher.FileChangedEvent{Path: "src/handler.ts"})
+	// the rebuild stops the worker, and starting it again fails
+	time.Sleep(500 * time.Millisecond)
+	h.runtime.failRuns.Store(false)
+	got, err := b.invoke("second")
+	if err != nil {
+		t.Fatalf("invocation after a worker failed to start: %v", err)
+	}
+	if got != "echo second" {
+		t.Fatalf("got %q, want %q", got, "echo second")
+	}
+}
+
+// A worker that fails an invocation before sst dev has recorded it has its error
+// shown, as after. Before, sst dev didn't know whose it was, so it published
+// none.
+func TestWorkerRecordedLateShowsItsError(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo, recordedLate: true, failInvocations: true})
+	h.addFunction("Fn")
+	errs := bus.Subscribe(&FunctionErrorEvent{})
+	defer bus.Unsubscribe(errs)
+	b := h.bridge("Fn")
+	if _, err := b.invoke("first"); err == nil {
+		t.Fatal("the invocation succeeded, want it to fail")
+	}
+	select {
+	case evt := <-errs:
+		if got := evt.(*FunctionErrorEvent); got.FunctionID != "Fn" || got.ErrorMessage != "echo first" {
+			t.Fatalf("published %+v, want Fn's error", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no error was published")
+	}
+}
+
+// A streamed function's worker that answers before sst dev has recorded it has
+// its answer streamed, as it would after. Before, sst dev didn't know the
+// worker yet, so it sent the answer as a whole reply.
+func TestWorkerRecordedLateStreams(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo, recordedLate: true})
+	h.addFunction("Fn")
+	responses := bus.Subscribe(&FunctionResponseEvent{})
+	defer bus.Unsubscribe(responses)
+	b := h.bridgeWithEnv("Fn", []string{"SST_FUNCTION_STREAMING=true"})
+	if _, err := b.invoke("first"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case evt := <-responses:
+		if got := string(evt.(*FunctionResponseEvent).Output); got != "[streaming response]" {
+			t.Fatalf("the first answer went as %q, want it streamed", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no response")
 	}
 }
 

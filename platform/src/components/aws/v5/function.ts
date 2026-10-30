@@ -989,8 +989,8 @@ export class Function extends component("sst:aws:Function", parts) {
           : "resource.enc";
         if (dev) {
           result.SST_REGION = process.env.SST_AWS_REGION!;
-          result.SST_APPSYNC_HTTP = appsync.http;
-          result.SST_APPSYNC_REALTIME = appsync.realtime;
+          result.SST_APPSYNC_HTTP = appsync!.http;
+          result.SST_APPSYNC_REALTIME = appsync!.realtime;
           result.SST_FUNCTION_ID = name;
           result.SST_APP = $app.name;
           result.SST_STAGE = $app.stage;

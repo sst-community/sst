@@ -193,7 +193,8 @@ func function(ctx context.Context, input input) {
 	}
 	// firstReply makes the writer for the first copy of a reply, which goes
 	// over the AppSync connection's WebSocket where it can, as the bridge is
-	// waiting on it. Its resends, and every other message, go over HTTPS.
+	// waiting on it, if it holds no more than a packet. Its resends, a longer
+	// reply, and every other message, go over HTTPS.
 	firstReply := func(message bridge.MessageType, workerID, messageID string) *bridge.Writer {
 		writer := newReply(message, workerID, messageID)
 		writer.SetOverSocket(!flag.SST_DEV_HTTP_PUBLISH)
@@ -282,14 +283,11 @@ func function(ctx context.Context, input input) {
 			}
 		}()
 	}
-	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{}, &FunctionInvokedEvent{})
+	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{})
 
 	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/next`, func(w http.ResponseWriter, r *http.Request) {
 		log.Info("got next request", "workerID", r.PathValue("workerID"))
 		workerID := r.PathValue("workerID")
-		// A first request that comes before the worker is recorded, just after
-		// it starts, doesn't count. It still takes what's queued, and the
-		// worker asks again once it has answered, which does.
 		stateMu.Lock()
 		info, ok := workers[workerID]
 		if ok {
@@ -340,9 +338,15 @@ func function(ctx context.Context, input input) {
 			log.Info("worker got next request", "workerID", workerID)
 			resp, _ := http.ReadResponse(bufio.NewReader(reader), r)
 			requestID := resp.Header.Get("lambda-runtime-aws-request-id")
-			if ms, err := strconv.ParseInt(resp.Header.Get("lambda-runtime-deadline-ms"), 10, 64); err == nil && recorded {
+			if recorded {
+				// what it prints from now is this invocation's, set here and
+				// not by the loop, which can be held up, as by a build, and
+				// would tie it to the invocation before
 				stateMu.Lock()
-				current.Deadline = time.UnixMilli(ms)
+				current.CurrentRequestID = requestID
+				if ms, err := strconv.ParseInt(resp.Header.Get("lambda-runtime-deadline-ms"), 10, 64); err == nil {
+					current.Deadline = time.UnixMilli(ms)
+				}
 				stateMu.Unlock()
 			}
 			for key, values := range resp.Header {
@@ -350,20 +354,21 @@ func function(ctx context.Context, input input) {
 					w.Header().Add(key, value)
 				}
 			}
-			w.WriteHeader(resp.StatusCode)
-
-			var buf bytes.Buffer
-			tee := io.TeeReader(resp.Body, &buf)
-			io.Copy(w, tee)
-			workerInfo, ok := loadWorker(workerID)
-			if ok {
+			// The invocation is published before the worker has it, so it comes
+			// before anything the worker prints for it, which is tied to it from
+			// above, and its log starts with it. Its body is in memory already,
+			// as the bridge's message.
+			body, _ := io.ReadAll(resp.Body)
+			if workerInfo, ok := loadWorker(workerID); ok {
 				bus.Publish(&FunctionInvokedEvent{
 					FunctionID: workerInfo.FunctionID,
 					WorkerID:   workerID,
 					RequestID:  requestID,
-					Input:      buf.Bytes(),
+					Input:      body,
 				})
 			}
+			w.WriteHeader(resp.StatusCode)
+			w.Write(body)
 		}
 	})
 
@@ -549,6 +554,31 @@ func function(ctx context.Context, input input) {
 		if !ok {
 			return false, "Function failed to start"
 		}
+		streaming := false
+		for _, e := range workerEnv[workerID] {
+			if e == "SST_FUNCTION_STREAMING=true" {
+				streaming = true
+				break
+			}
+		}
+		// The worker is recorded before it starts, not once it has, so what it
+		// does as soon as it runs is its own: its first request for an
+		// invocation, its answer, its error, what it prints. On a busy machine
+		// it can answer an invocation before Run returns. Its Worker is set once
+		// it has. Nothing stops a worker but this loop, which is here till then.
+		info := &WorkerInfo{
+			FunctionID: functionID,
+			WorkerID:   workerID,
+			Streaming:  streaming,
+		}
+		stateMu.Lock()
+		previous, hadPrevious := workers[workerID]
+		workers[workerID] = info
+		stateMu.Unlock()
+		// it isn't stopped while it's recorded, so it's taken out as it's
+		// recorded, and put back if it doesn't start
+		stopped, wasStopped := stoppedAt[workerID]
+		delete(stoppedAt, workerID)
 		worker, err := input.project.Runtime.Run(ctx, &runtime.RunInput{
 			CfgPath:    input.project.PathConfig(),
 			Runtime:    target.Runtime,
@@ -559,22 +589,24 @@ func function(ctx context.Context, input input) {
 			Env:        workerEnv[workerID],
 		})
 		if err != nil {
+			stateMu.Lock()
+			if workers[workerID] == info {
+				if hadPrevious {
+					workers[workerID] = previous
+				} else {
+					delete(workers, workerID)
+				}
+			}
+			stateMu.Unlock()
+			if wasStopped {
+				stoppedAt[workerID] = stopped
+			}
 			log.Error("failed to run worker", "error", err)
 			return false, "Function failed to start"
 		}
-		streaming := false
-		for _, e := range workerEnv[workerID] {
-			if e == "SST_FUNCTION_STREAMING=true" {
-				streaming = true
-				break
-			}
-		}
-		info := &WorkerInfo{
-			FunctionID: functionID,
-			Worker:     worker,
-			WorkerID:   workerID,
-			Streaming:  streaming,
-		}
+		stateMu.Lock()
+		info.Worker = worker
+		stateMu.Unlock()
 		go func() {
 			logs := worker.Logs()
 			onLine := func(line string) {
@@ -601,10 +633,6 @@ func function(ctx context.Context, input input) {
 			}
 			workerShutdownChan <- info
 		}()
-		stateMu.Lock()
-		workers[workerID] = info
-		stateMu.Unlock()
-		delete(stoppedAt, workerID)
 
 		return true, ""
 	}
@@ -970,14 +998,6 @@ func function(ctx context.Context, input input) {
 			}
 		case unknown := <-evts:
 			switch evt := unknown.(type) {
-			case *FunctionInvokedEvent:
-				info, ok := loadWorker(evt.WorkerID)
-				if !ok {
-					continue
-				}
-				stateMu.Lock()
-				info.CurrentRequestID = evt.RequestID
-				stateMu.Unlock()
 			case *project.CompleteEvent:
 				if evt.Old {
 					continue
@@ -1099,8 +1119,9 @@ const (
 )
 
 // sendMessage writes a message's body and publishes what's left of it, and returns
-// the first error. The writer publishes each time its buffer fills, so the copy can
-// fail as well as the close.
+// the first error. The writer publishes its packets as they fill, in the
+// background, so a request that failed can come back from the copy as well as
+// the close.
 func sendMessage(writer *bridge.Writer, body io.Reader) error {
 	_, err := io.Copy(writer, body)
 	if closeErr := writer.Close(); err == nil {

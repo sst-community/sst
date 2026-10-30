@@ -1,3 +1,8 @@
+---
+name: document-component
+description: Add a new SST component to the docs site. Use when a new component under platform/src/components needs a reference page. Covers registering it in www/generate.ts, matching getSSTLink() getters, linking it from guides, adding it to the sidebar in www/astro.config.mjs, and generating the docs.
+---
+
 # Document Component
 
 Steps to add a new component to the SST docs.

@@ -18,8 +18,9 @@ import (
 // and drops the rest without saying which, so the socket is kept under it, and
 // every publish over it is backed by one over HTTPS.
 var (
-	// how many publishes go over the socket in any second, at most
-	socketPublishesPerSecond = 15
+	// how many events go over the socket in any second, at most, counting each
+	// event of a publish, as AppSync may count them, not the publish
+	socketEventsPerSecond = 15
 	// how long a publish waits for AppSync to acknowledge it, before it's
 	// published over HTTPS too. It's acknowledged in a round trip, so one that
 	// takes longer was dropped, or the socket is gone.
@@ -116,7 +117,10 @@ func (s *socket) handle(msg map[string]interface{}) bool {
 	publishID, _ := msg["id"].(string)
 	switch msg["type"] {
 	case "publish_success":
-		// a publish has one event, so one that failed is all of it
+		// A publish that lists any of its events as failed is taken as failed
+		// whole, so PublishBatchOverSocket publishes all of them over HTTPS,
+		// the ones AppSync took as well. The bridge's receiver drops a packet it
+		// has already, as it does Publish's retries.
 		if failed, ok := msg["failed"].([]interface{}); ok && len(failed) > 0 {
 			s.resolve(publishID, fmt.Errorf("event not published: %v", failed))
 			return true
@@ -146,8 +150,10 @@ type socketBudget struct {
 	offUntil time.Time
 }
 
-// take says whether a publish can go over the socket now, and counts it if so.
-func (b *socketBudget) take(now time.Time) bool {
+// take says whether a publish of events can go over the socket now, and counts
+// them if so. AppSync may count a publish's events, not the publish, so each
+// counts.
+func (b *socketBudget) take(now time.Time, events int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if now.Before(b.offUntil) {
@@ -160,10 +166,12 @@ func (b *socketBudget) take(now time.Time) bool {
 		}
 	}
 	b.sent = recent
-	if len(b.sent) >= socketPublishesPerSecond {
+	if len(b.sent)+events > socketEventsPerSecond {
 		return false
 	}
-	b.sent = append(b.sent, now)
+	for range events {
+		b.sent = append(b.sent, now)
+	}
 	return true
 }
 
@@ -191,29 +199,47 @@ func (c *Connection) webSocket() *websocket.Conn {
 // WebSocket where it can, which reaches a subscriber about 50 ms sooner. When
 // the socket is over its share of AppSync's limit, or a publish on it isn't
 // acknowledged in time, is throttled, or the socket is gone, the event is
-// published over HTTPS, with Publish. So a subscriber can get it twice, as
-// with Publish's retries.
+// published over HTTPS, with PublishBatch, as PublishBatchOverSocket does. So
+// a subscriber can get it twice, as with PublishBatch's retries.
 func (c *Connection) PublishOverSocket(ctx context.Context, channel string, event interface{}) error {
-	err := c.publishOverSocket(ctx, channel, event)
+	return c.PublishBatchOverSocket(ctx, channel, []interface{}{event})
+}
+
+// PublishBatchOverSocket publishes several events in one message over the
+// WebSocket, as PublishOverSocket does one, or with PublishBatch over HTTPS. An
+// event over AppSync's 240 KB closes the socket, and its subscription, where
+// over HTTPS only that event fails, so it's for events well under it. A write
+// has socketWriteTimeout, so it's for a batch no larger than an event.
+func (c *Connection) PublishBatchOverSocket(ctx context.Context, channel string, events []interface{}) error {
+	if len(events) == 0 {
+		return errors.New("a publish takes at least one event")
+	}
+	if len(events) > MaxBatch {
+		return fmt.Errorf("a publish takes at most %d events, not %d", MaxBatch, len(events))
+	}
+	err := c.publishOverSocket(ctx, channel, events)
 	if err == nil {
 		return nil
 	}
 	if err != errSocketUnavailable {
 		log.Info("publishing over HTTPS instead", "channel", channel, "err", err)
 	}
-	return c.Publish(ctx, channel, event)
+	return c.PublishBatch(ctx, channel, events)
 }
 
-func (c *Connection) publishOverSocket(ctx context.Context, channel string, event interface{}) error {
+func (c *Connection) publishOverSocket(ctx context.Context, channel string, batch []interface{}) error {
 	s := c.currentSocket()
-	if s == nil || !s.budget.take(time.Now()) {
+	if s == nil || !s.budget.take(time.Now(), len(batch)) {
 		return errSocketUnavailable
 	}
-	eventJson, err := json.Marshal(event)
-	if err != nil {
-		return err
+	events := make([]string, len(batch))
+	for i, event := range batch {
+		eventJson, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		events[i] = string(eventJson)
 	}
-	events := []string{string(eventJson)}
 	// signed the same way as the HTTPS request's body
 	auth, err := c.getAuth(ctx, map[string]interface{}{
 		"channel": channel,

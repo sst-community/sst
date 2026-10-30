@@ -40,8 +40,18 @@ func readAllWithin(t *testing.T, w *Worker, d time.Duration) string {
 	}
 }
 
+// alive is whether a process still runs a second after it should have gone.
+// One that was signalled can still answer kill(pid, 0) for a moment after its
+// group is empty, while the kernel finishes its exit, though ps no longer
+// lists it.
 func alive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		if syscall.Kill(pid, 0) != nil {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
 }
 
 // A worker's output has what it printed last, and ends once it exits.

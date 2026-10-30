@@ -1,3 +1,4 @@
+import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { isJSONata, JSONata, State, StateArgs } from "./state";
 
 export interface ChoiceArgs extends StateArgs { }
@@ -86,11 +87,11 @@ export class Choice extends State {
   /**
    * @internal
    */
-  public getPermissions() {
+  public getPermissions(opts?: ComponentResourceOptions) {
     return [
-      ...this.choices.flatMap((c) => c.next.getPermissions()),
-      ...(this.defaultNext?.getPermissions() || []),
-      ...super.getPermissions(),
+      ...this.choices.flatMap((c) => c.next.getPermissions(opts)),
+      ...(this.defaultNext?.getPermissions(opts) || []),
+      ...super.getPermissions(opts),
     ];
   }
 

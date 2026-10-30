@@ -200,4 +200,159 @@ describe("StaticSite", function () {
       "/web/404.html",
     ]);
   });
+
+  describe("with edgeRouting: false", () => {
+    it("throws with a router", () => {
+      expect(
+        () =>
+          new StaticSite("NoEdgeRouter", {
+            path: sitePath,
+            edgeRouting: false,
+            router: { instance: {} as any },
+          }),
+      ).toThrow(/Cannot provide both "edgeRouting: false" and "router"/);
+    });
+
+    it("creates only the CloudFront URL block for a domain", async () => {
+      new StaticSite("NoEdgeDomain", {
+        path: sitePath,
+        edgeRouting: false,
+        domain: {
+          name: "example.com",
+          dns: false,
+          cert: "arn:aws:acm:us-east-1:123456789012:certificate/mine",
+        },
+      });
+      await settle();
+
+      const fns = createdResources.filter(
+        (r) => r.type === "aws:cloudfront/function:Function",
+      );
+      expect(fns).toHaveLength(1);
+      expect(fns[0].inputs.code).toContain("cloudfront.net");
+      expect(fns[0].inputs.code).not.toContain("kvs()");
+      expect(fns[0].inputs.keyValueStoreAssociations).toEqual([]);
+    });
+
+    it("sets no origin path when the assets path is the root", async () => {
+      new StaticSite("NoEdgeRootPath", {
+        path: sitePath,
+        edgeRouting: false,
+        assets: { path: "/" },
+      });
+      await settle();
+
+      expect(
+        findDistribution("NoEdgeRootPath").inputs.origins[0].originPath,
+      ).toBe("");
+    });
+
+    it("creates no KeyValueStore, keys or request function", async () => {
+      new StaticSite("NoEdgeSite", { path: sitePath, edgeRouting: false });
+      await settle();
+
+      expect(
+        createdResources.filter(
+          (r) =>
+            r.type === "aws:cloudfront/keyValueStore:KeyValueStore" ||
+            r.type === "aws:cloudfront/function:Function" ||
+            r.name.includes("KvKeys"),
+        ),
+      ).toEqual([]);
+      expect(
+        findDistribution("NoEdgeSite").inputs.defaultCacheBehavior
+          .functionAssociations,
+      ).toEqual([]);
+    });
+
+    it("serves a SPA from the assets bucket", async () => {
+      new StaticSite("NoEdgeSpa", { path: sitePath, edgeRouting: false });
+      await settle();
+
+      const { origins, defaultRootObject, customErrorResponses } =
+        findDistribution("NoEdgeSpa").inputs;
+      expect(origins).toEqual([
+        {
+          originId: "default",
+          domainName: "NoEdgeSpaAssetsBucket.s3.us-east-1.amazonaws.com",
+          originAccessControlId: "NoEdgeSpaS3AccessControl_id",
+        },
+      ]);
+      expect(defaultRootObject).toBe("index.html");
+      expect(customErrorResponses).toEqual([
+        {
+          errorCode: 403,
+          responseCode: 200,
+          responsePagePath: "/index.html",
+          errorCachingMinTtl: 0,
+        },
+        {
+          errorCode: 404,
+          responseCode: 200,
+          responsePagePath: "/index.html",
+          errorCachingMinTtl: 0,
+        },
+      ]);
+    });
+
+    it("serves the error page with a 404", async () => {
+      new StaticSite("NoEdgeErrorPage", {
+        path: sitePath,
+        edgeRouting: false,
+        errorPage: "404.html",
+      });
+      await settle();
+
+      const { customErrorResponses } = findDistribution("NoEdgeErrorPage").inputs;
+      expect(
+        customErrorResponses.map((r: any) => [
+          r.responseCode,
+          r.responsePagePath,
+        ]),
+      ).toEqual([
+        [404, "/404.html"],
+        [404, "/404.html"],
+      ]);
+    });
+
+    it("reads the assets path from the origin", async () => {
+      new StaticSite("NoEdgePrefixed", {
+        path: sitePath,
+        edgeRouting: false,
+        assets: { path: "/web/" },
+      });
+      await settle();
+
+      const { origins, customErrorResponses } =
+        findDistribution("NoEdgePrefixed").inputs;
+      expect(origins[0].originPath).toBe("/web");
+      expect(customErrorResponses[0].responsePagePath).toBe("/index.html");
+    });
+
+    it("creates a request function for the user's injection", async () => {
+      new StaticSite("NoEdgeInjection", {
+        path: sitePath,
+        edgeRouting: false,
+        edge: {
+          viewerRequest: {
+            // An Output, to check it's resolved, not stringified, into the code
+            injection: pulumi.output(
+              `event.request.headers["x-test"] = { value: "1" };`,
+            ),
+            kvStore: "arn:aws:cloudfront::123456789012:key-value-store/mine",
+          },
+        },
+      });
+      await settle();
+
+      const fn = createdResources.find(
+        (r) => r.type === "aws:cloudfront/function:Function",
+      )!;
+      expect(fn.inputs.code).toContain(`event.request.headers["x-test"]`);
+      expect(fn.inputs.code).not.toContain("kvs()");
+      expect(fn.inputs.keyValueStoreAssociations).toEqual([
+        "arn:aws:cloudfront::123456789012:key-value-store/mine",
+      ]);
+    });
+  });
 });

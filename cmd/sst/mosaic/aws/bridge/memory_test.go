@@ -33,7 +33,7 @@ func TestSortedForgetsFinishedMessages(t *testing.T) {
 	sub := make(chan string, 1024)
 	seen := make(chan string, 1024)
 	go func() {
-		for p := range sorted(ctx, sub) {
+		for p := range sorted(ctx, sub, nil) {
 			select {
 			case seen <- p.ID:
 			default:
@@ -62,12 +62,13 @@ func TestSortedForgetsFinishedMessages(t *testing.T) {
 // A message that lost a packet is kept until it's whole, with the data of every
 // packet that did arrive. One that never becomes whole is kept for good.
 func TestSortedDropsMessagesThatNeverFinish(t *testing.T) {
+	with(t, &maxWaitingBytes, 8<<20)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sub := make(chan string, 1024)
 	seen := make(chan string, 16)
 	go func() {
-		for p := range sorted(ctx, sub) {
+		for p := range sorted(ctx, sub, nil) {
 			seen <- p.ID
 		}
 	}()

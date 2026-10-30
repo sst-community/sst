@@ -442,6 +442,31 @@ export interface RouterUrlRouteArgs extends RouteArgs {
    * ```
    */
   keepAliveTimeout?: Input<DurationSeconds>;
+  /**
+   * Sign the requests to this route with the Router's [`protection`](/docs/component/aws/router/#protection).
+   *
+   * This only applies when the destination is a Lambda function URL (a host like
+   * `<id>.lambda-url.<region>.on.aws`) and the Router has `protection` set. For any
+   * other destination, such as a function URL behind a custom domain, the route is
+   * not signed and the option has no effect.
+   *
+   * It is off by default, because a URL can't tell a function URL with IAM
+   * authorization from a public one, so the route has to say that it should be signed.
+   *
+   * The signature replaces the `Authorization` header of the viewer's request.
+   * Signing is meant for function URLs with `"iam"` authorization. A public one is
+   * signed too, but gains nothing. CloudFront needs permission to invoke the
+   * function. [Read more](/docs/component/aws/router/#protection).
+   *
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   protection: true
+   * }
+   * ```
+   */
+  protection?: Input<boolean>;
 }
 
 export interface RouterBucketRouteArgs extends RouteArgs {
@@ -1067,7 +1092,7 @@ export interface RouterArgs {
    * The available options are:
    * - `"none"`: Lambda URLs are publicly accessible.
    * - `"oac"`: Lambda URLs protected by CloudFront Origin Access Control. Requires
-   *   manual `x-amz-content-sha256` header for POST requests.
+   *   manual `x-amz-content-sha256` header for POST, PUT and PATCH requests.
    * - `"oac-with-edge-signing"`: Full protection with automatic header signing via
    *   Lambda@Edge. Works with external webhooks and callbacks. Higher cost and latency
    *   but works out of the box.
@@ -1083,6 +1108,24 @@ export interface RouterArgs {
    * When using `"oac-with-edge-signing"`, request bodies are limited to 1MB due to
    * Lambda@Edge payload limits. For file uploads larger than 1MB, consider using
    * presigned S3 URLs or the `"oac"` mode with manual header signing.
+   * :::
+   *
+   * :::note
+   * A Lambda function URL added with `router.route()` is signed when the route sets
+   * `protection: true`. It is off by default, because only you know whether the URL
+   * uses `"iam"` authorization. For example, `router.route("/api", fn.url, { protection: true })`.
+   *
+   * `router.route()` only receives a URL, so it cannot create the Lambda permissions.
+   * Allow the `cloudfront.amazonaws.com` principal to call `lambda:InvokeFunctionUrl`
+   * and `lambda:InvokeFunction` on the function, with this Router's distribution as
+   * the source ARN. Get the ARN with
+   * `router.nodes.cdn.apply((cdn) => cdn.nodes.distribution.arn)`. Set
+   * `invokedViaFunctionUrl: true` on the `lambda:InvokeFunction` permission.
+   *
+   * With `"oac"`, `POST`, `PUT` and `PATCH` requests to a function URL with `"iam"`
+   * authorization also need the `x-amz-content-sha256` header. The signature replaces
+   * the `Authorization` header of the viewer's request, so the function does not
+   * receive it. Send tokens in a different header.
    * :::
    *
    * :::note
@@ -2411,6 +2454,11 @@ async function handler(event) {
   /**
    * Add a route to a destination URL.
    *
+   * If the Router has [`protection`](#protection) set, set `protection: true` in the
+   * route's `args` to sign requests to a Lambda function URL with Origin Access
+   * Control. It is off by default. CloudFront also needs permission to invoke the
+   * function, as described under `protection`.
+   *
    * @param pattern The path prefix to match for this route.
    * @param url The destination URL to route matching requests to.
    * @param args Configure the route.
@@ -2460,8 +2508,8 @@ async function handler(event) {
     url: Input<string>,
     args?: Input<RouterUrlRouteArgs>,
   ) {
-    all([pattern, args, this.hasInlineRoutes]).apply(
-      ([pattern, args, hasInlineRoutes]) => {
+    all([pattern, args, this.hasInlineRoutes, this._protectionMode]).apply(
+      ([pattern, args, hasInlineRoutes, protection]) => {
         if (hasInlineRoutes)
           throw new VisibleError(
             "Cannot use both `routes` and `.route()` function to add routes.",
@@ -2475,6 +2523,7 @@ async function handler(event) {
             pattern,
             url,
             routeArgs: args,
+            protection,
           },
           { provider: this.constructorOpts.provider },
         );

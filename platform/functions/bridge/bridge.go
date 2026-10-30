@@ -99,6 +99,8 @@ func run() error {
 		return err
 	}
 	client := bridge.NewClient(ctx, conn, workerID, prefix+"/"+workerID)
+	// a streamed response is sent once, so a packet AppSync lost is asked for
+	client.AskForMissingOn(prefix + "/in")
 	waitForSubscription(ctx, conn, client, prefix+"/"+workerID+"/in")
 
 	init := bridge.InitBody{
@@ -145,9 +147,11 @@ func run() error {
 		writer := client.NewWriter(bridge.MessageNext, prefix+"/in")
 		if err == nil {
 			err = resp.Write(writer)
-		}
-		if err == nil {
-			err = writer.Close()
+			// closed even when the write failed, as it waits for what's in
+			// flight, and returns the first error
+			if closeErr := writer.Close(); err == nil {
+				err = closeErr
+			}
 		}
 		if err != nil {
 			// sst dev never got the invocation, so fail it now instead of

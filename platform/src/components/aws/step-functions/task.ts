@@ -1,4 +1,4 @@
-import { all, Output, output } from "@pulumi/pulumi";
+import { all, ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
 import { Duration, toSeconds } from "../../duration";
 import { Input } from "../../input";
 import { Prettify } from "../../component";
@@ -309,8 +309,8 @@ export class Task extends State implements Nextable, Failable {
   /**
    * @internal
    */
-  public getPermissions() {
-    return [...(this.args.permissions || []), ...super.getPermissions()];
+  public getPermissions(opts?: ComponentResourceOptions) {
+    return [...(this.args.permissions || []), ...super.getPermissions(opts)];
   }
 
   /**

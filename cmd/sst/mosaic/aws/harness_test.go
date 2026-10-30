@@ -49,11 +49,27 @@ type fakeAppSync struct {
 	pingDelay atomic.Int64
 	// what was published over the socket, by message type
 	overSocket map[bridge.MessageType]int
+	// counts the reboots sst dev asked for, by the channel they went to
+	reboots map[string]*atomic.Int32
+	// rebootDelay is how long a reboot takes to reach its bridge
+	rebootDelay atomic.Int64
 }
 
 func (f *fakeAppSync) Publish(ctx context.Context, channel string, event interface{}) error {
 	if p, ok := event.(bridge.Packet); ok && p.Type == bridge.MessagePing {
 		time.Sleep(time.Duration(f.pingDelay.Load()))
+	}
+	// A reboot is counted when sst dev sends it, not when its bridge reads it,
+	// which is only while it waits on an invocation: one sent as an invocation
+	// was answered was read, and counted, with the next invocation's, after a
+	// test had taken its count.
+	if p, ok := event.(bridge.Packet); ok && p.Type == bridge.MessageReboot && p.Index == 0 {
+		f.mu.Lock()
+		if count := f.reboots[channel]; count != nil {
+			count.Add(1)
+		}
+		f.mu.Unlock()
+		time.Sleep(time.Duration(f.rebootDelay.Load()))
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -68,18 +84,43 @@ func (f *fakeAppSync) Publish(ctx context.Context, channel string, event interfa
 	return nil
 }
 
-// PublishOverSocket publishes as Publish does, and counts what went this way,
-// by message type.
-func (f *fakeAppSync) PublishOverSocket(ctx context.Context, channel string, event interface{}) error {
-	if p, ok := event.(bridge.Packet); ok {
-		f.mu.Lock()
-		if f.overSocket == nil {
-			f.overSocket = map[bridge.MessageType]int{}
+// PublishBatch publishes each event as Publish does, in one request.
+func (f *fakeAppSync) PublishBatch(ctx context.Context, channel string, events []interface{}) error {
+	for _, event := range events {
+		if err := f.Publish(ctx, channel, event); err != nil {
+			return err
 		}
-		f.overSocket[p.Type]++
-		f.mu.Unlock()
 	}
-	return f.Publish(ctx, channel, event)
+	return nil
+}
+
+// PublishBatchOverSocket publishes as Publish does, and counts what went this
+// way, by message type.
+func (f *fakeAppSync) PublishBatchOverSocket(ctx context.Context, channel string, events []interface{}) error {
+	for _, event := range events {
+		if p, ok := event.(bridge.Packet); ok {
+			f.mu.Lock()
+			if f.overSocket == nil {
+				f.overSocket = map[bridge.MessageType]int{}
+			}
+			f.overSocket[p.Type]++
+			f.mu.Unlock()
+		}
+		if err := f.Publish(ctx, channel, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// countReboots counts the reboots sent to the channel in count.
+func (f *fakeAppSync) countReboots(channel string, count *atomic.Int32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reboots == nil {
+		f.reboots = map[string]*atomic.Int32{}
+	}
+	f.reboots[channel] = count
 }
 
 // unsubscribe removes the channel's subscribers, as when a bridge's Lambda
@@ -88,6 +129,7 @@ func (f *fakeAppSync) unsubscribe(channel string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.subs, channel)
+	delete(f.reboots, channel)
 }
 
 func (f *fakeAppSync) Subscribe(ctx context.Context, channel string) (chan string, error) {
@@ -142,6 +184,15 @@ type fakeRuntime struct {
 	crash atomic.Bool
 	// prints is a line a worker prints before it answers each invocation
 	prints string
+	// recordedLate has Run return only once its worker has answered its first
+	// invocation and asked for its next, as on a busy machine, where sst dev
+	// records a worker it started a while after the worker is running.
+	// recordedAfterTaking has it return once the worker has taken its first,
+	// while it runs it.
+	recordedLate        bool
+	recordedAfterTaking bool
+	// failInvocations has a worker answer each invocation with an error
+	failInvocations bool
 }
 
 func (r *fakeRuntime) Match(runtime string) bool { return runtime == "fake" }
@@ -172,8 +223,20 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 	}
 	r.starts.Add(1)
 	logs, output := io.Pipe()
-	w := &fakeWorker{runtime: r, api: "http://" + input.Server + "/2018-06-01/runtime", stop: make(chan struct{}), logs: logs}
+	w := &fakeWorker{runtime: r, api: "http://" + input.Server + "/2018-06-01/runtime", stop: make(chan struct{}), logs: logs, askedAgain: make(chan struct{}), took: make(chan struct{})}
 	go w.run(ctx, output)
+	if r.recordedLate || r.recordedAfterTaking {
+		signal := w.askedAgain
+		if r.recordedAfterTaking {
+			signal = w.took
+		}
+		select {
+		case <-signal:
+			// for the request to reach sst dev
+			time.Sleep(100 * time.Millisecond)
+		case <-time.After(2 * time.Second):
+		}
+	}
 	return w, nil
 }
 
@@ -187,6 +250,10 @@ type fakeWorker struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	logs     *io.PipeReader
+	// closed as it asks for its next invocation after answering its first, and
+	// as it takes its first
+	askedAgain chan struct{}
+	took       chan struct{}
 }
 
 func (w *fakeWorker) Stop() { w.stopOnce.Do(func() { close(w.stop) }) }
@@ -229,6 +296,13 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 			case <-next.Done():
 			}
 		}()
+		if invoked {
+			select {
+			case <-w.askedAgain:
+			default:
+				close(w.askedAgain)
+			}
+		}
 		req, _ := http.NewRequestWithContext(next, "GET", w.api+"/invocation/next", nil)
 		resp, err := http.DefaultClient.Do(req)
 		if idle != nil {
@@ -241,6 +315,9 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 		event, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
+		if !invoked {
+			close(w.took)
+		}
 		invoked = true
 		requestID := resp.Header.Get("lambda-runtime-aws-request-id")
 		answer := w.runtime.handle(string(event))
@@ -254,7 +331,12 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 		if w.runtime.prints != "" {
 			fmt.Fprintln(output, w.runtime.prints)
 		}
-		resp, err = http.Post(w.api+"/invocation/"+requestID+"/response", "application/json", strings.NewReader(answer))
+		endpoint := "/response"
+		if w.runtime.failInvocations {
+			endpoint = "/error"
+			answer = `{"errorType":"Error","errorMessage":"` + answer + `"}`
+		}
+		resp, err = http.Post(w.api+"/invocation/"+requestID+endpoint, "application/json", strings.NewReader(answer))
 		if err != nil {
 			return
 		}
@@ -379,7 +461,8 @@ type fakeBridge struct {
 	requests   atomic.Int32
 	// pinged is sent to when sst dev pings the bridge
 	pinged chan struct{}
-	// reboots counts the times sst dev asked the bridge to say it's there again
+	// reboots counts the times sst dev asked the bridge to say it's there
+	// again, when it asked
 	reboots atomic.Int32
 	// deadline, when set, is how long Lambda gives each invocation
 	deadline time.Duration
@@ -403,6 +486,7 @@ func (h *harness) bridgeWithEnv(functionID string, env []string) *fakeBridge {
 		cancel:     cancel,
 		pinged:     make(chan struct{}, 100),
 	}
+	h.appsync.countReboots(h.prefix+"/"+workerID+"/in", &b.reboots)
 	b.init()
 	return b
 }
@@ -461,7 +545,6 @@ func (b *fakeBridge) invoke(event string) (string, error) {
 				timeout, timedOut = b.h.invokeTimeout, errNoReply
 				b.pinged <- struct{}{}
 			case bridge.MessageReboot:
-				b.reboots.Add(1)
 				b.init()
 			case bridge.MessageResponse, bridge.MessageError:
 				if msg.ID != requestID {
@@ -517,6 +600,38 @@ func TestHarnessReboots(t *testing.T) {
 	}
 	if got != "echo x" {
 		t.Fatalf("got %q, want %q", got, "echo x")
+	}
+}
+
+// A reboot is counted when sst dev asks for it, though the bridge reads it only
+// with its next invocation, so a test that counts reboots between invocations
+// sees the ones asked before it counted.
+func TestHarnessCountsARebootWhenItsAsked(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{handle: echo})
+	h.addFunction("Fn")
+	b := h.bridge("Fn")
+	if _, err := b.invoke("first"); err != nil {
+		t.Fatal(err)
+	}
+	// the first can be asked, when it comes before the bridge said it's there
+	reboots := b.reboots.Load()
+	h.appsync.rebootDelay.Store(int64(50 * time.Millisecond))
+	writer := b.client.NewWriter(bridge.MessageReboot, h.prefix+"/"+b.workerID+"/in")
+	if err := sendJSON(writer, bridge.RebootBody{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := b.reboots.Load() - reboots; n != 1 {
+		t.Fatalf("counted %d reboots once one was sent, want 1", n)
+	}
+	got, err := b.invoke("second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "echo second" {
+		t.Fatalf("got %q after the reboot, want %q", got, "echo second")
+	}
+	if n := b.reboots.Load() - reboots; n != 1 {
+		t.Fatalf("counted %d reboots once the bridge read it, want 1", n)
 	}
 }
 
