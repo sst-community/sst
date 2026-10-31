@@ -11,7 +11,7 @@ import (
 )
 
 type ReadInput[T any] struct {
-	ID   string `json:"id"`
+	ID string `json:"id"`
 }
 
 type ReadResult[T any] struct {
@@ -63,12 +63,32 @@ func (a *AwsResource) config() (aws.Config, error) {
 	return casted.Config(), nil
 }
 
+func (a *AwsResource) configForRegion(region string) (aws.Config, error) {
+	cfg, err := a.config()
+	if err != nil {
+		return cfg, err
+	}
+	if a.project.Floci() && region != "" && region != cfg.Region {
+		return cfg, fmt.Errorf("Floci profile 2.3.0 does not support region %s. No AWS fallback was attempted.", region)
+	}
+	if region != "" {
+		cfg.Region = region
+	}
+	return cfg, nil
+}
+
 func Register(ctx context.Context, p *project.Project, r *rpc.Server) error {
 	awsResource := &AwsResource{ctx, p}
+	if p.Floci() {
+		r.RegisterName("Resource.Aws.BucketFiles", &BucketFiles{awsResource})
+		r.RegisterName("Resource.Aws.FunctionCodeUpdater", &FunctionCodeUpdater{awsResource})
+		r.RegisterName("Resource.Aws.FunctionEnvironmentUpdate", &FunctionEnvironmentUpdate{awsResource})
+		return nil
+	}
 	cloudflareResource := &CloudflareResource{ctx, p}
 	vercelResource := &VercelResource{ctx, p}
 	r.RegisterName("Resource.Run", NewRun())
-	
+
 	// AWS Resources
 	r.RegisterName("Resource.Aws.BucketFiles", &BucketFiles{awsResource})
 	r.RegisterName("Resource.Aws.DistributionDeploymentWaiter", &DistributionDeploymentWaiter{awsResource})

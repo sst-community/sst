@@ -14,6 +14,7 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/flag"
+	"github.com/sst/sst/v3/pkg/floci"
 	"github.com/sst/sst/v3/pkg/project"
 )
 
@@ -70,7 +71,21 @@ func (c *Cli) InitProject() (*project.Project, error) {
 		return nil, util.NewReadableError(err, "Could not find stage")
 	}
 
+	var local *floci.Config
+	command := c.path[len(c.path)-1].Name
+	if c.Bool("floci") || ((os.Getenv("SST_FLOCI") != "" || os.Getenv("SST_FLOCI_ENDPOINT") != "") && (command == "shell" || command == "remove" || command == "unlock")) {
+		if err := floci.CheckNode(c.Context); err != nil {
+			return nil, util.NewReadableError(err, err.Error())
+		}
+		local, err = floci.Ensure(c.Context)
+		if err != nil {
+			return nil, util.NewReadableError(err, err.Error())
+		}
+	} else if command == "dev" && (os.Getenv("SST_FLOCI") != "" || os.Getenv("SST_FLOCI_ENDPOINT") != "") {
+		return nil, util.NewReadableError(nil, "Select Floci explicitly with sst dev --floci")
+	}
 	p, err := project.New(&project.ProjectConfig{
+		Floci:   local,
 		Version: c.version,
 		Stage:   stage,
 		Config:  cfgPath,
@@ -148,6 +163,9 @@ func (c *Cli) InitProject() (*project.Project, error) {
 	}
 
 	if err := p.LoadHome(); err != nil {
+		if local != nil {
+			return nil, util.NewReadableError(err, err.Error())
+		}
 		return nil, err
 	}
 

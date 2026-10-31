@@ -1,3 +1,4 @@
+import { flociDynamicOptions } from "../../../floci/check";
 import { CustomResourceOptions, Input, dynamic } from "@pulumi/pulumi";
 import { rpc } from "../../rpc/rpc.js";
 
@@ -26,7 +27,7 @@ export class BucketFiles extends dynamic.Resource {
       new rpc.Provider("Aws.BucketFiles"),
       `${name}.sst.aws.BucketFiles`,
       args,
-      opts,
+      flociDynamicOptions(opts),
     );
   }
 }

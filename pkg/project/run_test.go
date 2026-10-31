@@ -1,11 +1,58 @@
 package project
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestProviderConfigArgs(t *testing.T) {
+	// Provider args arrive through JSON from sst.config.ts (numbers are float64).
+	var providers map[string]interface{}
+	if err := json.Unmarshal([]byte(`{"aws":{
+		"package":"@pulumi/aws@7.48.0",
+		"region":"us-east-1",
+		"skipCredentialsValidation":true,
+		"skipMetadataApiCheck":false,
+		"maxRetries":0,
+		"testFraction":1.5,
+		"testLargeNumber":1000000,
+		"defaultTags":{"tags":{"owner":"a=b c"}},
+		"endpoints":[{"s3":"http://127.0.0.1:4566"}],
+		"unset":null
+	},"other":{"enabled":true}}`), &providers); err != nil {
+		t.Fatal(err)
+	}
+	args, err := providerConfigArgs(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{
+		"aws:testLargeNumber=1000000":                    true,
+		"aws:region=us-east-1":                           true,
+		"aws:skipCredentialsValidation=true":             true,
+		"aws:skipMetadataApiCheck=false":                 true,
+		"aws:maxRetries=0":                               true,
+		"aws:testFraction=1.5":                           true,
+		`aws:defaultTags={"tags":{"owner":"a=b c"}}`:     true,
+		`aws:endpoints=[{"s3":"http://127.0.0.1:4566"}]`: true,
+		"other:enabled=true":                             true,
+	}
+	for i := 0; i < len(args); i += 2 {
+		if i+1 == len(args) || args[i] != "--config" {
+			t.Fatalf("invalid config arguments: %v", args)
+		}
+		if !want[args[i+1]] {
+			t.Errorf("unexpected or duplicate config: %s", args[i+1])
+		}
+		delete(want, args[i+1])
+	}
+	for missing := range want {
+		t.Errorf("missing config: %s", missing)
+	}
+}
 
 func TestEventLogRestarted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "eventlog.json")

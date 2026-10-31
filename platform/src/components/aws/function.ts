@@ -1968,7 +1968,7 @@ export class Function extends Component implements Link.Linkable {
         args.link,
         args.streaming,
         args.bundle,
-        dev.apply((dev) => dev ? Function.appsync() : undefined),
+        dev.apply((dev) => dev && !process.env.SST_FLOCI_BRIDGE ? Function.appsync() : undefined),
       ]).apply(([environment, dev, bootstrap, key, link, streaming, bundle, appsync]) => {
         const result = environment ?? {};
         result.SST_RESOURCE_App = JSON.stringify({
@@ -1995,8 +1995,13 @@ export class Function extends Component implements Link.Linkable {
           : "resource.enc";
         if (dev) {
           result.SST_REGION = process.env.SST_AWS_REGION!;
-          result.SST_APPSYNC_HTTP = appsync!.http;
-          result.SST_APPSYNC_REALTIME = appsync!.realtime;
+          if (process.env.SST_FLOCI_BRIDGE) {
+            result.SST_FLOCI_BRIDGE = process.env.SST_FLOCI_BRIDGE;
+            result.SST_FLOCI_TOKEN = process.env.SST_FLOCI_TOKEN!;
+          } else {
+            result.SST_APPSYNC_HTTP = appsync!.http;
+            result.SST_APPSYNC_REALTIME = appsync!.realtime;
+          }
           result.SST_FUNCTION_ID = name;
           result.SST_APP = $app.name;
           result.SST_STAGE = $app.stage;
@@ -2008,7 +2013,7 @@ export class Function extends Component implements Link.Linkable {
             result.SST_FUNCTION_STREAMING = "true";
           }
         }
-        return result;
+        return dev && process.env.SST_FLOCI_BRIDGE ? secret(result) : result;
       });
     }
 
@@ -2342,14 +2347,14 @@ export class Function extends Component implements Link.Linkable {
         args.permissions || [],
         linkPermissions,
         dev,
-        dev.apply((dev) => (dev ? Function.appsync() : undefined)),
+        dev.apply((dev) => (dev && !process.env.SST_FLOCI_BRIDGE ? Function.appsync() : undefined)),
       ]).apply(
         ([argsPermissions, linkPermissions, dev, appsync]) =>
           iam.getPolicyDocumentOutput({
             statements: [
               ...argsPermissions,
               ...linkPermissions,
-              ...(dev
+              ...(dev && !process.env.SST_FLOCI_BRIDGE
                 ? [
                     {
                       effect: "allow",

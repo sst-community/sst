@@ -20,6 +20,8 @@ func NewLocalHome() *LocalHome {
 	return &LocalHome{}
 }
 
+func NewLocalHomeAt(root string) *LocalHome { return &LocalHome{root: root} }
+
 func (l *LocalHome) configDir() string {
 	if l.root != "" {
 		return l.root

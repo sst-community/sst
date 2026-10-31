@@ -71,6 +71,10 @@ var transformers = []ErrorTransformer{
 }
 
 func Transform(err error) error {
+	var local *project.FlociUpdateError
+	if errors.As(err, &local) {
+		return local.ReadableError
+	}
 	for _, t := range transformers {
 		if ok, err := t(err); ok {
 			return err

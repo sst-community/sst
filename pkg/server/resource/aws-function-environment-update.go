@@ -47,7 +47,7 @@ func (r *FunctionEnvironmentUpdate) Read(input *ReadInput[FunctionEnvironmentUpd
 }
 
 func (r *FunctionEnvironmentUpdate) updateEnvironment(input *FunctionEnvironmentUpdateInputs) error {
-	cfg, err := r.config()
+	cfg, err := r.configForRegion(input.Region)
 	if err != nil {
 		return err
 	}

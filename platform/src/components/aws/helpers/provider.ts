@@ -1,3 +1,4 @@
+import { checkFlociRegion } from "../../../floci/check";
 import { runtime } from "@pulumi/pulumi";
 import { Provider, Region } from "@pulumi/aws";
 import { lazy } from "../../../util/lazy";
@@ -5,6 +6,7 @@ import { lazy } from "../../../util/lazy";
 const useProviderCache = lazy(() => new Map<string, Provider>());
 
 export const useProvider = (region: Region) => {
+  checkFlociRegion(region);
   const cache = useProviderCache();
   const existing = cache.get(region);
   if (existing) return existing;

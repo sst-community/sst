@@ -1,0 +1,44 @@
+name: sst-floci-spike
+services:
+  floci:
+    image: floci/floci@sha256:e0b292df4dc9559b7b1bf4f51bdda4bb8e269276236438cd03cae661260ea8a9 # 2.3.0
+    container_name: sst-floci-spike
+    ports:
+      - "127.0.0.1:${FLOCI_SPIKE_PORT:-4566}:${FLOCI_SPIKE_PORT:-4566}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - data:/app/data
+    environment:
+      QUARKUS_HTTP_PORT: "${FLOCI_SPIKE_PORT:-4566}"
+      FLOCI_STORAGE_MODE: persistent
+      FLOCI_SERVICES_DOCKER_NETWORK: sst-floci-spike
+      FLOCI_SERVICES_LAMBDA_DOCKER_FLAGS: "--add-host host.docker.internal:host-gateway"
+      FLOCI_SERVICES_LAMBDA_DOCKER_HOST_OVERRIDE: localhost.floci.io
+      FLOCI_BASE_URL: "http://localhost.floci.io:${FLOCI_SPIKE_PORT:-4566}"
+    networks:
+      spike:
+        aliases:
+          - localhost.floci.io
+      isolated:
+        aliases:
+          - localhost.floci.io
+  egress:
+    profiles: [test]
+    image: public.ecr.aws/lambda/nodejs:22
+    entrypoint: [node, /probe/egress.mjs]
+    volumes:
+      - ./egress.mjs:/probe/egress.mjs:ro
+    environment:
+      FLOCI_SPIKE_PORT: "${FLOCI_SPIKE_PORT:-4566}"
+    networks:
+      - isolated
+volumes:
+  data:
+    name: sst-floci-spike
+networks:
+  spike:
+    name: sst-floci-spike
+  isolated:
+    internal: true

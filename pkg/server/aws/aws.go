@@ -20,6 +20,9 @@ type BootstrapInput struct {
 }
 
 func (a *aws) Bootstrap(input *BootstrapInput, output *provider.AwsBootstrapData) error {
+	if a.project.FlociPreflight() {
+		return fmt.Errorf("Floci bootstrap cannot mutate resources during preflight")
+	}
 	unknown, ok := a.project.Provider("aws")
 	if !ok {
 		return fmt.Errorf("aws provider not found")
@@ -44,6 +47,9 @@ type AppsyncOutput struct {
 }
 
 func (a *aws) Appsync(input *AppsyncInput, output *AppsyncOutput) error {
+	if a.project.Floci() {
+		return fmt.Errorf("AppSync is not supported by Floci. No AWS fallback was attempted.")
+	}
 	unknown, ok := a.project.Provider("aws")
 	if !ok {
 		return fmt.Errorf("aws provider not found")

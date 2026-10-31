@@ -28,6 +28,7 @@ import (
 )
 
 type AwsProvider struct {
+	floci          bool
 	config         aws.Config
 	profile        string
 	credentials    sync.Once
@@ -146,6 +147,9 @@ func (a *AwsProvider) Config() aws.Config {
 }
 
 func (p *AwsProvider) Bootstrap(region string) (*AwsBootstrapData, error) {
+	if p.floci && region != p.config.Region {
+		return nil, fmt.Errorf("Floci supports only %s", p.config.Region)
+	}
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	ctx := context.TODO()
