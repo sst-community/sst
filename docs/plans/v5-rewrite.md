@@ -49,9 +49,14 @@ Change one only on purpose, and record it here with its date.
 | 2026-10-31 | **No host for package code in 5.0.** The places to plug in are Go interfaces in the core, and SST's built-ins stay in Go behind them. A host comes in a 5.x release, when a package needs to run code in the CLI. Taken after an independent review of this plan (see [No host in 5.0](#no-host-in-50)). |
 | 2026-10-31 | **No permission grants.** Packages are trusted like any other dependency. The core keeps the rules that need no grant. |
 | 2026-10-31 | **The v5 alphas stop.** New components start from the V5 ones where that helps. The codemod renames `sst.aws.v5.X` to `sst.aws.X`, which keeps the state, since the type is the same. |
-| 2026-10-31 | **New components keep the 4.x args** unless a reason is written down, so docs, examples and snippets keep working, and the codemod covers every rename. |
+| 2026-10-31 | **Breaking changes are allowed**: args, defaults, names, how a component is built. The limit is the state contract: no change deletes or replaces a resource that holds data, and any other replacement is listed. Each change gets a codemod rule where it's mechanical, and a line in the migration guide where it isn't. Earlier the same day the plan kept the 4.x args unless a reason was written down. |
 | 2026-10-31 | **5.0.0 ships with the Pulumi and provider versions of the 4.x it's built from.** A bump comes in a later release, so a move changes nothing it doesn't have to. |
 | 2026-10-31 | **Step 2's result is released as a pre-release that only runs `sst diff`**, so real apps check the new core, not only the lab. |
+| 2026-10-31 | **The core and the program talk through one designed contract** ([The program contract](#the-program-contract)), in place of globals, output names the CLI looks for, and calls back to the CLI in the middle of a deploy. |
+| 2026-10-31 | **A clean break from 4.x code.** No 5.0 component imports a 4.x file or builds on its types. What's kept from 4.x is identity: the names resources have, and the state maps, which live apart. |
+| 2026-10-31 | **State maps are how a component changes from now on**, not a one-off for 4.x. Each component has a version, and a change that moves its resources ships a map from the version before. They replace 4.x's `registerVersion` and `forceUpgrade`. |
+| 2026-10-31 | **Releasing 5.0 next to 4.x** (npm's tags, the docs site) is worked out near the release. |
+| 2026-10-31 | **What a package builds on is a public API**, changed only in a major version: `sst/components` and its groups (`sst/components/aws` and the rest), the program contract, and `sst.target`, `sst.runtime` and `sst.check`. An API report checked in CI shows every change to it. So 5.0's breaking changes happen once, at 5.0, not in a 5.x release. |
 
 ## The state contract
 
@@ -59,11 +64,11 @@ Pulumi decides creates and deletes by each resource's URN: its type, its name an
 
 | Part | What it means | How it's checked |
 | --- | --- | --- |
-| **Same identity** | Every resource in the cloud keeps its id. Its inputs change only in place. | `sst migrate --check` fails on any replace. After a real deploy, the states before and after are compared by type and cloud id (today's `compare-state.py` from the lab, brought into the CLI). |
+| **Same identity** | Every resource in the cloud keeps its id, and its inputs change only in place. A breaking change may replace a resource that holds no data, only when its state map lists the replace and the migration guide says what changes for the user, such as a new URL. | `sst migrate --check` fails on any replace the map doesn't list. After a real deploy, the states before and after are compared by type and cloud id (today's `compare-state.py` from the lab, brought into the CLI). |
 | **Mapped, not recreated** | A resource whose URN changes, because a component was restructured, is mapped from its old address to its new one. | Each new component ships a state map. `--check` fails on any create or delete that isn't listed. A listed one must have nothing in the cloud behind it (a component, a wrapper, a `DevCommand`), or be released, so it leaves the state without a delete. |
 | **Data is never replaced or deleted** | Buckets, tables, databases, caches, file systems, user pools, queues, log groups, and the secrets and passwords a database or cache uses, as in [v5 goal 2](v5-goals.md#2-moving-to-v5-never-loses-data). Also the table a `Vector` creates in its database. | `--check` fails when one of those is deleted, replaced, or changed in a field that replaces or empties it, listed or not. A `Vector`'s `dimension` is such a field: in 4.x, changing it drops the table and creates it again (`VectorTable.Update`). In the lab, data is written before the move and read after. |
 | **The home stays compatible** | The rewrite reads and locks state the old one wrote: the same bootstrap, the same keys, the same passphrase, the same secrets encryption and the same lock (see [today's home and program](#todays-home-and-program)). | Step 2's tests: before a move, each version is refused while the other holds the lock, no second passphrase is created, and after a deploy the home holds only what a 4.x deploy writes. |
-| **Deployed code keeps working** | A function reads its links from `SST_RESOURCE_<Name>` and `SST_RESOURCES_JSON`, or from the encrypted `resource.enc` with `SST_KEY` (`sdk/js/src/resource/node.ts`). SST's own Python, Go and Rust SDKs read the same, and the fork doesn't publish those. | The rewrite keeps writing them, as [Linking](#linking) says. A change to what a function reads is an in-place update that `--check` lists. In the lab, each runtime's function reads its links after the move. |
+| **Deployed code keeps working** | A function reads its links from `SST_RESOURCE_<Name>` and `SST_RESOURCES_JSON`, or from the encrypted `resource.enc` with `SST_KEY` (`sdk/js/src/resource/node.ts`). SST's own Python, Go and Rust SDKs read the same, and the fork doesn't publish those. | The rewrite writes them as one documented format that these SDKs already read, as [Linking](#linking) says. A change to what a function reads is an in-place update that `--check` lists. In the lab, each runtime's function reads its links after the move. |
 
 **The lock today is a read, then a write.** `provider.Lock` reads `lock/<app>/<stage>.json`, and writes it if it's empty. Nothing makes that atomic, so two deploys that start at the same moment can both take it. `diff` takes no lock at all. Until a stage moves, the rewrite keeps the same key and format, so 4.x and the rewrite refuse each other, and it writes the lock with a conditional put where the store has one (S3 does). Then two new CLIs can't both take it. Between 4.x and the rewrite, the race stays what it is today.
 
@@ -84,6 +89,7 @@ v5's takeover maps (`platform/src/components/takeover.ts`, and the rulebook's "T
 - **The core applies it, not the component.** v5 already keeps takeover out of the component's code. The rewrite goes one further: the core turns a map into aliases while a stage moves, and stops once the marker says it has. A component's code never carries its old layout.
 - **Release, for what can't move.** A resource whose type or provider changes can't be carried to a new address: Pulumi would replace it. Where deleting the old one would remove something in the cloud, a site's files or a router's routes, the map releases it instead. The move takes it out of the state without calling its delete, and the new resource writes the same thing again.
 - **`--check` reads the same map.** What the map says will change or be released is what the check allows. Nothing else. A delete the map doesn't release fails it.
+- **Maps are how a component changes from now on.** Each component has a version. A change that moves its resources ships a map from the version before, and `sst migrate` applies it, checked the same way. That replaces 4.x's `registerVersion` and `forceUpgrade` (in `Vpc`, `Cluster`, `Postgres`, `Redis` and `Auth`), which stop a deploy until the user renames the component to its old version, as `Cluster.v1`, or forces the upgrade. So a component can be restructured in a 5.x release, safely, without waiting for a major.
 
 Aliases, rather than editing the state file directly, because they're how Pulumi itself carries a resource to a new address, the preview shows exactly what they do, and v5 has run them in AWS: on 2026-10-01, 73 resources kept their ids under new names ([the report](v5-aws-test-2026-10-01.md)).
 
@@ -131,6 +137,7 @@ Read from [v5-progress.md](v5-progress.md), [v5-port-notes.md](v5-port-notes.md)
 - Test against what AWS really had, not only against the mock (recorded states).
 - Write down what the core and a component expect of each other (outputs the CLI reads, what a function is built from), instead of matching names.
 - Don't keep two copies. A component exists once, in its new form.
+- Build on 4.x's identity, not its code: keep the names its resources have, and nothing else.
 
 ## The architecture
 
@@ -139,6 +146,7 @@ Read from [v5-progress.md](v5-progress.md), [v5-port-notes.md](v5-port-notes.md)
 A Go binary, as today. It owns what must hold for every app:
 
 - **Loading the config** and running the Pulumi program.
+- **[The program contract](#the-program-contract)**: what the program is given, and what it reports back.
 - **The deploy loop**: preview, deploy, remove, refresh, and `sst diff`.
 - **State and locks.** The home stores them, but the core decides when the lock is taken and released, and when state is read and written.
 - **The event bus** (`pkg/bus`) and the UI (`cmd/sst/mosaic`).
@@ -146,9 +154,30 @@ A Go binary, as today. It owns what must hold for every app:
 - **The [safety rules](#safety-rules).**
 - **Moving an app**: `sst migrate`, the state maps, the marker and the tombstone.
 
+### The program contract
+
+How the core and the Pulumi program talk. Today it's whatever grew:
+
+- **In, through globals.** SST's components read `$app`, `$dev` and `$cli` 226 times, in 80 files, and the CLI defines them with esbuild (`pkg/project/run.go`). A package or a test has to fake them.
+- **Out, through output names the CLI looks for**: `_dev`, `_task`, `_tunnel`, `_hint` and `_metadata` (`pkg/project/completed.go`, `cmd/sst/mosaic`), and the `sst:sst:Version` resources.
+- **Calls back to the CLI in the middle of a deploy**, over the RPC: `Runtime.Build`, `Runtime.AddTarget`, `Provider.Aws.Bootstrap` and `Provider.Aws.Appsync`.
+
+Nothing declares any of it. A component type with two parts crashed the CLI after a deploy, and a component the CLI doesn't know by name half works.
+
+In the rewrite it's designed, typed and versioned:
+
+- **In: a context.** A component reads the app, the stage, whether it's `sst dev`, the paths, the home's bootstrap data and its own version in the state from `sst/components`, not from globals. `sst.config.ts` keeps `$app`, `$dev` and the rest as conveniences that read the same context.
+- **Out: one declared channel** for what the core needs from a component: each function to build and to run in `sst dev`, dev commands, tasks, tunnels, the shape of what it links, and hints. It's part of the component contract, so the core reads SST's components and a package's the same way. How it travels, as one SST resource's outputs or over the RPC, is settled in step 3.
+- **Calls into the core are the contract's own methods**, such as building a function, over the RPC, under the [safety rules](#safety-rules).
+- **Versioned.** The core says which version it speaks, and a package's peer dependency on `sst` covers it.
+
+It's designed first, in step 3. Every new component is written against it in step 4, and the 4.x half goes in step 5.
+
 ### Places to plug in
 
 Each is a typed, versioned interface in the core. The sketches are the shape, not the final API.
+
+**Each is drawn from what two implementations need**, the built-in and the first outside one (Floci for a target, the runtime made of commands for a runtime), and the built-in is fitted to it, not the other way round. Today's `Runtime` has `ShouldRunEagerly` only because Python rebuilds every function when a shared file changes. A quirk like that stays inside the built-in.
 
 | Kind | What it provides | Built-in today | Who provides one in 5.0 |
 | --- | --- | --- | --- |
@@ -176,7 +205,7 @@ type Home interface {
 	CreatePassphrase(ctx context.Context, app, stage, value string) error // never overwrites
 }
 
-// As pkg/runtime's interface is today, plus the types of what's linked.
+// Today's pkg/runtime interface, plus the types of what's linked. Step 3 draws it again from two implementations.
 type Runtime interface {
 	Match(runtime string) bool
 	Build(ctx context.Context, input *BuildInput) (*BuildOutput, error)
@@ -325,8 +354,8 @@ Read from the code on `v5` on 2026-10-31.
 1. **`Resource.MyBucket.name` stays.** How code reads a resource isn't the problem.
 2. **Types come from the components, not from deployed values.** A component declares the shape of what it links, as part of what it declares to the core, and the generator writes `MyBucket: Linked<"sst.aws.Bucket">`. Types are there after `sst install`, with no deploy, they're exact, and nothing a deploy or a remove does can empty them.
 3. **Each package gets only its own links**: what's linked to the functions and sites in it. A package with no links gets no file. Naming a resource that isn't linked fails the type check, in the right place.
-4. **The link format is written down,** as one documented shape: small values in an environment variable, larger ones and secrets in the encrypted file. Any language reads it in a few lines. The fork publishes its own readers for Python, Go and Rust, and each runtime writes its language's types through `Runtime.Types`.
-5. **Today's variables keep being written** while SST's SDKs are in use. A change to the format updates each function once, in place.
+4. **The link format is written down, as the shapes every SDK already reads**: the encrypted file with `SST_KEY` and `SST_KEY_FILE` for a deployed function, and `SST_RESOURCE_<Name>` for a process on the developer's machine. SST's JavaScript, Python, Go and Rust SDKs all read both today, so there's one format and no second one to keep. The spec says whether `SST_RESOURCES_JSON`, which only the JavaScript SDK reads, stays. Any other language reads it in a few lines, and each runtime writes its language's types through `Runtime.Types`.
+5. **The fork publishes its own readers** for Python, Go and Rust, from the same spec, so they don't depend on SST's releases.
 
 Not taken:
 
@@ -365,6 +394,7 @@ Components, checks, targets and runtimes are written the same way, and v5 alread
 - **Published as npm packages**, found by keyword, as [v5-community-packages.md](v5-community-packages.md) step 3 plans for components.
 - **Version-checked** on deploy, as `pkg/project/packages.go` checks peer dependencies.
 - **Documented from the source.**
+- **A public API, held still.** What a package builds on changes only in a major version: `sst/components` and its groups, the program contract, and `sst.target`, `sst.runtime` and `sst.check`. Adding to it is fine. Removing an export, or changing what one accepts, waits for a major. A report of the API for each entry point is checked in, made with [API Extractor](https://api-extractor.com/) as step 2 of [v5-community-packages.md](v5-community-packages.md) plans, so a pull request shows each change and CI fails on one nobody meant.
 - **Easy to set up.** A package shouldn't need `moduleResolution: "bundler"`, `skipLibCheck` or a pinned `google-protobuf`, and a group shouldn't pull in every provider. Each is fixed in step 3, or the reason it can't be is written down.
 
 ### A test suite for each
@@ -392,6 +422,24 @@ Each place to plug in has a suite. SST's built-ins pass it first, and a package'
 | The `sst dev` harness | `cmd/sst/mosaic/aws/harness_test.go`, `bridge` tests | The pieces of the transport suite. |
 | The template package | `examples/component-package/` (on `v5-community-packages`) | A template for a target package next to it. |
 | The goals | [v5-goals.md](v5-goals.md) | Goals 1, 2 and 6 become the state contract. Goal 3 (anyone can write a component and share it) widens to checks, targets and runtimes. Goal 4 (installing changes nothing) doesn't carry over: an app stays on 4.x until it moves, and moving is one checked step. |
+
+## Breaking changes
+
+Allowed, in args, defaults, names and how a component is built. The limit is the state contract: no change deletes or replaces a resource that holds data, and any other replacement is listed in the state map and the migration guide. Each change gets a codemod rule where it's mechanical, and a line in the guide where it isn't.
+
+Two lists to decide from, item by item, in step 4. Each decision goes in [Decisions](#decisions).
+
+- **SST's own list for its next major** ([anomalyco/sst#6588](https://github.com/anomalyco/sst/issues/6588)):
+  - `CronV2` becomes `Cron`, and the old `Cron` goes.
+  - `watch.include` in place of a list for `watch`, and `cron.target` in place of `cron.job`.
+  - `state.store` in place of `home`.
+  - Longer default timeouts, and `state.purge` on by default.
+  - Plain booleans in place of `Input<boolean>`, so nothing is created inside `.apply` (v5's `plain()` already does this).
+  - Title case for the SDK's exports (`Workflow.start`, `Task.run`).
+  - Required `package` and `version` for providers in the config.
+  - Dropped: `backend`, `removalPolicy`, the config's `version` field, drop-in mode, and the custom Cloudflare Wrangler variable.
+  - Required `version`, `instance` or `runtime`. A database's `version` and `Function`'s `runtime` were kept optional on 2026-10-14 ([v5-components.md](v5-components.md#decisions)).
+- **v5's own** ([v5-sharing.md](v5-sharing.md), "Breaking changes"): re-exporting a global by name, a provider's module used while `app()` loads, and a provider version from another major.
 
 ## The user's migration path
 
@@ -451,28 +499,40 @@ Today's CLI, with its homes behind the new `Home` interface, reads an existing h
 
 ### 3. Places to plug in, and Floci on them
 
-- **The interfaces, in Go, with SST's built-ins behind them as they are**: the three homes, the five runtimes, the AppSync transport, and the real cloud as a target. A suite for each, which the built-ins pass.
+- **The program contract, first** ([The program contract](#the-program-contract)).
+- **The interfaces, in Go**, each drawn from the built-in and the first outside one, with SST's built-ins fitted behind them: the three homes, the five runtimes, the AppSync transport, and the real cloud as a target. A suite for each, which the built-ins pass.
 - **`sst.target`, `sst.runtime` and `sst.check` for packages**, and a stage's target in `app()`.
 - **The safety rules**, the RPC's included: loopback, a token, and only the methods the program uses.
 - **Package setup fixed**: `bundler`, `skipLibCheck`, the protobuf pin, and a group that pulls in every provider.
 - **#212 on them**, with rogueturnip:
   - into the core: its HTTP transport behind `bridge.Conn` (`cmd/sst/mosaic/aws/local/local.go`), its client that only reaches one endpoint (`pkg/project/provider/floci.go`), and its environment stripping. Its fix for `true`/`false` and number provider settings comes with it.
-  - into a Floci package, in a repo of its own: its target settings, and its allowlist (`platform/src/floci/check.ts`, `profile.ts`) as a check. It runs on the 4.x components the core still runs as a test, and moves to the new ones in step 4.
+  - into a Floci package, in a repo of its own: its target settings, and its allowlist (`platform/src/floci/check.ts`, `profile.ts`) as a check. It's written for the V5 versions of the four components it covers (`Function`, `Bucket`, `Dynamo`, `Queue`), which exist already, not the 4.x ones.
 
-**Exit:** the built-ins pass their suites, and a deploy still shows no diff, as in step 2. A Floci stage runs an app in `sst dev` and can't reach the real stage or home. Each of #212's review findings is closed by a core rule. The Floci package passes the target suite in its own CI.
+**Exit:** the built-ins pass their suites, and a deploy still shows no diff, as in step 2. A component written against the program contract reports its functions, dev commands and tasks with no output name the CLI looks for, under `mock()` and in a deploy. A Floci stage runs an app in `sst dev` and can't reach the real stage or home. Each of #212's review findings is closed by a core rule. The Floci package passes the target suite in its own CI.
 
 ### 4. New components
 
-Starting from the V5 ones where that helps, for the Core tier of [v5-core-set.md](v5-core-set.md). Then Cloudflare's most used components, `Worker`, `Bucket`, `Kv` and `Astro`, after the AWS ones. The draft `v5-core-set.md` still keeps the Cloudflare components as 4.x, and has to be brought in line. A component keeps the 4.x args unless a reason is written down.
+Starting from the V5 ones where that helps, for the Core tier of [v5-core-set.md](v5-core-set.md). Then Cloudflare's most used components, `Worker`, `Bucket`, `Kv` and `Astro`, after the AWS ones. The draft `v5-core-set.md` still keeps the Cloudflare components as 4.x, and has to be brought in line. Each starts from the V5 one with a clean break, and with the [breaking changes](#breaking-changes) decided for it.
 
 - **`sst migrate --check` first.** It's the gate for every component.
-- **The hard ones next, as a gate**: `Function` with its dev stubs, `Nextjs` with `Router`, and `Vpc`, and releasing and adopting `BucketFiles` and `KvKeys`. If a component can't move without replacing a resource, stop: that answers a viability question the wrong way, and the design changes before anything else is ported. If the release doesn't pass cleanly, SST's provider resources stay as they are for 5.0.
+- **A clean break from 4.x code.** A V5 component builds on the 4.x one today:
+  - 22 of the 23 files import 4.x files, and 21 build their args on the 4.x args (`V5Args<Original…Args>`);
+  - 10 take either kind of `Vpc` (`AnyVpc`, `isVpc()`, `TakesVpc<>`), and others either kind of `Cluster`, `Efs` or `Alb`;
+  - 11 calls to `notAnOption()` handle old option shapes, and `helpers/function-code.ts` is a copy of 4.x code;
+  - the docs generator follows args back to the 4.x files.
+
+  In 5.0 a component owns its args, types and docs, and imports nothing from a 4.x file. A test checks that, as `v5-components.test.ts` checks v5's rules today. What's kept from 4.x is identity: the names resources have (`named()`), and the state map.
+- **Each component has a version**, and its map from 4.x is its first.
+- **The hard ones next, as a gate**: `Function` with its dev stubs, `Nextjs` with `Router`, and `Vpc`, and releasing and adopting `BucketFiles` and `KvKeys`. If a component can't move without losing data, or without a replace its map can't justify, stop: that answers a viability question the wrong way, and the design changes before anything else is ported. If the release doesn't pass cleanly, SST's provider resources stay as they are for 5.0.
 - **Then the rest of Core, then Cloudflare's.**
 - **SST's own provider resources move into the `sst` binary**, if the gate passed, alongside the components that create them, each as [its kind](#how-each-provider-resource-moves) says.
 - **Zipping and hashing are timed** on a large site, and moved to Go only if they're slow.
-- **The Floci package moves to the new components.**
+- **The Floci package follows the new components** as they change.
+- **The template package moves with them** (`examples/component-package/`), so authors always have a working one to copy. Packages built on the v5 alphas, `packages/aws-saas` among them, move to 5.0's API, and the migration guide has a section for package authors.
 
 **Exit, for each component:** its state map passes `--check` against every recorded state it's in. Then a real deploy in the lab, compared by cloud id, keeps every resource.
+
+**Exit, for packages:** the template builds and tests against the branch in CI, as it does on `v5-community-packages` now, and its API report matches what's promised.
 
 **Exit, for the provider resources:** after the move, the site serves the same files, the router has the same routes and the worker runs the same script, and the old entries have left the state without a delete.
 
@@ -482,6 +542,8 @@ Starting from the V5 ones where that helps, for the Core tier of [v5-core-set.md
 - **The codemod, `sst migrate` for a whole app, the marker and the tombstone**, and the refusal on a stage that hasn't moved.
 - **A migration guide** that lists which components have a 5.0 form, and says plainly: don't run `sst unlock` on a stage that has moved.
 - **The core stops running 4.x components**, and what it kept for them goes: their globals, the output names, and the RPC methods only they call.
+- **The codemod moves the 196 examples**, which are also its best test.
+- **Releasing 5.0 next to 4.x**, worked out near the release: npm's tags (`release.yml` publishes any tag without a suffix as `latest`, so a 4.x release after 5.0.0 would take `latest` back) and the docs site (built from `main` today).
 
 **Exit:** every recorded app goes through the user's path in the lab: codemod, check, move, and `sst diff` shows nothing to create or destroy. Compared by cloud id, every resource is kept, and data written before is read after. A 4.x CLI is refused on a moved stage. The saved copy is restored with the 4.x CLI once, and works. Then the same for an app in daily use, on a stage of its own. When this passes, `v5-rewrite` is merged into `v5`, and 5.0.0 can be released from there.
 
@@ -523,7 +585,8 @@ Each comes when it's needed, with its own exit test.
 - **Scrubbing misses something.** The scrub test looks for account ids, and a maintainer reads each scrubbed state before it's committed.
 - **SST's fixes stop arriving for free.** The new components don't match SST's files, so a fix from SST is ported by hand. SST is mostly quiet now, so there's little to port.
 - **A release leaves something behind.** A released resource is no longer tracked. If the new one doesn't take over exactly what the old one wrote (the same files, the same keys), the rest stays in the cloud. Each provider resource's tests check that it does.
-- **The places to plug in turn out wrong.** SST's own built-ins go behind them first, and Floci in step 3, before anyone else builds on them. They're versioned so a second version can follow.
+- **The program contract or the places to plug in turn out wrong.** SST's own components and built-ins go on them first, and Floci in step 3, before anyone else builds on them. They're versioned so a second version can follow.
+- **Breaking changes add up.** Each is small, but together they make moving harder. Each has a codemod rule where it can, and the codemod runs on the 196 examples before anyone else's app.
 
 ## Open questions
 
@@ -532,7 +595,7 @@ Each comes when it's needed, with its own exit test.
 
 ## Today's home and program
 
-What step 2 checks the new core against, read from the code on `v5` on 2026-10-31. The home half stays for good. The program half goes with the 4.x components in step 5.
+What step 2 checks the new core against, read from the code on `v5` on 2026-10-31. The home half stays for good. The program half is what [the program contract](#the-program-contract) replaces, and goes with the 4.x components in step 5.
 
 ### The home
 
