@@ -14,17 +14,24 @@ export function selectManagedLinks(
   for (const [name, members] of Object.entries(groups)) {
     permissions[name] = [];
     for (const member of members) {
-      if (!member || !links.includes(member) || !Link.isLinkable(member))
+      // Structural Linkables are cloned when Pulumi unwraps each input. URNs identify
+      // those copies; always derive the grants from the actual linked definition.
+      const original = links.find(
+        (link) =>
+          link === member ||
+          (typeof member?.urn === "string" && link?.urn === member.urn),
+      );
+      if (!original || !Link.isLinkable(original))
         throw new VisibleError(
           `Managed permission group "${name}" must contain resources from this function's "link" array.`,
         );
-      if (selected.has(member))
+      if (selected.has(original))
         throw new VisibleError(
           `A linked resource appears in managed permission groups more than once ("${name}").`,
         );
-      selected.add(member);
+      selected.add(original);
       permissions[name].push(
-        ...((member.getSSTLink().include ?? []).filter(
+        ...((original.getSSTLink().include ?? []).filter(
           (item) => item.type === "aws.permission",
         ) as Permission[]),
       );

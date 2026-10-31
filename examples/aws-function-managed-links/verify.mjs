@@ -6,6 +6,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
 const outputs = JSON.parse(readFileSync(".sst/outputs.json", "utf8"));
+const revoked = process.argv.includes("--revoked");
 const requests = [];
 let phase = "baseline";
 async function checkEndpoints() {
@@ -19,10 +20,20 @@ async function checkEndpoints() {
       const data = JSON.parse(body);
       assert.equal(data.bucket, data.linked);
       assert.equal(data.bucket, outputs.bucket);
-    } else assert.equal(body, outputs.bucket);
+    } else
+      assert.deepEqual(JSON.parse(body), {
+        bucket: outputs.bucket,
+        secondary: outputs.secondaryBucket,
+        ...(revoked ? { denied: true } : {}),
+      });
   }
 }
 await checkEndpoints();
+if (revoked) {
+  verifyPolicies("empty");
+  console.log("Both S3 grants are revoked and Resource bindings still work.");
+  process.exit(0);
+}
 if (!process.argv.includes("--migration")) {
   console.log(
     "Both endpoints returned 200 after accessing S3; Resource bindings match.",
@@ -53,14 +64,22 @@ function verifyPolicies(next) {
     "list-attached-role-policies",
     ...args,
   ).AttachedPolicies.filter((p) => !p.PolicyArn.includes(":aws:policy/"));
-  assert.equal(inline.length, 1);
+  assert.equal(inline.length, next === "empty" ? 0 : 1);
+  if (next === "empty") {
+    assert.equal(managed.length, 0);
+    return;
+  }
   const policy = aws(
     "get-role-policy",
     ...args,
     "--policy-name",
     "inline",
   ).PolicyDocument;
-  assert.equal(policy.Statement.length, next === "managed" ? 1 : 2);
+  const resources = policy.Statement.flatMap((s) => [s.Resource].flat());
+  assert.equal(
+    resources.some((r) => r.includes(outputs.secondaryBucket)),
+    next !== "managed",
+  );
   assert.equal(managed.length, next === "inline" ? 0 : 1);
 }
 // Start with PERMISSIONS_PHASE=inline deployed; never perform an unstaged rollback here.
@@ -80,16 +99,7 @@ const monitor = (async () => {
   }
 })();
 try {
-  for (const next of [
-    "both",
-    "managed",
-    "managed",
-    "both",
-    "inline",
-    "inline",
-    "both",
-    "managed",
-  ]) {
+  for (const next of ["managed", "managed", "inline", "inline", "managed"]) {
     await deploy(next);
     verifyPolicies(next);
     await checkEndpoints();

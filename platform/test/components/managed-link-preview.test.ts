@@ -92,3 +92,35 @@ it("rejects an empty managed map instead of retaining an unmanaged inline policy
     createManagedLinkPermissions("Empty", [], { managed: {} }, { parent }),
   ).toThrow("at least one");
 });
+
+it("registers both policy owners eagerly with unknown inline documents and ARNs", async () => {
+  const { iam } = await import("@pulumi/aws");
+  const { createFunctionRolePermissions } = await import(
+    "../../src/components/aws/helpers/function-role-permissions"
+  );
+  const parent = new pulumi.ComponentResource(
+    "test:component:Parent",
+    "UnknownOwners",
+  );
+  const role = new iam.Role(
+    "UnknownRole",
+    { assumeRolePolicy: "{}" },
+    { parent },
+  );
+  const unknown = pulumi.output(pulumi.unknown as any);
+  const owned = createFunctionRolePermissions(
+    "UnknownOwners",
+    role,
+    unknown,
+    unknown,
+    true,
+    { parent },
+  );
+  await Promise.all(owned.map((resource) => (resource.urn as any).promise()));
+  expect(
+    resources.filter((r) => r.name === "UnknownOwnersInlinePolicy"),
+  ).toHaveLength(1);
+  expect(
+    resources.filter((r) => r.name === "UnknownOwnersPolicyAttachments"),
+  ).toHaveLength(1);
+});

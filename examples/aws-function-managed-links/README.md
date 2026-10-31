@@ -11,7 +11,7 @@ linkPermissions: {
 
 Each group must contain the same resource objects passed in `link`, and a resource may belong to only one group. Unselected links and explicit `permissions` stay inline. Group names give the managed policies stable identities, including previews where resource ARNs are unknown. Policies are owned per function; they are not automatically shared across roles.
 
-When the inline policy would otherwise become empty, SST retains one exact statement from the first group inline. This deliberate duplicate is bounded by the group's 6,144-character limit and adds no permissions. It avoids a provider state bug that can delete restored inline grants during rollback after an empty inline policy. Explicit, unselected and dev grants take precedence over this fallback.
+When the inline policy would otherwise become empty, SST retains one exact statement from the first group inline. This deliberate duplicate is bounded by the group's 6,144-character limit and adds no permissions. It keeps a stable, nonempty inline policy even when ARNs are unknown during preview. Explicit, unselected and dev grants take precedence over this fallback.
 
 Run `sst deploy --stage <stage>` and request the returned URLs. `Reader` lists its bucket and returns both `Resource.Files.name` and `Resource.One.bucket`. Inspect its role with `aws iam list-role-policies` and `aws iam list-attached-role-policies`.
 
@@ -19,18 +19,25 @@ Each group must fit a 6,144-character managed policy. Oversized groups fail with
 
 The deploy role needs permission to create, read, version, tag and delete IAM managed policies and attach/detach them from roles, in addition to the existing Lambda deployment permissions. This option cannot manage an externally supplied function `role`; manage that role's policies directly.
 
-## Migration and rollback
+## Switching consolidation on or off
 
-`Migration` is a small function whose grants fit inline, so it can exercise the three phases:
+Set `linkPermissions` and deploy once to consolidate. Remove the option and deploy once to restore inline grants. SST attaches replacement grants before reducing the inline policy, and restores inline grants before detaching managed policies. The role and function keep their existing identities. Reverting to inline is rejected if the grants exceed the 10,240-character limit.
 
-1. `PERMISSIONS_PHASE=inline sst deploy --stage <stage>`: the existing inline behavior.
-2. `PERMISSIONS_PHASE=both sst deploy --stage <stage>`: set `retainInline: true` to attach managed policies without removing inline grants.
-3. `PERMISSIONS_PHASE=managed sst deploy --stage <stage>`: remove the redundant inline grants, except for the single compatibility statement when needed.
+`Migration` demonstrates this using two different buckets. Its endpoint lists both, so it detects loss of the managed grant even while the first bucket remains covered by the compatibility statement:
 
-Request `migrationUrl` after each phase. For rollback, go from `managed` to `both`, then `inline`. Restore inline grants before removing policies and ensure they fit the inline quota. To rename or reorganize managed groups, first restore inline grants, deploy the new groups, then remove inline grants again. For a role whose grants no longer fit inline, plan a separate overlapping migration rather than dropping an attached policy in one step.
+```sh
+PERMISSIONS_PHASE=inline sst deploy --stage <stage>
+SST_STAGE=<stage> SST_BIN=<sst-binary> node verify.mjs --migration
+```
 
-`Reader` always uses managed groups; the environment variable affects only `Migration`. `sst dev --mode=basic` keeps live-dev bridge permissions inline while preserving the managed grants and runtime links. Retain test resources until you explicitly choose to remove them.
+The script performs five direct deployments: managed, repeated managed, inline, repeated inline, and managed again. It checks actual policy contents and both endpoints, continuously requests them through the changes, records results in `.sst/migration-requests.json`, and leaves resources deployed. `node verify.mjs` checks endpoints without deploying.
 
-To verify actual responses, run `node verify.mjs`. To run the migration/rollback regression, first deploy the `inline` phase, then run `SST_STAGE=<stage> SST_BIN=<sst binary> node verify.mjs --migration`. It checks both URLs, policy attachments and continuous requests across eight deployments, records results in `.sst/migration-requests.json`, and leaves the resources deployed.
+`Reader` always uses managed groups; the environment variable affects only `Migration`. `sst dev --mode=basic` keeps dev bridge permissions inline while preserving managed grants and runtime links.
 
-The default role's existing behavior when every permission is removed is unchanged. Disabling this option and removing every link is not a supported complete-revocation procedure: an empty inline-policy list can relinquish management rather than delete an existing policy. Use explicit role management for that case and verify the resulting AWS policies. Managed groups must be nonempty.
+Switching the option works on a feature-capable SST version in both directions; downgrading the SST binary is not a migration path. SST retains ownership metadata after the option is removed so future deployments continue managing policies correctly. Use `permissions` and `policies`, rather than changing the role's policy fields through a transform. Set custom providers on the Function so its policies use the same provider.
+
+Regrouping existing resources is different from switching consolidation off/on. Use `retainInline: true` to establish overlap before moving resources between groups, then remove it afterwards. This requires the combined inline grants to fit; otherwise plan an overlapping managed-policy migration with sufficient quota headroom.
+
+To revoke every grant, use statically known link and permission lists (property-only links may remain). Unknown lists that resolve to no grants are rejected rather than leaving old policies unmanaged. Test resources remain deployed until you explicitly choose to remove them.
+
+The optional `empty` phase retains only property bindings and revokes both bucket grants. After `PERMISSIONS_PHASE=empty sst deploy --stage <stage>`, run `node verify.mjs --revoked` to check that both S3 calls are denied and no linked policies remain. Deploy `PERMISSIONS_PHASE=managed` again to restore access.

@@ -114,6 +114,27 @@ pulumi.runtime.setMocks(
   false,
 );
 
+const dependencies = new Map<string, string[]>();
+const monitor = pulumi.runtime.getMonitor() as any;
+const registerResource = monitor.registerResource.bind(monitor);
+monitor.registerResource = (request: any, callback: any) => {
+  dependencies.set(request.getName(), request.getDependenciesList());
+  return registerResource(request, callback);
+};
+const inlineFor = (name: string) =>
+  registered.find(
+    (r) =>
+      r.type === "aws:iam/rolePolicy:RolePolicy" &&
+      r.name === `${name}InlinePolicy`,
+  )!.inputs;
+const attachmentsFor = (name: string) =>
+  registered.find(
+    (r) =>
+      r.type ===
+        "aws:iam/rolePolicyAttachmentsExclusive:RolePolicyAttachmentsExclusive" &&
+      r.name === `${name}PolicyAttachments`,
+  )!.inputs;
+
 // Waits until no resource has been registered for 250 ms.
 async function settle() {
   let count = -1;
@@ -178,7 +199,22 @@ describe("Function managed link permissions", () => {
       },
     ]);
     const role = roles("Managed")[0].inputs;
-    expect(JSON.parse(role.inlinePolicies[0].policy).Statement).toEqual([
+    expect(role.inlinePolicies).toBeUndefined();
+    expect(role.managedPolicyArns).toBeUndefined();
+    expect(
+      registered.find((r) => r.name === "ManagedInlinePolicyOwnership")?.inputs
+        .policyNames,
+    ).toEqual(["inline"]);
+    expect(dependencies.get("ManagedInlinePolicyOwnership")).toContainEqual(
+      expect.stringContaining("::ManagedInlinePolicy"),
+    );
+    expect(dependencies.get("ManagedInlinePolicy")).toContainEqual(
+      expect.stringContaining("::ManagedPolicyAttachments"),
+    );
+    expect(dependencies.get("ManagedFunction")).toContainEqual(
+      expect.stringContaining("::ManagedInlinePolicy"),
+    );
+    expect(JSON.parse(inlineFor("Managed").policy).Statement).toEqual([
       {
         Effect: "Allow",
         Action: ["sqs:SendMessage"],
@@ -190,10 +226,10 @@ describe("Function managed link permissions", () => {
         Resource: ["arn:aws:s3:::other/*"],
       },
     ]);
-    expect(role.managedPolicyArns).toContain(
+    expect(attachmentsFor("Managed").policyArns).toContain(
       "arn:aws:iam::111111111111:policy/existing",
     );
-    expect(role.managedPolicyArns).toContain(
+    expect(attachmentsFor("Managed").policyArns).toContain(
       `arn:aws:test:::${managed[0].name}`,
     );
     expect(builds.get("Managed").links).toMatchObject({
@@ -207,6 +243,9 @@ describe("Function managed link permissions", () => {
     new Function("Default", { ...args, link: [storage] });
     await settle();
     expect(policiesFor("Default")).toHaveLength(0);
+    expect(registered.some((r) => r.name === "DefaultInlinePolicy")).toBe(
+      false,
+    );
     expect(
       JSON.parse(roles("Default")[0].inputs.inlinePolicies[0].policy)
         .Statement[0].Resource,
@@ -223,8 +262,7 @@ describe("Function managed link permissions", () => {
     await settle();
     expect(policiesFor("Migration")).toHaveLength(1);
     expect(
-      JSON.parse(roles("Migration")[0].inputs.inlinePolicies[0].policy)
-        .Statement[0].Resource,
+      JSON.parse(inlineFor("Migration").policy).Statement[0].Resource,
     ).toEqual(["arn:aws:s3:::example/*"]);
   });
 
@@ -255,7 +293,7 @@ describe("Function managed link permissions", () => {
     expect(documents.reduce((n, p) => n + p.length, 0)).toBeGreaterThan(10240);
     expect(documents.every((p) => p.length <= 6144)).toBe(true);
     // Keep one exact, bounded statement instead of the provider's unsafe empty sentinel.
-    const inline = roles("Large")[0].inputs.inlinePolicies[0];
+    const inline = inlineFor("Large");
     expect(inline.name).toBe("inline");
     expect(
       JSON.stringify(JSON.parse(inline.policy)).length,
@@ -298,9 +336,9 @@ describe("Function managed link permissions", () => {
       Resource: ["arn:aws:s3:::example/*"],
       Condition: { StringEquals: { "aws:PrincipalTag/team": ["read only"] } },
     });
-    expect(
-      JSON.parse(roles("Denied")[0].inputs.inlinePolicies[0].policy).Statement,
-    ).toEqual(JSON.parse(policiesFor("Denied")[0].inputs.policy).Statement);
+    expect(JSON.parse(inlineFor("Denied").policy).Statement).toEqual(
+      JSON.parse(policiesFor("Denied")[0].inputs.policy).Statement,
+    );
   });
 
   it("keeps live-dev bridge grants inline and exposes the same runtime bindings", async () => {
@@ -314,9 +352,7 @@ describe("Function managed link permissions", () => {
       });
       await settle();
       expect(policiesFor("DevManaged")).toHaveLength(1);
-      const inline = JSON.parse(
-        roles("DevManaged")[0].inputs.inlinePolicies[0].policy,
-      ).Statement;
+      const inline = JSON.parse(inlineFor("DevManaged").policy).Statement;
       expect(inline.map((s: any) => s.Action)).toEqual([
         ["appsync:*"],
         ["s3:*"],
@@ -342,5 +378,59 @@ describe("Function managed link permissions", () => {
           },
         } as any),
     ).toThrow(/role/);
+  });
+  it("restores inline before detaching when the option is removed", async () => {
+    $cli.state.version["sst:aws:Function::Restored::permissions"] = 2;
+    const storage = linked("RestoredStorage");
+    new Function("Restored", { ...args, link: [storage] });
+    await settle();
+    expect(roles("Restored")[0].inputs.inlinePolicies).toBeUndefined();
+    expect(roles("Restored")[0].inputs.managedPolicyArns).toBeUndefined();
+    expect(
+      JSON.parse(inlineFor("Restored").policy).Statement[0].Resource,
+    ).toEqual(["arn:aws:s3:::example/*"]);
+    expect(policiesFor("Restored")).toHaveLength(0);
+    expect(attachmentsFor("Restored").policyArns).toHaveLength(1);
+    expect(dependencies.get("RestoredPolicyAttachments")).toContainEqual(
+      expect.stringContaining("::RestoredInlinePolicyOwnership"),
+    );
+    expect(
+      registered.some(
+        (r) =>
+          r.type === "sst:sst:Version" &&
+          r.name === "RestoredPermissionOwnershipVersion",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a second policy owner introduced by a role transform", () => {
+    const storage = linked("TransformedStorage");
+    expect(
+      () =>
+        new Function("Transformed", {
+          ...args,
+          link: [storage],
+          linkPermissions: { managed: { Storage: [storage] } },
+          transform: { role: { managedPolicyArns: [] } },
+        }),
+    ).toThrow(/permissions.*policies/);
+  });
+  it("revokes all inline grants while keeping property-only resource bindings", async () => {
+    $cli.state.version["sst:aws:Function::EmptyRestored::permissions"] = 2;
+    const config = new Linkable("EmptyConfig", {
+      properties: { url: "https://example.com" },
+    });
+    new Function("EmptyRestored", { ...args, link: [config], permissions: [] });
+    await settle();
+    expect(registered.some((r) => r.name === "EmptyRestoredInlinePolicy")).toBe(
+      false,
+    );
+    expect(
+      registered.find((r) => r.name === "EmptyRestoredInlinePolicyOwnership")
+        ?.inputs.policyNames,
+    ).toEqual([]);
+    expect(builds.get("EmptyRestored").links.EmptyConfig.url).toBe(
+      "https://example.com",
+    );
   });
 });

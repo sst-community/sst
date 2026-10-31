@@ -74,4 +74,23 @@ describe("managed link policy boundaries", () => {
       ]),
     ).toThrow(/25/);
   });
+  it("matches cloned structural links by URN and only uses grants from the linked definition", () => {
+    const original = {
+      ...link(),
+      urn: "urn:pulumi:test::app::test:Link::Storage",
+    };
+    const clone = {
+      ...original,
+      getSSTLink: () => ({
+        properties: {},
+        include: [{ type: "aws.permission", actions: ["*"], resources: ["*"] }],
+      }),
+    };
+    const selected = selectManagedLinks([original], { Storage: [clone] });
+    expect(selected.remaining).toEqual([]);
+    expect(selected.permissions.Storage[0].actions).toEqual(["s3:GetObject"]);
+    expect(() =>
+      selectManagedLinks([original], { One: [original], Two: [clone] }),
+    ).toThrow(/more than once/);
+  });
 });
