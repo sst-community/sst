@@ -1,3 +1,11 @@
+import {
+  createFunctionRolePermissions,
+  permissionOwnershipKey,
+} from "./helpers/function-role-permissions";
+import {
+  createManagedLinkPermissions,
+  managedPolicyAttachments,
+} from "./helpers/managed-link-permissions";
 import fs from "fs";
 import path from "path";
 import { toPosix } from "../path.js";
@@ -16,6 +24,7 @@ import {
   secret,
   unsecret,
   rootStackResource,
+  Resource,
 } from "@pulumi/pulumi";
 import { bootstrap } from "./helpers/bootstrap.js";
 import {
@@ -707,6 +716,62 @@ export interface FunctionArgs {
    * ```
    */
   link?: Input<any[]>;
+  /**
+   * Move selected linked-resource grants into named customer-managed IAM policies,
+   * preserving the `Resource` bindings for every resource in `link`.
+   * Other linked grants, explicit `permissions`, and dev permissions remain inline.
+   * By default all linked grants remain inline. If no other inline statements remain,
+   * SST retains one exact statement from the first managed group inline. This bounded
+   * duplicate keeps the inline policy nonempty and stable during unknown-ARN previews;
+   * it does not change the function's effective permissions.
+   *
+   * Each group becomes one policy attached through the function's role alongside
+   * `policies`. Use stable alphanumeric names and the same resource objects as in `link`.
+   * A resource can belong to only one group. Policy-only grouping does not share policies
+   * between functions. External `role` ARNs are not supported by this option.
+   *
+   * Groups are explicit so policy identities and counts are known during preview even
+   * when ARNs are unknown. If a group exceeds IAM's 6,144-character managed-policy limit,
+   * split it into smaller named groups. IAM's aggregate inline limit is 10,240 characters;
+   * moving grants to multiple inline policies would not avoid it. The role's managed-policy
+   * quota also applies, including user-supplied and SST-required policies (20 by default,
+   * adjustable up to 25). Account-wide customer-managed policy quotas still apply.
+   *
+   * Enable this option and deploy once to consolidate grants. Remove it and deploy once
+   * to restore inline grants, provided they fit IAM's aggregate limit. SST establishes
+   * replacement grants before removing the old ones and keeps the existing role.
+   * This switch requires an SST version that supports the option in both directions;
+   * downgrading the SST binary is not a supported migration path.
+   *
+   * Moving resources between managed groups is a separate operation. Use
+   * `retainInline: true` for an overlapping deployment before regrouping, then remove it.
+   * Groups must be nonempty. To revoke every grant, use statically known link and
+   * permission lists; unknown lists resolving to no grants are rejected safely.
+   *
+   * After opting in, use `permissions` and `policies` rather than transforming the
+   * role's inline or attached-policy fields. Set a custom AWS provider on the Function,
+   * not only on its role, so policies and the role use the same provider.
+   *
+   * The deploy role needs IAM managed-policy create/update/delete/version and attach/detach
+   * permissions. No grants are broadened or compacted by replacing resources with wildcards.
+   *
+   * @example
+   * ```js
+   * {
+   *   link: [uploads, files, queue],
+   *   linkPermissions: {
+   *     managed: { Storage: [uploads, files], Jobs: [queue] }
+   *   }
+   * }
+   * ```
+   */
+  linkPermissions?: {
+    /** Named managed-policy groups containing resources from `link`. */
+    managed: Record<string, Input<any[]>>;
+    /** Keep inline grants while reorganizing groups. @default `false` */
+    retainInline?: boolean;
+  };
+
   /**
    * Enable streaming for the function.
    *
@@ -1818,6 +1883,11 @@ export class Function extends Component implements Link.Linkable {
     this.constructorName = name;
     this.durable = Boolean(args.durable);
 
+    if (args.linkPermissions && args.role)
+      throw new VisibleError(
+        '"linkPermissions" cannot manage grants on an externally supplied "role". Manage that role and its policies directly.',
+      );
+
     const parent = this;
     const dev = normalizeDev();
     const isContainer = all([args.python, dev]).apply(
@@ -1849,10 +1919,20 @@ export class Function extends Component implements Link.Linkable {
     const nodejs = normalizeNodeJs();
 
     const linkData = buildLinkData();
-    const linkPermissions = buildLinkPermissions();
+    const managedLinks = args.linkPermissions
+      ? createManagedLinkPermissions(name, args.link, args.linkPermissions, {
+          parent,
+        })
+      : undefined;
+    const linkPermissions = managedLinks?.inline ?? buildLinkPermissions();
+    const separatePermissions =
+      !args.role &&
+      (!!args.linkPermissions ||
+        $cli.state.version[permissionOwnershipKey(name)] === 2);
+    let permissionDependencies: Resource[] = [];
+    const role = createRole();
     const { bundle, handler: handler0, sourcemaps } = buildHandler();
     const { handler, wrapper } = buildHandlerWrapper();
-    const role = createRole();
     const imageAsset = createImageAsset();
     const logGroup = createLogGroup();
     const zipAsset = createZipAsset();
@@ -2343,12 +2423,16 @@ export class Function extends Component implements Link.Linkable {
         linkPermissions,
         dev,
         dev.apply((dev) => (dev ? Function.appsync() : undefined)),
+        managedLinks?.fallback ?? [],
       ]).apply(
-        ([argsPermissions, linkPermissions, dev, appsync]) =>
+        ([argsPermissions, linkPermissions, dev, appsync, fallback]) =>
           iam.getPolicyDocumentOutput({
             statements: [
               ...argsPermissions,
               ...linkPermissions,
+              ...(!argsPermissions.length && !linkPermissions.length && !dev
+                ? fallback
+                : []),
               ...(dev
                 ? [
                     {
@@ -2378,73 +2462,120 @@ export class Function extends Component implements Link.Linkable {
           }),
       );
 
+      const policyArns = all([
+        logging,
+        policies,
+        managedLinks?.policies.map((p) => p.arn) ?? [],
+      ]).apply(([logging, policies, linked]) => {
+        const arns = [
+          ...linked,
+          ...policies,
+          ...(logging
+            ? [
+                interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole`,
+              ]
+            : []),
+          ...(vpc
+            ? [
+                interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole`,
+              ]
+            : []),
+          ...(durable
+            ? [
+                interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy`,
+              ]
+            : []),
+        ];
+        return all(arns).apply((arns) =>
+          separatePermissions ? managedPolicyAttachments(name, arns) : arns,
+        );
+      });
+
       // Created eagerly, as before. `role` is consumed inside an `apply` in
       // `createFunction`, so this must not be deferred — the thunk exists only so both
       // branches share a return type.
-      const role = new iam.Role(
-        ...transform(
-          args.transform?.role,
-          `${name}Role`,
-          {
-            // Only `sst dev` trusts the account root, so the CLI can assume the
-            // role. This goes by `$dev` and not by this function's own `dev`,
-            // as the dev server of a site is created with `dev: false` and its
-            // role is still assumed by the CLI. A deployed role trusts the
-            // Lambda service alone.
-            assumeRolePolicy: iam.getPolicyDocumentOutput({
-              statements: [
-                {
-                  actions: ["sts:AssumeRole"],
-                  principals: [
-                    {
-                      type: "Service",
-                      identifiers: ["lambda.amazonaws.com"],
-                    },
-                    ...($dev
-                      ? [
-                          {
-                            type: "AWS",
-                            identifiers: [
-                              interpolate`arn:${partition}:iam::${
-                                getCallerIdentityOutput({}, opts).accountId
-                              }:root`,
-                            ],
-                          },
-                        ]
-                      : []),
-                  ],
-                },
-              ],
-            }).json,
-            // if there are no statements, do not add an inline policy.
-            // adding an inline policy with no statements will cause an error.
-            inlinePolicies: policy.apply(({ statements }) =>
-              statements ? [{ name: "inline", policy: policy.json }] : [],
-            ),
-            managedPolicyArns: all([logging, policies]).apply(
-              ([logging, policies]) => [
-                ...policies,
-                ...(logging
-                  ? [
-                      interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole`,
-                    ]
-                  : []),
-                ...(vpc
-                  ? [
-                      interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole`,
-                    ]
-                  : []),
-                ...(durable
-                  ? [
-                      interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy`,
-                    ]
-                  : []),
-              ],
-            ),
-          },
-          { parent },
-        ),
+      const roleArgs = transform(
+        args.transform?.role,
+        `${name}Role`,
+        {
+          // Only `sst dev` trusts the account root, so the CLI can assume the
+          // role. This goes by `$dev` and not by this function's own `dev`,
+          // as the dev server of a site is created with `dev: false` and its
+          // role is still assumed by the CLI. A deployed role trusts the
+          // Lambda service alone.
+          assumeRolePolicy: iam.getPolicyDocumentOutput({
+            statements: [
+              {
+                actions: ["sts:AssumeRole"],
+                principals: [
+                  {
+                    type: "Service",
+                    identifiers: ["lambda.amazonaws.com"],
+                  },
+                  ...($dev
+                    ? [
+                        {
+                          type: "AWS",
+                          identifiers: [
+                            interpolate`arn:${partition}:iam::${
+                              getCallerIdentityOutput({}, opts).accountId
+                            }:root`,
+                          ],
+                        },
+                      ]
+                    : []),
+                ],
+              },
+            ],
+          }).json,
+          // if there are no statements, do not add an inline policy.
+          // adding an inline policy with no statements will cause an error.
+          forceDetachPolicies: separatePermissions ? true : undefined,
+          inlinePolicies: separatePermissions
+            ? undefined
+            : policy.apply(({ statements }) =>
+                statements ? [{ name: "inline", policy: policy.json }] : [],
+              ),
+          managedPolicyArns: separatePermissions ? undefined : policyArns,
+        },
+        { parent },
       );
+      if (
+        separatePermissions &&
+        (roleArgs[1].inlinePolicies !== undefined ||
+          roleArgs[1].managedPolicyArns !== undefined)
+      )
+        throw new VisibleError(
+          'Use "permissions" and "policies" instead of transforming role policy fields with managed link permissions.',
+        );
+      if (
+        separatePermissions &&
+        roleArgs[2].provider &&
+        roleArgs[2].provider !== parent.getProvider("aws:iam/role:Role")
+      )
+        throw new VisibleError(
+          "Set the AWS provider on the Function instead of transforming its role provider with managed link permissions.",
+        );
+      const role = new iam.Role(...roleArgs);
+      if (separatePermissions)
+        permissionDependencies = createFunctionRolePermissions(
+          name,
+          role,
+          policy.json,
+          policyArns,
+          !!managedLinks,
+          { parent },
+          !managedLinks &&
+            (!$dev || args.dev === false || args.live === false) &&
+            (!args.permissions ||
+              (Array.isArray(args.permissions) && !args.permissions.length)) &&
+            (!args.link ||
+              (Array.isArray(args.link) &&
+                args.link.every((link) =>
+                  Link.isLinkable(link) &&
+                  !link.getSSTLink().include?.some((item) => item.type === "aws.permission"),
+                ))),
+        );
       return () => role;
     }
 
@@ -2823,7 +2954,10 @@ export class Function extends Component implements Link.Linkable {
                     ),
                   }),
             },
-            { parent },
+            {
+              parent,
+              ...(separatePermissions ? { dependsOn: permissionDependencies } : {}),
+            },
           );
           return new lambda.Function(
             transformed[0],
