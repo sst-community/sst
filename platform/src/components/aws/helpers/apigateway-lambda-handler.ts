@@ -19,18 +19,18 @@ export class ApiGatewayLambdaHandler {
   /** @internal */
   constructor(
     name: string,
-    arn: Input<FunctionArn>,
+    arn: Input<string>,
     private readonly api: ComponentResource,
     executionArn: Input<string>,
   ) {
-    this.arn = output(arn);
-    const target = this.arn.apply((arn) => {
+    this.arn = output(arn).apply((arn) => {
       if (!/^arn:[^:]+:lambda:[^:]+:[^:]+:function:[^:]+(?::[^:]+)?$/.test(arn))
         throw new VisibleError(
           `The shared handler "${name}" requires a Lambda function ARN.`,
         );
-      return splitQualifiedFunctionArn(arn);
+      return arn as FunctionArn;
     });
+    const target = this.arn.apply(splitQualifiedFunctionArn);
     // Register outside apply so unknown ARNs cannot hide the permission in previews.
     this.permission = new lambda.Permission(
       name,

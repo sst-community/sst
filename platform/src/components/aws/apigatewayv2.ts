@@ -1042,15 +1042,17 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
    * The permission belongs to this API and remains until this call is removed, even when
    * no routes use it. Different aliases or versions need separate named handlers.
    *
-   * To migrate existing routes, first add the handler and deploy while keeping the old
-   * routes. Then switch routes to the returned handler and deploy again. If the Lambda
-   * policy is already full, remove a redundant API-wide statement through its owning
-   * infrastructure before adding the shared grant; keep at least one working grant.
-   * For rollback, restore the per-route grants before removing this handler. Near the
-   * policy limit, restore routes in batches or keep the shared handler.
+   * To consolidate existing routes, add the handler, pass it to the routes, and deploy.
+   * Integrations depend on the replacement permissions before old grants are removed.
+   * To switch back, pass the Lambda ARN to the routes, remove the unused handler, and
+   * deploy. No intermediate deployment is needed when both policy forms fit the quota.
+   *
+   * If the Lambda policy is already full, first remove a redundant API-wide statement
+   * through its owning infrastructure while retaining a working grant. Switching back
+   * to per-route grants also needs enough policy space; use batches or keep sharing.
    *
    * @param name A unique, stable alphanumeric name for this handler.
-   * @param arn The Lambda ARN to invoke. Use `fn.arn`, or `fn.targetArn` for an alias.
+   * @param arn The Lambda ARN to invoke. Use `fn.arn`, or a qualified Lambda ARN for an alias or version.
    * @example
    * ```js
    * const handler = api.addHandler("Backend", fn.arn);
@@ -1058,7 +1060,7 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
    * api.route("POST /items", handler);
    * ```
    */
-  public addHandler(name: string, arn: Input<FunctionArn>) {
+  public addHandler(name: string, arn: Input<string>) {
     if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name))
       throw new VisibleError(
         "A shared handler name must start with a letter and contain only letters and numbers.",
@@ -1112,7 +1114,7 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
    * :::
    *
    * @param rawRoute The path for the route.
-   * @param handler The function that'll be invoked.
+   * @param handler The function, Lambda ARN, or shared handler returned by `addHandler()` that'll be invoked.
    * @param args Configure the route.
    *
    * @example

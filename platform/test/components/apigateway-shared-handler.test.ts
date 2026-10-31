@@ -86,11 +86,15 @@ for (const [index, kind] of ["Http", "Rest", "WebSocket"].entries()) {
       const handler = api.addHandler("Backend", arn);
       await value(handler.permission.urn);
       expect(permissions(prefix)).toHaveLength(1);
-      expect(handler.permission.getProvider("aws:lambda/permission:Permission")).toBe(provider);
+      expect(
+        handler.permission.getProvider("aws:lambda/permission:Permission"),
+      ).toBe(provider);
       const route = api.route(index === 2 ? "a" : "GET /a", handler);
       await value(route.nodes.integration.id);
       expect(route.nodes.permission).toBe(handler.permission);
-      expect(route.nodes.integration.getProvider("aws:lambda/permission:Permission")).toBe(provider);
+      expect(
+        route.nodes.integration.getProvider("aws:lambda/permission:Permission"),
+      ).toBe(provider);
       expect(permissions(prefix)).toHaveLength(1);
     });
 
@@ -147,3 +151,25 @@ for (const [index, kind] of ["Http", "Rest", "WebSocket"].entries()) {
     });
   });
 }
+
+it("accepts a Function ARN exposed as Output<string> for every API", async () => {
+  const { ApiGatewayV2 } = await import(
+    "../../src/components/aws/apigatewayv2"
+  );
+  const { ApiGatewayV1 } = await import(
+    "../../src/components/aws/apigatewayv1"
+  );
+  const { ApiGatewayWebSocket } = await import(
+    "../../src/components/aws/apigateway-websocket"
+  );
+  const apis = [
+    new ApiGatewayV2("TypedHttp"),
+    new ApiGatewayV1("TypedRest"),
+    new ApiGatewayWebSocket("TypedSocket"),
+  ];
+  const functionArn: pulumi.Output<string> = pulumi.output(arn);
+  for (const api of apis) {
+    const binding = api.addHandler("Backend", functionArn);
+    expect(await value(binding.arn)).toBe(arn);
+  }
+});
