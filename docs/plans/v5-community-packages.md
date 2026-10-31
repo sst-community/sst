@@ -4,7 +4,7 @@ Planned 2026-10-22, on the branch `v5-community-packages`, from `v5`.
 
 ## Goal
 
-An integration with another service or provider can live in a package of its own, written and released by whoever needs it, instead of in this repo. The core keeps SST's own components and the CLI, and fixes to them.
+This repo carries less. An integration with another service or provider can live in a package of its own, written and released by whoever needs it, instead of in this repo. The core keeps the CLI and the components it owns (step A), and fixes to them.
 
 [Sharing components as packages](v5-sharing.md) already makes that work: a package builds on `sst/components`, an app installs it, and the deploy checks what it needs. This plan is what's missing before people can be told to send an integration as a package: something to start from, an API that holds still, a place to find packages, and runtimes.
 
@@ -14,7 +14,17 @@ SST had 114 open pull requests on 2026-10-22. About 57 change components, 49 of 
 
 So packages take new integrations out of the core. Fixes to the components everyone uses stay in it either way.
 
+**Stepping back (2026-10-22):** new integrations are a small part of what this repo carries. SST has gone quiet, so its components are kept up here now, and most of what comes in is carrying SST's fixes and fixing what's already here. v5 adds a second copy of each component it ports. What bounds the work is which components this repo owns, so that's step A, in [v5-core-set.md](v5-core-set.md). The steps below follow from it.
+
 ## Steps
+
+### A. Which components this repo owns
+
+[v5-core-set.md](v5-core-set.md), a draft: three tiers (Core, Kept, Community), what this repo does for each, and how SST's fixes are carried for each. It decides which components are still ported to v5, and which are promised to packages (step 2).
+
+### B. The first real package: `aws-saas`
+
+`packages/aws-saas`, on `v5-saas`, is meant as a community package that shows what one can do. Where it is now, it's part of this repo: it isn't `private`, so `release.yml` publishes it with each release, and the release stops until its first version is published by hand. To show the path a package takes, it would live in a repo of its own, released on its own, and built against `sst` from npm. That needs a pre-release with what it uses (its peer dependency is `sst >=5.0.0-alpha.3`).
 
 ### 0. The v5 docs on the site (waits for 5.0)
 
@@ -53,19 +63,24 @@ Found while building it:
 
 ### 2. `sst/components` as a stable API
 
-The rulebook already says it's a public API: adding is fine, and removing an export or changing what one accepts waits for a major version. Nothing checks that yet, and some of what it exports isn't meant for packages.
+The rulebook already says it's a public API: adding is fine, and removing an export or changing what one accepts waits for a major version. Nothing checks that yet.
 
-- **Decide what's public.** `core.ts` exports `takeover`, which is for porting 4.x components. It also exports the experimental `x`, the deprecated `linkable` and `V5Args`. Each group exports every component of its provider, the 4.x and V5 ones, with their args.
-- **Leave `@internal` out of the types.** The core's files have 13, and `tsconfig.types.json` doesn't set `stripInternal`, so they're in the `.d.ts` a package reads. `declarations.test.ts` shows where a public type relies on one.
-- **A check of the API.** The `.d.ts` of `sst/components` and of each group, checked in. A test fails when what's built differs, so every change to the API shows in a pull request.
-- **Write down the promise** in `MAINTAINING.md`: within 5.x the API only changes in ways that don't break a package. A pre-release can still break it, and its notes say so.
+- **First, what packages build on** (checked 2026-10-22):
+  - **The name of a V5 component.** [v5-components.md](v5-components.md) leaves open what `sst.aws.v5.X` is called once 4.x is removed, and every package imports `v5.X`. It can't change in 5.x: an app's `sst.aws.X` stays the 4.x component until it switches. Proposed: `v5.X` is the name for all of 5.x, and a later major that renames it keeps `v5` as an alias.
+  - **Which components.** The framework, and the Core components of step A. A package can use a Kept or a 4.x component, but isn't promised it.
+- **A report of the API, with [API Extractor](https://api-extractor.com/).** A `.api.md` for each entry point, checked in, so a pull request shows each change. Tried on 2026-10-22 against the platform's types: the core and the `aws` group each take about 3 seconds. Its first run found seven types the core's public types use that a package can't import, like `PartsComponent` and `LinkInclude`. Export only the ones a package has to name: each is more to keep. Things to know:
+  - One entry point a run, so a config each for the core, `aws`, `cloudflare` and `vercel`.
+  - SST uses `@internal` to hide something from the docs, and apps still use some of it (`forceUpgrade: "v2"` on `Cluster`). API Extractor takes `@internal` as outside the API. So only `@alpha` and `@beta` can mark what's not promised, in the repo's own files.
+  - A name used twice gets a suffix in the report (`Bucket_3`), so adding one can renumber others.
+- **Not `stripInternal`.** It would take `forceUpgrade` and the rest out of the types an app is checked against.
+- **Write down the promise** in `MAINTAINING.md`: within 5.x, the framework and the Core components only change in ways that don't break a package. `x`, and what's `@deprecated`, `@alpha` or `@beta`, aren't promised. A pre-release can still break it, and its notes say so.
 - **Settle the import name** before 5.0 (an open question in [v5-sharing.md](v5-sharing.md)).
 
-Before 5.0, and before many packages build on it.
+After step A, before 5.0, and before many packages build on it.
 
 ### 3. Finding packages
 
-- **A docs page that lists them,** from a data file in `www`: the package, its providers, what it does, its repo, and who wrote it. A package is added by a pull request, and the review checks it installs and has a peer dependency on `sst`. It's a list, not an endorsement. It's published with the v5 docs (step 0).
+- **A docs page that lists them,** made from npm when the docs are built: every package with the `sst-component` keyword and a peer dependency on `sst`, with its name, description, repo and the providers it uses. Nothing to review or keep up by hand. Astro's integrations library is made that way, every week, from npm's `astro-component` and `withastro` keywords, and Gatsby's plugin library from `gatsby-plugin`. It lists packages, and doesn't vouch for them. It's published with the v5 docs (step 0).
 - **The `sst-component` keyword** on npm, which the template sets, so `npm search sst-component` finds them too.
 - **The rule, in `CONTRIBUTING.md`:** a new integration goes in a package, and a fix to a component that's already here goes in the core.
 
@@ -85,12 +100,14 @@ Open: which files a rebuild watches, whether the build can run in a container, a
 
 ## Order
 
-1, then 3 (the page waits for step 0, the rest doesn't), then 2 before 5.0. 4 has its own plan. 0 waits for the release.
+A first: it decides what 2 covers and what's still ported. Then 2 before 5.0, and B when a pre-release has what `aws-saas` uses. 1 is built. 3's rule is in, and its page waits for 0. 4 waits for someone who needs a runtime: none has been asked for here. 0 waits for the release.
 
 ## Status
 
 | Step | Status |
 | --- | --- |
+| A. Which components this repo owns | A draft, 2026-10-22 ([v5-core-set.md](v5-core-set.md)) |
+| B. `aws-saas` in a repo of its own | Not started |
 | 0. The v5 docs on the site | Waits for 5.0 |
 | 1. A template package | Built 2026-10-22 (`6ce09bd6d`), not merged. Not deployed to AWS. |
 | 2. A stable API | Not started |
