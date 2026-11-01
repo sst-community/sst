@@ -79,6 +79,44 @@ for (const [index, kind] of ["Http", "Rest", "WebSocket"].entries()) {
         ).toContain(`${arn}:live`);
       }
     });
+    it("preserves a published Function target when using its qualified ARN", async () => {
+      const { Function } = await import("../../src/components/aws/function");
+      // Match the Function getter fixture used by function-builder.test.ts.
+      const fn = Object.create(Function.prototype) as InstanceType<
+        typeof Function
+      >;
+      Object.assign(fn, {
+        durable: false,
+        function: pulumi.output({
+          arn,
+          qualifiedArn: `${arn}:42`,
+          publish: true,
+        }),
+      });
+      const prefix = `${kind}Published`;
+      const api = new types[index](prefix);
+      const handler = api.addHandler("Backend", fn.nodes.function.qualifiedArn);
+      const shared = api.route(index === 2 ? "shared" : "GET /shared", handler);
+      await value(shared.nodes.integration.id);
+      expect(await value(fn.arn)).toBe(arn);
+      expect(await value(handler.arn)).toBe(await value(fn.targetArn));
+      expect(permissions(prefix)).toHaveLength(1);
+      for (const permission of permissions(prefix))
+        expect(permission.inputs).toMatchObject({
+          function: arn,
+          qualifier: "42",
+        });
+      const integrations = resources.filter(
+        (r) =>
+          r.name.startsWith(prefix) &&
+          r.type.endsWith("/integration:Integration"),
+      );
+      expect(integrations).toHaveLength(1);
+      for (const integration of integrations)
+        expect(
+          integration.inputs.integrationUri ?? integration.inputs.uri,
+        ).toContain(`${arn}:42`);
+    });
     it("inherits the API provider and keeps the grant without routes", async () => {
       const prefix = `${kind}Provider`;
       const provider = new Provider(`${prefix}Aws`, { region: "us-east-1" });

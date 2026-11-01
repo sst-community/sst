@@ -66,7 +66,14 @@ function verifyPolicy(phase) {
   const result = JSON.parse(
     execFileSync(
       "aws",
-      ["lambda", "get-policy", "--function-name", outputs.function],
+      [
+        "lambda",
+        "get-policy",
+        "--function-name",
+        outputs.function,
+        "--region",
+        outputs.region,
+      ],
       { encoding: "utf8" },
     ),
   );

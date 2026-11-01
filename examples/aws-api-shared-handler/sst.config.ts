@@ -47,6 +47,7 @@ export default $config({
       rest: rest.url,
       ws: ws.url,
       function: fn.name,
+      region: fn.arn.apply((arn) => arn.split(":")[3]),
       count,
     };
   },

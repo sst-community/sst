@@ -4,9 +4,9 @@ This example registers 60 HTTP routes, 60 REST methods, and three WebSocket rout
 
 Run `sst deploy --stage <stage>`, then `node verify.mjs`. It checks the expected response from all 120 HTTP/REST endpoints and opens a WebSocket connection, sends a unique message, and checks the returned echo. WebSocket connect/message/disconnect invocations also log their route and connection ID.
 
-Inspect the function's resource policy with `aws lambda get-policy --function-name <function>`. There should be three API Gateway statements. The permission remains if its routes are removed; remove the `addHandler` call when the target is no longer needed. Route order has no effect on the permission's name or owner.
+Inspect the function's resource policy with `aws lambda get-policy --function-name <function> --region <region>`. There should be three API Gateway statements. The permission remains if its routes are removed; remove the `addHandler` call when the target is no longer needed. Route order has no effect on the permission's name or owner.
 
-For an alias or version, pass its qualified Lambda ARN. Create separate bindings for different targets or APIs. Route authentication, throttling and integrations can still be configured independently.
+For an alias or version, pass its qualified Lambda ARN. For a versioned or durable SST Function, use `fn.nodes.function.qualifiedArn` to preserve the version used by `route(..., fn)`; `fn.arn` is unqualified. Create separate bindings for different targets or APIs. Route authentication, throttling and integrations can still be configured independently.
 
 For existing deployments, add the shared handler and switch the routes in the same configuration change, then deploy once. To switch back, pass the function ARN to each route and remove the unused handler, then deploy once. Integration dependencies order the replacement grants before removal of the old grants.
 
