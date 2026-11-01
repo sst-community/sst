@@ -2,8 +2,14 @@ import fs from "fs";
 import * as pulumi from "@pulumi/pulumi";
 import { notInstalled, sstGlobal } from "./global";
 import { type MockInput, mockPulumi } from "./mock";
+import type { Target } from "../components/target";
 
 export type { MockInput, RecordedResource } from "./mock";
+export {
+  targetSuite,
+  type TargetSuiteOptions,
+  type TargetSuiteCheck,
+} from "./target";
 
 /**
  * Test a component without deploying it. `mock()` stands in for the engine
@@ -39,7 +45,13 @@ export type { MockInput, RecordedResource } from "./mock";
  * });
  * ```
  */
-export async function mock(input?: MockInput & { dev?: boolean }) {
+export async function mock(
+  input?: MockInput & {
+    dev?: boolean;
+    /** The stage's target, as `targets` in `app()` would bind it. */
+    target?: Target;
+  },
+) {
   const engine = mockPulumi({ root: process.cwd(), ...input });
 
   // What `sst.config.ts` is given when it's built: the app, and whether this
@@ -52,6 +64,9 @@ export async function mock(input?: MockInput & { dev?: boolean }) {
       home: "aws",
       providers: {},
       protect: false,
+      targets: input?.target
+        ? { [input?.stage ?? "test"]: input.target }
+        : undefined,
     },
     $dev: input?.dev ?? false,
   });

@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/js"
+	"github.com/sst/sst/v3/pkg/target"
 )
 
 // What the core gives the Pulumi program today, item by item. The 5.0
@@ -151,6 +153,33 @@ func TestProgramEnv(t *testing.T) {
 		if len(entry) > 11 && entry[:11] == "SST_SERVER=" {
 			t.Fatalf("SST_SERVER is set with no server: %v", entry)
 		}
+	}
+}
+
+// On a target's stage the program is fenced in, and Pulumi doesn't try to
+// download a plugin from behind the fence
+func TestProgramEnvOnTarget(t *testing.T) {
+	local, err := target.Parse([]byte(`{"name": "emulator", "endpoint": "http://127.0.0.1:4566", "region": "us-east-1", "credentials": {"accessKeyId": "test", "secretAccessKey": "test"}, "providers": {"aws": {}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Project{app: &App{Name: "my-app", Stage: "local"}, target: local}
+	got := map[string]string{}
+	for _, entry := range p.programEnv([]string{"AWS_PROFILE=mine", "HTTPS_PROXY=http://corp:8080"}, "p", "w", nil, nil, "") {
+		key, value, _ := strings.Cut(entry, "=")
+		got[key] = value
+	}
+	for key, want := range map[string]string{
+		"AWS_ACCESS_KEY_ID": "test",
+		"HTTPS_PROXY":       "http://127.0.0.1:1",
+		"PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION": "true",
+	} {
+		if got[key] != want {
+			t.Fatalf("%v is %q, want %q", key, got[key], want)
+		}
+	}
+	if _, ok := got["AWS_PROFILE"]; ok {
+		t.Fatalf("the program has the developer's AWS_PROFILE")
 	}
 }
 

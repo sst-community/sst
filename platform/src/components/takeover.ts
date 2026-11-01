@@ -1,10 +1,13 @@
 import {
+  type Alias,
   Input,
+  Output,
   Resource,
   all,
   getProject,
   getStack,
   interpolate,
+  output,
   rootStackResource,
 } from "@pulumi/pulumi";
 import type { Parts } from "./parts";
@@ -106,8 +109,38 @@ export function takeoverOf(
   }
 }
 
-/** The Pulumi alias for an old address. */
-export function aliasOf(old: OldAddress) {
+/**
+ * The Pulumi alias for an old address of the resource named `name`.
+ *
+ * An old address can be made from a value that isn't known in a preview, like
+ * the ARN of a queue a new stage is about to create. Nothing can be at it
+ * then, and Pulumi fails on an alias it can't resolve, so in that case the
+ * alias is one that matches nothing: the resource's own name with a suffix,
+ * which no other resource has.
+ */
+export function aliasOf(old: OldAddress, name: string): Input<Alias> {
+  const alias = addressOf(old);
+  const computed = [alias.name, alias.parent].filter((value) =>
+    Output.isInstance(value),
+  ) as unknown as { isKnown: Promise<boolean> }[];
+  if (computed.length === 0) return alias;
+  const known = Promise.all(computed.map((value) => value.isKnown)).then(
+    (each) => each.every(Boolean),
+  );
+  return output(known).apply(
+    (known): Input<Alias> =>
+      known
+        ? Resource.isInstance(alias.parent) || alias.parent === undefined
+          ? output(alias.name).apply((name) => ({ ...alias, name }))
+          : all([alias.name, alias.parent]).apply(([name, parent]) => ({
+              name,
+              parent,
+            }))
+        : { name: `${name}$unknown-in-preview` },
+  ) as Output<Alias>;
+}
+
+function addressOf(old: OldAddress) {
   // Pulumi reads a parent that's set but empty as "it had no parent"
   if (old.parent === false)
     return { name: old.name, parent: rootStackResource };

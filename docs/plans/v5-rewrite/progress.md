@@ -2,6 +2,31 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 3, the target suite and the Floci package
+
+The maintainer said to go on to the Floci package. It's to live in a repo of its own, with rogueturnip, so it was drafted outside this repo and not published, for them to take over.
+
+**Done, reviewed, committed (not pushed):**
+
+- **The target suite, `targetSuite(target)` in `sst/testing`**, which a package that exports a target runs in its own CI. It runs the `sst` CLI on an app with one bucket, bound to the target. Its deploy, `sst shell` and remove run with the developer's AWS settings planted around the CLI: keys, a session token, a profile, a region, endpoints, a role, credential and config files, and a proxy that records where it's sent. It checks that the program and `sst shell` get the target's credentials and region and nothing planted, that the program can reach nothing but this machine (the fence refuses it, not just no network), that the bucket is created and removed in the target, that the state is in the target's home, and that nothing went to AWS through the proxy. It cleans up after itself, and keeps a stage's state if the stage couldn't be removed.
+- **`context().target`**, in the program contract: the stage's target, when it isn't the real cloud. A package's check can turn itself on for its own target's stages only. `mock()` takes a `target` to bind its stage to one.
+- **Pulumi's plugins on a target's stage.** Pulumi downloads a provider's plugin as it runs, which the fence stops. The CLI now installs the ones it doesn't have first, with its own environment, and Pulumi doesn't try. One that can't be installed is left, as the program may not use it; if it does, Pulumi names it. One whose install was stopped partway counts as missing.
+- **Found and fixed: `sst diff` of a new stage failed with a V5 `Queue`, `Bucket` or `Dynamo` subscriber.** The takeover map gives the subscriber's 4.x address, made from the queue's or bucket's ARN or the table's name, which a new stage's preview doesn't know. Pulumi fails on an alias it can't resolve. Such an alias is now one that matches nothing, under the resource's own name: nothing can be at an address made from a resource that doesn't exist yet. Known values give the same aliases as before. A deploy that previews first, as one with checks does, failed the same way.
+- **The Floci package**, from #212's allowlist: the target settings for Floci 2.3.0, and `flociCheck()`, a check on the V5 `Function`, `Bucket`, `Dynamo` and `Queue` and the AWS resources an app creates, which turns on only on a stage bound to Floci. Its tests: the check under `mock()`, and with Docker, the target suite and a deploy of the four components on Floci with the check on.
+
+**Checked:**
+
+- **Against Floci:** the target suite passed all its checks. The package's deploy of the four components, with a subscriber and the check on, previewed first, deployed, its function answered with its links, and `sst diff` showed no changes. With an SNS topic added, the check stopped the deploy before anything changed. `sst dev` deployed the same app, its stub included, with the check on. With a plugin taken out of Pulumi's cache, the CLI installed it and the suite passed. Nothing was left in Floci or the target's home, and its container was stopped. Nothing of it was in AWS.
+- The preview of the three subscribers fails without the alias fix and passes with it, in a test. The platform's 1,835 tests and all Go tests pass.
+- **An independent review** found these, each fixed: an internet check that passed on a machine with no network, so the program now has to be refused by the fence itself; the warm-up's failures were ignored; a command that didn't stop on time was never killed; the code that reads the environment was copied from a function's source, which coverage tools rewrite; the state of a stage that couldn't be removed was deleted anyway; `sst` from npm couldn't be run on Windows; more of the developer's AWS variables are planted; a partly installed plugin; a plugin the program doesn't use stopping an offline run; two old addresses of one resource that both weren't known.
+
+**Left:**
+
+- The Floci package needs a repo of its own and SST 5's first pre-release with these, before its CI can run. It's been run on macOS with Docker Desktop, not yet on Linux.
+- The suite doesn't run `sst dev`'s workers, and its check that nothing reaches AWS only sees clients that use the proxy they're given.
+- A package's handler that imports `sst`'s runtime SDK, like `Resource`, still needs `skipLibCheck`: two of its declarations name `aws-lambda`'s types, which it doesn't install, and one has a type error.
+- The first deploy of a stage with checks still shows an error before the run with a preview, as before.
+
 ## 2026-11-01: step 3, the package setup
 
 The plan asks that a package need no `moduleResolution: "bundler"`, `skipLibCheck` or pinned `google-protobuf`, and that a group not pull in every provider, or that the reason be written down. Each was tried in a copy of the template package (`examples/component-package` on `v5-community-packages`), with `sst` packed from this branch.

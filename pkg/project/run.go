@@ -27,6 +27,7 @@ import (
 	"github.com/sst/sst/v3/pkg/js"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project/provider"
+	"github.com/sst/sst/v3/pkg/target"
 	"github.com/sst/sst/v3/pkg/telemetry"
 	"github.com/sst/sst/v3/pkg/types"
 	"golang.org/x/exp/slices"
@@ -274,6 +275,10 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	pulumiPath := global.PulumiPath()
 	if flag.SST_PULUMI_PATH != "" {
 		pulumiPath = flag.SST_PULUMI_PATH
+	}
+	// On a target's stage, Pulumi's engine can't download a plugin as it runs
+	if !target.IsCloud(p.Target()) {
+		p.installPlugins(ctx, pulumiPath)
 	}
 
 	eventlogPath := workdir.EventLogPath()

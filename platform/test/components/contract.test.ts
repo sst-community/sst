@@ -46,6 +46,18 @@ describe("The program contract", () => {
       versions: {},
     });
     expect(context().paths.root).toBe("/");
+    expect(context().target).toBeUndefined();
+  });
+
+  it("gives the program its stage's target", () => {
+    const app = (globalThis as any).$app;
+    const emulator = { name: "emulator", endpoint: "http://127.0.0.1:4566" };
+    app.targets = { dev: emulator, other: { name: "other" } };
+    try {
+      expect(context().target).toEqual(emulator);
+    } finally {
+      delete app.targets;
+    }
   });
 
   // The record the core's test reads (pkg/project/report_test.go), so the two

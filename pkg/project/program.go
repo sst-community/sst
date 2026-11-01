@@ -60,7 +60,10 @@ func (p *Project) programDefine(input *StackInput, versions map[string]int) (map
 func (p *Project) programEnv(base []string, passphrase, backend string, secrets, fallback map[string]string, server string) []string {
 	env := p.Target().Env(append([]string{}, base...))
 	if !target.IsCloud(p.Target()) {
+		// Behind the fence Pulumi can't download a plugin, so it doesn't try:
+		// the CLI installs them first (installPlugins)
 		env = append(env, target.Fence()...)
+		env = append(env, "PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION=true")
 	}
 	for key, value := range p.Env() {
 		env = append(env, fmt.Sprintf("%v=%v", key, value))

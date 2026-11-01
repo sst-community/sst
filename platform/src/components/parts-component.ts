@@ -307,10 +307,11 @@ export class PartsComponent<P extends Parts> extends Component {
         `The "${this.componentName}" component has already created its "${key}"${id === undefined ? "" : ` named "${id}"`}. A part is created once.`,
       );
 
+    const name = this.nameOf(key, id);
     return new cls(
-      ...transformPart(this.transformOf(key, id), this.nameOf(key, id), args, {
+      ...transformPart(this.transformOf(key, id), name, args, {
         ...opts,
-        aliases: [...(opts?.aliases ?? []), ...this.aliasesOf(key, id)],
+        aliases: [...(opts?.aliases ?? []), ...this.aliasesOf(key, name, id)],
         parent: this,
       }),
     );
@@ -509,10 +510,14 @@ export class PartsComponent<P extends Parts> extends Component {
    * @internal
    */
   public partHandle(key: string, id?: string) {
+    const name = this.nameOf(key, id);
     return {
-      name: this.nameOf(key, id),
+      name,
       transform: this.transformOf(key, id),
-      opts: { parent: this as Component, aliases: this.aliasesOf(key, id) },
+      opts: {
+        parent: this as Component,
+        aliases: this.aliasesOf(key, name, id),
+      },
       /** What the user passed in `existing` for the part, as they passed it. */
       existing: at(this.partExisting, key, id) as unknown,
       /**
@@ -642,8 +647,9 @@ export class PartsComponent<P extends Parts> extends Component {
       : lookup.get(name, resourceId, undefined, lookupOpts);
   }
 
-  // Where a part's resource lived in the component this one takes over from
-  private aliasesOf(key: string, id?: string) {
+  // Where a part's resource lived in the component this one takes over from.
+  // `name` is the part's own.
+  private aliasesOf(key: string, name: string, id?: string) {
     const moved = takeoverOf(this.constructor)?.moved?.[key];
     if (!moved) return [];
 
@@ -653,7 +659,10 @@ export class PartsComponent<P extends Parts> extends Component {
       typeof moved === "string"
         ? { name: `${this.componentName}${logicalName(moved)}${logicalName(id ?? "")}` }
         : moved(this, { name: this.componentName, id });
-    return [old ?? []].flat().map(aliasOf);
+    // Each old address that isn't known yet stands in under a name of its own
+    return [old ?? []]
+      .flat()
+      .map((address, i) => aliasOf(address, i === 0 ? name : `${name}-${i}`));
   }
 
   private nameOf(key: string, id?: string) {

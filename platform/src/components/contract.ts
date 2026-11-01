@@ -2,6 +2,7 @@ import { type Input, type Inputs, all, output } from "@pulumi/pulumi";
 import { Link } from "./link";
 import { rpc } from "./rpc/rpc";
 import { lazy } from "../util/lazy";
+import type { Target } from "./target";
 
 /**
  * The program contract: what the core gives the program, and what a component
@@ -44,6 +45,12 @@ export interface Context {
   };
   /** The version of each component in the state, by its name. */
   versions: Record<string, number>;
+  /**
+   * Where the stage's cloud calls go, when it isn't the real cloud: its target
+   * in `app()`. A package's check can turn itself on for its own target's
+   * stages only.
+   */
+  target?: Target;
 }
 
 /** What the core gives the program. It's a copy, so changing it changes nothing. */
@@ -55,6 +62,9 @@ export function context(): Context {
     command: $cli.command,
     paths: $cli.paths,
     versions: $cli.state?.version ?? {},
+    target: ($app as { targets?: Record<string, Target> }).targets?.[
+      $app.stage
+    ],
   });
 }
 
