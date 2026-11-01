@@ -82,6 +82,15 @@ type Conn interface {
 
 var _ Conn = (*appsync.Connection)(nil)
 
+// Connection is the stub's: a Conn it can also make connect again, as after a
+// Lambda freeze its subscription can be dead with no error.
+type Connection interface {
+	Conn
+	Reconnect(context.Context)
+}
+
+var _ Connection = (*appsync.Connection)(nil)
+
 // socketConn is a Conn that can publish over its WebSocket, which is faster.
 type socketConn interface {
 	PublishBatchOverSocket(ctx context.Context, channel string, events []interface{}) error

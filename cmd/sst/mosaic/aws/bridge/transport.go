@@ -35,8 +35,8 @@ import (
 //   - A Conn that publishes several events in one request, with PublishBatch,
 //     takes as many as packetsPerPublish.
 //
-// The stub's own loop still uses AppSync's connection, and its Reconnect after
-// a Lambda freeze, until there's a second transport to run it over.
+// The stub's own loop runs over a Connection: a Conn it can also make connect
+// again after a Lambda freeze.
 type Transport interface {
 	// Stub is what the stub is given: its environment, and the permissions its
 	// role needs. The program asks for it in sst dev, at the same time as sst

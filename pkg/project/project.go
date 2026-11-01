@@ -86,10 +86,13 @@ func validateDev(dev *AppDev) error {
 }
 
 // Transport is how the stage's stubs in sst dev reach the CLI: AppSync, when
-// the app has the aws provider and the stage is in the real cloud.
+// the app has the aws provider and the stage is in the real cloud, and HTTP on
+// this machine on a target's stage, whose functions run in containers here.
+// HTTP keeps its port and token in the working folder, so each run gives the
+// stubs the same ones.
 func (p *Project) Transport() (bridge.Transport, bool) {
 	if !target.IsCloud(p.Target()) {
-		return nil, false
+		return transport.NewHTTP(filepath.Join(p.PathWorkingDir(), p.app.Stage+".transport.json")), true
 	}
 	unknown, ok := p.Provider("aws")
 	if !ok {
@@ -104,9 +107,6 @@ func (p *Project) Transport() (bridge.Transport, bool) {
 
 // NoTransport says why the stage has no transport for sst dev's functions.
 func (p *Project) NoTransport() error {
-	if !target.IsCloud(p.Target()) {
-		return util.NewReadableError(nil, fmt.Sprintf("On the %q target's stage, sst dev has no way yet for its functions to reach it.", p.Target().Name()))
-	}
 	return util.NewReadableError(nil, "sst dev needs the aws provider to reach its functions")
 }
 

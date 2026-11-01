@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/appsync"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/httpbus"
 	"github.com/sst/sst/v3/pkg/id"
 )
 
@@ -34,6 +35,9 @@ var SST_APPSYNC_REALTIME = os.Getenv("SST_APPSYNC_REALTIME")
 var SST_FUNCTION_STREAMING = os.Getenv("SST_FUNCTION_STREAMING")
 
 var ENV_BLACKLIST = map[string]bool{
+	// how the stub reaches sst dev, which the function's code doesn't need
+	"SST_HTTP_TRANSPORT":              true,
+	"SST_HTTP_TRANSPORT_TOKEN":        true,
 	"SST_DEBUG_ENDPOINT":              true,
 	"SST_DEBUG_SRC_HANDLER":           true,
 	"SST_DEBUG_SRC_PATH":              true,
@@ -86,17 +90,32 @@ func run() error {
 	defer cancel()
 
 	logStreamName := os.Getenv("AWS_LAMBDA_LOG_STREAM_NAME")
-	workerID := logStreamName[len(logStreamName)-32:]
+	// An emulator's log stream names can be shorter than Lambda's
+	workerID := id.Ascending()
+	if len(logStreamName) >= 32 {
+		workerID = logStreamName[len(logStreamName)-32:]
+	}
 	prefix := fmt.Sprintf("/sst/%s/%s", SST_APP, SST_STAGE)
 	fmt.Println("prefix", prefix)
-	config, err := config.LoadDefaultConfig(ctx, config.WithRegion(SST_REGION))
-	if err != nil {
-		return err
-	}
-
-	conn, err := appsync.Dial(ctx, config, SST_APPSYNC_HTTP, SST_APPSYNC_REALTIME)
-	if err != nil {
-		return err
+	// The stage's transport says how to reach sst dev: over HTTP on this
+	// machine, or AppSync's Event API
+	var conn bridge.Connection
+	if address := os.Getenv("SST_HTTP_TRANSPORT"); address != "" {
+		httpConn, err := httpbus.Dial(address, os.Getenv("SST_HTTP_TRANSPORT_TOKEN"))
+		if err != nil {
+			return err
+		}
+		conn = httpConn
+	} else {
+		config, err := config.LoadDefaultConfig(ctx, config.WithRegion(SST_REGION))
+		if err != nil {
+			return err
+		}
+		appsyncConn, err := appsync.Dial(ctx, config, SST_APPSYNC_HTTP, SST_APPSYNC_REALTIME)
+		if err != nil {
+			return err
+		}
+		conn = appsyncConn
 	}
 	client := bridge.NewClient(ctx, conn, workerID, prefix+"/"+workerID)
 	// a streamed response is sent once, so a packet AppSync lost is asked for
@@ -403,7 +422,7 @@ func deadlineOf(resp *http.Response) time.Time {
 // AppSync drops events that have no live subscriber, and after a Lambda freeze
 // the websocket can be dead without any error. A new subscription can also miss
 // events for a moment after subscribe_success.
-func waitForSubscription(ctx context.Context, conn *appsync.Connection, client *bridge.Client, channel string) {
+func waitForSubscription(ctx context.Context, conn bridge.Connection, client *bridge.Client, channel string) {
 	sent := map[string]bool{}
 	for attempt := 1; attempt <= 15; attempt++ {
 		if attempt == 4 || attempt == 10 {

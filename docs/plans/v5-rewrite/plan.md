@@ -63,6 +63,7 @@ Change one only on purpose, and record it here with its date.
 | 2026-10-31 | **Step 2's result is released as a pre-release that only runs `sst diff`**, so real apps check the new core, not only the lab. |
 | 2026-10-31 | **As few lab apps as cover the cases.** Nothing stays deployed: an app is removed and cleaned up after each check, unless it's checked again shortly after. |
 | 2026-10-31 | **The Floci package is owned outside the core**, probably by rogueturnip, who wrote #212. |
+| 2026-11-01 | **A target is a plain object of the type `Target`, not one `sst.target()` makes.** An app names it in `app()`, which is read before the platform is loaded, so nothing of `sst/components` runs there. A package imports the type with `import type`, and the core checks the settings. |
 | 2026-10-31 | **Releasing 5.0 next to 4.x** (npm's tags, the docs site) is worked out near the release. |
 | 2026-10-31 | **No timeline.** Getting it right matters more than when. |
 
@@ -158,15 +159,16 @@ type Target interface {
 What a package writes:
 
 ```ts
-// A target: settings, which the core carries out
-export const floci = sst.target({
-  image: "floci/floci:2.3.0",
-  ports: [4566],
-  dockerSocket: true, // the core says so when it starts it
+// A target: settings, which the core carries out. A plain object, as app() is
+// read before the platform is loaded.
+export const floci: Target = {
+  name: "floci",
   endpoint: "http://127.0.0.1:4566",
-  credentials: { accessKeyId: "test", secretAccessKey: "test" },
   region: "us-east-1",
-});
+  credentials: { accessKeyId: "test", secretAccessKey: "test" },
+  providers: { aws: { s3UsePathStyle: true } },
+  container: { image: "floci/floci:2.3.0", ports: [4566], dockerSocket: true }, // the core says so when it starts it
+};
 
 // A runtime: commands, as v5-community-packages.md step 4 plans. The dev command is the
 // language's runtime interface client, run against sst dev's Lambda runtime API.
@@ -217,7 +219,7 @@ An app names a stage's target in `app()`, as `targets: { local: floci }`, and a 
 
 A package can provide components, checks, and target and runtime settings. Writing one:
 
-- **Typed:** `sst/components`, with `sst.target`, `sst.runtime` and `sst.check` beside `sst.component`.
+- **Typed:** `sst/components`, with the `Target` type, `sst.runtime` and `sst.check` beside `sst.component`.
 - **Tested without the cloud:** `mock()` for components and checks, and each kind's suite for targets and runtimes.
 - **Published on npm**, found by keyword, as [v5-community-packages.md](../v5-community-packages.md) step 3 plans.
 - **Loaded with SST as the host.** A package imports `sst/components` and its providers by name, and the bundler maps them to the app's `.sst/platform`, so there's one copy of each, as v5 does (`pkg/js/js.go`, `pkg/project/run.go`).
@@ -226,7 +228,7 @@ A package can provide components, checks, and target and runtime settings. Writi
 - **Easy to set up.** A package shouldn't need `moduleResolution: "bundler"`, `skipLibCheck` or a pinned `google-protobuf`, and a group shouldn't pull in every provider. Each is fixed in step 3, or the reason it can't be is written down.
 - **A template to copy:** `examples/component-package/` (on `v5-community-packages`), kept working with each change, and a template for a target package beside it.
 
-**A public API, held still.** What a package builds on changes only in a major version: `sst/components` and its groups (`sst/components/aws` and the rest), the program contract, and `sst.target`, `sst.runtime` and `sst.check`. Adding to it is fine; removing an export, or changing what one accepts, waits for a major. A report of the API for each entry point is checked in, made with [API Extractor](https://api-extractor.com/) as [v5-community-packages.md](../v5-community-packages.md) step 2 plans, so a pull request shows each change and CI fails on one nobody meant ([goal 8](goals.md#8-what-a-package-builds-on-holds-still-within-5x)). So 5.0's breaking changes happen once, at 5.0.
+**A public API, held still.** What a package builds on changes only in a major version: `sst/components` and its groups (`sst/components/aws` and the rest), the program contract, and the `Target` type, `sst.runtime` and `sst.check`. Adding to it is fine; removing an export, or changing what one accepts, waits for a major. A report of the API for each entry point is checked in, made with [API Extractor](https://api-extractor.com/) as [v5-community-packages.md](../v5-community-packages.md) step 2 plans, so a pull request shows each change and CI fails on one nobody meant ([goal 8](goals.md#8-what-a-package-builds-on-holds-still-within-5x)). So 5.0's breaking changes happen once, at 5.0.
 
 **Trusted like any other dependency.** A package's components run in the Pulumi program with the deploy's credentials, and npm runs its install scripts. 5.0 makes no promise to contain a package. It promises the [safety rules](#safety-rules) hold for every app.
 
@@ -377,7 +379,7 @@ Today's CLI, with its homes behind the new `Home` interface, reads an existing h
 
 - **[The program contract](#the-program-contract), first.**
 - **[The places to plug in](#places-to-plug-in), in Go**, each drawn from the built-in and the first outside one, with SST's built-ins fitted behind them: the three homes, the five runtimes, the AppSync transport, and the real cloud as a target. A suite for each, which the built-ins pass.
-- **`sst.target`, `sst.runtime` and `sst.check`** for packages, and a stage's target in `app()`.
+- **The `Target` type, `sst.runtime` and `sst.check`** for packages, and a stage's target in `app()`.
 - **The [safety rules](#safety-rules)**, the RPC's included.
 - **Package setup fixed:** `bundler`, `skipLibCheck`, the protobuf pin, and a group that pulls in every provider.
 - **#212 on them**, with rogueturnip:
@@ -472,7 +474,7 @@ Each comes when it's needed, with its own exit test.
 | 0. What v5 taught | Written in [reference.md](reference.md#what-v5-taught), 2026-10-31. |
 | 1. A record of today's state | Started, 2026-10-31. Recorded with v4.23.1 and in `testdata/states/`: the serverless group and the sites, the VPC groups, and the serverless group by `sst dev`. A recorded state replays with AWS credentials and the passphrase, not without. Everything removed, and the audit is clean. Left: Cloudflare (at step 4). |
 | 2. The first proof | Started, 2026-10-31, committed (not pushed). Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
-| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. The program contract's version 1: `report()` and `context()`, the core's reader, the V5 components on it, checked in the lab and under `mock()`. The transport as a place to plug in: `bridge.Transport`, AppSync behind it, `Dev.Stub`, and the transport suite, checked against the real Event API and in the lab, and reviewed. The runtime as a place to plug in: the interface without `ShouldRunEagerly`, a runtime made of commands, and the runtime suite, which Node.js, Go, Python, Cloudflare's workers and the commands runtime pass, reviewed. `sst.runtime`, with a Ruby function deployed and run in `sst dev` in the lab, and each start of a worker keyed, so what a stopped one sends is left out, reviewed. Next: the target, `sst.target` and `sst.check`. |
+| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. The program contract's version 1: `report()` and `context()`, the core's reader, the V5 components on it, checked in the lab and under `mock()`. The transport as a place to plug in: `bridge.Transport`, AppSync behind it, `Dev.Stub`, and the transport suite, checked against the real Event API and in the lab, and reviewed. The runtime as a place to plug in: the interface without `ShouldRunEagerly`, a runtime made of commands, and the runtime suite, which Node.js, Go, Python, Cloudflare's workers and the commands runtime pass, reviewed. `sst.runtime`, with a Ruby function deployed and run in `sst dev` in the lab, and each start of a worker keyed, so what a stopped one sends is left out, reviewed. The target: the interface with the real cloud behind it, and a target on this machine from settings, which the core carries out (its container on loopback, the Docker socket said, the developer's credentials kept out, the program fenced in to this machine, a home of its own), checked against Floci in the lab, and reviewed. #212's HTTP transport, which passes the transport suite, with `sst dev` on a Floci stage in the lab. Next: `sst.check`, the package setup fixes, and the Floci package with rogueturnip. |
 | 4. New components | Not started. |
 | 5. Moving an app | Not started. |
 | 6. After 5.0 | When needed. |

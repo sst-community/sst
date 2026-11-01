@@ -2,6 +2,51 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 3, #212's HTTP transport
+
+The maintainer asked whether to adopt #212's HTTP transport now, rather than wait, and said yes to porting it: without it a target's stage could deploy, but `sst dev`'s functions couldn't reach it.
+
+**Done, committed (not pushed):**
+
+- **#212's server and client, by rogueturnip,** as `httpbus`: sst dev and each stub publish and subscribe over HTTP on this machine, with a token on every request. What's changed is the wording, which named Floci.
+- **`transport.HTTP`, a `Transport` behind them:** `Stub` gives the stub sst dev's address as a container reaches it, `host.docker.internal`, and the token; `Connect` starts the server; `Remove` forgets them. The port and token are kept per stage in the working folder, readable only by the developer, so each run gives the stubs the same ones. The server listens on `127.0.0.1`, which Docker Desktop's containers reach; on Linux, also on the Docker bridge's address, only while sst dev runs. #212 listened on every interface.
+- **A target's stage uses it,** and the real cloud's uses AppSync as before. The stub picks its connection from its environment, and doesn't pass the token on to the function's code.
+
+**Checked:**
+
+- The transport suite: all ten of its tests pass against it, as AppSync's do, and #212's own tests. The token's checks, its port taken, two processes making its settings at once, and its file's mode.
+- **In the lab, `sst dev` on the Floci stage:** Floci's Lambda ran the stub, which reached sst dev over HTTP, and the function ran on this machine and answered. An edit to the handler was picked up on the next invocation. The token isn't in plain text in the state: the function's environment is a secret, as it holds the links' key. sst dev listened on `127.0.0.1` only. `sst remove` removed the stage and the transport's settings. The container Floci started for its registry also published its port on `127.0.0.1` only.
+- All Go tests, with the race detector for `sst dev`'s packages, `tsc`, and the platform's 1,822 tests.
+
+## 2026-11-01: step 3, the target
+
+The maintainer said to work through step 3. The target came first: it doesn't wait on #212's transport.
+
+**Done, committed (not pushed):**
+
+- **`pkg/target`:** the `Target` interface: start and stop, the providers, the home, and the environment of what the core starts on the stage. The real cloud is the built-in, `Cloud`, and does what the core did before. `Local` is a target on this machine, from its settings, which the core carries out.
+- **A stage is bound to its target in the config,** as `targets: { local: emulator }` in `app()`. A target is a plain object of the type `Target`: `app()` is read before the platform is loaded, so no function from `sst/components` can make one there ([decision](plan.md#decisions)).
+- **Its container is the core's:** its ports are published on `127.0.0.1` only, its volumes are Docker volumes of its own, and nothing of the machine's files is given to it but the Docker socket, when its settings say so, which the CLI says when it starts it. A container of that name SST didn't start is left alone. One started with other settings is replaced, and its volumes are kept.
+- **The developer's credentials are kept out.** On the stage, the CLI takes the developer's AWS variables out of its own environment and sets the target's, so everything it starts gets them. The program, the workers and `sst shell` lose the developer's proxies too, and get no files to read credentials from. The CLI's own AWS client reaches only the target's endpoint.
+- **The program is fenced in:** its proxy answers nothing, for every host but this machine, so a call that isn't the target's fails.
+- **Its state is in a home of its own,** a folder under the user's config folder, never the home the app names.
+- **A boolean or number provider setting reaches Pulumi**, which it didn't before: #212's fix. An app with one sees it applied.
+- On a target's stage there was no transport yet; the next entry adds #212's.
+
+**Checked:**
+
+- Unit tests of the settings' checks, the container's arguments and how it's started, and the environment.
+- **In the lab, with Floci 2.3.0, and AWS credentials in the shell:** the CLI started Floci's container, said it's given the Docker socket, and published its port on `127.0.0.1` only. The V5 `Function`, `Bucket`, `Dynamo` and `Queue` deployed to it, with only the endpoint set for the provider, no list of services. The function answered in Floci. `sst diff` showed no changes, and `sst remove` removed it all. The real account had no passphrase, state or resource of the stage. `sst shell` had only the target's credentials, with a planted credentials file, a profile and a proxy in its parent's environment. Behind the fence, Node couldn't reach the internet and reached the target.
+- All Go tests, `tsc`, and the platform's 1,822 tests.
+- **An independent review** found five gaps, each fixed with a test:
+  - What the CLI kept of its environment when it started, which `sst shell --target` and `sst dev`'s panes are given, still had the developer's credentials. It's made the target's now too.
+  - Cloudflare's and Vercel's tokens stayed, and the CLI calls some of their APIs for the program, outside the fence. They're taken out with AWS's, and a target's stage turns down those providers, with a message. The home's provider isn't added on a target's stage, as its home is the target's.
+  - An app's `endpoints`, proxies or CA bundle for the aws provider could send its calls somewhere else. They're left out, with what picks credentials, and the target's settings go over the rest.
+  - An image name that starts with a dash is turned down.
+  - `sst dev` stopped at once on a target's stage, with no transport. The HTTP transport fixed it.
+- **Left, from the review:** Node reads the proxy variables only in its newer releases (24, and the latest 22), so on an older Node 22 the program's own calls aren't fenced in; Pulumi's plugin download is blocked by the fence, so a plugin has to be installed before; two commands starting a target at once can race on its container; a tag isn't pulled again; nothing stops the container but Docker. The credentials are the target's in each case.
+- **For the release notes:** an app with a boolean or number provider setting sees it applied on its next deploy, as an update to the provider.
+
 ## 2026-11-01: `main` merged in, with v4.23.1
 
 The maintainer said to close two open items: bring in the fixes `v5-rewrite` was missing, and delete the lab's old state versions.
