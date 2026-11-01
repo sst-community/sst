@@ -262,13 +262,9 @@ describe("the lab's serverless group, as v4.23.1 deployed it in sst dev", () => 
     );
   });
 
-  it("is taken over by the V5 components, but for the shared stub's code", () => {
+  it("is taken over by the V5 components", () => {
     const { result } = run;
     expect(result.unclaimed).toEqual([
-      // The code of the stub every 4.x function in `sst dev` shares, kept in
-      // the bucket when it leaves the state. Not yet taken over or released
-      // by the V5 Function.
-      "aws:s3/bucketObjectv2:BucketObjectv2::DevBridgeCodeUswest2Bridge",
       "sst:aws:ApiGatewayV2Authorizer::ApiAuthorizerToken",
       "sst:aws:ApiGatewayV2LambdaRoute::ApiRouteDnvusb",
       "sst:aws:ApiGatewayV2LambdaRoute::ApiRouteKthwzz",

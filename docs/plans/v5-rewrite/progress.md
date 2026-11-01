@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, the shared dev stub code is taken over
+
+Looking into the `Function` with its dev stubs, the first of the gate's hard components, showed that the gap the recordings found there wasn't one.
+
+**Done, committed (not pushed):**
+
+- **Each run in the takeover helpers starts as a run of the program does** (`src/auto/run.ts`): with the 4.x `Function`'s dev stub code forgotten, which its functions share within a run. `takesOverState()` ran both programs in one process, so the V5 `Function` found the object the 4.x run had created, created nothing, and the stub code was listed as unclaimed. The `Function` suite already reset it by hand; `takesOver()` and `takeoverCases()` now do it for every suite.
+
+**Checked** (`recorded.test.ts`, all platform tests and `tsc`): **the V5 `Function` takes over 4.x's shared dev stub code** (`DevBridgeCode<region>Bridge`) in the `sst dev` recording, with nothing to update. The earlier finding below was wrong.
+
 ## 2026-11-01: step 4, the VPC recording
 
 The maintainer said yes to the VPC recording next: the lab's containers and databases, which v4.23.1 deployed in a VPC (`vpc-containers-databases.json`), checked as the serverless group is. `Vpc` has no V5 form yet, so both programs are given the 4.x one, as the lab does.
@@ -17,7 +27,7 @@ The maintainer said yes to the VPC recording next: the lab's containers and data
 - **4.x gives what the state has**: every resource claimed and nothing more, the same inputs, options and outputs, the same values secret, nothing out of order.
 - **V5 takes it over and changes nothing in AWS.** The `Cluster`, `Efs`, `Service` with its image, domain and scaling, the shared `Alb`, `Task`, `CronV2`, the `Function` in the VPC, `Postgres` with its proxy, `Mysql`, `Redis`, `Aurora` and `Dsql` update no resource. What goes: 4.x's version markers, and what `sst dev` runs for each service, which V5 keeps inside the service under another name. The orders 4.x removes things in that V5 doesn't keep are ones nothing in AWS needs: a function's URL and its permissions waited for all of what the function links, and the web service's load balancer for its cluster, file system and private subnets. Each V5 function in the VPC is still removed before its subnets. Nothing secret is in plain text but what's made from a function's ARN, as in the serverless group.
 
-**Left:** the hard components: the `Function` with 4.x's shared dev stub code, `Nextjs` with `Router`, `Vpc`, and releasing and adopting `BucketFiles` and `KvKeys`.
+**Left:** the hard components: the `Function` with its dev stubs, `Nextjs` with `Router`, `Vpc`, and releasing and adopting `BucketFiles` and `KvKeys`.
 
 ## 2026-11-01: step 4, the maps against the recorded states
 
@@ -43,7 +53,7 @@ The maintainer asked to continue with step 4. Its first item after `--check` is 
 **Found:**
 
 - **The V5 `Function` wrote its links' values into the state in plain text in `sst dev`**, a Cognito client's secret among them, in the `_live` output (`unsecret`). 4.x writes only their names there, and nothing reads `_live`. Fixed: names only.
-- **V5 doesn't take over 4.x's shared dev stub code** (`DevBridgeCode<region>Bridge`), which is kept in the bucket when it leaves the state. `--check` would fail on it. For the `Function` with its dev stubs, at the gate: its map releases it, or it's kept.
+- **(Wrong, [corrected](#2026-11-01-step-4-the-shared-dev-stub-code-is-taken-over): the test reused 4.x's object.) V5 doesn't take over 4.x's shared dev stub code** (`DevBridgeCode<region>Bridge`), which is kept in the bucket when it leaves the state. `--check` would fail on it. For the `Function` with its dev stubs, at the gate: its map releases it, or it's kept.
 - **The V5 `Function`'s code and source map keys are secrets**, because the code is built with the key the links are encrypted with. A deploy changes nothing for it, but `sst diff` shows the key as `[secret]`. For the 5.0 `Function`.
 - **4.x makes everything made from a function's ARN a secret** (a permission's function, an integration's URI), because the function is created inside an apply that reads that key. V5 doesn't, which is better and changes nothing in AWS.
 - **The mock's comparison hid renames in values.** It rewrote names in what's compared, for ids and ARNs it made up from them, and so a code object's key under a new name compared the same. Against a state it's off; the suites without one still do it.

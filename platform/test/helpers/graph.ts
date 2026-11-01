@@ -189,6 +189,16 @@ export function mockPulumi(input?: MockInput) {
     });
   };
 
+  // Each deploy is a run of the program of its own, and starts with nothing
+  // the run before it kept: what's registered, and what a run resets when it
+  // starts (`src/auto/run.ts`), like the 4.x Function's dev stub code, which
+  // its functions share within a run.
+  const newRun = async () => {
+    engine.reset();
+    const { Function } = await import("../../src/components/aws/function");
+    Function.reset();
+  };
+
   return {
     ...engine,
     /**
@@ -215,7 +225,7 @@ export function mockPulumi(input?: MockInput) {
       leaveOut: (r: RecordedResource) => boolean = () => false,
     ) {
       if (!input?.recorded) throw new Error("The mock has no recorded state");
-      engine.reset();
+      await newRun();
       original();
       await engine.settle();
       const before = deployed(engine.graph());
@@ -224,7 +234,7 @@ export function mockPulumi(input?: MockInput) {
       );
       const asDeployed = engine.compare(recorded);
 
-      engine.reset();
+      await newRun();
       v5();
       await engine.settle();
       const result = engine.compare(before);
@@ -237,13 +247,13 @@ export function mockPulumi(input?: MockInput) {
      * resource, the second has to claim it at its old address too.
      */
     async takesOver(original: () => unknown, v5: () => unknown) {
-      engine.reset();
+      await newRun();
       original();
       await engine.settle();
       const before = deployed(engine.graph());
       if (before.length === 0) throw new Error("The original created nothing");
 
-      engine.reset();
+      await newRun();
       v5();
       await engine.settle();
       const result = engine.takeover(before);
@@ -309,7 +319,7 @@ export function mockPulumi(input?: MockInput) {
                 // Whether the component itself has to be given the options
                 strict: boolean,
               ) => {
-                mock.reset();
+                await newRun();
                 if (written) written(opts());
                 else if (test.create) test.create(Component, opts());
                 else throw new Error(`The "${name}" case creates nothing`);
