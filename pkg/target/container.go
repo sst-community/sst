@@ -181,14 +181,64 @@ func (c *Container) say(target string) {
 	Say(message + ".")
 }
 
-func (c *Container) stop(ctx context.Context, target string, run runner) error {
-	out, err := run(ctx, "container", "inspect", "--format", `{{index .Config.Labels "`+settingsLabel+`"}}`, ContainerName(target))
-	if err != nil || strings.TrimSpace(string(out)) == "" {
-		// nothing of ours to stop
-		return nil
+// ours finds the target's container: whether it's there, whether the core
+// started it, and whether it's running
+func ours(ctx context.Context, target string, run runner) (there, started, running bool, err error) {
+	out, err := run(ctx, "container", "inspect", "--format", "{{json .}}", ContainerName(target))
+	if err != nil {
+		if _, err := run(ctx, "version", "--format", "{{.Server.Version}}"); err != nil {
+			return false, false, false, fmt.Errorf("the %q target runs in Docker, which isn't running: %w", target, err)
+		}
+		// none there
+		return false, false, false, nil
 	}
-	_, err = run(ctx, "stop", ContainerName(target))
-	return err
+	var found struct {
+		State  struct{ Running bool }
+		Config struct{ Labels map[string]string }
+	}
+	if err := json.Unmarshal(out, &found); err != nil {
+		return true, false, false, fmt.Errorf("reading the %q target's container: %w", target, err)
+	}
+	_, started = found.Config.Labels[settingsLabel]
+	return true, started, found.State.Running, nil
+}
+
+// stop stops the target's container, and keeps it and its volumes. It says
+// whether one was running. A container of that name the core didn't start
+// is left alone.
+func (c *Container) stop(ctx context.Context, target string, run runner) (bool, error) {
+	_, started, running, err := ours(ctx, target, run)
+	if err != nil || !started || !running {
+		return false, err
+	}
+	if _, err := run(ctx, "stop", ContainerName(target)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// reset removes the target's container and its volumes, and with them what
+// the target kept. A container of that name the core didn't start is refused.
+func (c *Container) reset(ctx context.Context, target string, run runner) error {
+	there, started, _, err := ours(ctx, target, run)
+	if err != nil {
+		return err
+	}
+	if there && !started {
+		return fmt.Errorf("a container named %s is there, and SST didn't start it, so it's left alone", ContainerName(target))
+	}
+	if there {
+		if _, err := run(ctx, "rm", "--force", ContainerName(target)); err != nil {
+			return err
+		}
+	}
+	for _, folder := range sortedKeys(c.Volumes) {
+		volume := ContainerName(target) + "-" + c.Volumes[folder]
+		if _, err := run(ctx, "volume", "rm", "--force", volume); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // waitReady waits until something answers at the endpoint, whatever it says

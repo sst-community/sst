@@ -895,6 +895,7 @@ var root = &cli.Command{
 			},
 		},
 		CmdVersion,
+		CmdTarget,
 		{
 			Name: "upgrade",
 			Description: cli.Description{

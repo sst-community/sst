@@ -63,13 +63,17 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 		return ErrProtectedStage
 	}
 
-	bus.Publish(&StackCommandEvent{
-		App:     p.app.Name,
-		Stage:   p.app.Stage,
-		Config:  p.PathConfig(),
-		Command: input.Command,
-		Version: p.Version(),
-	})
+	// A run again with a preview first goes on from the first, which was shown
+	// as the command's start (Run)
+	if !input.previewFirst {
+		bus.Publish(&StackCommandEvent{
+			App:     p.app.Name,
+			Stage:   p.app.Stage,
+			Config:  p.PathConfig(),
+			Command: input.Command,
+			Version: p.Version(),
+		})
+	}
 
 	update := &provider.Update{
 		ID: id.Descending(),
@@ -393,6 +397,11 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	// backend/display), which this relies on: check a deploy with --policy
 	// when Pulumi is updated.
 	previewing := input.Command == "deploy" && withPreview
+	// A deploy with no preview whose program turns out to have checks stops
+	// before anything changes, to run again with a preview first (Run). From
+	// where it says so, nothing of the run is shown, and none of it is kept.
+	mayStopForPreview := input.Command == "deploy" && !withPreview
+	stoppedForPreview := false
 	// the preview's log up to its first planned step, which the update's
 	// log doesn't have
 	var previewStart []byte
@@ -528,6 +537,13 @@ loop:
 			continue
 		}
 
+		if mayStopForPreview && event.DiagnosticEvent != nil && strings.Contains(event.DiagnosticEvent.Message, checksNeedPreview) {
+			stoppedForPreview = true
+		}
+		if stoppedForPreview {
+			continue
+		}
+
 		if previewing {
 			pre, outputs := event.ResourcePreEvent, event.ResOutputsEvent
 			// A step the update took, read from where the preview's log
@@ -656,6 +672,17 @@ loop:
 		}
 	}
 
+	if stoppedForPreview {
+		log.Info("the program has checks; running again with a preview first")
+		partialCancel()
+		<-partialDone
+		// Locking the stage put this run in its history
+		if err := provider.RemoveUpdate(p.home, p.app.Name, p.app.Stage, update.ID); err != nil {
+			log.Warn("removing the stopped run from the history", "err", err)
+		}
+		return errChecksNeedPreview
+	}
+
 	// The update didn't run, so what the preview logged is shown
 	for _, diagnostic := range previewDiagnostics {
 		bus.Publish(diagnostic)
@@ -763,6 +790,7 @@ loop:
 	}
 
 	if input.Command == "remove" && len(complete.Resources) == 0 {
+		defer p.stopIdleTarget()
 		p.removeTransport()
 		if p.app.State != nil && p.app.State.Purge {
 			if err := provider.Purge(p.home, p.app.Name, p.app.Stage); err != nil {

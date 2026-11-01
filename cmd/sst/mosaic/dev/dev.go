@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
 	"github.com/sst/sst/v3/pkg/bus"
@@ -201,17 +202,31 @@ func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
 	return &result, nil
 }
 
-// Deploy asks `sst dev` to deploy again.
+// Deploy asks `sst dev` to deploy again. It tries for a few seconds: the UI
+// can ask as `sst dev` starts, before it takes the request.
 func Deploy(ctx context.Context, url string) error {
-	resp, err := send(ctx, "POST", url, "/api/deploy")
-	if err != nil {
-		return err
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		if attempt > 0 {
+			slog.Warn("asking sst dev to deploy again", "err", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+		var resp *http.Response
+		resp, err = send(ctx, "POST", url, "/api/deploy")
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		err = fmt.Errorf("POST /api/deploy: %s", resp.Status)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("POST /api/deploy: %s", resp.Status)
-	}
-	return nil
+	return err
 }
 
 func Completed(ctx context.Context, url string) (*project.CompleteEvent, error) {

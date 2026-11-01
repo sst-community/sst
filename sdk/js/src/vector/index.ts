@@ -251,11 +251,12 @@ export interface VectorClientResponse {
  */
 export function VectorClient<
   T extends keyof {
-    // @ts-expect-error
-    [key in keyof Resource as "sst.aws.Vector" extends Resource[key]["type"]
-      ? string extends key
-        ? never
-        : key
+    [key in keyof Resource as Resource[key] extends { type: infer Type }
+      ? "sst.aws.Vector" extends Type
+        ? string extends key
+          ? never
+          : key
+        : never
       : never]: Resource[key];
   }
 >(name: T): VectorClientResponse {

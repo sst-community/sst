@@ -22,6 +22,12 @@ export interface TargetSuiteOptions {
   timeout?: number;
   /** Keeps the fixture app's folder, for a look after a failure. */
   keep?: boolean;
+  /**
+   * Whether the target runs Lambda functions. The suite then also runs
+   * `sst dev`, and checks what a function it runs on this machine gets.
+   * @default `true`
+   */
+  functions?: boolean;
 }
 
 /** One of the suite's checks, and what it found. */
@@ -36,18 +42,21 @@ export interface TargetSuiteCheck {
  * `sst` CLI, on this machine. A package that exports a {@link Target} runs it
  * in its own CI. It needs Docker when the target has a container.
  *
- * It writes an app with one S3 bucket and binds a stage to the target. Then it
- * deploys, runs `sst shell` and removes the stage with fake AWS credentials,
+ * It writes an app with an S3 bucket and a function, and binds a stage to the
+ * target. Then it deploys, runs `sst shell` and `sst dev`, and removes the
+ * stage with fake AWS credentials,
  * a profile and credential files of the developer's planted around the CLI,
  * and a proxy in front of it that records where it's asked to go. It checks
  * that:
  *
- * - the program and `sst shell` get the target's credentials and region, and
- *   nothing that was planted;
+ * - the program, `sst shell`, and a function `sst dev` runs on this machine
+ *   get the target's credentials and region, and nothing that was planted;
  * - the program can reach nothing but this machine: the core's fence refuses
  *   anything else;
  * - the bucket is created in the target, through its endpoint, and removed;
  * - the stage's state is kept in the target's home, not the app's;
+ * - with nothing deployed on it, its container is stopped, and
+ *   `sst target stop` stops it;
  * - nothing is sent to AWS through the proxy the CLI was given.
  *
  * It throws with every check that failed, and returns them all.
@@ -66,6 +75,7 @@ export async function targetSuite(
   options: TargetSuiteOptions = {},
 ): Promise<TargetSuiteCheck[]> {
   const cli = options.cli ?? "sst";
+  const functions = options.functions ?? true;
   const timeout = options.timeout ?? 600_000;
   const id = Math.random().toString(36).slice(2, 8);
   const app = `target-suite-${id}`;
@@ -91,9 +101,16 @@ export async function targetSuite(
   );
   fs.writeFileSync(
     path.join(dir, "app", "sst.config.ts"),
-    fixture(app, stage, target, marker),
+    fixture(app, stage, target, marker, functions),
   );
 
+  fs.writeFileSync(
+    path.join(dir, "app", "report.ts"),
+    `export const handler = async () => ({\n` +
+      `  ...(${REPORT})(process.env, ${JSON.stringify(marker)}),\n` +
+      `  here: process.cwd(),\n` +
+      `});\n`,
+  );
   fs.writeFileSync(
     path.join(dir, "shell.mjs"),
     `console.log("SUITE" + JSON.stringify((${REPORT})(process.env, ${JSON.stringify(
@@ -134,9 +151,14 @@ export async function targetSuite(
     region: target.region,
     service: "s3",
   });
+  // The target's buckets, or nothing if it doesn't answer
   const buckets = async () => {
-    const res = await s3.fetch(`${target.endpoint.replace(/\/$/, "")}/`);
-    return res.text();
+    try {
+      const res = await s3.fetch(`${target.endpoint.replace(/\/$/, "")}/`);
+      return await res.text();
+    } catch {
+      return undefined;
+    }
   };
 
   try {
@@ -165,7 +187,7 @@ export async function targetSuite(
       const listed = await buckets();
       check(
         "the bucket is in the target",
-        listed.includes(`<Name>${outputs.bucket}</Name>`),
+        !!listed?.includes(`<Name>${outputs.bucket}</Name>`),
         outputs.bucket,
       );
       const state = path.join(
@@ -195,13 +217,67 @@ export async function targetSuite(
       if (line)
         envChecks("sst shell", JSON.parse(line.slice(5)), target, check);
 
+      if (functions) {
+        const dev = background(
+          cli,
+          ["dev", "--mode=basic", "--stage", stage],
+          path.join(dir, "app"),
+          plantedEnv,
+        );
+        try {
+          // What sst dev says once its deploy is done
+          const ready = await dev.until(/✓\s+Complete|✕\s+Failed/, timeout);
+          check(
+            "runs sst dev",
+            /Complete/.test(ready),
+            [dev.tail(), "sst dev's log:", logTail(path.join(dir, "app"))].join(
+              "\n",
+            ),
+          );
+          if (/Complete/.test(ready)) {
+            const answer = await invoke(target, outputs.function);
+            check(
+              "a function in sst dev runs on this machine",
+              !!answer && answer.here !== "/var/task",
+              JSON.stringify(answer),
+            );
+            if (answer)
+              envChecks("a function in sst dev", answer, target, check);
+          }
+        } finally {
+          await dev.stop();
+        }
+      }
+
       const remove = await run(["remove", "--stage", stage], plantedEnv);
       removed = remove.code === 0;
       check("removes", removed, remove.tail);
+
+      // With nothing deployed on it, the CLI stops the target's container.
+      // Another stage on it, like the developer's own, keeps it running.
+      if (target.container && removed && (await running(target.name)) === false)
+        check(
+          "stops the target's container once nothing on it is deployed",
+          true,
+        );
+      // A command on the stage starts it again
+      if ((await buckets()) === undefined)
+        await run(["diff", "--stage", stage]);
+      const after = await buckets();
       check(
         "the bucket is removed from the target",
-        !(await buckets()).includes(`<Name>${outputs.bucket}</Name>`),
+        after !== undefined &&
+          !after.includes(`<Name>${outputs.bucket}</Name>`),
+        after === undefined ? "The target doesn't answer" : outputs.bucket,
       );
+      if (target.container) {
+        const stop = await run(["target", "stop", "--stage", stage]);
+        check(
+          "sst target stop stops its container",
+          stop.code === 0 && (await running(target.name)) === false,
+          stop.tail,
+        );
+      }
     }
 
     const aws = proxy.hosts.filter((host) =>
@@ -249,7 +325,13 @@ export async function targetSuite(
 }
 
 // The app: one bucket, and what the program sees, as outputs
-function fixture(app: string, stage: string, target: Target, marker: string) {
+function fixture(
+  app: string,
+  stage: string,
+  target: Target,
+  marker: string,
+  functions: boolean,
+) {
   return `/// <reference path="./.sst/platform/config.d.ts" />
 const target = ${JSON.stringify(target, null, 2)};
 
@@ -277,8 +359,12 @@ export default $config({
           : \`failed: \${cause?.code ?? error?.name ?? error}\`;
     }
     const bucket = new aws.s3.Bucket("Suite", { forceDestroy: true });
+    const report = ${functions}
+      ? new sst.aws.v5.Function("Report", { handler: "report.handler" })
+      : undefined;
     return {
       bucket: bucket.bucket,
+      function: report?.name,
       program: JSON.stringify({
         ...(${REPORT})(process.env, ${JSON.stringify(marker)}),
         internet,
@@ -386,6 +472,124 @@ function command(
       });
     },
   );
+}
+
+// The end of the CLI's own log, for what a command didn't say
+function logTail(app: string) {
+  try {
+    return fs
+      .readFileSync(path.join(app, ".sst", "log", "sst.log"), "utf8")
+      .trim()
+      .split("\n")
+      .slice(-30)
+      .join("\n");
+  } catch {
+    return "(none)";
+  }
+}
+
+// Whether the target's container is running, or undefined if Docker can't
+// say
+function running(name: string) {
+  return new Promise<boolean | undefined>((resolve) => {
+    const child = spawn(
+      "docker",
+      [
+        "container",
+        "inspect",
+        "--format",
+        "{{.State.Running}}",
+        `sst-target-${name}`,
+      ],
+      { stdio: ["ignore", "pipe", "ignore"] },
+    );
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.on("error", () => resolve(undefined));
+    child.on("close", (code) =>
+      resolve(code === 0 ? out.trim() === "true" : undefined),
+    );
+  });
+}
+
+// Invokes a function in the target until it answers what a worker reports,
+// which it does once `sst dev` has it connected
+async function invoke(target: Target, name: string) {
+  const lambda = new AwsClient({
+    accessKeyId: target.credentials.accessKeyId,
+    secretAccessKey: target.credentials.secretAccessKey,
+    region: target.region,
+    service: "lambda",
+  });
+  const until = Date.now() + 120_000;
+  while (Date.now() < until) {
+    try {
+      const res = await lambda.fetch(
+        `${target.endpoint.replace(
+          /\/$/,
+          "",
+        )}/2015-03-31/functions/${name}/invocations`,
+        { method: "POST", body: "{}" },
+      );
+      const answer = (await res.json()) as { planted?: unknown };
+      if (res.ok && Array.isArray(answer?.planted))
+        return answer as Seen & { here: string };
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  return undefined;
+}
+
+// A command that runs until it's stopped, like `sst dev`
+function background(
+  cli: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string>,
+) {
+  const windows = process.platform === "win32";
+  const child = spawn(
+    cli,
+    windows ? args.map((arg) => JSON.stringify(arg)) : args,
+    {
+      cwd,
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: windows,
+    },
+  );
+  let output = "";
+  let exited = false;
+  child.stdout.on("data", (chunk) => (output += chunk));
+  child.stderr.on("data", (chunk) => (output += chunk));
+  // On exit, not on close: a process it started may still hold its output
+  const closed = new Promise<void>((resolve) =>
+    child.on("exit", () => {
+      exited = true;
+      resolve();
+    }),
+  );
+  return {
+    tail: () => output.trim().split("\n").slice(-40).join("\n"),
+    // What it printed once it says what's looked for, or exits, or the time
+    // is up
+    async until(pattern: RegExp, timeout: number) {
+      const end = Date.now() + timeout;
+      while (!pattern.test(output) && !exited && Date.now() < end)
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      return output.match(pattern)?.[0] ?? "";
+    },
+    // As Ctrl-C would, then for good if it doesn't stop
+    async stop() {
+      if (exited) return;
+      child.kill("SIGINT");
+      const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+      await closed;
+      clearTimeout(timer);
+      child.stdout.destroy();
+      child.stderr.destroy();
+    },
+  };
 }
 
 // A proxy that records each host it's asked for, and passes HTTPS through,

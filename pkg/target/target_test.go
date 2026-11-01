@@ -1,10 +1,13 @@
 package target
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -296,4 +299,132 @@ func TestImageThatsAFlag(t *testing.T) {
 	_, err := parse(t, func(s map[string]any) { s["container"].(map[string]any)["image"] = "--privileged" })
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "image name")
+}
+
+func TestStop(t *testing.T) {
+	local, err := parse(t, nil)
+	require.NoError(t, err)
+	container := local.settings.Container
+	ctx := context.Background()
+
+	t.Run("running, started by SST", func(t *testing.T) {
+		docker := &fakeDocker{inspect: `{"State":{"Running":true},"Config":{"Labels":{"sst.target.settings":"any"}}}`}
+		stopped, err := container.stop(ctx, "emulator", docker.run)
+		require.NoError(t, err)
+		assert.True(t, stopped)
+		assert.Equal(t, "stop sst-target-emulator", docker.calls[1])
+	})
+
+	t.Run("stopped already", func(t *testing.T) {
+		docker := &fakeDocker{inspect: `{"State":{"Running":false},"Config":{"Labels":{"sst.target.settings":"any"}}}`}
+		stopped, err := container.stop(ctx, "emulator", docker.run)
+		require.NoError(t, err)
+		assert.False(t, stopped)
+		assert.Len(t, docker.calls, 1)
+	})
+
+	t.Run("not SST's", func(t *testing.T) {
+		docker := &fakeDocker{inspect: `{"State":{"Running":true},"Config":{"Labels":{}}}`}
+		stopped, err := container.stop(ctx, "emulator", docker.run)
+		require.NoError(t, err)
+		assert.False(t, stopped)
+		assert.Len(t, docker.calls, 1, "it's left alone")
+	})
+
+	t.Run("none there", func(t *testing.T) {
+		docker := &fakeDocker{missing: true}
+		stopped, err := container.stop(ctx, "emulator", docker.run)
+		require.NoError(t, err)
+		assert.False(t, stopped)
+	})
+
+	t.Run("no Docker", func(t *testing.T) {
+		docker := &fakeDocker{missing: true, down: true}
+		_, err := container.stop(ctx, "emulator", docker.run)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Docker, which isn't running")
+	})
+}
+
+func TestReset(t *testing.T) {
+	local, err := parse(t, func(s map[string]any) {
+		s["container"].(map[string]any)["volumes"] = map[string]any{"/data": "data", "/cache": "cache"}
+	})
+	require.NoError(t, err)
+	container := local.settings.Container
+	ctx := context.Background()
+
+	t.Run("its container and volumes", func(t *testing.T) {
+		docker := &fakeDocker{inspect: `{"State":{"Running":true},"Config":{"Labels":{"sst.target.settings":"any"}}}`}
+		require.NoError(t, container.reset(ctx, "emulator", docker.run))
+		assert.Equal(t, []string{
+			"rm --force sst-target-emulator",
+			"volume rm --force sst-target-emulator-cache",
+			"volume rm --force sst-target-emulator-data",
+		}, docker.calls[1:])
+	})
+
+	t.Run("no container, its volumes still", func(t *testing.T) {
+		docker := &fakeDocker{missing: true}
+		require.NoError(t, container.reset(ctx, "emulator", docker.run))
+		// it asks Docker if it's running, as no container answered
+		assert.Equal(t, "volume rm --force sst-target-emulator-cache", docker.calls[2])
+	})
+
+	t.Run("not SST's", func(t *testing.T) {
+		docker := &fakeDocker{inspect: `{"State":{"Running":true},"Config":{"Labels":{}}}`}
+		err := container.reset(ctx, "emulator", docker.run)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "SST didn't start it")
+		assert.Len(t, docker.calls, 1, "nothing is removed")
+	})
+}
+
+func TestDeployed(t *testing.T) {
+	home := t.TempDir()
+	write := func(app, stage string, gzipped bool, types ...string) {
+		resources := []map[string]string{}
+		for _, t := range types {
+			resources = append(resources, map[string]string{"type": t})
+		}
+		data, err := json.Marshal(map[string]any{"version": 3, "checkpoint": map[string]any{"latest": map[string]any{"resources": resources}}})
+		require.NoError(t, err)
+		if gzipped {
+			var buf bytes.Buffer
+			w := gzip.NewWriter(&buf)
+			w.Write(data)
+			w.Close()
+			data = buf.Bytes()
+		}
+		dir := filepath.Join(home, "state", "app", app)
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, stage+".json"), data, 0644))
+	}
+	// What `sst remove` leaves
+	write("shop", "local", false, "pulumi:pulumi:Stack")
+	write("shop", "removed", false)
+	write("shop", "dev", false, "pulumi:pulumi:Stack", "pulumi:providers:aws", "aws:s3/bucket:Bucket")
+	write("blog", "local", true, "pulumi:pulumi:Stack", "sst:aws:Function")
+
+	deployed, err := deployedIn(home)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"shop/dev", "blog/local"}, deployed)
+
+	none, err := deployedIn(t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, none)
+}
+
+func TestLocked(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "state", "lock", "shop")
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "local.json"), []byte("{}"), 0644))
+	locked, err := lockedIn(home)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"shop/local"}, locked)
+
+	none, err := lockedIn(t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, none)
 }

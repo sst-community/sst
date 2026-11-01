@@ -154,6 +154,12 @@ func PutUpdate(backend Home, app, stage string, update *Update) error {
 	return putJSON(backend, historyKey("update", app, stage, update.ID), false, update)
 }
 
+// RemoveUpdate takes an update out of a stage's history: one that stopped
+// before it changed anything, to run again.
+func RemoveUpdate(backend Home, app, stage, id string) error {
+	return backend.Remove(context.TODO(), historyKey("update", app, stage, id))
+}
+
 // Cleanup removes a stage's event logs and snapshots, after a remove that
 // left nothing. Its update history stays.
 func Cleanup(backend Home, app, stage string) error {

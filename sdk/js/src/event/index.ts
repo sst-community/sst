@@ -26,8 +26,7 @@ export namespace event {
         properties: any,
       ) => any
         ? ReturnType<Metadata>
-        : // @ts-expect-error
-          inferParser<Metadata>["out"];
+        : inferParser<Metadata>["out"];
       type Payload = Prettify<{
         type: Type;
         properties: Parsed["out"];
@@ -38,7 +37,6 @@ export namespace event {
         ? (properties: Parsed["in"]) => Promise<Payload>
         : (
             properties: Parsed["in"],
-            // @ts-expect-error
             metadata: inferParser<Metadata>["in"],
           ) => Promise<Payload>;
       const validate = validator(schema);
@@ -123,16 +121,19 @@ export namespace event {
     | ParserWithInputOutput<any, any>
     | ParserWithoutInput<any>;
 
-  export type inferParser<TParser extends Parser> =
-    TParser extends ParserWithInputOutput<infer $TIn, infer $TOut>
+  // Anything that isn't a parser is `never`
+  export type inferParser<TParser> = TParser extends ParserWithInputOutput<
+    infer $TIn,
+    infer $TOut
+  >
+    ? {
+        in: $TIn;
+        out: $TOut;
+      }
+    : TParser extends ParserWithoutInput<infer $InOut>
       ? {
-          in: $TIn;
-          out: $TOut;
+          in: $InOut;
+          out: $InOut;
         }
-      : TParser extends ParserWithoutInput<infer $InOut>
-        ? {
-            in: $InOut;
-            out: $InOut;
-          }
-        : never;
+      : never;
 }

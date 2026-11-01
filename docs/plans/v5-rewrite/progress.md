@@ -2,6 +2,25 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 3, four gaps closed
+
+The maintainer asked what closes the gaps the last entry left, and chose for each ([decisions](plan.md#decisions)).
+
+**Done, reviewed, committed (not pushed):**
+
+- **Code that imports `sst` needs no `skipLibCheck`.** `sst` installs `@types/aws-lambda`, which three of its SDK's declarations use. Two declarations had type errors that a `@ts-expect-error` hid in the source, which a declaration drops: `VectorClient`'s and `event`'s. Both are written so they need none. A check in CI type-checks what an app imports from `sst` against the built SDK without `skipLibCheck`, under NodeNext and bundler, and that every package its declarations import is one `sst` installs, or one an app brings for the module that uses it (`hono` for `sst/auth`, `zod` or `valibot` for `sst/event`).
+- **The target suite checks `sst dev`.** It runs `sst dev`, calls a function through the target, and checks that the worker on this machine answers with the target's credentials and region and nothing planted. A target that doesn't run functions turns it off. It also checks that the container stops once nothing is deployed on it, and that `sst target stop` stops it.
+- **The first deploy of a stage with checks shows nothing of the run that stopped.** From where the program says it has checks, nothing of that run is shown or kept, its update is taken out of the history, and the run with a preview goes on under the same heading.
+- **`sst target stop` and `sst target reset`**, and **`sst remove` stops a target's container** once no stage of any app has anything deployed on it, keeping its data. Both commands read the config without starting the target. `reset` lists the stages with something deployed, asks, and removes the container, its volumes and the target's home. A container of that name SST didn't start is left alone.
+- **`sst dev`'s UI asks to deploy again** for a few seconds if the first request fails, and says so if it still fails. Once, in the suite, `sst dev` started and never deployed, with nothing said; it didn't happen again in ten tries, or in the suite after.
+
+**Checked:**
+
+- The SDK check passes, and fails when `@types/aws-lambda` is only a dev dependency. The SDK's own tests pass.
+- **Against Floci, started new:** the target suite passed all 19 of its checks twice, `sst dev` among them, and the container stopped after the remove. The Floci package's tests passed. A first deploy of a stage with checks showed one heading, no error, and kept one update. `sst target reset` answered no left everything, and with `--yes` removed the container, its volume and its home.
+- The platform's 1,835 tests and all Go tests.
+- **An independent review** found these, each fixed: `sst target reset` stopped at a state it couldn't read, which is when it's needed most, so it says so and goes on; `sst remove` could stop the container under another stage's first deploy, which has nothing in its state yet, so a command running on any other stage keeps it going; the suite waited for `sst dev`'s output to close, which a process it started can hold open; `sst target stop` said the container wasn't running when Docker wasn't; `reset` without a terminal now says to pass `--yes`. The suite passed all its checks again after.
+
 ## 2026-11-01: step 3, the target suite and the Floci package
 
 The maintainer said to go on to the Floci package. It's to live in a repo of its own, with rogueturnip, so it was drafted outside this repo and not published, for them to take over.

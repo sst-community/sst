@@ -4,13 +4,18 @@
 package target
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/global"
@@ -187,11 +192,102 @@ func (l *Local) Start(ctx context.Context) error {
 }
 
 func (l *Local) Stop(ctx context.Context) error {
+	_, err := l.StopContainer(ctx)
+	return err
+}
+
+// StopContainer stops the target's container, if the core started it and
+// it's running, and says whether it did. Its volumes are kept, and the next
+// command on a stage bound to the target starts it again.
+func (l *Local) StopContainer(ctx context.Context) (bool, error) {
 	s := l.settings
 	if s.Container == nil {
-		return nil
+		return false, nil
 	}
 	return s.Container.stop(ctx, s.Name, docker)
+}
+
+// Reset removes the target's container and its volumes, and the state of
+// every stage on it, of every app: what was in the target is gone with them.
+// The next command on a stage bound to it starts it new.
+func (l *Local) Reset(ctx context.Context) error {
+	s := l.settings
+	if s.Container != nil {
+		if err := s.Container.reset(ctx, s.Name, docker); err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(HomeDir(s.Name))
+}
+
+// Deployed lists the stages on a target that have resources, as
+// "app/stage", from the state in its home.
+func Deployed(name string) ([]string, error) {
+	return deployedIn(HomeDir(name))
+}
+
+// Locked lists the stages on a target that a command is running on, as
+// "app/stage": a first deploy has nothing in its state yet.
+func Locked(name string) ([]string, error) {
+	return lockedIn(HomeDir(name))
+}
+
+func lockedIn(home string) ([]string, error) {
+	files, err := filepath.Glob(filepath.Join(home, "state", "lock", "*", "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	stages := []string{}
+	for _, file := range files {
+		stages = append(stages, filepath.Base(filepath.Dir(file))+"/"+strings.TrimSuffix(filepath.Base(file), ".json"))
+	}
+	return stages, nil
+}
+
+func deployedIn(home string) ([]string, error) {
+	files, err := filepath.Glob(filepath.Join(home, "state", "app", "*", "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	stages := []string{}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		// A home can keep its state gzipped
+		if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
+			reader, err := gzip.NewReader(bytes.NewReader(data))
+			if err != nil {
+				return nil, err
+			}
+			if data, err = io.ReadAll(reader); err != nil {
+				return nil, err
+			}
+		}
+		var state struct {
+			Checkpoint struct {
+				Latest struct {
+					Resources []struct {
+						Type string `json:"type"`
+					} `json:"resources"`
+				} `json:"latest"`
+			} `json:"checkpoint"`
+		}
+		if err := json.Unmarshal(data, &state); err != nil {
+			return nil, fmt.Errorf("reading %s: %w", file, err)
+		}
+		for _, resource := range state.Checkpoint.Latest.Resources {
+			// What Pulumi keeps for any stack, with nothing deployed
+			if resource.Type == "pulumi:pulumi:Stack" || strings.HasPrefix(resource.Type, "pulumi:providers:") {
+				continue
+			}
+			app := filepath.Base(filepath.Dir(file))
+			stages = append(stages, app+"/"+strings.TrimSuffix(filepath.Base(file), ".json"))
+			break
+		}
+	}
+	return stages, nil
 }
 
 // clouds are the providers of other clouds SST calls, with credentials a

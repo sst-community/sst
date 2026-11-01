@@ -59,6 +59,16 @@ func (c *Cli) Discover() (string, error) {
 }
 
 func (c *Cli) InitProject() (*project.Project, error) {
+	return c.initProject(true)
+}
+
+// InitProjectWithoutHome reads the project and its stage as InitProject
+// does, and doesn't load its home: a stage's target isn't started.
+func (c *Cli) InitProjectWithoutHome() (*project.Project, error) {
+	return c.initProject(false)
+}
+
+func (c *Cli) initProject(loadHome bool) (*project.Project, error) {
 	slog.Info("initializing project", "version", c.version)
 
 	cfgPath, err := c.Discover()
@@ -150,12 +160,14 @@ func (c *Cli) InitProject() (*project.Project, error) {
 		}
 	}
 
-	if err := p.LoadHome(); err != nil {
-		return nil, err
+	if loadHome {
+		if err := p.LoadHome(); err != nil {
+			return nil, err
+		}
+		// What the CLI kept of its environment when it started, which sst
+		// dev's panes and sst shell are given, as the stage's target gives it
+		c.env = p.Target().Env(c.env)
 	}
-	// What the CLI kept of its environment when it started, which sst dev's
-	// panes and sst shell are given, as the stage's target gives it
-	c.env = p.Target().Env(c.env)
 
 	app := p.App()
 	slog.Info("loaded config", "app", app.Name, "stage", app.Stage)

@@ -54,6 +54,11 @@ jobs:
       - name: Check types
         run: cd platform && bun tsc --noEmit
 
+      # What an app's code reads of the SDK, `import { Resource } from "sst"`
+      # and the rest, without skipLibCheck
+      - name: Check the SDK's types
+        run: cd sdk/js && bun run build && bun ./scripts/types.ts
+
       - name: Build platform
         run: ./platform/scripts/build
         env:
