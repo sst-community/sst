@@ -27,9 +27,20 @@ The maintainer said to continue. The `Vpc` is the gate's hard component that the
 - **The VPC recording, with the V5 `Vpc`**: it takes over the lab's `Net` (a managed NAT and a bastion) and the containers and databases in it, updating nothing. Only `NetVersion` goes, beside the markers that went before.
 - **A new stage's preview plans everything a deploy creates**, for an EC2 NAT with a bastion and for a managed NAT with one.
 
+**Checked in the lab** (stage `net`, `LAB_ONLY=net`, the VPC alone with a bastion, with a CLI built from the branch), the maintainer having said to continue:
+
+- **An EC2 NAT that's the bastion.** Deployed with the 4.x `Vpc`, then switched: `sst diff` showed only 4.x's version marker going, and `sst migrate --check` passed (33 kept, the marker taken out of the state). The deploy kept all 28 resources in AWS with the same ids. The core was told the tunnel at the first NAT instance's Elastic IP, as 4.x told it.
+- **A managed NAT and a bastion of its own**, as the recordings have it, on the same stage after a remove: the same diff and check (32 kept), all 27 resources kept by id, and nothing to change on the next diff. 4.x had found the image with the 6.18 kernel, which is the one Amazon's parameter names now, so the bastion was kept. SSH to the address the V5 `Vpc` reported, with the key it keeps in SSM, reached it.
+- Removed, and cleaned up (below).
+
+**Found:**
+
+- **Going back to the 4.x `Vpc` after a deploy with the V5 one fails.** The V5 one doesn't keep 4.x's version marker, the core reads a component without one as its first version, and 4.x refuses to deploy with a message to rename it `Vpc.v1`, which would create the VPC again. It's the same for the V5 `Cluster`, `Postgres` and `Redis`. In 5.0 the way back is the copy of the state `sst migrate` saves, which has the markers, and the tombstone stops a 4.x deploy; the migration guide has to say not to follow that message. The rulebook no longer says going back keeps everything, and the `Vpc`'s docs warn of it.
+- **4.x kept the whole tunnel secret**, address and subnets too, because the key was in it. The V5 `Vpc` keeps the key secret, and the rest, which isn't, in plain text.
+
 **Not decided, for the maintainer:** the NAT instances and the bastion take the newest image on every deploy, as in 4.x, so a new fck-nat or Amazon Linux release replaces them, and replacing a NAT instance cuts the private subnets off for a while. Leaving changes to the image alone once an instance exists (`ignoreChanges`) would stop that, at the price of never updating it without a replace by hand.
 
-**Left:** the `Vpc`'s lab deploy, compared by cloud id. The V5 `Efs` still counts a VPC's subnets inside an `apply` and names each mount target after its subnet's id; its 5.0 form reads the `Vpc`'s subnets by AZ, which a preview can count, and moves the mount targets with a map. Then `Nextjs` with `Router`, the `Function`'s rebuild the 5.0 way, and releasing and adopting `BucketFiles` and `KvKeys`.
+**Left:** the V5 `Efs` still counts a VPC's subnets inside an `apply` and names each mount target after its subnet's id; its 5.0 form reads the `Vpc`'s subnets by AZ, which a preview can count, and moves the mount targets with a map. Then `Nextjs` with `Router`, the `Function`'s rebuild the 5.0 way, and releasing and adopting `BucketFiles` and `KvKeys`.
 
 ## 2026-11-01: step 4, the shared dev stub code is taken over
 

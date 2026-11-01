@@ -461,6 +461,9 @@ interface Network {
  *   bastion, or on the NAT's or the bastion's security group, it keeps the tags SST sets
  *   next to yours. They're added back when you switch. A stage that references this VPC
  *   with `get` finds its bastion by them.
+ * - Going back to `sst.aws.Vpc` after a deploy with this one fails on its version check,
+ *   since this one doesn't keep 4.x's version marker. The message says to rename it to
+ *   `Vpc.v1`. Don't: that would create the VPC again.
  * - `sst.aws.Vpc.v1` has no V5 form.
  *
  * ---

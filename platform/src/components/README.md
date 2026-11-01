@@ -257,8 +257,12 @@ Everything above applies. The rest is specific to SST's own components in
 - **The same type is what makes it the same component.** A deployed `sst:aws:Queue`
   named `MyQueue` is the one `new sst.aws.v5.Queue("MyQueue")` creates, so it's kept, and
   so is each resource in it that has the name it had. Going back to the 4.x component
-  keeps those too. What links the component sees no change, and a `$transform` for
-  either applies to both.
+  keeps those too, except for the components 4.x versions (`Vpc`, `Cluster`, `Postgres`,
+  `Redis`): the V5 one drops 4.x's version marker, and 4.x reads a component without
+  one as its first version and refuses to deploy. Its message says to rename the
+  component to `.v1`, which would create it again, so don't. The way back for those is
+  the copy of the state from before the switch. What links the component sees no change,
+  and a `$transform` for either applies to both.
 - **Where a file needs both, the 4.x one is `Original…`.** That goes for the class and
   for its types: `import type { Queue as OriginalQueue } from "../queue"`. In prose,
   say which one you mean: "the 4.x `Queue`" in a code comment, `sst.aws.Queue` and
