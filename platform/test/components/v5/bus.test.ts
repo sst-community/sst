@@ -151,6 +151,7 @@ describe("Bus", () => {
         ],
         changed: [],
         unordered: [],
+        revealed: [],
       });
       expect(resource("SharedBusRuleEmailer").inputs.eventBusName).toBe(
         "shared",

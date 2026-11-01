@@ -589,7 +589,18 @@ describe("takes over a deployed Queue", () => {
 - Wrappers whose names aren't worth writing out can be counted: give the mock a
   `wrappers` pattern and the case a `wrappers` number (see `v5/apigatewayv2.test.ts`).
 - For a one-off, `pulumi.takesOver(original, v5)` returns `{ unclaimed, changed,
-  unordered }`.
+  unordered, revealed }`.
+- **What was secret stays secret.** A value the original kept secret that's in plain text
+  now is listed in `revealed`, by where it is: "MyServiceTask.environment.variables.TOKEN",
+  or "MyComponent.outputs.token" for a component's outputs. Every case expects it empty.
+  A deploy updates nothing for it, so nothing else catches it: the state holds the value
+  in plain text from then on.
+- **The states 4.x really deployed** (`testdata/states`) are checked too, under the mock:
+  `test/components/v5/recorded.test.ts` runs the lab app that deployed them
+  (`test/recorded`) with `pulumi.takesOverState()`, which replays a state's ids and
+  outputs. The 4.x components have to give what the state has, and the V5 ones have to
+  take over what they gave. A port of a component in a recording updates what that test
+  expects.
 - **Teardown order is checked too.** A deploy removes resources in the reverse of the
   order they depend on each other, and AWS refuses to delete what's still in use. So
   every dependency the original has is expected of the V5 component, directly or

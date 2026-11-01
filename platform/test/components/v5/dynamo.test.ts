@@ -337,6 +337,7 @@ describe("Dynamo", () => {
         unclaimed: [`${WRAPPER}::OrdersSubscriberIndexer`],
         changed: [],
         unordered: [],
+        revealed: [],
       });
       expect(
         resource("ExternalOrdersEventSourceMappingIndexer").inputs.eventSourceArn,

@@ -600,6 +600,7 @@ describe("Task", () => {
         unclaimed: [],
         changed: [],
         unordered: [],
+        revealed: [],
       });
     });
 

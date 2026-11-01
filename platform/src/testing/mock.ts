@@ -7,6 +7,21 @@ import { rpc } from "../components/rpc/rpc";
 import { contractVersion } from "../components/contract";
 import { checkResource } from "../components/check";
 import type { MovedPart } from "../components/move";
+import {
+  ARCHIVE,
+  ASSET,
+  SECRET,
+  SIG,
+  type StateExport,
+  asStateHas,
+  buildHashes,
+  comparable,
+  hiddenInPlainText,
+  policyDocument,
+  replayer,
+  revealedPaths,
+  withHashes,
+} from "./state";
 
 /**
  * A resource a component registered, with what decides whether a deployed
@@ -32,6 +47,11 @@ export interface RecordedResource {
    * resource's inputs.
    */
   build?: Record<string, any>;
+  /**
+   * Read from a stage's state (`stateGraph()`), which doesn't hold everything
+   * a registration does. What it doesn't hold isn't compared.
+   */
+  fromState?: boolean;
 }
 
 // Suppress Pulumi "Trace events are unavailable" errors in test environment
@@ -69,6 +89,24 @@ export interface MockInput {
    * which `moved()` returns. With `preview`, it's `sst migrate --check`.
    */
   move?: boolean;
+  /**
+   * For the platform's own takeover tests: a stage's state, as `sst state
+   * export` writes it, to run against. A resource at an address the state
+   * has, or that answers to one through an alias, comes back with the id and
+   * outputs deployed there, as the engine reads them from the state. A
+   * secret the state has comes back as `[secret]`.
+   *
+   * The outputs are the state's whatever the resource is given now, as in a
+   * preview. So where a resource's inputs differ from the state's, it's
+   * listed as changed, and what reads its outputs isn't.
+   */
+  recorded?: StateExport;
+  /**
+   * What the CLI answers, in place of the mock's stand-ins: for a recorded
+   * state, what it answered when the stage was deployed, like the bucket its
+   * code went to. Undefined leaves the stand-in's answer.
+   */
+  cli?: (method: string, args: any) => any;
 }
 
 // The outputs 4.x's components name for the core, and what each is in a
@@ -131,7 +169,7 @@ export function mockPulumi(input?: MockInput) {
   const bundle = path.join(work, "bundle");
   fs.mkdirSync(bundle);
   fs.writeFileSync(
-    path.join(bundle, "index.mjs"),
+    path.join(bundle, "bundle.mjs"),
     "export const handler = async () => {};\n",
   );
   // In `sst dev` a stub is deployed in place of a function's code. The CLI
@@ -152,15 +190,17 @@ export function mockPulumi(input?: MockInput) {
   // What components reported while the stage moves
   const moved: MovedPart[] = [];
   rpc.call = (async (method: string, args: any) => {
-    if (method === "Move.Part") {
-      moved.push(args);
-      return {};
-    }
     if (method === "Runtime.Build" || method === "Runtime.AddTarget")
       built(args);
+    if (method === "Move.Part") moved.push(args);
+    const answer = input?.cli?.(method, args);
+    if (answer !== undefined) return answer;
+    if (method === "Move.Part") return {};
+    // As the CLI builds a Node.js function: one file, named `bundle`, with
+    // the handler's export
     if (method === "Runtime.Build")
       return {
-        handler: "index.handler",
+        handler: "bundle" + (args.handler ? path.extname(args.handler) : ""),
         out: bundle,
         errors: [],
         sourcemaps: input?.sourcemaps?.(args.functionID) ?? [],
@@ -221,9 +261,58 @@ export function mockPulumi(input?: MockInput) {
     paths: { root: input?.root ?? "/", work, platform },
   };
 
+  // What a recorded state answers for a resource registered or read. The
+  // engine's mock is told only its type and name, and asks for it as soon as
+  // the request is sent, so the answer is handed over then (`send()`).
+  const replay = input?.recorded ? replayer(input.recorded) : undefined;
+  let reply:
+    | { type: string; name: string; found?: { id: string; outputs: any } }
+    | undefined;
+  const send = (
+    to: (req: any, callback: any) => unknown,
+    req: any,
+    callback: any,
+    addresses: Iterable<string>,
+  ) => {
+    if (!replay) return to(req, callback);
+    reply = {
+      type: req.getType(),
+      name: req.getName(),
+      found: replay.find(addresses),
+    };
+    try {
+      return to(req, callback);
+    } finally {
+      const unasked = reply;
+      reply = undefined;
+      if (unasked)
+        throw new Error(
+          `The engine's mock didn't ask for ${unasked.name} when it was sent`,
+        );
+    }
+  };
+
+  // What a lookup gives with a recorded state: as the provider answered when
+  // the stage was deployed, where the state says
+  const replayed = (args: pulumi.runtime.MockCallArgs) => {
+    if (args.token === "aws:index/getRegion:getRegion") {
+      const region = replay!.region(args.provider);
+      return region ? { name: region, region, id: region } : undefined;
+    }
+    if (args.token === "aws:iam/getPolicyDocument:getPolicyDocument")
+      return policyDocument(args.inputs);
+  };
+
   pulumi.runtime.setMocks(
     {
       newResource(args: pulumi.runtime.MockResourceArgs) {
+        if (reply && (reply.type !== args.type || reply.name !== args.name))
+          throw new Error(
+            `The engine's mock asked for ${args.name} while ${reply.name} was sent`,
+          );
+        const recorded = reply?.found;
+        reply = undefined;
+        if (recorded) return { id: recorded.id, state: recorded.outputs };
         return {
           id: `${args.name}_id`,
           state: {
@@ -237,6 +326,7 @@ export function mockPulumi(input?: MockInput) {
       call(args: pulumi.runtime.MockCallArgs) {
         return (
           input?.call?.(args) ??
+          (replay && replayed(args)) ??
           lookups[args.token]?.(args.inputs) ??
           args.inputs
         );
@@ -260,15 +350,19 @@ export function mockPulumi(input?: MockInput) {
   const findings: string[] = [];
   // A deploy here has its preview first, so the program's checks turn on
   process.env.SST_PREVIEW_FIRST = "1";
+  // Every address each resource registered answers to, by its own
+  const addresses = new Map<string, Set<string>>();
   monitor.registerResource = (req: any, callback: any) => {
     activity++;
-    resources.push({
+    const r: RecordedResource = {
       kind: "register",
       type: req.getType(),
       name: req.getName(),
       parent: req.getParent(),
       custom: req.getCustom(),
-      inputs: req.getObject()?.toJavaScript() ?? {},
+      // What a file asset holds is read now: what's registered later can
+      // write the file again
+      inputs: withHashes(req.getObject()?.toJavaScript() ?? {}),
       options: compact({
         protect: req.getProtect(),
         retainOnDelete: req.getRetainondelete(),
@@ -287,22 +381,30 @@ export function mockPulumi(input?: MockInput) {
         providers: Object.fromEntries(req.getProvidersMap().toArray()),
         dependencies: [...req.getDependenciesList()].sort(),
       }),
-    });
+    };
+    resources.push(r);
+    const own = urn(r.type, r.name, r.parent);
+    addresses.set(own, answersTo(r, addresses.get(r.parent)));
+    // A component isn't in the engine's mock's state, and gets no answer
+    const register = () =>
+      send(
+        registerResource,
+        req,
+        callback,
+        r.custom ? addresses.get(own)! : [],
+      );
     // The program's checks look at a resource before it's registered, as
     // they do in a deploy. What they find is kept in `findings`, for a test
     // to read, and the resource is registered anyway.
-    if (!req.getCustom()) return registerResource(req, callback);
+    if (!req.getCustom()) return register();
     checkResource(
       req.getType(),
       req.getName(),
       req.getObject()?.toJavaScript() ?? {},
-    ).then(
-      () => registerResource(req, callback),
-      (error: any) => {
-        findings.push(String(error?.message ?? error));
-        registerResource(req, callback);
-      },
-    );
+    ).then(register, (error: any) => {
+      findings.push(String(error?.message ?? error));
+      register();
+    });
   };
   const readResource = monitor.readResource.bind(monitor);
   monitor.readResource = (req: any, callback: any) => {
@@ -316,7 +418,9 @@ export function mockPulumi(input?: MockInput) {
       inputs: req.getProperties()?.toJavaScript() ?? {},
       options: compact({ id: req.getId(), provider: req.getProvider() }),
     });
-    return readResource(req, callback);
+    return send(readResource, req, callback, [
+      urn(req.getType(), req.getName(), req.getParent()),
+    ]);
   };
 
   // What a component registers as its outputs, by its URN. The CLI reads
@@ -369,6 +473,7 @@ export function mockPulumi(input?: MockInput) {
       moved.length = 0;
       registered.clear();
       builds.clear();
+      addresses.clear();
     },
     /** The outputs a component registered, by the component's name. */
     outputsOf(name: string) {
@@ -481,48 +586,46 @@ export function mockPulumi(input?: MockInput) {
      * A resource claimed this way is kept on deploy. One that isn't claimed
      * is deleted, and one whose inputs changed is updated or replaced.
      * `unordered` lists what the original removed in order and this doesn't:
-     * "MyService before MyNamespace".
+     * "MyService before MyNamespace". `revealed` lists where a value the
+     * original kept secret is in plain text now, in a resource's inputs or a
+     * component's outputs: "MyParameter.value". A deploy updates nothing for
+     * it, but the state holds the value in plain text from then on.
+     *
+     * A secret is compared by its value, and a file asset or archive by what
+     * was in the file when the resource was registered.
      *
      * @param original The `graph()` of what's deployed: taken a moment ago,
      * or saved to a file and read back.
      */
     takeover(original: RecordedResource[]) {
-      // Every address each resource answers to: its own, its aliases, and
-      // the ones it inherits from its parent's aliases, as Pulumi works
-      // them out.
+      const { unclaimed, changed, unordered, revealed } =
+        this.compare(original);
+      return { unclaimed, changed, unordered, revealed };
+    },
+    /**
+     * What `takeover()` checks, and more:
+     *
+     * - `hidden`: where a value that was plain is kept secret now, which
+     *   changes nothing in AWS.
+     * - `created`: what's registered now that takes the place of nothing in
+     *   the original, which a deploy creates.
+     * - `pairs`: each original resource, with what claims it now.
+     *
+     * Run against a recorded state, `revealed` also lists where a value
+     * holds a secret the state has (`[secret]`) in plain text, in anything
+     * registered now.
+     */
+    compare(original: RecordedResource[]) {
       const claims = new Map<string, Set<string>>();
-      for (const r of resources) {
-        const own = urn(r.type, r.name, r.parent);
-        const aliases = ((r.options.aliases ?? []) as any[]).map((alias) =>
-          typeof alias === "string"
-            ? alias
-            : urn(
-                alias.spec.type || r.type,
-                alias.spec.name || r.name,
-                alias.spec.noparent ? "" : alias.spec.parenturn || r.parent,
-              ),
+      for (const r of resources)
+        claims.set(
+          urn(r.type, r.name, r.parent),
+          answersTo(r, claims.get(r.parent)),
         );
-        // Under each address its parent had, the resource answers to its own
-        // name and type, and to the name and type of each of its aliases.
-        const inherited: string[] = [];
-        const parentName = nameOf(r.parent);
-        for (const parentAlias of claims.get(r.parent) ?? []) {
-          if (parentAlias === r.parent) continue;
-          for (const [type, name] of [
-            [r.type, r.name],
-            ...aliases.map((alias) => [typeOf(alias), nameOf(alias)]),
-          ]) {
-            const aliasName = name.startsWith(parentName)
-              ? nameOf(parentAlias) + name.substring(parentName.length)
-              : name;
-            inherited.push(urn(type, aliasName, parentAlias));
-          }
-        }
-        claims.set(own, new Set([own, ...aliases, ...inherited]));
-      }
 
       const unclaimed: string[] = [];
       const pairs: [RecordedResource, RecordedResource][] = [];
+      const claimed = new Set<RecordedResource>();
       for (const before of original) {
         const address = urn(before.type, before.name, before.parent);
         const claimants = resources.filter((r) =>
@@ -536,8 +639,15 @@ export function mockPulumi(input?: MockInput) {
           );
         if (claimants.length === 0)
           unclaimed.push(`${before.type}::${before.name}`);
-        else pairs.push([before, claimants[0]]);
+        else {
+          pairs.push([before, claimants[0]]);
+          claimed.add(claimants[0]);
+        }
       }
+      const created = deployed(resources)
+        .filter((r) => !claimed.has(r))
+        .map((r) => `${r.type}::${r.name}`)
+        .sort();
 
       // Mock ids and ARNs are made from resource names, so write the names
       // used now as the original ones before comparing inputs.
@@ -581,6 +691,10 @@ export function mockPulumi(input?: MockInput) {
         Object.fromEntries(
           Object.entries(r.inputs).filter(([key]) => !ignore.includes(key)),
         );
+      // The hashes of what the mock built, which a state has the CLI's for
+      const built = original.some((r) => r.fromState)
+        ? buildHashes(resources)
+        : new Set<string>();
       const changed = pairs
         .map(([before, now]) => {
           // A resource that's looked up isn't written to. What matters is
@@ -595,32 +709,44 @@ export function mockPulumi(input?: MockInput) {
           // What a component registers as its outputs is kept in the state
           // too, and the CLI reads it
           const registers = !before.custom || !now.custom;
+          // A stage's state holds less than a registration: it's compared
+          // with what it holds. Otherwise what's compared is what the
+          // provider is given. Either way, whether a value is kept secret is
+          // said apart.
+          const state = before.fromState === true;
+          const original = (values: Record<string, any>) =>
+            state ? comparable(values) : withoutSecrets(values);
+          const current = (
+            values: Record<string, any>,
+            was: Record<string, any>,
+          ) =>
+            state ? asStateHas(was, values, built) : withoutSecrets(values);
+          // Run against a state, what's registered was given what the state
+          // has, so nothing needs writing as it was
+          const rename = state || replay ? undefined : asOriginal(now.name);
+          const outputs = asTheCoreReads(before.outputs ?? {});
           // What a function's code is built from ends up in the code
-          const builds = before.build || buildOf(now);
+          const builds = !state && (before.build || buildOf(now));
           return {
             name: before.name,
             original: {
-              ...stable(kept(before, ignore)),
-              ...deployOptions(before),
-              ...(registers
-                ? { outputs: stable(asTheCoreReads(before.outputs ?? {})) }
-                : {}),
+              ...stable(original(kept(before, ignore))),
+              ...deployOptions(before, state),
+              ...(registers ? { outputs: stable(original(outputs)) } : {}),
               ...(builds ? { build: stable(before.build ?? {}) } : {}),
             },
             now: {
-              ...stable(kept(now, ignore), asOriginal(now.name)),
-              ...deployOptions(now),
+              ...stable(current(kept(now, ignore), before.inputs), rename),
+              ...deployOptions(now, state),
               ...(registers
                 ? {
                     outputs: stable(
-                      asTheCoreReads(outputsOf(now)),
-                      asOriginal(now.name),
+                      current(asTheCoreReads(outputsOf(now)), outputs),
+                      rename,
                     ),
                   }
                 : {}),
-              ...(builds
-                ? { build: stable(buildOf(now) ?? {}, asOriginal(now.name)) }
-                : {}),
+              ...(builds ? { build: stable(buildOf(now) ?? {}, rename) } : {}),
             },
           };
         })
@@ -678,20 +804,110 @@ export function mockPulumi(input?: MockInput) {
           .map((dependency) => `${now.name} before ${dependency.name}`),
       );
 
-      return { unclaimed, changed, unordered };
+      // Where a value is kept secret in one and not the other: a resource's
+      // inputs, and what a component registers as its outputs. A deploy
+      // updates nothing for it, but the state keeps the value in plain text
+      // from then on, or encrypted. A state can have a secret on the
+      // property that holds it, where the program put it deeper.
+      const secrets = (r: RecordedResource, outputs: Record<string, any>) => {
+        const { __provider, ...inputs } = r.inputs;
+        return r.custom ? inputs : { ...inputs, outputs };
+      };
+      const revealed: string[] = [];
+      const hidden: string[] = [];
+      for (const [before, now] of pairs) {
+        if (before.kind === "read" || now.kind === "read") continue;
+        const was = secrets(before, before.outputs ?? {});
+        const is = secrets(now, outputsOf(now));
+        const widened = before.fromState === true;
+        for (const path of revealedPaths(was, is, widened))
+          revealed.push(`${before.name}.${path}`);
+        for (const path of revealedPaths(is, was, widened))
+          hidden.push(`${before.name}.${path}`);
+      }
+      // A secret the state has is given as `[secret]`, so where that's in
+      // plain text, a secret's value is written in plain text
+      if (replay)
+        for (const r of resources) {
+          const paired = pairs.find(([, now]) => now === r);
+          for (const path of hiddenInPlainText(secrets(r, outputsOf(r))))
+            revealed.push(`${(paired?.[0] ?? r).name}.${path}`);
+        }
+
+      return {
+        unclaimed,
+        changed,
+        unordered,
+        revealed: [...new Set(revealed)].sort(),
+        hidden: hidden.sort(),
+        created,
+        pairs,
+      };
     },
   };
+}
+
+// Inputs as the provider is given them: a secret's value, no value for a
+// secret with none, and an asset or archive by what was in its file when it
+// was registered, as Pulumi compares them, not where it was written
+function withoutSecrets(value: any): any {
+  if (Array.isArray(value)) return value.map(withoutSecrets);
+  if (!value || typeof value !== "object") return value;
+  if (value[SIG] === SECRET)
+    return value.value == null ? undefined : withoutSecrets(value.value);
+  if ((value[SIG] === ASSET || value[SIG] === ARCHIVE) && value.hash)
+    return { [SIG]: value[SIG], hash: value.hash };
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, v]) => [key, withoutSecrets(v)])
+      .filter(([, v]) => v !== undefined),
+  );
+}
+
+// Every address a resource answers to: its own, its aliases, and the ones it
+// inherits from its parent's aliases, as Pulumi works them out. Under each
+// address its parent had, a resource answers to its own name and type, and to
+// the name and type of each of its aliases.
+function answersTo(r: RecordedResource, parent: Set<string> | undefined) {
+  const own = urn(r.type, r.name, r.parent);
+  const aliases = ((r.options.aliases ?? []) as any[]).map((alias) =>
+    typeof alias === "string"
+      ? alias
+      : urn(
+          alias.spec.type || r.type,
+          alias.spec.name || r.name,
+          alias.spec.noparent ? "" : alias.spec.parenturn || r.parent,
+        ),
+  );
+  const inherited: string[] = [];
+  const parentName = nameOf(r.parent);
+  for (const parentAlias of parent ?? []) {
+    if (parentAlias === r.parent) continue;
+    for (const [type, name] of [
+      [r.type, r.name],
+      ...aliases.map((alias) => [typeOf(alias), nameOf(alias)]),
+    ]) {
+      const aliasName = name.startsWith(parentName)
+        ? nameOf(parentAlias) + name.substring(parentName.length)
+        : name;
+      inherited.push(urn(type, aliasName, parentAlias));
+    }
+  }
+  return new Set([own, ...aliases, ...inherited]);
 }
 
 // The options that change what a deploy does to a resource that's already
 // there, as `options.<name>` next to its inputs. Losing `ignoreChanges` on a
 // database's engine version, or `retainOnDelete` on a bucket, is as much a
 // change as a different input.
-function deployOptions(r: RecordedResource) {
+//
+// A stage's state doesn't hold `deleteBeforeReplace`, so it isn't compared
+// with one.
+function deployOptions(r: RecordedResource, againstState = false) {
   const options = [
     "protect",
     "retainOnDelete",
-    "deleteBeforeReplace",
+    ...(againstState ? [] : ["deleteBeforeReplace"]),
     "ignoreChanges",
     "replaceOnChanges",
     "additionalSecretOutputs",

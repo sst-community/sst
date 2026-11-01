@@ -13,10 +13,18 @@ as the home stored it (Pulumi's checkpoint), scrubbed before it was committed:
 - the app's folder is `/home/user/v5-lab`, and other paths on the deploying
   machine start at `/home/user` or `/tmp`;
 - every secret's ciphertext is `v1:scrubbed`, so a state can be read but not
-  decrypted.
+  decrypted;
+- a name SST made by hashing an ARN, like a queue subscriber's, is made again
+  from the scrubbed ARN, everywhere it's used, so the state is the one a
+  deploy in the scrubbed account would have written.
 
 `pkg/project/provider/recorded_state_test.go` reads each one through the homes
 and fails if a file holds anything that looks private.
+
+`platform/test/components/v5/recorded.test.ts` runs the app that deployed them
+(`platform/test/recorded`) under the mock, given the state: the 4.x components
+have to give what the state has, and the V5 ones have to take over what they
+gave.
 
 | File | What it holds |
 | --- | --- |

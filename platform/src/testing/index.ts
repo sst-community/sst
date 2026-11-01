@@ -5,6 +5,7 @@ import { type MockInput, mockPulumi } from "./mock";
 import type { Target } from "../components/target";
 
 export type { MockInput, RecordedResource } from "./mock";
+export type { StateExport } from "./state";
 export {
   targetSuite,
   type TargetSuiteOptions,

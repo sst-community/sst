@@ -59,7 +59,7 @@ A resource whose URN changes, because a component was restructured, is carried f
 - Each component's map runs against every recorded state it's in, in CI, with no AWS.
 - In the lab, a real deploy compared by cloud id (goal 1). For a released resource, what it held is checked after the move: the same files, the same routes, the same rows.
 
-**Where it stands (2026-11-01):** `sst migrate --check` does the first, from Pulumi's preview of the move and what each component reports about its parts. On a Floci stage, it passed a move from the 4.x `Bucket`, `Dynamo`, `Queue` and `Function` to the V5 ones, a deploy then kept every id it said it would, and it failed a move with the table renamed. Not yet: the maps against the recorded states, and the lab.
+**Where it stands (2026-11-01):** `sst migrate --check` does the first, from Pulumi's preview of the move and what each component reports about its parts. On a Floci stage, it passed a move from the 4.x `Bucket`, `Dynamo`, `Queue` and `Function` to the V5 ones, a deploy then kept every id it said it would, and it failed a move with the table renamed. The second runs for the serverless group, deployed and in `sst dev` (`test/components/v5/recorded.test.ts`): the mock replays the state, 4.x gives what it has, and V5 takes it over, but for 4.x's shared dev stub code, which V5 doesn't take over or release yet. Not yet: the VPC recording, and the lab.
 
 ## 4. The home stays compatible
 

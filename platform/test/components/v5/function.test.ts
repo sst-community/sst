@@ -573,7 +573,7 @@ describe("Function", () => {
       queue.subscribe({ handler, link: [queue] });
       await pulumi.settle();
 
-      expect(inputs("MyQueueSubscriberFunction").handler).toBe("index.handler");
+      expect(inputs("MyQueueSubscriberFunction").handler).toBe("bundle.handler");
       const policy = inputs("MyQueueSubscriberRole").inlinePolicies[0].policy;
       expect(JSON.parse(policy).statements).toContainEqual(
         expect.objectContaining({ actions: ["sqs:*"] }),
@@ -600,7 +600,7 @@ describe("Function", () => {
       await pulumi.settle();
       const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
       expect(fn.inputs.runtime).toBe("ruby3.4");
-      expect(fn.inputs.handler).toBe("index.handler");
+      expect(fn.inputs.handler).toBe("bundle.handler");
       const built = pulumi.graph().find((r) => r.name === "MyFunction")!.build!;
       expect(built.runtime).toBe("ruby3.4");
       expect(built.commands).toEqual(commands);
@@ -700,7 +700,7 @@ describe("Function", () => {
 
       expect(inputs("MyQueueSubscriberFunction")).toMatchObject({
         // Not the stub that's deployed in `sst dev`
-        handler: "index.handler",
+        handler: "bundle.handler",
         role: ROLE_ARN,
         loggingConfig: { logFormat: "JSON", logGroup: "/my/logs" },
       });
@@ -783,7 +783,7 @@ describe("Function", () => {
       expect(result.changed.map((c) => [c.name, c.fields])).toEqual([]);
       expect(inputs("MyFunctionFunction")).toMatchObject({
         // Not the stub that's deployed in `sst dev`
-        handler: "index.handler",
+        handler: "bundle.handler",
         role: ROLE_ARN,
         loggingConfig: { logFormat: "JSON", logGroup: "/my/logs" },
       });

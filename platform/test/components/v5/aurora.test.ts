@@ -373,6 +373,7 @@ describe("Aurora", () => {
         unclaimed: [],
         changed: [],
         unordered: [],
+        revealed: [],
       });
     });
   });

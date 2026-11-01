@@ -1,3 +1,6 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { mock } from "../../src/testing";
 
@@ -132,6 +135,7 @@ describe("mock()", () => {
         unclaimed: ["aws:s3/bucket:Bucket::DocsBucket"],
         changed: [],
         unordered: [],
+        revealed: [],
       });
     });
 
@@ -141,7 +145,7 @@ describe("mock()", () => {
       app.reset();
       new Kept("Docs");
       await app.settle();
-      expect(app.takeover(deployed)).toEqual({ unclaimed: [], changed: [], unordered: [] });
+      expect(app.takeover(deployed)).toEqual({ unclaimed: [], changed: [], unordered: [], revealed: [] });
     });
 
     it("says which inputs changed", async () => {
@@ -158,6 +162,69 @@ describe("mock()", () => {
       expect(changed.map((c) => [c.name, c.fields])).toEqual([
         ["DocsReaderA", ["maxSessionDuration"]],
       ]);
+    });
+
+    it("says where a value that was secret is in plain text now", async () => {
+      const aws = (globalThis as any).aws as typeof import("@pulumi/aws");
+      const create = (secret: (value: string) => any) => () => {
+        new aws.iam.Role("Role", {
+          assumeRolePolicy: "{}",
+          description: secret("hunter2"),
+        });
+        new aws.lambda.Function("Fn", {
+          role: "role",
+          environment: {
+            variables: { A: $util.secret("a"), B: secret("b") },
+          },
+        });
+        new Holder("Holder", secret("hunter2"));
+      };
+      const deployed = await deploy(create($util.secret));
+
+      app.reset();
+      create((value) => value)();
+      await app.settle();
+      // A deploy updates nothing for it, but the state holds it in plain
+      // text from then on
+      expect(app.takeover(deployed)).toEqual({
+        unclaimed: [],
+        changed: [],
+        unordered: [],
+        revealed: [
+          "Fn.environment.variables.B",
+          "Holder.outputs.token",
+          "Role.description",
+        ],
+      });
+    });
+
+    it("compares a file by what was in it when it was registered", async () => {
+      const aws = (globalThis as any).aws as typeof import("@pulumi/aws");
+      const folder = fs.mkdtempSync(path.join(os.tmpdir(), "sst-mock-"));
+      const page = (file: string) => () =>
+        new aws.s3.BucketObjectv2("Page", {
+          bucket: "site",
+          key: "index.html",
+          source: new $util.asset.FileAsset(path.join(folder, file)),
+        });
+      fs.writeFileSync(path.join(folder, "one.html"), "one");
+      const deployed = await deploy(page("one.html"));
+
+      // The same file, written again by the next build
+      fs.writeFileSync(path.join(folder, "one.html"), "two");
+      app.reset();
+      page("one.html")();
+      await app.settle();
+      expect(
+        app.takeover(deployed).changed.map((c) => [c.name, c.fields]),
+      ).toEqual([["Page", ["source"]]]);
+
+      // What was deployed, at another path
+      fs.writeFileSync(path.join(folder, "other.html"), "one");
+      app.reset();
+      page("other.html")();
+      await app.settle();
+      expect(app.takeover(deployed).changed).toEqual([]);
     });
 
     it("says when what a function is built from changed", async () => {
@@ -181,3 +248,11 @@ describe("mock()", () => {
     });
   });
 });
+
+// A component that registers what it's given as its outputs
+class Holder extends $util.ComponentResource {
+  constructor(name: string, token: $util.Input<string>) {
+    super("acme:index:Holder", name);
+    this.registerOutputs({ token });
+  }
+}

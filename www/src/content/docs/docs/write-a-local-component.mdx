@@ -467,15 +467,18 @@ test("keeps what's deployed", async () => {
     unclaimed: [],
     changed: [],
     unordered: [],
+    revealed: [],
   });
 });
 ```
 
 Here `unclaimed` are the resources a deploy would remove. And `changed` are the ones it would update, with the inputs that are different. A part that's [renamed](#rename-a-part) with `sst.named` or `sst.takeover` passes this.
 
-A function is also in `changed` when what its code is built from is different: its handler, its runtime, or its links. A function's links are written into its code, so they aren't in the inputs of anything it creates.
+A function is also in `changed` when what its code is built from is different: its handler, its runtime, or its links. A function's links are written into its code, so they aren't in the inputs of anything it creates. A file a resource is given, like an object's source, is compared by what's in it, not where it is.
 
 And `unordered` are the resources that were removed in order before, and aren't now. Resources are removed in the reverse of the order they depend on each other. So if a database no longer depends on its subnet group, the two are removed in any order, and AWS refuses to delete a subnet group that's still in use.
+
+And `revealed` are the values that were secret before and aren't now, by where they are: `"DocsParameter.value"`, or `"Docs.outputs.token"` for what a component registers as its outputs. A deploy updates nothing for it, but your state holds the value in plain text from then on.
 
 ---
 

@@ -347,6 +347,7 @@ describe("CronV2", () => {
         unclaimed: [],
         changed: [],
         unordered: [],
+        revealed: [],
       });
     });
 

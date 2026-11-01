@@ -262,6 +262,7 @@ describe("Mysql", () => {
         unclaimed: [],
         changed: [],
         unordered: [],
+        revealed: [],
       });
     });
   });

@@ -270,6 +270,7 @@ describe("Postgres", () => {
         unclaimed: [VERSION],
         changed: [],
         unordered: [],
+        revealed: [],
       });
     });
   });

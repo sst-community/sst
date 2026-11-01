@@ -5,6 +5,7 @@ import {
   type RecordedResource,
   mockPulumi as mockEngine,
 } from "../../src/testing/mock";
+import { stateGraph } from "../../src/testing/state";
 
 export type { RecordedResource };
 
@@ -191,6 +192,46 @@ export function mockPulumi(input?: MockInput) {
   return {
     ...engine,
     /**
+     * Runs a program that deployed a recorded state, then what replaces it,
+     * with the mock given that state (`recorded`), and compares each with
+     * what it takes over:
+     *
+     * - `deployed`: the first against the state. It's the proof the program
+     *   is the one that deployed it: every resource claimed and nothing more
+     *   created, what each is given the same as far as a state holds it, the
+     *   same values kept secret, and every order the state has resources
+     *   removed in.
+     * - `result`: the second against the first, as `takesOver` does, with
+     *   what was really deployed in place of what the mock makes up: the ids
+     *   and outputs from the state. What the state can't hold, like a
+     *   secret's value or what a function is built from, is compared as the
+     *   first program gave it.
+     *
+     * @param leaveOut What of the state the first program doesn't deploy.
+     */
+    async takesOverState(
+      original: () => unknown,
+      v5: () => unknown,
+      leaveOut: (r: RecordedResource) => boolean = () => false,
+    ) {
+      if (!input?.recorded) throw new Error("The mock has no recorded state");
+      engine.reset();
+      original();
+      await engine.settle();
+      const before = deployed(engine.graph());
+      const recorded = deployed(stateGraph(input.recorded)).filter(
+        (r) => !leaveOut(r),
+      );
+      const asDeployed = engine.compare(recorded);
+
+      engine.reset();
+      v5();
+      await engine.settle();
+      const result = engine.compare(before);
+      claimsBeforeRenames(before, result);
+      return { deployed: asDeployed, result };
+    },
+    /**
      * Deploys a component, then what replaces it, and checks the second
      * against the first, as the mock's own does. When the first renamed a
      * resource, the second has to claim it at its old address too.
@@ -305,6 +346,7 @@ export function mockPulumi(input?: MockInput) {
                   unordered: result.unordered.filter(
                     (order) => !suite.needlessOrder?.test(order),
                   ),
+                  revealed: result.revealed,
                 },
                 // Shown when it fails: what each changed resource had and has
                 JSON.stringify(result.changed, null, 2),
@@ -315,6 +357,7 @@ export function mockPulumi(input?: MockInput) {
                 wrappers: wrappers ?? 0,
                 changed: expected(test.changed ?? suite.changed) ?? [],
                 unordered: expected(test.unordered) ?? [],
+                revealed: [],
               });
               claimsBeforeRenames(before, result);
               await suite.check?.(way);
