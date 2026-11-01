@@ -638,7 +638,8 @@ func function(ctx context.Context, input input) {
 			WorkerID:   workerID,
 			FunctionID: functionID,
 			Build:      build,
-			Env:        workerEnv[workerID],
+			// What the stub runs with, as the stage's target gives it
+			Env: input.project.Target().Env(workerEnv[workerID]),
 		})
 		if err != nil {
 			stateMu.Lock()

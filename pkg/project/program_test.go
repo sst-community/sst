@@ -190,7 +190,7 @@ func TestProviderConfigArgs(t *testing.T) {
 			"package":           "@pulumi/aws",
 			"defaultTags":       map[string]interface{}{"tags": map[string]interface{}{"sst:app": "my-app"}},
 			"allowedAccountIds": []interface{}{"123456789012"},
-			// Dropped today: the bug step 3 fixes.
+			// Dropped before step 3, which took #212's fix
 			"skipCredentialsValidation": true,
 			"maxRetries":                float64(5),
 		},
@@ -209,7 +209,9 @@ func TestProviderConfigArgs(t *testing.T) {
 	want := []string{
 		`aws:allowedAccountIds=["123456789012"]`,
 		`aws:defaultTags={"tags":{"sst:app":"my-app"}}`,
+		`aws:maxRetries=5`,
 		`aws:region=us-west-2`,
+		`aws:skipCredentialsValidation=true`,
 	}
 	if !reflect.DeepEqual(config, want) {
 		t.Fatalf("the provider settings are\n%v\nwant\n%v", config, want)

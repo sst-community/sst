@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
 	"github.com/sst/sst/v3/pkg/project"
@@ -19,7 +18,7 @@ type devContract struct {
 func (d *devContract) Stub(input *struct{}, output *bridge.StubSettings) error {
 	transport, ok := d.project.Transport()
 	if !ok {
-		return fmt.Errorf("sst dev needs the aws provider to reach its functions")
+		return d.project.NoTransport()
 	}
 	settings, err := transport.Stub(context.Background())
 	if err != nil {

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/js"
+	"github.com/sst/sst/v3/pkg/target"
 )
 
 // What the core gives the Pulumi program. The 5.0 program contract replaces
@@ -49,12 +51,16 @@ func (p *Project) programDefine(input *StackInput, versions map[string]int) (map
 	}, nil
 }
 
-// programEnv is the environment the program runs in: base (the user's), the
-// providers', each secret as SST_SECRET_<name> with the stage's over the
-// fallback's, Pulumi's settings, and SST_SERVER, the RPC the program calls,
-// with its token.
+// programEnv is the environment the program runs in: base (the user's), as
+// the stage's target gives it, the providers', each secret as
+// SST_SECRET_<name> with the stage's over the fallback's, Pulumi's settings,
+// and SST_SERVER, the RPC the program calls, with its token. On a target's
+// stage, the program can reach nothing but this machine.
 func (p *Project) programEnv(base []string, passphrase, backend string, secrets, fallback map[string]string, server string) []string {
-	env := append([]string{}, base...)
+	env := p.Target().Env(append([]string{}, base...))
+	if !target.IsCloud(p.Target()) {
+		env = append(env, target.Fence()...)
+	}
 	for key, value := range p.Env() {
 		env = append(env, fmt.Sprintf("%v=%v", key, value))
 	}
@@ -113,9 +119,9 @@ func (p *Project) programGlobals() ([]js.Global, map[string]string) {
 }
 
 // providerConfigArgs is the `--config` Pulumi gets for each provider setting
-// in the config's app(). Objects and lists go as JSON, strings as they are.
-// Booleans and numbers are dropped, which is a bug: the program contract in
-// step 3 fixes it, with #212's fix.
+// in the config's app(). Objects and lists go as JSON, and strings, booleans
+// and numbers as they are. Booleans and numbers were dropped before; #212
+// found it, for a target's settings.
 func providerConfigArgs(providers map[string]interface{}) ([]string, error) {
 	args := []string{}
 	for provider, opts := range providers {
@@ -131,8 +137,10 @@ func providerConfigArgs(providers map[string]interface{}) ([]string, error) {
 					return nil, err
 				}
 				args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
-			case string:
+			case string, bool:
 				args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, v))
+			case float64:
+				args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, strconv.FormatFloat(v, 'f', -1, 64)))
 			}
 		}
 	}

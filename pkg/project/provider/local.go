@@ -26,6 +26,12 @@ func NewLocalHome() *LocalHome {
 	return &LocalHome{}
 }
 
+// NewLocalHomeAt keeps state in files under root, as NewLocalHome does under
+// the user's config folder.
+func NewLocalHomeAt(root string) *LocalHome {
+	return &LocalHome{root: root}
+}
+
 func (l *LocalHome) configDir() string {
 	if l.root != "" {
 		return l.root

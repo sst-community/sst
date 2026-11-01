@@ -88,6 +88,7 @@
  * @packageDocumentation
  */
 import type { Shell } from "bun";
+import type { Target as StageTarget } from "./components/target.js";
 
 type Prettify<T> = {
   [K in keyof T]: T[K];
@@ -266,6 +267,24 @@ export interface App {
    *
    */
   home: "aws" | "cloudflare" | "local";
+
+  /**
+   * Where a stage's cloud calls go when it isn't the real cloud, by stage: a
+   * [`Target`](/docs/component/target), like an emulator on this machine.
+   *
+   * The stage is bound to its target here, so a command on it can't reach the
+   * real cloud by leaving out a flag. On it, nothing gets your AWS
+   * credentials, and its state is kept in a home of the target's own, not in
+   * `home`.
+   *
+   * @example
+   * ```ts
+   * {
+   *   targets: { local: emulator }
+   * }
+   * ```
+   */
+  targets?: Record<string, StageTarget>;
 
   /**
    * If set to `true`, the `sst remove` CLI will not run and will error out.

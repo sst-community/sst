@@ -153,6 +153,9 @@ func (c *Cli) InitProject() (*project.Project, error) {
 	if err := p.LoadHome(); err != nil {
 		return nil, err
 	}
+	// What the CLI kept of its environment when it started, which sst dev's
+	// panes and sst shell are given, as the stage's target gives it
+	c.env = p.Target().Env(c.env)
 
 	app := p.App()
 	slog.Info("loaded config", "app", app.Name, "stage", app.Stage)

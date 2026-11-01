@@ -3,6 +3,7 @@ package project
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 	"github.com/sst/sst/v3/pkg/runtime/python"
 	"github.com/sst/sst/v3/pkg/runtime/rust"
 	"github.com/sst/sst/v3/pkg/runtime/worker"
+	"github.com/sst/sst/v3/pkg/target"
 	"github.com/sst/sst/v3/pkg/transport"
 )
 
@@ -36,12 +38,15 @@ type App struct {
 	Providers map[string]interface{} `json:"providers"`
 	Packages  map[string]string      `json:"packages"` // installed in the platform, for an app without a package.json
 	Home      string                 `json:"home"`
-	Version   string                 `json:"version"`
-	Protect   bool                   `json:"protect"`
-	Watch     Watch                  `json:"watch"`
-	State     *State                 `json:"state"`
-	Dev       *AppDev                `json:"dev"`
-	Types     struct {
+	// Targets are where a stage's cloud calls go, by stage, when it isn't the
+	// real cloud: each a target's settings, a plain object of the type Target
+	Targets map[string]json.RawMessage `json:"targets,omitempty"`
+	Version string                     `json:"version"`
+	Protect bool                       `json:"protect"`
+	Watch   Watch                      `json:"watch"`
+	State   *State                     `json:"state"`
+	Dev     *AppDev                    `json:"dev"`
+	Types   struct {
 		Ignore []string `json:"ignore"`
 	} `json:"types"`
 	// Deprecated: Backend is now Home
@@ -81,8 +86,11 @@ func validateDev(dev *AppDev) error {
 }
 
 // Transport is how the stage's stubs in sst dev reach the CLI: AppSync, when
-// the app has the aws provider.
+// the app has the aws provider and the stage is in the real cloud.
 func (p *Project) Transport() (bridge.Transport, bool) {
+	if !target.IsCloud(p.Target()) {
+		return nil, false
+	}
 	unknown, ok := p.Provider("aws")
 	if !ok {
 		return nil, false
@@ -92,6 +100,14 @@ func (p *Project) Transport() (bridge.Transport, bool) {
 		return nil, false
 	}
 	return transport.NewAppSync(aws, p.AppSyncScope(), p.app.Name, p.app.Stage), true
+}
+
+// NoTransport says why the stage has no transport for sst dev's functions.
+func (p *Project) NoTransport() error {
+	if !target.IsCloud(p.Target()) {
+		return util.NewReadableError(nil, fmt.Sprintf("On the %q target's stage, sst dev has no way yet for its functions to reach it.", p.Target().Name()))
+	}
+	return util.NewReadableError(nil, "sst dev needs the aws provider to reach its functions")
 }
 
 // AppSyncScope is which Event API sst dev and its stubs use: the shared one, or
@@ -151,6 +167,7 @@ type Project struct {
 	config          string
 	app             *App
 	home            provider.Home
+	target          target.Target
 	env             map[string]string
 	loadedProviders map[string]provider.Provider
 	nodeVersion     string
@@ -258,6 +275,7 @@ func New(input *ProjectConfig) (*Project, error) {
 		root:    rootPath,
 		config:  input.Config,
 		env:     map[string]string{},
+		target:  target.Cloud{},
 	}
 
 	proj.Runtime = runtime.NewCollection(
@@ -392,7 +410,19 @@ console.log("~j" + JSON.stringify(await mod.app({
 				return nil, util.NewReadableError(nil, `You must specify a "home" provider in the project configuration file.`)
 			}
 
-			if _, ok := proj.app.Providers[proj.app.Home]; !ok && proj.app.Home != "local" {
+			// The stage's target is in the config, so a command on the stage
+			// can't reach the real cloud by leaving out a flag. Its home is the
+			// target's, so the home's provider isn't added.
+			if settings, ok := proj.app.Targets[input.Stage]; ok {
+				local, err := target.Parse(settings)
+				if err != nil {
+					return nil, util.NewReadableError(err, fmt.Sprintf("The target for the %q stage: %v", input.Stage, err))
+				}
+				if err := target.CheckProviders(local, proj.app.Providers); err != nil {
+					return nil, util.NewReadableError(err, err.Error())
+				}
+				proj.target = local
+			} else if _, ok := proj.app.Providers[proj.app.Home]; !ok && proj.app.Home != "local" {
 				proj.app.Providers[proj.app.Home] = map[string]interface{}{}
 			}
 
@@ -445,56 +475,51 @@ console.log("~j" + JSON.stringify(await mod.app({
 }
 
 func (proj *Project) LoadHome() error {
-	slog.Info("loading home")
-	loadedProviders := make(map[string]provider.Provider)
-
-	for key, args := range proj.app.Providers {
-		var match provider.Provider
-		switch key {
-		case "cloudflare":
-			match = &provider.CloudflareProvider{}
-		case "aws":
-			match = provider.NewAwsProvider()
-		}
-		if match == nil {
-			continue
-		}
-		err := match.Init(proj.app.Name, proj.app.Stage, args.(map[string]interface{}))
-		if err != nil {
-			return util.NewReadableError(err, key+": "+err.Error())
-		}
-		env, err := match.Env()
+	slog.Info("loading home", "target", proj.target.Name())
+	ctx := context.Background()
+	if err := proj.target.Start(ctx); err != nil {
+		return util.NewReadableError(err, err.Error())
+	}
+	loadedProviders, err := proj.target.Providers(ctx, proj.app.Name, proj.app.Stage, proj.app.Providers)
+	if err != nil {
+		return err
+	}
+	for _, loaded := range loadedProviders {
+		env, err := loaded.Env()
 		if err != nil {
 			return err
 		}
 		for key, value := range env {
 			proj.env[key] = value
 		}
-		loadedProviders[key] = match
 	}
-
-	var home provider.Home
+	// What the CLI starts on the stage gets the target's credentials, and
+	// none of the developer's
+	if local, ok := proj.target.(*target.Local); ok {
+		local.Apply()
+	}
 
 	compress := proj.app.State != nil && proj.app.State.Compress
-
-	switch proj.app.Home {
-	case "local":
-		home = provider.NewLocalHome()
-	case "aws":
-		home = provider.NewAwsHome(loadedProviders["aws"].(*provider.AwsProvider), compress)
-	case "cloudflare":
-		home = provider.NewCloudflareHome(loadedProviders["cloudflare"].(*provider.CloudflareProvider), compress)
-	default:
-		return fmt.Errorf("Home provider %s is invalid", proj.app.Home)
+	home, err := proj.target.Home(proj.app.Home, loadedProviders, compress)
+	if err != nil {
+		return err
 	}
-
-	err := home.Bootstrap()
+	err = home.Bootstrap()
 	if err != nil {
 		return fmt.Errorf("Error initializing %s:\n   %w", proj.app.Home, err)
 	}
 	proj.home = home
 	proj.loadedProviders = loadedProviders
 	return nil
+}
+
+// Target is where the stage's cloud calls go: the real cloud, or the target
+// the config names for the stage.
+func (p *Project) Target() target.Target {
+	if p.target == nil {
+		return target.Cloud{}
+	}
+	return p.target
 }
 
 func (p Project) getPath(path ...string) string {

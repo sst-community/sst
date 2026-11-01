@@ -8,6 +8,7 @@ export * from "./linkable";
 export { takeover, type Takeover, type OldAddress } from "./takeover";
 export { Component, type NamingRule, type Transform } from "./component";
 export { runtime, type Runtime, type RuntimeSettings } from "./runtime";
+export type { Target } from "./target";
 export {
   context,
   type Context,

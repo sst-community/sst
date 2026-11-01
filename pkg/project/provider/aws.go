@@ -116,6 +116,20 @@ func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}
 	}
 	slog.Info("aws credentials found", "region", cfg.Region, "profile", a.profile)
 	a.config = cfg
+	tags(app, stage, args)
+	if args["region"] == nil {
+		args["region"] = cfg.Region
+	}
+	_, err = a.Bootstrap(cfg.Region)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// tags gives every resource the provider creates the app's and the stage's
+// names, beside the app's own default tags.
+func tags(app, stage string, args map[string]interface{}) {
 	defaultTags, ok := args["defaultTags"].(map[string]interface{})
 	if !ok {
 		defaultTags = map[string]interface{}{}
@@ -128,14 +142,6 @@ func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}
 	tags["sst:app"] = app
 	tags["sst:stage"] = stage
 	args["defaultTags"] = defaultTags
-	if args["region"] == nil {
-		args["region"] = cfg.Region
-	}
-	_, err = a.Bootstrap(cfg.Region)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (a *AwsProvider) Config() aws.Config {

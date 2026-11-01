@@ -30,7 +30,7 @@ func Start(
 
 	transport, ok := p.Transport()
 	if !ok {
-		return fmt.Errorf("no transport for the stage")
+		return p.NoTransport()
 	}
 	conn, err := transport.Connect(ctx)
 	if err != nil {
