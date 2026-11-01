@@ -2,6 +2,37 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-10-31: step 3, the transport as a place to plug in
+
+The maintainer said to go on, with the places to plug in. The transport came first: its built-in already does all four things the plan's interface asks, spread over the CLI, the program and a 4.x component, and #212's HTTP transport is the second one to draw it from.
+
+**Done, committed (not pushed):**
+
+- **`bridge.Transport`** (`cmd/sst/mosaic/aws/bridge/transport.go`): `Stub` (the stub's environment and the permissions its role needs), `Connect` (the CLI's side) and `Remove` (on `sst remove`). `Stub` and `Connect` each find or create what the transport needs outside the state, like the Event API: the program asks for `Stub` while `sst dev` connects, and in `sst deploy --dev` and `sst diff --dev` without it. It writes down what a connection has to do, which `bridge.Conn` never said: an event goes to whoever subscribes at the time; one may be lost, reordered or copied; an error from `Publish` means it may not have been sent, and no error doesn't mean it arrived; a new subscription may miss events for a moment, lasts as long as the connection, and comes back by itself; the largest packet arrives whole; a slow subscriber's events may be held up or lost; and calls come from many goroutines at once. An error that may pass if `sst dev` starts again wraps `bridge.ErrNotReady`, so `sst dev` tells it apart without knowing the transport.
+- **AppSync behind it** (`pkg/transport/appsync.go`), as it was: the shared Event API, or the stage's own with `dev.appsync: "stage"`. `sst dev` connects through `Project.Transport()`, and `sst remove` removes through it, still looking for the stage's own Event API whatever `dev.appsync` is now.
+- **The stub's settings come from the core**, through a contract call, `Dev.Stub`, made once per program. The V5 `Function` and `Task` take their stub's environment and permissions from it; they used to work them out from what `Provider.Aws.Appsync` returned. The 4.x components still call that, until step 4. Which Event APIs a stub may reach is worked out in Go now, and tested there.
+- **The transport suite** (`cmd/sst/mosaic/aws/bridge/transporttest`): a transport's events, a packet as large as the bridge sends, a subscription after reconnecting, a message of many packets, twenty messages at once, and the same message with a packet lost, the packets reversed, and every packet twice, by wrapping the connection under test, as the bridge's own fakes do. A message that isn't streamed is sent again with its ID while it isn't read, as `sst dev` sends a reply, so a transport that loses an event still passes, and every read has a time limit. It also reports what a small message takes. It runs against a transport in memory in every test run, and against AppSync's real Event API with `SST_TEST_AWS_APPSYNC=1`.
+- **The bridge stops reading a subscription a transport closes**, as the rules allow when its connection ends.
+
+**Checked:**
+
+- The suite against the lab account's shared Event API: everything passes, and a small message takes about 140 ms at the median. The first run lost one message out of ten: a new subscription on AppSync can miss events for a moment, as the stub already allows for. The suite now waits, as the stub does, until each subscription receives.
+- The AppSync stub settings: the shared Event API's give any Event API, the stage's own only its own, as the 4.x components did.
+- All Go tests, and the platform's 1,792 tests and `tsc`. The suite three times with the race detector.
+- **An independent review** found four problems, all fixed:
+  - The interface said `Ensure` runs before `Stub`, which nothing made true: in `sst dev` the program runs at the same time, and `sst deploy --dev` never connects. `Ensure` is gone, and `Stub` and `Connect` each find or create what they need.
+  - The rules didn't match AppSync: it can report a publish as failed that arrived, close a subscription when its connection ends, and hold events up for a slow subscriber. Several things the bridge relies on weren't written down. The rules now say what both AppSync and #212's HTTP transport do.
+  - The suite could hang until `go test`'s timeout: only a message's first packet had a time limit, and a lost packet in a message that isn't streamed was never sent again. Both are fixed, and a test that loses a packet that way now passes after one resend.
+  - The suite left out reconnecting, which the plan listed. It's in now, for a transport that can reconnect on demand, as AppSync's does. A full subscriber is left out of the plan's list: the rules let a transport hold up or lose its events, and the bridge reads as they come.
+  - Smaller: a transport's empty permissions reach the program as `[]`, not `null`; the AppSync error handling left in `sst dev` and `sst remove` moved into its transport; the suite passes over pings by their content, reverses a message of more than one request's worth, and closes each test's connections.
+- The suite against the real Event API again, twice: all ten pass, the new reconnect test included. One run lost one small message out of ten after the subscription was receiving, which sst dev's resends of a reply cover.
+- **In the lab**, the serverless group with the V5 components in `sst dev`, on a stage of its own: `sst dev` connected through the transport, the functions answered, each stub's environment had the Event API's endpoints from `Dev.Stub`, and its role reached the shared Event API. `sst diff --dev` showed no changes. `sst remove` went through the transport, and the stage was cleaned up after; nothing of it is left, and no Event API was made for it.
+
+**Left:**
+
+- **#212's HTTP transport**, with rogueturnip, as the plan says. Its stub reads which protocol to speak from its environment, which the transport gives; AppSync's stays the default, so stubs already deployed keep working.
+- **The plan's suite also runs the stub's own loop** and `harness_test.go` over each transport. The stub's loop is in its `main` package and reads its settings as it loads, so that comes with the HTTP transport, when there are two to run.
+
 ## 2026-10-31: step 3, the program contract, version 1
 
 The maintainer said to go on, with [the program contract](plan.md#the-program-contract) next.
@@ -104,7 +135,7 @@ The maintainer approved the plan and asked for step 2, with step 1's recordings 
 
 ### Step 2: the core's state and lock behind `Home`
 
-**Done, not committed yet:**
+**Done, committed (not pushed):**
 
 - **`Home` is a store of bytes** (`pkg/project/provider/home.go`): `Get`, `Put` (with `IfAbsent`), `Remove`, `List`, and the passphrase. A home whose store keeps versions (`VersionedHome`, the AWS home) also removes versions. The lock, the secrets' encryption, and the history (cleanup, prune, purge, the stages list) are written once, in `state.go`, on top of it. They were written three times before, once in each home.
 - **The lock is a conditional write.** The AWS home writes it with `If-None-Match: *`, so S3 refuses the second of two writes. The local home creates the file with `O_EXCL`. Between 4.x and 5.0, the race stays what it was: 4.x reads, then writes.

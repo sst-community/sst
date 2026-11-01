@@ -141,8 +141,7 @@ type Runtime interface {
 
 // How the stub in the cloud reaches sst dev.
 type Transport interface {
-	Ensure(ctx context.Context) error     // what it needs outside the state, like the AppSync Event API
-	Stub(ctx context.Context) StubSettings // the wire protocol, environment and permissions
+	Stub(ctx context.Context) (*StubSettings, error) // the stub's environment and permissions
 	Connect(ctx context.Context) (bridge.Conn, error)
 	Remove(ctx context.Context) error // on sst remove
 }
@@ -192,7 +191,7 @@ An app names a stage's target in `app()`, as `targets: { local: floci }`, and a 
 - **A home only stores bytes.** The lock, the secrets' encryption and the history are the core's, as they are today, so a home can't change the layout, the lock or the encryption, and [goal 4](goals.md#4-the-home-stays-compatible) holds for every home. The AWS home's other duties, resolving credentials, giving the program its bootstrap data and pruning old object versions, stay in it, in Go.
 - **A runtime only builds and runs.** The shared work stays in the core, as `runtime.Collection` does it now: bundles, copied files, and the links encrypted into `resource.enc`.
 - **The stub stays in the core.** The deployed stub (`platform/functions/bridge/`) is a Go binary, so it starts fast in any Lambda runtime. It speaks a fixed set of wire protocols, AppSync Events and #212's token-authenticated HTTP, and a transport picks one and gives it its endpoint and permissions.
-- **A transport only delivers packets.** The interface writes down what `bridge.Conn` never said: what a transport does about order, copies, loss, a channel with no subscriber, and closing. The bridge keeps doing the rest: packets, order, copies, and asking again for what's lost ([the `sst dev` path](reference.md#the-sst-dev-path)). What a transport needs outside the state, like the AppSync Event API, is what `Ensure` and `Remove` are for.
+- **A transport only delivers packets.** The interface writes down what `bridge.Conn` never said: what a transport does about order, copies, loss, a channel with no subscriber, and closing. The bridge keeps doing the rest: packets, order, copies, and asking again for what's lost ([the `sst dev` path](reference.md#the-sst-dev-path)). `Stub` and `Connect` each find or create what a transport needs outside the state, like the AppSync Event API, as the program can ask for the stub's settings before `sst dev` connects, or without it, in `sst deploy --dev`. `Remove` removes it.
 - **Checks build on what's there.** `--policy` already passes a Pulumi policy pack to the deploy, and the [policies experiment](../policies-experiment.md) built rules into one, each finding named by its component and part. #212's allowlist used Pulumi's transforms instead, which also see invokes. A check takes both, and the policies experiment's rules package becomes a check package.
 - **A check sees a component's args through SST, not Pulumi.** `Component` passes `{}` to Pulumi, so a Pulumi transform sees no args, and passing them would record every component's args in the state, secrets included. So the core gives a check the args from SST's own hook (`ComponentTransforms` in `component.ts` today), and a resource's inputs from Pulumi's `registerResourceTransform`.
 
@@ -200,7 +199,7 @@ An app names a stage's target in `app()`, as `targets: { local: floci }`, and a 
 
 - **home:** two clients race for the lock and one wins. A stale lock is reported. A checkpoint round trip is byte for byte. The passphrase stays the same. A home that finds no state for a stage with history refuses. Built-in homes also read a recorded state 4.x wrote.
 - **runtime:** builds a fixture function, which then answers on a fake runtime API. A change to a watched file rebuilds it. A build error is reported. Its types match what's linked.
-- **transport:** one set of behaviors run against any transport: loss, reordering, copies, a full subscriber, reconnecting, large payloads, many invocations at once, and the time it adds. Today's fakes in the `bridge` package and `harness_test.go` become wrappers around the transport under test, and the stub's own loop is run too.
+- **transport:** one set of behaviors run against any transport: loss, reordering, copies, reconnecting, large payloads, many invocations at once, and the time it adds. A full subscriber isn't one: a transport may hold up or lose its events, and the bridge reads as they come. Today's fakes in the `bridge` package and `harness_test.go` become wrappers around the transport under test, and the stub's own loop is run too.
 - **target:** on its stage, the program, the workers and `sst shell` have none of the developer's `AWS_*` variables and can't read a planted credentials file. Every provider endpoint is the target's: a run behind a proxy that fails any other host passes. Its stage can't reach the real home.
 - **check:** findings on fixture programs. An unknown value in a preview is reported, not dropped.
 
@@ -473,7 +472,7 @@ Each comes when it's needed, with its own exit test.
 | 0. What v5 taught | Written in [reference.md](reference.md#what-v5-taught), 2026-10-31. |
 | 1. A record of today's state | Started, 2026-10-31. Recorded with v4.23.1 and in `testdata/states/`: the serverless group and the sites, the VPC groups, and the serverless group by `sst dev`. A recorded state replays with AWS credentials and the passphrase, not without. Everything removed, and the audit is clean. Left: Cloudflare (at step 4). |
 | 2. The first proof | Started, 2026-10-31, committed (not pushed). Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
-| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. The program contract's version 1: `report()` and `context()`, the core's reader, the V5 components on it, checked in the lab and under `mock()`. Next: the places to plug in. |
+| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. The program contract's version 1: `report()` and `context()`, the core's reader, the V5 components on it, checked in the lab and under `mock()`. The transport as a place to plug in: `bridge.Transport`, AppSync behind it, `Dev.Stub`, and the transport suite, checked against the real Event API and in the lab, and reviewed. Next: the runtime. |
 | 4. New components | Not started. |
 | 5. Moving an app | Not started. |
 | 6. After 5.0 | When needed. |

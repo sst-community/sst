@@ -1,5 +1,7 @@
 import { type Input, type Inputs, all, output } from "@pulumi/pulumi";
 import { Link } from "./link";
+import { rpc } from "./rpc/rpc";
+import { lazy } from "../util/lazy";
 
 /**
  * The program contract: what the core gives the program, and what a component
@@ -150,3 +152,21 @@ export function withRecord(
 ): Inputs {
   return { ...outputs, _sst: record(report) };
 }
+
+/**
+ * What the stub `sst dev` deploys in place of a function or a task is deployed
+ * with, from the stage's transport: how it reaches the CLI.
+ */
+export interface StubSettings {
+  /** Added to its environment, which also says how it reaches the CLI. */
+  environment: Record<string, string>;
+  /** Added to the role it runs as. */
+  permissions: { actions: string[]; resources: string[] }[];
+}
+
+/**
+ * Asks the core for the stub's settings, once for the program.
+ *
+ * @internal
+ */
+export const devStub = lazy(() => rpc.call<StubSettings>("Dev.Stub", {}));

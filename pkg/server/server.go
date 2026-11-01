@@ -154,6 +154,7 @@ func (s *Server) Start(ctx context.Context, p *project.Project) error {
 	resource.Register(ctx, p, s.Rpc)
 	aws.Register(ctx, p, s.Rpc)
 	runtime.Register(ctx, p, s.Rpc)
+	s.Rpc.RegisterName("Dev", &devContract{project: p})
 	return s.Serve(ctx)
 }
 

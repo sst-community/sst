@@ -2,10 +2,10 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
-	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/appsync"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/project/provider"
@@ -28,19 +28,16 @@ func Start(
 	slog.Info("getting endpoint")
 	prefix := fmt.Sprintf("/sst/%s/%s", p.App().Name, p.App().Stage)
 
-	api, err := prov.ResolveAppSync(ctx, p.AppSyncScope())
-	if err != nil {
-		return err
+	transport, ok := p.Transport()
+	if !ok {
+		return fmt.Errorf("no transport for the stage")
 	}
-	rest, realtime := api.Http, api.Realtime
-	slog.Info("found appsync", "rest", rest, "realtime", realtime, "shared", api.Shared)
-
-	conn, err := appsync.DialWhenReady(ctx, config, rest, realtime)
+	conn, err := transport.Connect(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if !appsync.Transient(err) {
+		if !errors.Is(err, bridge.ErrNotReady) {
 			return err
 		}
 		slog.Error("appsync not ready", "err", err)

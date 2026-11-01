@@ -13,6 +13,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/evanw/esbuild/pkg/api"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
 	"github.com/sst/sst/v3/internal/fs"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/flag"
@@ -25,6 +26,7 @@ import (
 	"github.com/sst/sst/v3/pkg/runtime/python"
 	"github.com/sst/sst/v3/pkg/runtime/rust"
 	"github.com/sst/sst/v3/pkg/runtime/worker"
+	"github.com/sst/sst/v3/pkg/transport"
 )
 
 type App struct {
@@ -76,6 +78,20 @@ func validateDev(dev *AppDev) error {
 		return nil
 	}
 	return util.NewReadableError(nil, fmt.Sprintf(`The "dev.appsync" property must be "shared" or "stage", not %q.`, dev.AppSync))
+}
+
+// Transport is how the stage's stubs in sst dev reach the CLI: AppSync, when
+// the app has the aws provider.
+func (p *Project) Transport() (bridge.Transport, bool) {
+	unknown, ok := p.Provider("aws")
+	if !ok {
+		return nil, false
+	}
+	aws, ok := unknown.(*provider.AwsProvider)
+	if !ok {
+		return nil, false
+	}
+	return transport.NewAppSync(aws, p.AppSyncScope(), p.app.Name, p.app.Stage), true
 }
 
 // AppSyncScope is which Event API sst dev and its stubs use: the shared one, or

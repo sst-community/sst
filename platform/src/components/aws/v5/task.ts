@@ -9,7 +9,7 @@ import { Image } from "@pulumi/docker-build";
 import { V5Args, component, many, optional } from "../../parts-component";
 import { notAnOption, plain, withDefault } from "../../args";
 import { VisibleError } from "../../error";
-import { Function as OriginalFunction } from "../function";
+import { devStub } from "../../contract";
 import {
   type Container,
   type ContainerArgs,
@@ -372,16 +372,8 @@ export class Task extends component("sst:aws:Task", parts) {
         args,
         opts,
         dev,
-        // The stub reaches the user's machine over AppSync: any Event API
-        // while it's the shared one, or only the stage's own
-        dev
-          ? output(OriginalFunction.appsync()).apply((appsync) => [
-              {
-                actions: ["appsync:*"],
-                resources: OriginalFunction.appsyncResources(appsync),
-              },
-            ])
-          : [],
+        // The stub reaches the user's machine through the stage's transport
+        dev ? output(devStub()).apply((stub) => stub.permissions) : [],
       ),
     );
     const executionRole = this.part(
@@ -459,18 +451,16 @@ export class Task extends component("sst:aws:Task", parts) {
         entrypoint: undefined,
         command: undefined,
         image: "ghcr.io/sst-community/sst/bridge-task:latest",
-        environment: all([
-          container.environment,
-          OriginalFunction.appsync(),
-        ]).apply(([environment, appsync]) => ({
-          ...environment,
-          SST_TASK_ID: name,
-          SST_REGION: process.env.SST_AWS_REGION!,
-          SST_APPSYNC_HTTP: appsync.http,
-          SST_APPSYNC_REALTIME: appsync.realtime,
-          SST_APP: $app.name,
-          SST_STAGE: $app.stage,
-        })),
+        environment: all([container.environment, devStub()]).apply(
+          ([environment, stub]) => ({
+            ...environment,
+            SST_TASK_ID: name,
+            SST_REGION: process.env.SST_AWS_REGION!,
+            ...stub.environment,
+            SST_APP: $app.name,
+            SST_STAGE: $app.stage,
+          }),
+        ),
       };
     }
   }

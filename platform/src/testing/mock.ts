@@ -160,6 +160,16 @@ export function mockPulumi(input?: MockInput) {
         arn: "arn:aws:appsync:us-east-1:123456789012:apis/sst",
         shared: true,
       };
+    // What the stub is deployed with: the shared Event API's, as `sst dev`
+    // uses by default
+    if (method === "Dev.Stub")
+      return {
+        environment: {
+          SST_APPSYNC_HTTP: "appsync.example.com",
+          SST_APPSYNC_REALTIME: "appsync-realtime.example.com",
+        },
+        permissions: [{ actions: ["appsync:*"], resources: ["*"] }],
+      };
     if (method === "Provider.Aws.Bootstrap")
       return {
         asset: "sst-asset-bucket",

@@ -39,6 +39,7 @@ import { logicalName, physicalName } from "../../naming";
 import { toDays, toSeconds } from "../../duration";
 import { toMBs } from "../../size";
 import { rpc } from "../../rpc/rpc";
+import { devStub } from "../../contract";
 import { warnOnce } from "../../../util/warn";
 import {
   Function as OriginalFunction,
@@ -965,8 +966,8 @@ export class Function extends component("sst:aws:Function", parts) {
         args.link,
         args.streaming,
         args.bundle,
-        dev ? OriginalFunction.appsync() : undefined,
-      ]).apply(([environment, bootstrap, key, link, streaming, bundle, appsync]) => {
+        dev ? devStub() : undefined,
+      ]).apply(([environment, bootstrap, key, link, streaming, bundle, stub]) => {
         const result = environment ?? {};
         result.SST_RESOURCE_App = JSON.stringify({
           name: $app.name,
@@ -987,8 +988,7 @@ export class Function extends component("sst:aws:Function", parts) {
           : "resource.enc";
         if (dev) {
           result.SST_REGION = process.env.SST_AWS_REGION!;
-          result.SST_APPSYNC_HTTP = appsync!.http;
-          result.SST_APPSYNC_REALTIME = appsync!.realtime;
+          Object.assign(result, stub!.environment);
           result.SST_FUNCTION_ID = name;
           result.SST_APP = $app.name;
           result.SST_STAGE = $app.stage;
@@ -1009,15 +1009,14 @@ export class Function extends component("sst:aws:Function", parts) {
         "aws.permission",
         args.link,
       );
-      // In `sst dev` the stub talks to the CLI through AppSync, any Event API
-      // while it's the shared one or only the stage's own, and the asset bucket
+      // In `sst dev` the stub reaches the CLI through the stage's transport,
+      // and uses the asset bucket
       const devPermissions = dev
-        ? output(OriginalFunction.appsync()).apply((appsync) => [
-            {
+        ? output(devStub()).apply((stub) => [
+            ...stub.permissions.map((permission) => ({
               effect: "allow",
-              actions: ["appsync:*"],
-              resources: OriginalFunction.appsyncResources(appsync),
-            },
+              ...permission,
+            })),
             {
               effect: "allow",
               actions: ["s3:*"],
