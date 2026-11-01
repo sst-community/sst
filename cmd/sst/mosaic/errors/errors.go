@@ -29,6 +29,7 @@ var transformers = []ErrorTransformer{
 	exact(project.ErrPolicyViolation, ""),
 	exact(project.ErrPolicyConfigError, ""),
 	exact(provider.ErrLockExists, ""),
+	passthrough(provider.ErrStateMissing),
 	exact(project.ErrVersionInvalid, "The version range defined in the config is invalid"),
 	exact(provider.ErrCloudflareMissingAccount, "The Cloudflare Account ID was not able to be determined from this token. Make sure it has permissions to fetch account information or you can set the CLOUDFLARE_DEFAULT_ACCOUNT_ID environment variable to the account id you want to use."),
 	exact(server.ErrServerNotFound, "Could not find an `sst dev` session to connect to. Since you are running a command outside of the multiplexer be sure to start `sst dev` first."),

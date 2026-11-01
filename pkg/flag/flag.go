@@ -33,6 +33,11 @@ var SST_EXPERIMENTAL = isTrue("SST_EXPERIMENTAL") || isTrue("SST_EXPERIMENTAL_RU
 var SST_RUN_ID = os.Getenv("SST_RUN_ID")
 var SST_SKIP_APPSYNC = isTrue("SST_SKIP_APPSYNC")
 
+// SST_ALLOW_MISSING_STATE lets a deploy go ahead on a stage whose history
+// says it was deployed but whose state the home can't find. Without it, the
+// deploy is refused, since it would create every resource again.
+var SST_ALLOW_MISSING_STATE = isTrue("SST_ALLOW_MISSING_STATE")
+
 // SST_SKIP_UPDATE_CHECK stops the CLI looking for a newer SST once a day. CI
 // never looks.
 var SST_SKIP_UPDATE_CHECK = isTrue("SST_SKIP_UPDATE_CHECK")

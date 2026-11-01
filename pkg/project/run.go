@@ -73,9 +73,17 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	defer workdir.Cleanup()
 
 	var passphrase string
-	if input.Command == "deploy" || input.Command == "diff" || input.Dev {
+	switch {
+	case input.Command == "diff":
+		// A diff writes nothing to the home. A stage with no passphrase has no
+		// state or secrets to decrypt, so one made for this run will do.
+		passphrase, err = provider.GetPassphrase(p.home, p.app.Name, p.app.Stage)
+		if err == nil && passphrase == "" {
+			passphrase, err = provider.NewPassphrase()
+		}
+	case input.Command == "deploy" || input.Dev:
 		passphrase, err = provider.GetOrCreatePassphrase(p.home, p.app.Name, p.app.Stage)
-	} else {
+	default:
 		passphrase, err = provider.GetPassphrase(p.home, p.app.Name, p.app.Stage)
 	}
 	if err != nil {
@@ -103,6 +111,18 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		if errors.Is(err, provider.ErrStateNotFound) {
 			if input.Command != "deploy" && input.Command != "diff" {
 				return ErrStageNotFound
+			}
+			// A stage that was deployed has its state in the home. If the home
+			// doesn't, it's reading the wrong place, and a deploy would create
+			// every resource again.
+			if !flag.SST_ALLOW_MISSING_STATE {
+				deployed, err := provider.HasDeployHistory(p.home, p.app.Name, p.app.Stage)
+				if err != nil {
+					return err
+				}
+				if deployed {
+					return provider.ErrStateMissing
+				}
 			}
 			cmd := process.Command(global.PulumiPath(), "stack", "init", "organization/"+p.app.Name+"/"+p.app.Stage)
 			cmd.Stdout = pulumiStdout
@@ -137,47 +157,17 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	bus.Publish(completed)
 	log.Info("got previous deployment")
 
-	cli := map[string]interface{}{
-		"command": input.Command,
-		"dev":     input.Dev,
-		"paths": map[string]string{
-			"home":     global.ConfigDir(),
-			"root":     p.PathRoot(),
-			"work":     p.PathWorkingDir(),
-			"platform": p.PathPlatformDir(),
-		},
-		"state": map[string]interface{}{
-			"version": completed.Versions,
-		},
-	}
-	cliBytes, err := json.Marshal(cli)
-	if err != nil {
-		return err
-	}
-	appBytes, err := json.Marshal(p.app)
+	define, err := p.programDefine(input, completed.Versions)
 	if err != nil {
 		return err
 	}
 
-	globals := []js.Global{}
-	for _, entry := range p.lock {
-		globals = append(globals, js.Global{Name: entry.Alias, Module: entry.Package})
-	}
-	components := path.Join(filepath.ToSlash(p.PathPlatformDir()), "src/components")
-	globals = append(globals, js.Global{Name: "sst", Module: components})
-	platform := map[string]string{}
-	for module, file := range platformModuleFiles() {
-		platform[module] = path.Join(components, file+".ts")
-	}
+	globals, platform := p.programGlobals()
 
 	buildResult, err := js.Build(js.EvalOptions{
-		Dir:     p.PathRoot(),
-		Outfile: outfile,
-		Define: map[string]string{
-			"$app": string(appBytes),
-			"$cli": string(cliBytes),
-			"$dev": fmt.Sprintf("%v", input.Dev),
-		},
+		Dir:      p.PathRoot(),
+		Outfile:  outfile,
+		Define:   define,
 		Inject:   []string{filepath.ToSlash(filepath.Join(p.PathWorkingDir(), "platform/src/shim/run.js"))},
 		Globals:  globals,
 		Platform: platform,
@@ -239,6 +229,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	wg := errgroup.Group{}
 
 	wg.Go(func() error {
+		var err error
 		secrets, err = provider.GetSecrets(p.home, p.app.Name, p.app.Stage)
 		if err != nil {
 			return ErrPassphraseInvalid
@@ -247,6 +238,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	})
 
 	wg.Go(func() error {
+		var err error
 		fallback, err = provider.GetSecrets(p.home, p.app.Name, "")
 		if err != nil {
 			return ErrPassphraseInvalid
@@ -258,35 +250,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		return err
 	}
 
-	env := os.Environ()
-	for key, value := range p.Env() {
-		env = append(env, fmt.Sprintf("%v=%v", key, value))
-	}
-	for key, value := range fallback {
-		env = append(env, fmt.Sprintf("SST_SECRET_%v=%v", key, value))
-	}
-	for key, value := range secrets {
-		env = append(env, fmt.Sprintf("SST_SECRET_%v=%v", key, value))
-	}
-	env = append(env,
-		"PULUMI_CONFIG_PASSPHRASE="+passphrase,
-		"PULUMI_SKIP_UPDATE_CHECK=true",
-		"PULUMI_BACKEND_URL=file://"+filepath.ToSlash(workdir.Backend()),
-		"PULUMI_DEBUG_COMMANDS=true",
-		"PULUMI_IGNORE_AMBIENT_PLUGINS=true",
-		// "PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION=true",
-		"NODE_OPTIONS="+func() string {
-			nodeOptions := "--enable-source-maps --no-deprecation --no-warnings"
-			if existing := os.Getenv("NODE_OPTIONS"); existing != "" {
-				nodeOptions = existing + " " + nodeOptions
-			}
-			return nodeOptions
-		}(),
-		"PULUMI_HOME="+global.ConfigDir(),
-	)
-	if input.ServerPort != 0 {
-		env = append(env, "SST_SERVER=http://127.0.0.1:"+fmt.Sprint(input.ServerPort))
-	}
+	env := p.programEnv(os.Environ(), passphrase, workdir.Backend(), secrets, fallback, input.ServerPort)
 	pulumiPath := global.PulumiPath()
 	if flag.SST_PULUMI_PATH != "" {
 		pulumiPath = flag.SST_PULUMI_PATH
@@ -313,30 +277,11 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	}
 
 	if input.Command == "deploy" || input.Command == "diff" || input.Command == "refresh" {
-		for provider, opts := range p.app.Providers {
-			for key, value := range opts.(map[string]interface{}) {
-				// Skip SST-only fields that Pulumi doesn't understand
-				if key == "package" {
-					continue
-				}
-				switch v := value.(type) {
-				case map[string]interface{}:
-					bytes, err := json.Marshal(v)
-					if err != nil {
-						return err
-					}
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
-				case []interface{}:
-					bytes, err := json.Marshal(v)
-					if err != nil {
-						return err
-					}
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
-				case string:
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, v))
-				}
-			}
+		config, err := providerConfigArgs(p.app.Providers)
+		if err != nil {
+			return err
 		}
+		args = append(args, config...)
 	}
 
 	switch input.Command {

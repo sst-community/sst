@@ -55,6 +55,11 @@ export interface MockInput {
   call?: (args: pulumi.runtime.MockCallArgs) => Record<string, any> | undefined;
   /** The source maps the build of a function writes, by the function's name. */
   sourcemaps?: (functionID: string) => string[];
+  /**
+   * Run as a preview, the way `sst diff` runs the program, rather than as a
+   * deploy.
+   */
+  preview?: boolean;
 }
 
 /**
@@ -171,7 +176,7 @@ export function mockPulumi(input?: MockInput) {
     },
     "project",
     "stack",
-    false,
+    input?.preview ?? false,
   );
 
   // The mocks above are not told about a resource's parent or options, so

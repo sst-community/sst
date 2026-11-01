@@ -65,7 +65,7 @@ A resource whose URN changes, because a component was restructured, is carried f
 
 5.0 reads and locks state the old CLI wrote: the same bootstrap, the same keys, the same passphrase and the same secrets encryption ([today's home](reference.md#todays-home)). Until a stage moves, it takes the same lock, so 4.x and 5.0 refuse each other. It writes the lock with a conditional put where the store has one (S3 does), so two 5.0 CLIs can't both take it; between 4.x and 5.0 the race stays what it is today, a read then a write. After a move, a tombstone at the old lock key keeps 4.x CLIs off the stage.
 
-A home that finds no state for a stage that has a passphrase or update history refuses to deploy. Otherwise a home that read the wrong place would create everything again, then write over the real checkpoint.
+A home that finds no state for a stage that was deployed refuses to deploy. The newest update that finished without errors says whether it was: a deploy says it is, a remove says it isn't, and with no such update, a snapshot says it is. A passphrase doesn't: `sst diff` in 4.x and `sst secret set` create one before a first deploy. This catches a home that reads the state from the wrong key; it can't catch one pointed at another account or region, where the history is missing too. Otherwise a home that read the wrong place would create everything again, then write over the real checkpoint.
 
 **How it's checked** (step 2, and step 5 for the tombstone):
 
@@ -75,7 +75,7 @@ A home that finds no state for a stage that has a passphrase or update history r
 - A home pointed at the wrong place, for a stage with history, refuses to deploy.
 - After a move, a 4.x CLI is refused.
 
-**Where it stands (2026-10-31):** not started.
+**Where it stands (2026-10-31):** checked for the new core in step 2, not committed. In the lab: 4.x and the new core refuse each other's deploys both ways, and two new cores racing for the lock in a real bucket leave one winner. No second passphrase was made, and the home holds only what 4.x writes. With the state hidden, a deploy is refused and nothing is created. Left: the tombstone (step 5).
 
 ## 5. Deployed code keeps working
 
@@ -97,7 +97,7 @@ Nothing it shows doesn't happen, and nothing happens that it didn't show. `--che
 - In the lab, the diff before each deploy is compared with what the deploy did, and a second diff after it shows no changes.
 - A 5.0 component never creates a resource inside an `apply` the preview skips. That's what makes a 4.x function show as deleted (v5 goal 6, unmet for 4.x), so step 2's test copy of the 4.x components gets the preview fix.
 
-**Where it stands (2026-10-31):** not started.
+**Where it stands (2026-10-31):** for the new core in step 2, its `sst diff` lists the same changes as 4.x's on every recorded stage. Three things in 4.x don't settle: the server-rendered sites, which build again on every diff, the `Vpc`'s bastion, whose AMI lookup can return any of three images, and, in a preview, a 4.x function whose args aren't known yet, which the test copy's preview fix covers.
 
 ## 7. Every breaking change has a way across
 
@@ -136,3 +136,4 @@ Breaking changes are allowed in 5.0: args, defaults, names, how a component is b
 | Date | Change |
 | --- | --- |
 | 2026-10-31 | Set: goals 1 to 8. |
+| 2026-10-31 | Goal 4: what says a stage was deployed is a snapshot or an update that deployed, not a passphrase, which a diff or a secret can create first. |

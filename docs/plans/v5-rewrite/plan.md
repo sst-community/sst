@@ -1,6 +1,6 @@
 # The 5.0 rewrite
 
-**A draft, 2026-10-31.** On the branch `v5-rewrite`, from `v5`. What's settled is under [Decisions](#decisions); the rest is open to change.
+**Approved, 2026-10-31.** On the branch `v5-rewrite`, from `v5`. What's settled is under [Decisions](#decisions); the rest is open to change. What's been done is in [progress.md](progress.md).
 
 Three files:
 
@@ -56,6 +56,7 @@ Change one only on purpose, and record it here with its date.
 | 2026-10-31 | **What a package builds on is a public API**, changed only in a major version, with an API report in CI ([Packages](#packages)). |
 | 2026-10-31 | **Package code is TypeScript, for now.** Other languages may come later. |
 | 2026-10-31 | **The RPC the program calls back into is redone in 5.0**, not fixed separately on `main` ([Safety rules](#safety-rules)). |
+| 2026-10-31 | **The RPC's design:** loopback and a token for every route, the Lambda runtime routes keyed by a worker id nobody can guess, the Docker bridge only while a worker runs in a container, and no TLS proxy ([Safety rules](#safety-rules)). |
 | 2026-10-31 | **Cloudflare is in scope:** its home, its runtime, `sst dev` for workers, and its most used components, after the AWS ones. A Cloudflare account is used as a lab, like the AWS one. |
 | 2026-10-31 | **5.0.0 ships with the Pulumi and provider versions of the 4.x it's built from**, so a move changes nothing it doesn't have to. A bump comes in a later release. |
 | 2026-10-31 | **Step 2's result is released as a pre-release that only runs `sst diff`**, so real apps check the new core, not only the lab. |
@@ -240,7 +241,12 @@ Not taken:
 
 The rules that hold for every app live in the core, where nothing a package does can weaken them. They need no grants:
 
-- **Listeners are the core's, on loopback, with a token.** That includes the RPC the program calls back into (`pkg/server`), which also offers only the methods the program uses.
+- **Listeners are the core's, on loopback, with a token.** That includes the RPC the program calls back into (`pkg/server`), which also offers only the methods the program uses, and the routes `sst dev`'s own processes call. Two cases need more:
+  - **The Lambda runtime API that workers call** (`/lambda/<worker>/…`) can't take a token in a header, since AWS's runtime clients send none. Its routes are keyed by a worker id nobody can guess.
+  - **A worker in a container** reaches the core through the Docker bridge, which is listened on only while such a worker runs.
+
+  The TLS proxy the dev server ran on the next port up, for a browser page, goes.
+- **Nothing secret is kept in plain text in the state.** A command a component runs gets its environment when it runs, not as an input Pulumi stores.
 - **Containers are started by the core**, with their ports on `127.0.0.1` only. A target that needs the Docker socket says so in its settings, and the core says so when it starts it.
 - **On a target's stage, nothing gets the developer's credentials.** The program, the workers in `sst dev` and `sst shell` get the target's. The developer's `AWS_*` variables, profile files and proxies are taken out, as #212's `FlociEnvironment` does.
 - **A stage that uses a target is bound to it in the config**, and to the target's own home. `sst remove --stage local` finds the target in the config, not in a flag or an environment variable, so forgetting one can't remove the real stage.
@@ -334,7 +340,7 @@ Deploy as few apps as cover the cases, with the latest 4.x (v4.23.1 now), and ex
 
 Every Core component of [v5-core-set.md](../v5-core-set.md) has to be in one of them. One that isn't is added to the lab app, not given an app of its own.
 
-For each: deploy, call what's deployed, check `sst diff` shows no changes (an app that doesn't settle on 4.x can't be a baseline), export the state, scrub it, commit the scrubbed copy. Then try replaying a preview from it with the app removed.
+For each: deploy, call what's deployed, check `sst diff` shows no changes (an app that doesn't settle on 4.x can't be a baseline), export the state, scrub it, commit the scrubbed copy. The server-rendered sites never settle on 4.x: they build again on every diff, with new hashes. For them, the baseline is 4.x's own diff, and the new core has to show the same resources changing, in the same fields. Then try replaying a preview from it with the app removed.
 
 **Nothing stays deployed.** An app is removed as soon as it's recorded, unless the next check that needs it comes shortly after. After every removal, the lab audit runs, and anything SST left behind for the app is deleted and checked gone. A later step that needs a live stage deploys it again.
 
@@ -351,7 +357,7 @@ Today's CLI, with its homes behind the new `Home` interface, reads an existing h
 
 **Exit:**
 
-- `sst diff` from the new core shows no changes for every recorded app, deployed again or replayed, as step 1 found. Not even the provider entries, since the platform is the same.
+- `sst diff` from the new core shows no changes for every recorded app, deployed again or replayed, as step 1 found: for a server-rendered site, the same changes 4.x's own diff shows. Not even the provider entries, since the platform is the same.
 - [Goal 4](goals.md#4-the-home-stays-compatible)'s checks pass, apart from the tombstone.
 - After a deploy by the new core, the 4.x CLI's `sst diff` shows no changes.
 - What the new core gives the program matches [today's](reference.md#todays-program), item by item, with a test for each that can have one.
@@ -452,10 +458,10 @@ Each comes when it's needed, with its own exit test.
 
 | Step | Status |
 | --- | --- |
-| The plan | A draft. Decisions taken 2026-10-31. |
+| The plan | Approved, 2026-10-31. |
 | 0. What v5 taught | Written in [reference.md](reference.md#what-v5-taught), 2026-10-31. |
-| 1. A record of today's state | Not started. Needs AWS. |
-| 2. The first proof | Not started. |
+| 1. A record of today's state | Started, 2026-10-31. Recorded with v4.23.1 and in `testdata/states/`: the serverless group and the sites, the VPC groups, and the serverless group by `sst dev`. A recorded state replays with AWS credentials and the passphrase, not without. Everything removed, and the audit is clean. Left: Cloudflare (at step 4). |
+| 2. The first proof | Started, 2026-10-31, not committed. Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
 | 3. The program contract, places to plug in, and Floci | Not started. |
 | 4. New components | Not started. |
 | 5. Moving an app | Not started. |

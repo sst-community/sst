@@ -17,7 +17,8 @@ func gzipEncode(r io.Reader) (io.Reader, error) {
 	if err := gw.Close(); err != nil {
 		return nil, err
 	}
-	return &buf, nil
+	// A reader that can seek, so the SDK can send it again when it retries.
+	return bytes.NewReader(buf.Bytes()), nil
 }
 
 func gzipDecode(r io.Reader) (io.Reader, error) {

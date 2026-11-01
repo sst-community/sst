@@ -4,6 +4,7 @@ import {
   Input,
   Output,
   output,
+  runtime,
 } from "@pulumi/pulumi";
 import { Function, FunctionArgs, FunctionArn } from "../function.js";
 import { Workflow } from "../workflow.js";
@@ -47,7 +48,28 @@ export function functionBuilder(
     };
   }
 
-  return output(definition).apply((definition) => {
+  const resolved = output(definition);
+  // In a preview, an arg that isn't known until the deploy would leave the
+  // function out of it, and `sst diff` would show it as deleted. Then what was
+  // passed decides what to create, not the values inside it. Otherwise, and
+  // in every deploy, the function is built from the values, as it always was.
+  if (
+    runtime.isDryRun() &&
+    !Output.isInstance(definition) &&
+    typeof (definition as any)?.then !== "function"
+  ) {
+    const known: Promise<boolean> = (resolved as any).isKnown;
+    return output(known).apply((known) =>
+      known
+        ? resolved.apply(build)
+        : output(undefined).apply(() => build(definition as any)),
+    ) as FunctionBuilder;
+  }
+  return resolved.apply(build);
+
+  function build(
+    definition: string | Workflow | Function | FunctionArgs | FunctionArn,
+  ) {
     if (definition instanceof Workflow) {
       return buildResult(definition.getFunction());
     }
@@ -129,5 +151,5 @@ export function functionBuilder(
       return buildResult(fn);
     }
     throw new Error(`Invalid function definition for the "${name}" Function`);
-  });
+  }
 }

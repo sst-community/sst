@@ -28,6 +28,11 @@ import (
 
 var version = "dev"
 
+// diffOnly is set to "true" with -ldflags for a pre-release that only runs
+// `sst diff`: it checks a new core against an app's real state, and can't
+// change anything.
+var diffOnly = ""
+
 func getAliasName(entry *project.ProviderLockEntry) string {
 	name := entry.Name
 	if entry.Name == entry.Package {
@@ -47,7 +52,8 @@ func main() {
 	// check if node_modules/.bin/sst exists
 	nodeModulesBinPath := filepath.Join("node_modules", ".bin", "sst")
 	binary, _ := os.Executable()
-	if _, err := os.Stat(nodeModulesBinPath); err == nil && !strings.Contains(binary, "node_modules") && os.Getenv("SST_SKIP_LOCAL") != "true" && version != "dev" {
+	// A diff-only build never hands off: the point of it is to run its own core.
+	if _, err := os.Stat(nodeModulesBinPath); err == nil && !strings.Contains(binary, "node_modules") && os.Getenv("SST_SKIP_LOCAL") != "true" && version != "dev" && diffOnly != "true" {
 		// forward command to node_modules/.bin/sst
 		fmt.Fprintln(os.Stderr, ui.TEXT_WARNING_BOLD.Render("Warning: ")+"You are using a global installation of SST but you also have a local installation specified in your package.json. The local installation will be used but you should typically run it through your package manager.")
 		cmd := process.Command(nodeModulesBinPath, os.Args[1:]...)
@@ -117,6 +123,11 @@ func run() error {
 	c, err := cli.New(ctx, cancel, root, version)
 	if err != nil {
 		return err
+	}
+	if diffOnly == "true" {
+		if err := checkDiffOnly(c.Path(), c.Bool("help")); err != nil {
+			return err
+		}
 	}
 	_, err = user.Current()
 	if err != nil {
@@ -1046,4 +1057,17 @@ var root = &cli.Command{
 		CmdTunnel,
 		CmdDiagnostic,
 	},
+}
+
+// checkDiffOnly refuses every command but `sst diff`, `sst version` and help
+// in a diff-only build.
+func checkDiffOnly(path cli.CommandPath, help bool) error {
+	if help || len(path) < 2 {
+		return nil
+	}
+	switch path[1].Name {
+	case "diff", "version":
+		return nil
+	}
+	return util.NewReadableError(nil, "This build of SST only runs `sst diff`. It's a pre-release for checking the 5.0 core against your app's state: it doesn't deploy, and it doesn't write your app's state. Use your usual `sst` for `sst "+path[1].Name+"`.")
 }
