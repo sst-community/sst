@@ -2,6 +2,42 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-10-31: step 3, `sst.runtime`
+
+The maintainer said to go on. `sst.runtime` came before the target: it finishes the runtime, and one lab run checks both it and the runtime's `sst dev` changes. The target needs #212's transport, with rogueturnip, and Docker.
+
+**Done, committed (not pushed):**
+
+- **`sst.runtime(settings)`** (`platform/src/components/runtime.ts`, exported with `sst.component`): a runtime made of commands, for a language SST doesn't build in. Its settings are the Lambda runtime its functions deploy with (`lambda`), and the core's command settings: the folder, the build command and its output, the dev command, and the files to watch. It turns down settings with no Lambda runtime or no dev command. It's marked with a key of its own, which an output keeps.
+- **The V5 `Function` takes one as its `runtime`**, given as it is or in an output. Its build input carries the commands, so the CLI builds it with them for a deploy and runs it with them in `sst dev`, and it's deployed with the Lambda runtime they name. A function with a runtime name is as it was. What's neither is turned down, and so are `injections` with one, as they're for a Node.js function SST builds.
+- **The 4.x `Function` turns down a runtime from `sst.runtime`**, with a message that says why: a `$transform` written for the V5 one runs on it too, as they share a type. It changes nothing for an app that works.
+- **A worker's process has a key of its own for each start.** Its address has the start in it, `/lambda/<worker>.<key>/<run>`. What a start that `sst dev` stopped, or that another replaced, sends is left out: it isn't handed an invocation, and its answers, errors and init errors aren't passed on. Ruby's runtime interface client reports being stopped as an init error, which `sst dev` passed on as the function's, so each rebuild failed the next invocation; the lab found it. A worker id or start with a `/` in it is turned down, so one's key can't be another's.
+
+**Checked:**
+
+- In the lab, on a stage of its own, a Ruby function through `sst.runtime`, with Bundler as its build and Ruby's own runtime interface client (`aws_lambda_ric`) as its dev command, beside a Node.js function, both linked to a table:
+  - deployed: the CLI ran `bundle install`, zipped the folder, and Lambda's Ruby 3.4 answered, with its links' key and file;
+  - in `sst dev`: the function ran on this machine's Ruby through its runtime interface client, what it printed showed, its links' file was in its folder, and the Node.js function answered beside it;
+  - two changes to the handler each rebuilt it, and the next invocation answered with the change. Before the fix above, the first one after a change failed;
+  - `sst diff --dev` showed no changes; `sst remove` removed it, and the stage was cleaned up after: nothing of it is left.
+- A test that a worker stopped by a rebuild, which reports that as an init error, doesn't fail the next invocation or publish an error. It fails without the fix, as the lab did.
+- Tests of the V5 `Function` with a runtime made of commands, deployed, in `sst dev` and in an output, and of what it turns down. All Go tests, the platform's 1,796 tests and `tsc`.
+- **An independent review** found three problems, each fixed with a test that fails without the fix:
+  - A start that was replaced could still ask for an invocation, take one meant for the new one, and answer it. Every request from such a start is left out now, not only its init error.
+  - A runtime in an output lost its mark, as Pulumi copies an object by its string keys, and the function failed on it. Its mark is a string key now, and the function reads its runtime through the output.
+  - A `$transform` that gives the V5 `Function` a runtime from `sst.runtime` runs on the 4.x one too, which failed on it with no reason given. It says why now.
+  - Smaller: the address's own doc; the docs of the folder and the dev command; two cases of a late init error, after the new start is recorded and once the worker is forgotten, have tests.
+
+**Found:**
+
+- A stopped Ruby worker still prints its init error as it exits, so `sst dev` shows it after each change, though it no longer fails anything.
+- Quitting `sst dev` with a Ruby worker running wasn't tried; its init error should find the server gone.
+
+**Left:**
+
+- A page for `sst.runtime` in the docs, with the rest of the package API. The generated page of the V5 `Function` links its `Runtime` type to that page already.
+- A package with a runtime, like a Ruby one, in a repo of its own, as the community packages plan's step 4 asks; the lab's is the shape it would take.
+
 ## 2026-10-31: step 3, the runtime as a place to plug in
 
 The maintainer said yes to the transport's commit, and the runtime came next. The plan draws it from the five built-ins and a runtime made of commands, the one packages will give with `sst.runtime`.

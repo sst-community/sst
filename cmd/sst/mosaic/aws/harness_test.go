@@ -170,6 +170,9 @@ type fakeRuntime struct {
 	stopDelay time.Duration
 
 	starts atomic.Int32
+	// the workers it started, the first first
+	startedMu sync.Mutex
+	started   []*fakeWorker
 	// failRuns makes starting a worker fail, as when its runtime can't run it
 	failRuns atomic.Bool
 	// failBuilds makes a function's build fail
@@ -192,6 +195,9 @@ type fakeRuntime struct {
 	recordedAfterTaking bool
 	// failInvocations has a worker answer each invocation with an error
 	failInvocations bool
+	// initErrorOnStop has a worker that's stopped as it asks for an invocation
+	// report it as an init error, as Ruby's runtime interface client does
+	initErrorOnStop bool
 }
 
 func (r *fakeRuntime) Match(runtime string) bool { return runtime == "fake" }
@@ -223,6 +229,9 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 	r.starts.Add(1)
 	logs, output := io.Pipe()
 	w := &fakeWorker{runtime: r, api: "http://" + input.Server + "/2018-06-01/runtime", stop: make(chan struct{}), logs: logs, askedAgain: make(chan struct{}), took: make(chan struct{})}
+	r.startedMu.Lock()
+	r.started = append(r.started, w)
+	r.startedMu.Unlock()
 	go w.run(ctx, output)
 	if r.recordedLate || r.recordedAfterTaking {
 		signal := w.askedAgain
@@ -307,6 +316,16 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 		}
 		if err != nil {
 			cancel()
+			select {
+			case <-w.stop:
+				if w.runtime.initErrorOnStop {
+					resp, err := http.Post(w.api+"/init/error", "application/json", strings.NewReader(`{"errorMessage":"interrupted with a SIGTERM SIGNAL, gracefully shutting down","errorType":"Init<LambdaErrors::InvocationError>"}`))
+					if err == nil {
+						resp.Body.Close()
+					}
+				}
+			default:
+			}
 			return
 		}
 		event, _ := io.ReadAll(resp.Body)

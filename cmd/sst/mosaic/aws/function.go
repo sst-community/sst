@@ -119,6 +119,10 @@ func function(ctx context.Context, input input) {
 		// Stopped is whether it was stopped. It takes a moment to exit, and
 		// isn't handed an invocation meanwhile.
 		Stopped bool
+		// Run is which start of the worker's process this is, which is in the
+		// address it's given, so what a process that was stopped sends as it
+		// exits can be told from what the one that replaced it does
+		Run string
 	}
 	workerShutdownChan := make(chan *WorkerInfo, 1000)
 	nextChan := map[string]chan io.Reader{}
@@ -294,9 +298,33 @@ func function(ctx context.Context, input input) {
 	}
 	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{})
 
+	// stale is whether a worker's request comes from a start of its process that
+	// sst dev stopped, or that another replaced. What it sends isn't the
+	// worker's any more, and it isn't handed an invocation: a runtime interface
+	// client can go on asking, or report being stopped, as Ruby's reports an
+	// init error, as it exits. One with no run is sst dev's own.
+	stale := func(r *http.Request, workerID string) bool {
+		run := r.PathValue("run")
+		if run == "" {
+			return false
+		}
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		info, ok := workers[workerID]
+		stale := !ok || info.Run != run || info.Stopped
+		if stale {
+			log.Info("left out the request of a worker that was stopped", "workerID", workerID, "run", run, "path", r.URL.Path)
+		}
+		return stale
+	}
+
 	input.server.HandleWorker("GET", "/2018-06-01/runtime/invocation/next", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("got next request", "workerID", r.PathValue("workerID"))
 		workerID := r.PathValue("workerID")
+		if stale(r, workerID) {
+			<-r.Context().Done()
+			return
+		}
 		stateMu.Lock()
 		info, ok := workers[workerID]
 		if ok {
@@ -384,6 +412,10 @@ func function(ctx context.Context, input input) {
 	input.server.HandleWorker("POST", "/2018-06-01/runtime/init/error", func(w http.ResponseWriter, r *http.Request) {
 		workerID := r.PathValue("workerID")
 		log.Info("got init error", "workerID", workerID, "requestID", r.PathValue("requestID"))
+		if stale(r, workerID) {
+			w.WriteHeader(200)
+			return
+		}
 		// an init error has no request ID, so its copies share one made here, and
 		// the bridge passes on only one of them
 		messageID := id.Ascending()
@@ -415,6 +447,11 @@ func function(ctx context.Context, input input) {
 		workerID := r.PathValue("workerID")
 		requestID := r.PathValue("requestID")
 		log.Info("got response", "workerID", workerID, "requestID", r.PathValue("requestID"))
+		if stale(r, workerID) {
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(202)
+			return
+		}
 		writer := firstReply(bridge.MessageResponse, workerID, requestID)
 		defer sendLogs(workerID, requestID)
 		info, ok := loadWorker(workerID)
@@ -455,6 +492,11 @@ func function(ctx context.Context, input input) {
 		workerID := r.PathValue("workerID")
 		requestID := r.PathValue("requestID")
 		log.Info("got error", "workerID", workerID, "requestID", r.PathValue("requestID"))
+		if stale(r, workerID) {
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(202)
+			return
+		}
 		writer := firstReply(bridge.MessageError, workerID, requestID)
 		var buf bytes.Buffer
 		if _, err := buf.ReadFrom(r.Body); err != nil {
@@ -579,6 +621,7 @@ func function(ctx context.Context, input input) {
 			FunctionID: functionID,
 			WorkerID:   workerID,
 			Streaming:  streaming,
+			Run:        id.Ascending(),
 		}
 		stateMu.Lock()
 		previous, hadPrevious := workers[workerID]
@@ -591,7 +634,7 @@ func function(ctx context.Context, input input) {
 		worker, err := input.project.Runtime.Run(ctx, &runtime.RunInput{
 			CfgPath:    input.project.PathConfig(),
 			Runtime:    target.Runtime,
-			Server:     input.server.WorkerAddress(workerID),
+			Server:     input.server.WorkerRunAddress(workerID, info.Run),
 			WorkerID:   workerID,
 			FunctionID: functionID,
 			Build:      build,

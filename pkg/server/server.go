@@ -103,32 +103,53 @@ func (s *Server) workerSecret(workerID string) string {
 	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
-// WorkerAddress is what a worker is given as AWS_LAMBDA_RUNTIME_API: the host
-// and the path of its own routes, with no scheme, as Lambda gives it.
+// WorkerAddress is the address of a worker's own routes, for sst dev's own
+// requests to them. A worker is given WorkerRunAddress.
 func (s *Server) WorkerAddress(workerID string) string {
 	return fmt.Sprintf("127.0.0.1:%d/lambda/%s.%s", s.port(), workerID, s.workerSecret(workerID))
 }
 
+// WorkerRunAddress is what a worker is given as AWS_LAMBDA_RUNTIME_API, for
+// one start of its process, run: the host and the path of its own routes,
+// with no scheme, as Lambda gives it. Its routes see run as
+// r.PathValue("run"), so what a process that was stopped sends can be told
+// from what the one that replaced it does.
+func (s *Server) WorkerRunAddress(workerID, run string) string {
+	return fmt.Sprintf("127.0.0.1:%d/lambda/%s.%s/%s", s.port(), workerID, s.workerSecret(workerID+"/"+run), run)
+}
+
 // HandleWorker serves a route of the Lambda runtime API to the workers, such as
 // ("GET", "/2018-06-01/runtime/invocation/next"). The handler finds the worker's
-// id with r.PathValue("workerID"). A request with a key that isn't the worker's
-// isn't found.
+// id with r.PathValue("workerID"), and the start of its process with
+// r.PathValue("run"), if it was given one. A request with a key that isn't the
+// worker's, for that start, isn't found.
 func (s *Server) HandleWorker(method, path string, handler http.HandlerFunc) {
-	s.workers.HandleFunc(method+" /lambda/{worker}"+path, func(w http.ResponseWriter, r *http.Request) {
-		worker := r.PathValue("worker")
+	serve := func(w http.ResponseWriter, r *http.Request) {
+		worker, run := r.PathValue("worker"), r.PathValue("run")
 		dot := strings.LastIndexByte(worker, '.')
 		if dot < 0 {
 			http.NotFound(w, r)
 			return
 		}
 		workerID, secret := worker[:dot], worker[dot+1:]
-		if !hmac.Equal([]byte(secret), []byte(s.workerSecret(workerID))) {
+		// a / in either, sent as %2F, would make one worker's key another's
+		if strings.Contains(workerID, "/") || strings.Contains(run, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		name := workerID
+		if run != "" {
+			name += "/" + run
+		}
+		if !hmac.Equal([]byte(secret), []byte(s.workerSecret(name))) {
 			http.NotFound(w, r)
 			return
 		}
 		r.SetPathValue("workerID", workerID)
 		handler(w, r)
-	})
+	}
+	s.workers.HandleFunc(method+" /lambda/{worker}"+path, serve)
+	s.workers.HandleFunc(method+" /lambda/{worker}/{run}"+path, serve)
 }
 
 // ServeHTTP sends a worker's request to its routes, and any other with the

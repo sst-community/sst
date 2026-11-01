@@ -40,6 +40,7 @@ import { toDays, toSeconds } from "../../duration";
 import { toMBs } from "../../size";
 import { rpc } from "../../rpc/rpc";
 import { devStub } from "../../contract";
+import { type Runtime, commandsOf, isRuntime } from "../../runtime";
 import { warnOnce } from "../../../util/warn";
 import {
   Function as OriginalFunction,
@@ -231,6 +232,7 @@ export interface FunctionArgs
         OriginalFunctionArgs,
         | "live"
         | "dev"
+        | "runtime"
         | "role"
         | "logging"
         | "url"
@@ -241,6 +243,26 @@ export interface FunctionArgs
     >,
     typeof parts
   > {
+  /**
+   * The language runtime for the function: one SST builds in, as for
+   * [`sst.aws.Function`](/docs/component/aws/function#runtime), or a runtime
+   * made of commands, from `sst.runtime`, for one
+   * it doesn't.
+   *
+   * @default `"nodejs24.x"`
+   * @example
+   * ```js
+   * {
+   *   runtime: sst.runtime({
+   *     lambda: "ruby3.4",
+   *     build: { command: "bundle install" },
+   *     dev: { command: "bundle exec aws_lambda_ric $_HANDLER" },
+   *     watch: ["*.rb", "Gemfile.lock"],
+   *   })
+   * }
+   * ```
+   */
+  runtime?: OriginalFunctionArgs["runtime"] | Runtime;
   /**
    * Mount an EFS file system to the function.
    *
@@ -534,7 +556,9 @@ export class Function extends component("sst:aws:Function", parts) {
     // A few options are written another way for the 4.x `Function`: `live`,
     // `role`, `logging.logGroup` and `url.route`. They're taken here too. A
     // `$transform` written for the 4.x one runs on this one, as they have
-    // the same type, and so does the definition of a function part.
+    // the same type, and so does the definition of a function part. One
+    // written for this one runs on the 4.x one too, which turns down a runtime
+    // from `sst.runtime`.
     const given = args as Record<string, any>;
     const original: {
       live?: boolean;
@@ -570,7 +594,39 @@ export class Function extends component("sst:aws:Function", parts) {
     // created once for the app. `Function` holds them, so that an app with
     // both kinds of function has one of each.
     const encryptionKey = OriginalFunction["encryptionKey"]().base64;
-    const runtime = output(args.runtime ?? "nodejs24.x");
+    // A runtime made of commands is built and run by them, and deployed with
+    // the Lambda runtime it names. It can come in an output, and what isn't a
+    // runtime is turned down then.
+    if (
+      typeof args.runtime === "object" &&
+      args.runtime !== null &&
+      !Output.isInstance(args.runtime)
+    ) {
+      if (!isRuntime(args.runtime))
+        throw new VisibleError(
+          `The "runtime" of the "${name}" function is a runtime's name, like "nodejs24.x", or a runtime from sst.runtime.`,
+        );
+      if (
+        Array.isArray(args.injections) &&
+        args.injections.length > 0
+      )
+        throw new VisibleError(
+          `The "${name}" function has "injections", which are for a Node.js function SST builds, not one built by a runtime from sst.runtime.`,
+        );
+    }
+    const runtimeArg = output(
+      args.runtime as Input<string | Runtime | undefined>,
+    ).apply((value) => {
+      if (value === undefined) return { name: "nodejs24.x" };
+      if (typeof value === "string") return { name: value };
+      if (isRuntime(value))
+        return { name: value.lambda, commands: commandsOf(value) };
+      throw new VisibleError(
+        `The "runtime" of the "${name}" function is a runtime's name, like "nodejs24.x", or a runtime from sst.runtime.`,
+      );
+    });
+    const runtime = runtimeArg.apply((r) => r.name);
+    const commands = runtimeArg.apply((r) => r.commands);
     const architecture = withDefault(args.architecture, "x86_64");
     const streaming = withDefault(args.streaming, false);
     const injections = withDefault(args.injections, []);
@@ -631,7 +687,7 @@ export class Function extends component("sst:aws:Function", parts) {
 
     // Build the code. In `sst dev` the stub is deployed in its place, and the
     // CLI is told about the function so it can run it locally.
-    const buildInput = output({
+    const buildInput = all([commands, output({
       functionID: name,
       handler: args.handler,
       bundle: args.bundle,
@@ -646,7 +702,7 @@ export class Function extends component("sst:aws:Function", parts) {
         architecture,
       })),
       dev,
-    });
+    })]).apply(([commands, input]) => (commands ? { ...input, commands } : input));
     if (dev) buildInput.apply((input) => rpc.call("Runtime.AddTarget", input));
     // What's built is files on this machine. It's given the links, and a
     // link's name is read from the component that's linked, so without this
@@ -663,14 +719,19 @@ export class Function extends component("sst:aws:Function", parts) {
           ),
         );
     // A Node.js handler is wrapped in a file that runs the injections first
-    const entry = all([built, runtime, streaming, injections]).apply(
-      ([built, runtime, streaming, injections]): {
+    const entry = all([built, runtime, streaming, injections, commands]).apply(
+      ([built, runtime, streaming, injections, commands]): {
         handler: string;
         wrapper?: FunctionFile;
-      } =>
-        dev || !runtime.startsWith("nodejs")
+      } => {
+        if (commands && injections.length > 0)
+          throw new VisibleError(
+            `The "${name}" function has "injections", which are for a Node.js function SST builds, not one built by a runtime from sst.runtime.`,
+          );
+        return dev || commands || !runtime.startsWith("nodejs")
           ? { handler: built.handler }
-          : injectHandler(name, { ...built, streaming, injections }),
+          : injectHandler(name, { ...built, streaming, injections });
+      },
     );
     const handler = entry.apply((entry) => entry.handler);
 
@@ -795,7 +856,7 @@ export class Function extends component("sst:aws:Function", parts) {
               links,
               args.handler,
               args.bundle,
-              args.runtime,
+              runtime,
               nodejs,
               copyFiles,
             ]).apply(
@@ -804,7 +865,7 @@ export class Function extends component("sst:aws:Function", parts) {
                 links,
                 handler,
                 bundle,
-                runtime: runtime || "nodejs24.x",
+                runtime,
                 copyFiles,
                 properties: nodejs,
               }),

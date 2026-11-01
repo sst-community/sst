@@ -1821,6 +1821,16 @@ export class Function extends Component implements Link.Linkable {
     super(__pulumiType, name, args, opts);
     this.constructorName = name;
     this.durable = Boolean(args.durable);
+    // A $transform written for sst.aws.v5.Function runs on this one too, as
+    // they share a type, and a runtime from sst.runtime is only for that one
+    if (
+      typeof args.runtime === "object" &&
+      args.runtime !== null &&
+      !Output.isInstance(args.runtime)
+    )
+      throw new VisibleError(
+        `The "runtime" of the "${name}" function isn't a runtime's name. A runtime from sst.runtime is for sst.aws.v5.Function; a $transform that sets one runs on sst.aws.Function too, as they share a type.`,
+      );
 
     const parent = this;
     const dev = normalizeDev();

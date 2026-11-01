@@ -33,7 +33,11 @@ func newTestServer(t *testing.T) *Server {
 	}
 	s.Rpc.RegisterName("Echo", Echo{})
 	s.HandleWorker("GET", "/2018-06-01/runtime/invocation/next", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("next for " + r.PathValue("workerID")))
+		body := "next for " + r.PathValue("workerID")
+		if run := r.PathValue("run"); run != "" {
+			body += " run " + run
+		}
+		w.Write([]byte(body))
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -164,6 +168,26 @@ func TestServerWorkerRoutes(t *testing.T) {
 	}
 	if status, _ := get(t, root+"/lambda/w1.x"+next); status != http.StatusNotFound {
 		t.Fatalf("w1 with x as its key: %v", status)
+	}
+
+	// one start of a worker's process has a key of its own, and its routes see
+	// which start it is
+	if status, body := get(t, "http://"+s.WorkerRunAddress("w1", "r1")+next); status != http.StatusOK || body != "next for w1 run r1" {
+		t.Fatalf("a start's own route: %v %v", status, body)
+	}
+	r1 := s.WorkerRunAddress("w1", "r1")
+	r1Key := r1[strings.LastIndex(r1, ".")+1 : strings.LastIndex(r1, "/")]
+	for name, address := range map[string]string{
+		"the worker's key for a start":  root + "/lambda/w1." + key + "/r1" + next,
+		"a start's key for another":     root + "/lambda/w1." + r1Key + "/r2" + next,
+		"a start's key for the worker":  root + "/lambda/w1." + r1Key + next,
+		"a start's key for another one": root + "/lambda/w2." + r1Key + "/r1" + next,
+		// w1 with r1 as the worker id w1/r1
+		"a start's key with a / sent": root + "/lambda/w1%2Fr1." + r1Key + next,
+	} {
+		if status, body := get(t, address); status != http.StatusNotFound {
+			t.Fatalf("%v: %v %v", name, status, body)
+		}
 	}
 }
 

@@ -580,6 +580,87 @@ describe("Function", () => {
       );
     });
 
+    // The CLI builds it with the commands, and it's deployed with the Lambda
+    // runtime they name. In `sst dev` the CLI is told the commands too, to run
+    // it with.
+    it("is built by a runtime made of commands", async () => {
+      const { runtime } = await import("../../../src/components/runtime");
+      const ruby = runtime({
+        lambda: "ruby3.4",
+        build: { command: "bundle install" },
+        dev: { command: "bundle exec aws_lambda_ric $_HANDLER" },
+        watch: ["*.rb", "Gemfile.lock"],
+      });
+      const commands = {
+        build: { command: "bundle install" },
+        dev: { command: "bundle exec aws_lambda_ric $_HANDLER" },
+        watch: ["*.rb", "Gemfile.lock"],
+      };
+      new Function("MyFunction", { handler: "functions/ruby/app.handler", runtime: ruby });
+      await pulumi.settle();
+      const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
+      expect(fn.inputs.runtime).toBe("ruby3.4");
+      expect(fn.inputs.handler).toBe("index.handler");
+      const built = pulumi.graph().find((r) => r.name === "MyFunction")!.build!;
+      expect(built.runtime).toBe("ruby3.4");
+      expect(built.commands).toEqual(commands);
+
+      pulumi.reset();
+      // @ts-ignore
+      global.$dev = true;
+      new Function("MyFunction", { handler: "functions/ruby/app.handler", runtime: ruby });
+      await pulumi.settle();
+      const stub = pulumi.resources.find((r) => r.type === LAMBDA)!;
+      expect(stub.inputs.runtime).toBe("provided.al2023");
+      expect(pulumi.graph().find((r) => r.name === "MyFunction")!.build!.commands).toEqual(commands);
+    });
+
+    it("needs a runtime made of commands to say how it's deployed and run", async () => {
+      const { runtime } = await import("../../../src/components/runtime");
+      // @ts-expect-error
+      expect(() => runtime({ dev: { command: "ruby x.rb" } })).toThrow(/lambda/);
+      // @ts-expect-error
+      expect(() => runtime({ lambda: "ruby3.4" })).toThrow(/dev.command/);
+    });
+
+    // A runtime can come in an output, as a function part's args can
+    it("is built by a runtime made of commands that comes in an output", async () => {
+      const { runtime } = await import("../../../src/components/runtime");
+      const ruby = runtime({ lambda: "ruby3.4", dev: { command: "ruby x.rb" } });
+      new Function("MyFunction", {
+        handler: "functions/ruby/app.handler",
+        runtime: output(ruby) as any,
+      });
+      await pulumi.settle();
+      const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
+      expect(fn.inputs.runtime).toBe("ruby3.4");
+      expect(pulumi.graph().find((r) => r.name === "MyFunction")!.build!.commands).toEqual({
+        build: {},
+        dev: { command: "ruby x.rb" },
+      });
+    });
+
+    it("turns down what isn't a runtime", async () => {
+      const { runtime } = await import("../../../src/components/runtime");
+      const ruby = runtime({ lambda: "ruby3.4", dev: { command: "ruby x.rb" } });
+      expect(
+        () => new Function("MyFunction", { handler, runtime: { lambda: "ruby3.4" } as any }),
+      ).toThrow(/a runtime's name, like "nodejs24.x", or a runtime from sst.runtime/);
+      expect(
+        () =>
+          new Function("Injected", {
+            handler: "functions/ruby/app.handler",
+            runtime: ruby,
+            injections: ["console.log(1)"],
+          }),
+      ).toThrow(/"injections", which are for a Node.js function SST builds/);
+      // a $transform written for the V5 Function runs on the 4.x one too
+      expect(() => new OriginalFunction("Old", { handler, runtime: ruby as any })).toThrow(
+        /A runtime from sst.runtime is for sst.aws.v5.Function/,
+      );
+      await pulumi.settle();
+    });
+
     // The permissions and the environment are what say what the function
     // needs in AWS. What it's built from is files on this machine.
     it("has code that doesn't depend on what's linked", async () => {
