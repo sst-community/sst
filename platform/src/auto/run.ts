@@ -8,7 +8,7 @@ import {
 
 import { VisibleError } from "../components/error";
 import { checkNames } from "../components/check";
-import { Function } from "../components/aws/function";
+import { newRun } from "../util/lazy";
 
 export async function run(program: automation.PulumiFn) {
   process.chdir($cli.paths.root);
@@ -17,7 +17,7 @@ export async function run(program: automation.PulumiFn) {
   addTransformationToAddTags();
   addTransformationToCheckBucketsHaveMultiplePolicies();
 
-  Function.reset();
+  newRun();
   Link.reset();
   let outputs: Record<string, any>;
   try {

@@ -7,6 +7,7 @@ import { rpc } from "../components/rpc/rpc";
 import { contractVersion } from "../components/contract";
 import { checkResource } from "../components/check";
 import type { MovedPart } from "../components/move";
+import { newRun } from "../util/lazy";
 import {
   ARCHIVE,
   ASSET,
@@ -472,8 +473,13 @@ export function mockPulumi(input?: MockInput) {
     moved() {
       return [...moved];
     },
-    /** Empties the list, so each test sees only its own resources. */
+    /**
+     * Empties the list, so each test sees only its own resources, and starts
+     * a new run of the program: what an app creates once, like the key links
+     * are encrypted with, is created again.
+     */
     reset() {
+      newRun();
       resources.length = 0;
       findings.length = 0;
       moved.length = 0;

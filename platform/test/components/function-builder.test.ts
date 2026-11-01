@@ -2,6 +2,8 @@ import * as pulumi from "@pulumi/pulumi";
 import { describe, expect, it } from "vitest";
 import { Function } from "../../src/components/aws/function";
 import { functionBuilder } from "../../src/components/aws/helpers/function-builder";
+import { devStubCode } from "../../src/components/aws/helpers/function-shared";
+import { newRun } from "../../src/util/lazy";
 
 async function resolveOutputs<T extends readonly unknown[]>(values: T) {
   return await new Promise<T>((resolve, reject) => {
@@ -68,14 +70,15 @@ describe("Function targets", () => {
   });
 });
 
-describe("Function reset", () => {
-  it("clears the dev bridge cache before a new program run", () => {
+describe("a new run of the program", () => {
+  it("forgets the dev stub code the run before it uploaded", () => {
     const cache = (Function as any).devBridgeCode();
     cache.set("us-east-1:bridge", Promise.resolve({}));
 
-    Function.reset();
+    newRun();
 
-    expect(cache.size).toBe(0);
+    expect((Function as any).devBridgeCode().size).toBe(0);
+    expect(devStubCode()).toBe((Function as any).devBridgeCode());
   });
 });
 

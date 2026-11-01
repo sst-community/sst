@@ -205,13 +205,10 @@ export function mockPulumi(input?: MockInput) {
   };
 
   // Each deploy is a run of the program of its own, and starts with nothing
-  // the run before it kept: what's registered, and what a run resets when it
-  // starts (`src/auto/run.ts`), like the 4.x Function's dev stub code, which
-  // its functions share within a run.
+  // the run before it kept: what's registered, and what an app creates once,
+  // like the dev stub code its functions share. The engine's reset does both.
   const newRun = async () => {
     engine.reset();
-    const { Function } = await import("../../src/components/aws/function");
-    Function.reset();
   };
 
   return {

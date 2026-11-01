@@ -48,8 +48,8 @@ import { Vpc } from "./vpc.js";
 import { Image } from "@pulumi/docker-build";
 import { rpc } from "../rpc/rpc.js";
 import { parseRoleArn, splitQualifiedFunctionArn } from "./helpers/arn.js";
-import { RandomBytes } from "@pulumi/random";
 import { lazy } from "../../util/lazy.js";
+import { devStubCode, linkEncryptionKey } from "./helpers/function-shared.js";
 import { Efs } from "./efs.js";
 import { FunctionEnvironmentUpdate } from "./providers/function-environment-update.js";
 import { warnOnce } from "../../util/warn.js";
@@ -1778,16 +1778,10 @@ export class Function extends Component implements Link.Linkable {
   private urlResource: Output<lambda.FunctionUrl | undefined>;
   private eventInvokeConfig?: lambda.FunctionEventInvokeConfig;
 
-  private static readonly encryptionKey = lazy(
-    () =>
-      new RandomBytes("LambdaEncryptionKey", {
-        length: 32,
-      }),
-  );
+  // Made once for the app, and shared with sst.aws.v5.Function
+  private static readonly encryptionKey = linkEncryptionKey;
 
-  private static readonly devBridgeCode = lazy(
-    () => new Map<string, Promise<s3.BucketObjectv2>>(),
-  );
+  private static readonly devBridgeCode = devStubCode;
 
   public static readonly appsync = lazy(() =>
     rpc.call<{
@@ -1806,11 +1800,6 @@ export class Function extends Component implements Link.Linkable {
    */
   public static appsyncResources(appsync: { arn: string; shared: boolean }) {
     return appsync.shared ? ["*"] : [appsync.arn, `${appsync.arn}/*`];
-  }
-
-  /** @internal */
-  public static reset() {
-    Function.devBridgeCode().clear();
   }
 
   constructor(

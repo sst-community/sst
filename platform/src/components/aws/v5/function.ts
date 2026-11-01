@@ -63,6 +63,7 @@ import {
   injectHandler,
   zipCode,
 } from "../helpers/function-code";
+import { devStubCode, linkEncryptionKey } from "../helpers/function-shared";
 import { FunctionEnvironmentUpdate } from "../providers/function-environment-update";
 import { KvKeys } from "../providers/kv-keys";
 import { KvRoutesUpdate } from "../providers/kv-routes-update";
@@ -591,10 +592,9 @@ export class Function extends component("sst:aws:Function", parts) {
     const region = getRegionOutput({}, opts).region;
     const bootstrapData = region.apply((region) => bootstrap.forRegion(region));
     const assetBucket = bootstrapData.apply((data) => data.asset);
-    // The key links are encrypted with, and the code of the dev stub, are
-    // created once for the app. `Function` holds them, so that an app with
-    // both kinds of function has one of each.
-    const encryptionKey = OriginalFunction["encryptionKey"]().base64;
+    // The key links are encrypted with is created once for the app, and
+    // shared with the 4.x `Function`, so an app with both has one
+    const encryptionKey = linkEncryptionKey().base64;
     // A runtime made of commands is built and run by them, and deployed with
     // the Lambda runtime it names. It can come in an output, and what isn't a
     // runtime is turned down then.
@@ -1302,7 +1302,7 @@ export class Function extends component("sst:aws:Function", parts) {
     // code is uploaded once for the app, outside of any function.
     function devBridgeCode() {
       return all([built, region]).apply(([{ bundle }, region]) => {
-        const cache = OriginalFunction["devBridgeCode"]();
+        const cache = devStubCode();
         const cacheKey = `${region}:${bundle}`;
         const cached = cache.get(cacheKey);
         if (cached) return cached;

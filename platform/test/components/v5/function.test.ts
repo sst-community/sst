@@ -88,7 +88,6 @@ describe("Function", () => {
 
   beforeEach(() => {
     pulumi.reset();
-    OriginalFunction.reset();
     // @ts-ignore
     global.$dev = false;
   });
@@ -359,11 +358,8 @@ describe("Function", () => {
             {
               original: (opts?: ComponentResourceOptions) =>
                 new OriginalFunction("MyFunction", args(), opts),
-              v5: (opts?: ComponentResourceOptions) => {
-                // The stub's code is uploaded once for the app
-                OriginalFunction.reset();
-                new Function("MyFunction", args(), opts);
-              },
+              v5: (opts?: ComponentResourceOptions) =>
+                new Function("MyFunction", args(), opts),
             },
           ]),
         ),
