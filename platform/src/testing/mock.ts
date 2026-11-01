@@ -5,6 +5,7 @@ import path from "path";
 import * as pulumi from "@pulumi/pulumi";
 import { rpc } from "../components/rpc/rpc";
 import { contractVersion } from "../components/contract";
+import { checkResource } from "../components/check";
 
 /**
  * A resource a component registered, with what decides whether a deployed
@@ -242,6 +243,9 @@ export function mockPulumi(input?: MockInput) {
   monitor.newUrn = (parent: string, type: string, name: string) =>
     urn(type, name, parent);
   const registerResource = monitor.registerResource.bind(monitor);
+  const findings: string[] = [];
+  // A deploy here has its preview first, so the program's checks turn on
+  process.env.SST_PREVIEW_FIRST = "1";
   monitor.registerResource = (req: any, callback: any) => {
     activity++;
     resources.push({
@@ -270,7 +274,21 @@ export function mockPulumi(input?: MockInput) {
         dependencies: [...req.getDependenciesList()].sort(),
       }),
     });
-    return registerResource(req, callback);
+    // The program's checks look at a resource before it's registered, as
+    // they do in a deploy. What they find is kept in `findings`, for a test
+    // to read, and the resource is registered anyway.
+    if (!req.getCustom()) return registerResource(req, callback);
+    checkResource(
+      req.getType(),
+      req.getName(),
+      req.getObject()?.toJavaScript() ?? {},
+    ).then(
+      () => registerResource(req, callback),
+      (error: any) => {
+        findings.push(String(error?.message ?? error));
+        registerResource(req, callback);
+      },
+    );
   };
   const readResource = monitor.readResource.bind(monitor);
   monitor.readResource = (req: any, callback: any) => {
@@ -312,6 +330,12 @@ export function mockPulumi(input?: MockInput) {
 
   return {
     resources,
+    /**
+     * What the program's checks found in resources, from `sst.check()`, each
+     * as the message a deploy stops with. A component's checks throw when
+     * it's created, as in a deploy.
+     */
+    findings,
     /** What the mock was created with. */
     input,
     /** What a deploy leaves in the state, of a `graph()`. */
@@ -319,6 +343,7 @@ export function mockPulumi(input?: MockInput) {
     /** Empties the list, so each test sees only its own resources. */
     reset() {
       resources.length = 0;
+      findings.length = 0;
       registered.clear();
       builds.clear();
     },

@@ -2,6 +2,25 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 3, `sst.check`
+
+The maintainer chose how a check stops a deploy: with a preview first, so a deploy never half-applies ([decision](plan.md#decisions)).
+
+**Done (not committed yet; review to come):**
+
+- **`sst.check({ name, component, resource, invoke })`** turns a check on for the program: it looks at each component with its args (SST's hook, after `$transform`), each resource with its inputs, and each provider function the program calls (Pulumi's resource and invoke transforms). What it finds stops the program, with the check's name, the resource and how to fix it. A value that isn't known yet in a preview is given as `unknown`, not left out.
+- **A preview first.** The program keeps its checks' names with the state (`_checks`, a hidden output, only when it has some), and a deploy of such a stage runs Pulumi's preview first, as `--policy` does. A deploy with no preview whose program turns out to have checks stops in `sst.check()`, before anything is registered, and the CLI runs it again with a preview first.
+- **The core shows a finding,** which Pulumi wraps in its message about the resource it stopped, and shows the preview of a deploy as a preview, not as steps taken. Before, a `--policy` deploy did that only for policies.
+- **Under `mock()`,** a resource's checks run as it's registered, and what they find is kept in `findings` for a test.
+
+**Checked:** tests of findings, unknown values, components, invokes, the stop without a preview, and the mock; which states preview first; the finding read from Pulumi's message. In the lab, on the Floci stage: a check that finds the table stopped a deploy with nothing created; turned on for a stage whose state had none, it stopped the first run before anything changed, and the run with a preview showed the finding; a check that finds nothing deployed and kept `_checks`; the next deploy previewed first and stopped at the finding. All Go tests, `tsc`, and the platform's 1,830 tests.
+
+**Found and fixed: `sst diff` of a new stage with the V5 `Function` failed:** "handler and runtime must be set". The handler comes from the build, which waits for the links' values and the key, and on a new stage they aren't known in a preview. The provider turns down a Zip function with an unknown handler. The 4.x `Function` creates its Lambda inside an `apply`, which a preview skips, so it never showed. Now, when the build input isn't known in a preview, the preview builds without the links and the key, only to learn the handler, which doesn't depend on them. In the lab, the diff of a new Floci stage planned the function, and after a deploy (handler `bundle.handler`) the diff showed no changes. A new stage doesn't preview first: a deploy whose program has checks stops and runs again with one.
+
+**An independent review** found six problems. Fixed: `sst.check()` turned on after a component was created is turned down, as it wouldn't see it; a secret input reached a check still wrapped, so a check missed it, and is now its value; a finding is kept out of telemetry; under `mock()` a check now gets `unknown` and secrets' values as in a deploy; the function's preview build skips a function with `bundle`, which it would have written into with no key, and runs `hook.postbuild`.
+
+**Left:** a value that isn't known in the preview, or a component created inside an `apply`, is checked during the update, where a finding stops the deploy partway: a check that must not let an unknown value through reports it in the preview. The first, stopped run of a deploy that turns out to have checks shows an error and leaves a failed update in the history before the run with a preview. Invoke checks don't run under `mock()`. A finding also stops `sst refresh`, and each deploy of a stage with checks runs the program twice.
+
 ## 2026-11-01: step 3, #212's HTTP transport
 
 The maintainer asked whether to adopt #212's HTTP transport now, rather than wait, and said yes to porting it: without it a target's stage could deploy, but `sst dev`'s functions couldn't reach it.

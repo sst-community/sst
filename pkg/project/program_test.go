@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -215,5 +216,39 @@ func TestProviderConfigArgs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config, want) {
 		t.Fatalf("the provider settings are\n%v\nwant\n%v", config, want)
+	}
+}
+
+// A deploy runs a preview first on a stage whose program had checks, so a
+// check's finding stops it before anything changes
+func TestChecksIn(t *testing.T) {
+	stack := func(outputs map[string]interface{}) apitype.ResourceV3 {
+		return apitype.ResourceV3{Type: "pulumi:pulumi:Stack", Outputs: outputs}
+	}
+	bucket := apitype.ResourceV3{Type: "aws:s3/bucketV2:BucketV2"}
+	cases := map[string]struct {
+		resources []apitype.ResourceV3
+		want      bool
+	}{
+		"a new stage":         {nil, false},
+		"a stage with checks": {[]apitype.ResourceV3{stack(map[string]interface{}{"_checks": []interface{}{"floci"}}), bucket}, true},
+		"a stage with none":   {[]apitype.ResourceV3{stack(map[string]interface{}{"_protect": false}), bucket}, false},
+		"an empty list kept":  {[]apitype.ResourceV3{stack(map[string]interface{}{"_checks": []interface{}{}}), bucket}, false},
+	}
+	for name, c := range cases {
+		if got := checksIn(c.resources); got != c.want {
+			t.Errorf("%s: got %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestCheckFinding(t *testing.T) {
+	wrapped := "failed to register new resource TargetItemsTable [aws:dynamodb/table:Table]: 2 UNKNOWN: invoke transform: rpc error: code = Unknown desc = transform failed: Error: The \"lab-check\" check found a problem with the aws:dynamodb/table:Table \"TargetItemsTable\":\n- TargetItemsTable is a table\n  The lab's check stops at tables."
+	want := "The \"lab-check\" check found a problem with the aws:dynamodb/table:Table \"TargetItemsTable\":\n- TargetItemsTable is a table\n  The lab's check stops at tables."
+	if got := checkFinding(wrapped + "\n    at new Table (table.ts:588:9)\n  promise: Promise { <rejected> }\n}"); got != want {
+		t.Fatalf("got %q", got)
+	}
+	if got := checkFinding("failed to register new resource X: something else"); got != "" {
+		t.Fatalf("got %q for a message that isn't a finding", got)
 	}
 }

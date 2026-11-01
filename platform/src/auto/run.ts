@@ -7,6 +7,7 @@ import {
 } from "@pulumi/pulumi";
 
 import { VisibleError } from "../components/error";
+import { checkNames } from "../components/check";
 import { Function } from "../components/aws/function";
 
 export async function run(program: automation.PulumiFn) {
@@ -25,6 +26,10 @@ export async function run(program: automation.PulumiFn) {
     explainUndefined(error);
   }
   outputs._protect = $app.protect;
+  // Kept with the state, so the next deploy runs a preview first and a
+  // check's finding stops it before anything changes
+  const checks = checkNames();
+  if (checks.length) outputs._checks = checks;
   return outputs;
 }
 

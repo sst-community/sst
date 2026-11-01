@@ -25,6 +25,9 @@ type StackInput struct {
 	Continue   bool
 	SkipHash   string
 	PolicyPath string
+	// previewFirst runs a deploy with Pulumi's preview first, as when the
+	// program turned out to have checks
+	previewFirst bool
 }
 
 type ConcurrentUpdateEvent struct{}

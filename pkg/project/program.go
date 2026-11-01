@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/js"
 	"github.com/sst/sst/v3/pkg/target"
@@ -88,6 +89,48 @@ func (p *Project) programEnv(base []string, passphrase, backend string, secrets,
 		env = append(env, "SST_SERVER="+server)
 	}
 	return env
+}
+
+// previewFirst is whether a deploy runs Pulumi's preview first, so a check's
+// finding stops it before anything changes: on a stage whose program had
+// checks when it last ran, which it keeps with the state as `_checks`. A
+// program that turns out to have checks on a deploy with no preview stops
+// before anything is registered, and the deploy runs again with one.
+func previewFirst(workdir *PulumiWorkdir) bool {
+	checkpoint, err := workdir.Export()
+	if err != nil || checkpoint == nil || checkpoint.Latest == nil {
+		return false
+	}
+	return checksIn(checkpoint.Latest.Resources)
+}
+
+// checksIn is whether a state's stack says its program has checks
+func checksIn(resources []apitype.ResourceV3) bool {
+	for _, resource := range resources {
+		if resource.Type != "pulumi:pulumi:Stack" {
+			continue
+		}
+		checks, ok := resource.Outputs["_checks"].([]interface{})
+		return ok && len(checks) > 0
+	}
+	return false
+}
+
+// checkFinding is what a check found, from the message of a resource whose
+// registration it stopped, or "" when the message isn't one. A check's
+// message starts `The "<check>" check found a problem`, from
+// platform/src/components/check.ts.
+func checkFinding(message string) string {
+	start := strings.Index(message, `The "`)
+	if start < 0 || !strings.Contains(message[start:], `" check found a problem with `) {
+		return ""
+	}
+	finding := message[start:]
+	// Node adds the error's stack, which isn't the finding's
+	if end := strings.Index(finding, "\n    at "); end >= 0 {
+		finding = finding[:end]
+	}
+	return strings.TrimSpace(finding)
 }
 
 // lookupEnv is the last value of key in env, as a process sees it.

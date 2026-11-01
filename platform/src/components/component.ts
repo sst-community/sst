@@ -14,6 +14,7 @@ import { nameResource, registerNamingRule } from "./naming.js";
 import type { NamingRule } from "./naming-rules.js";
 import { takeoverOf } from "./takeover.js";
 import { VisibleError } from "./error.js";
+import { checkComponent } from "./check.js";
 import path from "path";
 import { statSync } from "fs";
 
@@ -56,6 +57,8 @@ export class Component extends ComponentResource {
     for (const transform of transforms) {
       transform({ name, props: args, opts });
     }
+    // The app's and its packages' checks see the args as transformed
+    checkComponent(type, name, args);
 
     // `this` is not available to the transformations below until `super`
     // returns, so they reach the component through this variable.

@@ -34,6 +34,27 @@ import (
 )
 
 func (p *Project) Run(ctx context.Context, input *StackInput) error {
+	err := p.run(ctx, input)
+	// A program that turned out to have checks stopped before anything
+	// changed, as a check's finding has to stop a deploy before then. It's run
+	// again with a preview first.
+	if errors.Is(err, errChecksNeedPreview) {
+		again := *input
+		again.previewFirst = true
+		return p.run(ctx, &again)
+	}
+	return err
+}
+
+// errChecksNeedPreview is a deploy that ran with no preview, whose program
+// has checks
+var errChecksNeedPreview = errors.New("the program has checks, and the deploy ran with no preview")
+
+// checksNeedPreview is what the program says when it stops for it, from
+// platform/src/components/check.ts
+const checksNeedPreview = "has checks, so its deploys run a preview first"
+
+func (p *Project) run(ctx context.Context, input *StackInput) error {
 	log := slog.Default().With("service", "project.run")
 	log.Info("running stack command", "cmd", input.Command)
 
@@ -283,15 +304,18 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		args = append(args, config...)
 	}
 
+	// Whether a deploy runs Pulumi's preview first
+	withPreview := false
 	switch input.Command {
 	case "diff":
 		args = append([]string{"preview"}, args...)
 	case "refresh":
 		args = append([]string{"refresh", "--yes", "--run-program"}, args...)
 	case "deploy":
-		if input.PolicyPath != "" {
-			// Preview first, so a mandatory policy stops the deploy before
-			// anything is changed
+		if input.PolicyPath != "" || input.previewFirst || previewFirst(workdir) {
+			withPreview = true
+			// Preview first, so a mandatory policy or a check stops the
+			// deploy before anything is changed
 			args = append([]string{"up", "--yes"}, args...)
 		} else {
 			args = append([]string{"up", "--yes", "-f"}, args...)
@@ -341,6 +365,10 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	cmd := process.Command(pulumiPath, args...)
 	process.Detach(cmd)
 	cmd.Env = env
+	if withPreview {
+		// The program's checks know the deploy has a preview first
+		cmd.Env = append(cmd.Env, "SST_PREVIEW_FIRST=1")
+	}
 	cmd.Stdout = pulumiStdout
 	cmd.Stderr = pulumiStderr
 	cmd.Dir = workdir.Backend()
@@ -359,7 +387,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	// opens the same file again with O_TRUNC (startEventLogger in its
 	// backend/display), which this relies on: check a deploy with --policy
 	// when Pulumi is updated.
-	previewing := input.Command == "deploy" && input.PolicyPath != ""
+	previewing := input.Command == "deploy" && withPreview
 	// the preview's log up to its first planned step, which the update's
 	// log doesn't have
 	var previewStart []byte
@@ -545,6 +573,11 @@ loop:
 		}
 
 		if event.DiagnosticEvent != nil && event.DiagnosticEvent.Severity == "error" {
+			// A check's finding stops a resource's registration, and comes
+			// wrapped in Pulumi's message about it
+			if finding := checkFinding(event.DiagnosticEvent.Message); finding != "" {
+				event.DiagnosticEvent.Message = finding
+			}
 			if strings.HasPrefix(event.DiagnosticEvent.Message, "update failed") || (input.Command == "deploy" && (strings.TrimSpace(event.DiagnosticEvent.Message) == "preview failed" || strings.TrimSpace(event.DiagnosticEvent.Message) == "preview canceled")) || strings.HasPrefix(event.DiagnosticEvent.Message, "update cancelled") || strings.Contains(event.DiagnosticEvent.Message, "failed to register new resource") {
 				continue
 			}
@@ -568,11 +601,14 @@ loop:
 					Message: strings.TrimSpace(event.DiagnosticEvent.Message),
 					URN:     event.DiagnosticEvent.URN,
 				})
-				log.Info("telemetry tracking error")
-				telemetry.Track("cli.resource.error", map[string]interface{}{
-					"error": event.DiagnosticEvent.Message,
-					"urn":   event.DiagnosticEvent.URN,
-				})
+				// A check's finding is the app's, and can quote its values
+				if checkFinding(event.DiagnosticEvent.Message) == "" {
+					log.Info("telemetry tracking error")
+					telemetry.Track("cli.resource.error", map[string]interface{}{
+						"error": event.DiagnosticEvent.Message,
+						"urn":   event.DiagnosticEvent.URN,
+					})
+				}
 			}
 		}
 
@@ -737,6 +773,13 @@ loop:
 	log.Info("done running stack command", "resources", len(complete.Resources))
 
 	if cmd.ProcessState.ExitCode() > 0 {
+		if input.Command == "deploy" && !withPreview {
+			for _, e := range errors {
+				if strings.Contains(e.Message, checksNeedPreview) {
+					return errChecksNeedPreview
+				}
+			}
+		}
 		if hasPolicyViolations {
 			return ErrPolicyViolation
 		}

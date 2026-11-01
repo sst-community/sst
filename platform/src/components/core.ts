@@ -10,6 +10,16 @@ export { Component, type NamingRule, type Transform } from "./component";
 export { runtime, type Runtime, type RuntimeSettings } from "./runtime";
 export type { Target } from "./target";
 export {
+  check,
+  unknown,
+  type Check,
+  type Finding,
+  type Found,
+  type CheckedComponent,
+  type CheckedResource,
+  type CheckedInvoke,
+} from "./check";
+export {
   context,
   type Context,
   type Report,
