@@ -25,3 +25,4 @@ export * from "./redis";
 export * from "./service";
 export * from "./sns-topic";
 export * from "./task";
+export * from "./vpc";

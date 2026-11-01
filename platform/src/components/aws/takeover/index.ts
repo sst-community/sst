@@ -26,3 +26,4 @@ import "./redis";
 import "./service";
 import "./sns-topic";
 import "./task";
+import "./vpc";

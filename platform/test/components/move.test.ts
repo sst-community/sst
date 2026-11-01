@@ -158,3 +158,20 @@ describe("A component's parts, while the stage moves", () => {
     expect(pulumi.moved()).toEqual([]);
   });
 });
+
+describe("SST's components, while the stage moves", () => {
+  beforeEach(() => pulumi.reset());
+
+  it("a Vpc's bastion may be replaced, for its image", async () => {
+    const { Vpc } = await import("../../src/components/aws/v5/vpc");
+    await import("../../src/components/aws/takeover/vpc");
+    new Vpc("Net", { az: ["us-east-1a"], bastion: true });
+    await pulumi.settle();
+    expect(pulumi.moved()).toEqual([
+      expect.objectContaining({
+        key: "bastionInstance",
+        replaced: expect.stringContaining("Amazon Linux 2023"),
+      }),
+    ]);
+  });
+});

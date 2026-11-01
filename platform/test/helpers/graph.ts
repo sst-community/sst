@@ -85,11 +85,13 @@ const nameOf = (urn: string) => urn.substring(urn.lastIndexOf("::") + 2);
 
 /**
  * A graph as a 4.x stage has it when it was deployed before 4.x renamed one of
- * its resources. 4.x renames with an alias that changes only the name. What's
- * inside a renamed component was named after it, so it had the old name in
- * front, as Pulumi works it out. Only addresses are changed: where a name is
- * in what a resource is given, it can't be told apart from another of the same
- * name. Undefined when nothing was renamed.
+ * its resources, or moved one into a component from the top of the app. 4.x
+ * renames with an alias that changes only the name, and moves with one that
+ * says it had no parent. What's inside a renamed component was named after
+ * it, so it had the old name in front, as Pulumi works it out. Only addresses
+ * are changed: where a name is in what a resource is given, it can't be told
+ * apart from another of the same name. Undefined when nothing was renamed or
+ * moved.
  *
  * @returns The graph, and the name of each renamed resource now, as
  * `type::name`, by its name then.
@@ -108,16 +110,26 @@ export function beforeRenames(graph: RecordedResource[]) {
         // Pulumi fills in the parent the resource has
         (!alias.spec.parenturn || alias.spec.parenturn === r.parent),
     );
+  // Moved into a component, with the name it has
+  const fromTop = (r: RecordedResource) =>
+    ((r.options.aliases ?? []) as any[]).some(
+      (alias) =>
+        typeof alias === "object" &&
+        alias.spec?.noparent &&
+        !alias.spec.type &&
+        (!alias.spec.name || alias.spec.name === r.name),
+    );
   const was = new Map<string, string>();
   const before = (urn: string): string => {
     const r = byAddress.get(urn);
     if (!r) return urn;
     if (was.has(urn)) return was.get(urn)!;
-    const parent = before(r.parent);
+    const top = fromTop(r);
+    const parent = top ? "" : before(r.parent);
     const parentName = nameOf(r.parent);
     const name =
       rename(r)?.spec.name ??
-      (parent !== r.parent && r.name.startsWith(parentName)
+      (!top && parent !== r.parent && r.name.startsWith(parentName)
         ? nameOf(parent) + r.name.substring(parentName.length)
         : r.name);
     const old = address(r.type, name, parent);
@@ -126,14 +138,17 @@ export function beforeRenames(graph: RecordedResource[]) {
   };
 
   const now = new Map<string, string>();
+  let moved = false;
   const old = graph.map((r) => {
-    const name = nameOf(before(address(r.type, r.name, r.parent)));
+    const urn = address(r.type, r.name, r.parent);
+    const name = nameOf(before(urn));
     if (name !== r.name) now.set(`${r.type}::${name}`, `${r.type}::${r.name}`);
+    if (before(urn) !== urn) moved = true;
     const { aliases, dependencies, ...options } = r.options;
     return {
       ...r,
       name,
-      parent: before(r.parent),
+      parent: fromTop(r) ? "" : before(r.parent),
       options: {
         ...options,
         ...(dependencies
@@ -142,7 +157,7 @@ export function beforeRenames(graph: RecordedResource[]) {
       },
     };
   });
-  return now.size === 0 ? undefined : { graph: old, now };
+  return moved ? { graph: old, now } : undefined;
 }
 
 // What a case's component is created inside, for "inside another component"
@@ -174,7 +189,7 @@ export function mockPulumi(input?: MockInput) {
     try {
       old = engine.takeover(earlier.graph);
     } catch (error: any) {
-      error.message = `As deployed before 4.x renamed a resource: ${error.message}`;
+      error.message = `As deployed before 4.x renamed or moved a resource: ${error.message}`;
       throw error;
     }
     expect(
@@ -182,7 +197,7 @@ export function mockPulumi(input?: MockInput) {
         unclaimed: old.unclaimed.map((r) => earlier.now.get(r) ?? r).sort(),
         unordered: old.unordered,
       },
-      "as deployed before 4.x renamed a resource",
+      "as deployed before 4.x renamed or moved a resource",
     ).toEqual({
       unclaimed: [...result.unclaimed].sort(),
       unordered: result.unordered,

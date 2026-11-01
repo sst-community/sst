@@ -280,11 +280,17 @@ Everything above applies. The rest is specific to SST's own components in
   `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Function`, `Service` and
   `Task` take either `Efs` the same way, and the V5 `Service` either `Alb`.
   For a `Vpc`, the two kinds are already one thing to a V5 component: it wraps the
-  original's args in `TakesVpc<>`, which gives `vpc` the type `AnyVpc` in place of the
-  4.x `Vpc`, and it checks with `isVpc()`, not `instanceof` (all three are in
-  `helpers/vpc.ts`). When `Vpc` is ported, the V5 one is added to `AnyVpc` and
-  `isVpc()`, and every V5 component takes it.
+  original's args in `TakesVpc<>`, which gives `vpc` the type `AnyVpc` (either `Vpc`)
+  in place of the 4.x one, and it checks with `isVpc()`, not `instanceof`. It reads the
+  subnets with `subnetsOf()` where it needs them as one output, and whether there's a
+  NAT with `hasNat()`, since the two `Vpc`s keep those differently. All are in
+  `helpers/vpc.ts`.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
+- **A 5.0 component owns its args.** The 5.0 rewrite makes a clean break from 4.x
+  code: a component imports no 4.x component file and builds on none of its types
+  (`docs/plans/v5-rewrite/plan.md`). The V5 `Vpc` is the first built that way; its
+  args are its own, docs included. The ports before it reuse the original's, as below,
+  until each is rebuilt.
 - **Reuse the original's arg types**: `interface QueueArgs extends
   V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
   change. For an arg that has to become a plain value, write
@@ -326,7 +332,7 @@ Everything above applies. The rest is specific to SST's own components in
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
-| A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)` in `helpers/vpc.ts` |
+| A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)`, `subnetsOf(vpc, kind)`, `hasNat(vpc)` in `helpers/vpc.ts` |
 | A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
@@ -567,9 +573,11 @@ describe("takes over a deployed Queue", () => {
   original created to be kept as it is. It's run three ways: as it is, inside another
   component, and with a `provider` of its own. So a case has to pass its `opts` on to
   the component, and fails when it doesn't.
-- When the original renamed one of its resources with an alias, each case is also
-  checked against its graph as it was before the rename: a stage deployed with an
-  older 4.x has the old addresses. The 4.x subscribers renamed their functions this
+- When the original renamed one of its resources with an alias, or moved one into
+  the component from the top of the app, each case is also checked against its graph
+  as it was before: a stage deployed with an older 4.x has the old addresses. The 4.x
+  `Vpc` moved its NAT instances' Elastic IP associations, so its map gives their old
+  address. The 4.x subscribers renamed their functions this
   way, so a takeover map gives both of a subscriber function's addresses with
   `subscriberFunction()` from `takeover/helpers.ts`.
 - The second and third way are where 4.x and a port differ most. 4.x often created a
@@ -731,4 +739,6 @@ only exists sometimes, and a part that's created in `sst dev` too; `cron-v2.ts` 
 function the component may be given or may create, next to another component it's
 given (a `Task`); `dynamo.ts` for required args next to `get`, and a static method
 replaced by `get`; `function.ts` for a component 4.x built almost entirely inside
-`.apply()`, with parts that are created later.
+`.apply()`, with parts that are created later; `vpc.ts` for args of its own, parts in
+each AZ from a plain count with nothing inside `.apply()`, and a `get` that finds what
+it can't count with lookups that aren't resources.

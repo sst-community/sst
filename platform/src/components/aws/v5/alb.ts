@@ -17,7 +17,7 @@ import {
   pointDomainAt,
   securityGroupArgs,
 } from "../helpers/load-balancer-args";
-import { type TakesVpc, isVpc } from "../helpers/vpc";
+import { type TakesVpc, isVpc, subnetsOf } from "../helpers/vpc";
 import type { AlbArgs as OriginalAlbArgs } from "../alb";
 
 const parts = () => ({
@@ -150,8 +150,8 @@ export class Alb extends component("sst:aws:Alb", parts) {
     const vpc = isVpc(args.vpc)
       ? {
           id: args.vpc.id,
-          publicSubnets: output(args.vpc.publicSubnets),
-          privateSubnets: output(args.vpc.privateSubnets),
+          publicSubnets: subnetsOf(args.vpc, "public"),
+          privateSubnets: subnetsOf(args.vpc, "private"),
         }
       : output(args.vpc);
     const vpcId = output(vpc.id);

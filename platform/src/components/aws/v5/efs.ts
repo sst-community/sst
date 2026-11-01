@@ -9,7 +9,7 @@ import { V5Args, component, many } from "../../parts-component";
 import { withDefault } from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
-import { type TakesVpc, isVpc } from "../helpers/vpc";
+import { type TakesVpc, isVpc, subnetsOf } from "../helpers/vpc";
 import type { EfsArgs as OriginalEfsArgs } from "../efs";
 
 const parts = {
@@ -207,7 +207,7 @@ export class Efs extends component("sst:aws:Efs", parts) {
       if (isVpc(args.vpc))
         return output({
           id: args.vpc.id,
-          subnets: args.vpc.privateSubnets,
+          subnets: subnetsOf(args.vpc, "private"),
           cidrBlock: args.vpc.nodes.vpc.cidrBlock,
         });
 

@@ -2,8 +2,9 @@ import { ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { ecs } from "@pulumi/aws";
 import { V5Args, component } from "../../parts-component";
 import { VisibleError } from "../../error";
-import { type TakesVpc, isVpc } from "../helpers/vpc";
+import { type AnyVpc, type TakesVpc, isVpc } from "../helpers/vpc";
 import { Vpc as VpcV1 } from "../vpc-v1";
+import type { Vpc as OriginalVpc } from "../vpc";
 import type {
   Cluster as OriginalCluster,
   ClusterArgs as OriginalClusterArgs,
@@ -25,6 +26,9 @@ const parts = {
 
 export interface ClusterArgs
   extends V5Args<TakesVpc<OriginalClusterArgs>, typeof parts> {}
+
+// Where the services and tasks run: either kind of `Vpc`, or the ids of one
+type Network = AnyVpc | Exclude<OriginalCluster["vpc"], OriginalVpc>;
 
 /**
  * The `Cluster` component lets you create an [ECS cluster](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/clusters.html)
@@ -89,7 +93,7 @@ export interface ClusterArgs
  *   sets next to yours. It's added back when you switch.
  */
 export class Cluster extends component("sst:aws:Cluster", parts) {
-  private network: OriginalCluster["vpc"];
+  private network: Network;
 
   constructor(
     name: string,
@@ -199,7 +203,7 @@ export class Cluster extends component("sst:aws:Cluster", parts) {
 function networkOf(
   name: string,
   vpc: ClusterArgs["vpc"],
-): OriginalCluster["vpc"] {
+): Network {
   if (vpc instanceof VpcV1)
     throw new VisibleError(
       `You are using the "Vpc.v1" component. Please migrate to the latest "Vpc" component.`,

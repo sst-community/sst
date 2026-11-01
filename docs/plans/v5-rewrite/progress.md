@@ -2,6 +2,35 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, the `Vpc`
+
+The maintainer said to continue. The `Vpc` is the gate's hard component that the VPC recording can check right away, and the first built the 5.0 way.
+
+**Done, committed (not pushed):**
+
+- **The V5 `Vpc`** (`aws/v5/vpc.ts`, `sst.aws.v5.Vpc`, type `sst:aws:Vpc`). Its args, types and docs are its own, and it imports no 4.x component file: the clean break, read as no 4.x component file or its types, with the parts framework, `args`, `contract` and `error` as 5.0's own. Every resource keeps the name 4.x gave it. Nothing is created inside an `apply`: `az`, `nat` and `bastion` are plain, and a subnet, route table, Elastic IP and NAT in each AZ are parts keyed by the AZ's number, from a count a preview knows. The bastion is reported to the core for `sst tunnel`. No `registerVersion`; the version tags 4.x writes are kept.
+- **The bastion's image is one image.** 4.x took the newest `al2023-ami-20*` for Arm, and Amazon releases one per kernel in the same second, so a diff could replace the bastion. The V5 `Vpc` reads Amazon's public parameter for the newest image with the default kernel. A switch replaces the bastion once if it doesn't run that image, which the state map lists, and the docs tell the user to start `sst tunnel` again.
+- **`get`** looks up the VPC, its default security group, its Internet Gateway and its Cloud Map namespace as parts, and finds the subnets and the bastion with lookups that aren't resources: how many there are is only known once they're looked up. 4.x's other lookups leave the state, which changes nothing in AWS. A namespace id with a `0` in it is read whole; 4.x read it up to the `0`.
+- **Its state map** gives the old address of a NAT instance's Elastic IP association, which older 4.x releases created at the top of the app, and lists the bastion's replacement.
+- **Every V5 component takes either `Vpc`** (`AnyVpc`, `isVpc()`), and reads the subnets with `subnetsOf()` and whether there's a NAT with `hasNat()` where the two keep them differently.
+- **The takeover suite checks a resource 4.x moved from the top of the app** against the graph from before the move, as it checks a rename. Without the map's old address, the `Vpc`'s NAT instance cases fail.
+- **A report with nothing in it is read as no report** in the takeover suite, as the core reads it: a `Vpc` from `get` with no bastion reports an empty tunnel.
+- **The docs generator builds again.** It had failed since `sst.cloudflare.binding()` was given an intersection type in step 3. It renders an intersection and a type parameter now, and no longer shows `ComponentArgs`' comment as the `Dsql`, `Service`, `Task` and `Vpc` args' own.
+
+**Reviewed** by a separate agent, which compared the two resource by resource and found nothing a switch would change but the bastion's image. Its findings, fixed: `nat.ec2.role` and `bastion.instanceProfile` can be outputs again, since only whether they're given decides; a test catches the tunnel's key in plain text; a `get` with no bastion is a case; the docs say what in `nat` has to be plain, the permission the bastion's image needs, and what `get`'s `nodes` and an object `transform` do differently. A check I'd added for a default security group's `description` was dropped: the AWS SDK leaves it out before anything is sent.
+
+**Checked** (all platform tests, `tsc`, the generated page, the docs site's build):
+
+- **The V5 `Vpc` takes over the 4.x one** in 17 takeover cases, each run three ways (as it is, inside another component, with a provider of its own) and against the graph from before the move: two AZs, three, the AZs given, a managed NAT, one with its Elastic IPs given, an EC2 NAT, one with its instance, image, role and Elastic IPs given, an EC2 NAT that's the bastion, with and without its Elastic IPs given, a bastion, a managed NAT with a bastion on an instance profile of its own, transforms, and `get`, of a VPC with a bastion and of one without. Nothing updates; only 4.x's version marker goes, and for `get`, its lookups. An object `transform` that sets tags is merged, so the tags 4.x dropped come back, as the docs say. When Amazon's parameter names another image, a switch replaces only the bastion, and `sst migrate` is told the map lists it.
+- **The tunnel's key stays secret** in what's reported, created or looked up, even where a lookup gives it in plain text; the test fails without that.
+- **The V5 components take it**, created or from `get`: the `Cluster` and a `Service`, `Efs`, a `Function` and an API's VPC link.
+- **The VPC recording, with the V5 `Vpc`**: it takes over the lab's `Net` (a managed NAT and a bastion) and the containers and databases in it, updating nothing. Only `NetVersion` goes, beside the markers that went before.
+- **A new stage's preview plans everything a deploy creates**, for an EC2 NAT with a bastion and for a managed NAT with one.
+
+**Not decided, for the maintainer:** the NAT instances and the bastion take the newest image on every deploy, as in 4.x, so a new fck-nat or Amazon Linux release replaces them, and replacing a NAT instance cuts the private subnets off for a while. Leaving changes to the image alone once an instance exists (`ignoreChanges`) would stop that, at the price of never updating it without a replace by hand.
+
+**Left:** the `Vpc`'s lab deploy, compared by cloud id. The V5 `Efs` still counts a VPC's subnets inside an `apply` and names each mount target after its subnet's id; its 5.0 form reads the `Vpc`'s subnets by AZ, which a preview can count, and moves the mount targets with a map. Then `Nextjs` with `Router`, the `Function`'s rebuild the 5.0 way, and releasing and adopting `BucketFiles` and `KvKeys`.
+
 ## 2026-11-01: step 4, the shared dev stub code is taken over
 
 Looking into the `Function` with its dev stubs, the first of the gate's hard components, showed that the gap the recordings found there wasn't one.

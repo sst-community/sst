@@ -1038,10 +1038,20 @@ function renderType(
 
   function renderSomeType(type: TypeDoc.SomeType): string {
     type = usePlainType(type);
+    // A type parameter is shown as what it can be
+    if (type.type === "reference" && type.refersToTypeParameter) {
+      const param = type.reflection as
+        | TypeDoc.TypeParameterReflection
+        | undefined;
+      return param?.type
+        ? renderSomeType(param.type)
+        : `<code class="type">${type.name}</code>`;
+    }
     if (type.type === "intrinsic") return renderIntrisicType(type);
     if (type.type === "literal") return renderLiteralType(type);
     if (type.type === "templateLiteral") return renderTemplateLiteralType(type);
     if (type.type === "union") return renderUnionType(type);
+    if (type.type === "intersection") return renderIntersectionType(type);
     if (type.type === "indexedAccess") return renderIndexedAccessType(type);
     if (type.type === "array") return renderArrayType(type);
     if (type.type === "tuple") return renderTupleType(type);
@@ -1163,6 +1173,14 @@ function renderType(
   }
   function renderIndexedAccessType(type: TypeDoc.IndexedAccessType) {
     return `${renderSomeType(type.objectType)}<code class="symbol">[</code>${renderSomeType(type.indexType)}<code class="symbol">]</code>`;
+  }
+  // A type narrowed with `&`, like `Binding & { type: T }`. What's narrowed is
+  // what a reader needs, so an object written only to narrow it is left out.
+  function renderIntersectionType(type: TypeDoc.IntersectionType) {
+    const named = type.types.filter((t) => t.type !== "reflection");
+    return (named.length ? named : type.types)
+      .map((t) => renderSomeType(t))
+      .join(`<code class="symbol"> &amp; </code>`);
   }
   function renderUnionType(type: TypeDoc.UnionType) {
     return useUnionMembers(type)
@@ -2957,23 +2975,20 @@ function useClassGetters(module: TypeDoc.DeclarationReflection) {
   );
 }
 // An interface with no comment of its own is given the comment of the one it
-// extends. When that one is in a helper file, the comment is about the
-// helper, not about what the page's interface is for.
+// extends. That comment is about the one it extends, like a helper's args or
+// `ComponentArgs`, not about what the page's interface is for.
 function useInterfaceSummary(int: TypeDoc.DeclarationReflection) {
   const summary = int.comment?.summary;
   if (!summary) return undefined;
 
   const text = (parts: TypeDoc.CommentDisplayPart[]) =>
     parts.map((part) => part.text).join("");
-  const fromHelper = (int.extendedTypes ?? []).some((type) => {
+  const inherited = (int.extendedTypes ?? []).some((type) => {
     if (type.type !== "reference") return false;
     const base = type.reflection as TypeDoc.DeclarationReflection | undefined;
-    return (
-      isHelperSource(base?.sources?.[0]?.fileName ?? "") &&
-      text(base?.comment?.summary ?? []) === text(summary)
-    );
+    return text(base?.comment?.summary ?? []) === text(summary);
   });
-  return fromHelper ? undefined : summary;
+  return inherited ? undefined : summary;
 }
 function useInterfaceProps(i: TypeDoc.DeclarationReflection) {
   if (!i.children?.length) throw new Error(`Interface ${i.name} has no props`);

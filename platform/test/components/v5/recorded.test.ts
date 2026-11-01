@@ -37,6 +37,18 @@ const lookups: Record<string, (inputs: any) => Record<string, any>> = {
     ...inputs,
     id: "ami-0d2beaff07e79c24e",
   }),
+  // The V5 `Vpc` asks Amazon's public parameter for it. Here it names the
+  // image 4.x found; when it doesn't, a move replaces the bastion, as the
+  // `Vpc`'s state map says.
+  "aws:ssm/getParameter:getParameter": (inputs) => ({
+    ...inputs,
+    ...(inputs.name.startsWith("/aws/service/ami-amazon-linux-latest/")
+      ? {
+          value: "ami-0d2beaff07e79c24e",
+          insecureValue: "ami-0d2beaff07e79c24e",
+        }
+      : {}),
+  }),
   // What an image is pushed with. The provider returns the password as a
   // secret.
   "aws:ecr/getAuthorizationToken:getAuthorizationToken": (inputs) => ({
@@ -348,9 +360,8 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
     pulumi = replay("vpc-containers-databases.json", "recvpc");
     const aws = await import("../../../src/components/aws/index");
     const lab = await import("../../recorded/v5-lab");
-    // Both versions are given the 4.x `Vpc`
     const groups = (components: any) => () => {
-      const vpc = lab.net(aws);
+      const vpc = lab.net(components);
       lab.containers(components, vpc);
       lab.databases(components, vpc);
     };
@@ -381,6 +392,7 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
       "sst:sst:DevCommand::WebDev",
       // 4.x's version markers, with nothing in AWS behind them
       "sst:sst:Version::ClusterVersion",
+      "sst:sst:Version::NetVersion",
       "sst:sst:Version::PostgresVersion",
       "sst:sst:Version::RedisVersion",
     ]);

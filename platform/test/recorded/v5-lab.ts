@@ -9,8 +9,10 @@ import type * as aws from "../../src/components/aws/index";
 /** The components a group is written with. It's typed as the V5 ones. */
 export type Components = typeof aws.v5;
 
-/** The VPC the containers and databases are in. */
-export type Vpc = InstanceType<typeof aws.Vpc>;
+/** The VPC the containers and databases are in: either kind of `Vpc`. */
+export type Vpc =
+  | InstanceType<typeof aws.Vpc>
+  | InstanceType<typeof aws.v5.Vpc>;
 
 /** The domain the lab account has a hosted zone for, as scrubbed. */
 export const zone = "lab.example.com";
@@ -93,11 +95,13 @@ export function serverless(aws: Components) {
 }
 
 /**
- * The VPC both versions of the containers and databases are given: `Vpc` has
- * no V5 form yet. A NAT gateway in each AZ, and a bastion for `sst tunnel`.
+ * The VPC the containers and databases are in: a NAT gateway in each AZ, and
+ * a bastion for `sst tunnel`.
  */
-export function net(v4: typeof aws) {
-  return new v4.Vpc("Net", { nat: "managed", bastion: true });
+export function net(
+  aws: Components | typeof import("../../src/components/aws/index"),
+): Vpc {
+  return new aws.Vpc("Net", { nat: "managed", bastion: true });
 }
 
 export function containers(aws: Components, vpc: Vpc) {

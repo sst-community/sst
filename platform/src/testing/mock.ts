@@ -130,8 +130,13 @@ const legacyOutputs: Record<string, string> = {
 function asTheCoreReads(outputs: Record<string, any>) {
   const { _sst, ...rest } = outputs;
   if (_sst) {
-    const { contract, ...report } = _sst;
-    return { ...rest, report };
+    const { contract, ...record } = _sst;
+    // An item that came out empty isn't read, so a record of nothing but
+    // its version is no report
+    const report = Object.fromEntries(
+      Object.entries(record).filter(([, item]) => item != null),
+    );
+    return Object.keys(report).length ? { ...rest, report } : rest;
   }
   const report: Record<string, any> = {};
   for (const [name, item] of Object.entries(legacyOutputs)) {
