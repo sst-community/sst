@@ -47,9 +47,10 @@ The maintainer said to go on with step 3's first piece: the [safety rule](plan.m
 
 Checked again with the final code, on an app with the local home and only a dev command, so no cloud: `sst dev` writes the file, a dev command finds it, an `sst diff` beside it leaves the file alone, `sst secret set` reaches `sst dev`, the file goes when `sst dev` stops, and with a file left behind `secret set` says to deploy. The app's files were deleted after.
 
+**The Console's local connection, removed** (the maintainer's call, after the review). With `/socket` under the token and the TLS proxy gone, the SST Console couldn't reach `sst dev`, so `/socket` and `sst cert` had no user, and `sst cert` still installed a trusted root certificate. Both are gone, with `mkcert`'s download, and the docs page's "Local logs" section and its note on personal stages. What they did, and what bringing them back takes, is in [reference.md](reference.md#the-consoles-local-connection-removed).
+
 **Left, on purpose:**
 
-- **The Console's local logs can't connect any more**: `/socket` is under the token, and the TLS proxy is gone. So `/socket` and `sst cert` have no user. Whether to remove them, and the docs page that describes them, is the maintainer's call.
 - A redirect from the server's router (a path missing its last slash, as `/debug/pprof`) leaves the token out, so it isn't found. The URL in `SST_PPROF`'s note has the slash.
 - On Windows, the server file can't be replaced while another process has it open; the old one stays, and the error is logged.
 - The dev tests' server doesn't wait for its handlers when a test ends, as `httptest` did. The race detector finds nothing.

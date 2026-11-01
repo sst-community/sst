@@ -19,7 +19,6 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/mosaic/dev"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/monoplexer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/multiplexer"
-	"github.com/sst/sst/v3/cmd/sst/mosaic/socket"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/watcher"
 	"github.com/sst/sst/v3/internal/util"
@@ -196,11 +195,6 @@ func CmdMosaic(c *cli.Cli) error {
 	wg.Go(func() error {
 		defer c.Cancel()
 		return dev.Start(c.Context, p, server)
-	})
-
-	wg.Go(func() error {
-		defer c.Cancel()
-		return socket.Start(c.Context, p, server)
 	})
 
 	wg.Go(func() error {

@@ -36,7 +36,3 @@ func ConfigDir() string {
 func BinPath() string {
 	return filepath.Join(configDir, "bin")
 }
-
-func CertPath() string {
-	return filepath.Join(configDir, "cert")
-}

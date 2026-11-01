@@ -57,6 +57,7 @@ Change one only on purpose, and record it here with its date.
 | 2026-10-31 | **Package code is TypeScript, for now.** Other languages may come later. |
 | 2026-10-31 | **The RPC the program calls back into is redone in 5.0**, not fixed separately on `main` ([Safety rules](#safety-rules)). |
 | 2026-10-31 | **The RPC's design:** loopback and a token for every route, the Lambda runtime routes keyed by a worker id nobody can guess, the Docker bridge only while a worker runs in a container, and no TLS proxy ([Safety rules](#safety-rules)). |
+| 2026-10-31 | **The Console's local connection goes:** `sst dev` serves no `/socket`, and `sst cert` is gone. With the RPC's design, the SST Console can't reach `sst dev`, so it can't show local logs or see that `sst dev` is running ([what it did, and how to bring it back](reference.md#the-consoles-local-connection-removed)). |
 | 2026-10-31 | **Cloudflare is in scope:** its home, its runtime, `sst dev` for workers, and its most used components, after the AWS ones. A Cloudflare account is used as a lab, like the AWS one. |
 | 2026-10-31 | **5.0.0 ships with the Pulumi and provider versions of the 4.x it's built from**, so a move changes nothing it doesn't have to. A bump comes in a later release. |
 | 2026-10-31 | **Step 2's result is released as a pre-release that only runs `sst diff`**, so real apps check the new core, not only the lab. |
@@ -464,7 +465,7 @@ Each comes when it's needed, with its own exit test.
 | 0. What v5 taught | Written in [reference.md](reference.md#what-v5-taught), 2026-10-31. |
 | 1. A record of today's state | Started, 2026-10-31. Recorded with v4.23.1 and in `testdata/states/`: the serverless group and the sites, the VPC groups, and the serverless group by `sst dev`. A recorded state replays with AWS credentials and the passphrase, not without. Everything removed, and the audit is clean. Left: Cloudflare (at step 4). |
 | 2. The first proof | Started, 2026-10-31, committed (not pushed). Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
-| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. Open: whether the Console's local logs (`/socket`, `sst cert`) go. Next: the program contract. |
+| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. Next: the program contract. |
 | 4. New components | Not started. |
 | 5. Moving an app | Not started. |
 | 6. After 5.0 | When needed. |
