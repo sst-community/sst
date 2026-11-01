@@ -624,8 +624,7 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    * Disable running this function [_Live_](/docs/live/) in `sst dev`.
    *
    * By default, the functions in your app are run locally in `sst dev`. To do this, a
-   * _stub_ version of your function is deployed, instead of the real function. It has
-   * to be a plain value.
+   * _stub_ version of your function is deployed, instead of the real function.
    *
    * :::note
    * In `sst dev` a _stub_ version of your function is deployed.
@@ -646,6 +645,8 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    * it's deployed, so it can't reach anything that only runs on your machine.
    *
    * Read more about [Live](/docs/live/) and [`sst dev`](/docs/reference/cli/#dev).
+   *
+   * It decides which function is deployed, so it has to be a plain value.
    *
    * @default `true`
    * @example
@@ -1729,7 +1730,9 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  *
  * The V5 components create their functions, like a queue's subscriber, as
  * `sst.aws.v5.Function` too. There you can keep writing the function the way
- * `sst.aws.Function` takes it.
+ * `sst.aws.Function` takes it, but for what a build reads: `handler`, `bundle`,
+ * `runtime`, `architecture`, `nodejs` and `copyFiles` have to be plain values there
+ * too.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * new sst.aws.Function("MyFunction", { handler: "src/lambda.handler" });
@@ -1801,19 +1804,19 @@ export class Function extends component("sst:aws:Function", parts) {
     const encryptionKey = linkEncryptionKey().base64;
     // What's built is read from these, and a preview has to know what's
     // built: its handler, and the source maps it writes
-    const built_ =
+    const isBuilt =
       "The function is built from it, and a preview has to know what's built.";
-    plain(args.handler, option("handler"), built_);
-    plain(args.bundle, option("bundle"), built_);
-    plainDeep(args.nodejs, option("nodejs"), built_);
-    plainDeep(args.copyFiles, option("copyFiles"), built_);
+    plain(args.handler, option("handler"), isBuilt);
+    plain(args.bundle, option("bundle"), isBuilt);
+    plainDeep(args.nodejs, option("nodejs"), isBuilt);
+    plainDeep(args.copyFiles, option("copyFiles"), isBuilt);
     const architecture =
-      plain(args.architecture, option("architecture"), built_) ?? "x86_64";
+      plain(args.architecture, option("architecture"), isBuilt) ?? "x86_64";
     const injections =
-      plainDeep(args.injections, option("injections"), built_) ?? [];
+      plainDeep(args.injections, option("injections"), isBuilt) ?? [];
     // A runtime made of commands is built and run by them, and deployed with
     // the Lambda runtime it names
-    const runtimeArg = plain(args.runtime, option("runtime"), built_);
+    const runtimeArg = plain(args.runtime, option("runtime"), isBuilt);
     if (
       runtimeArg !== undefined &&
       typeof runtimeArg !== "string" &&
@@ -2159,6 +2162,7 @@ export class Function extends component("sst:aws:Function", parts) {
           .route,
         option("url.route"),
       );
+      plain(given?.router, option("url.route.router"));
       const router: RouteArgs | undefined =
         urlArgs.router ??
         (given && (({ router, ...route }) => ({ ...route, instance: router }))(given));

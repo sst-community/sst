@@ -71,11 +71,16 @@ describe("a function in a new stage's preview", () => {
       "../../../src/components/aws/v5/function"
     );
     const { Router } = await import("../../../src/components/aws/router");
+    const { Bucket } = await import("../../../src/components/aws/v5/bucket");
     const signs = new Router("Signs", { protection: "oac" });
     const open = new Router("Open");
+    // A route field that's only known once something else is created
+    const files = new Bucket("Files");
     new Function("Signed", {
       handler: "src/api.handler",
-      url: { router: { instance: signs, path: "/api" } },
+      url: {
+        router: { instance: signs, path: files.arn.apply(() => "/api") },
+      },
     });
     new Function("Public", {
       handler: "src/api.handler",

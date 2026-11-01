@@ -757,8 +757,7 @@ function the component may be given or may create, next to another component it'
 given (a `Task`); `dynamo.ts` for required args next to `get`, and a static method
 replaced by `get`; `function.ts` for a component 4.x built almost entirely inside
 `.apply()`, with parts that are created later, args of its own, what a build reads
-kept plain so a preview knows its
-source maps, and what an app creates once shared with the 4.x one; `vpc.ts` for args
-of its own, parts in
-each AZ from a plain count with nothing inside `.apply()`, and a `get` that finds what
-it can't count with lookups that aren't resources.
+kept plain so a preview knows its source maps, and what an app creates once shared
+with the 4.x one; `vpc.ts` for args of its own, parts in each AZ from a plain count
+with nothing inside `.apply()`, and a `get` that finds what it can't count with
+lookups that aren't resources.

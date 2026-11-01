@@ -735,6 +735,22 @@ describe("Function", () => {
       ).toEqual(["MyQueueSubscriberRouteKey", "MyQueueSubscriberRoutesUpdate"]);
     });
 
+    it("names the router as it was given when it's an output", async () => {
+      expect(() =>
+        new Queue("MyQueue").subscribe({
+          handler,
+          url: { route: { router: output(router("oac")), path: "/jobs" } },
+        }),
+      ).toThrow(/The "url.route.router" of the "MyQueueSubscriber" function has to be a plain value/);
+      expect(() =>
+        new Queue("Other").subscribe({
+          handler,
+          url: { router: { instance: output(router("oac")) as any } },
+        }),
+      ).toThrow(/The "url.router.instance" of the "OtherSubscriber" function has to be a plain value/);
+      await pulumi.settle();
+    });
+
     it("is transformed through the component, down to its own parts", async () => {
       new Queue("MyQueue", {
         transform: {

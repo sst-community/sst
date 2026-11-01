@@ -92,11 +92,14 @@ describe("V5 components", () => {
 
     // Its args, types and docs are its own. A 4.x component it takes, like a
     // `Vpc` or a `Router`, is reached through a helper that takes either kind
-    // (`helpers/vpc.ts`), until 5.0 has no 4.x components.
+    // (`helpers/vpc.ts`), until 5.0 has no 4.x components. The modules that
+    // aren't components, like `permission.ts` or the providers, are shared.
     it("imports no 4.x component's file, once it's built the 5.0 way", () => {
       if (!rebuilt.includes(file)) return;
       const code = fs.readFileSync(new URL(file, dir), "utf8");
-      const fourX = [...code.matchAll(/from\s+"(\.[^"]+)"/g)]
+      const fourX = [
+        ...code.matchAll(/(?:\bfrom|^\s*import)\s*["'](\.[^"']+)["']/gm),
+      ]
         .map((match) => new URL(`${match[1].replace(/\.js$/, "")}.ts`, dir))
         .filter(
           (target) =>

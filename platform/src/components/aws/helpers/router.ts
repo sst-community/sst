@@ -10,7 +10,8 @@ export type AnyRouter = OriginalRouter;
 
 export interface RouteArgs {
   /**
-   * The `Router` component to use for routing requests.
+   * The `Router` component to serve it through. It has to be a plain value: whether
+   * the router signs its requests decides who may call what it routes to.
    *
    * @example
    *
@@ -22,8 +23,7 @@ export interface RouteArgs {
    * });
    * ```
    *
-   * You can attach it to the Router, instead of creating a standalone CloudFront
-   * distribution.
+   * Serve it through the router.
    *
    * ```ts
    * router: {
@@ -178,15 +178,15 @@ export interface RouteArgs {
 /**
  * What a component served through a router needs to know of it: where its
  * routes are kept, its URL, and whether it signs its requests to the
- * component (`signs`). Whether it signs comes from the router's settings, so
- * a preview knows it.
+ * component (`signs`). Whether it signs is read from the router's protection
+ * alone, which its settings give, so a preview knows it whatever the route's
+ * own fields are.
  */
 export function routeOf(route: RouteArgs) {
-  const normalized = normalizeRouteArgs(route)!;
   return {
-    route: normalized,
-    signs: normalized.routerProtection.apply(
-      (p) => p?.mode === "oac" || p?.mode === "oac-with-edge-signing",
+    route: normalizeRouteArgs(route)!,
+    signs: route.instance._protection.apply(
+      (p) => p.mode === "oac" || p.mode === "oac-with-edge-signing",
     ) as Output<boolean>,
   };
 }

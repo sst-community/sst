@@ -2,6 +2,45 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, the `Function` built the 5.0 way
+
+The maintainer said to continue. The `Function` with its dev stubs is the gate's other hard component the recordings already check; what was left was building it the 5.0 way.
+
+**Done, committed (not pushed):**
+
+- **What an app creates once is made once in each run** (`perRun()` and `newRun()` in `util/lazy.ts`). The key links are encrypted with and the shared dev stub code were statics of the 4.x `Function`, which the V5 one reached into. They're in `aws/helpers/function-shared.ts` now, which both use, with the same names, so nothing changes in an app. The CLI's run and the mock's `reset()` start a new run, so a test sees what a run creates whatever ran before it; the takeover helpers no longer reset the 4.x `Function` by hand, and neither do the tests. The 4.x `Function`'s `reset()` is gone.
+- **The V5 `Function` owns its args** (`FunctionArgs`, its types and its docs) and imports no 4.x component file. The 4.x `Efs` and `Router` are reached through `helpers/efs.ts` (`AnyEfs`, `isEfs()`) and `helpers/router.ts` (`RouteArgs`, `AnyRouter`, `routeOf()`), which take either kind, as `helpers/vpc.ts` does for the `Vpc`. A V5 `Router` joins `AnyRouter` when there is one.
+- **What a build reads is a plain value**: `handler`, `bundle`, `runtime`, `architecture`, `nodejs` and `copyFiles`. They decide what's built, its handler and the source maps it writes, so a preview has to know them; an output fails with a message that says so. A runtime from `sst.runtime` in a function part's args that are themselves an output still works, since the part unwraps them first. `plain()` takes a reason for an arg like these, which doesn't decide which resources are created.
+- **A URL behind a router has its permissions in a new stage's preview.** Who may call it was decided once the router's distribution existed, so a preview of a new stage had none. It's decided from whether the router signs its requests, which its settings say, and the distribution's ARN is passed in.
+- **The clean break is checked**: `v5-components.test.ts` lists the components built the 5.0 way (`Vpc`, `Function`) and fails if one imports a 4.x component's file.
+- **The docs page** has the args, with every example naming the V5 components; the rulebook says how a 5.0 component reaches a 4.x `Efs` or `Router`, and where what an app creates once lives.
+
+**Checked** (all 1,962 platform tests, `tsc`, the generated page, the docs site's build):
+
+- The takeover cases, the recorded states (the serverless group deployed and in `sst dev`) and the new stage's preview pass as before.
+- A new stage's preview of a URL behind a router that signs its requests, and one behind a router that doesn't, has both permissions; the test fails with the old code.
+- Each of the six build args in an output is turned down with its message.
+
+**Checked in the lab** (stage `fn`, `LAB_ONLY=serverless`, with a CLI built from the branch):
+
+- Deployed with the 4.x components, then switched with `LAB_V5=serverless`: `sst migrate --check` passed, with 166 kept (97 at a new address, 11 updated in place), 13 wrappers taken out of the state and the 9 functions' code replaced, as the `Function`'s map says. The deploy kept 118 of the 133 resources with the same ids, 69 under a new name; only the 9 code objects are new. A diff after it showed no changes.
+- The function URL, the API's routes and its authorizer answered as before.
+- `sst dev` deployed the stubs with the shared stub code, and the function URL, the routes and the authorizer ran on this machine through them.
+- Removed, and cleaned up (below).
+
+**Reviewed** by a separate agent, which found nothing a switch changes beyond what the docs say, the URL's permissions the same as before for each protection and authorization, and `perRun()` right. Its findings, fixed:
+
+- Whether a router signs was read from the whole route, so a route's `path` or `domain` only known mid-deploy still left the permissions out of a preview. It's read from the router's protection alone now, and the preview test has such a path; it fails the old way.
+- The V5 components still type the function args they're given as 4.x's, which allow outputs for what a build reads. The docs say those have to be plain there too; each component takes the V5 type when it's rebuilt.
+- The 4.x `url.route.router` given as an output was reported as `url.router.instance`. The docs of a router's `instance` were the 4.x `Router`'s, about a distribution of its own. The clean-break test reads every kind of import.
+
+**Left:**
+
+- **A URL behind a router still creates its permissions inside an `apply`**, on the router's protection, which a preview knows unless an edge function's ARN in it is an output. A V5 `Router` gives its protection as a plain value, and then nothing waits.
+- **A function part whose whole definition is an output** is created inside an `apply` (`functionPart()`), so a preview that doesn't know the definition doesn't see the function. Each component's 5.0 rebuild takes a plain definition.
+- **The 4.x ways of writing `live`, `role`, `logging.logGroup` and `url.route`** are still taken, as the V5 components take 4.x's function args; they go with those types.
+- `RouteArgs` is a copy of the 4.x `RouterRouteArgs` until the V5 `Router` owns it.
+
 ## 2026-11-01: step 4, the `Vpc`
 
 The maintainer said to continue. The `Vpc` is the gate's hard component that the VPC recording can check right away, and the first built the 5.0 way.
