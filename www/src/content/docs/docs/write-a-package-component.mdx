@@ -28,7 +28,6 @@ npm install -D sst@npm:@sst-community/sst@^5.0.0-0 @pulumi/pulumi @pulumi/aws @p
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
-    "skipLibCheck": true,
     "declaration": true,
     "outDir": "dist",
     "rootDir": "src"
@@ -37,9 +36,9 @@ npm install -D sst@npm:@sst-community/sst@^5.0.0-0 @pulumi/pulumi @pulumi/aws @p
 }
 ```
 
-Keep `moduleResolution` on `bundler`. SST's types import their own files without an extension, which TypeScript doesn't follow under `NodeNext`. There, `component()` and the V5 components come out as `any` or missing, and `skipLibCheck` hides why.
+`moduleResolution` can be `bundler`, as here, or `NodeNext`. SST's types work under both, and need no `skipLibCheck`.
 
-The component's imports can leave out `.js` too: the app bundles the component when it deploys, and bundles a handler the package ships when it builds the function. Only code that Node loads without a bundler needs it, like a library the package exports for a server started with `node`. `tsc` writes an import as it is, and Node doesn't find `./config` without its extension.
+Under `bundler`, the component's imports can leave out `.js`: the app bundles the component when it deploys, and bundles a handler the package ships when it builds the function. Only code that Node loads without a bundler needs it, like a library the package exports for a server started with `node`. `tsc` writes an import as it is, and Node doesn't find `./config` without its extension. Under `NodeNext`, `tsc` asks for the `.js` on every import, so that can't happen.
 
 ---
 
@@ -162,7 +161,7 @@ It finds the file wherever the app installed the package: in its `node_modules`,
 
 ## Test it
 
-Test the component with `mock()` from `sst/testing`, as in [Test it](/docs/write-a-local-component/#test-it) for a local component. It works in vitest, `bun test` and `node --test`, with one thing to set up, below.
+Test the component with `mock()` from `sst/testing`, as in [Test it](/docs/write-a-local-component/#test-it) for a local component. It works in vitest, `bun test` and `node --test`.
 
 ```ts title="test/email-domain.test.ts"
 import { expect, test } from "vitest";
@@ -182,16 +181,6 @@ test("verifies the domain in Cloudflare", async () => {
 ```
 
 `mock()` gives the test `sst` with the components of each provider whose packages are installed, like `sst.aws`. Using one that isn't fails, and says what to install.
-
-Pin `google-protobuf`, which `@pulumi/pulumi` brings in, to `3.21.2`, as SST does. With `3.21.4`, which it gets otherwise, every resource `mock()` registers fails with `c.g is not a function`.
-
-```json title="package.json"
-"overrides": {
-  "google-protobuf": "3.21.2"
-}
-```
-
-That's npm's field, and Bun's. With pnpm it's `pnpm.overrides`, and with Yarn `resolutions`.
 
 ---
 
@@ -245,8 +234,6 @@ For TypeScript to read the package's types, the app's `tsconfig.json` extends `.
   }
 }
 ```
-
-Set the app's `moduleResolution` to `bundler` as well. Under `NodeNext`, TypeScript doesn't find SST's types through those paths.
 
 :::note
 `paths` in your own `tsconfig.json` replace the ones it extends. If you have some, add the entries from `.sst/tsconfig.json` to yours. `sst install` changes them when you add a provider.

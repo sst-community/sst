@@ -20,6 +20,11 @@ npx tsc -p tsconfig.types.json || exit 1
   mkdir -p "../dist/types/$(dirname "$file")"
   cp "$file" "../dist/types/$file"
 done)
+# The `sst` global's module is only re-exports, so it's its own declaration
+# (see tsconfig.types.json)
+cp ./src/components/index.ts ./dist/types/components/index.d.ts
+# Their imports get their `.js`, and are checked under NodeNext
+node ./scripts/types.mjs || exit 1
 
 mkdir -p ./dist/nodejs-bridge
 cp ./functions/nodejs-bridge/index.mjs ./dist/nodejs-bridge/index.mjs

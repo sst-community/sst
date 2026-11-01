@@ -2,11 +2,37 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 3, the package setup
+
+The plan asks that a package need no `moduleResolution: "bundler"`, `skipLibCheck` or pinned `google-protobuf`, and that a group not pull in every provider, or that the reason be written down. Each was tried in a copy of the template package (`examples/component-package` on `v5-community-packages`), with `sst` packed from this branch.
+
+**Done, reviewed, committed (not pushed):**
+
+- **`skipLibCheck`.** Without it, a package's `tsc` found 45 errors in SST's declarations, for two reasons:
+  - **TypeScript names a type by its shortest path.** The V5 components' declarations named `OptionalPart`, `ManyPart`, `ComponentClass` and the rest as `import("../..")`, which is the `sst` global's module. That module loads every group, so `sst/components/aws` reached Cloudflare's and Vercel's declarations, and their providers. The global's module is now left out of the build of the declarations, and copied in as its own: it's only re-exports. So they're named through `core`. A test checks that no file of the platform imports it, which would bring it back. The one that did, `aws/helpers/arn.ts`, didn't use it.
+  - **`sst.cloudflare.binding()` gave its callers a type with an unbound `T`**, in ten of Cloudflare's components. It couldn't infer `T`, and TypeScript copied its body's `as T` into theirs. It now infers `T` from the binding's `type`, and returns `BindingInclude<T>`.
+- **`moduleResolution`.** Under `NodeNext`, SST's declarations needed `.js` on every import: their own files, and paths inside a provider like `@pulumi/aws/ec2/vpc`. The build now adds it (`platform/scripts/types.mjs`), as the 2026-10-19 decision in [v5-components.md](../v5-components.md#decisions) left for when a package needs `NodeNext`. Then it checks `sst/components`, its groups and `sst/testing` under `NodeNext`, without `skipLibCheck`, so a change that breaks either fails the build, in CI too. `bundler` reads the same files.
+- **An app under `NodeNext`.** `.sst/tsconfig.json` points each path at a file, with its extension: under `NodeNext`, TypeScript doesn't add one to a path or look in a folder. A provider's path is the types file its `package.json` names. `config.d.ts` imports `config.js`.
+- **`google-protobuf`.** No pin is needed. With 3.21.4, the version `@pulumi/pulumi` asks for, the template's tests passed under vitest and `bun test`, against this branch and against `5.0.0-alpha.2`: resources, reads with `get`, existing parts, and provider functions given secrets. The failure the guide described, `c.g is not a function`, didn't happen. Pulumi's community reports it when two copies of `google-protobuf` meet.
+- **`$resolve`'s types.** Two of its overloads named `Unwrap` without `util.`, so with `skipLibCheck` their values were `any`.
+- **The guide**, *Write a Package Component*, no longer asks for `skipLibCheck`, `bundler` or the pin, for a package or an app.
+
+**Not fixed: a group needs every provider its components use.** A component's declarations are typed with the classes of its parts: a function's `image` is docker-build's `Image`, a database's password random's `RandomPassword`, a site's build command's `Command`, and a VPC's bastion key tls's `PrivateKey`. So a package's repo that imports `sst/components/aws` installs all five providers as dev dependencies, even if it uses none of those parts. Loading them only when a part is made would spare the tests, not `tsc`. An app always has them. What could narrow it is an entry point for each component, which is more API to hold still, and only pays off once 5.0's components each import only what they use; it's for step 4.
+
+**Checked:**
+
+- A packed `sst` in a copy of the template: `tsc` with no errors without `skipLibCheck`, under `bundler` and `NodeNext` (the template's own import then needs its `.js`), and its tests without the pin.
+- An app installed by a test CLI from this branch (`sst install`, a local home, nothing deployed): with `NodeNext` and with `bundler`, the config, a local component, and `sst.aws.v5.Function` typed, and mistakes in each caught.
+- The platform's `tsc`, its 1,833 tests, and the Go tests of `pkg/project` and `pkg/js`.
+- **An independent review** found two gaps, each fixed with a test: a package with no `types` field was pointed at an `index.d.ts` that might not be there, and is now pointed at the first file that is, the declaration beside its `main` among them, or at its folder; and the test of what imports the global's module missed `../index` with no extension.
+
+**Left:** the template on `v5-community-packages` still sets `skipLibCheck` and the pin, and its README says to; they go when it comes to this branch. The declarations' source maps are a few columns off on the lines whose import got its `.js`.
+
 ## 2026-11-01: step 3, `sst.check`
 
 The maintainer chose how a check stops a deploy: with a preview first, so a deploy never half-applies ([decision](plan.md#decisions)).
 
-**Done (not committed yet; review to come):**
+**Done, committed (not pushed):**
 
 - **`sst.check({ name, component, resource, invoke })`** turns a check on for the program: it looks at each component with its args (SST's hook, after `$transform`), each resource with its inputs, and each provider function the program calls (Pulumi's resource and invoke transforms). What it finds stops the program, with the check's name, the resource and how to fix it. A value that isn't known yet in a preview is given as `unknown`, not left out.
 - **A preview first.** The program keeps its checks' names with the state (`_checks`, a hidden output, only when it has some), and a deploy of such a stage runs Pulumi's preview first, as `--policy` does. A deploy with no preview whose program turns out to have checks stops in `sst.check()`, before anything is registered, and the CLI runs it again with a preview first.

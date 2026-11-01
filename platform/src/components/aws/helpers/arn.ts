@@ -1,4 +1,3 @@
-import { aws } from "../..";
 import { VisibleError } from "../../error";
 
 export function parseFunctionArn(arn: string) {

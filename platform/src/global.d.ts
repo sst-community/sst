@@ -175,13 +175,15 @@ declare global {
   >;
   export function $resolve<T1, T2, T3, T4>(
     values: [util.Input<T1>, util.Input<T2>, util.Input<T3>, util.Input<T4>],
-  ): util.Output<[Unwrap<T1>, util.Unwrap<T2>, Unwrap<T3>, Unwrap<T4>]>;
+  ): util.Output<
+    [util.Unwrap<T1>, util.Unwrap<T2>, util.Unwrap<T3>, util.Unwrap<T4>]
+  >;
   export function $resolve<T1, T2, T3>(
     values: [util.Input<T1>, util.Input<T2>, util.Input<T3>],
   ): util.Output<[util.Unwrap<T1>, util.Unwrap<T2>, util.Unwrap<T3>]>;
   export function $resolve<T1, T2>(
     values: [util.Input<T1>, util.Input<T2>],
-  ): util.Output<[Unwrap<T1>, util.Unwrap<T2>]>;
+  ): util.Output<[util.Unwrap<T1>, util.Unwrap<T2>]>;
   /**
    * Use string interpolation on Output values.
    *

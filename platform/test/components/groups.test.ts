@@ -1,6 +1,9 @@
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { build } from "esbuild";
+import { globSync } from "glob";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { groups } from "../../src/components/groups";
 import { alias } from "../../src/testing/vitest";
@@ -69,6 +72,38 @@ describe("SST's components", () => {
         path.join(components, name, "index.ts"),
       );
     expect(resolve("sst/components/other")).toBeUndefined();
+  });
+
+  // The types build leaves the `sst` global's module out, so the declarations
+  // name SST's types through core, not through the global, which loads every
+  // group and its providers (tsconfig.types.json). A file that imported it
+  // would bring it back.
+  it("never import the sst global's module", () => {
+    const index = path.join(components, "index.ts");
+    // `../..`, `../index`, `../index.js` and `../index.ts` are all it
+    const names = [
+      components,
+      index,
+      index.replace(/\.ts$/, ""),
+      index.replace(/\.ts$/, ".js"),
+    ];
+    const importers: string[] = [];
+    for (const file of globSync("**/*.ts", { cwd: path.dirname(components) })) {
+      const full = path.join(path.dirname(components), file);
+      if (full === index || file === "global-aliases.d.ts") continue;
+      const { importedFiles } = ts.preProcessFile(
+        fs.readFileSync(full, "utf8"),
+        true,
+        true,
+      );
+      for (const { fileName } of importedFiles) {
+        if (!fileName.startsWith(".")) continue;
+        const target = path.resolve(path.dirname(full), fileName);
+        if (names.includes(target))
+          importers.push(`${file} imports "${fileName}"`);
+      }
+    }
+    expect(importers).toEqual([]);
   });
 
   it("share a core that loads no provider", async () => {

@@ -123,10 +123,21 @@ export type Binding =
   | DurableObjectNamespaceBinding
   | RateLimitBinding;
 
-export function binding<T extends Binding["type"]>(input: Binding & {}) {
+/**
+ * A binding to include in a link, from {@link binding}.
+ */
+export interface BindingInclude<T extends Binding["type"] = Binding["type"]> {
+  type: "cloudflare.binding";
+  binding: T;
+  properties: Extract<Binding, { type: T }>["properties"];
+}
+
+export function binding<T extends Binding["type"]>(
+  input: Binding & { type: T },
+): BindingInclude<T> {
   return {
-    type: "cloudflare.binding" as const,
-    binding: input.type as T,
-    properties: input.properties as Extract<Binding, { type: T }>["properties"],
-  };
+    type: "cloudflare.binding",
+    binding: input.type,
+    properties: input.properties,
+  } as BindingInclude<T>;
 }

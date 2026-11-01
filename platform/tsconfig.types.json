@@ -18,6 +18,15 @@
   },
   "include": ["src"],
   // Without the `sst` global, the declarations name SST's types through
-  // their modules (see src/global-aliases.d.ts)
-  "exclude": ["templates", "functions", "src/global-aliases.d.ts"]
+  // their modules (see src/global-aliases.d.ts). Without the global's module,
+  // components/index, they name them through core and never through it:
+  // TypeScript picks the shortest path to a type, and `../..` from a group's
+  // file is that module, which loads every group and its providers.
+  // scripts/build copies it in as its declaration.
+  "exclude": [
+    "templates",
+    "functions",
+    "src/global-aliases.d.ts",
+    "src/components/index.ts"
+  ]
 }

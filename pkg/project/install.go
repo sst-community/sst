@@ -198,7 +198,7 @@ func (p *Project) writeTypes() error {
 	file.WriteString(`import "` + types + `/global.d.ts"` + "\n")
 	file.WriteString(`import "` + types + `/global-aliases.d.ts"` + "\n")
 	file.WriteString(`import "../types.generated"` + "\n")
-	file.WriteString(`import { AppInput, App, Config } from "` + types + `/config"` + "\n")
+	file.WriteString(`import { AppInput, App, Config } from "` + types + `/config.js"` + "\n")
 
 	for _, entry := range p.lock {
 		file.WriteString(`import * as _` + entry.Alias + ` from "` + entry.Package + `";` + "\n")
