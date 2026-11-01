@@ -9,6 +9,7 @@ import {
   Output,
   output,
   rootStackResource,
+  runtime as pulumiRuntime,
   secret,
   unsecret,
 } from "@pulumi/pulumi";
@@ -687,15 +688,12 @@ export class Function extends component("sst:aws:Function", parts) {
 
     // Build the code. In `sst dev` the stub is deployed in its place, and the
     // CLI is told about the function so it can run it locally.
-    const buildInput = all([commands, output({
+    // What the build is given but the links and the key
+    const buildParts = all([commands, output({
       functionID: name,
       handler: args.handler,
       bundle: args.bundle,
-      encryptionKey,
       runtime,
-      links: links.apply((links) =>
-        Object.fromEntries(links.map((item) => [item.name, item.properties])),
-      ),
       copyFiles,
       properties: output({ nodejs, python }).apply((val) => ({
         ...(val.nodejs || val.python),
@@ -703,6 +701,17 @@ export class Function extends component("sst:aws:Function", parts) {
       })),
       dev,
     })]).apply(([commands, input]) => (commands ? { ...input, commands } : input));
+    const buildInput = all([
+      buildParts,
+      encryptionKey,
+      links.apply((links) =>
+        Object.fromEntries(links.map((item) => [item.name, item.properties])),
+      ),
+    ]).apply(([parts, encryptionKey, links]) => ({
+      ...parts,
+      encryptionKey,
+      links,
+    }));
     if (dev) buildInput.apply((input) => rpc.call("Runtime.AddTarget", input));
     // What's built is files on this machine. It's given the links, and a
     // link's name is read from the component that's linked, so without this
@@ -719,7 +728,7 @@ export class Function extends component("sst:aws:Function", parts) {
           ),
         );
     // A Node.js handler is wrapped in a file that runs the injections first
-    const entry = all([built, runtime, streaming, injections, commands]).apply(
+    const entryOf = (built: Output<FunctionBundle>) => all([built, runtime, streaming, injections, commands]).apply(
       ([built, runtime, streaming, injections, commands]): {
         handler: string;
         wrapper?: FunctionFile;
@@ -733,7 +742,34 @@ export class Function extends component("sst:aws:Function", parts) {
           : injectHandler(name, { ...built, streaming, injections });
       },
     );
-    const handler = entry.apply((entry) => entry.handler);
+    const entry = entryOf(built);
+    // In a preview of a new stage, what's linked and the key aren't known yet,
+    // so the build waits for them and the handler is unknown. The provider
+    // turns down a Zip function whose handler is unknown. The handler doesn't
+    // depend on either, so the preview builds without them, only to learn it.
+    const handler = output((built as any).isKnown as Promise<boolean>).apply(
+      (known) =>
+        // With `bundle`, the build writes into the app's own folder, which a
+        // build with no key would leave wrong
+        known || dev || args.bundle || !pulumiRuntime.isDryRun()
+          ? entry.apply((entry) => entry.handler)
+          : entryOf(
+              withoutDependencies(
+                buildParts.apply((parts) =>
+                  buildBundle(
+                    {
+                      ...parts,
+                      // a key of the right length, as none is known yet
+                      encryptionKey: Buffer.alloc(32).toString("base64"),
+                      links: {},
+                      isContainer,
+                    },
+                    args.hook && ((dir) => args.hook!.postbuild(dir)),
+                  ),
+                ),
+              ),
+            ).apply((entry) => entry.handler),
+    );
 
     const image = isContainer ? createImage() : undefined;
     const code = isContainer
