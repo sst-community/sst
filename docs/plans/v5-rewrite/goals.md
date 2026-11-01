@@ -95,7 +95,7 @@ Nothing it shows doesn't happen, and nothing happens that it didn't show. `--che
 **How it's checked:**
 
 - In the lab, the diff before each deploy is compared with what the deploy did, and a second diff after it shows no changes.
-- A 5.0 component never creates a resource inside an `apply` the preview skips. That's what makes a 4.x function show as deleted (v5 goal 6, unmet for 4.x), so step 2's test copy of the 4.x components gets the preview fix.
+- A 5.0 component never creates a resource inside an `apply` the preview skips. That's what makes a 4.x function show as deleted (v5 goal 6, unmet for 4.x), so step 2's test copy of the 4.x components gets the preview fix. Each component's test checks that a preview where nothing is known yet registers the same resources as a deploy.
 
 **Where it stands (2026-10-31):** for the new core in step 2, its `sst diff` lists the same changes as 4.x's on every recorded stage. Three things in 4.x don't settle: the server-rendered sites, which build again on every diff, the `Vpc`'s bastion, whose AMI lookup can return any of three images, and, in a preview, a 4.x function whose args aren't known yet, which the test copy's preview fix covers.
 

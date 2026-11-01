@@ -6,7 +6,7 @@ What's been done on [the plan](plan.md), newest first. Each entry says what was 
 
 The maintainer asked for step 3's check against the recordings, then step 4. The recordings can't be replayed as step 1 did it: each stage's passphrase was deleted with the stage, and the state's secrets can't be read without it. So the check means deploying the stages again, and the maintainer left it for later. Step 4 starts with `sst migrate --check`, the gate for every component.
 
-**Done, reviewed, not committed yet:**
+**Done, reviewed, committed (not pushed):**
 
 - **`sst migrate --check --stage <stage>`** runs Pulumi's preview of the move (the path `sst diff` takes, which writes nothing) and sorts each step by [goals 1 to 3](goals.md) (`pkg/move`):
   - **kept**: the same resource, at its address or at a new one, maybe updated in place, with the fields that change;
@@ -24,7 +24,7 @@ The maintainer asked for step 3's check against the recordings, then step 4. The
 
 - **On the Floci stage, nothing in AWS.** The lab's target group deployed with the 4.x `Bucket`, `Dynamo`, `Queue` with a subscriber and `Function` (`LAB_TARGET=v4`). With the V5 ones, `sst migrate --check` passed: 29 kept, 6 at a new address, the subscriber's function updated in place, 4.x's wrapper taken out of the state, and the subscriber's code replaced, as the `Function`'s map says. A deploy with the V5 ones then did exactly that: compared by cloud id, 17 of 18 kept, 5 under a new name, and only the code object new. With the table renamed, the check failed on the old table's delete ("It holds data.") and the new one's create. The stage was removed, the container stopped on its own, and the stage's files were deleted.
 - After the review's fixes, the same three runs on a new Floci stage gave the same results, with every step counted against the summary. Removed and cleaned up again.
-- `pkg/move`'s tests for each rule, the platform's tests (1,838) and `tsc`, and all Go tests.
+- `pkg/move`'s tests for each rule, the platform's tests (1,839) and `tsc`, and all Go tests.
 - **An independent review** reproduced three ways the check passed what loses data, each fixed and tested: the data rules looked only at what a resource is now, so one moved to a part of another type was replaced without a word; releasing what holds data was allowed with nothing to take it over, and a release that never happened still let the part in its place be created; and only a `Vector`'s `dimension` counted as an update that loses data. It also found the event log's lost line, a backup vault and an identity pool missing from the list, a resource left over from an earlier replace taken for a replace, and a managed resource that would only be looked up taken as kept, each fixed.
 
 **Found:**
@@ -34,7 +34,14 @@ The maintainer asked for step 3's check against the recordings, then step 4. The
 - **A part's address isn't set while its transformations run**, so it's read once they have.
 - **What a preview can't see, the check can't either.** A resource created inside `.apply()` on a value the preview doesn't know isn't in the preview, so its create isn't checked. A release whose old address isn't known in the preview isn't reported, which fails the check rather than passing it.
 
-**Left:** the check under the mock against the recorded states, and the hard components. The move itself (`sst migrate`) is step 5.
+**What a preview can't see, settled.** The maintainer asked whether the gap could be closed properly rather than patched. Options weighed: holding the move to its preview with Pulumi's update plans (`--plan` is still experimental in 3.267, and only stops a move partway), and comparing the move with the check after it ran (a report, not a guard). The proper fix is at the cause: a component creates nothing inside an `apply`, so a preview registers all of it ([decision](plan.md#decisions)). Goal 6 already asked it of every 5.0 component; what was checked is that it can be done:
+
+- **Pulumi's docs** say to avoid creating resources inside `apply` because a preview won't show them, and to pass the output as an input instead. The case they call hard, a certificate's DNS validation records, isn't: how many there are follows from the domain names (a wildcard shares its domain's record), and only each record's name and value come from the certificate.
+- **An inventory** of the V5 components and their helpers, and the 4.x `Nextjs`, `Router`, `Vpc`, sites and `Function`, found 69 places that create something inside an `apply`. Most wait on a value they only pass in (a build held for a lock, `Nextjs` waiting on its table's ARN), so the resource can be created directly. Some wait on an arg that decides what's created (a `Vpc`'s zones, how a function URL is protected), which becomes a plain value. `Efs` counts a new `Vpc`'s subnets from one output, so a `Vpc` gives its subnets as a list of known length. A function's source maps come from its bundle, which doesn't depend on its links (they're encrypted into a file of their own after the build). A site's servers, image optimizer and revalidation come from its code and framework config, not from the link values in the build's environment. None needs a value only known once something else in the same deploy is created.
+
+**First applied: the V5 `Function`'s source maps.** They were created once the build was known, and on a new stage the build waits for the key and the links, so a preview had none. The preview now learns them from the build without the key and the links, which it already ran for the handler, and each one uploads the file the deploy's build wrote. A new test (`v5/function-preview.test.ts`) runs a new stage's preview, where nothing AWS gives back is known: it had 4 of the function's 6 resources before, and has the same 6 as a deploy now. On the Floci stage, the check of the move with the table renamed no longer shows the source map as deleted: it's replaced, as the `Function`'s map says, and only the table's delete and create are problems.
+
+**Left:** the check under the mock against the recorded states, and the hard components, each built so a preview sees all it creates. The move itself (`sst migrate`) is step 5.
 
 ## 2026-11-01: step 3, four gaps closed
 

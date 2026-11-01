@@ -744,31 +744,42 @@ export class Function extends component("sst:aws:Function", parts) {
     );
     const entry = entryOf(built);
     // In a preview of a new stage, what's linked and the key aren't known yet,
-    // so the build waits for them and the handler is unknown. The provider
-    // turns down a Zip function whose handler is unknown. The handler doesn't
-    // depend on either, so the preview builds without them, only to learn it.
-    const handler = output((built as any).isKnown as Promise<boolean>).apply(
+    // so the build waits for them. What the build writes doesn't depend on
+    // either: the links are encrypted into a file of their own after it. So
+    // the preview builds without them, to learn what the function is made of:
+    // its handler, which the provider needs to plan a Zip function, and its
+    // source maps, so that what the deploy uploads is in the preview.
+    const knowsBuild = output((built as any).isKnown as Promise<boolean>).apply(
       (known) =>
         // With `bundle`, the build writes into the app's own folder, which a
         // build with no key would leave wrong
-        known || dev || args.bundle || !pulumiRuntime.isDryRun()
-          ? entry.apply((entry) => entry.handler)
-          : entryOf(
-              withoutDependencies(
-                buildParts.apply((parts) =>
-                  buildBundle(
-                    {
-                      ...parts,
-                      // a key of the right length, as none is known yet
-                      encryptionKey: Buffer.alloc(32).toString("base64"),
-                      links: {},
-                      isContainer,
-                    },
-                    args.hook && ((dir) => args.hook!.postbuild(dir)),
-                  ),
-                ),
-              ),
-            ).apply((entry) => entry.handler),
+        known || dev || !!args.bundle || !pulumiRuntime.isDryRun(),
+    );
+    let builtWithoutLinks: Output<FunctionBundle> | undefined;
+    const buildWithoutLinks = () =>
+      (builtWithoutLinks ??= withoutDependencies(
+        buildParts.apply((parts) =>
+          buildBundle(
+            {
+              ...parts,
+              // a key of the right length, as none is known yet
+              encryptionKey: Buffer.alloc(32).toString("base64"),
+              links: {},
+              isContainer,
+            },
+            args.hook && ((dir) => args.hook!.postbuild(dir)),
+          ),
+        ),
+      ));
+    // What's built, as far as what the function is made of goes. Every
+    // preview knows it.
+    const shape: Output<FunctionBundle> = knowsBuild.apply((knows) =>
+      knows ? built : buildWithoutLinks(),
+    );
+    const handler = knowsBuild.apply((knows) =>
+      knows
+        ? entry.apply((entry) => entry.handler)
+        : entryOf(buildWithoutLinks()).apply((entry) => entry.handler),
     );
 
     const image = isContainer ? createImage() : undefined;
@@ -1257,13 +1268,13 @@ export class Function extends component("sst:aws:Function", parts) {
       );
 
       // The source maps are stored under the log group the function creates,
-      // which is where the errors to map are read from. How many there are
-      // is only known once the code is built.
+      // which is where the errors to map are read from. Which there are comes
+      // from the build as every preview knows it.
       const ownLogGroup =
         self.existingPart("logGroup") || givenLogGroup ? undefined : logGroup;
       if (ownLogGroup)
-        all([built, zip]).apply(([built, zip]) =>
-          (built.sourcemaps ?? []).forEach((file, index) =>
+        shape.apply((shape) =>
+          (shape.sourcemaps ?? []).forEach((file, index) =>
             self.part(
               "sourcemap",
               `${index}`,
@@ -1272,7 +1283,10 @@ export class Function extends component("sst:aws:Function", parts) {
                   zip.hash
                 }.${path.basename(file)}`,
                 bucket: assetBucket,
-                source: new asset.FileAsset(file),
+                // In a deploy, the build is the one the files come from
+                source: built.apply(
+                  (built) => new asset.FileAsset(built.sourcemaps![index]),
+                ),
               },
               { retainOnDelete: true },
             ),

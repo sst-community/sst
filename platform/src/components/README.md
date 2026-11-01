@@ -124,14 +124,22 @@ the component reads its args.
 - **An SST component can be a part**, like `sst.aws.v5.Function` or a certificate. If the
   component's own file imports yours, declare the parts in a function so they're read
   late: `component("acme:index:Uploads", () => ({ ... }))`.
-- **A part can be created later**, inside an `.apply()`, when whether it exists depends
-  on something that's only known on deploy: another component's output, or the result of
-  a build. Declare it `optional` or `many`. It's added to `nodes` when it's created, so
-  say that in its doc comment. Do this only when a plain arg can't decide it.
-  If people read it from `nodes` in their config, declare it `deferred` instead, so its
-  entry is an output that's there from the start. The V5 `Service` does this for its
-  Cloud Map service, which exists only when the cluster's VPC has a namespace: it
-  creates it with `this.partHandle()`, and supplies the `nodes` entry with `defer()`.
+- **A part is never created inside an `.apply()`.** A preview skips an `.apply()` whose
+  input it doesn't know yet, so what's created inside one is missing from `sst diff` and
+  `sst migrate --check`. Decide whether a part exists, and how many there are, only from
+  what a preview knows: plain args, lookups whose inputs are known, and the code and
+  config on disk. A value that's only known on deploy, like another component's output
+  or a link's value, is only ever passed in, as an input.
+  - Where a build decides it (a function's source maps, a site's servers), take it from
+    a build that doesn't need what isn't known, and check on deploy that the real build
+    matches.
+  - A list another component counts, like a `Vpc`'s subnets, is a list of known length
+    with an output in each place, not one output of a list.
+  - Some V5 components still create parts inside `.apply()` with `optional`, `many` or
+    `deferred` (the V5 `Service`'s Cloud Map service, through `this.partHandle()` and
+    `defer()`). They're what the 5.0 components change.
+  - Test it: a new stage's preview, where nothing AWS gives back is known yet,
+    registers what a deploy does (`test/components/v5/function-preview.test.ts`).
 - **A part is created once.** Creating it a second time is an error.
 - **`this.existingPart(key)`** returns the resource the user passed in `existing`, when
   the component has to do something different for a resource it didn't create.
@@ -500,8 +508,8 @@ While the stage moves, each component tells the CLI what its map says about each
 it creates; `mock({ move: true })` records the same, and `moved()` returns it
 (`test/components/move.test.ts`).
 
-A resource that's created inside `.apply()` has to be given the output, not the
-value the callback was called with: the output is what says the resource depends on
+Where a V5 component still creates a resource inside `.apply()`, it has to be given
+the output, not the value the callback was called with: the output is what says the resource depends on
 where the value came from, so that it's removed first. The V5 `Service` creates its
 Cloud Map service inside `.apply()` for a VPC given by its ids, and gives it the
 namespace id as the output.
