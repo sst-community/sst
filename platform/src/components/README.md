@@ -508,7 +508,7 @@ describe("takes over a deployed Queue", () => {
         // What goes: the wrapper, which has nothing in AWS behind it
         unclaimed: ["sst:aws:QueueLambdaSubscriber::MyQueueSubscriberVkxuom"],
         // What a deploy updates: a resource and its fields
-        changed: [["MyQueueSubscriberVkxuomFunctionFunction", ["description"]]],
+        changed: [["MyQueueSubscriberVkxuomFunction", ["description"]]],
         // Anything else to assert, once the V5 component is deployed
         check: () => expect(names()).toContain("MyQueueSubscriberFunction"),
       },
@@ -521,6 +521,11 @@ describe("takes over a deployed Queue", () => {
   original created to be kept as it is. It's run three ways: as it is, inside another
   component, and with a `provider` of its own. So a case has to pass its `opts` on to
   the component, and fails when it doesn't.
+- When the original renamed one of its resources with an alias, each case is also
+  checked against its graph as it was before the rename: a stage deployed with an
+  older 4.x has the old addresses. The 4.x subscribers renamed their functions this
+  way, so a takeover map gives both of a subscriber function's addresses with
+  `subscriberFunction()` from `takeover/helpers.ts`.
 - The second and third way are where 4.x and a port differ most. 4.x often created a
   wrapper at the top of the app wherever the component was, gave a wrapper the provider
   but not the parent, or created something with no parent at all, so with the app's

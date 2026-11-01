@@ -695,7 +695,7 @@ describe("Function", () => {
       ]);
       // The description names the queue now, where it named that component
       expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["MyQueueSubscriberVkxuomFunctionFunction", ["description"]],
+        ["MyQueueSubscriberVkxuomFunction", ["description"]],
       ]);
 
       expect(inputs("MyQueueSubscriberFunction")).toMatchObject({

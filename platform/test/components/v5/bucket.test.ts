@@ -373,7 +373,7 @@ describe("Bucket", () => {
         ]);
         // The function's description is updated, and the notification's id
         expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-          [`${SUBSCRIBER}FunctionFunction`, ["description"]],
+          [`${SUBSCRIBER}Function`, ["description"]],
           [notification, ["lambdaFunctions", "queues", "topics"]],
         ]);
         expect(names()).toContain("MyBucketSubscriberResizerRole");

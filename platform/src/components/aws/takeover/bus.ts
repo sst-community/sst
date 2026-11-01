@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { Bus } from "../v5/bus";
-import { childOf } from "./helpers";
+import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Bus` keeps each subscription in a component of its own, at the top
 // of the app. The V5 one keeps them inside the bus. The component was named
@@ -17,8 +17,8 @@ const subscribers = (bus: Bus, name: string, id?: string) => [
 takeover(Bus, {
   moved: {
     subscriber: (bus, { name, id }) =>
-      subscribers(bus, name, id).map((subscriber) =>
-        childOf(FUNCTION, subscriber, "Function"),
+      subscribers(bus, name, id).flatMap((subscriber) =>
+        subscriberFunction(FUNCTION, subscriber),
       ),
     permission: (bus, { name, id }) =>
       subscribers(bus, name, id).map((subscriber) =>

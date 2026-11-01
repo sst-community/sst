@@ -2,7 +2,7 @@ import { interpolate } from "@pulumi/pulumi";
 import { takeover } from "../../takeover";
 import { hashStringToPrettyString, logicalName } from "../../naming";
 import { Bucket } from "../v5/bucket";
-import { childOf } from "./helpers";
+import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Bucket` keeps what `notify()` creates in a component of its own,
 // named after the bucket. It's created with the bucket's own options, so it's
@@ -61,7 +61,7 @@ takeover(Bucket, {
     subscriber: (bucket, { name, id }) => [
       ...notified(bucket, name, `Notification${id}`),
       ...(first(bucket.nodes.subscriber)
-        ? [childOf(FUNCTION, subscriber(bucket, name), "Function")]
+        ? subscriberFunction(FUNCTION, subscriber(bucket, name))
         : []),
     ],
     permission: (bucket, { name, id }) => [
@@ -83,7 +83,7 @@ takeover(Bucket, {
         : []),
     ],
     eventBridgeSubscriber: (bucket, { id }) =>
-      childOf(BUS_FUNCTION, eventBridgeSubscriber(bucket, id), "Function"),
+      subscriberFunction(BUS_FUNCTION, eventBridgeSubscriber(bucket, id)),
     eventBridgePermission: (bucket, { id }) =>
       childOf(BUS_FUNCTION, eventBridgeSubscriber(bucket, id), "Permission"),
     eventBridgeRule: (bucket, { id }) =>

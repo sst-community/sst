@@ -2,6 +2,29 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: `main` merged in, with v4.23.1
+
+The maintainer said to close two open items: bring in the fixes `v5-rewrite` was missing, and delete the lab's old state versions.
+
+**Done, committed (not pushed):**
+
+- **`main` merged into `v5-rewrite`:** v4.23.1's `Router` fixes, the type files left alone on `sst remove` (#201), the globals for a project with `.sst` in its path (#206), and the subscriber function names (#214), which came after the release. A build of `v5-rewrite` no longer shows `Router` changes on a stage v4.23.1 deployed, so a test build needs nothing on top.
+- **`pkg/js`:** #206 compares the project's `.sst` folder by its real path too. That's kept beside the rewrite's globals, which are imports. #206's tests give the globals as a module now, and the file in `.sst` they check uses the global: an import a `.ts` file doesn't use is dropped, so the test couldn't see one otherwise.
+- **#214 renames the function of a 4.x subscriber**, from the subscriber's name with `Function` added to the subscriber's name alone, with an alias to the first. What's inside the function is named after it. So a 4.x stage has them at one address or the other, by the 4.x it last deployed with. The V5 `Bucket`, `Bus`, `Dynamo`, `Queue` and `SnsTopic` take them over at either.
+- **The takeover tests check both.** When the original component renamed a resource, each case is also run against its graph as it was before the rename, and the V5 component has to claim the same resources there. What each resource is given is the same both ways, and is checked once.
+
+**Checked:**
+
+- All Go tests, `tsc`, and the platform's 1,822 tests. Without the old address, 20 takeover tests fail; without the new one, the same 20 fail.
+- The merged `pkg/js` tests fail without #206's fix: the two that need the globals without it, the two that need `.sst` left alone without the real path.
+- **An independent review** found no other place a V5 component claims a 4.x subscriber's function, and that the mock works out inherited aliases as Pulumi does. It found:
+  - Two subscribers whose names differ by a `Function` at the end, like `Foo` and `FooFunction`, have the same address, one in each naming. Pulumi takes the first address it finds, so no order is right for both. The later naming is looked for first: 4.x after #214 already fails on such a pair on a stage deployed before it.
+  - The mock treats an alias as claiming whatever it matches, where Pulumi takes the first. It matters only for such a pair. Left as it is.
+  - 4.x creates a durable function's URL alias (`<name>Durable`) with no parent, so #214's rename replaces it in 4.x, and the V5 `Function` replaces it too. It's a Lambda alias, which holds no data. Left for step 4's look at 4.x.
+  - The rulebook still had the old name in an example, and didn't say what the check is. Both fixed.
+
+**The lab:** the old state versions of the October stages `lab`, `ports` and `share` were deleted: 1,131 versions and delete markers, none of them live. The state bucket has nothing of the lab app now, and it has no passphrase or sourcemap left.
+
 ## 2026-10-31: step 3, `sst.runtime`
 
 The maintainer said to go on. `sst.runtime` came before the target: it finishes the runtime, and one lab run checks both it and the runtime's `sst dev` changes. The target needs #212's transport, with rogueturnip, and Docker.

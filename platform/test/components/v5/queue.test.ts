@@ -103,7 +103,7 @@ describe("Queue", () => {
           // The function is kept. Its description is updated: it names the
           // queue now, where it named the subscriber component.
           changed: [
-            ["MyQueueSubscriberVkxuomFunctionFunction", ["description"]],
+            ["MyQueueSubscriberVkxuomFunction", ["description"]],
           ],
           // The function and what it's made of are now inside the queue
           check: () =>

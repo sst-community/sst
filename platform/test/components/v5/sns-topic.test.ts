@@ -79,7 +79,7 @@ describe("SnsTopic", () => {
           // The function is kept. Its description is updated: it names the
           // topic now, where it named the subscriber component.
           changed: [
-            ["MyTopicSubscriberEmailerFunctionFunction", ["description"]],
+            ["MyTopicSubscriberEmailerFunction", ["description"]],
           ],
           // The function and what it's made of are now inside the topic
           check: () =>

@@ -74,6 +74,76 @@ export interface TakeoverCases<A, B> {
   check?: (way: TakeoverWay) => unknown;
 }
 
+// A resource's address, as the mock works it out
+const address = (type: string, name: string, parent: string) => {
+  if (!parent) return `urn:pulumi:stack::project::${type}::${name}`;
+  const [prefix, project, types] = parent.split("::");
+  return `${prefix}::${project}::${types}$${type}::${name}`;
+};
+const nameOf = (urn: string) => urn.substring(urn.lastIndexOf("::") + 2);
+
+/**
+ * A graph as a 4.x stage has it when it was deployed before 4.x renamed one of
+ * its resources. 4.x renames with an alias that changes only the name. What's
+ * inside a renamed component was named after it, so it had the old name in
+ * front, as Pulumi works it out. Only addresses are changed: where a name is
+ * in what a resource is given, it can't be told apart from another of the same
+ * name. Undefined when nothing was renamed.
+ *
+ * @returns The graph, and the name of each renamed resource now, as
+ * `type::name`, by its name then.
+ */
+export function beforeRenames(graph: RecordedResource[]) {
+  const byAddress = new Map(
+    graph.map((r) => [address(r.type, r.name, r.parent), r] as const),
+  );
+  const rename = (r: RecordedResource) =>
+    ((r.options.aliases ?? []) as any[]).find(
+      (alias) =>
+        typeof alias === "object" &&
+        alias.spec?.name &&
+        !alias.spec.type &&
+        !alias.spec.noparent &&
+        // Pulumi fills in the parent the resource has
+        (!alias.spec.parenturn || alias.spec.parenturn === r.parent),
+    );
+  const was = new Map<string, string>();
+  const before = (urn: string): string => {
+    const r = byAddress.get(urn);
+    if (!r) return urn;
+    if (was.has(urn)) return was.get(urn)!;
+    const parent = before(r.parent);
+    const parentName = nameOf(r.parent);
+    const name =
+      rename(r)?.spec.name ??
+      (parent !== r.parent && r.name.startsWith(parentName)
+        ? nameOf(parent) + r.name.substring(parentName.length)
+        : r.name);
+    const old = address(r.type, name, parent);
+    was.set(urn, old);
+    return old;
+  };
+
+  const now = new Map<string, string>();
+  const old = graph.map((r) => {
+    const name = nameOf(before(address(r.type, r.name, r.parent)));
+    if (name !== r.name) now.set(`${r.type}::${name}`, `${r.type}::${r.name}`);
+    const { aliases, dependencies, ...options } = r.options;
+    return {
+      ...r,
+      name,
+      parent: before(r.parent),
+      options: {
+        ...options,
+        ...(dependencies
+          ? { dependencies: (dependencies as string[]).map(before) }
+          : {}),
+      },
+    };
+  });
+  return now.size === 0 ? undefined : { graph: old, now };
+}
+
 // What a case's component is created inside, for "inside another component"
 class Parent extends pulumi.ComponentResource {
   constructor(name: string) {
@@ -90,8 +160,55 @@ export function mockPulumi(input?: MockInput) {
   const engine = mockEngine(input);
   const { resources, deployed } = engine;
 
+  // A stage deployed before 4.x renamed something has it at its old address,
+  // and what takes over claims it there too. What each resource is given is
+  // the same either way, and is checked against the graph as it is now.
+  const claimsBeforeRenames = (
+    before: RecordedResource[],
+    result: ReturnType<typeof engine.takeover>,
+  ) => {
+    const earlier = beforeRenames(before);
+    if (!earlier) return;
+    let old: ReturnType<typeof engine.takeover>;
+    try {
+      old = engine.takeover(earlier.graph);
+    } catch (error: any) {
+      error.message = `As deployed before 4.x renamed a resource: ${error.message}`;
+      throw error;
+    }
+    expect(
+      {
+        unclaimed: old.unclaimed.map((r) => earlier.now.get(r) ?? r).sort(),
+        unordered: old.unordered,
+      },
+      "as deployed before 4.x renamed a resource",
+    ).toEqual({
+      unclaimed: [...result.unclaimed].sort(),
+      unordered: result.unordered,
+    });
+  };
+
   return {
     ...engine,
+    /**
+     * Deploys a component, then what replaces it, and checks the second
+     * against the first, as the mock's own does. When the first renamed a
+     * resource, the second has to claim it at its old address too.
+     */
+    async takesOver(original: () => unknown, v5: () => unknown) {
+      engine.reset();
+      original();
+      await engine.settle();
+      const before = deployed(engine.graph());
+      if (before.length === 0) throw new Error("The original created nothing");
+
+      engine.reset();
+      v5();
+      await engine.settle();
+      const result = engine.takeover(before);
+      claimsBeforeRenames(before, result);
+      return result;
+    },
     /**
      * The standard takeover tests for a V5 component. Call it inside a
      * `describe`. Each case is run three ways: as it is, inside another
@@ -199,6 +316,7 @@ export function mockPulumi(input?: MockInput) {
                 changed: expected(test.changed ?? suite.changed) ?? [],
                 unordered: expected(test.unordered) ?? [],
               });
+              claimsBeforeRenames(before, result);
               await suite.check?.(way);
               await test.check?.(way);
             });

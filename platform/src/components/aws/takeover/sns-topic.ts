@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { SnsTopic } from "../v5/sns-topic";
-import { childOf } from "./helpers";
+import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `SnsTopic` keeps each subscription in a component of its own, next to
 // the topic and named after the subscriber. The V5 one keeps them inside the
@@ -13,7 +13,7 @@ const subscriber = (topic: string, name?: string) => `${topic}Subscriber${name}`
 takeover(SnsTopic, {
   moved: {
     subscriber: (_, { name, id }) =>
-      childOf(FUNCTION, subscriber(name, id), "Function"),
+      subscriberFunction(FUNCTION, subscriber(name, id)),
     permission: (_, { name, id }) =>
       childOf(FUNCTION, subscriber(name, id), "Permission"),
     // A subscription was in either kind of subscriber

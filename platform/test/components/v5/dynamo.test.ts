@@ -167,7 +167,7 @@ describe("Dynamo", () => {
     // A subscriber's function is kept. Its description is updated: it names
     // the table now, where it named the subscriber component.
     const described: [string, string[]][] = [
-      ["MyTableSubscriberIndexerFunctionFunction", ["description"]],
+      ["MyTableSubscriberIndexerFunction", ["description"]],
     ];
 
     // The 4.x `Dynamo.get` gives its options to the table it looks up and not
@@ -356,7 +356,7 @@ describe("Dynamo", () => {
 
       expect(result.unclaimed).toEqual([`${WRAPPER}::OrdersSubscriberIndexer`]);
       expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
-        ["OrdersSubscriberIndexerFunctionFunction", ["description"]],
+        ["OrdersSubscriberIndexerFunction", ["description"]],
       ]);
     });
   });

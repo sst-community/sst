@@ -1,7 +1,7 @@
 import { takeover } from "../../takeover";
 import { logicalName } from "../../naming";
 import { Dynamo } from "../v5/dynamo";
-import { childOf } from "./helpers";
+import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Dynamo` keeps each subscription in a component of its own, at the
 // top of the app. The V5 one keeps them inside the table. The component was
@@ -20,8 +20,8 @@ const subscribers = (table: Dynamo, name: string, id?: string) => [
 takeover(Dynamo, {
   moved: {
     subscriber: (table, { name, id }) =>
-      subscribers(table, name, id).map((subscriber) =>
-        childOf(SUBSCRIBER, subscriber, "Function"),
+      subscribers(table, name, id).flatMap((subscriber) =>
+        subscriberFunction(SUBSCRIBER, subscriber),
       ),
     eventSourceMapping: (table, { name, id }) =>
       subscribers(table, name, id).map((subscriber) =>
