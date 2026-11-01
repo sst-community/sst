@@ -896,11 +896,13 @@ export class Function extends component("sst:aws:Function", parts) {
       hint: args._skipHint ? undefined : this.urlEndpoint,
     });
     this.registerOutputs({
-      // What's run locally in `sst dev`
+      // What's run locally in `sst dev`. Its links by name, as 4.x writes
+      // them: what they hold can be a secret, like a client's, and this is
+      // kept in the state in plain text.
       _live: dev
         ? unsecret(
             all([
-              links,
+              links.apply((links) => links.map((link) => link.name)),
               args.handler,
               args.bundle,
               runtime,
