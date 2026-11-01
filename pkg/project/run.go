@@ -250,7 +250,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		return err
 	}
 
-	env := p.programEnv(os.Environ(), passphrase, workdir.Backend(), secrets, fallback, input.ServerPort)
+	env := p.programEnv(os.Environ(), passphrase, workdir.Backend(), secrets, fallback, input.Server)
 	pulumiPath := global.PulumiPath()
 	if flag.SST_PULUMI_PATH != "" {
 		pulumiPath = flag.SST_PULUMI_PATH

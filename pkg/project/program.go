@@ -48,8 +48,9 @@ func (p *Project) programDefine(input *StackInput, versions map[string]int) (map
 
 // programEnv is the environment the program runs in: base (the user's), the
 // providers', each secret as SST_SECRET_<name> with the stage's over the
-// fallback's, Pulumi's settings, and SST_SERVER, the RPC the program calls.
-func (p *Project) programEnv(base []string, passphrase, backend string, secrets, fallback map[string]string, serverPort int) []string {
+// fallback's, Pulumi's settings, and SST_SERVER, the RPC the program calls,
+// with its token.
+func (p *Project) programEnv(base []string, passphrase, backend string, secrets, fallback map[string]string, server string) []string {
 	env := append([]string{}, base...)
 	for key, value := range p.Env() {
 		env = append(env, fmt.Sprintf("%v=%v", key, value))
@@ -74,8 +75,8 @@ func (p *Project) programEnv(base []string, passphrase, backend string, secrets,
 		"NODE_OPTIONS="+nodeOptions,
 		"PULUMI_HOME="+global.ConfigDir(),
 	)
-	if serverPort != 0 {
-		env = append(env, "SST_SERVER=http://127.0.0.1:"+fmt.Sprint(serverPort))
+	if server != "" {
+		env = append(env, "SST_SERVER="+server)
 	}
 	return env
 }

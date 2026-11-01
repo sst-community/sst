@@ -103,7 +103,7 @@ func TestProgramEnv(t *testing.T) {
 		filepath.Join("work", "pulumi", "id"),
 		map[string]string{"Token": "stage"},
 		map[string]string{"Token": "fallback", "Other": "fallback"},
-		13557,
+		"http://127.0.0.1:50123/token",
 	)
 
 	got := map[string]string{}
@@ -133,7 +133,7 @@ func TestProgramEnv(t *testing.T) {
 		"PULUMI_HOME":                   global.ConfigDir(),
 		"NODE_OPTIONS":                  "--max-old-space-size=4096 --enable-source-maps --no-deprecation --no-warnings",
 		// the RPC the program calls back into
-		"SST_SERVER": "http://127.0.0.1:13557",
+		"SST_SERVER": "http://127.0.0.1:50123/token",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the program's environment is\n%v\nwant\n%v", got, want)
@@ -143,7 +143,7 @@ func TestProgramEnv(t *testing.T) {
 		t.Fatalf("the environment starts %v", env[:len(base)])
 	}
 
-	noServer := p.programEnv(nil, "p", "w", nil, nil, 0)
+	noServer := p.programEnv(nil, "p", "w", nil, nil, "")
 	for _, entry := range noServer {
 		if len(entry) > 11 && entry[:11] == "SST_SERVER=" {
 			t.Fatalf("SST_SERVER is set with no server: %v", entry)

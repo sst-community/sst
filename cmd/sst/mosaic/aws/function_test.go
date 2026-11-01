@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
-	"github.com/sst/sst/v3/pkg/server"
 )
 
 // The lambda runtime-API handlers read worker state from request goroutines
@@ -26,7 +25,7 @@ func TestFunctionConcurrentInitAndNext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv := &server.Server{Mux: http.NewServeMux()}
+	srv := newServer(t, ctx)
 	msg := make(chan bridge.Message)
 	go function(ctx, input{server: srv, msg: msg})
 
@@ -56,10 +55,10 @@ func TestFunctionConcurrentInitAndNext(t *testing.T) {
 			defer handlers.Done()
 			r := httptest.NewRequest(
 				http.MethodGet,
-				fmt.Sprintf("/lambda/worker-%d/2018-06-01/runtime/invocation/next", worker%8),
+				workerPath(srv, fmt.Sprintf("worker-%d", worker%8), "/2018-06-01/runtime/invocation/next"),
 				nil,
 			).WithContext(requests)
-			srv.Mux.ServeHTTP(httptest.NewRecorder(), r)
+			srv.ServeHTTP(httptest.NewRecorder(), r)
 		}(i)
 	}
 

@@ -51,7 +51,7 @@ func CmdMosaic(c *cli.Cli) error {
 		if err != nil {
 			return err
 		}
-		slog.Info("found server", "url", url)
+		slog.Info("found server")
 		evts, err := dev.Stream(c.Context, url, project.CompleteEvent{})
 		if err != nil {
 			return err
@@ -187,6 +187,11 @@ func CmdMosaic(c *cli.Cli) error {
 	if err != nil {
 		return err
 	}
+	removeServerFile, err := server.WriteDiscoveryFile(p.PathConfig(), p.App().Stage)
+	if err != nil {
+		return err
+	}
+	defer removeServerFile()
 
 	wg.Go(func() error {
 		defer c.Cancel()
@@ -213,7 +218,7 @@ func CmdMosaic(c *cli.Cli) error {
 		}
 	})
 
-	os.Setenv("SST_SERVER", fmt.Sprintf("http://localhost:%v", server.Port))
+	os.Setenv("SST_SERVER", server.URL())
 	for name, a := range p.App().Providers {
 		args := a
 		switch name {
@@ -263,10 +268,10 @@ func CmdMosaic(c *cli.Cli) error {
 		}
 		multiEnv := append(
 			c.Env(),
-			fmt.Sprintf("SST_SERVER=http://localhost:%v", server.Port),
+			"SST_SERVER="+server.URL(),
 			"SST_STAGE="+p.App().Stage,
 		)
-		serverURL := fmt.Sprintf("http://localhost:%v", server.Port)
+		serverURL := server.URL()
 		_, hasAWS := p.App().Providers["aws"]
 		showWorkers := p.App().Home == "cloudflare" && !hasAWS
 		fnTitle := "Functions"

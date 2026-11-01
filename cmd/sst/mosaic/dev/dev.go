@@ -3,8 +3,11 @@ package dev
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -41,7 +44,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		}
 	})
 
-	server.Mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("content-type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
 		log.Info("subscribed", "addr", r.RemoteAddr)
@@ -75,12 +78,12 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		}
 	})
 
-	server.Mux.HandleFunc(("/api/deploy"), func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("POST /api/deploy", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("deploy requested")
 		bus.Publish(&deployer.DeployRequestedEvent{})
 	})
 
-	server.Mux.HandleFunc("/api/env", func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("GET /api/env", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		name := r.URL.Query().Get("name")
 		resolved := complete
@@ -121,7 +124,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		return
 	})
 
-	server.Mux.HandleFunc("/api/completed", func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("GET /api/completed", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("content-type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(complete)
@@ -133,12 +136,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 
 func Stream(ctx context.Context, url string, types ...interface{}) (chan any, error) {
 	out := make(chan any)
-	req, err := http.NewRequestWithContext(ctx, "GET", url+"/stream", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := send(ctx, "GET", url, "/stream")
 	if err != nil {
 		return nil, err
 	}
@@ -190,11 +188,7 @@ type EnvResponse struct {
 }
 
 func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url+"/api/env?"+query, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := send(ctx, "GET", url, "/api/env?"+query)
 	if err != nil {
 		return nil, err
 	}
@@ -207,24 +201,21 @@ func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
 	return &result, nil
 }
 
+// Deploy asks `sst dev` to deploy again.
 func Deploy(ctx context.Context, url string) error {
-	req, err := http.NewRequestWithContext(ctx, "POST", url+"/api/deploy", nil)
+	resp, err := send(ctx, "POST", url, "/api/deploy")
 	if err != nil {
 		return err
 	}
-	_, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return err
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("POST /api/deploy: %s", resp.Status)
 	}
 	return nil
 }
 
 func Completed(ctx context.Context, url string) (*project.CompleteEvent, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url+"/api/completed", nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := send(ctx, "GET", url, "/api/completed")
 	if err != nil {
 		return nil, err
 	}
@@ -235,4 +226,21 @@ func Completed(ctx context.Context, url string) (*project.CompleteEvent, error) 
 		return nil, err
 	}
 	return &result, nil
+}
+
+// send makes a request of `sst dev` at server, its URL with the token. An
+// error leaves out the URL, as errors are logged.
+func send(ctx context.Context, method, server, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, server+path, nil)
+	if err == nil {
+		var resp *http.Response
+		if resp, err = http.DefaultClient.Do(req); err == nil {
+			return resp, nil
+		}
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return nil, fmt.Errorf("%s %s: %w", method, path, err)
 }

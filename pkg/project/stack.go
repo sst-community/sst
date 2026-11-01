@@ -19,7 +19,7 @@ type StackInput struct {
 	Command    string
 	Target     []string
 	Exclude    []string
-	ServerPort int
+	Server     string
 	Dev        bool
 	Verbose    bool
 	Continue   bool

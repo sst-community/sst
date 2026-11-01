@@ -15,9 +15,8 @@ import (
 	"github.com/sst/sst/v3/pkg/server"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
+// the default origin check: a page can't connect from another site
+var upgrader = websocket.Upgrader{}
 
 type CliDevEvent struct {
 	App    string `json:"app"`
@@ -69,7 +68,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 	connected := make(chan *websocket.Conn)
 	disconnected := make(chan *websocket.Conn)
 	invocationClear := make(chan string)
-	server.Mux.HandleFunc("/socket", func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("GET /socket", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("socket upgrading", "addr", r.RemoteAddr)
 		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {

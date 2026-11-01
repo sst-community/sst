@@ -388,8 +388,8 @@ func TestNextPutsBackAnInvocationForAWorkerThatLeft(t *testing.T) {
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
 	for range 20 {
-		r := httptest.NewRequest(http.MethodGet, "/lambda/"+b.workerID+"/2018-06-01/runtime/invocation/next", nil).WithContext(gone)
-		h.mux.ServeHTTP(httptest.NewRecorder(), r)
+		r := httptest.NewRequest(http.MethodGet, workerPath(h.server, b.workerID, "/2018-06-01/runtime/invocation/next"), nil).WithContext(gone)
+		h.server.ServeHTTP(httptest.NewRecorder(), r)
 	}
 
 	close(polling)

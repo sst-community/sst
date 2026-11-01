@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -82,7 +81,6 @@ type input struct {
 
 func function(ctx context.Context, input input) {
 	log := slog.Default().With("service", "aws.function")
-	server := fmt.Sprintf("localhost:%d/lambda/", input.server.Port)
 	type WorkerInfo struct {
 		FunctionID       string
 		WorkerID         string
@@ -285,7 +283,7 @@ func function(ctx context.Context, input input) {
 	}
 	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/next`, func(w http.ResponseWriter, r *http.Request) {
+	input.server.HandleWorker("GET", "/2018-06-01/runtime/invocation/next", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("got next request", "workerID", r.PathValue("workerID"))
 		workerID := r.PathValue("workerID")
 		stateMu.Lock()
@@ -372,7 +370,7 @@ func function(ctx context.Context, input input) {
 		}
 	})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/init/error`, func(w http.ResponseWriter, r *http.Request) {
+	input.server.HandleWorker("POST", "/2018-06-01/runtime/init/error", func(w http.ResponseWriter, r *http.Request) {
 		workerID := r.PathValue("workerID")
 		log.Info("got init error", "workerID", workerID, "requestID", r.PathValue("requestID"))
 		// an init error has no request ID, so its copies share one made here, and
@@ -402,7 +400,7 @@ func function(ctx context.Context, input input) {
 		}
 	})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/{requestID}/response`, func(w http.ResponseWriter, r *http.Request) {
+	input.server.HandleWorker("POST", "/2018-06-01/runtime/invocation/{requestID}/response", func(w http.ResponseWriter, r *http.Request) {
 		workerID := r.PathValue("workerID")
 		requestID := r.PathValue("requestID")
 		log.Info("got response", "workerID", workerID, "requestID", r.PathValue("requestID"))
@@ -442,7 +440,7 @@ func function(ctx context.Context, input input) {
 		}
 	})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/{requestID}/error`, func(w http.ResponseWriter, r *http.Request) {
+	input.server.HandleWorker("POST", "/2018-06-01/runtime/invocation/{requestID}/error", func(w http.ResponseWriter, r *http.Request) {
 		workerID := r.PathValue("workerID")
 		requestID := r.PathValue("requestID")
 		log.Info("got error", "workerID", workerID, "requestID", r.PathValue("requestID"))
@@ -582,7 +580,7 @@ func function(ctx context.Context, input input) {
 		worker, err := input.project.Runtime.Run(ctx, &runtime.RunInput{
 			CfgPath:    input.project.PathConfig(),
 			Runtime:    target.Runtime,
-			Server:     server + workerID,
+			Server:     input.server.WorkerAddress(workerID),
 			WorkerID:   workerID,
 			FunctionID: functionID,
 			Build:      build,
@@ -669,7 +667,7 @@ func function(ctx context.Context, input input) {
 		// and the loop doesn't wait on that
 		go func() {
 			client := http.Client{Timeout: 10 * time.Second}
-			result, err := client.Post("http://"+server+workerID+"/2018-06-01/runtime/init/error", "application/json", bytes.NewReader(body))
+			result, err := client.Post("http://"+input.server.WorkerAddress(workerID)+"/2018-06-01/runtime/init/error", "application/json", bytes.NewReader(body))
 			if err != nil {
 				log.Error("failed to report a worker that didn't start", "workerID", workerID, "err", err)
 				return

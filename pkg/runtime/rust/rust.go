@@ -146,7 +146,7 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 	cmd := process.Command(
 		filepath.Join(input.Build.Out, input.Build.Handler),
 	)
-	slog.Info("running server binary", "server", input.Server)
+	slog.Info("running server binary", "workerID", input.WorkerID)
 	cmd.Env = input.Env
 	cmd.Env = append(cmd.Env, "AWS_LAMBDA_RUNTIME_API=http://"+input.Server)
 	cmd.Env = append(cmd.Env, "AWS_LAMBDA_FUNCTION_MEMORY_SIZE=1024")

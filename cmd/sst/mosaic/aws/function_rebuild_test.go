@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/runtime"
-	"github.com/sst/sst/v3/pkg/server"
 )
 
 // The builds run at once, and each result is in the place of its function.
@@ -74,7 +72,7 @@ func TestFunctionRebuildsChangedFilesTogether(t *testing.T) {
 	dir := t.TempDir()
 	fake := &rebuildRuntime{started: make(chan string, 16)}
 	proj := &project.Project{Runtime: runtime.NewCollection("", fake)}
-	srv := &server.Server{Mux: http.NewServeMux()}
+	srv := newServer(t, ctx)
 	msg := make(chan bridge.Message)
 	// the loop takes events from the bus, so it's stopped before the next test
 	stopped := make(chan struct{})

@@ -84,7 +84,7 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 	cmd := process.Command(
 		filepath.Join(input.Build.Out, input.Build.Handler),
 	)
-	slog.Info("running go run", "server", input.Server)
+	slog.Info("running go run", "workerID", input.WorkerID)
 	cmd.Env = input.Env
 	cmd.Env = append(cmd.Env, "AWS_LAMBDA_RUNTIME_API="+input.Server)
 	cmd.Dir = input.Build.Out

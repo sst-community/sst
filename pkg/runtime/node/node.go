@@ -367,7 +367,7 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 		}
 	}
 	cmd.Env = append(cmd.Env, "AWS_LAMBDA_RUNTIME_API="+input.Server)
-	slog.Info("starting worker", "server", input.Server)
+	slog.Info("starting worker", "workerID", input.WorkerID)
 	cmd.Dir = input.Build.Out
 	worker, err := process.StartWorker(cmd)
 	if err != nil {

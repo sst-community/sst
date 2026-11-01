@@ -15,15 +15,14 @@ var SST_BUN_PATH = os.Getenv("SST_BUN_PATH")
 // SST_BUILD_CONCURRENCY is deprecated, use SST_FUNCTION_BUILD_CONCURRENCY instead
 var SST_BUILD_CONCURRENCY = os.Getenv("SST_BUILD_CONCURRENCY")
 var SST_BUILD_CONCURRENCY_FUNCTION = os.Getenv("SST_BUILD_CONCURRENCY_FUNCTION")
-var SST_BUILD_CONCURRENCY_SITE = os.Getenv("SST_BUILD_CONCURRENCY_SITE")
 
 // SST_BUILD_CONTEXT_CACHE is the max number of esbuild build contexts kept
 // alive in dev mode for fast incremental rebuilds. 0 disables the cache.
 var SST_BUILD_CONTEXT_CACHE = os.Getenv("SST_BUILD_CONTEXT_CACHE")
 
 // SST_PPROF exposes Go pprof handlers under /debug/pprof/ on the local SST server
-// that `sst dev`, `deploy`, `diff`, `remove` and `refresh` start, for requests from
-// localhost only
+// that `sst dev`, `deploy`, `diff`, `remove` and `refresh` start. The server's URL,
+// with its token, is in .sst/<stage>.server while it runs.
 var SST_PPROF = isTrue("SST_PPROF")
 var SST_SKIP_DEPENDENCY_CHECK = isTrue("SST_SKIP_DEPENDENCY_CHECK")
 var SST_TELEMETRY_DISABLED = isTrue("SST_TELEMETRY_DISABLED") || isTrue("DO_NOT_TRACK")

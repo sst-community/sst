@@ -19,9 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -347,7 +345,7 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 // harness runs function against the fakes.
 type harness struct {
 	t       *testing.T
-	mux     *http.ServeMux
+	server  *server.Server
 	ctx     context.Context
 	appsync *fakeAppSync
 	runtime *fakeRuntime
@@ -378,17 +376,14 @@ func newHarness(t *testing.T, rt *fakeRuntime) *harness {
 			t.Logf("what sst dev logged:\n%s", logged)
 		}
 	})
-	mux := http.NewServeMux()
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	// cleanups run last first: the workers stop before the server waits for
-	// their requests to end
+	// cleanups run last first: the workers stop before the server does
+	srv := newServer(t, context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	h := &harness{
 		t:             t,
-		mux:           mux,
+		server:        srv,
 		ctx:           ctx,
 		appsync:       &fakeAppSync{},
 		runtime:       rt,
@@ -404,7 +399,7 @@ func newHarness(t *testing.T, rt *fakeRuntime) *harness {
 		defer close(stopped)
 		function(ctx, input{
 			project: &project.Project{Runtime: runtime.NewCollection(h.cfgPath, rt)},
-			server:  &server.Server{Mux: mux, Port: srv.Listener.Addr().(*net.TCPAddr).Port},
+			server:  srv,
 			client:  client,
 			msg:     msg,
 			prefix:  h.prefix,
@@ -660,4 +655,25 @@ func TestHarnessConcurrentEnvironments(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// newServer starts a dev server, as sst dev does, which serves until ctx is
+// done or the test ends.
+func newServer(t *testing.T, ctx context.Context) *server.Server {
+	t.Helper()
+	srv, err := server.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	go srv.Serve(ctx)
+	return srv
+}
+
+// workerPath is the path of a route of the Lambda runtime API, such as
+// "/2018-06-01/runtime/invocation/next", for one worker.
+func workerPath(srv *server.Server, workerID, route string) string {
+	address := srv.WorkerAddress(workerID)
+	return address[strings.Index(address, "/"):] + route
 }

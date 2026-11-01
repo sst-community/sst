@@ -45,7 +45,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server, polic
 					err := p.Run(ctx, &project.StackInput{
 						Command:    "deploy",
 						Dev:        true,
-						ServerPort: server.Port,
+						Server:     server.URL(),
 						SkipHash:   lastBuildHash,
 						PolicyPath: policyPath,
 					})

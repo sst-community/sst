@@ -246,6 +246,8 @@ The rules that hold for every app live in the core, where nothing a package does
   - **A worker in a container** reaches the core through the Docker bridge, which is listened on only while such a worker runs.
 
   The TLS proxy the dev server ran on the next port up, for a browser page, goes.
+
+  The token is the first part of the path, not a header: `SST_SERVER` is the address with the token, and every route is under it. Pulumi stores the code of each of SST's dynamic resources with the resource, and runs that code, not the program's, to delete or read it. That code calls `SST_SERVER + "/rpc"`, so it carries the token as it is.
 - **Nothing secret is kept in plain text in the state.** A command a component runs gets its environment when it runs, not as an input Pulumi stores.
 - **Containers are started by the core**, with their ports on `127.0.0.1` only. A target that needs the Docker socket says so in its settings, and the core says so when it starts it.
 - **On a target's stage, nothing gets the developer's credentials.** The program, the workers in `sst dev` and `sst shell` get the target's. The developer's `AWS_*` variables, profile files and proxies are taken out, as #212's `FlociEnvironment` does.
@@ -461,8 +463,8 @@ Each comes when it's needed, with its own exit test.
 | The plan | Approved, 2026-10-31. |
 | 0. What v5 taught | Written in [reference.md](reference.md#what-v5-taught), 2026-10-31. |
 | 1. A record of today's state | Started, 2026-10-31. Recorded with v4.23.1 and in `testdata/states/`: the serverless group and the sites, the VPC groups, and the serverless group by `sst dev`. A recorded state replays with AWS credentials and the passphrase, not without. Everything removed, and the audit is clean. Left: Cloudflare (at step 4). |
-| 2. The first proof | Started, 2026-10-31, not committed. Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
-| 3. The program contract, places to plug in, and Floci | Not started. |
+| 2. The first proof | Started, 2026-10-31, committed (not pushed). Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
+| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. Open: whether the Console's local logs (`/socket`, `sst cert`) go. Next: the program contract. |
 | 4. New components | Not started. |
 | 5. Moving an app | Not started. |
 | 6. After 5.0 | When needed. |
