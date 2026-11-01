@@ -2,6 +2,23 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, the VPC recording
+
+The maintainer said yes to the VPC recording next: the lab's containers and databases, which v4.23.1 deployed in a VPC (`vpc-containers-databases.json`), checked as the serverless group is. `Vpc` has no V5 form yet, so both programs are given the 4.x one, as the lab does.
+
+**Done, committed (not pushed):**
+
+- **The lab's VPC groups are in the repo** (`test/recorded/v5-lab.ts`: `net`, `containers`, `databases`, and the web service's image folder), and in `recorded.test.ts`, with what the lab account answered the lookups the deploy made: its availability zones, the bastion's image, and the registry login an image is pushed with.
+- **The replay reads the state as if the app were deployed from the test's folder:** a state names the app's folder (`/home/user/v5-lab`, scrubbed), and a service writes into its image's folder, so the folder has to be real.
+- **An image is compared as the Docker build provider checks it** (`asChecked()`): the provider fills in its schema's defaults and Go's zero value for each field that isn't a pointer, without listing them (`__defaults`), and keeps a registry's password secret whatever it's given. Taken from the provider's source at the recorded version (0.0.22). The 4.x service creates its image inside an `apply`, so the password reaches the provider in plain text, and only the provider's schema keeps it secret.
+
+**Checked** (`recorded.test.ts`, `state.test.ts`, all platform tests and `tsc`):
+
+- **4.x gives what the state has**: every resource claimed and nothing more, the same inputs, options and outputs, the same values secret, nothing out of order.
+- **V5 takes it over and changes nothing in AWS.** The `Cluster`, `Efs`, `Service` with its image, domain and scaling, the shared `Alb`, `Task`, `CronV2`, the `Function` in the VPC, `Postgres` with its proxy, `Mysql`, `Redis`, `Aurora` and `Dsql` update no resource. What goes: 4.x's version markers, and what `sst dev` runs for each service, which V5 keeps inside the service under another name. The orders 4.x removes things in that V5 doesn't keep are ones nothing in AWS needs: a function's URL and its permissions waited for all of what the function links, and the web service's load balancer for its cluster, file system and private subnets. Each V5 function in the VPC is still removed before its subnets. Nothing secret is in plain text but what's made from a function's ARN, as in the serverless group.
+
+**Left:** the hard components: the `Function` with 4.x's shared dev stub code, `Nextjs` with `Router`, `Vpc`, and releasing and adopting `BucketFiles` and `KvKeys`.
+
 ## 2026-11-01: step 4, the maps against the recorded states
 
 The maintainer asked to continue with step 4. Its first item after `--check` is checking each component's map, under the mock, against the states v4.23.1 really deployed (`testdata/states`), so CI catches what only the AWS run caught before.

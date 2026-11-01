@@ -7,6 +7,7 @@ import {
   SECRET,
   SIG,
   type StateExport,
+  asChecked,
   asStateHas,
   comparable,
   policyDocument,
@@ -69,6 +70,58 @@ describe("a resource compared with a state", () => {
         new Set(),
       ),
     ).toEqual({ policy: '{"a":"\\u003cx\\u003e","b":1}' });
+  });
+});
+
+describe("an image, as the Docker build provider checks it", () => {
+  it("has the provider's defaults, and its registry's password secret", () => {
+    const given = {
+      push: true,
+      dockerfile: { location: "/app/Dockerfile" },
+      cacheTo: [{ registry: { ref: "cache", mode: "max" } }],
+      registries: [{ address: "https://registry", password: "token" }],
+    };
+    expect(asChecked("docker-build:index:Image", given)).toEqual({
+      push: true,
+      exec: false,
+      load: false,
+      noCache: false,
+      pull: false,
+      target: "",
+      dockerfile: { location: "/app/Dockerfile", inline: "" },
+      cacheTo: [
+        {
+          raw: "",
+          disabled: false,
+          registry: {
+            ref: "cache",
+            mode: "max",
+            ignoreError: false,
+            ociMediaTypes: true,
+            imageManifest: false,
+            compression: "gzip",
+            compressionLevel: 0,
+            forceCompression: false,
+          },
+        },
+      ],
+      registries: [
+        {
+          address: "https://registry",
+          username: "",
+          password: secret("token"),
+        },
+      ],
+    });
+    // Inside a secret, and for anything else, as it's given
+    expect(
+      asChecked("docker-build:index:Image", {
+        registries: [secret({ address: "a", password: secret("p") })],
+      }).registries,
+    ).toEqual([secret({ address: "a", username: "", password: secret("p") })]);
+    expect(asChecked("aws:s3/bucket:Bucket", { bucket: "b" })).toEqual({
+      bucket: "b",
+    });
   });
 });
 

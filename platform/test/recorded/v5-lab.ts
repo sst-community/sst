@@ -9,6 +9,9 @@ import type * as aws from "../../src/components/aws/index";
 /** The components a group is written with. It's typed as the V5 ones. */
 export type Components = typeof aws.v5;
 
+/** The VPC the containers and databases are in. */
+export type Vpc = InstanceType<typeof aws.Vpc>;
+
 /** The domain the lab account has a hosted zone for, as scrubbed. */
 export const zone = "lab.example.com";
 
@@ -87,4 +90,97 @@ export function serverless(aws: Components) {
   const email = new aws.Email("Mail", { sender: `v5lab.${zone}` });
 
   return { links, api, graph, email };
+}
+
+/**
+ * The VPC both versions of the containers and databases are given: `Vpc` has
+ * no V5 form yet. A NAT gateway in each AZ, and a bastion for `sst tunnel`.
+ */
+export function net(v4: typeof aws) {
+  return new v4.Vpc("Net", { nat: "managed", bastion: true });
+}
+
+export function containers(aws: Components, vpc: Vpc) {
+  const cluster = new aws.Cluster("Cluster", { vpc });
+  const files = new aws.Efs("Files", { vpc });
+
+  // A service with a load balancer, certificate and domain of its own. Its
+  // image is built from a Dockerfile.
+  const web = new aws.Service("Web", {
+    cluster,
+    architecture: "arm64",
+    image: { context: "./web" },
+    loadBalancer: {
+      domain: `web.v5lab.${zone}`,
+      rules: [
+        { listen: "80/http", redirect: "443/https" },
+        { listen: "443/https", forward: "80/http" },
+      ],
+    },
+    scaling: { min: 1, max: 2 },
+    serviceRegistry: { port: 80 },
+    volumes: [{ efs: files, path: "/mnt/efs" }],
+  });
+
+  // A load balancer two services could share, and a service on it
+  const shared = new aws.Alb("Shared", {
+    vpc,
+    domain: `alb.v5lab.${zone}`,
+    listeners: [
+      { port: 80, protocol: "http" },
+      { port: 443, protocol: "https" },
+    ],
+  });
+  const onShared = new aws.Service("OnShared", {
+    cluster,
+    image: "public.ecr.aws/nginx/nginx:alpine",
+    loadBalancer: {
+      instance: shared,
+      rules: [
+        {
+          listen: "443/https",
+          forward: "80/http",
+          conditions: { path: "/*" },
+          priority: 100,
+        },
+      ],
+    },
+  });
+
+  const job = new aws.Task("Job", {
+    cluster,
+    image: "public.ecr.aws/docker/library/busybox:stable",
+    command: ["echo", "ran"],
+  });
+  new aws.CronV2("Nightly", { task: job, schedule: "rate(1 day)" });
+
+  // A function in the VPC that mounts the file system and can run the task
+  const mounted = new aws.Function("Mounted", {
+    handler: "functions/files.handler",
+    url: true,
+    vpc,
+    volume: { efs: files, path: "/mnt/efs" },
+    link: [job, shared, web],
+  });
+
+  return { web, shared, onShared, mounted };
+}
+
+export function databases(aws: Components, vpc: Vpc) {
+  const postgres = new aws.Postgres("Postgres", { vpc, proxy: true });
+  // RDS no longer offers 8.0.40, the default of both versions of the component
+  const mysql = new aws.Mysql("Mysql", { vpc, version: "8.0.46" });
+  const redis = new aws.Redis("Redis", { vpc });
+  const aurora = new aws.Aurora("Aurora", { engine: "postgres", vpc });
+  const dsql = new aws.Dsql("Dsql", { vpc });
+
+  // Reads what each database's link gives it
+  const connections = new aws.Function("Connections", {
+    handler: "functions/connections.handler",
+    url: true,
+    vpc,
+    link: [postgres, mysql, redis, aurora, dsql],
+  });
+
+  return { connections };
 }

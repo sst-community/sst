@@ -24,7 +24,8 @@ and fails if a file holds anything that looks private.
 `platform/test/components/v5/recorded.test.ts` runs the app that deployed them
 (`platform/test/recorded`) under the mock, given the state: the 4.x components
 have to give what the state has, and the V5 ones have to take over what they
-gave.
+gave. It reads a state as if the app were deployed from that folder. The sites
+aren't run: they have no V5 form.
 
 | File | What it holds |
 | --- | --- |

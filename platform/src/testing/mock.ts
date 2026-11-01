@@ -13,6 +13,7 @@ import {
   SECRET,
   SIG,
   type StateExport,
+  asChecked,
   asStateHas,
   buildHashes,
   comparable,
@@ -736,7 +737,15 @@ export function mockPulumi(input?: MockInput) {
               ...(builds ? { build: stable(before.build ?? {}) } : {}),
             },
             now: {
-              ...stable(current(kept(now, ignore), before.inputs), rename),
+              ...stable(
+                current(
+                  state
+                    ? asChecked(now.type, kept(now, ignore))
+                    : kept(now, ignore),
+                  before.inputs,
+                ),
+                rename,
+              ),
               ...deployOptions(now, state),
               ...(registers
                 ? {
@@ -817,9 +826,13 @@ export function mockPulumi(input?: MockInput) {
       const hidden: string[] = [];
       for (const [before, now] of pairs) {
         if (before.kind === "read" || now.kind === "read") continue;
-        const was = secrets(before, before.outputs ?? {});
-        const is = secrets(now, outputsOf(now));
         const widened = before.fromState === true;
+        const was = secrets(before, before.outputs ?? {});
+        // A state holds what the provider's check made of the inputs
+        const is = secrets(
+          widened ? { ...now, inputs: asChecked(now.type, now.inputs) } : now,
+          outputsOf(now),
+        );
         for (const path of revealedPaths(was, is, widened))
           revealed.push(`${before.name}.${path}`);
         for (const path of revealedPaths(is, was, widened))

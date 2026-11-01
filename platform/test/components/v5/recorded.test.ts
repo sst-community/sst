@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { mockPulumi } from "../../helpers/graph";
+import { SECRET, SIG } from "../../../src/testing/state";
 
 // The V5 components against what v4.23.1 really deployed for the lab app
 // (`testdata/states`), with the app's own config (`test/recorded`). The mock
@@ -20,23 +21,46 @@ const sourcemap = path.join(
 );
 fs.writeFileSync(sourcemap, "{}");
 
+// What the lab account answered the lookups a deploy made, as scrubbed
+const lookups: Record<string, (inputs: any) => Record<string, any>> = {
+  "aws:route53/getZone:getZone": (inputs) => ({
+    ...inputs,
+    zoneId: "Z00000000000000EXAMPLE",
+    id: "Z00000000000000EXAMPLE",
+  }),
+  "aws:index/getAvailabilityZones:getAvailabilityZones": (inputs) => ({
+    ...inputs,
+    names: ["us-west-2a", "us-west-2b", "us-west-2c", "us-west-2d"],
+  }),
+  // The bastion's image
+  "aws:ec2/getAmi:getAmi": (inputs) => ({
+    ...inputs,
+    id: "ami-0d2beaff07e79c24e",
+  }),
+  // What an image is pushed with. The provider returns the password as a
+  // secret.
+  "aws:ecr/getAuthorizationToken:getAuthorizationToken": (inputs) => ({
+    ...inputs,
+    proxyEndpoint: "https://123456789012.dkr.ecr.us-west-2.amazonaws.com",
+    userName: "AWS",
+    password: { [SIG]: SECRET, value: "token" },
+  }),
+};
+
 /** The mock, given a recorded state and what the CLI answered for it. */
 function replay(file: string, stage: string) {
   return mockPulumi({
     app: "v5-lab",
     stage,
     root: app,
-    recorded: JSON.parse(fs.readFileSync(path.join(states, file), "utf8")),
+    // The app was deployed from another folder
+    recorded: JSON.parse(
+      fs
+        .readFileSync(path.join(states, file), "utf8")
+        .replaceAll("/home/user/v5-lab", app),
+    ),
     sourcemaps: () => [sourcemap],
-    // A lookup of the lab's hosted zone, as scrubbed
-    call: (args) =>
-      args.token === "aws:route53/getZone:getZone"
-        ? {
-            ...args.inputs,
-            zoneId: "Z00000000000000EXAMPLE",
-            id: "Z00000000000000EXAMPLE",
-          }
-        : undefined,
+    call: (args) => lookups[args.token]?.(args.inputs),
     // The lab account's bootstrap, where functions' code went
     cli: (method) =>
       method === "Provider.Aws.Bootstrap"
@@ -187,6 +211,16 @@ function needless(order: string) {
     // secret: removing a function needs none of them.
     /^(LinksUrl\w*|Api(Integration|Permission)GETitemsid\w+) before (UploadsCors|UsersPermissionPreSignUp|UsersTriggerPreSignUpSourcemap0|WebClientClient)$/.test(
       order,
+    ) ||
+    // The same for a function's URL and the permissions to call it, which
+    // 4.x creates with what the function links and the VPC it's in. The V5
+    // function itself is still removed before its subnets.
+    /^(Connections|Mounted)Url\w* before (?!Connections|Mounted)/.test(order) ||
+    // The 4.x Service's load balancer depends on what the service runs in,
+    // its cluster, file system and private subnets, as in the Service suite.
+    // It's in the public subnets, and has nothing to do with them.
+    /^WebLoadBalancer before (ClusterCluster|Files\w+|NetPrivateSubnet\d)$/.test(
+      order,
     )
   );
 }
@@ -309,3 +343,66 @@ function valueAt(value: any, path: string[]) {
       value,
     );
 }
+
+describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
+  let run: Run;
+  let pulumi: ReturnType<typeof replay>;
+  beforeAll(async () => {
+    // The engine's mock is one for the process, so it's made here
+    pulumi = replay("vpc-containers-databases.json", "recvpc");
+    const aws = await import("../../../src/components/aws/index");
+    const lab = await import("../../recorded/v5-lab");
+    // Both versions are given the 4.x `Vpc`
+    const groups = (components: any) => () => {
+      const vpc = lab.net(aws);
+      lab.containers(components, vpc);
+      lab.databases(components, vpc);
+    };
+    run = await pulumi.takesOverState(
+      groups(aws),
+      groups(aws.v5),
+      (r) => r.type === "sst:sst:LinkRef",
+    );
+  });
+
+  it("is what the 4.x components deploy", () => {
+    const { deployed } = run;
+    expect(deployed.unclaimed).toEqual([]);
+    expect(deployed.created).toEqual([]);
+    expect(deployed.changed).toEqual([]);
+    expect(deployed.unordered).toEqual([]);
+    expect(deployed.revealed).toEqual([]);
+    expect(deployed.hidden).toEqual([]);
+  });
+
+  it("is taken over by the V5 components", () => {
+    const { result } = run;
+    expect(result.unclaimed).toEqual([
+      // What `sst dev` runs for a service was kept at the top of the app,
+      // with nothing in AWS behind it. The V5 one keeps it inside the
+      // service.
+      "sst:sst:DevCommand::OnSharedDev",
+      "sst:sst:DevCommand::WebDev",
+      // 4.x's version markers, with nothing in AWS behind them
+      "sst:sst:Version::ClusterVersion",
+      "sst:sst:Version::PostgresVersion",
+      "sst:sst:Version::RedisVersion",
+    ]);
+    expect(result.created).toEqual([
+      "sst:sst:DevCommand::OnSharedDevCommandOnShared",
+      "sst:sst:DevCommand::WebDevCommandWeb",
+    ]);
+    expect(result.changed).toEqual([]);
+    expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
+    // A function in the VPC is removed before the subnets its network
+    // interfaces are in
+    for (const name of ["ConnectionsFunction", "MountedFunction"])
+      for (const subnet of ["NetPrivateSubnet1", "NetPrivateSubnet2"])
+        expect(pulumi.dependsOn(name, subnet), `${name} on ${subnet}`).toBe(
+          true,
+        );
+  });
+
+  it("keeps secret what was secret, but for what's made from a function's ARN", () =>
+    keepsSecrets(run.result, true));
+});

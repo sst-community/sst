@@ -451,6 +451,90 @@ export function policyDocument(inputs: Record<string, any>) {
   };
 }
 
+/**
+ * What's registered now, as the provider's check makes it, where a state
+ * holds what the check made and the provider doesn't list what it filled in
+ * (`__defaults`). The Docker build provider fills in its schema's defaults,
+ * and Go's zero value for each field that isn't a pointer, and keeps secret
+ * what its schema marks secret, like a registry's password, however it's
+ * given (pulumi-docker-build 0.0.22, `provider/internal`: `image.go`,
+ * `cache.go`, `dockerfile.go`, `auth.go`), for the fields the components
+ * give.
+ */
+export function asChecked(type: string, inputs: Record<string, any>) {
+  if (type !== "docker-build:index:Image") return inputs;
+  const cache = (c: any, to: boolean) =>
+    within(c, (c) => ({
+      raw: "",
+      disabled: false,
+      ...c,
+      ...(to && c.registry
+        ? {
+            registry: within(c.registry, (r) => ({
+              mode: "min",
+              ignoreError: false,
+              ociMediaTypes: true,
+              imageManifest: false,
+              compression: "gzip",
+              compressionLevel: 0,
+              forceCompression: false,
+              ...r,
+            })),
+          }
+        : {}),
+    }));
+  const list = (v: any, each: (v: any) => any) =>
+    within(v, (v) => (Array.isArray(v) ? v.map(each) : v));
+  return {
+    exec: false,
+    load: false,
+    noCache: false,
+    pull: false,
+    target: "",
+    ...inputs,
+    ...(inputs.dockerfile
+      ? {
+          dockerfile: within(inputs.dockerfile, (d) => ({
+            location: "",
+            inline: "",
+            ...d,
+          })),
+        }
+      : {}),
+    ...(inputs.cacheFrom
+      ? { cacheFrom: list(inputs.cacheFrom, (c) => cache(c, false)) }
+      : {}),
+    ...(inputs.cacheTo
+      ? { cacheTo: list(inputs.cacheTo, (c) => cache(c, true)) }
+      : {}),
+    ...(inputs.registries
+      ? {
+          registries: list(inputs.registries, (r) =>
+            within(r, (r) => ({
+              username: "",
+              ...r,
+              password: asSecret(r.password ?? ""),
+            })),
+          ),
+        }
+      : {}),
+  };
+}
+
+// A value as a secret, if it isn't one
+function asSecret(value: any) {
+  return value && typeof value === "object" && value[SIG] === SECRET
+    ? value
+    : { [SIG]: SECRET, value };
+}
+
+// A value changed, inside the secret it's in, if it's in one
+function within(value: any, change: (value: any) => any): any {
+  if (value && typeof value === "object" && value[SIG] === SECRET)
+    return { ...value, value: within(value.value, change) };
+  return value && typeof value === "object" ? change(value) : value;
+}
+
 // An object with its keys in order, as Go writes a map
 function sorted<T>(object: Record<string, T>) {
   return Object.fromEntries(
