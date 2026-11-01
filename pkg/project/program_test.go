@@ -56,13 +56,15 @@ func TestProgramDefine(t *testing.T) {
 		t.Fatalf("$app is %v", app)
 	}
 
-	// $cli is the command, whether it's sst dev, the paths, and the versions
-	// of the components in the state.
+	// $cli is the command, the version of the program contract the core
+	// speaks, whether it's sst dev, the paths, and the versions of the
+	// components in the state.
 	var cli struct {
-		Command string            `json:"command"`
-		Dev     bool              `json:"dev"`
-		Paths   map[string]string `json:"paths"`
-		State   struct {
+		Command  string            `json:"command"`
+		Contract int               `json:"contract"`
+		Dev      bool              `json:"dev"`
+		Paths    map[string]string `json:"paths"`
+		State    struct {
 			Version map[string]int `json:"version"`
 		} `json:"state"`
 	}
@@ -71,10 +73,10 @@ func TestProgramDefine(t *testing.T) {
 	}
 	var raw map[string]interface{}
 	json.Unmarshal([]byte(define["$cli"]), &raw)
-	if keys := sortedKeys(raw); !reflect.DeepEqual(keys, []string{"command", "dev", "paths", "state"}) {
+	if keys := sortedKeys(raw); !reflect.DeepEqual(keys, []string{"command", "contract", "dev", "paths", "state"}) {
 		t.Fatalf("$cli has %v", keys)
 	}
-	if cli.Command != "deploy" || !cli.Dev {
+	if cli.Command != "deploy" || cli.Contract != ContractVersion || !cli.Dev {
 		t.Fatalf("$cli is %+v", cli)
 	}
 	wantPaths := map[string]string{

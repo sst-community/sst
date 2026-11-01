@@ -2,6 +2,48 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-10-31: step 3, the program contract, version 1
+
+The maintainer said to go on, with [the program contract](plan.md#the-program-contract) next.
+
+**Done:**
+
+- **How it travels is settled** ([the plan](plan.md#the-program-contract)): in each component's own outputs, as one record, `_sst`, with the contract's version in it. One resource for the app would miss a component made inside an `apply`, which registers after the program's main function returns. The RPC would leave nothing in the state for `sst tunnel`, `sst shell` or a restarted `sst dev` to read.
+- **A component reports with `this.report()`** (`platform/src/components/contract.ts`, on `PartsComponent`): a function the core builds, a dev command, a task, a tunnel, a hint. Each call adds the items it gives, and it never names an output. The record goes in with the component's outputs, since Pulumi registers those once: the first `registerOutputs()` call wins, and the SDK makes one after the constructor if the component didn't. A report after that is an error that says so, and so is an item SST doesn't read. An item given as `undefined` isn't reported, so a component given nothing to report writes no record.
+- **`context()`** from `sst/components` gives the app, the stage, whether it's `sst dev`, the command, the paths, the components' versions, and the version of the contract the core speaks, which `$cli` now carries as `contract`. It reads what the globals hold, so the globals stay as they are until step 4.
+- **The core reads one report per component** (`pkg/project/report.go`): the record, or 4.x's output names (`_metadata`, `_dev`, `_task`, `_tunnel`, `_hint`) as the same items. A field of the wrong type is left out and the rest read, as before. A record from a newer contract than the CLI's is an error that says to upgrade.
+- **The `sst dev` UI lists functions by their report**, not by `sst:aws:Function` and `sst:cloudflare:Worker`, so a package's function shows too, and it no longer panics on a function without a handler. Nothing in the CLI finds a component by its type now.
+- **The V5 components report** instead of naming outputs: `Function`, `Task`, `ApiGatewayV2`, `AppSync`, `Service` and `Alb`. `_live`, which the CLI doesn't read, stays as it is.
+- **Links keep `sst:sst:LinkRef`** and versions keep `sst:sst:Version`, as the plan says.
+- **The takeover tests compare outputs as the core reads them**, so a V5 component that reports what its 4.x one named is the same to them. The rulebook (`platform/src/components/README.md`) says to report, not to name outputs.
+- **Found on the way:** the platform's `tsconfig.json` type-checked `dist/`, the output of the last build, along with the source, so a change to a hand-written `.d.ts` failed until the next build. `dist` is excluded now; the types build has its own config.
+
+**Checked:**
+
+- `testdata/contract/report-v1.json` is the record both sides are held to: the platform's test (`platform/test/components/contract.test.ts`) checks a component writes exactly it, and the core's (`pkg/project/report_test.go`) checks it reads it as meant. The core's test also reads every component of the three states 4.x left in the lab, and finds each output 4.x named as the same item.
+- The platform's 1,790 tests and `tsc`; all Go tests.
+
+**In the lab** (a build of this branch; the serverless group with the V5 components, `LAB_V5=serverless`, and a component written as a package would write one, `LAB_CONTRACT=1`, deployed by `sst dev` on a stage of its own):
+
+- The core read every report from the state: 13 functions with their handlers, the package-style component's dev command with its two links and its task, and four hints, which `sst dev` printed after the deploy. Sixteen components wrote a record, and none wrote 4.x's output names.
+- The reported dev command, run as `SST_CHILD=Reporter sst dev`, got its links from `/api/env`. The functions answered through `sst dev`. `sst diff --dev` shows no changes.
+- The API's custom domain failed TLS from this machine: its name still resolved to the earlier stage's endpoint, from an hour before. The API answered on its own endpoint, so it's a DNS cache, not the contract.
+- `sst remove` took everything down, and the stage's state in every version and its passphrase were deleted after. The audit and a direct check find nothing of it left.
+
+**The independent review** (a separate agent, given the code and the plan). Fixed after it:
+
+- **Every 4.x site would have been listed as a function in `sst dev`.** `StaticSite` and the server-rendered sites name what they are as `_metadata` too, with no handler. Only a `_metadata` with a handler is a function now. The lab run had only the serverless group, so it didn't show. The test over the recorded states now carries a copy of the old reading and requires the same functions, dev commands, tasks, tunnels and hints; it fails without the fix.
+- **A report could be lost** if a component that reported passed `registerOutputs()` one Output: a secret in it makes all the outputs one secret value, where the core can't find the record. That's an error now that says to pass an object.
+- **The takeover comparison** read a component's old output names even when it had a record, which the core doesn't. It reads them as the core does now, so a V5 component that writes a record and an old name too is a difference.
+- Smaller: `report()` refuses an item SST doesn't read, like `functions`; `function` takes an `Input` like the other items; `context()` returns a copy; `mock()` gives the app a home and the contract's version from the platform; a doc said `internal` functions aren't listed, and they are.
+
+**Left, on purpose:**
+
+- **The home's bootstrap data isn't in `context()` yet.** It stays the call it is (`Provider.Aws.Bootstrap`), since it's for a region and may create the bootstrap.
+- **A component that extends `Component` itself, not `sst.component()`, can't report.** `linkable.ts` extends `Component` as it loads, so the contract can't be imported there. 5.0's components and packages are built with `sst.component()`.
+- **A report inside an `apply`** fails or not depending on whether the outputs are registered by then. The doc says to report in the constructor.
+- **4.x's tunnel needed a list of subnets** to be read; now a tunnel needs its address, user and key. 4.x's `Vpc` always gives the subnets, and the recorded state reads the same.
+
 ## 2026-10-31: step 3 started, the RPC's safety rule
 
 The maintainer said to go on with step 3's first piece: the [safety rule](plan.md#safety-rules) for the server the CLI runs, to the design in the plan's decisions.

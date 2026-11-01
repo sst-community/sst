@@ -137,7 +137,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
         url: interpolate`http://${existing.dnsName}`,
         vpcId: existing.vpcId,
       };
-      this.registerOutputs({ _hint: this.balancer.url });
+      this.report({ hint: this.balancer.url });
       return;
     }
 
@@ -206,7 +206,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
         : interpolate`http://${loadBalancer.dnsName}`,
       vpcId,
     };
-    this.registerOutputs({ _hint: this.balancer.url });
+    this.report({ hint: this.balancer.url });
   }
 
   /**

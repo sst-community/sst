@@ -16,11 +16,14 @@ import (
 // purpose.
 
 // programDefine is what the program reads as the globals $app, $cli and
-// $dev. versions are the components' versions read from the state.
+// $dev. versions are the components' versions read from the state. The
+// program contract's context() reads them, and $cli says which version of
+// the contract the core speaks.
 func (p *Project) programDefine(input *StackInput, versions map[string]int) (map[string]string, error) {
 	cli := map[string]interface{}{
-		"command": input.Command,
-		"dev":     input.Dev,
+		"command":  input.Command,
+		"contract": ContractVersion,
+		"dev":      input.Dev,
 		"paths": map[string]string{
 			"home":     global.ConfigDir(),
 			"root":     p.PathRoot(),

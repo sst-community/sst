@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/tokens"
 	"github.com/sst/sst/v3/pkg/id"
 	"github.com/sst/sst/v3/pkg/project/common"
@@ -36,6 +37,7 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 		Versions:    map[string]int{},
 		ImportDiffs: map[string][]ImportDiff{},
 		Devs:        Devs{},
+		Functions:   map[string]FunctionReport{},
 		Tunnels:     map[string]Tunnel{},
 		Hints:       map[string]string{},
 		Outputs:     map[string]interface{}{},
@@ -58,13 +60,13 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 	}
 	complete.Resources = deployment.Resources
 
-	for _, resource := range complete.Resources {
-		outputs, ok := parsePlaintext(resource.Outputs).(map[string]interface{})
+	for _, res := range complete.Resources {
+		outputs, ok := parsePlaintext(res.Outputs).(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if typePackage(resource.Type) == "sst" {
-			if resource.Type == "sst:sst:Version" {
+		if typePackage(res.Type) == "sst" {
+			if res.Type == "sst:sst:Version" {
 				target, targetOk := outputs["target"].(string)
 				version, versionOk := outputs["version"].(float64)
 				if targetOk && versionOk {
@@ -72,58 +74,23 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 				}
 			}
 
-			if resource.Type != "sst:sst:Version" {
-				name := resource.URN.Name()
+			if res.Type != "sst:sst:Version" {
+				name := res.URN.Name()
 				_, ok := complete.Versions[name]
 				if !ok {
 					complete.Versions[name] = 1
 				}
 			}
 		}
-		if match, ok := outputs["_dev"].(map[string]interface{}); ok {
-			data, _ := json.Marshal(match)
-			var entry Dev
-			json.Unmarshal(data, &entry)
-			entry.Name = resource.URN.Name()
-			complete.Devs[entry.Name] = entry
+		report, err := readReport(outputs)
+		if err != nil {
+			return nil, err
+		}
+		if report != nil {
+			complete.add(res.URN, report)
 		}
 
-		if match, ok := outputs["_task"].(map[string]interface{}); ok {
-			data, _ := json.Marshal(match)
-			var entry Task
-			json.Unmarshal(data, &entry)
-			entry.Name = resource.URN.Name()
-			complete.Tasks[entry.Name] = entry
-		}
-
-		if match, ok := outputs["_tunnel"].(map[string]interface{}); ok {
-			ip, ipOk := match["ip"].(string)
-			username, usernameOk := match["username"].(string)
-			privateKey, privateKeyOk := match["privateKey"].(string)
-			if !ipOk || !usernameOk || !privateKeyOk {
-				continue
-			}
-			tunnel := Tunnel{
-				IP:         ip,
-				Username:   username,
-				PrivateKey: privateKey,
-				Subnets:    []string{},
-			}
-			if subnets, ok := match["subnets"].([]interface{}); ok {
-				for _, subnet := range subnets {
-					if s, ok := subnet.(string); ok {
-						tunnel.Subnets = append(tunnel.Subnets, s)
-					}
-				}
-				complete.Tunnels[resource.URN.Name()] = tunnel
-			}
-		}
-
-		if hint, ok := outputs["_hint"].(string); ok {
-			complete.Hints[string(resource.URN)] = hint
-		}
-
-		if resource.Type == "sst:sst:LinkRef" {
+		if res.Type == "sst:sst:LinkRef" {
 			target, targetOk := outputs["target"].(string)
 			properties, propertiesOk := outputs["properties"].(map[string]interface{})
 			if !targetOk || !propertiesOk {
@@ -163,6 +130,34 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 	}
 
 	return complete, nil
+}
+
+// add adds what a component reported to what the deploy left
+func (complete *CompleteEvent) add(urn resource.URN, report *Report) {
+	name := urn.Name()
+	if report.Function != nil {
+		complete.Functions[name] = *report.Function
+	}
+	if report.Dev != nil {
+		dev := *report.Dev
+		dev.Name = name
+		complete.Devs[name] = dev
+	}
+	if report.Task != nil {
+		task := *report.Task
+		task.Name = name
+		complete.Tasks[name] = task
+	}
+	// a tunnel is only of use with all three
+	if tunnel := report.Tunnel; tunnel != nil && tunnel.IP != "" && tunnel.Username != "" && tunnel.PrivateKey != "" {
+		if tunnel.Subnets == nil {
+			tunnel.Subnets = []string{}
+		}
+		complete.Tunnels[name] = *tunnel
+	}
+	if report.Hint != "" {
+		complete.Hints[string(urn)] = report.Hint
+	}
 }
 
 func parsePlaintext(input interface{}) interface{} {

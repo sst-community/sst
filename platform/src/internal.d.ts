@@ -2,6 +2,7 @@ declare global {
   export const $cli: {
     command: string;
     rpc: string;
+    contract?: number;
     paths: {
       home: string;
       root: string;

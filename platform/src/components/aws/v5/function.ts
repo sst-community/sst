@@ -782,6 +782,10 @@ export class Function extends component("sst:aws:Function", parts) {
         maximumRetryAttempts: args.retries,
       });
 
+    this.report({
+      function: { handler: args.handler, internal: args._skipMetadata, dev },
+      hint: args._skipHint ? undefined : this.urlEndpoint,
+    });
     this.registerOutputs({
       // What's run locally in `sst dev`
       _live: dev
@@ -806,12 +810,6 @@ export class Function extends component("sst:aws:Function", parts) {
             ),
           )
         : undefined,
-      _metadata: {
-        handler: args.handler,
-        internal: args._skipMetadata,
-        dev,
-      },
-      _hint: args._skipHint ? undefined : this.urlEndpoint,
     });
 
     function normalizeLogging() {

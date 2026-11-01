@@ -108,7 +108,7 @@ describe("Alb", () => {
       v5: () => Alb,
       check: () => {
         expect(resource("MyAlbLoadBalancer").type).toBe(LOAD_BALANCER);
-        expect(pulumi.outputsOf("MyAlb")).toHaveProperty("_hint");
+        expect(pulumi.reportOf("MyAlb")).toHaveProperty("hint");
       },
       cases: {
         "http listeners, in a Vpc": {
@@ -116,7 +116,7 @@ describe("Alb", () => {
             new Alb("MyAlb", { vpc: new Vpc("MyVpc"), listeners: http }, opts);
           },
           check: () =>
-            expect(pulumi.outputsOf("MyAlb")?._hint).toBe(
+            expect(pulumi.reportOf("MyAlb")?.hint).toBe(
               "http://MyAlbLoadBalancer.us-east-1.elb.amazonaws.com",
             ),
         },
@@ -151,9 +151,7 @@ describe("Alb", () => {
           },
           check: () => {
             expect(names()).toContain("MyAlbCertificate");
-            expect(pulumi.outputsOf("MyAlb")?._hint).toBe(
-              "https://example.com/",
-            );
+            expect(pulumi.reportOf("MyAlb")?.hint).toBe("https://example.com/");
           },
         },
         "a domain with aliases": (Alb, opts) => {
@@ -229,7 +227,7 @@ describe("Alb", () => {
               kind: "read",
               options: { id: "sg-alb" },
             });
-            expect(pulumi.outputsOf("MyAlb")?._hint).toBe(
+            expect(pulumi.reportOf("MyAlb")?.hint).toBe(
               "http://shared.us-east-1.elb.amazonaws.com",
             );
           },
@@ -489,7 +487,7 @@ describe("Alb", () => {
       );
       expect(await pulumi.resolve(alb._vpc)).toBe("vpc-1");
       expect(await pulumi.resolve(alb.securityGroupId)).toBe("sg-alb");
-      expect(pulumi.outputsOf("MyAlb")?._hint).toBe(
+      expect(pulumi.reportOf("MyAlb")?.hint).toBe(
         "http://shared.us-east-1.elb.amazonaws.com",
       );
     });

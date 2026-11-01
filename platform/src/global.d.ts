@@ -361,6 +361,8 @@ declare global {
   export const $cli: {
     command: string;
     rpc: string;
+    /** The version of the program contract the core speaks. */
+    contract?: number;
     paths: {
       home: string;
       root: string;

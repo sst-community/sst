@@ -191,6 +191,14 @@ the component reads its args.
   is missing. A part that's created all the same is in `nodes` as usual, like the role
   a service's containers run as on the user's machine. Keep the values the getters
   return in one object so the getters don't branch on dev.
+- **Telling the CLI.** What the CLI needs from a component it reads from what the
+  component reported, through the program contract: a function it builds (`function`),
+  a command `sst dev` runs (`dev`), a task `sst dev` runs locally (`task`), a bastion
+  for `sst tunnel` (`tunnel`), and a URL to show after a deploy (`hint`). Call
+  `this.report({ ... })` in the constructor, before `registerOutputs()`; a report after
+  it is an error. Don't name an output for the CLI. `context()` from `sst/components`
+  gives the app, the stage, whether it's `sst dev`, the command and the paths. In a
+  test, `app.reportOf(name)` is what a component reported.
 - **Physical names.** SST knows how to name the resource types its own components use.
   For another type, `sst.Component.naming("aws:athena/workgroup:Workgroup", { field:
   "name", max: 128 })`, or `false` to leave it to the provider. A resource that's looked
@@ -547,7 +555,8 @@ describe("takes over a deployed Queue", () => {
   does to it: `ignoreChanges`, `protect`, `retainOnDelete`, `deleteBeforeReplace`,
   `replaceOnChanges` and its provider. A difference there is reported as a field named
   `options.<name>`. For a component it compares what's registered as its outputs
-  (`outputs`): the CLI reads some of them (`_task`, `_dev`, `_tunnel`).
+  (`outputs`), as the CLI reads them: what a 4.x component named as an output, like
+  `_task`, and what a V5 one reports, are the same when they say the same thing.
 - For a function it also compares what the CLI is given to build the code from
   (`build`): the handler, runtime, copied files and **links**. A function's links go into
   its code, not into any resource's inputs, so this is the only place a wrong link
@@ -617,9 +626,10 @@ For a component with function parts, test a function that links the component.
    logical name, parent and options.
 2. Write `aws/v5/<name>.ts`, with the original's file name and class name: parts, args,
    constructor, methods, `link()`, `static get`.
-   Give it the original's type. Search `cmd/` and `pkg/` for that type
-   (`"sst:aws:Function"`): the CLI finds some components by it and reads what they
-   register as outputs, so the V5 one has to register the same.
+   Give it the original's type. What the original registers for the CLI, as `_hint`,
+   `_dev`, `_task`, `_tunnel` or `_metadata`, the V5 one reports with `this.report()`.
+   Search `cmd/` and `pkg/` for the type (`"sst:aws:Function"`) too, in case the CLI
+   finds it by name.
 3. If a part has another name or place than it had, write `aws/takeover/<name>.ts` and
    import it from `aws/takeover/index.ts`.
 4. Export the component from `aws/v5/index.ts`, which is `sst.aws.v5`.
@@ -652,7 +662,7 @@ and a `get` that takes args next to the id; `efs.ts` for a part per item of a li
 that's only known on deploy (a mount target per subnet), and a `get` that finds the
 other part it needs; `dsql.ts` for parts in another region, and features that each add a
 group of parts; `task.ts` for parts per item of a plain list (containers), a part
-that's built later, a stub in `sst dev`, and outputs the CLI reads; `service.ts` for
+that's built later, a stub in `sst dev`, and what it reports to the CLI; `service.ts` for
 groups of parts that depend on an arg (a load balancer of its own, or one it
 shares), parts made from a plain list of rules, a part that's read from `nodes` and
 only exists sometimes, and a part that's created in `sst dev` too; `cron-v2.ts` for a

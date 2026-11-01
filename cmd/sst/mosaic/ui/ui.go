@@ -657,13 +657,8 @@ func (u *UI) functionName(functionID string) string {
 	if u.complete == nil {
 		return functionID
 	}
-	for _, resource := range u.complete.Resources {
-		if resource.Type == "sst:aws:Function" && resource.URN.Name() == functionID {
-			return strings.TrimPrefix(resource.Outputs["_metadata"].(map[string]interface{})["handler"].(string), "./")
-		}
-		if resource.Type == "sst:cloudflare:Worker" && resource.URN.Name() == functionID {
-			return strings.TrimPrefix(resource.Outputs["_metadata"].(map[string]interface{})["handler"].(string), "./")
-		}
+	if fn, ok := u.complete.Functions[functionID]; ok && fn.Handler != "" {
+		return strings.TrimPrefix(fn.Handler, "./")
 	}
 	return functionID
 }

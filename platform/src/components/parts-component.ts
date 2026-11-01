@@ -3,6 +3,7 @@ import {
   type CustomResourceOptions,
   type Input,
   type Inputs,
+  Output,
   type ResourceTransformationArgs,
   ComponentResource,
   output,
@@ -27,6 +28,7 @@ import type { Permission } from "./aws/permission";
 import type { binding } from "./cloudflare/binding";
 import type { env } from "./linkable";
 import { aliasOf, takeoverOf } from "./takeover";
+import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
 import { notAnOption } from "./args";
 
@@ -165,6 +167,10 @@ export class PartsComponent<P extends Parts> extends Component {
   // Resources created through `delegateOpts()`
   private readonly partDelegated = new WeakSet<object>();
   private runningLocally = false;
+  // What the component reported to the core, and whether its outputs, which
+  // carry it, are registered
+  private reported?: Report;
+  private outputsRegistered = false;
 
   constructor(
     type: string,
@@ -371,6 +377,61 @@ export class PartsComponent<P extends Parts> extends Component {
    */
   protected runsLocally() {
     this.runningLocally = true;
+  }
+
+  /**
+   * Tell the core about this component, through the program contract: a
+   * function it builds, a command or a task `sst dev` runs, a bastion `sst
+   * tunnel` connects through, or a URL to show when a deploy is done. Each
+   * call adds the items it gives, and an item given again replaces the first.
+   *
+   * Call it in the constructor, before `registerOutputs()`, and not inside an
+   * `apply`: the report goes in with the component's outputs, which are
+   * registered once, and by the time an `apply` runs they may be.
+   *
+   * @example
+   * ```ts
+   * this.report({
+   *   dev: { command: "npm run dev", directory: "web", link: [bucket] },
+   *   hint: this.url,
+   * });
+   * ```
+   */
+  protected report(report: Report) {
+    if (this.outputsRegistered)
+      throw new VisibleError(
+        `The "${this.componentName}" component (${this.componentType.replaceAll(":", ".")}) reported to SST after it registered its outputs. Call report() before registerOutputs(), in its constructor.`,
+      );
+    const unknown = Object.keys(report).filter((k) => !reportItems.includes(k));
+    if (unknown.length)
+      throw new VisibleError(
+        `The "${this.componentName}" component (${this.componentType.replaceAll(":", ".")}) reported ${unknown.map((k) => `"${k}"`).join(", ")}, which SST doesn't read. It reads ${reportItems.map((k) => `"${k}"`).join(", ")}.`,
+      );
+    // An item given as `undefined` isn't reported, so a component given
+    // nothing to report writes no record
+    const given = Object.entries(report).filter(([, v]) => v !== undefined);
+    if (given.length)
+      this.reported = { ...this.reported, ...Object.fromEntries(given) };
+  }
+
+  /**
+   * Register the component's outputs, with what it reported. Pulumi registers
+   * them once: the first call does, and Pulumi calls it after the constructor
+   * if the component didn't.
+   */
+  protected registerOutputs(
+    outputs?: Inputs | Promise<Inputs> | Output<Inputs>,
+  ) {
+    if (this.outputsRegistered) return;
+    this.outputsRegistered = true;
+    if (!this.reported) return super.registerOutputs(outputs);
+    // As one Output, a secret anywhere in them would make all the outputs one
+    // secret value, and the core couldn't find the report in it
+    if (Output.isInstance(outputs) || outputs instanceof Promise)
+      throw new VisibleError(
+        `The "${this.componentName}" component (${this.componentType.replaceAll(":", ".")}) reported to SST, and registers its outputs as one Output. Pass registerOutputs() an object, with an Output for each value that needs one.`,
+      );
+    super.registerOutputs(withRecord(outputs, this.reported));
   }
 
   /**

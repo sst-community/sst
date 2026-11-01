@@ -74,6 +74,7 @@ type CompleteEvent struct {
 	UpdateID    string
 	Links       common.Links
 	Devs        Devs
+	Functions   map[string]FunctionReport
 	Tasks       map[string]Task
 	Outputs     map[string]interface{}
 	Hints       map[string]string

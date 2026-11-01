@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -300,21 +302,16 @@ func CmdMosaic(c *cli.Cli) error {
 					return nil
 				}
 				var options []multiplexer.FilterOption
-				for _, r := range completed.Resources {
-					if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:cloudflare:Worker" {
-						name := r.URN.Name()
-						handler := name
-						if meta, ok := r.Outputs["_metadata"].(map[string]interface{}); ok {
-							if h, ok := meta["handler"].(string); ok {
-								handler = h
-							}
-						}
-						options = append(options, multiplexer.FilterOption{
-							Label:       name,
-							Description: handler,
-							Value:       name,
-						})
+				for _, name := range slices.Sorted(maps.Keys(completed.Functions)) {
+					handler := completed.Functions[name].Handler
+					if handler == "" {
+						handler = name
 					}
+					options = append(options, multiplexer.FilterOption{
+						Label:       name,
+						Description: handler,
+						Value:       name,
+					})
 				}
 				return options
 			},
@@ -401,13 +398,7 @@ func CmdMosaic(c *cli.Cli) error {
 								Env: append(multiEnv, "SST_LOG="+p.PathLog("ui-task")),
 							})
 						}
-						var fnNames []string
-						for _, r := range evt.Resources {
-							if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:cloudflare:Worker" {
-								fnNames = append(fnNames, r.URN.Name())
-							}
-						}
-						multi.CheckFilter("function", fnNames)
+						multi.CheckFilter("function", slices.Collect(maps.Keys(evt.Functions)))
 						var taskNames []string
 						for name := range evt.Tasks {
 							taskNames = append(taskNames, name)

@@ -8,6 +8,15 @@ export * from "./linkable";
 export { takeover, type Takeover, type OldAddress } from "./takeover";
 export { Component, type NamingRule, type Transform } from "./component";
 export {
+  context,
+  type Context,
+  type Report,
+  type FunctionReport,
+  type DevReport,
+  type TaskReport,
+  type TunnelReport,
+} from "./contract";
+export {
   component,
   type ComponentClass,
   deferred,

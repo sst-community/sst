@@ -110,7 +110,7 @@ describe("Task", () => {
       check: () => {
         expect(resource("MyTaskTaskDefinition").type).toBe(TASK_DEFINITION);
         // What the task tells `sst dev` to run is compared with the rest
-        expect(pulumi.outputsOf("MyTask")).toHaveProperty("_task");
+        expect(pulumi.reportOf("MyTask")).toHaveProperty("task");
       },
       cases: {
         "an image that's pulled": (Task, opts) => {
@@ -479,7 +479,10 @@ describe("Task", () => {
           context: { location: app },
           dockerfile: { location: path.join(app, "Dockerfile") },
         });
-        expect(pulumi.outputsOf("MyTask")).toEqual({ _task: { directory: "." } });
+        expect(pulumi.reportOf("MyTask")).toEqual({
+          contract: 1,
+          task: { directory: "." },
+        });
       } finally {
         paths.root = root;
       }
@@ -611,7 +614,7 @@ describe("Task", () => {
     pulumi.takeoverCases({
       original: () => OriginalTask,
       v5: () => Task,
-      check: () => expect(pulumi.outputsOf("MyTask")).toHaveProperty("_task"),
+      check: () => expect(pulumi.reportOf("MyTask")).toHaveProperty("task"),
       cases: {
         "a task with a command to run": (Task, opts) => {
           new Task(
@@ -708,9 +711,9 @@ describe("Task", () => {
       // Running it still names every container
       expect(await pulumi.resolve(task.containers)).toEqual(["app", "admin"]);
       expect(pulumi.outputsOf("MyTask")).toEqual({
-        _task: {
-          directory: "packages/task",
-          command: "node task.js",
+        _sst: {
+          contract: 1,
+          task: { directory: "packages/task", command: "node task.js" },
         },
       });
     });
@@ -790,7 +793,10 @@ describe("Task", () => {
     ]);
     expect(task.nodes.taskDefinition.urn).toBeDefined();
     expect(task.nodes.publicSecurityGroup).toBe(undefined);
-    expect(pulumi.outputsOf("MyTask")).toEqual({ _task: { directory: "" } });
+    expect(pulumi.reportOf("MyTask")).toEqual({
+      contract: 1,
+      task: { directory: "" },
+    });
   });
 
   it("builds an image from a Dockerfile and pushes it", async () => {
@@ -814,7 +820,10 @@ describe("Task", () => {
       /^\.sst$/m,
     );
     expect(Object.keys(task.nodes.image)).toEqual(["MyTask"]);
-    expect(pulumi.outputsOf("MyTask")).toEqual({ _task: { directory: app } });
+    expect(pulumi.reportOf("MyTask")).toEqual({
+      contract: 1,
+      task: { directory: app },
+    });
   });
 
   it("keeps a container's image and log group under its name", async () => {

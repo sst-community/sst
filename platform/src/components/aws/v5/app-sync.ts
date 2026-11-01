@@ -263,7 +263,7 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
         domainName: domainName.domainName,
       });
 
-    this.registerOutputs({ _hint: this.url });
+    this.report({ hint: this.url });
   }
 
   // The custom domain: its certificate, the domain name, and the DNS records

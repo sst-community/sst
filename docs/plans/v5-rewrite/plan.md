@@ -91,6 +91,14 @@ In 5.0 it's designed, typed and versioned:
 - **Calls into the core are the contract's own methods**, such as building a function, over the RPC, under the [safety rules](#safety-rules).
 - **Versioned.** The core says which version it speaks, and a package's peer dependency on `sst` covers it.
 
+**How it travels, settled in step 3:** in each component's own outputs, as one record the framework writes, `_sst`, with the contract's version in it. A component calls `this.report(...)` in its constructor, and never names an output.
+
+- **Not one resource for the app.** A component made inside an `apply` registers after the program's main function returns, so a resource made at the end would miss it.
+- **Not over the RPC.** `sst tunnel`, `sst shell` and a restarted `sst dev` read what was reported from the state, with no deploy running. And the state keeps each record with its component, so a deploy that fails partway leaves the records of what it didn't reach as they were.
+- **Once per component.** Pulumi registers a component's outputs once: the first call wins, and the SDK makes one after the constructor if the component didn't. So the record goes in with that call, and a report after it is an error, not lost without a word.
+- **Links keep `sst:sst:LinkRef`**, since a linkable resource that isn't a component can't hold a record. **Versions keep `sst:sst:Version`** until [state maps](#state-maps) replace them in step 4.
+- Until step 4, the core also reads 4.x's output names, for the 4.x components still on this branch.
+
 ### Places to plug in
 
 Each is a typed, versioned interface in the core, drawn from what two implementations need: the built-in, and the first outside one (Floci for a target, a runtime made of commands for a runtime). The built-in is fitted to the interface, not the other way round. Today's `Runtime` has `ShouldRunEagerly` only because Python rebuilds every function when a shared file changes; a quirk like that stays inside the built-in.
@@ -380,7 +388,7 @@ Today's CLI, with its homes behind the new `Home` interface, reads an existing h
 **Exit:**
 
 - The built-ins pass their suites, and a deploy still shows no diff, as in step 2.
-- A component written against the program contract reports its functions, dev commands and tasks with no output name the CLI looks for, under `mock()` and in a deploy.
+- A component written against the program contract reports its functions, dev commands and tasks without naming an output, under `mock()` and in a deploy.
 - A Floci stage runs an app in `sst dev` and can't reach the real stage or home. Each of #212's review findings is closed by a core rule. The Floci package passes the target suite in its own CI.
 
 ### 4. New components
@@ -465,7 +473,7 @@ Each comes when it's needed, with its own exit test.
 | 0. What v5 taught | Written in [reference.md](reference.md#what-v5-taught), 2026-10-31. |
 | 1. A record of today's state | Started, 2026-10-31. Recorded with v4.23.1 and in `testdata/states/`: the serverless group and the sites, the VPC groups, and the serverless group by `sst dev`. A recorded state replays with AWS credentials and the passphrase, not without. Everything removed, and the audit is clean. Left: Cloudflare (at step 4). |
 | 2. The first proof | Started, 2026-10-31, committed (not pushed). Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
-| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. Next: the program contract. |
+| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. The program contract's version 1: `report()` and `context()`, the core's reader, the V5 components on it, checked in the lab and under `mock()`. Next: the places to plug in. |
 | 4. New components | Not started. |
 | 5. Moving an app | Not started. |
 | 6. After 5.0 | When needed. |

@@ -1570,7 +1570,7 @@ export class Service extends component("sst:aws:Service", parts) {
       ),
     };
 
-    this.registerOutputs({ _hint: this.reach.url });
+    this.report({ hint: this.reach.url });
   }
 
   // The service's own load balancer. Each port it listens on has a listener,

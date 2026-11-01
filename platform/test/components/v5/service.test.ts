@@ -165,7 +165,7 @@ describe("Service", () => {
       // The 4.x Service's load balancer depends on the ECS cluster, which it
       // has nothing to do with
       needlessOrder: /^MyServiceLoadBalancer before MyClusterCluster$/,
-      // What the CLI shows as the service's URL, `_hint`, is compared with
+      // What the CLI shows as the service's URL, its report's hint, is compared with
       // the rest. The cases with a load balancer check that there is one.
       check: () => expect(resource("MyServiceService").type).toBe(SERVICE),
       cases: {
@@ -448,7 +448,7 @@ describe("Service", () => {
             );
           },
           check: () =>
-            expect(pulumi.outputsOf("MyService")?._hint).toBe(
+            expect(pulumi.reportOf("MyService")?.hint).toBe(
               "http://MyServiceLoadBalancer.us-east-1.elb.amazonaws.com",
             ),
         },
@@ -506,7 +506,7 @@ describe("Service", () => {
               types.filter((type) => type === "aws:route53/record:Record")
                 .length,
             ).toBe(3);
-            expect(pulumi.outputsOf("MyService")?._hint).toBe(
+            expect(pulumi.reportOf("MyService")?.hint).toBe(
               "https://example.com/",
             );
           },
@@ -678,7 +678,7 @@ describe("Service", () => {
             );
           },
           check: () =>
-            expect(pulumi.outputsOf("MyService")?._hint).toBe(
+            expect(pulumi.reportOf("MyService")?.hint).toBe(
               "http://MyAlbLoadBalancer.us-east-1.elb.amazonaws.com",
             ),
         },
@@ -753,7 +753,7 @@ describe("Service", () => {
             expect(
               resource("MyServiceListenerRuleHTTPS443P100").inputs.listenerArn,
             ).toBe(mockArn("MyAlbListenerHTTPS443"));
-            expect(pulumi.outputsOf("MyService")?._hint).toBe(
+            expect(pulumi.reportOf("MyService")?.hint).toBe(
               "http://shared.us-east-1.elb.amazonaws.com",
             );
           },
@@ -1658,7 +1658,7 @@ describe("Service", () => {
 
     expect(await pulumi.resolve(service.url)).toBe("https://example.com/");
     expect(pulumi.outputsOf("MyService")).toEqual({
-      _hint: "https://example.com/",
+      _sst: { contract: 1, hint: "https://example.com/" },
     });
     expect(
       await pulumi.resolve((service as any).getSSTLink().properties),

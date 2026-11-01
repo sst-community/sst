@@ -49,6 +49,7 @@ export async function mock(input?: MockInput & { dev?: boolean }) {
       name: input?.app ?? "app",
       stage: input?.stage ?? "test",
       removal: "remove",
+      home: "aws",
       providers: {},
       protect: false,
     },

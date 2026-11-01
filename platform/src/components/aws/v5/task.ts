@@ -446,8 +446,8 @@ export class Task extends component("sst:aws:Task", parts) {
     };
 
     // What `sst dev` runs on the user's machine when the task is started
-    this.registerOutputs({
-      _task: all([args.dev, containers[0].image]).apply(([dev, image]) => ({
+    this.report({
+      task: all([args.dev, containers[0].image]).apply(([dev, image]) => ({
         directory: typeof image === "string" ? "" : image?.context ?? ".",
         ...dev,
       })),

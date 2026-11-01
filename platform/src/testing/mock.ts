@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import * as pulumi from "@pulumi/pulumi";
 import { rpc } from "../components/rpc/rpc";
+import { contractVersion } from "../components/contract";
 
 /**
  * A resource a component registered, with what decides whether a deployed
@@ -60,6 +61,42 @@ export interface MockInput {
    * deploy.
    */
   preview?: boolean;
+}
+
+// The outputs 4.x's components name for the core, and what each is in a
+// report of the program contract
+const legacyOutputs: Record<string, string> = {
+  _metadata: "function",
+  _dev: "dev",
+  _task: "task",
+  _tunnel: "tunnel",
+  _hint: "hint",
+};
+
+/**
+ * A component's outputs as the core reads them (`pkg/project/report.go`): what
+ * it reported, and the rest of its outputs. A report is its record (`_sst`)
+ * when it has one, and otherwise what it named with 4.x's output names. So a
+ * V5 component that reports what a 4.x one named is the same to the core, and
+ * one that writes a record and an old name too isn't.
+ */
+function asTheCoreReads(outputs: Record<string, any>) {
+  const { _sst, ...rest } = outputs;
+  if (_sst) {
+    const { contract, ...report } = _sst;
+    return { ...rest, report };
+  }
+  const report: Record<string, any> = {};
+  for (const [name, item] of Object.entries(legacyOutputs)) {
+    if (!(name in rest)) continue;
+    const value = rest[name];
+    delete rest[name];
+    const object = typeof value === "object" && value !== null;
+    if (item === "hint" ? typeof value === "string" : object)
+      if (item !== "function" || typeof value.handler === "string")
+        report[item] = value;
+  }
+  return Object.keys(report).length ? { ...rest, report } : rest;
 }
 
 /**
@@ -136,7 +173,11 @@ export function mockPulumi(input?: MockInput) {
   }) as typeof rpc.call;
 
   // @ts-ignore
-  global.$app = { name: input?.app ?? "app", stage: input?.stage ?? "test" };
+  global.$app = {
+    name: input?.app ?? "app",
+    stage: input?.stage ?? "test",
+    home: "aws",
+  };
   // @ts-ignore
   global.$util = pulumi;
   // @ts-ignore
@@ -149,6 +190,8 @@ export function mockPulumi(input?: MockInput) {
   global.$dev = false;
   // @ts-ignore
   global.$cli = {
+    contract: contractVersion,
+    command: input?.preview ? "diff" : "deploy",
     state: { version: {} },
     paths: { root: input?.root ?? "/", work, platform },
   };
@@ -275,6 +318,13 @@ export function mockPulumi(input?: MockInput) {
       return component
         ? registered.get(urn(component.type, component.name, component.parent))
         : undefined;
+    },
+    /**
+     * What a component reported to the core through the program contract, by
+     * the component's name: the record the core reads from its outputs.
+     */
+    reportOf(name: string): Record<string, any> | undefined {
+      return this.outputsOf(name)?._sst;
     },
     /**
      * Lets pending `.apply()` chains and registrations finish: waits until
@@ -494,14 +544,21 @@ export function mockPulumi(input?: MockInput) {
             original: {
               ...stable(kept(before, ignore)),
               ...deployOptions(before),
-              ...(registers ? { outputs: stable(before.outputs ?? {}) } : {}),
+              ...(registers
+                ? { outputs: stable(asTheCoreReads(before.outputs ?? {})) }
+                : {}),
               ...(builds ? { build: stable(before.build ?? {}) } : {}),
             },
             now: {
               ...stable(kept(now, ignore), asOriginal(now.name)),
               ...deployOptions(now),
               ...(registers
-                ? { outputs: stable(outputsOf(now), asOriginal(now.name)) }
+                ? {
+                    outputs: stable(
+                      asTheCoreReads(outputsOf(now)),
+                      asOriginal(now.name),
+                    ),
+                  }
                 : {}),
               ...(builds
                 ? { build: stable(buildOf(now) ?? {}, asOriginal(now.name)) }
