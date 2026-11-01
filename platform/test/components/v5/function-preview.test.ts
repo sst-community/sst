@@ -62,4 +62,40 @@ describe("a function in a new stage's preview", () => {
     expect(fn.inputs.handler).toEqual(expect.any(String));
     expect(fn.inputs.handler).not.toBe(UNKNOWN);
   });
+
+  // Who may call the URL depends on whether the router signs its requests,
+  // which its settings say. Its distribution isn't created yet.
+  it("plans who may call its URL behind a router", async () => {
+    pulumi.reset();
+    const { Function } = await import(
+      "../../../src/components/aws/v5/function"
+    );
+    const { Router } = await import("../../../src/components/aws/router");
+    const signs = new Router("Signs", { protection: "oac" });
+    const open = new Router("Open");
+    new Function("Signed", {
+      handler: "src/api.handler",
+      url: { router: { instance: signs, path: "/api" } },
+    });
+    new Function("Public", {
+      handler: "src/api.handler",
+      url: { router: { instance: open, path: "/api" } },
+    });
+    await pulumi.settle();
+
+    const access = (name: string) =>
+      pulumi.resources
+        .filter((r) => r.name.startsWith(`${name}Url`))
+        .map((r) => [r.name, r.inputs.principal, r.inputs.sourceArn]);
+    expect(access("Signed")).toEqual([
+      ["SignedUrl", undefined, undefined],
+      ["SignedUrlAccess", "cloudfront.amazonaws.com", UNKNOWN],
+      ["SignedUrlInvoke", "cloudfront.amazonaws.com", UNKNOWN],
+    ]);
+    expect(access("Public")).toEqual([
+      ["PublicUrl", undefined, undefined],
+      ["PublicUrlAccess", "*", undefined],
+      ["PublicUrlInvoke", "*", undefined],
+    ]);
+  });
 });

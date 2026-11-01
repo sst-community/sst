@@ -13,6 +13,10 @@ const files = fs
   .readdirSync(dir)
   .filter((file) => file.endsWith(".ts") && file !== "index.ts");
 
+// The 5.0 rewrite makes a clean break from 4.x code. These are built the 5.0
+// way; the others still lean on 4.x until each is rebuilt.
+const rebuilt = ["vpc.ts", "function.ts"];
+
 describe("V5 components", () => {
   let takeoverOf: typeof import("../../src/components/takeover").takeoverOf;
 
@@ -84,6 +88,25 @@ describe("V5 components", () => {
       );
       expect(otherTypes).toEqual([]);
       expect(code).not.toMatch(/takeover|\baliases\s*:/);
+    });
+
+    // Its args, types and docs are its own. A 4.x component it takes, like a
+    // `Vpc` or a `Router`, is reached through a helper that takes either kind
+    // (`helpers/vpc.ts`), until 5.0 has no 4.x components.
+    it("imports no 4.x component's file, once it's built the 5.0 way", () => {
+      if (!rebuilt.includes(file)) return;
+      const code = fs.readFileSync(new URL(file, dir), "utf8");
+      const fourX = [...code.matchAll(/from\s+"(\.[^"]+)"/g)]
+        .map((match) => new URL(`${match[1].replace(/\.js$/, "")}.ts`, dir))
+        .filter(
+          (target) =>
+            fs.existsSync(target) &&
+            /\bclass \w+ extends Component\b/.test(
+              fs.readFileSync(target, "utf8"),
+            ),
+        )
+        .map((target) => fileURLToPath(target).split("/components/")[1]);
+      expect(fourX).toEqual([]);
     });
   });
 });

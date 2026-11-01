@@ -619,18 +619,36 @@ describe("Function", () => {
       expect(() => runtime({ lambda: "ruby3.4" })).toThrow(/dev.command/);
     });
 
-    // A runtime can come in an output, as a function part's args can
-    it("is built by a runtime made of commands that comes in an output", async () => {
+    // What's built is read from these, and a preview has to know it
+    it("turns down what it's built from in an output", async () => {
       const { runtime } = await import("../../../src/components/runtime");
       const ruby = runtime({ lambda: "ruby3.4", dev: { command: "ruby x.rb" } });
-      new Function("MyFunction", {
-        handler: "functions/ruby/app.handler",
-        runtime: output(ruby) as any,
-      });
+      const given: [string, Record<string, unknown>][] = [
+        ["runtime", { runtime: output(ruby) }],
+        ["handler", { handler: output(handler) }],
+        ["bundle", { bundle: output("src") }],
+        ["architecture", { architecture: output("arm64") }],
+        ["nodejs", { nodejs: { install: output(["sharp"]) } }],
+        ["copyFiles", { copyFiles: [{ from: output("a.txt") }] }],
+      ];
+      for (const [arg, args] of given)
+        expect(() => new Function("MyFunction", { handler, ...args } as any)).toThrow(
+          `The "${arg}" of the "MyFunction" function has to be a plain value, not an output. The function is built from it, and a preview has to know what's built.`,
+        );
+      await pulumi.settle();
+    });
+
+    it("is built by a runtime made of commands, given in a function part's args in an output", async () => {
+      const { runtime } = await import("../../../src/components/runtime");
+      const { Queue } = await import("../../../src/components/aws/v5/queue");
+      const ruby = runtime({ lambda: "ruby3.4", dev: { command: "ruby x.rb" } });
+      new Queue("MyQueue").subscribe(
+        output({ handler: "functions/ruby/app.handler", runtime: ruby }) as any,
+      );
       await pulumi.settle();
       const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
       expect(fn.inputs.runtime).toBe("ruby3.4");
-      expect(pulumi.graph().find((r) => r.name === "MyFunction")!.build!.commands).toEqual({
+      expect(pulumi.graph().find((r) => r.type === "sst:aws:Function")!.build!.commands).toEqual({
         build: {},
         dev: { command: "ruby x.rb" },
       });

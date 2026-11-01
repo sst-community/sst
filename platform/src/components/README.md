@@ -281,8 +281,11 @@ Everything above applies. The rest is specific to SST's own components in
   taken goes last: an app switches to it once everything it's passed to is V5.
   The V5 `Service` and `Task` take either `Cluster`. The arg is declared again in each
   (`cluster: OriginalCluster | Cluster`), and the V5 `Cluster` gives them the same
-  `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Function`, `Service` and
-  `Task` take either `Efs` the same way, and the V5 `Service` either `Alb`.
+  `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Service` and `Task` take
+  either `Efs` the same way, and the V5 `Service` either `Alb`. A component built the
+  5.0 way names neither: it takes an `AnyEfs` and checks it with `isEfs()`
+  (`helpers/efs.ts`), and is served through an `AnyRouter` with `routeOf()`
+  (`helpers/router.ts`), which says whether the router signs its requests.
   For a `Vpc`, the two kinds are already one thing to a V5 component: it wraps the
   original's args in `TakesVpc<>`, which gives `vpc` the type `AnyVpc` (either `Vpc`)
   in place of the 4.x one, and it checks with `isVpc()`, not `instanceof`. It reads the
@@ -292,9 +295,17 @@ Everything above applies. The rest is specific to SST's own components in
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **A 5.0 component owns its args.** The 5.0 rewrite makes a clean break from 4.x
   code: a component imports no 4.x component file and builds on none of its types
-  (`docs/plans/v5-rewrite/plan.md`). The V5 `Vpc` is the first built that way; its
-  args are its own, docs included. The ports before it reuse the original's, as below,
-  until each is rebuilt.
+  (`docs/plans/v5-rewrite/plan.md`). The V5 `Vpc` and `Function` are built that way;
+  their args are their own, docs included, and `v5-components.test.ts` lists them and
+  checks what they import. A 4.x component they take is reached through a helper that
+  takes either kind, as above. The ports before them reuse the original's, as below,
+  until each is rebuilt and added to that list.
+- **What an app creates once is made once in each run** of the program. A resource
+  its components share, like the key a function's links are encrypted with, is kept
+  in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
+  the mock's `reset()` start a new run with `newRun()`, so a test sees what a run
+  creates whatever ran before it. Both `Function`s share theirs from
+  `helpers/function-shared.ts`.
 - **Reuse the original's arg types**: `interface QueueArgs extends
   V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
   change. For an arg that has to become a plain value, write
@@ -341,8 +352,10 @@ Everything above applies. The rest is specific to SST's own components in
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
-| An arg that must not be an output | `plain(value, what)` in `args.ts` |
-| An arg that must not have an output anywhere inside it | `plainDeep(value, what)` in `args.ts` |
+| An arg that must not be an output | `plain(value, what, why?)` in `args.ts`; `why` when it doesn't decide which resources are created, like what a build reads |
+| An arg that must not have an output anywhere inside it | `plainDeep(value, what, why?)` in `args.ts` |
+| An `efs` arg: either kind of `Efs`, or an access point's ARN | `AnyEfs`, `isEfs(value)` in `helpers/efs.ts` |
+| Serving a component through a `Router` | `RouteArgs`, `AnyRouter`, `routeOf(route)` in `helpers/router.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |
 | A value made on this machine from things in AWS, like built code | `withoutDependencies(output)` in `args.ts` |
 
@@ -743,6 +756,9 @@ only exists sometimes, and a part that's created in `sst dev` too; `cron-v2.ts` 
 function the component may be given or may create, next to another component it's
 given (a `Task`); `dynamo.ts` for required args next to `get`, and a static method
 replaced by `get`; `function.ts` for a component 4.x built almost entirely inside
-`.apply()`, with parts that are created later; `vpc.ts` for args of its own, parts in
+`.apply()`, with parts that are created later, args of its own, what a build reads
+kept plain so a preview knows its
+source maps, and what an app creates once shared with the 4.x one; `vpc.ts` for args
+of its own, parts in
 each AZ from a plain count with nothing inside `.apply()`, and a `get` that finds what
 it can't count with lookups that aren't resources.

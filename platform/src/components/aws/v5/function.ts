@@ -25,11 +25,16 @@ import {
   types,
 } from "@pulumi/aws";
 import { Image } from "@pulumi/docker-build";
-import { V5Args, component, many, optional } from "../../parts-component";
 import {
-  Plain,
+  type ComponentArgs,
+  component,
+  many,
+  optional,
+} from "../../parts-component";
+import {
   ifSet,
   plain,
+  plainDeep,
   withDefault,
   withoutDependencies,
 } from "../../args";
@@ -37,22 +42,25 @@ import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { Link } from "../../link";
 import { logicalName, physicalName } from "../../naming";
-import { toDays, toSeconds } from "../../duration";
-import { toMBs } from "../../size";
+import {
+  Duration,
+  DurationDays,
+  DurationMinutes,
+  toDays,
+  toSeconds,
+} from "../../duration";
+import { Size, toMBs } from "../../size";
+import type { Loader } from "esbuild";
+import type { EsbuildOptions } from "../../esbuild";
 import { rpc } from "../../rpc/rpc";
 import { devStub } from "../../contract";
 import { type Runtime, commandsOf, isRuntime } from "../../runtime";
 import { warnOnce } from "../../../util/warn";
-import {
-  Function as OriginalFunction,
-  FunctionArgs as OriginalFunctionArgs,
-} from "../function";
-import { Efs as OriginalEfs } from "../efs";
-import { type TakesVpc, hasNat, isVpc } from "../helpers/vpc";
-import { Efs } from "./efs";
+import { type AnyVpc, hasNat, isVpc } from "../helpers/vpc";
+import { type AnyEfs, isEfs } from "../helpers/efs";
+import { type AnyRouter, type RouteArgs, routeOf } from "../helpers/router";
 import { RETENTION } from "../logging";
 import { Permission, permission } from "../permission";
-import { normalizeRouteArgs } from "../router";
 import { bootstrap } from "../helpers/bootstrap";
 import { parseRoleArn, splitQualifiedFunctionArn } from "../helpers/arn";
 import {
@@ -107,8 +115,7 @@ const parts = {
   urlAlias: optional(lambda.Alias),
   /**
    * The permission to call the function's URL: for everyone, or for the router's
-   * distribution when the URL is behind a router that signs its requests. When the URL
-   * is behind a router, it's only known once the router is.
+   * distribution when the URL is behind a router that signs its requests.
    */
   urlAccess: optional(lambda.Permission),
   /**
@@ -139,17 +146,325 @@ const parts = {
   environmentUpdate: optional(FunctionEnvironmentUpdate),
 };
 
-type Logging = Exclude<
-  Plain<OriginalFunctionArgs["logging"]>,
-  false | undefined
->;
-type Url = Exclude<Plain<OriginalFunctionArgs["url"]>, boolean | undefined>;
-type Python = NonNullable<Plain<OriginalFunctionArgs["python"]>>;
-type Concurrency = NonNullable<Plain<OriginalFunctionArgs["concurrency"]>>;
+/**
+ * The ARN of a Lambda function.
+ */
+export type FunctionArn = `arn:${string}` & {};
 
-export interface FunctionLoggingArgs extends Omit<Logging, "logGroup"> {}
+export interface FunctionPermissionArgs {
+  /**
+   * Configures whether the permission is allowed or denied.
+   * @default `"allow"`
+   * @example
+   * ```ts
+   * {
+   *   effect: "deny"
+   * }
+   * ```
+   */
+  effect?: "allow" | "deny";
+  /**
+   * The [IAM actions](https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html#actions_table) that can be performed.
+   * @example
+   * ```js
+   * {
+   *   actions: ["s3:*"]
+   * }
+   * ```
+   */
+  actions: string[];
+  /**
+   * The resourcess specified using the [IAM ARN format](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_identifiers.html).
+   * @example
+   * ```js
+   * {
+   *   resources: ["arn:aws:s3:::my-bucket/*"]
+   * }
+   * ```
+   */
+  resources: Input<Input<string>[]>;
+  /**
+   * Configure specific conditions for when the policy is in effect.
+   *
+   * @example
+   * ```js
+   * {
+   *   conditions: [
+   *     {
+   *       test: "StringEquals",
+   *       variable: "s3:x-amz-server-side-encryption",
+   *       values: ["AES256"]
+   *     },
+   *     {
+   *       test: "IpAddress",
+   *       variable: "aws:SourceIp",
+   *       values: ["10.0.0.0/16"]
+   *     }
+   *   ]
+   * }
+   * ```
+   */
+  conditions?: Input<
+    Input<{
+      /**
+       * Name of the [IAM condition operator](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition_operators.html) to evaluate.
+       */
+      test: Input<string>;
+      /**
+       * Name of a [Context Variable](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#AvailableKeys) to apply the condition to. Context variables may either be standard AWS variables starting with `aws:` or service-specific variables prefixed with the service name.
+       */
+      variable: Input<string>;
+      /**
+       * The values to evaluate the condition against. If multiple values are provided, the condition matches if at least one of them applies. That is, AWS evaluates multiple values as though using an "OR" boolean operation.
+       */
+      values: Input<Input<string>[]>;
+    }>[]
+  >;
+}
 
-export interface FunctionUrlArgs extends Omit<Url, "route" | "authorization"> {
+export interface FunctionUrlCorsArgs {
+  /**
+   * Allow cookies or other credentials in requests to the function URL.
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowCredentials: true
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  allowCredentials?: Input<boolean>;
+  /**
+   * The HTTP headers that origins can include in requests to the function URL.
+   * @default `["*"]`
+   * @example
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowHeaders: ["date", "keep-alive", "x-custom-header"]
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  allowHeaders?: Input<Input<string>[]>;
+  /**
+   * The origins that can access the function URL.
+   * @default `["*"]`
+   * @example
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowOrigins: ["https://www.example.com", "http://localhost:60905"]
+   *     }
+   *   }
+   * }
+   * ```
+   * Or the wildcard for all origins.
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowOrigins: ["*"]
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  allowOrigins?: Input<Input<string>[]>;
+  /**
+   * The HTTP methods that are allowed when calling the function URL.
+   * @default `["*"]`
+   * @example
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowMethods: ["GET", "POST", "DELETE"]
+   *     }
+   *   }
+   * }
+   * ```
+   * Or the wildcard for all methods.
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowMethods: ["*"]
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  allowMethods?: Input<
+    Input<
+      "*" | "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT"
+    >[]
+  >;
+  /**
+   * The HTTP headers you want to expose in your function to an origin that calls the function URL.
+   * @default `[]`
+   * @example
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       exposeHeaders: ["date", "keep-alive", "x-custom-header"]
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  exposeHeaders?: Input<Input<string>[]>;
+  /**
+   * The maximum amount of time the browser can cache results of a preflight request. By
+   * default the browser doesn't cache the results. The maximum value is `86400 seconds` or `1 day`.
+   * @default `"0 seconds"`
+   * @example
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       maxAge: "1 day"
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  maxAge?: Input<Duration>;
+}
+
+export interface FunctionLoggingArgs {
+  /**
+   * The duration the function logs are kept in CloudWatch.
+   *
+   * It can't be set with a log group passed in `existing.logGroup`, which has its own
+   * retention.
+   *
+   * @default `1 month`
+   * @example
+   * ```js
+   * {
+   *   logging: {
+   *     retention: "forever"
+   *   }
+   * }
+   * ```
+   */
+  retention?: Input<keyof typeof RETENTION>;
+  /**
+   * The [log format](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs-advanced.html)
+   * of the Lambda function.
+   * @default `"text"`
+   * @example
+   * ```js
+   * {
+   *   logging: {
+   *     format: "json"
+   *   }
+   * }
+   * ```
+   */
+  format?: Input<"text" | "json">;
+}
+
+export interface FunctionUrlArgs {
+  /**
+   * Serve your function URL through a `Router` instead of a standalone Function URL.
+   *
+   * By default, this component creates a direct function URL endpoint. But you might
+   * want to serve it through the distribution of your `Router` as a:
+   *
+   * - A path like `/api/users`
+   * - A subdomain like `api.example.com`
+   * - Or a combined pattern like `dev.example.com/api`
+   *
+   * Whether the URL is served through a router decides what's created, so it has to
+   * be a plain value, and so does the router.
+   *
+   * @example
+   *
+   * To serve your function **from a path**, you'll need to configure the root domain
+   * in your `Router` component.
+   *
+   * ```ts title="sst.config.ts" {2}
+   * const router = new sst.aws.Router("Router", {
+   *   domain: "example.com"
+   * });
+   * ```
+   *
+   * Now set the `router` and the `path` in the `url` prop.
+   *
+   * ```ts {4,5}
+   * {
+   *   url: {
+   *     router: {
+   *       instance: router,
+   *       path: "/api/users"
+   *     }
+   *   }
+   * }
+   * ```
+   *
+   * To serve your function **from a subdomain**, you'll need to configure the
+   * domain in your `Router` component to match both the root and the subdomain.
+   *
+   * ```ts title="sst.config.ts" {3,4}
+   * const router = new sst.aws.Router("Router", {
+   *   domain: {
+   *     name: "example.com",
+   *     aliases: ["*.example.com"]
+   *   }
+   * });
+   * ```
+   *
+   * Now set the `domain` in the `router` prop.
+   *
+   * ```ts {5}
+   * {
+   *   url: {
+   *     router: {
+   *       instance: router,
+   *       domain: "api.example.com"
+   *     }
+   *   }
+   * }
+   * ```
+   *
+   * Finally, to serve your function **from a combined pattern** like
+   * `dev.example.com/api`, you'll need to configure the domain in your `Router` to
+   * match the subdomain.
+   *
+   * ```ts title="sst.config.ts" {3,4}
+   * const router = new sst.aws.Router("Router", {
+   *   domain: {
+   *     name: "example.com",
+   *     aliases: ["*.example.com"]
+   *   }
+   * });
+   * ```
+   *
+   * And set the `domain` and the `path`.
+   *
+   * ```ts {5,6}
+   * {
+   *   url: {
+   *     router: {
+   *       instance: router,
+   *       domain: "dev.example.com",
+   *       path: "/api/users"
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  router?: RouteArgs;
   /**
    * The authorization used for the function URL. Supports [IAM authorization](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html).
    *
@@ -166,19 +481,49 @@ export interface FunctionUrlArgs extends Omit<Url, "route" | "authorization"> {
    * ```
    */
   authorization?: "none" | "iam";
+  /**
+   * Customize the CORS (Cross-origin resource sharing) settings for the function URL.
+   * @default `true`
+   * @example
+   * Disable CORS.
+   * ```js
+   * {
+   *   url: {
+   *     cors: false
+   *   }
+   * }
+   * ```
+   * Only enable the `GET` and `POST` methods for `https://example.com`.
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowMethods: ["GET", "POST"],
+   *       allowOrigins: ["https://example.com"]
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  cors?: Input<boolean | FunctionUrlCorsArgs>;
 }
 
-export interface FunctionPythonArgs extends Omit<Python, "container"> {
+export interface FunctionPythonArgs {
   /**
-   * Set this to `true` to deploy the function as a container image. That lifts the
-   * 250MB limit on the unzipped package to 10GB, and lets you use your own Dockerfile.
-   * It needs the Docker daemon to be running.
+   * Set this to `true` if you want to deploy this function as a container image.
+   * There are a couple of reasons why you might want to do this.
+   *
+   * 1. The Lambda package size has an unzipped limit of 250MB. Whereas the
+   *    container image size has a limit of 10GB.
+   * 2. Even if you are below the 250MB limit, larger Lambda function packages
+   *    have longer cold starts when compared to container image.
+   * 3. You might want to use a custom Dockerfile to handle complex builds.
    *
    * It decides whether an image is built, so it has to be a plain value.
    *
    * @default `false`
    * @example
-   * ```js
+   * ```ts
    * {
    *   python: {
    *     container: true
@@ -186,26 +531,53 @@ export interface FunctionPythonArgs extends Omit<Python, "container"> {
    * }
    * ```
    *
-   * To use a custom Dockerfile, add one to the root of the uv workspace of the function.
+   * When you run `sst deploy`, it uses a built-in Dockerfile. It also needs
+   * the Docker daemon to be running.
    *
-   * Disable the Docker build cache, for environments like Localstack where exporting
-   * the cache to ECR isn't supported.
+   * :::note
+   * This needs the Docker daemon to be running.
+   * :::
    *
-   * ```js
-   * {
-   *   python: {
-   *     container: {
-   *       cache: false
-   *     }
-   *   }
-   * }
+   * To use a custom Dockerfile, add one to the root of the uv workspace
+   * of the function.
+   *
+   * ```txt {5}
+   * ├── sst.config.ts
+   * ├── pyproject.toml
+   * └── function
+   *     ├── pyproject.toml
+   *     ├── Dockerfile
+   *     └── src
+   *         └── function
+   *             └── api.py
    * ```
+   *
+   * You can refer to [this example of using a container image](/docs/examples/#aws-lambda-python-container).
    */
-  container?: boolean | { cache?: Input<boolean> };
+  container?:
+    | boolean
+    | {
+        /**
+         * Controls whether Docker build cache is enabled.
+         * @default `true`
+         * @example
+         * Disable Docker build caching, useful for environments like Localstack where
+         * ECR cache export is not supported.
+         * ```js
+         * {
+         *   python: {
+         *     container: {
+         *       cache: false
+         *     }
+         *   }
+         * }
+         * ```
+         */
+        cache?: Input<boolean>;
+      };
 }
 
-export interface FunctionConcurrencyArgs
-  extends Omit<Concurrency, "provisioned"> {
+export interface FunctionConcurrencyArgs {
   /**
    * Provisioned concurrency keeps a number of Lambda instances ready to handle
    * requests, which reduces cold starts. It incurs extra charges, and it needs
@@ -225,34 +597,145 @@ export interface FunctionConcurrencyArgs
    * ```
    */
   provisioned?: number;
+  /**
+   * Reserved concurrency limits the maximum number of concurrent executions for a
+   * function, ensuring critical functions always have capacity. It does not incur
+   * extra charges.
+   *
+   * :::note
+   * Setting this to `0` will disable the function from being triggered.
+   * :::
+   *
+   * @default No reserved concurrency
+   * @example
+   * ```js
+   * {
+   *   concurrency: {
+   *     reserved: 50
+   *   }
+   * }
+   * ```
+   */
+  reserved?: Input<number>;
 }
 
-export interface FunctionArgs
-  extends V5Args<
-    TakesVpc<
-      Omit<
-        OriginalFunctionArgs,
-        | "live"
-        | "dev"
-        | "runtime"
-        | "role"
-        | "logging"
-        | "url"
-        | "python"
-        | "concurrency"
-        | "volume"
-      >
-    >,
-    typeof parts
-  > {
+export interface FunctionArgs extends ComponentArgs<typeof parts> {
   /**
-   * The language runtime for the function: one SST builds in, as for
-   * [`sst.aws.Function`](/docs/component/aws/function#runtime), or a runtime
-   * made of commands, from `sst.runtime`, for one
-   * it doesn't.
+   * Disable running this function [_Live_](/docs/live/) in `sst dev`.
+   *
+   * By default, the functions in your app are run locally in `sst dev`. To do this, a
+   * _stub_ version of your function is deployed, instead of the real function. It has
+   * to be a plain value.
+   *
+   * :::note
+   * In `sst dev` a _stub_ version of your function is deployed.
+   * :::
+   *
+   * In `sst dev` the role that SST creates for the function also trusts the root of your AWS
+   * account, so you can assume it from your machine. A deployed role trusts only Lambda. If
+   * you run `sst dev` on a stage that is also deployed, the account root is added back to
+   * the role until the next `sst deploy`, so each switch updates the role.
+   *
+   * This shows under the **Functions** tab in the multiplexer sidebar where your invocations
+   * are logged.
+   *
+   * A function that's _Live_ makes a round trip to your machine for each invocation, so
+   * turning it off makes its invocations faster. It's worth doing for a function you
+   * aren't working on, such as an authorizer, which runs before each request to its
+   * routes that it doesn't have a cached result for. The function then runs in AWS as
+   * it's deployed, so it can't reach anything that only runs on your machine.
+   *
+   * Read more about [Live](/docs/live/) and [`sst dev`](/docs/reference/cli/#dev).
+   *
+   * @default `true`
+   * @example
+   * ```js
+   * {
+   *   dev: false
+   * }
+   * ```
+   */
+  dev?: false;
+  /**
+   * Configure the maximum number of retry attempts for this function when invoked
+   * asynchronously.
+   *
+   * This only affects asynchronous invocations of the function, ie. when subscribed to
+   * Topics, EventBuses, or Buckets. And not when directly invoking the function.
+   *
+   * Valid values are between 0 and 2.
+   *
+   * @default `2`
+   * @example
+   * ```js
+   * {
+   *   retries: 0
+   * }
+   * ```
+   */
+  retries?: Input<number>;
+  /**
+   * The name for the function.
+   *
+   * By default, the name is generated from the app name, stage name, and component name. This
+   * is displayed in the AWS Console for this function.
+   *
+   * :::caution
+   * To avoid the name from thrashing, you want to make sure that it includes the app and stage
+   * name.
+   * :::
+   *
+   * If you are going to set the name, you need to make sure:
+   * 1. It's unique across your app.
+   * 2. Uses the app and stage name, so it doesn't thrash when you deploy to different stages.
+   *
+   * Also, changing the name after your've deployed it once will create a new function and delete
+   * the old one.
+   *
+   * @example
+   * ```js
+   * {
+   *   name: `${$app.name}-${$app.stage}-my-function`
+   * }
+   * ```
+   */
+  name?: Input<string>;
+  /**
+   * A description for the function. This is displayed in the AWS Console.
+   * @example
+   * ```js
+   * {
+   *   description: "Handler function for my nightly cron job."
+   * }
+   * ```
+   */
+  description?: Input<string>;
+  /**
+   * The language runtime for the function: one SST builds in, or a runtime made of
+   * commands, from `sst.runtime`, for one it doesn't.
+   *
+   * Node.js and Golang are officially supported. While, Python and Rust are
+   * community supported.
+   *
+   * A later release can move the default to a newer Node.js, and says so in its notes.
+   * A function that uses the default is then updated on its next deploy. Set `runtime`
+   * to keep it on one version.
+   *
+   * It decides what's built, so it has to be a plain value.
    *
    * @default `"nodejs24.x"`
+   *
    * @example
+   * ```js
+   * {
+   *   runtime: "nodejs24.x"
+   * }
+   * ```
+   *
+   * A runtime made of commands builds the function with its `build` command, runs it
+   * with its `dev` command in `sst dev`, and is deployed with the Lambda runtime it
+   * names.
+   *
    * ```js
    * {
    *   runtime: sst.runtime({
@@ -264,7 +747,716 @@ export interface FunctionArgs
    * }
    * ```
    */
-  runtime?: OriginalFunctionArgs["runtime"] | Runtime;
+  runtime?:
+    | "nodejs18.x"
+    | "nodejs20.x"
+    | "nodejs22.x"
+    | "nodejs24.x"
+    | "go"
+    | "rust"
+    | "provided.al2"
+    | "provided.al2023"
+    | "python3.9"
+    | "python3.10"
+    | "python3.11"
+    | "python3.12"
+    | "python3.13"
+    | "python3.14"
+    | Runtime;
+  /**
+   * Path to the source code directory for the function. By default, the handler is
+   * bundled with [esbuild](https://esbuild.github.io/). Use `bundle` to skip bundling.
+   *
+   * :::caution
+   * Use `bundle` only when you want to bundle the function yourself.
+   * :::
+   *
+   * If the `bundle` option is specified, the `handler` needs to be in the root of the bundle.
+   *
+   * :::note
+   * SST writes the linked resources of each function to `.sst/<function name>/resource.enc`
+   * inside the bundle directory, so functions that share a bundle don't overwrite each
+   * other. Each function's zip only includes its own folder from `.sst`. Don't keep your
+   * own files in a `.sst` folder or a `resource.enc` file at the root of the bundle, they are
+   * left out of the zip.
+   * :::
+   *
+   * It decides what's built, so it has to be a plain value.
+   *
+   * @example
+   *
+   * Here, the entire `packages/functions/src` directory is zipped, except for the
+   * `.sst` folders of other functions and any `resource.enc` at the root. And the handler is
+   * in the `src` directory.
+   *
+   * ```js
+   * {
+   *   bundle: "packages/functions/src",
+   *   handler: "index.handler"
+   * }
+   * ```
+   */
+  bundle?: string;
+  /**
+   * Path to the handler for the function.
+   *
+   * - For Node.js this is in the format `{path}/{file}.{method}`.
+   * - For Python this is also `{path}/{file}.{method}`.
+   * - For Golang this is `{path}` to the Go module.
+   * - For Rust this is `{path}` to the Rust crate.
+   *
+   * It decides what's built, so it has to be a plain value.
+   *
+   * @example
+   *
+   * ##### Node.js
+   *
+   * For example with Node.js you might have.
+   *
+   * ```js
+   * {
+   *   handler: "packages/functions/src/main.handler"
+   * }
+   * ```
+   *
+   * Where `packages/functions/src` is the path. And `main` is the file, where you might have
+   * a `main.ts` or `main.js`. And `handler` is the method exported in that file.
+   *
+   * :::note
+   * You don't need to specify the file extension.
+   * :::
+   *
+   * If `bundle` is specified, the handler needs to be in the root of the bundle directory.
+   *
+   * ```js
+   * {
+   *   bundle: "packages/functions/src",
+   *   handler: "index.handler"
+   * }
+   * ```
+   *
+   * ##### Python
+   *
+   * SST uses [uv](https://docs.astral.sh/uv/) to package the function.
+   * You need to have it installed.
+   *
+   * :::note
+   * You need uv installed for Python functions.
+   * :::
+   *
+   * Your handler must live in a [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/)
+   * with a `pyproject.toml`. Match the Python version to your Lambda runtime.
+   *
+   * ```toml title="pyproject.toml"
+   * [project]
+   * name = "my-project"
+   * requires-python = "==3.11.*"
+   * ```
+   *
+   * Install your packages before starting `sst dev`:
+   *
+   * ```bash
+   * uv sync --all-packages
+   * ```
+   *
+   * Use absolute imports within your package.
+   *
+   * ```python
+   * from mypackage.utils import helper
+   * ```
+   *
+   * Avoid relative imports — they can fail in Lambda. Make sure package directories have `__init__.py`.
+   *
+   * Access static files relative to `__file__`.
+   *
+   * ```python
+   * from pathlib import Path
+   * config = Path(__file__).parent / "config.json"
+   * ```
+   *
+   * For large dependencies like numpy or pandas, deploy as a container. See [`python.container`](#functionpythonargs).
+   *
+   * For common project layouts, check out the [Python examples](https://github.com/sst-community/sst/tree/main/examples/python-layouts).
+   *
+   * ##### Golang
+   *
+   * For Golang the handler looks like.
+   *
+   * ```js
+   * {
+   *   handler: "packages/functions/go/some_module"
+   * }
+   * ```
+   *
+   * Where `packages/functions/go/some_module` is the path to the Go module. This
+   * includes the name of the module in your `go.mod`. So in this case your `go.mod`
+   * might be in `packages/functions/go` and `some_module` is the name of the
+   * module.
+   *
+   * You can refer to [this example of deploying a Go function](/docs/examples/#aws-lambda-go).
+   *
+   * ##### Rust
+   *
+   * For Rust, the handler looks like.
+   *
+   * ```js
+   * {
+   *   handler: "crates/api"
+   * }
+   * ```
+   *
+   * Where `crates/api` is the path to the Rust crate. This means there is a
+   * `Cargo.toml` file in `crates/api`, and the main() function handles the lambda.
+   */
+  handler: string;
+  /**
+   * The maximum amount of time the function can run. The minimum timeout is 1 second and the maximum is 900 seconds or 15 minutes.
+   *
+   * :::note
+   * If a function is connected to another service, the request will time out based on the service's limits.
+   * :::
+   *
+   * While the maximum timeout is 15 minutes, if a function is connected to other
+   * services, it'll time out based on those limits.
+   *
+   * - API Gateway has a timeout of 30 seconds. So even if the function has a
+   *   timeout of 15 minutes, the API request will time out after 30 seconds.
+   * - CloudFront has a default timeout of 60 seconds. You can have this limit
+   *   increased by [contacting AWS Support](https://console.aws.amazon.com/support/home#/case/create?issueType=service-limit-increase).
+   *
+   * @default `"20 seconds"`
+   * @example
+   * ```js
+   * {
+   *   timeout: "900 seconds"
+   * }
+   * ```
+   */
+  timeout?: Input<DurationMinutes>;
+  /**
+   * The amount of memory allocated for the function. Takes values between 128 MB
+   * and 10240 MB in 1 MB increments.  The amount of memory affects the amount of
+   * virtual CPU available to the function.
+   *
+   * :::tip
+   * While functions with less memory are cheaper, larger functions can process faster.
+   * And might end up being more [cost effective](https://docs.aws.amazon.com/lambda/latest/operatorguide/computing-power.html).
+   * :::
+   *
+   * @default `"1024 MB"`
+   * @example
+   * ```js
+   * {
+   *   memory: "10240 MB"
+   * }
+   * ```
+   */
+  memory?: Input<Size>;
+  /**
+   * The amount of ephemeral storage allocated for the function. This sets the ephemeral
+   * storage of the lambda function (/tmp). Must be between "512 MB" and "10240 MB" ("10 GB")
+   * in 1 MB increments.
+   *
+   * @default `"512 MB"`
+   * @example
+   * ```js
+   * {
+   *   storage: "5 GB"
+   * }
+   * ```
+   */
+  storage?: Input<Size>;
+  /**
+   * Key-value pairs of values that are set as [Lambda environment variables](https://docs.aws.amazon.com/lambda/latest/dg/configuration-envvars.html).
+   * The keys need to:
+   * - Start with a letter
+   * - Be at least 2 characters long
+   * - Contain only letters, numbers, or underscores
+   *
+   * They can be accessed in your function using `process.env.<key>`.
+   *
+   * :::note
+   * The total size of the environment variables cannot exceed 4 KB.
+   * :::
+   *
+   * @example
+   *
+   * ```js
+   * {
+   *   environment: {
+   *     DEBUG: "true"
+   *   }
+   * }
+   * ```
+   */
+  environment?: Input<Record<string, Input<string>>>;
+  /**
+   * Permissions and the resources that the function needs to access. These permissions are
+   * used to create the function's IAM role.
+   *
+   * :::tip
+   * If you `link` the function to a resource, the permissions to access it are
+   * automatically added.
+   * :::
+   *
+   * @example
+   * Allow the function to read and write to an S3 bucket called `my-bucket`.
+   * ```js
+   * {
+   *   permissions: [
+   *     {
+   *       actions: ["s3:GetObject", "s3:PutObject"],
+   *       resources: ["arn:aws:s3:::my-bucket/*"]
+   *     }
+   *   ]
+   * }
+   * ```
+   *
+   * Allow the function to perform all actions on an S3 bucket called `my-bucket`.
+   *
+   * ```js
+   * {
+   *   permissions: [
+   *     {
+   *       actions: ["s3:*"],
+   *       resources: ["arn:aws:s3:::my-bucket/*"]
+   *     }
+   *   ]
+   * }
+   * ```
+   *
+   * Granting the function permissions to access all resources.
+   *
+   * ```js
+   * {
+   *   permissions: [
+   *     {
+   *       actions: ["*"],
+   *       resources: ["*"]
+   *     }
+   *   ]
+   * }
+   * ```
+   */
+  permissions?: Input<FunctionPermissionArgs[]>;
+  /**
+   * Policies to attach to the function. These policies will be added to the
+   * function's IAM role.
+   *
+   * Attaching policies lets you grant a set of predefined permissions to the
+   * function without having to specify the permissions in the `permissions` prop.
+   *
+   * @example
+   * For example, allow the function to have read-only access to all resources.
+   * ```js
+   * {
+   *   policies: ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+   * }
+   * ```
+   */
+  policies?: Input<string[]>;
+  /**
+   * [Link resources](/docs/linking/) to your function. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your function using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of components to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: Input<any[]>;
+  /**
+   * Enable streaming for the function.
+   *
+   * Streaming is supported with both Function URLs and API Gateway REST API (V1). It is
+   * not supported with API Gateway HTTP API (V2).
+   *
+   * You'll also need to [wrap your handler](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html) with `awslambda.streamifyResponse` to enable streaming.
+   *
+   * Check out the [AWS Lambda streaming example](/docs/examples/#aws-lambda-streaming) for more
+   * details.
+   *
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   streaming: true
+   * }
+   * ```
+   */
+  streaming?: Input<boolean>;
+  /**
+   * @internal
+   */
+  injections?: string[];
+  /**
+   * Configure the function logs in CloudWatch. Or pass in `false` to disable writing
+   * logs: the function is then not given permissions to write to CloudWatch.
+   *
+   * Whether the function logs has to be a plain value. The fields can be outputs.
+   *
+   * To write to a log group you already have, pass it in `existing.logGroup`.
+   *
+   * @default `{retention: "1 month", format: "text"}`
+   * @example
+   * ```js
+   * {
+   *   logging: false
+   * }
+   * ```
+   */
+  logging?: false | FunctionLoggingArgs;
+  /**
+   * The [architecture](https://docs.aws.amazon.com/lambda/latest/dg/foundation-arch.html)
+   * of the Lambda function.
+   *
+   * It decides what's built, so it has to be a plain value.
+   *
+   * @default `"x86_64"`
+   * @example
+   * ```js
+   * {
+   *   architecture: "arm64"
+   * }
+   * ```
+   */
+  architecture?: "x86_64" | "arm64";
+  /**
+   * Enable [Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/lambda-urls.html).
+   * These are dedicated endpoints for your Lambda functions.
+   *
+   * Whether there is a URL, and whether it's served through a router, have to be plain
+   * values. The fields of the CORS settings can be outputs.
+   *
+   * @default `false`
+   * @example
+   * Enable it with the default options.
+   * ```js
+   * {
+   *   url: true
+   * }
+   * ```
+   *
+   * Configure the authorization and CORS settings for the URL.
+   * ```js
+   * {
+   *   url: {
+   *     authorization: "iam",
+   *     cors: {
+   *       allowOrigins: ["https://example.com"]
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  url?: boolean | FunctionUrlArgs;
+  /**
+   * Configure how your function is bundled.
+   *
+   * By default, SST will bundle your function
+   * code using [esbuild](https://esbuild.github.io/). This tree shakes your code to
+   * only include what's used; reducing the size of your function package and improving
+   * cold starts.
+   *
+   * It decides what's built, so it has to be a plain value.
+   */
+  nodejs?: {
+    /**
+     * @internal
+     * Point to a file that exports a list of esbuild plugins to use.
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     plugins: "./plugins.mjs"
+     *   }
+     * }
+     * ```
+     *
+     * The path is relative to the location of the `sst.config.ts`.
+     *
+     * ```js title="plugins.mjs"
+     * import { somePlugin } from "some-plugin";
+     *
+     * export default [
+     *   somePlugin()
+     * ];
+     * ```
+     *
+     * You'll also need to install the npm package of the plugin.
+     */
+    plugins?: string;
+    /**
+     * Configure additional esbuild loaders for other file extensions. This is useful
+     * when your code is importing non-JS files like `.png`, `.css`, etc.
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     loader: {
+     *      ".png": "file"
+     *     }
+     *   }
+     * }
+     * ```
+     */
+    loader?: Record<string, Loader>;
+    /**
+     * Dependencies that need to be excluded from the function package.
+     *
+     * Certain npm packages cannot be bundled using esbuild. This allows you to exclude them
+     * from the bundle. Instead they'll be moved into a `node_modules/` directory in the
+     * function package.
+     *
+     * :::tip
+     * If esbuild is giving you an error about a package, try adding it to `install`.
+     * :::
+     *
+     * This will allow your functions to be able to use these dependencies when deployed. They
+     * just won't be tree shaken.
+     *
+     * :::caution
+     * If you don't specify a version, the package still needs to be in your `package.json`.
+     * :::
+     *
+     * Esbuild will ignore them while traversing the imports in your code. So these are the
+     * **package names as seen in the imports**. It also works on packages that are not directly
+     * imported by your code.
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     install: { pg: "8.13.1" }
+     *   }
+     * }
+     * ```
+     *
+     * Passing `["packageName"]` is the same as passing `{ packageName: "*" }`.
+     */
+    install?: string[] | Record<string, string>;
+    /**
+     * Use this to insert a string at the beginning of the generated JS file.
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     banner: "console.log('Function starting')"
+     *   }
+     * }
+     * ```
+     */
+    banner?: string;
+    /**
+     * This allows you to customize esbuild config that is used.
+     *
+     * :::tip
+     * Check out the _JS tab_ in the code snippets in the esbuild docs for the
+     * [`BuildOptions`](https://esbuild.github.io/api/#build).
+     * :::
+     *
+     * For example, a function builds faster in `sst dev` when the AWS SDK is left out of
+     * its bundle there. It's loaded from your `node_modules` instead, so the packages you
+     * import have to be installed. A deploy still bundles them.
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     esbuild: {
+     *       external: $dev ? ["@aws-sdk/*", "@smithy/*"] : []
+     *     }
+     *   }
+     * }
+     * ```
+     */
+    esbuild?: EsbuildOptions;
+    /**
+     * Disable if the function code is minified when bundled.
+     *
+     * @default `true`
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     minify: false
+     *   }
+     * }
+     * ```
+     */
+    minify?: boolean;
+    /**
+     * Configure the format of the generated JS code; ESM or CommonJS.
+     *
+     * @default `"esm"`
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     format: "cjs"
+     *   }
+     * }
+     * ```
+     */
+    format?: "cjs" | "esm";
+    /**
+     * Configure if source maps are added to the function bundle when **deployed**. Since they
+     * increase payload size and potentially cold starts, they are not added by default.
+     * However, they are always generated during `sst dev`.
+     *
+     * :::tip[SST Console]
+     * For the [Console](/docs/console/), source maps are always generated and uploaded
+     * to your bootstrap bucket. These are then downloaded and used to display
+     * Issues in the console.
+     * :::
+     *
+     * @default `false`
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     sourcemap: true
+     *   }
+     * }
+     * ```
+     */
+    sourcemap?: boolean;
+    /**
+     * If enabled, modules that are dynamically imported will be bundled in their own files
+     * with common dependencies placed in shared chunks. This can help reduce cold starts
+     * as your function grows in size.
+     *
+     * @default `false`
+     *
+     * @example
+     * ```js
+     * {
+     *   nodejs: {
+     *     splitting: true
+     *   }
+     * }
+     * ```
+     */
+    splitting?: boolean;
+  };
+  /**
+   * Configure how your Python function is packaged.
+   */
+  python?: FunctionPythonArgs;
+  /**
+   * Add additional files to copy into the function package. Takes a list of objects
+   * with `from` and `to` paths. These will be copied over before the function package
+   * is zipped up.
+   *
+   * It decides what's built, so it has to be a plain value.
+   *
+   * @example
+   *
+   * Copying over a single file from the `src` directory to the `src/` directory of the
+   * function package.
+   *
+   * ```js
+   * {
+   *   copyFiles: [{ from: "src/index.js" }]
+   * }
+   * ```
+   *
+   * Copying over a single file from the `src` directory to the `core/src` directory in
+   * the function package.
+   *
+   * ```js
+   * {
+   *   copyFiles: [{ from: "src/index.js", to: "core/src/index.js" }]
+   * }
+   * ```
+   *
+   * Copying over a couple of files.
+   *
+   * ```js
+   * {
+   *   copyFiles: [
+   *     { from: "src/this.js", to: "core/src/this.js" },
+   *     { from: "src/that.js", to: "core/src/that.js" }
+   *   ]
+   * }
+   * ```
+   */
+  copyFiles?: {
+    /**
+     * Source path relative to the `sst.config.ts`.
+     */
+    from: string;
+    /**
+     * Destination path relative to function root in the package. By default, it
+     * creates the same directory structure as the `from` path and copies the file.
+     *
+     * @default The `from` path in the function package
+     */
+    to?: string;
+  }[];
+  /**
+   * Configure the concurrency settings for the function.
+   *
+   * @default No concurrency settings set
+   * @example
+   * ```js
+   * {
+   *   concurrency: {
+   *     provisioned: 10,
+   *     reserved: 50
+   *   }
+   * }
+   * ```
+   */
+  concurrency?: FunctionConcurrencyArgs;
+  /**
+   * Enable versioning for the function.
+   *
+   * :::note
+   * Durable functions enable this by default.
+   * :::
+   *
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   versioning: true
+   * }
+   * ```
+   */
+  versioning?: Input<boolean>;
+  /**
+   * A list of Lambda layer ARNs to add to the function.
+   *
+   * :::note
+   * Layers are only added when the function is deployed.
+   * :::
+   *
+   * These are only added when the function is deployed. In `sst dev`, your functions are run
+   * locally, so the layers are not used. Instead you should use a local version of what's
+   * in the layer.
+   *
+   * @example
+   * ```js
+   * {
+   *   layers: ["arn:aws:lambda:us-east-1:123456789012:layer:my-layer:1"]
+   * }
+   * ```
+   */
+  layers?: Input<Input<string>[]>;
   /**
    * Mount an EFS file system to the function.
    *
@@ -272,7 +1464,7 @@ export interface FunctionArgs
    * Create an EFS file system.
    *
    * ```ts title="sst.config.ts"
-   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const vpc = new sst.aws.v5.Vpc("MyVpc");
    * const fileSystem = new sst.aws.v5.Efs("MyFileSystem", { vpc });
    * ```
    *
@@ -312,7 +1504,7 @@ export interface FunctionArgs
     /**
      * The EFS file system to mount. Or an EFS access point ARN.
      */
-    efs: Input<OriginalEfs | Efs | string>;
+    efs: Input<AnyEfs | string>;
     /**
      * The path to mount the volume.
      * @default `"/mnt/efs"`
@@ -320,102 +1512,112 @@ export interface FunctionArgs
     path?: Input<string>;
   }>;
   /**
-   * Disable running this function [_Live_](/docs/live/) in `sst dev`.
+   * A list of tags to add to the function.
    *
-   * By default, the functions in your app are run locally in `sst dev`. To do this, a
-   * _stub_ version of your function is deployed, instead of the real function. You can
-   * turn this off by setting `dev` to `false`. It has to be a plain value.
-   *
-   * A function that's _Live_ makes a round trip to your machine for each invocation, so
-   * turning it off makes its invocations faster. It's worth doing for a function you
-   * aren't working on, such as an authorizer, which runs before each request to its
-   * routes that it doesn't have a cached result for. The function then runs in AWS as
-   * it's deployed, so it can't reach anything that only runs on your machine.
-   *
-   * @default `true`
    * @example
    * ```js
    * {
-   *   dev: false
-   * }
-   * ```
-   */
-  dev?: Plain<OriginalFunctionArgs["dev"]>;
-  /**
-   * Configure the function logs in CloudWatch. Or pass in `false` to disable writing
-   * logs: the function is then not given permissions to write to CloudWatch.
-   *
-   * Whether the function logs has to be a plain value. The fields can be outputs.
-   *
-   * To write to a log group you already have, pass it in `existing.logGroup`.
-   *
-   * @default `{retention: "1 month", format: "text"}`
-   * @example
-   * ```js
-   * {
-   *   logging: false
-   * }
-   * ```
-   */
-  logging?: false | FunctionLoggingArgs;
-  /**
-   * Enable [Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/lambda-urls.html).
-   * These are dedicated endpoints for your Lambda functions.
-   *
-   * Whether there is a URL, and whether it's served through a router, have to be plain
-   * values. The fields of the CORS settings can be outputs.
-   *
-   * @default `false`
-   * @example
-   * Enable it with the default options.
-   * ```js
-   * {
-   *   url: true
-   * }
-   * ```
-   *
-   * Configure the authorization and CORS settings for the URL.
-   * ```js
-   * {
-   *   url: {
-   *     authorization: "iam",
-   *     cors: {
-   *       allowOrigins: ["https://example.com"]
-   *     }
+   *   tags: {
+   *     "my-tag": "my-value"
    *   }
    * }
    * ```
    */
-  url?: boolean | FunctionUrlArgs;
+  tags?: Input<Record<string, Input<string>>>;
   /**
-   * Configure how your Python function is packaged.
-   */
-  python?: FunctionPythonArgs;
-  /**
-   * Configure the concurrency settings for the function.
+   * Configure the function to connect to private subnets in a virtual private cloud or VPC. This allows your function to access private resources.
    *
-   * @default No concurrency settings set
    * @example
+   * Create a `Vpc` component.
+   *
+   * ```js title="sst.config.ts"
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
+   * ```
+   *
+   * Or reference an existing VPC.
+   *
+   * ```js title="sst.config.ts"
+   * const myVpc = sst.aws.v5.Vpc.get("MyVpc", "vpc-12345678901234567");
+   * ```
+   *
+   * And pass it in.
+   *
    * ```js
    * {
-   *   concurrency: {
-   *     provisioned: 10,
-   *     reserved: 50
-   *   }
+   *   vpc: myVpc
    * }
    * ```
    */
-  concurrency?: FunctionConcurrencyArgs;
+  vpc?:
+    | AnyVpc
+    | Input<{
+        /**
+         * A list of VPC security group IDs.
+         */
+        securityGroups: Input<Input<string>[]>;
+        /**
+         * A list of VPC subnet IDs.
+         */
+        privateSubnets: Input<Input<string>[]>;
+      }>;
+  /**
+   * Hook into the Lambda function build process.
+   */
+  hook?: {
+    /**
+     * Specify a callback that'll be run after the Lambda function is built.
+     *
+     * :::note
+     * This is not called in `sst dev`.
+     * :::
+     *
+     * Useful for modifying the generated Lambda function code before it's
+     * deployed to AWS. It can also be used for uploading the generated sourcemaps
+     * to a service like Sentry.
+     *
+     * @param dir The directory where the function code is generated.
+     */
+    postbuild(dir: string): Promise<void>;
+  };
+  /**
+   * Configure the lambda function as a [AWS durable function](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
+   *
+   * :::caution
+   * This property is meant to be used internally by [Workflow](/docs/component/aws/workflow).
+   * Prefer the component if you want to use the [SDK](/docs/component/aws/workflow#sdk) or if you are not very familiar with durable functions limitations.
+   * :::
+   */
+  durable?:
+    | boolean
+    | {
+        /**
+         * Maximum execution time for the durable function.
+         * @default `14 days`
+         */
+        timeout?: Input<Duration>;
+        /**
+         * Number of days to retain the function's execution state.
+         * @default `30 days`
+         */
+        retention?: Input<DurationDays>;
+      };
+  /**
+   * @internal
+   */
+  _skipMetadata?: boolean;
+  /**
+   * @internal
+   */
+  _skipHint?: boolean;
 }
 
 /**
  * The `Function` component lets you add serverless functions to your app.
  * It uses [AWS Lambda](https://aws.amazon.com/lambda/).
  *
- * It takes the same args as [`sst.aws.Function`](/docs/component/aws/function), apart from the
- * few listed under [Switch from `Function`](#switch-from-function). It's built from parts,
- * so every resource it creates can be transformed, is available in `nodes`, and can be
- * swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available
+ * in `nodes`, and can be swapped for one you already have. How to switch to it is the
+ * last example.
  *
  * @example
  *
@@ -429,8 +1631,7 @@ export interface FunctionArgs
  * });
  * ```
  *
- * The runtimes, and what `handler` means for each, are the same as for
- * [`sst.aws.Function`](/docs/component/aws/function#handler).
+ * What `handler` means for each runtime is under [`handler`](#handler).
  *
  * #### Set additional config
  *
@@ -507,8 +1708,11 @@ export interface FunctionArgs
  * Change `sst.aws.Function` to `sst.aws.v5.Function` and keep the name. The function, its
  * role, log group, code and URL are kept. A few things are written differently:
  *
- * - `dev`, `logging`, `url`, `url.authorization`, `python`, `python.container`,
- *   `concurrency` and `concurrency.provisioned` have to be plain values, not outputs.
+ * - `handler`, `bundle`, `runtime`, `architecture`, `nodejs` and `copyFiles` have to be
+ *   plain values, not outputs: the function is built from them, and a preview has to
+ *   know what's built. So do `dev`, `logging`, `url`, `url.authorization`, `url.router`,
+ *   `python`, `python.container`, `concurrency` and `concurrency.provisioned`, which
+ *   decide what's created.
  * - `role: roleArn` becomes `existing: { role: roleArn }`. It can also be the role or
  *   its name, which is looked up on every deploy.
  * - `logging: { logGroup: name }` becomes `existing: { logGroup }`, with the log group
@@ -595,42 +1799,41 @@ export class Function extends component("sst:aws:Function", parts) {
     // The key links are encrypted with is created once for the app, and
     // shared with the 4.x `Function`, so an app with both has one
     const encryptionKey = linkEncryptionKey().base64;
+    // What's built is read from these, and a preview has to know what's
+    // built: its handler, and the source maps it writes
+    const built_ =
+      "The function is built from it, and a preview has to know what's built.";
+    plain(args.handler, option("handler"), built_);
+    plain(args.bundle, option("bundle"), built_);
+    plainDeep(args.nodejs, option("nodejs"), built_);
+    plainDeep(args.copyFiles, option("copyFiles"), built_);
+    const architecture =
+      plain(args.architecture, option("architecture"), built_) ?? "x86_64";
+    const injections =
+      plainDeep(args.injections, option("injections"), built_) ?? [];
     // A runtime made of commands is built and run by them, and deployed with
-    // the Lambda runtime it names. It can come in an output, and what isn't a
-    // runtime is turned down then.
+    // the Lambda runtime it names
+    const runtimeArg = plain(args.runtime, option("runtime"), built_);
     if (
-      typeof args.runtime === "object" &&
-      args.runtime !== null &&
-      !Output.isInstance(args.runtime)
-    ) {
-      if (!isRuntime(args.runtime))
-        throw new VisibleError(
-          `The "runtime" of the "${name}" function is a runtime's name, like "nodejs24.x", or a runtime from sst.runtime.`,
-        );
-      if (
-        Array.isArray(args.injections) &&
-        args.injections.length > 0
-      )
-        throw new VisibleError(
-          `The "${name}" function has "injections", which are for a Node.js function SST builds, not one built by a runtime from sst.runtime.`,
-        );
-    }
-    const runtimeArg = output(
-      args.runtime as Input<string | Runtime | undefined>,
-    ).apply((value) => {
-      if (value === undefined) return { name: "nodejs24.x" };
-      if (typeof value === "string") return { name: value };
-      if (isRuntime(value))
-        return { name: value.lambda, commands: commandsOf(value) };
+      runtimeArg !== undefined &&
+      typeof runtimeArg !== "string" &&
+      !isRuntime(runtimeArg)
+    )
       throw new VisibleError(
         `The "runtime" of the "${name}" function is a runtime's name, like "nodejs24.x", or a runtime from sst.runtime.`,
       );
-    });
-    const runtime = runtimeArg.apply((r) => r.name);
-    const commands = runtimeArg.apply((r) => r.commands);
-    const architecture = withDefault(args.architecture, "x86_64");
+    const commands = isRuntime(runtimeArg) ? commandsOf(runtimeArg) : undefined;
+    const runtime =
+      runtimeArg === undefined
+        ? "nodejs24.x"
+        : typeof runtimeArg === "string"
+          ? runtimeArg
+          : runtimeArg.lambda;
+    if (commands && injections.length > 0)
+      throw new VisibleError(
+        `The "${name}" function has "injections", which are for a Node.js function SST builds, not one built by a runtime from sst.runtime.`,
+      );
     const streaming = withDefault(args.streaming, false);
-    const injections = withDefault(args.injections, []);
     // `Link.build` gives an output for each link, and `all` reads them. Left
     // as outputs, each one's name would be an output where a string is read.
     const links = output(args.link || []).apply((links) =>
@@ -689,7 +1892,7 @@ export class Function extends component("sst:aws:Function", parts) {
     // Build the code. In `sst dev` the stub is deployed in its place, and the
     // CLI is told about the function so it can run it locally.
     // What the build is given but the links and the key
-    const buildParts = all([commands, output({
+    const buildParts = output({
       functionID: name,
       handler: args.handler,
       bundle: args.bundle,
@@ -700,7 +1903,8 @@ export class Function extends component("sst:aws:Function", parts) {
         architecture,
       })),
       dev,
-    })]).apply(([commands, input]) => (commands ? { ...input, commands } : input));
+      ...(commands ? { commands } : {}),
+    });
     const buildInput = all([
       buildParts,
       encryptionKey,
@@ -728,20 +1932,13 @@ export class Function extends component("sst:aws:Function", parts) {
           ),
         );
     // A Node.js handler is wrapped in a file that runs the injections first
-    const entryOf = (built: Output<FunctionBundle>) => all([built, runtime, streaming, injections, commands]).apply(
-      ([built, runtime, streaming, injections, commands]): {
-        handler: string;
-        wrapper?: FunctionFile;
-      } => {
-        if (commands && injections.length > 0)
-          throw new VisibleError(
-            `The "${name}" function has "injections", which are for a Node.js function SST builds, not one built by a runtime from sst.runtime.`,
-          );
-        return dev || commands || !runtime.startsWith("nodejs")
-          ? { handler: built.handler }
-          : injectHandler(name, { ...built, streaming, injections });
-      },
-    );
+    const entryOf = (built: Output<FunctionBundle>) =>
+      all([built, streaming]).apply(
+        ([built, streaming]): { handler: string; wrapper?: FunctionFile } =>
+          dev || commands || !runtime.startsWith("nodejs")
+            ? { handler: built.handler }
+            : injectHandler(name, { ...built, streaming, injections }),
+      );
     const entry = entryOf(built);
     // In a preview of a new stage, what's linked and the key aren't known yet,
     // so the build waits for them. What the build writes doesn't depend on
@@ -827,7 +2024,7 @@ export class Function extends component("sst:aws:Function", parts) {
               imageUri: image.ref.apply((ref) => ref?.replace(":latest", "")),
               imageConfig: {
                 commands: [
-                  all([handler, runtime]).apply(([handler, runtime]) =>
+                  handler.apply((handler) =>
                     // A Python image is given the handler as a module path:
                     // no leading "./", and "." in place of "/"
                     runtime.includes("python")
@@ -842,9 +2039,10 @@ export class Function extends component("sst:aws:Function", parts) {
               s3Bucket: code!.apply((code) => code.bucket),
               s3Key: code!.apply((code) => code.key),
               handler: unsecret(handler),
-              runtime: runtime.apply((v) =>
-                v === "go" || v === "rust" ? "provided.al2023" : v,
-              ),
+              runtime:
+                runtime === "go" || runtime === "rust"
+                  ? "provided.al2023"
+                  : runtime,
             }),
       },
       // In `sst dev` the function is the stub, whatever its transform says
@@ -955,11 +2153,15 @@ export class Function extends component("sst:aws:Function", parts) {
       const url = plain(args.url, option("url"));
       if (url === false || url === undefined) return undefined;
       const urlArgs = url === true ? {} : url;
-      // 4.x names the router `route.router`
-      const { router: instance, ...routing } =
-        plain((urlArgs as any).route, option("url.route")) ?? {};
-      const router =
-        urlArgs.router ?? (instance ? { ...routing, instance } : undefined);
+      // 4.x takes the router as `route.router`
+      const given = plain(
+        (urlArgs as { route?: Omit<RouteArgs, "instance"> & { router: AnyRouter } })
+          .route,
+        option("url.route"),
+      );
+      const router: RouteArgs | undefined =
+        urlArgs.router ??
+        (given && (({ router, ...route }) => ({ ...route, instance: router }))(given));
 
       const defaultCors: types.input.lambda.FunctionUrlCors = {
         allowHeaders: ["*"],
@@ -980,8 +2182,14 @@ export class Function extends component("sst:aws:Function", parts) {
                   maxAge: cors.maxAge && toSeconds(cors.maxAge),
                 },
         ),
-        route: normalizeRouteArgs(plain(router, option("url.router"))),
+        router: router && routeOfRouter(router),
       };
+    }
+
+    function routeOfRouter(router: RouteArgs) {
+      plain(router, option("url.router"));
+      plain(router.instance, option("url.router.instance"));
+      return routeOf(router);
     }
 
     function normalizeCopyFiles() {
@@ -1034,7 +2242,8 @@ export class Function extends component("sst:aws:Function", parts) {
       }
 
       return output(args.vpc).apply((vpc) => {
-        if (vpc.subnets) {
+        // 4.x took the subnets as `vpc.subnets`
+        if ((vpc as { subnets?: unknown }).subnets) {
           throw new VisibleError(
             `The "vpc.subnets" property has been renamed to "vpc.privateSubnets". Update your code to use "vpc.privateSubnets" instead.`,
           );
@@ -1048,7 +2257,7 @@ export class Function extends component("sst:aws:Function", parts) {
 
       return output(args.volume).apply((volume) => ({
         efs:
-          volume.efs instanceof OriginalEfs || volume.efs instanceof Efs
+          isEfs(volume.efs)
             ? volume.efs.nodes.accessPoint.arn
             : output(volume.efs),
         path: volume.path ?? "/mnt/efs",
@@ -1236,11 +2445,7 @@ export class Function extends component("sst:aws:Function", parts) {
             },
           },
         ]),
-        platforms: [
-          architecture.apply((v) =>
-            v === "arm64" ? "linux/arm64" : "linux/amd64",
-          ),
-        ],
+        platforms: [architecture === "arm64" ? "linux/arm64" : "linux/amd64"],
         push: true,
         registries: [
           authToken.apply((authToken) => ({
@@ -1343,12 +2548,11 @@ export class Function extends component("sst:aws:Function", parts) {
     }
 
     function createUrl(url: NonNullable<ReturnType<typeof normalizeUrl>>) {
-      const { authorization, route } = url;
+      const { authorization } = url;
+      const route = url.router?.route;
       // A router can sign its requests to the URL. Then only its
       // distribution may call the URL, whatever the authorization is.
-      const isOac = output(route?.routerProtection).apply(
-        (p) => p?.mode === "oac" || p?.mode === "oac-with-edge-signing",
-      );
+      const isOac = url.router?.signs ?? output(false);
 
       /**
        * Lambda Function URLs only accept alias names in the explicit `qualifier`
@@ -1408,35 +2612,34 @@ export class Function extends component("sst:aws:Function", parts) {
         return fnUrl.functionUrl;
       }
 
-      // Who may call the URL depends on how the router protects its origins,
-      // and that's only known once the router is.
-      all([isOac, route.routerDistributionArn]).apply(
-        ([oac, distributionArn]) => {
-          if (oac && distributionArn) {
-            self.part(
-              "urlAccess",
-              {
-                action: "lambda:InvokeFunctionUrl",
-                function: fn.name,
-                principal: "cloudfront.amazonaws.com",
-                sourceArn: distributionArn,
-              },
-              afterUrl,
-            );
-            self.part(
-              "urlInvoke",
-              {
-                action: "lambda:InvokeFunction",
-                function: fn.name,
-                principal: "cloudfront.amazonaws.com",
-                sourceArn: distributionArn,
-                invokedViaFunctionUrl: true,
-              },
-              afterUrl,
-            );
-          } else if (authorization === "none") allowEveryone();
-        },
-      );
+      // Who may call the URL depends on whether the router signs its
+      // requests. Its settings say, so a preview knows; its distribution is
+      // only passed in.
+      isOac.apply((oac) => {
+        if (oac) {
+          self.part(
+            "urlAccess",
+            {
+              action: "lambda:InvokeFunctionUrl",
+              function: fn.name,
+              principal: "cloudfront.amazonaws.com",
+              sourceArn: route.routerDistributionArn,
+            },
+            afterUrl,
+          );
+          self.part(
+            "urlInvoke",
+            {
+              action: "lambda:InvokeFunction",
+              function: fn.name,
+              principal: "cloudfront.amazonaws.com",
+              sourceArn: route.routerDistributionArn,
+              invokedViaFunctionUrl: true,
+            },
+            afterUrl,
+          );
+        } else if (authorization === "none") allowEveryone();
+      });
 
       const routeNamespace = crypto
         .createHash("md5")

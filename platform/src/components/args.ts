@@ -72,11 +72,17 @@ export function ifSet(value: any, convert?: (value: unknown) => unknown) {
  * ```
  *
  * @param what The arg, as the start of the error message.
+ * @param why Why it has to be known up front, for an arg that doesn't decide
+ * which resources are created, like what a function's build reads.
  */
-export function plain<T>(value: T, what: string): T {
+export function plain<T>(
+  value: T,
+  what: string,
+  why = "It decides which resources are created, so it has to be known before they are.",
+): T {
   if (Output.isInstance(value) || value instanceof Promise)
     throw new VisibleError(
-      `${what} has to be a plain value, not an output. It decides which resources are created, so it has to be known before they are.`,
+      `${what} has to be a plain value, not an output. ${why}`,
     );
   return value;
 }
@@ -91,11 +97,12 @@ export function plain<T>(value: T, what: string): T {
  * ```
  *
  * @param what The arg, as the start of the error message.
+ * @param why Why it has to be known up front, as for `plain()`.
  */
-export function plainDeep<T>(value: T, what: string): T {
-  plain(value, what);
+export function plainDeep<T>(value: T, what: string, why?: string): T {
+  plain(value, what, why);
   if (value && typeof value === "object")
-    for (const inner of Object.values(value)) plainDeep(inner, what);
+    for (const inner of Object.values(value)) plainDeep(inner, what, why);
   return value;
 }
 
