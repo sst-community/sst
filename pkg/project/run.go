@@ -480,6 +480,9 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	}()
 
 	reader := bufio.NewReader(eventlog)
+	// The start of a line Pulumi hasn't finished writing. The rest of it comes
+	// with a later read.
+	var pending []byte
 	// Reads the update's event log from its start. What was taken from it as
 	// the preview's is dropped: a preview that passed leaves no errors.
 	readUpdate := func() error {
@@ -488,6 +491,7 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 			return err
 		}
 		reader.Reset(eventlog)
+		pending = nil
 		read = 0
 		previewing = false
 		previewDiagnostics = nil
@@ -508,6 +512,7 @@ loop:
 		}
 		if err != nil {
 			if err == io.EOF {
+				pending = append(pending, bytes...)
 				if previewing && len(previewStart) > 0 && eventLogRestarted(eventlog, read, previewStart) {
 					if err := readUpdate(); err != nil {
 						return err
@@ -528,6 +533,10 @@ loop:
 				}
 			}
 			continue
+		}
+		if len(pending) > 0 {
+			bytes = append(pending, bytes...)
+			pending = nil
 		}
 
 		var event events.EngineEvent

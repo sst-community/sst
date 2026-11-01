@@ -33,6 +33,11 @@ export interface Context {
   dev: boolean;
   /** The command the program runs for, like `deploy`, `diff` or `remove`. */
   command: string;
+  /**
+   * Whether the stage is moving to new components, in `sst migrate`. Each
+   * component reports what its state map says about its parts then.
+   */
+  move: boolean;
   paths: {
     /** The app's folder, where `sst.config.ts` is. */
     root: string;
@@ -60,6 +65,7 @@ export function context(): Context {
     app: $app as Context["app"],
     dev: $dev,
     command: $cli.command,
+    move: $cli.move === true,
     paths: $cli.paths,
     versions: $cli.state?.version ?? {},
     target: ($app as { targets?: Record<string, Target> }).targets?.[

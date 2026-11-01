@@ -27,6 +27,7 @@ func (p *Project) programDefine(input *StackInput, versions map[string]int) (map
 		"command":  input.Command,
 		"contract": ContractVersion,
 		"dev":      input.Dev,
+		"move":     input.Move,
 		"paths": map[string]string{
 			"home":     global.ConfigDir(),
 			"root":     p.PathRoot(),

@@ -365,6 +365,8 @@ declare global {
     rpc: string;
     /** The version of the program contract the core speaks. */
     contract?: number;
+    /** Whether the stage is moving to new components, in `sst migrate`. */
+    move?: boolean;
     paths: {
       home: string;
       root: string;

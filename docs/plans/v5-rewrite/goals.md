@@ -26,7 +26,7 @@ A breaking change may replace a resource that holds no data, only when the compo
 - `sst migrate --check` fails on any replace the map doesn't list.
 - In the lab, after a real deploy, the states before and after are compared by type and cloud id. The lab's `compare-state.py` does this today, and is brought into the CLI.
 
-**Where it stands (2026-10-31):** not started. v5's takeover maps kept every resource's id in AWS on 2026-10-01, 73 of them under new names ([the report](../v5-aws-test-2026-10-01.md)).
+**Where it stands (2026-11-01):** `sst migrate --check` fails on a replace the map doesn't list, and on any replace of what holds data. v5's takeover maps kept every resource's id in AWS on 2026-10-01, 73 of them under new names ([the report](../v5-aws-test-2026-10-01.md)). The comparison by cloud id isn't in the CLI yet.
 
 ## 2. Moving never loses data
 
@@ -39,7 +39,7 @@ No move, and no later change to a component, deletes or replaces a resource that
 - the secrets and generated passwords a database or a cache uses;
 - the table a `Vector` creates in its database.
 
-That's [v5's goal 2](../v5-goals.md#2-moving-to-v5-never-loses-data), with the `Vector` table added.
+That's [v5's goal 2](../v5-goals.md#2-moving-to-v5-never-loses-data), with the `Vector` table added. The list `--check` holds to is `pkg/move/data.go`.
 
 **How it's checked:**
 
@@ -47,7 +47,7 @@ That's [v5's goal 2](../v5-goals.md#2-moving-to-v5-never-loses-data), with the `
 - A takeover suite never lists one of them as going, and asserts it's kept where a component could lose it.
 - In the lab, data is written before the move and read after.
 
-**Where it stands (2026-10-31):** not started.
+**Where it stands (2026-11-01):** `sst migrate --check` fails on a delete or replace of what holds data, whatever the map says, judged by what a resource is and what it was; on a release of one that what takes its place doesn't adopt by its id; and on an update that empties one (a `Vector`'s `dimension`), shortens how long it keeps what it holds (retention), or changes what expires (a TTL, a bucket's lifecycle rules). Not yet: the takeover suites' assertion, and data written and read in the lab.
 
 ## 3. What moves is mapped
 
@@ -55,11 +55,11 @@ A resource whose URN changes, because a component was restructured, is carried f
 
 **How it's checked:**
 
-- `--check` fails on any create or delete the map doesn't list, and on any delete it doesn't release.
+- `--check` fails on any create or delete of something in the cloud that the map doesn't list, and on any such delete it doesn't release. A component, a wrapper or a provider has nothing in the cloud behind it, and needs no listing.
 - Each component's map runs against every recorded state it's in, in CI, with no AWS.
 - In the lab, a real deploy compared by cloud id (goal 1). For a released resource, what it held is checked after the move: the same files, the same routes, the same rows.
 
-**Where it stands (2026-10-31):** not started.
+**Where it stands (2026-11-01):** `sst migrate --check` does the first, from Pulumi's preview of the move and what each component reports about its parts. On a Floci stage, it passed a move from the 4.x `Bucket`, `Dynamo`, `Queue` and `Function` to the V5 ones, a deploy then kept every id it said it would, and it failed a move with the table renamed. Not yet: the maps against the recorded states, and the lab.
 
 ## 4. The home stays compatible
 
@@ -137,3 +137,4 @@ Breaking changes are allowed in 5.0: args, defaults, names, how a component is b
 | --- | --- |
 | 2026-10-31 | Set: goals 1 to 8. |
 | 2026-10-31 | Goal 4: what says a stage was deployed is a snapshot or an update that deployed, not a passphrase, which a diff or a secret can create first. |
+| 2026-11-01 | Goal 3: a component, a wrapper or a provider, with nothing in the cloud behind it, needs no listing in a map to leave the state or be created. The goal already said such a thing may leave. |

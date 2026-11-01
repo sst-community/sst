@@ -462,6 +462,44 @@ takeover(ApiGatewayV2, {
   policy until `main` fixed 4.x. Changing it is a decision of its own, not a side
   effect of a port. When 4.x changes what it deploys, the port follows.
 
+`sst migrate --check --stage <stage>` previews the move of a deployed stage and checks
+it. A component, a wrapper or a provider has nothing in the cloud behind it, so it may
+leave the state or be created. Anything else the move would create, delete or replace
+fails the check, unless the map lists it:
+
+```ts
+// A made-up site, to show each
+takeover(Site, {
+  // Parts 4.x didn't have. What's inside one, if it's a component, is new too.
+  added: ["logs"],
+  // Parts a move replaces, with what changes for the user. Only a part that
+  // holds no data. The V5 `Function` lists its code and source maps.
+  replaced: {
+    code: "The site's server code is uploaded again, under a new key.",
+  },
+  // Parts that take the place of what 4.x created and a move can't carry over,
+  // as when the type changes. The old one leaves the state without its delete
+  // being called; the part writes the same thing again, or adopts it by its id.
+  released: {
+    files: (_, { name }) => ({
+      type: "pulumi-nodejs:dynamic:Resource",
+      name: `${name}AssetFiles.sst.aws.BucketFiles`,
+    }),
+  },
+});
+```
+
+Whatever the map says, the check fails when something that holds data would be
+deleted, replaced or emptied: a bucket, a table, a database, a cache, a file system, a
+user pool, a queue, a log group, a backup vault, or the secrets a database uses
+(`pkg/move/data.go`). It also fails when one would keep what it holds for less time (a
+log group's retention), or when what expires would change (a table's TTL, a bucket's
+lifecycle rules). Something that holds data can be released only to a part that
+adopts it: imports the same resource by its id.
+While the stage moves, each component tells the CLI what its map says about each part
+it creates; `mock({ move: true })` records the same, and `moved()` returns it
+(`test/components/move.test.ts`).
+
 A resource that's created inside `.apply()` has to be given the output, not the
 value the callback was called with: the output is what says the resource depends on
 where the value came from, so that it's removed first. The V5 `Service` creates its

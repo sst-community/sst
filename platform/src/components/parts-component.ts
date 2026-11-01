@@ -4,8 +4,10 @@ import {
   type Input,
   type Inputs,
   Output,
+  type Resource,
   type ResourceTransformationArgs,
   ComponentResource,
+  all,
   output,
 } from "@pulumi/pulumi";
 import { Component } from "./component";
@@ -27,7 +29,8 @@ import {
 import type { Permission } from "./aws/permission";
 import type { binding } from "./cloudflare/binding";
 import type { env } from "./linkable";
-import { aliasOf, takeoverOf } from "./takeover";
+import { aliasOf, releasedAddress, takeoverOf } from "./takeover";
+import { moving, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
 import { notAnOption } from "./args";
@@ -545,6 +548,34 @@ export class PartsComponent<P extends Parts> extends Component {
         `In the "${this.componentName}" component, "${child.name}" (${child.type}) is not one of the component's parts. Add it to the parts of ${this.componentType.replaceAll(":", ".")}: ${Object.keys(this.partClasses).join(", ")}.`,
       );
     put(this.partNodes, part.key, part.id, child.resource);
+    if (moving()) this.reportMoved(part, child.resource);
+  }
+
+  // While the stage moves, tell the core what the state map says about a
+  // part: that it's new, replaced, or in the place of what's released
+  private reportMoved(part: PartRef, resource: Resource) {
+    const how = takeoverOf(this.constructor);
+    if (!how) return;
+    const added = how.added?.includes(part.key) ?? false;
+    const replaced = how.replaced?.[part.key];
+    const released = how.released?.[part.key]?.(this, {
+      name: this.componentName,
+      id: part.id,
+    });
+    if (!added && !replaced && !released) return;
+    reportPart({
+      component: this.urn,
+      type: this.componentType,
+      key: part.key,
+      ...(part.id === undefined ? {} : { id: part.id }),
+      // Set once the resource's transformations, this among them, have run
+      urn: all([]).apply(() => resource.urn),
+      ...(added ? { added } : {}),
+      ...(replaced ? { replaced } : {}),
+      releases: [released ?? []]
+        .flat()
+        .map((old) => releasedAddress(old, this.urn, how.from)),
+    });
   }
 
   // The part a child belongs to. One created some other way than `part()` is

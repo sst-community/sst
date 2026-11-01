@@ -18,4 +18,10 @@ takeover(Function, {
     // parent
     urlAlias: (_, { name }) => ({ name: `${name}Durable`, parent: false }),
   },
+  // Each is an object keyed by what's in it, and is uploaded under a new key
+  // whenever the function's code changes, as when it's renamed
+  replaced: {
+    code: "The function's code is uploaded again, under a new key.",
+    sourcemap: "The function's source map is uploaded again, under a new key.",
+  },
 });

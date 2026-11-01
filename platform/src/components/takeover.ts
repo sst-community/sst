@@ -38,6 +38,15 @@ export interface OldAddress {
 }
 
 /**
+ * A resource that a part takes the place of, and which leaves the state
+ * without being deleted.
+ */
+export interface ReleasedAddress extends OldAddress {
+  /** The resource's type, like `pulumi-nodejs:dynamic:Resource`. */
+  type: string;
+}
+
+/**
  * How a component takes over from the one it replaces, so that switching to
  * it keeps the resources that are already deployed.
  *
@@ -45,6 +54,11 @@ export interface OldAddress {
  * Each of its resources is matched to the part with the same key. List a part
  * under `moved` when it used to have a different key, or lived in a different
  * component.
+ *
+ * `sst migrate --check` fails on anything else a move would create, delete or
+ * replace in the cloud, unless it's listed under `added`, `replaced` or
+ * `released`. It never allows a resource that holds data to be deleted,
+ * replaced or emptied.
  */
 export interface Takeover<P extends Parts, C = unknown> {
   /**
@@ -60,6 +74,26 @@ export interface Takeover<P extends Parts, C = unknown> {
           /** The component's name, and the part's id for a `many` part. */
           part: { name: string; id?: string },
         ) => OldAddress | OldAddress[] | undefined);
+  };
+  /** Parts the component it takes over didn't have. A move creates them. */
+  added?: (keyof P)[];
+  /**
+   * Parts a move replaces, each with what changes for the user, as the
+   * migration guide says it: "The function's URL changes." Only a part that
+   * holds no data can be replaced.
+   */
+  replaced?: { [K in keyof P]?: string };
+  /**
+   * Parts that take the place of resources a move can't carry over, as when
+   * the type changes. Those leave the state without their delete being
+   * called, and the part writes the same thing again or adopts it by its id.
+   */
+  released?: {
+    [K in keyof P]?: (
+      component: C,
+      /** The component's name, and the part's id for a `many` part. */
+      part: { name: string; id?: string },
+    ) => ReleasedAddress | ReleasedAddress[] | undefined;
   };
 }
 
@@ -138,6 +172,39 @@ export function aliasOf(old: OldAddress, name: string): Input<Alias> {
             }))
         : { name: `${name}$unknown-in-preview` },
   ) as Output<Alias>;
+}
+
+/**
+ * The address of a resource a part releases. One with no `parent` was in the
+ * component this one takes over from: `component` is this one's address, and
+ * `from` the type of the one it takes over, when that's another type.
+ *
+ * @internal
+ */
+export function releasedAddress(
+  old: ReleasedAddress,
+  component: Input<string>,
+  from?: string,
+): Output<string> {
+  const parent: Input<string> | undefined =
+    old.parent === false
+      ? undefined
+      : old.parent
+        ? (addressOf(old).parent as Input<string>)
+        : output(component).apply((urn) => (from ? withType(urn, from) : urn));
+  return all([parent, old.name]).apply(([parent, name]) => {
+    if (!parent)
+      return `urn:pulumi:${getStack()}::${getProject()}::${old.type}::${name}`;
+    const [stack, project, types] = parent.split("::");
+    return [stack, project, `${types}$${old.type}`, name].join("::");
+  });
+}
+
+// The address with its own type swapped for another
+function withType(urn: string, type: string) {
+  const [stack, project, types, name] = urn.split("::");
+  const chain = [...types.split("$").slice(0, -1), type].join("$");
+  return [stack, project, chain, name].join("::");
 }
 
 function addressOf(old: OldAddress) {

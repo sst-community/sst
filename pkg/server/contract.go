@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
+	"github.com/sst/sst/v3/pkg/bus"
+	"github.com/sst/sst/v3/pkg/move"
 	"github.com/sst/sst/v3/pkg/project"
 )
 
@@ -32,5 +34,17 @@ func (d *devContract) Stub(input *struct{}, output *bridge.StubSettings) error {
 	if output.Permissions == nil {
 		output.Permissions = []bridge.StubPermission{}
 	}
+	return nil
+}
+
+// moveContract is the program contract's call while a stage moves to new
+// components, as Move.<method>.
+type moveContract struct{}
+
+// Part is a part of a component that its state map says something about: new,
+// replaced, or in the place of what's released. The command that moves the
+// stage reads them from the bus.
+func (m *moveContract) Part(input *move.Part, output *struct{}) error {
+	bus.Publish(input)
 	return nil
 }

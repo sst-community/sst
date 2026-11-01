@@ -176,6 +176,7 @@ func (s *Server) Start(ctx context.Context, p *project.Project) error {
 	aws.Register(ctx, p, s.Rpc)
 	runtime.Register(ctx, p, s.Rpc)
 	s.Rpc.RegisterName("Dev", &devContract{project: p})
+	s.Rpc.RegisterName("Move", &moveContract{})
 	return s.Serve(ctx)
 }
 

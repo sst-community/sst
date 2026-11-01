@@ -1113,6 +1113,14 @@ describe("Component parts", () => {
           () => new After("Docs", { teams: ["legal"] }),
         ),
       ).toEqual({ unclaimed: [], changed: [], unordered: [] });
+      // What the map says about the parts is told to the core only while the
+      // stage moves (move.test.ts)
+      takeover(After, { from: "docs:index:Uploads", added: ["audit"] });
+      new After("Docs", { teams: [], audit: true });
+      await pulumi.settle();
+      expect(pulumi.moved()).toEqual([]);
+      takeover(After, { from: "docs:index:Uploads" });
+
       // A class that extends it takes over the same way
       class Extended extends After {}
       expect(

@@ -25,6 +25,9 @@ type StackInput struct {
 	Continue   bool
 	SkipHash   string
 	PolicyPath string
+	// Move runs the program as the stage moves to new components, which apply
+	// their state maps and report their parts (pkg/move)
+	Move bool
 	// previewFirst runs a deploy with Pulumi's preview first, as when the
 	// program turned out to have checks
 	previewFirst bool

@@ -6,6 +6,7 @@ import * as pulumi from "@pulumi/pulumi";
 import { rpc } from "../components/rpc/rpc";
 import { contractVersion } from "../components/contract";
 import { checkResource } from "../components/check";
+import type { MovedPart } from "../components/move";
 
 /**
  * A resource a component registered, with what decides whether a deployed
@@ -62,6 +63,12 @@ export interface MockInput {
    * deploy.
    */
   preview?: boolean;
+  /**
+   * Run as the stage moves to new components, the way `sst migrate` runs the
+   * program: each component reports what its state map says about its parts,
+   * which `moved()` returns. With `preview`, it's `sst migrate --check`.
+   */
+  move?: boolean;
 }
 
 // The outputs 4.x's components name for the core, and what each is in a
@@ -142,7 +149,13 @@ export function mockPulumi(input?: MockInput) {
     builds.set(functionID, build);
   const buildOf = (r: RecordedResource) =>
     !r.custom && r.type === "sst:aws:Function" ? builds.get(r.name) : undefined;
+  // What components reported while the stage moves
+  const moved: MovedPart[] = [];
   rpc.call = (async (method: string, args: any) => {
+    if (method === "Move.Part") {
+      moved.push(args);
+      return {};
+    }
     if (method === "Runtime.Build" || method === "Runtime.AddTarget")
       built(args);
     if (method === "Runtime.Build")
@@ -203,6 +216,7 @@ export function mockPulumi(input?: MockInput) {
   global.$cli = {
     contract: contractVersion,
     command: input?.preview ? "diff" : "deploy",
+    move: input?.move === true,
     state: { version: {} },
     paths: { root: input?.root ?? "/", work, platform },
   };
@@ -340,10 +354,19 @@ export function mockPulumi(input?: MockInput) {
     input,
     /** What a deploy leaves in the state, of a `graph()`. */
     deployed,
+    /**
+     * What components reported while the stage moves, with `move` set: each
+     * part their state maps list as new, replaced, or in the place of what's
+     * released. The core reads these in `sst migrate --check`.
+     */
+    moved() {
+      return [...moved];
+    },
     /** Empties the list, so each test sees only its own resources. */
     reset() {
       resources.length = 0;
       findings.length = 0;
+      moved.length = 0;
       registered.clear();
       builds.clear();
     },

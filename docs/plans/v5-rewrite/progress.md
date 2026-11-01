@@ -2,6 +2,40 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4 started, `sst migrate --check`
+
+The maintainer asked for step 3's check against the recordings, then step 4. The recordings can't be replayed as step 1 did it: each stage's passphrase was deleted with the stage, and the state's secrets can't be read without it. So the check means deploying the stages again, and the maintainer left it for later. Step 4 starts with `sst migrate --check`, the gate for every component.
+
+**Done, reviewed, not committed yet:**
+
+- **`sst migrate --check --stage <stage>`** runs Pulumi's preview of the move (the path `sst diff` takes, which writes nothing) and sorts each step by [goals 1 to 3](goals.md) (`pkg/move`):
+  - **kept**: the same resource, at its address or at a new one, maybe updated in place, with the fields that change;
+  - **taken out of the state** or **created**: a component, a wrapper or a provider, which has nothing in the cloud behind it ([decision](plan.md#decisions));
+  - **released**, **created** or **replaced**, when a component's map says so;
+  - **a problem**, anything else: a create, delete or replace no map lists, and, whatever a map says, a delete or replace of what holds data (by what it is and by what it was), a release of it to a part that doesn't import it by its id, or an update that empties it (a `Vector`'s `dimension`), keeps what it holds for less time (a log group's, queue's, stream's or database's retention) or changes what expires (a table's TTL, a bucket's lifecycle rules). A delete the app's removal policy would keep in the cloud is still a problem: the app would lose it. So is a resource the app manages that it would only look up.
+  It exits with an error when there's a problem, and `--json` prints what it found. `--dev` checks the stage as `sst dev` deploys it. Without `--check`, it says the move itself isn't built yet.
+- **What holds data** is a list of types (`pkg/move/data.go`): goal 2's, plus Kinesis streams, OpenSearch domains, Cognito identity pools, backup vaults (`Dsql`'s), the key a 4.x `Auth` signs with, and Cloudflare's R2 buckets, D1 databases, KV namespaces and queues.
+- **A state map says more:** `added` (parts the old component didn't have; what's inside one is new too), `replaced` (with what changes for the user) and `released` (the old addresses a part takes the place of, with their type) beside `moved`. While a stage moves, the program's `$cli.move` is set (`context().move` in the program contract), and each component tells the core what its map says about each part it creates, through the RPC (`Move.Part`). `mock({ move: true })` records the same, and `moved()` returns it.
+- **The V5 `Function`'s map lists its code and source maps as replaced.** Each is an object keyed by what's in it, uploaded under a new key whenever the code changes, as when a subscriber's function is renamed.
+- **No step goes unseen.** The command reads the steps on a subscription of its own, not the UI's, which drops events when it falls behind, fails if any was lost, and counts the steps of each kind against the preview's summary.
+- **The CLI no longer loses a line of Pulumi's event log** it reads while Pulumi is still writing it. It dropped what it had read of the line, and then couldn't read the rest. That's older than this work, and every command reads the log that way.
+
+**Checked:**
+
+- **On the Floci stage, nothing in AWS.** The lab's target group deployed with the 4.x `Bucket`, `Dynamo`, `Queue` with a subscriber and `Function` (`LAB_TARGET=v4`). With the V5 ones, `sst migrate --check` passed: 29 kept, 6 at a new address, the subscriber's function updated in place, 4.x's wrapper taken out of the state, and the subscriber's code replaced, as the `Function`'s map says. A deploy with the V5 ones then did exactly that: compared by cloud id, 17 of 18 kept, 5 under a new name, and only the code object new. With the table renamed, the check failed on the old table's delete ("It holds data.") and the new one's create. The stage was removed, the container stopped on its own, and the stage's files were deleted.
+- After the review's fixes, the same three runs on a new Floci stage gave the same results, with every step counted against the summary. Removed and cleaned up again.
+- `pkg/move`'s tests for each rule, the platform's tests (1,838) and `tsc`, and all Go tests.
+- **An independent review** reproduced three ways the check passed what loses data, each fixed and tested: the data rules looked only at what a resource is now, so one moved to a part of another type was replaced without a word; releasing what holds data was allowed with nothing to take it over, and a release that never happened still let the part in its place be created; and only a `Vector`'s `dimension` counted as an update that loses data. It also found the event log's lost line, a backup vault and an identity pool missing from the list, a resource left over from an earlier replace taken for a replace, and a managed resource that would only be looked up taken as kept, each fixed.
+
+**Found:**
+
+- **Pulumi reports the last step of a replace at the old address** when the resource moved, so the check groups a replace's steps by where the resource went. Without that, it showed one replace as two.
+- **A preview can't see what's built from a value a move creates.** With the table renamed, the function that links it couldn't be built in the preview, so the source map it would upload never showed, and the old one looked deleted. It only happens when a move creates something a function links to, which fails the check already.
+- **A part's address isn't set while its transformations run**, so it's read once they have.
+- **What a preview can't see, the check can't either.** A resource created inside `.apply()` on a value the preview doesn't know isn't in the preview, so its create isn't checked. A release whose old address isn't known in the preview isn't reported, which fails the check rather than passing it.
+
+**Left:** the check under the mock against the recorded states, and the hard components. The move itself (`sst migrate`) is step 5.
+
 ## 2026-11-01: step 3, four gaps closed
 
 The maintainer asked what closes the gaps the last entry left, and chose for each ([decisions](plan.md#decisions)).
