@@ -1820,6 +1820,9 @@ export class Router extends Component implements Link.Linkable {
 
           normalizedRoutes["/*"] = normalizedRoutes["/*"] ?? {
             url: "https://do-not-exist.sst.dev",
+            edge: {
+              viewerRequest: { injection: CF_ROUTER_NOT_FOUND_INJECTION },
+            },
           };
 
           return normalizedRoutes;
@@ -2459,6 +2462,9 @@ async function handler(event) {
    * Control. It is off by default. CloudFront also needs permission to invoke the
    * function, as described under `protection`.
    *
+   * A request that matches none of the Router's routes gets a 404. To catch it
+   * instead, add a route for `/`.
+   *
    * @param pattern The path prefix to match for this route.
    * @param url The destination URL to route matching requests to.
    * @param args Configure the route.
@@ -2533,6 +2539,9 @@ async function handler(event) {
 
   /**
    * Add a route to an S3 bucket.
+   *
+   * A request that matches none of the Router's routes gets a 404. To catch it
+   * instead, add a route for `/`.
    *
    * @param pattern The path prefix to match for this route.
    * @param bucket The S3 bucket to route matching requests to.
@@ -2698,9 +2707,26 @@ Router.__pulumiType = __pulumiType;
 // this viewer-request function runs, so borderline requests fail with a clear 431.
 const CLOUDFRONT_FUNCTION_SAFE_HEADER_LIMIT = 10240 - 512;
 
-// NOTE: This string is size-sensitive — CloudFront Functions have a 10KB limit.
-// The 403 body is plain text on purpose: it keeps the block small, and it is the
-// body upstream chose. Don't put the HTML page back to look like a web server's.
+// Returned at the edge for the synthetic catch-all route that is added when the user
+// does not define a `/*` route. Without it, requests that match no route are forwarded
+// to the placeholder origin and come back as a 502 instead of a 404.
+const CF_ROUTER_NOT_FOUND_INJECTION = `
+return {
+  statusCode: 404,
+  statusDescription: 'Not Found',
+  headers: {
+    "content-type": { value: "text/html; charset=utf-8" }
+  },
+  body: {
+    encoding: "text",
+    data: '<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center></body></html>'
+  }
+};`;
+
+// NOTE: CF_BLOCK_CLOUDFRONT_URL_INJECTION is size-sensitive — CloudFront Functions
+// have a 10KB limit. Its 403 body is plain text on purpose: it keeps the block
+// small, and it is the body upstream chose. Don't put the HTML page back to look
+// like a web server's.
 export const CF_BLOCK_CLOUDFRONT_URL_INJECTION = minifyBody`
 if (event.request.headers.host.value.includes('cloudfront.net')) {
   return {
@@ -2718,6 +2744,7 @@ if (event.request.headers.host.value.includes('cloudfront.net')) {
 // Minified when the function is built, because the router's key-value
 // namespace is part of it.
 // NOTE: This string is size-sensitive — CloudFront Functions have a 10KB limit.
+// The minifier keeps local names as written, so keep them short.
 export const routerLookupCode = (kvNamespace: string) => minifyBody`
   async function getRoutes() {
     const routerNS = "${kvNamespace}";
@@ -2728,21 +2755,21 @@ export const routerLookupCode = (kvNamespace: string) => minifyBody`
 
       // handle chunked routes
       if (routes.parts) {
-        const chunkPromises = [];
+        const reads = [];
         for (let i = 0; i < routes.parts; i++) {
-          chunkPromises.push(cf.kvs().get(routerNS + ":routes:" + i));
+          reads.push(cf.kvs().get(routerNS + ":routes:" + i));
         }
-        const chunks = await Promise.all(chunkPromises);
+        const chunks = await Promise.all(reads);
         routes = JSON.parse(chunks.join(""));
       }
     } catch (e) {}
-    return routes;
+    return Array.isArray(routes) ? routes : [];
   }
 
   async function matchRoute(routes) {
     const requestHost = event.request.headers.host.value;
-    const requestHostWithEscapedDots = requestHost.replace(/\\./g, "\\\\.");
-    const requestHostRegexPattern = "^" + requestHost + "$";
+    const escapedHost = requestHost.replace(/\\./g, "\\\\.");
+    const hostPattern = "^" + requestHost + "$";
     let match;
     routes.forEach(r => {
       ${
@@ -2767,8 +2794,8 @@ export const routerLookupCode = (kvNamespace: string) => minifyBody`
       )) return;
 
       const hostMatches = host === ""
-        || host === requestHostWithEscapedDots
-        || (host.includes("*") && new RegExp(host).test(requestHostRegexPattern));
+        || host === escapedHost
+        || (host.includes("*") && new RegExp(host).test(hostPattern));
       if (!hostMatches) return;
 
       const pathMatches = event.request.uri.startsWith(path) && (event.request.uri === path || path.endsWith('/') || event.request.uri[path.length] === '/' || path === '/');
@@ -2791,14 +2818,30 @@ export const routerLookupCode = (kvNamespace: string) => minifyBody`
         const routeNs = match.routeNs;
         const v = await cf.kvs().get(routeNs + ":metadata");
         return { type, routeNs, metadata: JSON.parse(v) };
-      } catch (e) {}
+      } catch (e) {
+        return { unreadable: true };
+      }
     }
   }
 
   // Look up the route
   const routes = await getRoutes();
   const route = await matchRoute(routes);
-  if (!route) return event.request;
+  if (!route || route.unreadable) {
+    // Routes are registered and none matches this request: a 404, as the docs
+    // say. When no routes are registered yet, or a matched route's metadata
+    // couldn't be read, the request is passed on as it was. The body is plain
+    // text, like CF_BLOCK_CLOUDFRONT_URL_INJECTION's 403, because this function
+    // shares 10KB with the user's injection.
+    if (!route && routes.length > 0) {
+      return {
+        statusCode: 404,
+        statusDescription: "Not Found",
+        body: { encoding: "text", data: "404 Not Found" },
+      };
+    }
+    return event.request;
+  }
   if (route.metadata.rewrite) {
     const rw = route.metadata.rewrite;
     event.request.uri = event.request.uri.replace(new RegExp(rw.regex), rw.to);
@@ -2927,7 +2970,7 @@ async function routeSite(kvNamespace, metadata) {
     if (event.request.uri.startsWith("/_next/image")) {
       cacheKey = getHeader("accept");
     } else {
-      var headers = ["rsc","next-router-prefetch","next-router-state-tree","next-url","x-prerender-revalidate"];
+      var headers = ["rsc","next-router-prefetch","next-router-segment-prefetch","next-router-state-tree","next-url","x-prerender-revalidate"];
       for (var i=0; i<headers.length; i++) cacheKey += getHeader(headers[i]);
     }
     if (event.request.cookies["__prerender_bypass"]) {

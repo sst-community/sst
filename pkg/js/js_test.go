@@ -270,3 +270,83 @@ export function read() {
 	assert.Contains(t, err.Error(), `Could not resolve "@acme/uploads"`)
 	assert.Contains(t, err.Error(), `Could not resolve "@acme/email"`)
 }
+
+// A global made of a module that only sets `injectedGlobals`, so a bundle has
+// it only when some file was given the globals. The module is in the project's
+// .sst folder, as the platform is.
+func injectedGlobal(t *testing.T, dir string) []js.Global {
+	t.Helper()
+	writeFiles(t, dir, map[string]string{
+		".sst/platform/injected.mjs": "globalThis.injectedGlobals = true;\nexport const yes = true;",
+	})
+	return []js.Global{{Name: "injected", Module: filepath.ToSlash(filepath.Join(dir, ".sst", "platform", "injected.mjs"))}}
+}
+
+func buildToFile(t *testing.T, input js.EvalOptions) string {
+	t.Helper()
+	input.Outfile = filepath.Join(input.Dir, ".sst", "platform", "config.mjs")
+	result, err := js.Build(input)
+	require.NoError(t, err)
+	defer js.Cleanup(result)
+	contents, err := os.ReadFile(input.Outfile)
+	require.NoError(t, err)
+	return string(contents)
+}
+
+func TestBuildInjectsGlobalsForProjectPathContainingSST(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "app.sst-branch")
+	writeFiles(t, dir, map[string]string{
+		"source.ts": `if (!injected.yes) throw new Error("missing globals")`,
+	})
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     dir,
+		Code:    `import "./source"`,
+		Globals: injectedGlobal(t, dir),
+	})
+	assert.Contains(t, contents, "injectedGlobals = true")
+}
+
+func TestBuildInjectsGlobalsForDirectoryNextToSST(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		".sst-old/source.ts": `if (!injected.yes) throw new Error("missing globals")`,
+	})
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     dir,
+		Code:    `import "./.sst-old/source"`,
+		Globals: injectedGlobal(t, dir),
+	})
+	assert.Contains(t, contents, "injectedGlobals = true")
+}
+
+func TestBuildLeavesTheProjectSSTDirectoryAlone(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		// It uses the global, since an import a .ts file doesn't use is dropped
+		".sst/platform/own.ts": `export const own = typeof injected === "undefined" ? "own file" : "given the globals"`,
+	})
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     dir,
+		Code:    `import { own } from "./.sst/platform/own"; console.log(own)`,
+		Globals: injectedGlobal(t, dir),
+	})
+	assert.Contains(t, contents, "own file")
+	assert.NotContains(t, contents, "injectedGlobals")
+}
+
+func TestBuildLeavesTheProjectSSTDirectoryAloneThroughASymlink(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(real, link))
+	writeFiles(t, real, map[string]string{
+		// It uses the global, since an import a .ts file doesn't use is dropped
+		".sst/platform/own.ts": `export const own = typeof injected === "undefined" ? "own file" : "given the globals"`,
+	})
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     link,
+		Code:    `import { own } from "./.sst/platform/own"; console.log(own)`,
+		Globals: injectedGlobal(t, link),
+	})
+	assert.Contains(t, contents, "own file")
+	assert.NotContains(t, contents, "injectedGlobals")
+}

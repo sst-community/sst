@@ -100,6 +100,14 @@ func Build(input EvalOptions) (esbuild.BuildResult, error) {
 		define[global.Name] = local
 	}
 	globals := strings.Join(imports, "\n")
+	// esbuild reports the real path of a file, so the project's .sst directory is
+	// also compared by its real path, for a project opened through a symlink.
+	sstDirs := []string{filepath.Join(input.Dir, ".sst")}
+	if realDir, err := filepath.EvalSymlinks(input.Dir); err == nil {
+		if realSST := filepath.Join(realDir, ".sst"); realSST != sstDirs[0] {
+			sstDirs = append(sstDirs, realSST)
+		}
+	}
 	var err error
 	result := esbuild.Build(esbuild.BuildOptions{
 		Banner: map[string]string{
@@ -220,20 +228,19 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 					// allows, like a top-level return
 					build.OnLoad(esbuild.OnLoadOptions{Filter: `\.(m?[jt]s|[jt]sx)$`},
 						func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
-							if filepath.HasPrefix(args.Path, filepath.Join(input.Dir, ".sst")) {
-								return esbuild.OnLoadResult{}, nil
+							for _, dir := range sstDirs {
+								if isWithinDir(args.Path, dir) {
+									return esbuild.OnLoadResult{}, nil
+								}
 							}
 							contents, err := os.ReadFile(args.Path)
 							if err != nil {
 								return esbuild.OnLoadResult{}, err
 							}
-							newContents := string(contents)
-							if !strings.Contains(args.Path, ".sst") {
-								// At the end, so the file's own lines keep their
-								// numbers in an error. Imports run before the rest
-								// of a file wherever they are.
-								newContents = newContents + "\n" + globals
-							}
+							// At the end, so the file's own lines keep their numbers
+							// in an error. Imports run before the rest of a file
+							// wherever they are.
+							newContents := string(contents) + "\n" + globals
 							return esbuild.OnLoadResult{
 								Contents: &newContents,
 								Loader:   esbuild.LoaderDefault,
@@ -277,6 +284,11 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 	os.WriteFile(filepath.Join(input.Dir, ".sst", "esbuild.json"), []byte(analysis), 0644)
 
 	return result, nil
+}
+
+func isWithinDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func FormatError(input []esbuild.Message) string {
