@@ -2,6 +2,51 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-10-31: step 3, the runtime as a place to plug in
+
+The maintainer said yes to the transport's commit, and the runtime came next. The plan draws it from the five built-ins and a runtime made of commands, the one packages will give with `sst.runtime`.
+
+**Done, committed (not pushed):**
+
+- **`runtime.Runtime`** (`pkg/runtime/runtime.go`) is `Match`, `Build`, `Run` and `ShouldRebuild`, and writes down what a runtime has to do: build into the function's folder, with an error in the function's code in the build's errors, not as the runtime failing; build different functions at once, and again into the same folder while a worker runs from it; run a worker against the Lambda runtime API with the environment it's given; a worker's logs end when it exits, and stopping it doesn't wait; and say which files a function uses.
+- **`ShouldRunEagerly` is gone.** Python said no to it because a change to shared code rebuilt every function, and the core started a worker again at once for each, a few seconds apiece. Now the core starts again at once only the workers of the three functions invoked last, whatever the runtime, and the rest when they're invoked. Python gets the function in use started ahead of its next invocation, which it didn't before, and a Node.js change to shared code no longer starts a worker for every function either. After a deploy, only those three are built at once; the rest build when they're invoked.
+- **The types of what's linked stay out of the runtime**, against the plan's sketch: a site's frontend or a Rails app reads its links too, and isn't a function, so the core goes on making them for the app's languages (`pkg/types`). The plan says so now.
+- **A runtime made of commands** (`runtime.Commands`, `pkg/runtime/commands.go`), the core's side of `sst.runtime`. A function's build input carries the settings, and the core picks it for any function that has them. Neither command runs in a shell, as a dev command doesn't.
+  - **Where:** the folder the function's code is in, or without one, the handler's folder, with the handler the rest of it. With a folder, the handler is as Lambda takes it, which for .NET isn't a path.
+  - **Build:** a command run there, told whether it's for `sst dev` or a deploy and the function's architecture, and the folder it writes. Functions in one folder build one at a time, and one that asks while another builds takes that build. A deploy copies the output into the function's folder, links as what they point to; `sst dev` links each thing in it there, so the files the core adds, like a function's copied files and its links, sit beside it.
+  - **Dev:** a command run in the function's folder against the Lambda runtime API, with `AWS_LAMBDA_RUNTIME_API`, `_HANDLER` and `LAMBDA_TASK_ROOT` set as Lambda sets them, and the CLI's `PATH` and `HOME`, which the tools it starts need. `$NAME` in it is expanded from what it's given, as a runtime interface client takes the handler as its argument; any other is left for a shell it starts.
+  - **Watch:** globs from the folder, `../` for files outside it. The output, when it's a folder of its own, is left out.
+- **The core runs a function with the runtime that built it**, not by its runtime setting again.
+- **The runtime suite** (`pkg/runtime/runtimetest`), through `runtime.Collection`, as the core calls it, each runtime with a fixture in its language. It builds the fixture for a deploy, and four functions in one folder at once. It runs a dev build on a stand-in Lambda runtime API, with only what `sst dev` gives a worker, and checks its answer and that what it printed with a variable it was given reaches its logs. A file it uses rebuilds it and one it doesn't doesn't, and once the file changes, the rebuilt function answers with the change. An error in its code is reported as the function's. Node.js, Go, Python, Cloudflare's workers (built only, as `sst dev` runs them through Cloudflare) and the commands runtime run it.
+- **Go's and Rust's** runtimes keep each function's folder under a lock of its own, as `sst dev` asks which functions use a file while a deploy builds one. Rust writes its binary beside the old one and renames it over, as a worker may still run the old one.
+
+**Checked:**
+
+- The suite for each, on this machine. Python has no build step in `sst dev`, and any Python file rebuilds every function, so its fixture has no broken build and what it doesn't use isn't Python.
+- A test that a change to six functions starts three workers at once, the three invoked last, and the rest when invoked, and one that a deploy builds all six at once and starts three. The first fails without the cap.
+- All Go tests, and `sst dev`'s and the runtimes' with the race detector.
+- **An independent review** found no bug in `sst dev`'s change, and these, now fixed:
+  - Functions in one folder ran the build command at once there, which Bundler or .NET turns down. The suite's commands fixture now takes a lock as it builds, and the at-once check fails without the fix.
+  - The dev command got no `PATH` or `HOME`, as `sst dev` gives a worker none, so the tools a runtime interface client starts weren't found. The suite gave them, which hid it; it now gives only what `sst dev` does.
+  - A watch glob could match the build's output, so a build could start another for ever. The output is left out, and the settings say a glob shouldn't match what else the build writes. Leaving out every file changed while a build ran was tried, and dropped: it also leaves out an edit made then.
+  - In `sst dev`, a function's copied files and links weren't where its worker ran. It runs in the function's folder now, as in Lambda.
+  - A handler in a folder under the code's, or one that isn't a path, as .NET's, couldn't be given. The folder setting is for that.
+  - The interface's rules said a runtime could put its build elsewhere, which the core never let it; the rules say what the core does now. Cloudflare's workers aren't run by the core, and the rules say so.
+  - After a deploy, the functions outside the three built one by one as each was invoked, in `sst dev`'s loop. All of them build at once again, as before; only the starts are capped.
+  - Older ones in Go and Rust: their map of folders could be read while a build wrote it, and Rust rebuilt over a binary a worker may be running.
+  - Smaller: a function moved to a prebuilt bundle kept running with the runtime that last built it; a variable a dev command means for a shell it starts was expanded away; `./` and `../` in a glob; an absolute output; a missing output was the runtime failing, not a build error; links in the output didn't survive a deploy's copy; the plan's Ruby example used a Bundler flag that's gone.
+
+**Found:**
+
+- Python flushes what a function printed after it answers, so a worker stopped as soon as it answers loses it. `sst dev` doesn't stop one then, and the suite now waits, as `sst dev` does, until the worker asks for its next invocation.
+- Python reports a failed deploy build as the runtime failing, not in the build's errors, and Node.js a handler it can't find and a failed install the same way. Left as they are.
+- `input.Server`, as `AWS_LAMBDA_RUNTIME_API`, is a host and port followed by the worker's path, which keys its routes. A runtime interface client that takes it as a host and port only, as Python's `awslambdaric` does to report an init error, can't do that. Its invocations work.
+
+**Left:**
+
+- **Rust's suite** needs `cargo`, which this machine doesn't have, so Rust's changes here aren't run.
+- **`sst.runtime`** in the platform, which gives a function's build input the commands, and a function in Ruby through it deployed and run in `sst dev` in the lab, as the community packages plan asks. The lab check of this step's `sst dev` changes comes with it.
+
 ## 2026-10-31: step 3, the transport as a place to plug in
 
 The maintainer said to go on, with the places to plug in. The transport came first: its built-in already does all four things the plan's interface asks, spread over the CLI, the program and a 4.x component, and #212's HTTP transport is the second one to draw it from.

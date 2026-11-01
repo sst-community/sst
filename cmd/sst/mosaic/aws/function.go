@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,7 +78,17 @@ type input struct {
 	client  *bridge.Client
 	msg     chan bridge.Message
 	prefix  string
+	// how many functions' workers start again as soon as they're built, the
+	// ones invoked last, usually startAtOnce
+	startAtOnce int
 }
+
+// After a change, the workers of the functions invoked last start again as soon
+// as they're built, as they're likely to be invoked next, and the others when
+// they're invoked. So a change to code many functions share doesn't start a
+// worker for each of them at once, whatever the runtime, and the ones in use are
+// ready.
+const startAtOnce = 3
 
 func function(ctx context.Context, input input) {
 	log := slog.Default().With("service", "aws.function")
@@ -690,11 +701,10 @@ func function(ctx context.Context, input input) {
 	// restartOrDeferWorker starts a worker again after its function was built,
 	// or, when it isn't to start eagerly, once it's next invoked
 	restartOrDeferWorker := func(workerID string, info *WorkerInfo, eager bool) {
-		target, ok := targets[info.FunctionID]
-		if !ok {
+		if _, ok := targets[info.FunctionID]; !ok {
 			return
 		}
-		if eager && input.project.Runtime.ShouldRunEagerly(target.Runtime) {
+		if eager {
 			startWorker(info.FunctionID, workerID)
 		} else {
 			log.Info("lazy startup: deferring worker restart until invoked", "workerID", workerID, "functionID", info.FunctionID)
@@ -804,35 +814,55 @@ func function(ctx context.Context, input input) {
 		}
 	}
 
-	// restartAfterBuild starts again, of each function that was built, the
-	// worker invoked last, which is likely to be invoked next. The others start
-	// when they're invoked, so a save doesn't start a worker for every
-	// environment of a function at once. One that's still running an
-	// invocation is replaced once it's done.
+	// lastOf is the worker of each function invoked last, of those given, and
+	// whether it's one of the startAtOnce functions invoked last of all.
+	lastOf := func(infos map[string]*WorkerInfo) (map[string]*WorkerInfo, map[string]bool) {
+		last := map[string]*WorkerInfo{}
+		for _, info := range infos {
+			if latest, ok := last[info.FunctionID]; !ok || info.LastInvoked.After(latest.LastInvoked) {
+				last[info.FunctionID] = info
+			}
+		}
+		functions := slices.SortedFunc(maps.Keys(last), func(a, b string) int {
+			return last[b].LastInvoked.Compare(last[a].LastInvoked)
+		})
+		atOnce := map[string]bool{}
+		for _, functionID := range functions[:min(len(functions), input.startAtOnce)] {
+			atOnce[functionID] = true
+		}
+		return last, atOnce
+	}
+
+	// restartAfterBuild starts again, of the startAtOnce functions built that
+	// were invoked last, the worker of each invoked last, which is likely to be
+	// invoked next. The others start when they're invoked, so a save doesn't
+	// start a worker for every function or every environment of one at once.
+	// One that's still running an invocation is replaced once it's done.
 	restartAfterBuild := func(built func(functionID string) bool) {
 		stateMu.Lock()
-		last := map[string]*WorkerInfo{}
+		builtWorkers := map[string]*WorkerInfo{}
 		toRestart := map[string]*WorkerInfo{}
 		for workerID, info := range workers {
 			if !built(info.FunctionID) {
 				continue
 			}
-			if latest, ok := last[info.FunctionID]; !ok || info.LastInvoked.After(latest.LastInvoked) {
-				last[info.FunctionID] = info
-			}
+			builtWorkers[workerID] = info
 			if info.Outdated {
 				continue
 			}
 			toRestart[workerID] = info
 		}
-		for _, info := range last {
+		last, atOnce := lastOf(builtWorkers)
+		// one still running an invocation starts again once it's done if it's
+		// one to start at once now, whatever it was after an earlier build
+		for _, info := range builtWorkers {
 			if info.Outdated {
-				info.Eager = true
+				info.Eager = atOnce[info.FunctionID] && last[info.FunctionID] == info
 			}
 		}
 		stateMu.Unlock()
 		for workerID, info := range toRestart {
-			restartOrDeferWorker(workerID, info, last[info.FunctionID] == info)
+			restartOrDeferWorker(workerID, info, atOnce[info.FunctionID] && last[info.FunctionID] == info)
 		}
 	}
 
@@ -1004,12 +1034,13 @@ func function(ctx context.Context, input input) {
 					stopWhenDone(info)
 				}
 				builds = map[string]*runtime.BuildOutput{}
-				// the functions whose workers start again now are built at once,
-				// not one by one as each starts
+				// the functions with a worker are built at once, not one by one
+				// in this loop as each is invoked, and restartAfterBuild starts
+				// again those of the ones invoked last
 				toBuild := []*runtime.BuildInput{}
 				for _, info := range workers {
 					target, ok := targets[info.FunctionID]
-					if !ok || slices.Contains(toBuild, target) || !input.project.Runtime.ShouldRunEagerly(target.Runtime) {
+					if !ok || slices.Contains(toBuild, target) {
 						continue
 					}
 					toBuild = append(toBuild, target)

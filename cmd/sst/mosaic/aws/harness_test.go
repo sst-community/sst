@@ -174,8 +174,9 @@ type fakeRuntime struct {
 	failRuns atomic.Bool
 	// failBuilds makes a function's build fail
 	failBuilds atomic.Bool
-	// lazy starts a worker only when it's invoked, as the Python runtime does,
-	// instead of again straight after a rebuild
+	// lazy has sst dev start a worker only when it's invoked, instead of again
+	// straight after a rebuild, as it does for the functions not among the
+	// startAtOnce invoked last
 	lazy bool
 	// crash makes a worker report an init error and exit without asking for an
 	// invocation, as a Node.js worker does when its handler throws on import
@@ -239,8 +240,6 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 }
 
 func (r *fakeRuntime) ShouldRebuild(functionID string, path string) bool { return r.rebuild }
-
-func (r *fakeRuntime) ShouldRunEagerly() bool { return !r.lazy }
 
 type fakeWorker struct {
 	runtime  *fakeRuntime
@@ -397,12 +396,17 @@ func newHarness(t *testing.T, rt *fakeRuntime) *harness {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
+		atOnce := startAtOnce
+		if rt.lazy {
+			atOnce = 0
+		}
 		function(ctx, input{
-			project: &project.Project{Runtime: runtime.NewCollection(h.cfgPath, rt)},
-			server:  srv,
-			client:  client,
-			msg:     msg,
-			prefix:  h.prefix,
+			project:     &project.Project{Runtime: runtime.NewCollection(h.cfgPath, rt)},
+			server:      srv,
+			client:      client,
+			msg:         msg,
+			prefix:      h.prefix,
+			startAtOnce: atOnce,
 		})
 	}()
 	// the loop has stopped, and left the bus, before the next test starts

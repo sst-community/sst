@@ -77,7 +77,7 @@ func TestFunctionRebuildsChangedFilesTogether(t *testing.T) {
 	// the loop takes events from the bus, so it's stopped before the next test
 	stopped := make(chan struct{})
 	go func() {
-		function(ctx, input{server: srv, msg: msg, project: proj})
+		function(ctx, input{server: srv, msg: msg, project: proj, startAtOnce: startAtOnce})
 		close(stopped)
 	}()
 	defer func() {
@@ -204,8 +204,6 @@ func (f *rebuildRuntime) Run(ctx context.Context, input *runtime.RunInput) (runt
 func (f *rebuildRuntime) ShouldRebuild(functionID string, path string) bool {
 	return strings.HasSuffix(path, ".ts")
 }
-
-func (f *rebuildRuntime) ShouldRunEagerly() bool { return true }
 
 type rebuildWorker struct {
 	logs   *io.PipeReader

@@ -27,7 +27,7 @@ func TestFunctionConcurrentInitAndNext(t *testing.T) {
 
 	srv := newServer(t, ctx)
 	msg := make(chan bridge.Message)
-	go function(ctx, input{server: srv, msg: msg})
+	go function(ctx, input{server: srv, msg: msg, startAtOnce: startAtOnce})
 
 	send := func(worker int) {
 		m := bridge.Message{

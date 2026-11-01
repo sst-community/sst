@@ -101,14 +101,14 @@ In 5.0 it's designed, typed and versioned:
 
 ### Places to plug in
 
-Each is a typed, versioned interface in the core, drawn from what two implementations need: the built-in, and the first outside one (Floci for a target, a runtime made of commands for a runtime). The built-in is fitted to the interface, not the other way round. Today's `Runtime` has `ShouldRunEagerly` only because Python rebuilds every function when a shared file changes; a quirk like that stays inside the built-in.
+Each is a typed, versioned interface in the core, drawn from what two implementations need: the built-in, and the first outside one (Floci for a target, a runtime made of commands for a runtime). The built-in is fitted to the interface, not the other way round. Python rebuilds every function when shared code changes, so the core starts again at once only the workers of the few functions invoked last, whatever the runtime, and no runtime has to say how it starts.
 
 | Kind | What it provides | Built-in today | Who provides one in 5.0 |
 | --- | --- | --- | --- |
 | `component` | resources, as parts | the components | SST, apps and packages |
 | `check` | validation, in the program and of the preview | none | SST, apps and packages |
 | `target` | where cloud calls go | the real cloud | SST, and packages as settings the core carries out |
-| `runtime` | build, run in `sst dev`, which files to watch, the types of what's linked | node, python, go, rust, worker (`pkg/runtime/`) | SST, and packages as commands ([v5-community-packages.md](../v5-community-packages.md) step 4) |
+| `runtime` | build, run in `sst dev`, which files to watch | node, python, go, rust, worker (`pkg/runtime/`) | SST, and packages as commands ([v5-community-packages.md](../v5-community-packages.md) step 4) |
 | `home` | where state, locks and secrets are stored, and bootstrap | aws, cloudflare, local (`pkg/project/provider/`) | SST |
 | `transport` | how a deployed stub reaches `sst dev` | AppSync | SST: AppSync, and #212's HTTP |
 | `command` | an `sst <x>` subcommand | none | Waits for a host |
@@ -129,14 +129,13 @@ type Home interface {
 	CreatePassphrase(ctx context.Context, app, stage, value string) error // never overwrites
 }
 
-// Today's pkg/runtime interface, plus the types of what's linked. Step 3 draws it again from two implementations.
+// Builds a function, and in sst dev runs it against the Lambda runtime API. Built in:
+// node, python, go, rust, worker, and Commands, a runtime made of commands.
 type Runtime interface {
 	Match(runtime string) bool
 	Build(ctx context.Context, input *BuildInput) (*BuildOutput, error)
 	Run(ctx context.Context, input *RunInput) (Worker, error) // in sst dev, against the CLI's runtime API
 	ShouldRebuild(functionID, path string) bool
-	ShouldRunEagerly() bool
-	Types(ctx context.Context, links LinkTypes) error
 }
 
 // How the stub in the cloud reaches sst dev.
@@ -169,12 +168,13 @@ export const floci = sst.target({
   region: "us-east-1",
 });
 
-// A runtime: commands, as v5-community-packages.md step 4 plans
+// A runtime: commands, as v5-community-packages.md step 4 plans. The dev command is the
+// language's runtime interface client, run against sst dev's Lambda runtime API.
+// Its watch globs leave out what the build writes, here vendor/.
 export const ruby = sst.runtime({
-  match: "ruby",
-  build: { command: "bundle install --deployment", output: "." },
-  dev: { command: "ruby dev.rb" },
-  watch: ["**/*.rb", "Gemfile.lock"],
+  build: { command: "bundle install", output: "." },
+  dev: { command: "bundle exec aws_lambda_ric $_HANDLER" },
+  watch: ["*.rb", "lib/**/*.rb", "Gemfile.lock"],
 });
 
 // A check: runs in the program
@@ -189,7 +189,7 @@ An app names a stage's target in `app()`, as `targets: { local: floci }`, and a 
 - **A package gives settings, not CLI code.** A target or a runtime from a package is settings, and a check runs in the program, so nothing from a package runs in the CLI. `app()` already reaches the core as JSON, and a function's build input already reaches it through the RPC, so neither needs anything new to get there.
 - **No host in 5.0.** When a package needs to run code in the CLI (a home for another cloud, a command), a host comes in a 5.x release: a JavaScript runtime in its own process, talking to the core over a versioned protocol. Node or Deno is decided then ([why, and what else was weighed](reference.md#why-theres-no-host-in-50)).
 - **A home only stores bytes.** The lock, the secrets' encryption and the history are the core's, as they are today, so a home can't change the layout, the lock or the encryption, and [goal 4](goals.md#4-the-home-stays-compatible) holds for every home. The AWS home's other duties, resolving credentials, giving the program its bootstrap data and pruning old object versions, stay in it, in Go.
-- **A runtime only builds and runs.** The shared work stays in the core, as `runtime.Collection` does it now: bundles, copied files, and the links encrypted into `resource.enc`.
+- **A runtime only builds and runs.** The shared work stays in the core, as `runtime.Collection` does it now: bundles, copied files, and the links encrypted into `resource.enc`. The types of what's linked stay the app's, not a runtime's: a site's frontend or a Rails app reads its links too, and isn't a function, so the core makes them for the app's languages (`pkg/types`).
 - **The stub stays in the core.** The deployed stub (`platform/functions/bridge/`) is a Go binary, so it starts fast in any Lambda runtime. It speaks a fixed set of wire protocols, AppSync Events and #212's token-authenticated HTTP, and a transport picks one and gives it its endpoint and permissions.
 - **A transport only delivers packets.** The interface writes down what `bridge.Conn` never said: what a transport does about order, copies, loss, a channel with no subscriber, and closing. The bridge keeps doing the rest: packets, order, copies, and asking again for what's lost ([the `sst dev` path](reference.md#the-sst-dev-path)). `Stub` and `Connect` each find or create what a transport needs outside the state, like the AppSync Event API, as the program can ask for the stub's settings before `sst dev` connects, or without it, in `sst deploy --dev`. `Remove` removes it.
 - **Checks build on what's there.** `--policy` already passes a Pulumi policy pack to the deploy, and the [policies experiment](../policies-experiment.md) built rules into one, each finding named by its component and part. #212's allowlist used Pulumi's transforms instead, which also see invokes. A check takes both, and the policies experiment's rules package becomes a check package.
@@ -198,7 +198,7 @@ An app names a stage's target in `app()`, as `targets: { local: floci }`, and a 
 **Each has a test suite.** SST's built-ins pass it first, and a package's target or runtime runs it in its own CI.
 
 - **home:** two clients race for the lock and one wins. A stale lock is reported. A checkpoint round trip is byte for byte. The passphrase stays the same. A home that finds no state for a stage with history refuses. Built-in homes also read a recorded state 4.x wrote.
-- **runtime:** builds a fixture function, which then answers on a fake runtime API. A change to a watched file rebuilds it. A build error is reported. Its types match what's linked.
+- **runtime:** builds a fixture function, which then answers on a fake runtime API, and what it prints is in its logs. A change to a file it uses rebuilds it, and one to a file it doesn't, doesn't. An error in its code is reported as the function's, not the runtime's.
 - **transport:** one set of behaviors run against any transport: loss, reordering, copies, reconnecting, large payloads, many invocations at once, and the time it adds. A full subscriber isn't one: a transport may hold up or lose its events, and the bridge reads as they come. Today's fakes in the `bridge` package and `harness_test.go` become wrappers around the transport under test, and the stub's own loop is run too.
 - **target:** on its stage, the program, the workers and `sst shell` have none of the developer's `AWS_*` variables and can't read a planted credentials file. Every provider endpoint is the target's: a run behind a proxy that fails any other host passes. Its stage can't reach the real home.
 - **check:** findings on fixture programs. An unknown value in a preview is reported, not dropped.
@@ -472,7 +472,7 @@ Each comes when it's needed, with its own exit test.
 | 0. What v5 taught | Written in [reference.md](reference.md#what-v5-taught), 2026-10-31. |
 | 1. A record of today's state | Started, 2026-10-31. Recorded with v4.23.1 and in `testdata/states/`: the serverless group and the sites, the VPC groups, and the serverless group by `sst dev`. A recorded state replays with AWS credentials and the passphrase, not without. Everything removed, and the audit is clean. Left: Cloudflare (at step 4). |
 | 2. The first proof | Started, 2026-10-31, committed (not pushed). Done: `Home` as a store of bytes, the conditional lock, the guard for a missing state, `sst diff` that writes nothing, the preview fix, the diff-only build, and the program's input pinned by tests. Checked against every recording: the same diff as 4.x, the lock both ways, no second passphrase, 4.x's diff after a deploy by the new core. Reviewed, and the review's findings fixed. Left: the pre-release, which needs the maintainer. |
-| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. The program contract's version 1: `report()` and `context()`, the core's reader, the V5 components on it, checked in the lab and under `mock()`. The transport as a place to plug in: `bridge.Transport`, AppSync behind it, `Dev.Stub`, and the transport suite, checked against the real Event API and in the lab, and reviewed. Next: the runtime. |
+| 3. The program contract, places to plug in, and Floci | Started, 2026-10-31, committed (not pushed). Done: the RPC's safety rule (loopback, a token in the path, keyed worker routes, only the methods used, no TLS proxy), checked in the lab with `sst dev`, refresh and remove, and reviewed. The Console's local connection and `sst cert` removed. The program contract's version 1: `report()` and `context()`, the core's reader, the V5 components on it, checked in the lab and under `mock()`. The transport as a place to plug in: `bridge.Transport`, AppSync behind it, `Dev.Stub`, and the transport suite, checked against the real Event API and in the lab, and reviewed. The runtime as a place to plug in: the interface without `ShouldRunEagerly`, a runtime made of commands, and the runtime suite, which Node.js, Go, Python, Cloudflare's workers and the commands runtime pass, reviewed. Next: `sst.runtime`, with a Ruby function in the lab, then the target, `sst.target` and `sst.check`. |
 | 4. New components | Not started. |
 | 5. Moving an app | Not started. |
 | 6. After 5.0 | When needed. |

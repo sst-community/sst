@@ -1,12 +1,14 @@
 package aws
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/watcher"
 	"github.com/sst/sst/v3/pkg/bus"
+	"github.com/sst/sst/v3/pkg/project"
 )
 
 // Saving a file rebuilds the functions that use it, and stops their workers,
@@ -301,5 +303,113 @@ func TestReloadReplacesAWorkerWithoutADeadline(t *testing.T) {
 
 	if got, err := b.invoke("next"); err != nil || got != "echo next" {
 		t.Fatalf("got %q, %v, want %q", got, err, "echo next")
+	}
+}
+
+// A change to code many functions share starts again at once only the workers
+// of the startAtOnce functions invoked last, whatever the runtime, as Python's
+// did for none. Starting one for every function started as many processes at
+// once. The others start when they're invoked, and answer as before.
+func TestReloadStartsWorkersOnlyForTheFunctionsInvokedLast(t *testing.T) {
+	h := newHarness(t, &fakeRuntime{rebuild: true, handle: echo})
+	const functions = startAtOnce + 3
+	bridges := make([]*fakeBridge, functions)
+	for i := range bridges {
+		name := fmt.Sprintf("Fn%d", i)
+		h.addFunction(name)
+		bridges[i] = h.bridge(name)
+		if _, err := bridges[i].invoke("warm"); err != nil {
+			t.Fatal(err)
+		}
+		// each is invoked after the one before
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := h.runtime.starts.Load()
+
+	bus.Publish(&watcher.FileChangedEvent{Path: "src/shared.ts"})
+	time.Sleep(500 * time.Millisecond)
+	if started := h.runtime.starts.Load() - before; started != startAtOnce {
+		t.Fatalf("a change to %d functions started %d workers at once, want %d", functions, started, startAtOnce)
+	}
+	// the ones invoked last have theirs
+	for _, b := range bridges[functions-startAtOnce:] {
+		if _, err := b.invoke("after"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if started := h.runtime.starts.Load() - before; started != startAtOnce {
+		t.Fatalf("invoking the functions invoked last started %d workers since the change, want theirs started then", started)
+	}
+	// the others start theirs now
+	for _, b := range bridges[:functions-startAtOnce] {
+		got, err := b.invoke("later")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "echo later" {
+			t.Fatalf("got %q, want %q", got, "echo later")
+		}
+	}
+	if started := h.runtime.starts.Load() - before; started != functions {
+		t.Fatalf("started %d workers in all, want one for each function", started)
+	}
+}
+
+// A deploy builds every function with a worker at once, as before, and starts
+// again at once only the workers of the startAtOnce functions invoked last. The
+// others start when they're invoked, already built, so they aren't built one by
+// one in the loop then.
+func TestDeployStartsWorkersOnlyForTheFunctionsInvokedLast(t *testing.T) {
+	const functions = startAtOnce + 3
+	open := make(chan struct{})
+	close(open)
+	builds := map[string]chan struct{}{}
+	for i := range functions {
+		builds[fmt.Sprintf("Fn%d", i)] = open
+	}
+	held := make(chan string, 100)
+	h := newHarness(t, &fakeRuntime{handle: echo, builds: builds, held: held})
+	bridges := make([]*fakeBridge, functions)
+	for i := range bridges {
+		name := fmt.Sprintf("Fn%d", i)
+		h.addFunction(name)
+		bridges[i] = h.bridge(name)
+		if _, err := bridges[i].invoke("warm"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	built := func() int {
+		n := 0
+		for {
+			select {
+			case <-held:
+				n++
+			default:
+				return n
+			}
+		}
+	}
+	built()
+	before := h.runtime.starts.Load()
+
+	bus.Publish(&project.CompleteEvent{})
+	time.Sleep(500 * time.Millisecond)
+	if n := built(); n != functions {
+		t.Fatalf("a deploy built %d of %d functions with a worker, want all of them", n, functions)
+	}
+	if started := h.runtime.starts.Load() - before; started != startAtOnce {
+		t.Fatalf("a deploy started %d workers at once, want %d", started, startAtOnce)
+	}
+	for _, b := range bridges[:functions-startAtOnce] {
+		if got, err := b.invoke("later"); err != nil || got != "echo later" {
+			t.Fatalf("got %q, %v, want %q", got, err, "echo later")
+		}
+	}
+	if n := built(); n != 0 {
+		t.Fatalf("invoking the others built %d functions again", n)
+	}
+	if started := h.runtime.starts.Load() - before; started != functions {
+		t.Fatalf("started %d workers in all, want one for each function", started)
 	}
 }

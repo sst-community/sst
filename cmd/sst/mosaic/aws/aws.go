@@ -49,11 +49,12 @@ func Start(
 	tasksChan := make(chan bridge.Message, 1000)
 
 	in := input{
-		config:  config,
-		server:  s,
-		client:  client,
-		project: p,
-		prefix:  prefix,
+		config:      config,
+		server:      s,
+		client:      client,
+		project:     p,
+		prefix:      prefix,
+		startAtOnce: startAtOnce,
 	}
 
 	in.msg = functionsChan

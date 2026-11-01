@@ -18,7 +18,9 @@ import (
 )
 
 type Runtime struct {
-	mut         sync.Mutex
+	mut sync.Mutex
+	// each function's folder, which ShouldRebuild reads while a build runs
+	dirMut      sync.Mutex
 	directories map[string]string
 }
 
@@ -108,7 +110,9 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 	)
 	out := filepath.Join(input.Out(), "bootstrap")
 
+	r.dirMut.Lock()
 	r.directories[input.FunctionID], _ = filepath.Abs(root)
+	r.dirMut.Unlock()
 
 	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
@@ -120,18 +124,25 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 	}
 	defer source.Close()
 
-	destination, err := os.Create(out)
+	// written beside it and renamed over it, as a worker from the last build
+	// may still be running the binary there
+	next := out + ".next"
+	destination, err := os.Create(next)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create destination file: %w", err)
 	}
-	defer destination.Close()
-
 	if _, err := io.Copy(destination, source); err != nil {
+		destination.Close()
 		return nil, fmt.Errorf("failed to copy binary: %w", err)
 	}
-
-	if err := os.Chmod(out, 0755); err != nil {
+	if err := destination.Close(); err != nil {
+		return nil, fmt.Errorf("failed to copy binary: %w", err)
+	}
+	if err := os.Chmod(next, 0755); err != nil {
 		return nil, fmt.Errorf("failed to make binary executable: %w", err)
+	}
+	if err := os.Rename(next, out); err != nil {
+		return nil, fmt.Errorf("failed to replace the binary: %w", err)
 	}
 
 	return &runtime.BuildOutput{
@@ -163,7 +174,9 @@ func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 	if !strings.HasSuffix(file, ".rs") {
 		return false
 	}
+	r.dirMut.Lock()
 	match, ok := r.directories[functionID]
+	r.dirMut.Unlock()
 	if !ok {
 		return false
 	}
@@ -173,11 +186,4 @@ func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 		return false
 	}
 	return !strings.HasPrefix(rel, "..")
-}
-
-// ShouldRunEagerly returns true for Rust - the worker invoked last restarts immediately after rebuild.
-// Rust uses directory-based dependency tracking, so only functions in the changed
-// directory will rebuild.
-func (r *Runtime) ShouldRunEagerly() bool {
-	return true
 }

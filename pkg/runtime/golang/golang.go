@@ -15,7 +15,9 @@ import (
 )
 
 type Runtime struct {
-	mut         sync.Mutex
+	mut sync.Mutex
+	// each function's folder, which ShouldRebuild reads while a build runs
+	dirMut      sync.Mutex
 	directories map[string]string
 }
 
@@ -71,7 +73,9 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 			Errors: []string{string(output)},
 		}, nil
 	}
+	r.dirMut.Lock()
 	r.directories[input.FunctionID], _ = filepath.Abs(root)
+	r.dirMut.Unlock()
 	return &runtime.BuildOutput{
 		Handler:    "bootstrap",
 		Sourcemaps: []string{},
@@ -99,7 +103,9 @@ func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 	if !strings.HasSuffix(file, ".go") {
 		return false
 	}
+	r.dirMut.Lock()
 	match, ok := r.directories[functionID]
+	r.dirMut.Unlock()
 	if !ok {
 		return false
 	}
@@ -109,11 +115,4 @@ func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 		return false
 	}
 	return !strings.HasPrefix(rel, "..")
-}
-
-// ShouldRunEagerly returns true for Go - the worker invoked last restarts immediately after rebuild.
-// Go uses directory-based dependency tracking, so only functions in the changed
-// directory will rebuild.
-func (r *Runtime) ShouldRunEagerly() bool {
-	return true
 }
