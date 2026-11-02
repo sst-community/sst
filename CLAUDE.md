@@ -38,7 +38,7 @@ This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST rel
 
 ## V5 components
 
-`platform/src/components/README.md` is the guide to writing a V5 component and to porting a 4.x one: parts, args, takeover maps, tests and a checklist. Read it before touching a file in `platform/src/components/aws/v5/`. Edit a 4.x component file only where it changes nothing for an app that uses it (see the rulebook).
+`platform/src/components/README.md` is the guide to writing a V5 component: parts, args, linking, dev mode, versions and tests. `platform/src/components/PORTING.md` has the rules for porting one of SST's 4.x components: takeover maps, helpers, tests and a checklist. Read both before touching a file in `platform/src/components/aws/v5/`. Edit a 4.x component file only where it changes nothing for an app that uses it (see the rulebook).
 
 ## Plans and progress
 

@@ -225,7 +225,7 @@ An app names a stage's target in `app()`, as `targets: { local: floci }`, and a 
 
 ### Components
 
-- **Built the v5 way.** `sst.component(type, parts)`, with `transform`, `existing` and `nodes` for every part, tested with `mock()`, and their docs written from the parts. The rulebook (`platform/src/components/README.md`) carries over.
+- **Built the v5 way.** `sst.component(type, parts)`, with `transform`, `existing` and `nodes` for every part, tested with `mock()`, and their docs written from the parts. The rulebook carries over: `platform/src/components/README.md` for writing a component, and `PORTING.md` beside it for porting one of SST's, which goes at 5.0.
 - **A clean break from 4.x code.** A 5.0 component owns its args, types and docs, and imports nothing from a 4.x file. A test checks that, as `v5-components.test.ts` checks v5's rules today. The V5 components lean on 4.x ([how](reference.md#how-the-v5-components-lean-on-4x)); what's taken from them is the design, not those ties. What's kept from 4.x is identity: the names resources have (`named()`), and the state maps, which live apart.
 - **The component contract.** What the core reads from a component is declared through [the program contract](#the-program-contract): its functions, dev commands, tasks, tunnels, the shape of what it links, and hints.
 - **A version for each.** Its state map from 4.x is its first; a later change that moves resources ships a map of its own ([State maps](#state-maps)).
@@ -296,7 +296,7 @@ They close each of #212's review findings in the core, not by each package getti
 
 #### State maps
 
-v5's takeover maps (`platform/src/components/takeover.ts`, and the rulebook's "Taking over what 4.x deployed") say which old resource each new part takes over, and turn that into Pulumi aliases. 5.0 makes them a general tool:
+v5's takeover maps (`platform/src/components/takeover.ts`, and "Taking over what 4.x deployed" in `platform/src/components/PORTING.md`) say which old resource each new part takes over, and turn that into Pulumi aliases. 5.0 makes them a general tool:
 
 - **A map is data**, shipped with the component: for each part, the old addresses it can take over (`moved`), whether it's new (`added`), what changes for the user when a move replaces it (`replaced`), and what it takes the place of (`released`). What a move updates in place isn't listed; the check shows it. A component, a wrapper or a provider has nothing in the cloud behind it, so it may leave the state or be created without being listed.
 - **The core applies it, not the component.** The core turns a map into aliases while a stage moves, and stops once the stage has. A component's code never carries its old layout.

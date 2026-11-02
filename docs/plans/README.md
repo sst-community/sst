@@ -15,7 +15,7 @@ Where the fork's larger pieces of work are planned and tracked. `CLAUDE.md` hold
 | [v5-rewrite/](v5-rewrite/plan.md) | A draft: the 5.0 rewrite, in three files. [plan.md](v5-rewrite/plan.md) has the goal, the decisions, the design and the steps: new components only, a Go core with a designed program contract and typed places to plug in, and one checked step to move an app. [goals.md](v5-rewrite/goals.md) is what 5.0 holds to. [reference.md](v5-rewrite/reference.md) is SST as it is, read from the code for the plan. |
 | [policies-experiment.md](policies-experiment.md) | Policies made easier to use: rules in the config, exceptions, tests under `mock()`, and a CDK-NAG style rules package. Tried, not acted on. Also four policy bugs in SST today. |
 
-The rules for writing a v5 component are not here. They're in [`platform/src/components/README.md`](../../platform/src/components/README.md), which ships with the CLI.
+The rules for writing a v5 component are not here. They're in [`platform/src/components/README.md`](../../platform/src/components/README.md), which ships with the CLI, and the rules for porting one of SST's 4.x components, with the checklist, in [`PORTING.md`](../../platform/src/components/PORTING.md) beside it.
 
 ## Keeping it current
 
