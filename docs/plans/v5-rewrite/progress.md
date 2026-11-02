@@ -2,6 +2,58 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, `Nextjs` built the 5.0 way
+
+The maintainer said to continue. With the `Router` and its `Cdn` done, `Nextjs` was the last of the gate's three hard components.
+
+**Done, committed (not pushed):**
+
+- **The V5 `Nextjs`** (`sst:aws:Nextjs`), built the 5.0 way: its own args and docs, no 4.x component file, and nothing inside an `apply`. It's served through a `Router`, V5 or 4.x, with `router`, or through a V5 `Cdn` of its own. Its parts keep 4.x's names, so a switch moves nothing in the cloud.
+- **The site is built in the program, once per deploy** (`buildSite()` in `helpers/site-build.ts`), with the values of its links and its environment ([decision](plan.md#decisions)). A preview builds it without the values it doesn't know, and passes a link none of whose properties it knows with only its type. Builds take their turn, as many at once as `SST_BUILD_CONCURRENCY_SITE` says; 4.x sites keep a limit of their own. A failed build fails the deploy once, with the end of its output, and the `nodes` made from it fail with it. 4.x kept its build in the state as a `command:local:Command`, which a switch takes out. `sst migrate --check` lets a 4.x site's build go, or be replaced as it is on every deploy, since it only writes the site's files on this machine; a user's own local command only goes when it's deleted without a delete command.
+- **What the build makes is created after it**, with `this.after()`: a server in each region, the image optimizer, ISR's queue, table and seeder, the warmer and who may call the functions' URLs. The rest is created directly. `nodes.server` has the server of each region from the start (`willCreate()`); without `regions`, that's the app's region, read from its config.
+- **Plain args:** `regions`, `warm`, `protection`, `edge`, `router`, `invalidation`, `imageOptimization` and `server`, which decide what's created, what the build reads (`path`, `buildCommand`, `openNextVersion`), and the domain's names. `route`, `cdn` and `server.edge` are turned down with a message saying what to write.
+- **Seeding and warming follow the build.** 4.x seeded the ISR data and warmed the server on every deploy, triggered by the time. The V5 one seeds when the data changes and warms when the site is built. The data is keyed by the build's id, which Next.js makes new on every build unless an app sets `generateBuildId`, so it's most often seeded on every deploy all the same. `assets.textEncoding` sets the charset, which 4.x ignored.
+- **Shared with the 4.x sites:** the files, key-value entries and invalidation a site makes moved to `site-code.ts`, which the 4.x `SsrSite` calls, unchanged for an app. The framework has `after()`, `deferred(optional(...))` and `willCreate()`, and a takeover map can give an address inside the component (the 4.x warmer's `Cron`) or beside a queue (4.x's subscriber).
+- **A `VisibleError` keeps its message as it's written.** Pulumi added the property it was serializing to an error's message, in place, once for each resource that waited on it, so a failed build read `error serializing property "entries": error serializing property "paths": ...`. This cleans up such errors from 4.x components too, and changes nothing else for an app.
+
+**Checked** (all 2,139 platform tests, `tsc`, the docs page):
+
+- **Against what 4.x really deployed:** the recording of the lab's Next.js site, as v4.23.1 deployed it. 4.x gives what the state has, but for what a build changes, and the V5 `Nextjs` takes it over with only the build command and the subscriber's wrapper gone, and the seed and the code made again. Nothing secret is in plain text in its state.
+- It takes over 4.x's in 18 setups, each run as it is, inside another component and with a provider of its own: on a distribution of its own; behind a 4.x `Router`, and a V5 one that signs, under a path; each `protection`, and the user's edge signer; kept warm, in one region and two; ISR off; links and environment; edge code on the site's store and on the user's; a cache policy; each kind of `invalidation`; server and image options; a domain with aliases and redirects; a VPC; `transform.server`; two regions behind a router that signs; and a stage deployed in `sst dev`.
+- A new stage's preview plans everything a deploy creates, and builds with what it knows. A failed build fails once, with its own message; a test fails on the old `VisibleError`.
+
+**Checked in the lab** (stage `next`, `LAB_ONLY=sites`, with a CLI built from the branch):
+
+- Deployed with the 4.x `Nextjs` behind the 4.x `Router`, beside 4.x Astro, SvelteKit and static sites. Switched with `LAB_NEXT=v5`: `sst migrate --check` showed, for the site, its build command and its subscriber's wrapper taken out of the state, its seed and its code replaced as the maps say, its functions updated, and nothing created or released. The check failed only on the 4.x Astro and SvelteKit sites, which build again on every run, as in the router's check: their build commands, which pass now (above), and their functions' code, which doesn't (Left).
+- The deploy kept every resource with the same id but the code objects, uploaded again under new keys, and the build commands. Twelve kept their id under a new name: the revalidation subscriber, out of its wrapper. Its `SST_KEY_FILE` follows its new name.
+- The pages, the other sites and the image optimizer answered as before. A diff after it showed only what a new build changes, as 4.x's does. A build that fails in `sst diff` shows its message and the end of its output, once.
+- Removed, and cleaned up.
+
+**Reviewed** by a separate agent, which found nothing a switch loses: names, parents, providers and options match 4.x, and the extraction to `site-code.ts` leaves 4.x's sites byte for byte the same. Its findings, fixed:
+
+- **`nodes.server` was empty until the build, without `regions`.** It's there from the start now, as above.
+- **A preview builds the site, where 4.x's skipped the build when a value wasn't known.** On a new stage, a build that checks its environment can fail `sst diff`. A link whose properties weren't known was dropped from it; it's passed with its type now, and "Switch from" says what a preview's build gets.
+- **A failed build's message was rewritten** for each resource waiting on it, as above.
+- **The build's stdin was left open**, so one that asked for input hung. It gets none now.
+- **`sst migrate --check` let any local command go**, where only its delete does nothing. A user's command created or replaced runs, so it's listed now.
+- The tests: six setups above weren't run (a domain with redirects, a VPC, the user's store, `transform.server`, two regions behind a signing router, `sst dev`), nor a failed build or `nodes.server` without `regions`, and the removal orders 4.x had and V5 doesn't were matched too loosely. Added, and listed one by one.
+
+A second agent reviewed those fixes. Its findings, fixed:
+
+- **The stricter rule failed every stage that keeps a 4.x site**, whose build is replaced on every deploy. A 4.x site's build is told apart now: the one local command an SST component runs, right under the site, with no delete command.
+- **A failed build left the server in `nodes` as `undefined`**, so a resource made from its URL could be updated without it before the deploy failed. It fails with the build's error now, which Pulumi reports once.
+- **Sharing the limit with 4.x could hang a deploy**: a failed 4.x build never gives back its turn, and a V5 site waiting for it kept the program running. The limits are separate again.
+- A test helper rewrote an error's message to add context, which a `VisibleError` would have dropped; it wraps the error now.
+
+These came after the lab's check, which ran the first round's CLI. They change what a failure does and what `--check` allows, which the tests cover; they weren't deployed.
+
+**Left:**
+
+- **Domains the 5.0 way**, as for the `Router`: a new stage's preview doesn't show a domain's DNS records.
+- **A deploy that previews first builds a site twice**: on a stage with checks or a policy pack, once in the preview and once in the deploy.
+- **`sst migrate --check` fails on a stage with 4.x server-rendered sites that stay 4.x**: their functions' code is uploaded again on every deploy, under a new key, and the 4.x `Function` has no map. The move (step 5) has to tell what a stage changes on every deploy from what the move changes.
+- Releasing and adopting `BucketFiles` and `KvKeys`, the gate's last item: the site's switch didn't need it, since they keep their type and address.
+
 ## 2026-11-01: step 4, the `Router` built the 5.0 way
 
 The maintainer said to continue, with `Nextjs` and `Router` next. The `Router` comes first: every site, and a function's URL, is served through it. Two decisions came first ([Decisions](plan.md#decisions)): a site builds once per deploy, and the V5 `Router` drops inline routes.
