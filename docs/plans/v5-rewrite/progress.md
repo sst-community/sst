@@ -2,6 +2,15 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the lab check of the `Postgres`, `Mysql`, `Aurora` and `Redis`, with the `Vpc`
+
+**Checked in the lab** (a stage of its own, the only one with a VPC, with a CLI built from the branch). The lab app's databases group: a `Postgres` with a proxy, a `Mysql`, a `Redis`, an `Aurora` and a `Dsql`, in a VPC with a NAT gateway in each AZ and a bastion, and a function linked to all five that says which properties each link gives it. The move switched the `Vpc` with them.
+
+- **Deployed with SST 4**, then switched it all at once. `sst migrate --check` passed: 89 kept (11 at a new address), nothing updated in place, replaced or released, 3 taken out of the state with nothing in the cloud behind them (4.x's version markers) and the marker created.
+- **The move** kept every resource by id: all 70 in the state, the databases' secrets under their new names among them. Then `sst diff` showed no changes, and the function's links gave the same properties as before.
+- **In `sst dev`** on a stage of its own (`LAB_ONLY=panes`, nothing in AWS), the `Mysql`'s and the `Aurora`'s panes beside the `Postgres`'s and the `Redis`'s: the `Aurora` on MySQL with its engine's username and port, and its empty password shown as none.
+- Removed, and cleaned up: 105 state versions and the passphrase of the stage, the proxy's log group and the function's source map; and the pane stage's 18 state versions and passphrase. The state bucket has no key of the lab app. Each resource the tagging API still lists was checked directly, and is gone.
+
 ## 2026-11-02: step 4, the `Mysql` and the `Aurora` built the 5.0 way
 
 **Done, committed (not pushed):**
