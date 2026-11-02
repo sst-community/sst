@@ -634,6 +634,19 @@ export function replayer(state: StateExport) {
       return regions.get(provider ? provider : "");
     },
     /**
+     * The hosted zone SST's provider finds for a domain: the one SST 4's
+     * lookup found for it, which the state has.
+     */
+    hostedZone(domain: string): string | undefined {
+      const lookup = (state.checkpoint.latest?.resources ?? []).find(
+        (r) =>
+          !r.delete &&
+          r.urn.endsWith(".sst.aws.HostedZoneLookup") &&
+          r.inputs?.domain === domain,
+      );
+      return lookup?.outputs?.zoneId as string | undefined;
+    },
+    /**
      * The id and outputs of what a resource takes the place of, by every
      * address it answers to: its own and its aliases.
      */

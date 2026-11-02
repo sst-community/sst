@@ -53,6 +53,16 @@ var dataKinds = map[string][]string{
 	"sst.aws.VectorTable": {"dimension"},
 }
 
+// SST 4's lookups, made with resources, by the kind each adds to its name.
+// SST 5 makes them with functions of its provider. Nothing in the cloud is
+// behind one, so a move releases it: it leaves the state without its delete,
+// which only the CLI's RPC for SST 4 can run
+// (docs/plans/v5-rewrite/reference.md, SST's provider resources).
+var lookupKinds = map[string]bool{
+	"sst.aws.HostedZoneLookup":  true,
+	"sst.cloudflare.ZoneLookup": true,
+}
+
 // What sets when what a bucket stores expires. A move doesn't create one or
 // change it: set it after the move.
 var expiryTypes = map[string]bool{

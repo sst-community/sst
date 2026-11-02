@@ -75,7 +75,9 @@ func Main(version string) error {
 		close(stop)
 	}()
 
-	s := newServer(version, resources(envAws()))
+	load := envAws()
+	s := newServer(version, resources(load))
+	s.functions = functions(load)
 	handle, err := rpcutil.ServeWithOptions(rpcutil.ServeOptions{
 		Cancel: stop,
 		Init: func(srv *grpc.Server) error {
@@ -100,6 +102,7 @@ type server struct {
 	pulumirpc.UnimplementedResourceProviderServer
 	version   string
 	resources map[string]handler
+	functions map[string]function
 }
 
 // newServer serves resources, by type. A version that isn't one Pulumi can

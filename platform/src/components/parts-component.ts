@@ -562,11 +562,20 @@ export class PartsComponent<P extends Parts> extends Component {
     return {
       parent: this,
       // A resource's own transformations run before its parent's, so it's
-      // known by the time `childCreated()` sees it.
+      // known by the time `childCreated()` sees it. Pulumi reads its aliases
+      // after its transformations, so the map's can be added here.
       transformations: [
         (child) => {
           this.partDelegated.add(child.resource);
-          return undefined;
+          const aliases = this.delegatedAliases(child.name, child.type);
+          if (aliases.length === 0) return undefined;
+          return {
+            props: child.props,
+            opts: {
+              ...child.opts,
+              aliases: [...(child.opts.aliases ?? []), ...aliases],
+            },
+          };
         },
       ],
     };
@@ -780,6 +789,20 @@ export class PartsComponent<P extends Parts> extends Component {
         ? { name: `${this.componentName}${logicalName(moved)}${logicalName(id ?? "")}` }
         : moved(this, { name: this.componentName, id });
     // Each old address that isn't known yet stands in under a name of its own
+    return [old ?? []]
+      .flat()
+      .map((address, i) => aliasOf(address, i === 0 ? name : `${name}-${i}`));
+  }
+
+  // Where a resource created on this component's behalf lived, by the map
+  private delegatedAliases(name: string, type: string) {
+    const delegated = takeoverOf(this.constructor)?.delegated;
+    if (!delegated) return [];
+    const old = delegated(this, {
+      name,
+      type,
+      componentName: this.componentName,
+    });
     return [old ?? []]
       .flat()
       .map((address, i) => aliasOf(address, i === 0 ? name : `${name}-${i}`));

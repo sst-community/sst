@@ -16,10 +16,12 @@ import {
 import type { Prettify } from "../../component";
 import { plain } from "../../args";
 import { logicalName } from "../../naming";
-import { DnsValidatedCertificate } from "../dns-validated-certificate";
-import { HttpsRedirect } from "../https-redirect";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import { HttpsRedirect } from "./https-redirect";
 import { DistributionDeploymentWaiter } from "../providers/distribution-deployment-waiter";
-import { type CustomDomainArgs, customDomain } from "../helpers/custom-domain";
+import { VisibleError } from "../../error";
+import type { DnsAdapter } from "../../dns-adapter";
+import { dns as awsDns } from "../dns";
 import { useProvider } from "../helpers/provider";
 
 const parts = {
@@ -44,7 +46,65 @@ const parts = {
   redirect: optional(HttpsRedirect),
 };
 
-export interface CdnDomainArgs extends CustomDomainArgs {
+export interface CdnDomainArgs {
+  /**
+   * The custom domain you want to use. A plain value: the DNS records are named after it.
+   *
+   * @example
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com"
+   *   }
+   * }
+   * ```
+   *
+   * Can also include subdomains based on the current stage.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: `${$app.stage}.example.com`
+   *   }
+   * }
+   * ```
+   */
+  name: string;
+  /**
+   * The DNS provider to use for the domain: an adapter that creates the DNS records, like
+   * `sst.aws.dns()`, `sst.cloudflare.dns()` or `sst.vercel.dns()`.
+   *
+   * For other providers, set `dns` to `false` and pass in a `cert`.
+   *
+   * @default `sst.aws.dns`
+   *
+   * @example
+   *
+   * Specify the hosted zone ID for the Route 53 domain.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com",
+   *     dns: sst.aws.dns({
+   *       zone: "Z2FDTNDATAQYW2"
+   *     })
+   *   }
+   * }
+   * ```
+   *
+   * Use a domain hosted on Cloudflare, needs the Cloudflare provider.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com",
+   *     dns: sst.cloudflare.dns()
+   *   }
+   * }
+   * ```
+   */
+  dns?: false | DnsAdapter;
   /**
    * Alternate domains to be used. Visitors to the alternate domains will be redirected to the
    * main `name`.
@@ -227,10 +287,19 @@ export function cdnDomain(
   owner: string,
 ) {
   if (!domain) return;
-  const { name, dns, cert } = customDomain(domain, owner);
-  const given: Partial<CdnDomainArgs> =
-    typeof domain === "string" ? {} : domain;
+  plain(domain, `The "domain" of ${owner}`);
+  const given: CdnDomainArgs =
+    typeof domain === "string" ? { name: domain } : domain;
   const named = "Its DNS records are named after it.";
+  if (!given.name)
+    throw new VisibleError(`Domain "name" is required for ${owner}.`);
+  const name = plain(given.name, `The domain "name" of ${owner}`, named);
+  plain(given.dns, `The domain's "dns" in ${owner}`);
+  const dns = given.dns === false ? undefined : given.dns ?? awsDns();
+  if (!dns && !given.cert)
+    throw new VisibleError(
+      `Domain "cert" is required when "dns" is disabled for ${owner}.`,
+    );
   const plainList = (list: string[], what: string) => {
     plain(list, what);
     return list.map((item) => plain(item, what, named));
@@ -243,13 +312,7 @@ export function cdnDomain(
     given.redirects ?? [],
     `The domain "redirects" of ${owner}`,
   );
-  return {
-    name: plain(name, `The domain "name" of ${owner}`, named) as string,
-    aliases,
-    redirects,
-    dns,
-    cert,
-  };
+  return { name, aliases, redirects, dns, cert: given.cert };
 }
 
 /**
@@ -373,7 +436,7 @@ export class Cdn extends component("sst:aws:CDN", parts) {
       const seen: string[] = [];
       [domain.name, ...domain.aliases].forEach((recordName, i) => {
         const key = logicalName(recordName);
-        domain.dns!.createAlias(
+        domain.dns!.alias(
           seen.includes(key) ? `${name}${i}` : name,
           {
             name: recordName,

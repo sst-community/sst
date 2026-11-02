@@ -100,6 +100,22 @@ export interface Takeover<P extends Parts, C = unknown> {
       part: { name: string; id?: string },
     ) => ReleasedAddress | ReleasedAddress[] | undefined;
   };
+  /**
+   * Where a resource something created on the component's behalf lived, when
+   * that isn't where it lives now. Those aren't parts: a DNS adapter's records
+   * are created through the adapter. Give each one's old address, by the name
+   * and type it has now, or `undefined` where it didn't move.
+   */
+  delegated?: (
+    component: C,
+    resource: {
+      /** The resource's name, and its type. */
+      name: string;
+      type: string;
+      /** The component's name. */
+      componentName: string;
+    },
+  ) => OldAddress | OldAddress[] | undefined;
 }
 
 // By class and not by type: a component and the one that replaces it can

@@ -49,6 +49,8 @@ import { Transform, transform } from "../component";
 import { Input } from "../input";
 import { DEFAULT_ACCOUNT_ID } from "./account-id";
 import { DnsRecord as OverridableDnsRecord } from "./providers/dns-record";
+import type { DnsAdapter } from "../dns-adapter";
+import { cloudflareDnsAdapter } from "./dns-adapter";
 
 export interface DnsArgs {
   /**
@@ -99,11 +101,13 @@ export interface DnsArgs {
 
 export function dns(args: DnsArgs = {}) {
   return {
+    // What SST 5's components use
+    ...cloudflareDnsAdapter(args),
     provider: "cloudflare",
     createAlias,
     createCaa,
     createRecord,
-  } satisfies Dns;
+  } satisfies Dns & DnsAdapter;
 
   function lookupZone(
     namePrefix: string,

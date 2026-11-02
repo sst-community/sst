@@ -308,6 +308,10 @@ export function mockPulumi(input?: MockInput) {
     }
     if (args.token === "aws:iam/getPolicyDocument:getPolicyDocument")
       return policyDocument(args.inputs);
+    if (args.token === "sst:aws:getHostedZone") {
+      const zoneId = replay!.hostedZone(args.inputs.domain);
+      return zoneId ? { zoneId } : undefined;
+    }
   };
 
   pulumi.runtime.setMocks(
@@ -326,6 +330,7 @@ export function mockPulumi(input?: MockInput) {
             ...args.inputs,
             arn: `arn:aws:mock:us-east-1:123456789012:${args.name}`,
             url: `https://mock.example.com/123456789012/${args.name}`,
+            ...given(args),
             ...input?.state?.(args),
           },
         };
@@ -673,6 +678,10 @@ export function mockPulumi(input?: MockInput) {
         if (claimants.length === 0 && releasedBy) {
           releases.push([before, releasedBy]);
           claimed.add(releasedBy);
+        } else if (claimants.length === 0 && isLookup(before)) {
+          // One of SST 4's lookups, which 5.0 makes with a function of SST's
+          // provider: a move releases it, as nothing in the cloud is behind
+          // it (pkg/move)
         } else if (claimants.length === 0)
           unclaimed.push(`${before.type}::${before.name}`);
         else {
@@ -1003,6 +1012,41 @@ function deployOptions(r: RecordedResource, againstState = false) {
 // What the lookups nearly every component makes return. Without these a
 // region is `undefined`, and an IAM policy is empty whatever it's given, so
 // two policies would always compare as the same.
+// SST 4's lookups, made with resources, by the kind each adds to its name.
+// 5.0 makes them with functions, and a move releases them.
+const LOOKUPS = [".sst.aws.HostedZoneLookup", ".sst.cloudflare.ZoneLookup"];
+
+function isLookup(r: RecordedResource) {
+  return (
+    r.type === "pulumi-nodejs:dynamic:Resource" &&
+    LOOKUPS.some((kind) => r.name.endsWith(kind))
+  );
+}
+
+// What AWS gives back that a component reads, as AWS gives it: an ACM
+// certificate's validation records, one for each domain, which a domain and
+// its wildcard share
+function given(args: pulumi.runtime.MockResourceArgs): Record<string, any> {
+  if (args.type === "aws:acm/certificate:Certificate") {
+    const domains: string[] = [
+      args.inputs.domainName,
+      ...(args.inputs.subjectAlternativeNames ?? []),
+    ].filter((domain) => typeof domain === "string");
+    return {
+      domainValidationOptions: domains.map((domain) => {
+        const validated = domain.replace(/^\*\./, "");
+        return {
+          domainName: domain,
+          resourceRecordType: "CNAME",
+          resourceRecordName: `_abc.${validated}.`,
+          resourceRecordValue: `_def.${validated}.acm-validations.aws.`,
+        };
+      }),
+    };
+  }
+  return {};
+}
+
 const lookups: Record<string, (inputs: any) => Record<string, any>> = {
   "aws:index/getRegion:getRegion": () => ({
     name: "us-east-1",
@@ -1015,6 +1059,13 @@ const lookups: Record<string, (inputs: any) => Record<string, any>> = {
   "aws:iam/getPolicyDocument:getPolicyDocument": (inputs) => ({
     ...inputs,
     json: JSON.stringify(inputs),
+  }),
+  // A zone for each domain of two labels, like `example.com`
+  "cloudflare:index/getZones:getZones": (inputs) => ({
+    results:
+      inputs.name?.split(".").length === 2
+        ? [{ id: `${inputs.name.replace(".", "-")}-zone`, name: inputs.name }]
+        : [],
   }),
 };
 

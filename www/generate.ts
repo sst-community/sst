@@ -1278,8 +1278,8 @@ function renderType(
         `<code class="symbol">&gt;</code>`,
       ].join("");
     }
-    // Any DNS adapter
-    if (type.name === "Dns") {
+    // Any DNS adapter: SST 4's type, or the one SST 5's components take
+    if (type.name === "Dns" || type.name === "DnsAdapter") {
       return ["aws", "cloudflare", "vercel"]
         .map(
           (provider) =>

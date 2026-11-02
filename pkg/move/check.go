@@ -10,7 +10,8 @@
 //     run on this machine that's deleted without a delete command.
 //   - A resource the map releases leaves the state without its delete being
 //     called. The part in its place is created, and writes the same thing
-//     again or adopts it.
+//     again or adopts it. So does one of SST 4's lookups, which SST 5 makes
+//     with a function.
 //   - A part the map lists as new is created.
 //   - A part the map lists as replaced is replaced, unless it holds data.
 //   - A file uploaded under a key that follows from what's in it, like a
@@ -278,6 +279,8 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 				problem(urn, step, "delete", "It holds data, and "+nameOf(part.URN)+", in its place, doesn't adopt it by its id.")
 			case isReleased:
 				result.Released = append(result.Released, Change{URN: urn, Type: step.Type, Why: "Taken out of the state without being deleted, with " + nameOf(part.URN) + " in its place."})
+			case step.Type == "pulumi-nodejs:dynamic:Resource" && lookupKinds[kindOf(urn)]:
+				result.Released = append(result.Released, Change{URN: urn, Type: step.Type, Why: "One of SST 4's lookups, which SST 5 makes with a function: nothing in the cloud is behind it."})
 			case !custom:
 				result.Left = append(result.Left, Change{URN: urn, Type: step.Type, Why: "Nothing in the cloud is behind it."})
 			default:

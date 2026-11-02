@@ -21,16 +21,6 @@ const pulumi = mockPulumi({
       };
     if (args.type === "pulumi-nodejs:dynamic:Resource" && "etag" in args.inputs)
       return { isDone: true };
-    if (args.type === "aws:acm/certificate:Certificate")
-      return {
-        domainValidationOptions: [
-          {
-            resourceRecordType: "CNAME",
-            resourceRecordName: "_abc.example.com.",
-            resourceRecordValue: "_def.acm-validations.aws.",
-          },
-        ],
-      };
     return {};
   },
 });
@@ -42,6 +32,12 @@ describe("Cdn", () => {
   beforeAll(async () => {
     OriginalCdn = (await import("../../../src/components/aws/cdn")).Cdn;
     Cdn = (await import("../../../src/components/aws/v5/cdn")).Cdn;
+    // What the V5 Cdn creates for a domain takes over 4.x's by these
+    await import(
+      "../../../src/components/aws/takeover/dns-validated-certificate"
+    );
+    await import("../../../src/components/aws/takeover/https-redirect");
+    await import("../../../src/components/aws/takeover/bucket");
   });
 
   beforeEach(() => {
@@ -137,6 +133,18 @@ describe("Cdn", () => {
             );
           },
           check: () => expect(names()).toContain("MyCdnRedirect"),
+          // 4.x created the redirect's function with the app's provider,
+          // whatever the redirect's was. V5 uses the redirect's, which
+          // replaces it, as the redirect's map says.
+          changed: (way) =>
+            way === "with another provider"
+              ? [
+                  [
+                    "MyCdnRedirectCloudfrontFunctionRequest",
+                    ["options.provider"],
+                  ],
+                ]
+              : [],
         },
         "a domain with a certificate of its own": {
           create: (Cdn, opts) => {

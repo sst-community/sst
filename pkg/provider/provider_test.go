@@ -462,3 +462,36 @@ func mustRequest(t *testing.T, url string) *http.Request {
 	require.NoError(t, err)
 	return req
 }
+
+// A function runs with known arguments, and gives back what it found
+func TestInvoke(t *testing.T) {
+	s := newServer("5.0.0", nil)
+	var got resource.PropertyMap
+	s.functions = map[string]function{
+		"sst:aws:getHostedZone": func(_ context.Context, args resource.PropertyMap) (resource.PropertyMap, error) {
+			got = args
+			return resource.NewPropertyMapFromMap(map[string]any{"zoneId": "Z123"}), nil
+		},
+	}
+	resp, err := s.Invoke(context.Background(), &pulumirpc.InvokeRequest{
+		Tok:  "sst:aws:getHostedZone",
+		Args: props(t, resource.NewPropertyMapFromMap(map[string]any{"domain": "app.example.com"})),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"domain": "app.example.com"}, got.Mappable())
+	assert.Equal(t, map[string]any{"zoneId": "Z123"}, plain(t, resp.Return))
+
+	_, err = s.Invoke(context.Background(), &pulumirpc.InvokeRequest{Tok: "sst:aws:getNothing"})
+	assert.ErrorContains(t, err, `no function "sst:aws:getNothing"`)
+
+	unknown := resource.PropertyMap{"domain": resource.MakeComputed(resource.NewStringProperty(""))}
+	_, err = s.Invoke(context.Background(), &pulumirpc.InvokeRequest{Tok: "sst:aws:getHostedZone", Args: props(t, unknown)})
+	assert.ErrorContains(t, err, "isn't known yet")
+}
+
+func TestFunctions(t *testing.T) {
+	served := functions(envAws())
+	assert.Len(t, served, 1)
+	_, err := served["sst:aws:getHostedZone"](context.Background(), resource.PropertyMap{})
+	assert.ErrorContains(t, err, "needs a domain")
+}

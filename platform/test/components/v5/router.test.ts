@@ -36,16 +36,6 @@ const pulumi = mockPulumi({
       return { qualifiedArn: `${args.name}:1` };
     if (args.type === "aws:lambda/functionUrl:FunctionUrl")
       return { functionUrl: FUNCTION_URL };
-    if (args.type === "aws:acm/certificate:Certificate")
-      return {
-        domainValidationOptions: [
-          {
-            resourceRecordType: "CNAME",
-            resourceRecordName: "_abc.example.com.",
-            resourceRecordValue: "_def.acm-validations.aws.",
-          },
-        ],
-      };
     return {};
   },
 });
@@ -72,6 +62,10 @@ describe("Router", () => {
     await import("../../../src/components/aws/takeover/router");
     await import("../../../src/components/aws/takeover/function");
     await import("../../../src/components/aws/takeover/bucket");
+    await import(
+      "../../../src/components/aws/takeover/dns-validated-certificate"
+    );
+    await import("../../../src/components/aws/takeover/https-redirect");
   });
 
   beforeEach(() => {

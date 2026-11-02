@@ -111,16 +111,6 @@ const pulumi = mockPulumi({
       return { qualifiedArn: `${args.name}:1` };
     if (args.type === "aws:lambda/functionUrl:FunctionUrl")
       return { functionUrl: FUNCTION_URL };
-    if (args.type === "aws:acm/certificate:Certificate")
-      return {
-        domainValidationOptions: [
-          {
-            resourceRecordType: "CNAME",
-            resourceRecordName: "_abc.example.com.",
-            resourceRecordValue: "_def.acm-validations.aws.",
-          },
-        ],
-      };
     return {};
   },
 });
@@ -382,6 +372,18 @@ describe("Nextjs", () => {
               opts,
             ),
           ...isr,
+          // The redirect's function, as the Cdn's tests say
+          changed: (way) => [
+            ...(way === "with another provider"
+              ? ([
+                  [
+                    "NextCdnRedirectCloudfrontFunctionRequest",
+                    ["options.provider"],
+                  ],
+                ] as [string, string[]][])
+              : []),
+            ...isr.changed,
+          ],
         },
         "in a VPC": {
           create: (Nextjs, opts) =>

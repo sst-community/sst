@@ -166,8 +166,13 @@ the component reads its args.
   `transform` passed to the method, with a message that points at the component's own
   `transform`.
 - **`this.delegateOpts()`** is for resources something else creates on the component's
-  behalf, like a DNS adapter creating records: `dns.createAlias(name, record,
+  behalf, like a DNS adapter creating records: `dns.alias(name, record,
   this.delegateOpts())`. They aren't parts. They're configured through what creates them.
+  A DNS adapter (`DnsAdapter`, in `dns-adapter.ts`) creates its records directly and names
+  them from plain values: a record whose name in DNS is only known once something is
+  deployed, like a certificate's validation record, is given a `key` to be named after.
+  Where such a resource had another name in 4.x, the takeover map's `delegated` gives its
+  old address, by the name and type it has now.
 - **An arg the user's `transform` must not change** goes in a Pulumi transformation on
   the part: `this.part(key, args, { transformations: [({ props, opts }) => ({ props: {
   ...props, runtime }, opts })] })`. It runs after the user's `transform`. The V5

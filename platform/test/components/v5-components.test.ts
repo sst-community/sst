@@ -15,7 +15,15 @@ const files = fs
 
 // The 5.0 rewrite makes a clean break from 4.x code. These are built the 5.0
 // way; the others still lean on 4.x until each is rebuilt.
-const rebuilt = ["vpc.ts", "function.ts", "router.ts", "nextjs.ts"];
+const rebuilt = [
+  "vpc.ts",
+  "function.ts",
+  "router.ts",
+  "nextjs.ts",
+  "cdn.ts",
+  "dns-validated-certificate.ts",
+  "https-redirect.ts",
+];
 
 describe("V5 components", () => {
   let takeoverOf: typeof import("../../src/components/takeover").takeoverOf;
@@ -49,8 +57,12 @@ describe("V5 components", () => {
     // the two have the same type. The class is named the same, and so is the
     // file.
     it("has the name and type of the component it replaces", async () => {
-      // 4.x spelled the `Cdn`'s type in capitals, and a deployed one keeps it
-      const typeName = component.name === "Cdn" ? "CDN" : component.name;
+      // 4.x spelled the `Cdn`'s type in capitals, and named the certificate's
+      // type for what it is, and a deployed one keeps each
+      const typeName =
+        { Cdn: "CDN", DnsValidatedCertificate: "Certificate" }[
+          component.name as string
+        ] ?? component.name;
       expect(component.__pulumiType).toBe(`sst:aws:${typeName}`);
       const original = await import(`../../src/components/aws/${name}.ts`);
       expect(

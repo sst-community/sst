@@ -531,3 +531,21 @@ func TestSeen(t *testing.T) {
 	assert.EqualError(t, Seen(steps, summary), "not every step of the preview was seen: [1 of 2 delete]")
 	assert.Error(t, Seen(steps, nil))
 }
+
+// SST 4 looked up a domain's hosted zone with a resource, which SST 5 does
+// with a function of its provider
+func TestLookups(t *testing.T) {
+	zone := urn("sst:aws:CDN$pulumi-nodejs:dynamic:Resource", "WebAZoneLookupExamplecom.sst.aws.HostedZoneLookup")
+	cloudflare := urn("sst:aws:CDN$pulumi-nodejs:dynamic:Resource", "WebCNAMEexample.comZoneLookup.sst.cloudflare.ZoneLookup")
+	r := Check([]apitype.StepEventMetadata{
+		step(apitype.OpDelete, zone),
+		step(apitype.OpDelete, cloudflare),
+	}, nil)
+	assert.Empty(t, problems(r))
+	assert.Len(t, r.Released, 2)
+	assert.Contains(t, r.Released[0].Why, "SST 4's lookups")
+
+	// Another of SST's resources isn't one
+	waiter := urn("sst:aws:CDN$pulumi-nodejs:dynamic:Resource", "WebWaiter.sst.aws.DistributionDeploymentWaiter")
+	assert.Len(t, problems(Check([]apitype.StepEventMetadata{step(apitype.OpDelete, waiter)}, nil)), 1)
+}
