@@ -177,8 +177,9 @@ func Cleanup(backend Home, app, stage string) error {
 }
 
 // historyKinds are the kinds kept for each update. "summary" was written by
-// older CLIs and is still removed with the rest.
-var historyKinds = []string{"snapshot", "eventlog", "update", "summary"}
+// older CLIs and is still removed with the rest. "migrate" is the state a move
+// started from.
+var historyKinds = []string{"snapshot", "eventlog", "update", "summary", "migrate"}
 
 // Prune keeps the history of the last `retention` updates and removes the
 // rest. In a home that keeps versions, it also removes the old versions of the
@@ -290,6 +291,13 @@ func PushSnapshot(backend Home, updateID, app, stage string, data []byte) error 
 		return fmt.Errorf("something has corrupted the state file - refusing to upload: %w", err)
 	}
 	return backend.Put(context.TODO(), historyKey("snapshot", app, stage, updateID), data, PutOptions{})
+}
+
+// PushMoveCopy saves the state a move starts from, before the move changes
+// anything, so the stage can be put back as it was. Each attempt keeps its
+// own, under its update, so one run again doesn't write over the first.
+func PushMoveCopy(backend Home, updateID, app, stage string, data []byte) error {
+	return backend.Put(context.TODO(), historyKey("migrate", app, stage, updateID), data, PutOptions{})
 }
 
 func PushEventLog(backend Home, updateID, app, stage string, reader io.Reader) error {

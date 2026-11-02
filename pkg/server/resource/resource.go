@@ -49,22 +49,39 @@ type DeleteInput[T any] struct {
 	Outs T      `json:"outs"`
 }
 
+// AwsResource is what SST's AWS resources share: the context their calls run
+// in, and where they get the stage's AWS setup. The RPC reads it from the
+// project's provider, and the provider the sst binary serves (pkg/provider)
+// from its environment, so both run the same code.
 type AwsResource struct {
 	context context.Context
-	project *project.Project
+	load    func() (aws.Config, error)
+}
+
+// NewAwsResource is an AwsResource whose calls run in ctx, with the setup load
+// gives. load is called for each operation.
+func NewAwsResource(ctx context.Context, load func() (aws.Config, error)) *AwsResource {
+	return &AwsResource{ctx, load}
 }
 
 func (a *AwsResource) config() (aws.Config, error) {
-	result, ok := a.project.Provider("aws")
-	if !ok {
-		return aws.Config{}, fmt.Errorf("no aws provider found")
+	return a.load()
+}
+
+// projectAws is the setup of the project's AWS provider, as it is when called
+func projectAws(p *project.Project) func() (aws.Config, error) {
+	return func() (aws.Config, error) {
+		result, ok := p.Provider("aws")
+		if !ok {
+			return aws.Config{}, fmt.Errorf("no aws provider found")
+		}
+		casted := result.(*provider.AwsProvider)
+		return casted.Config(), nil
 	}
-	casted := result.(*provider.AwsProvider)
-	return casted.Config(), nil
 }
 
 func Register(ctx context.Context, p *project.Project, r *rpc.Server) error {
-	awsResource := &AwsResource{ctx, p}
+	awsResource := NewAwsResource(ctx, projectAws(p))
 	cloudflareResource := &CloudflareResource{ctx, p}
 	vercelResource := &VercelResource{ctx, p}
 	

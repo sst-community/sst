@@ -27,33 +27,45 @@ type AwsTarget struct {
 // replaces the app's. The provider is bootstrapped in the target as it would
 // be in an account.
 func (a *AwsProvider) InitTarget(app, stage string, target AwsTarget, args map[string]interface{}) error {
-	endpoint, err := url.Parse(target.Endpoint)
+	cfg := aws.Config{
+		Region:           target.Region,
+		Credentials:      credentials.NewStaticCredentialsProvider(target.AccessKeyID, target.SecretAccessKey, ""),
+		RetryMaxAttempts: 3,
+	}
+	if err := OnlyEndpoint(&cfg, target.Endpoint); err != nil {
+		return err
+	}
+	a.config = cfg
+	args["region"] = target.Region
+	tags(app, stage, args)
+	_, err := a.Bootstrap(target.Region)
+	return err
+}
+
+// OnlyEndpoint keeps a setup's calls on a target's endpoint: they go to it
+// with no proxy, a call to anywhere else is refused, and a bucket is a path
+// on it. The provider the sst binary serves (pkg/provider) uses it too, so
+// its calls on a target's stage go where the CLI's do.
+func OnlyEndpoint(cfg *aws.Config, target string) error {
+	endpoint, err := url.Parse(target)
 	if err != nil {
 		return err
 	}
-	a.config = aws.Config{
-		Region:           target.Region,
-		Credentials:      credentials.NewStaticCredentialsProvider(target.AccessKeyID, target.SecretAccessKey, ""),
-		BaseEndpoint:     aws.String(target.Endpoint),
-		RetryMaxAttempts: 3,
-		HTTPClient: &http.Client{
-			Timeout:   time.Minute,
-			Transport: &onlyHost{scheme: endpoint.Scheme, host: endpoint.Host, next: &http.Transport{Proxy: nil}},
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return fmt.Errorf("a target's endpoint doesn't redirect")
-			},
+	cfg.BaseEndpoint = aws.String(target)
+	cfg.HTTPClient = &http.Client{
+		Timeout:   time.Minute,
+		Transport: &onlyHost{scheme: endpoint.Scheme, host: endpoint.Host, next: &http.Transport{Proxy: nil}},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("a target's endpoint doesn't redirect")
 		},
-		ServiceOptions: []func(string, any){func(_ string, options any) {
-			// A bucket is a path on the endpoint, not a host of its own
-			if s3Options, ok := options.(*s3.Options); ok {
-				s3Options.UsePathStyle = true
-			}
-		}},
 	}
-	args["region"] = target.Region
-	tags(app, stage, args)
-	_, err = a.Bootstrap(target.Region)
-	return err
+	cfg.ServiceOptions = append(cfg.ServiceOptions, func(_ string, options any) {
+		// A bucket is a path on the endpoint, not a host of its own
+		if s3Options, ok := options.(*s3.Options); ok {
+			s3Options.UsePathStyle = true
+		}
+	})
+	return nil
 }
 
 // onlyHost refuses a request to anything but the target's endpoint

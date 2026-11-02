@@ -33,7 +33,13 @@ var CmdMigrate = &cli.Command{
 			"sst migrate --check --stage dev",
 			"```",
 			"",
-			"Moving the stage itself, without `--check`, isn't built yet.",
+			"Without `--check`, it moves the stage. It checks the move first, and stops there if the check fails. Then it saves a copy of the stage's state in its home, takes out of the state what the components' state maps release, without deleting it, and deploys:",
+			"",
+			"```bash frame=\"none\"",
+			"sst migrate --stage dev",
+			"```",
+			"",
+			"A resource is released when the one that takes its place can't be carried over from it, like a site's files, which SST now uploads with a resource of a new type. The new one writes the same thing again.",
 		}, "\n"),
 	},
 	Flags: []cli.Flag{
@@ -49,8 +55,8 @@ var CmdMigrate = &cli.Command{
 			Name: "dev",
 			Type: "bool",
 			Description: cli.Description{
-				Short: "Check the stage as sst dev deploys it",
-				Long:  "Check the move of the stage as `sst dev` deploys it, with a stub in place of each function.",
+				Short: "Move the stage as sst dev deploys it",
+				Long:  "Check or move the stage as `sst dev` deploys it, with a stub in place of each function.",
 			},
 		},
 		{
@@ -58,7 +64,7 @@ var CmdMigrate = &cli.Command{
 			Type: "bool",
 			Description: cli.Description{
 				Short: "Output as JSON",
-				Long:  "Output what the move would do as JSON to stdout.",
+				Long:  "Output what the move would do as JSON to stdout. Only with `--check`.",
 			},
 		},
 	},
@@ -69,12 +75,19 @@ var CmdMigrate = &cli.Command{
 				Short: "Check what moving production would do",
 			},
 		},
+		{
+			Content: "sst migrate --stage production",
+			Description: cli.Description{
+				Short: "Move production",
+			},
+		},
 	},
 	Run: func(c *cli.Cli) error {
-		if !c.Bool("check") {
-			return util.NewReadableError(nil, "Moving a stage isn't built yet. Run `sst migrate --check` to see what a move would do.")
-		}
+		moving := !c.Bool("check")
 		jsonOutput := c.Bool("json")
+		if moving && jsonOutput {
+			return util.NewReadableError(nil, "`--json` goes with `--check`: it prints what a move would do.")
+		}
 
 		p, err := c.InitProject()
 		if err != nil {
@@ -82,15 +95,16 @@ var CmdMigrate = &cli.Command{
 		}
 		defer p.Cleanup()
 
+		// One server and one UI for the check and the move: stopping the
+		// server cancels the command's context, so it's stopped once, at the
+		// end
 		var wg errgroup.Group
-		steps := []apitype.StepEventMetadata{}
-		parts := []move.Part{}
-		var summary *apitype.SummaryEvent
 		uiOptions := []ui.Option{}
 		if jsonOutput {
 			uiOptions = append(uiOptions, ui.WithSilent)
 		}
 		u := ui.New(c.Context, uiOptions...)
+		defer u.Destroy()
 		s, err := server.New()
 		if err != nil {
 			return err
@@ -99,42 +113,6 @@ var CmdMigrate = &cli.Command{
 			defer c.Cancel()
 			return s.Start(c.Context, p)
 		})
-
-		// The check reads the preview's steps and the reported parts from a
-		// subscription of its own: the UI's drops events when it falls behind,
-		// and a step lost would be a change the check didn't see.
-		collected := bus.Subscribe(&apitype.ResOutputsEvent{}, &move.Part{}, &apitype.SummaryEvent{})
-		collect := func(evt interface{}) {
-			switch evt := evt.(type) {
-			case *apitype.ResOutputsEvent:
-				steps = append(steps, evt.Metadata)
-			case *move.Part:
-				parts = append(parts, *evt)
-			case *apitype.SummaryEvent:
-				summary = evt
-			}
-		}
-		stop := make(chan struct{})
-		collecting := make(chan struct{})
-		go func() {
-			defer close(collecting)
-			for {
-				select {
-				case evt := <-collected:
-					collect(evt)
-				case <-stop:
-					// What's left once nothing more is published
-					for {
-						select {
-						case evt := <-collected:
-							collect(evt)
-						default:
-							return
-						}
-					}
-				}
-			}
-		}()
 		events := bus.SubscribeAll()
 		if !jsonOutput {
 			wg.Go(func() error {
@@ -144,49 +122,119 @@ var CmdMigrate = &cli.Command{
 				return nil
 			})
 		}
-		defer u.Destroy()
-		err = p.Run(c.Context, &project.StackInput{
-			Command: "diff",
-			Move:    true,
-			Server:  s.URL(),
-			Dev:     c.Bool("dev"),
-			Verbose: c.Bool("verbose"),
-		})
-		lost := droppedFrom(collectedLabel)
-		bus.Unsubscribe(collected)
-		close(stop)
-		<-collecting
-		bus.Unsubscribe(events)
-		close(events)
-		c.Cancel()
-		if waitErr := wg.Wait(); waitErr != nil && err == nil {
-			err = waitErr
-		}
-		if err != nil {
+		finish := func(err error) error {
+			bus.Unsubscribe(events)
+			close(events)
+			c.Cancel()
+			if waitErr := wg.Wait(); waitErr != nil && err == nil {
+				return waitErr
+			}
 			return err
 		}
-		if lost > 0 {
-			return util.NewReadableError(nil, "Some of the preview's events were lost, so the move can't be checked. Run it again.")
-		}
-		if err := move.Seen(steps, summary); err != nil {
-			return util.NewReadableError(err, "The move can't be checked: "+err.Error()+". Run it again.")
-		}
 
-		result := move.Check(steps, parts)
+		result, err := checkMove(c, p, s.URL())
+		if err != nil {
+			return finish(err)
+		}
 		if jsonOutput {
 			encoder := json.NewEncoder(os.Stdout)
 			encoder.SetIndent("", "  ")
 			if err := encoder.Encode(result); err != nil {
-				return err
+				return finish(err)
 			}
 		} else {
 			renderMove(result, u)
 		}
 		if !result.OK() {
-			return util.NewReadableError(nil, fmt.Sprintf("The stage can't move as it is: %v.", count(len(result.Problems), "change a move may not make", "changes a move may not make")))
+			unchanged := ""
+			if moving {
+				unchanged = " Nothing was changed."
+			}
+			return finish(util.NewReadableError(nil, fmt.Sprintf("The stage can't move as it is: %v.%v", count(len(result.Problems), "change a move may not make", "changes a move may not make"), unchanged)))
 		}
-		return nil
+		if !moving {
+			return finish(nil)
+		}
+
+		// The move the check passed. Under the deploy's lock, the state is
+		// saved and what the maps release is marked retained, so it leaves the
+		// state without its delete, and the components apply their maps.
+		released := []project.Released{}
+		for _, r := range result.Released {
+			released = append(released, project.Released{URN: r.URN, Type: r.Type})
+		}
+		return finish(p.Run(c.Context, &project.StackInput{
+			Command: "deploy",
+			Move:    true,
+			Release: released,
+			Dev:     c.Bool("dev"),
+			Server:  s.URL(),
+			Verbose: c.Bool("verbose"),
+		}))
 	},
+}
+
+// checkMove runs Pulumi's preview of the move and sorts its steps. It reads
+// the steps and the reported parts from a subscription of its own: the UI's
+// drops events when it falls behind, and a step lost would be a change the
+// check didn't see.
+func checkMove(c *cli.Cli, p *project.Project, server string) (*move.Result, error) {
+	steps := []apitype.StepEventMetadata{}
+	parts := []move.Part{}
+	var summary *apitype.SummaryEvent
+	collected := bus.Subscribe(&apitype.ResOutputsEvent{}, &move.Part{}, &apitype.SummaryEvent{})
+	collect := func(evt interface{}) {
+		switch evt := evt.(type) {
+		case *apitype.ResOutputsEvent:
+			steps = append(steps, evt.Metadata)
+		case *move.Part:
+			parts = append(parts, *evt)
+		case *apitype.SummaryEvent:
+			summary = evt
+		}
+	}
+	stop := make(chan struct{})
+	collecting := make(chan struct{})
+	go func() {
+		defer close(collecting)
+		for {
+			select {
+			case evt := <-collected:
+				collect(evt)
+			case <-stop:
+				// What's left once nothing more is published
+				for {
+					select {
+					case evt := <-collected:
+						collect(evt)
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
+	err := p.Run(c.Context, &project.StackInput{
+		Command: "diff",
+		Move:    true,
+		Server:  server,
+		Dev:     c.Bool("dev"),
+		Verbose: c.Bool("verbose"),
+	})
+	lost := droppedFrom(collectedLabel)
+	bus.Unsubscribe(collected)
+	close(stop)
+	<-collecting
+	if err != nil {
+		return nil, err
+	}
+	if lost > 0 {
+		return nil, util.NewReadableError(nil, "Some of the preview's events were lost, so the move can't be checked. Run it again.")
+	}
+	if err := move.Seen(steps, summary); err != nil {
+		return nil, util.NewReadableError(err, "The move can't be checked: "+err.Error()+". Run it again.")
+	}
+	return move.Check(steps, parts), nil
 }
 
 func renderMove(result *move.Result, u *ui.UI) {

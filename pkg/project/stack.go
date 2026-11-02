@@ -28,6 +28,9 @@ type StackInput struct {
 	// Move runs the program as the stage moves to new components, which apply
 	// their state maps and report their parts (pkg/move)
 	Move bool
+	// Release is what a move takes out of the state without deleting it,
+	// marked retained before the deploy runs (release.go)
+	Release []Released
 	// previewFirst runs a deploy with Pulumi's preview first, as when the
 	// program turned out to have checks
 	previewFirst bool

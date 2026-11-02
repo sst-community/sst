@@ -23,6 +23,7 @@ import (
 	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/provider"
 	"github.com/sst/sst/v3/pkg/telemetry"
 )
 
@@ -49,6 +50,16 @@ func getAliasName(entry *project.ProviderLockEntry) string {
 }
 
 func main() {
+	// Pulumi runs the binary as the provider of SST's own resources, by the
+	// plugin's name the CLI links it as (pkg/project). os.Args[0] is that name
+	// whether it's a link or a copy; os.Executable may be the link's target.
+	if plugin := strings.TrimSuffix(strings.ToLower(filepath.Base(os.Args[0])), ".exe"); plugin == provider.Executable {
+		if err := provider.Main(version); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	// check if node_modules/.bin/sst exists
 	nodeModulesBinPath := filepath.Join("node_modules", ".bin", "sst")
 	binary, _ := os.Executable()

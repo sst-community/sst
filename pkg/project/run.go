@@ -116,11 +116,17 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	}
 
 	outfile := filepath.Join(p.PathPlatformDir(), fmt.Sprintf("sst.config.%v.mjs", time.Now().UnixMilli()))
-	os.WriteFile(
-		filepath.Join(workdir.path, "Pulumi.yaml"),
-		[]byte("name: "+p.app.Name+"\nruntime: nodejs\nmain: "+outfile+"\n"),
-		0644,
-	)
+	// Pulumi runs this binary as the provider of SST's own resources. The
+	// folder has to be there before Pulumi reads the Pulumi.yaml naming it.
+	// It's in this run's work folder, so another CLI running on the app at the
+	// same time can't swap it for itself.
+	plugins := filepath.Join(workdir.path, "plugins", "sst")
+	if err := linkSstPlugin(plugins); err != nil {
+		return fmt.Errorf("linking the sst provider: %w", err)
+	}
+	if err := writePulumiYaml(filepath.Join(workdir.path, "Pulumi.yaml"), p.app.Name, outfile, plugins); err != nil {
+		return err
+	}
 	pulumiStdout, err := os.Create(p.PathLog("pulumi"))
 	if err != nil {
 		return err
@@ -166,6 +172,14 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 
 		} else {
 			return err
+		}
+	}
+
+	// A move releases what the components' maps say it does: marked retained
+	// in the state this deploy runs from, under its lock
+	if input.Command == "deploy" && len(input.Release) > 0 {
+		if err := p.release(workdir, update.ID, input.Release); err != nil {
+			return util.NewReadableError(err, "The move can't release what it has to: "+err.Error()+".")
 		}
 	}
 
