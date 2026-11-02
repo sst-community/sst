@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the lab check of the `Cluster`, `Task` and `Efs`, with the `Vpc`
+
+**Checked in the lab** (a stage of its own, the only one with a VPC, with a CLI built from the branch). The lab app's containers group: a cluster, a file system, two services (one with a load balancer and a domain of its own, one on a shared ALB with a domain), a task run by a cron job, and a function that mounts the file system and counts its visits in it. The lab app can now create its VPC with the 5.0 `Vpc` (`LAB_NET=v5`), so the move switched the `Vpc` with everything in it.
+
+- **Deployed with SST 4** (with its `Vpc`), then switched it all at once. `sst migrate --check` passed: 118 kept (18 at a new address), nothing updated in place, replaced or released, 4 taken out of the state with nothing in the cloud behind them (4.x's version markers and dev commands) and 3 created with nothing behind them.
+- **The move** kept every resource by id. The file system's two mount targets, which 4.x named after their subnets' ids, are kept by the AZ's number now (`FilesMountTarget1` and `2`), with the same ids. Then `sst diff` showed no changes.
+- **Everything still answers the same:** both domains serve, the shared ALB's own address still refuses what it doesn't route, and the function that mounts the file system counted on from the visit 4.x recorded, so the data was kept.
+- Removed, and cleaned up: its state versions, passphrase, a source map and three inactive task definitions. Each resource the tagging API still lists was checked directly, and is gone.
+- **Found, in both checks:** the functions' source maps outlive a remove, for the 5.0 `Function` after a move as for the 4.x one (11 on the bucket group's stage, one here), keyed by the log group's ARN. Left to look into.
+
 ## 2026-11-02: step 4, the lab check of the `Bucket`, `Queue`, `SnsTopic`, `Dynamo`, `Bus` and `CronV2`
 
 **Checked in the lab** (a stage of its own, with a CLI built from the branch, the maintainer having said to catch up on what wasn't tested). The lab app's bucket group deploys all six: a bucket with versioning, CORS, a lifecycle rule, CloudFront access, a statement of its own, a function, a queue and a topic notified, and an EventBridge subscriber; queues with subscribers; a topic with a function and a queue subscribed; a table with a stream subscriber; a bus with a function and a queue subscribed; a cron job. Each of the queue, topic, table and bus also has a subscriber from 4.x's static methods, which `get` takes the place of.
