@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 
@@ -21,19 +23,29 @@ func envAws() func() (aws.Config, error) {
 }
 
 // awsConfig is the stage's AWS setup from the environment Pulumi passes on
-// from the CLI: the credentials and region the CLI resolved, as SST_AWS_*
-// (Env in pkg/project/provider/aws.go). On a target's stage they're the
-// target's, and AWS_ENDPOINT_URL is its endpoint (pkg/target/env.go). With
-// none of them, it's what the AWS SDK finds on its own.
+// from the CLI (Env in pkg/project/provider/aws.go).
+//
+// In the cloud, it's made as the CLI made its own: the profile, the region
+// and the roles it assumed. Its credentials refresh themselves, so a deploy
+// that outlasts them, or a long sst dev, doesn't fail halfway.
+//
+// On a target's stage, it's the target's credentials, region and endpoint
+// (pkg/target/env.go), and calls go only to the endpoint.
 func awsConfig(ctx context.Context) (aws.Config, error) {
 	endpoint := os.Getenv("AWS_ENDPOINT_URL")
-	// As many tries as the CLI's own calls get, in the cloud and on a target
-	retries := 10
-	if endpoint != "" {
-		retries = 3
+	if endpoint == "" {
+		roles := []provider.AwsRole{}
+		if value := os.Getenv(provider.EnvAwsAssumeRoles); value != "" {
+			if err := json.Unmarshal([]byte(value), &roles); err != nil {
+				return aws.Config{}, fmt.Errorf("reading %v: %w", provider.EnvAwsAssumeRoles, err)
+			}
+		}
+		return provider.LoadAwsConfig(ctx, os.Getenv("AWS_PROFILE"), os.Getenv("SST_AWS_REGION"), roles)
 	}
+
 	options := []func(*config.LoadOptions) error{
-		config.WithRetryMaxAttempts(retries),
+		// As many tries as the CLI's own calls on a target get
+		config.WithRetryMaxAttempts(3),
 	}
 	if region := os.Getenv("SST_AWS_REGION"); region != "" {
 		options = append(options, config.WithRegion(region))
@@ -53,11 +65,8 @@ func awsConfig(ctx context.Context) (aws.Config, error) {
 	if cfg.Region == "" {
 		cfg.Region = "us-east-1"
 	}
-	// On a target, calls stay on its endpoint, as the CLI's do
-	if endpoint != "" {
-		if err := provider.OnlyEndpoint(&cfg, endpoint); err != nil {
-			return aws.Config{}, err
-		}
+	if err := provider.OnlyEndpoint(&cfg, endpoint); err != nil {
+		return aws.Config{}, err
 	}
 	return cfg, nil
 }

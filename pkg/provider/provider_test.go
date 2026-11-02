@@ -4,8 +4,11 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/plugin"
@@ -338,6 +341,7 @@ func isolate(t *testing.T) {
 		"AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ACCESS_KEY_ID",
 		"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ENDPOINT_URL",
 		"SST_AWS_ACCESS_KEY_ID", "SST_AWS_SECRET_ACCESS_KEY", "SST_AWS_SESSION_TOKEN", "SST_AWS_REGION",
+		"SST_AWS_ASSUME_ROLES",
 	} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
@@ -352,11 +356,17 @@ func TestAwsConfig(t *testing.T) {
 
 	t.Run("the cloud", func(t *testing.T) {
 		isolate(t)
+		// The CLI resolved the stage's credentials from the profile it was
+		// given, and passes it on with the region
+		credentialsFile := filepath.Join(t.TempDir(), "credentials")
+		require.NoError(t, os.WriteFile(credentialsFile, []byte("[lab]\naws_access_key_id = profile-access-key\naws_secret_access_key = profile-secret-key\n"), 0600))
+		t.Setenv("AWS_SHARED_CREDENTIALS_FILE", credentialsFile)
+		t.Setenv("AWS_PROFILE", "lab")
 		t.Setenv("SST_AWS_REGION", "eu-west-2")
-		t.Setenv("SST_AWS_ACCESS_KEY_ID", "test-access-key")
-		t.Setenv("SST_AWS_SECRET_ACCESS_KEY", "test-secret-key")
-		t.Setenv("SST_AWS_SESSION_TOKEN", "test-session-token")
-		// What the developer's shell has isn't used over what the CLI resolved
+		t.Setenv("SST_AWS_ACCESS_KEY_ID", "resolved-access-key")
+		t.Setenv("SST_AWS_SECRET_ACCESS_KEY", "resolved-secret-key")
+		// As for the CLI, a profile that's named wins over keys in the
+		// shell, and the region the CLI resolved over the shell's
 		t.Setenv("AWS_REGION", "ap-south-1")
 		t.Setenv("AWS_ACCESS_KEY_ID", "shell-access-key")
 		t.Setenv("AWS_SECRET_ACCESS_KEY", "shell-secret-key")
@@ -369,9 +379,26 @@ func TestAwsConfig(t *testing.T) {
 		creds, err := cfg.Credentials.Retrieve(ctx)
 		require.NoError(t, err)
 		// Compared without printing them
-		if creds.AccessKeyID != "test-access-key" || creds.SecretAccessKey != "test-secret-key" || creds.SessionToken != "test-session-token" {
-			t.Error("the credentials aren't the ones the CLI gave")
+		if creds.AccessKeyID != "profile-access-key" || creds.SecretAccessKey != "profile-secret-key" {
+			t.Error("the credentials aren't the profile's")
 		}
+	})
+
+	t.Run("roles the CLI assumed", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("SST_AWS_REGION", "eu-west-2")
+		t.Setenv("SST_AWS_ASSUME_ROLES", `[{"roleArn":"arn:aws:iam::123456789012:role/deploy","sessionName":"ci"}]`)
+
+		cfg, err := awsConfig(ctx)
+		require.NoError(t, err)
+		// Assumed again when they run out, as the CLI's are
+		cache, ok := cfg.Credentials.(*aws.CredentialsCache)
+		require.True(t, ok, "the credentials are cached until they run out")
+		assert.True(t, cache.IsCredentialsProvider(&stscreds.AssumeRoleProvider{}))
+
+		t.Setenv("SST_AWS_ASSUME_ROLES", "not json")
+		_, err = awsConfig(ctx)
+		assert.ErrorContains(t, err, "SST_AWS_ASSUME_ROLES")
 	})
 
 	t.Run("a target", func(t *testing.T) {

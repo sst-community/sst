@@ -27,6 +27,7 @@ import (
 type AwsProvider struct {
 	config         aws.Config
 	profile        string
+	roles          []AwsRole
 	credentials    sync.Once
 	lock           sync.Mutex
 	bootstrapCache map[string]*AwsBootstrapData
@@ -61,7 +62,78 @@ func (a *AwsProvider) Env() (map[string]string, error) {
 	if a.profile != "" {
 		env["AWS_PROFILE"] = a.profile
 	}
+	// How the credentials were made, so SST's provider makes its own the same
+	// way, and they don't run out in a long deploy
+	if len(a.roles) > 0 {
+		roles, err := json.Marshal(a.roles)
+		if err != nil {
+			return nil, err
+		}
+		env[EnvAwsAssumeRoles] = string(roles)
+	}
 	return env, nil
+}
+
+// EnvAwsAssumeRoles is the environment variable with the roles the CLI
+// assumed, as JSON
+const EnvAwsAssumeRoles = "SST_AWS_ASSUME_ROLES"
+
+// AwsRole is a role assumed after the profile's credentials, from app()'s
+// providers.aws.assumeRoles.
+type AwsRole struct {
+	RoleArn     string `json:"roleArn"`
+	SessionName string `json:"sessionName,omitempty"`
+}
+
+// LoadAwsConfig is the AWS setup for a profile, a region and the roles to
+// assume in turn, with credentials that refresh themselves. The CLI makes a
+// stage's with it, and SST's provider makes its own the same way from what
+// the CLI gives it (Env).
+func LoadAwsConfig(ctx context.Context, profile, region string, roles []AwsRole) (aws.Config, error) {
+	cfg, err := config.LoadDefaultConfig(
+		ctx,
+		config.WithRetryMaxAttempts(10),
+		func(lo *config.LoadOptions) error {
+			// A profile that's named wins over keys in the environment
+			lo.SharedConfigProfile = profile
+			if region != "" {
+				lo.Region = region
+				lo.DefaultRegion = "us-east-1"
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return aws.Config{}, err
+	}
+	for _, role := range roles {
+		// Each role is assumed with the credentials before it
+		cfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(cfg), role.RoleArn, func(options *stscreds.AssumeRoleOptions) {
+			if role.SessionName != "" {
+				options.RoleSessionName = role.SessionName
+			}
+		}))
+	}
+	if cfg.Region == "" {
+		cfg.Region = "us-east-1"
+	}
+	return cfg, nil
+}
+
+// awsRoles reads app()'s providers.aws.assumeRoles
+func awsRoles(args map[string]interface{}) []AwsRole {
+	roles := []AwsRole{}
+	list, _ := args["assumeRoles"].([]interface{})
+	for _, item := range list {
+		role, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		arn, _ := role["roleArn"].(string)
+		session, _ := role["sessionName"].(string)
+		roles = append(roles, AwsRole{RoleArn: arn, SessionName: session})
+	}
+	return roles
 }
 
 func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}) error {
@@ -80,39 +152,15 @@ func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}
 		a.profile = value
 	}
 
-	cfg, err := config.LoadDefaultConfig(
-		ctx,
-		config.WithRetryMaxAttempts(10),
-		func(lo *config.LoadOptions) error {
-			lo.SharedConfigProfile = a.profile
-			if region, ok := args["region"].(string); ok && region != "" {
-				lo.Region = region
-				lo.DefaultRegion = "us-east-1"
-			}
-			return nil
-		},
-	)
+	region, _ := args["region"].(string)
+	a.roles = awsRoles(args)
+	cfg, err := LoadAwsConfig(ctx, a.profile, region, a.roles)
 	if err != nil {
 		return err
-	}
-	if assumeRoles, ok := args["assumeRoles"].([]interface{}); ok {
-		for _, role := range assumeRoles {
-			if roleMap, ok := role.(map[string]interface{}); ok {
-				stsclient := sts.NewFromConfig(cfg)
-				cfg.Credentials = stscreds.NewAssumeRoleProvider(stsclient, roleMap["roleArn"].(string), func(aro *stscreds.AssumeRoleOptions) {
-					if sessionName, ok := roleMap["sessionName"].(string); ok {
-						aro.RoleSessionName = sessionName
-					}
-				})
-			}
-		}
 	}
 	_, err = cfg.Credentials.Retrieve(ctx)
 	if err != nil {
 		return err
-	}
-	if cfg.Region == "" {
-		cfg.Region = "us-east-1"
 	}
 	slog.Info("aws credentials found", "region", cfg.Region, "profile", a.profile)
 	a.config = cfg
