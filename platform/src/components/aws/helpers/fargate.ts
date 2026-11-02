@@ -35,7 +35,7 @@ import type { Permission } from "../permission";
 import type { Cluster } from "../v5/cluster";
 import { Efs } from "../v5/efs";
 import type { FunctionPermissionArgs } from "../v5/function";
-import type { ServiceArgs } from "../service";
+import type { DurationMinutes } from "../../duration";
 import { bootstrap } from "./bootstrap";
 import { imageBuilder } from "./container-builder";
 import { isVpc } from "./vpc";
@@ -822,12 +822,127 @@ export interface ContainerArgs {
 }
 
 /**
+ * Configure the health check that ECS runs on your containers.
+ *
+ * :::tip
+ * This health check is different from the [`loadBalancer.health`](#loadbalancer-health) check.
+ * :::
+ *
+ * This health check is run by ECS. While, `loadBalancer.health` is run by the load balancer,
+ * if you are using one. This is off by default. While the load balancer one
+ * cannot be disabled.
+ *
+ * This config maps to the `HEALTHCHECK` parameter of the `docker run` command. Learn
+ * more about [container health checks](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_HealthCheck.html).
+ *
+ * @default Health check is disabled
+ * @example
+ * ```js
+ * {
+ *   health: {
+ *     command: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"],
+ *     startPeriod: "60 seconds",
+ *     timeout: "5 seconds",
+ *     interval: "30 seconds",
+ *     retries: 3
+ *   }
+ * }
+ * ```
+ */
+export type ServiceHealth = Input<{
+  /**
+   * A string array representing the command that the container runs to determine if it is
+   * healthy.
+   *
+   * It must start with `CMD` to run the command arguments directly. Or `CMD-SHELL` to run
+   * the command with the container's default shell.
+   *
+   * @example
+   * ```js
+   * {
+   *   command: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
+   * }
+   * ```
+   */
+  command: Input<string[]>;
+  /**
+   * The grace period to provide containers time to bootstrap before failed health checks
+   * count towards the maximum number of retries. Must be between `0 seconds` and
+   * `300 seconds`.
+   * @default `"0 seconds"`
+   */
+  startPeriod?: Input<DurationMinutes>;
+  /**
+   * The maximum time to allow one command to run. Must be between `2 seconds` and
+   * `60 seconds`.
+   * @default `"5 seconds"`
+   */
+  timeout?: Input<DurationMinutes>;
+  /**
+   * The time between running the command for the health check. Must be between `5 seconds`
+   * and `300 seconds`.
+   * @default `"30 seconds"`
+   */
+  interval?: Input<DurationMinutes>;
+  /**
+   * The number of consecutive failures required to consider the check to have failed. Must
+   * be between `1` and `10`.
+   * @default `3`
+   */
+  retries?: Input<number>;
+}>;
+
+/**
+ * Configure how this component works in `sst dev`.
+ *
+ * :::note
+ * In `sst dev` your service is not deployed.
+ * :::
+ *
+ * By default, your service in not deployed in `sst dev`. Instead, you can set the
+ * `dev.command` and it'll be started locally in a separate tab in the
+ * `sst dev` multiplexer. Read more about [`sst dev`](/docs/reference/cli/#dev).
+ *
+ * This makes it so that the container doesn't have to be redeployed on every change. To
+ * disable this and deploy your service in `sst dev`, pass in `false`.
+ */
+export type ServiceDev =
+  | false
+  | {
+      /**
+       * The `url` when this is running in dev mode.
+       *
+       * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+       * using this component's `url` or linking to this component's `url`, it can be useful to
+       * have a placeholder URL. It avoids having to handle it being `undefined`.
+       * @default `"http://url-unavailable-in-dev.mode"`
+       */
+      url?: Input<string>;
+      /**
+       * The command that `sst dev` runs to start this in dev mode. This is the command you run
+       * when you want to run your service locally.
+       */
+      command?: Input<string>;
+      /**
+       * Configure if you want to automatically start this when `sst dev` starts. You can still
+       * start it manually later.
+       * @default `true`
+       */
+      autostart?: Input<boolean>;
+      /**
+       * Change the directory from where the `command` is run.
+       * @default Uses the `image.dockerfile` path
+       */
+      directory?: Input<string>;
+    };
+
+/**
  * A container as the helpers here read it: a task's, or a service's with its
  * health check and what `sst dev` runs.
  */
 export type Container = ContainerArgs & {
-  health?: ServiceArgs["health"];
-  dev?: ServiceArgs["dev"];
+  health?: ServiceHealth;
+  dev?: ServiceDev;
 };
 
 /** What a task or service says about its containers. */
@@ -843,8 +958,8 @@ type ContainersArgs = Pick<
 > & {
   containers?: Container[];
   volumes?: FargateArgs["volumes"];
-  health?: ServiceArgs["health"];
-  dev?: ServiceArgs["dev"];
+  health?: ServiceHealth;
+  dev?: ServiceDev;
 };
 
 /**

@@ -331,8 +331,9 @@ Everything above applies. The rest is specific to SST's own components in
   code: a component imports no 4.x component file and builds on none of its types
   (`docs/plans/v5-rewrite/plan.md`). The V5 `Vpc` and `Function` are built that way;
   their args are their own, docs included, and `v5-components.test.ts` lists them and
-  checks what they import. A 4.x component they take is reached through a helper that
-  takes either kind, as above. The `Router` is built that way too, on a V5 `Cdn`, with
+  checks every 4.x file they reach, through the helpers they use too. A 4.x component
+  they take is reached through a helper that takes either kind, as above, which the
+  test lists with the 4.x file it may import. The `Router` is built that way too, on a V5 `Cdn`, with
   the CloudFront code it shares with the 4.x one and the sites in `router-code.ts`. So
   is the `Cdn`, with the 5.0 certificate and redirect, whose DNS records the adapters
   create directly. The `Nextjs` is built that way: it builds its site in the program

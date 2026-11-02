@@ -119,27 +119,63 @@ describe("V5 components", () => {
 
     // Its args, types and docs are its own. A 4.x component it takes, like a
     // `Vpc` or a `Router`, is reached through a helper that takes either kind
-    // (`helpers/vpc.ts`), until 5.0 has no 4.x components. The modules that
-    // aren't components, like `permission.ts` or the providers, are shared.
-    it("imports no 4.x component's file, once it's built the 5.0 way", () => {
+    // (`helpers/vpc.ts`), until 5.0 has no 4.x components: those are the only
+    // 4.x files it reaches, through any of the helpers it uses. The modules
+    // that aren't components, like `permission.ts` or the providers, are
+    // shared.
+    it("reaches no 4.x component's file, once it's built the 5.0 way", () => {
       if (!rebuilt.includes(file)) return;
-      const code = fs.readFileSync(new URL(file, dir), "utf8");
-      const fourX = [
-        ...code.matchAll(/(?:\bfrom|^\s*import)\s*["'](\.[^"']+)["']/gm),
-      ]
-        .map((match) => new URL(`${match[1].replace(/\.js$/, "")}.ts`, dir))
-        .filter(
-          (target) =>
-            fs.existsSync(target) &&
-            /\bclass \w+ extends Component\b/.test(
-              fs.readFileSync(target, "utf8"),
-            ),
-        )
-        .map((target) => fileURLToPath(target).split("/components/")[1]);
-      expect(fourX).toEqual([]);
+      expect(fourXReached(new URL(file, dir))).toEqual([]);
     });
   });
 });
+
+// The helpers that take either kind of a component, and the 4.x file each
+// imports for it. A V5 component reaches 4.x's code through these alone.
+const eitherKind: Record<string, string[]> = {
+  "aws/helpers/vpc.ts": ["aws/vpc.ts"],
+  "aws/helpers/efs.ts": ["aws/efs.ts"],
+  "aws/helpers/bucket.ts": ["aws/bucket.ts"],
+  "aws/helpers/queue.ts": ["aws/queue.ts"],
+  "aws/helpers/sns-topic.ts": ["aws/sns-topic.ts"],
+  "aws/helpers/task.ts": ["aws/task.ts"],
+  "aws/helpers/router.ts": ["aws/router.ts"],
+  // A task's or a service's cluster, and a file system it mounts
+  "aws/helpers/fargate.ts": ["aws/cluster.ts", "aws/efs.ts"],
+  // A function given as either \`Function\`, or a \`Workflow\`, which has no
+  // 5.0 form yet
+  "aws/helpers/function-part.ts": ["aws/function.ts", "aws/workflow.ts"],
+};
+
+// The 4.x component files a file reaches: those it imports, and those the
+// helpers it imports reach, but what a helper imports to take either kind
+function fourXReached(start: typeof dir) {
+  const reached = new Set<string>();
+  const seen = new Set<string>();
+  const walk = (file: typeof dir) => {
+    const name = fileURLToPath(file).split("/src/components/")[1];
+    const code = fs.readFileSync(file, "utf8");
+    for (const match of code.matchAll(
+      /(?:\bfrom|^\s*import)\s*["'](\.[^"']+)["']/gm,
+    )) {
+      const target = new URL(`${match[1].replace(/\.js$/, "")}.ts`, file);
+      // Outside the components, like \`util/\`, isn't a component's
+      const targetName = fileURLToPath(target).split("/src/components/")[1];
+      if (!targetName || !fs.existsSync(target)) continue;
+      if (seen.has(`${name}>${targetName}`)) continue;
+      seen.add(`${name}>${targetName}`);
+      const isFourX = /\bclass \w+ extends Component\b/.test(
+        fs.readFileSync(target, "utf8"),
+      );
+      if (isFourX) {
+        if (!eitherKind[name]?.includes(targetName))
+          reached.add(`${targetName}, through ${name}`);
+      } else if (targetName.startsWith("aws/helpers/")) walk(target);
+    }
+  };
+  walk(start);
+  return [...reached].sort();
+}
 
 // The CLI bundles a config with esbuild, and this package says its files have
 // no side effects. A file that's imported for what it does, not for what it
