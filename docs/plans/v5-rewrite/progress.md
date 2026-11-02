@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Queue` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/queue.ts`), with no 4.x component file imported, and on the clean break's list. Its subscriber goes through `plainFunction()`, as the `Bucket`'s do.
+- **What 4.x's static `Queue.subscribe(queueArn, ...)` created is kept.** It was named after the queue's own name, and the map didn't look there. `Queue.get(name, queueArn).subscribe(...)` takes its place, given the options the static one was.
+- **The "Switch from" section** says what `subscribe` returns now, where its `transform` went (for a queue from `get` too), and that `get` needs the static one's `parent` and `provider`. The docs say a function passed in, or its ARN, isn't given permission to receive from the queue, as in 4.x, and the `batch` default's window is 0 seconds, as the code has it.
+- A test that gave a subscriber's args in an output now gives them plainly, and two that write a subscriber the 4.x way say it isn't typed.
+
+**Checked:** `tsc`, the docs page, and all 2,198 platform tests. The static subscribe's case runs the three ways, with a component named apart from its queue, and fails each without the map's new lines.
+
+**Reviewed**, and fixed: the map missed a static subscribe given a `parent`; the first test of it passed without the new lines, since the component and the queue had the same name; a subscriber's `transform` had no way across for a queue from `get`; and the docs above.
+
+**Left:** the lab check, with the `Bucket`'s.
+
 ## 2026-11-02: step 4, the `Bucket` built the 5.0 way
 
 The first of the rest of Core, after the gate. The `Bucket` is the most used of them, and the sites and a router's bucket routes build on it.

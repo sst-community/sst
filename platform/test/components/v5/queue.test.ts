@@ -1,12 +1,30 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import {
+  hashStringToPrettyString,
+  logicalName,
+} from "../../../src/components/naming";
 
-const pulumi = mockPulumi();
+// A queue that's looked up by its URL has the ARN that URL is for
+const pulumi = mockPulumi({
+  state: (args) => {
+    if (args.type !== "aws:sqs/queue:Queue" || !args.id) return {};
+    const [, , host, account, name] = args.id.split("/");
+    const region = host.split(".")[1];
+    return { url: args.id, arn: `arn:aws:sqs:${region}:${account}:${name}` };
+  },
+});
 
 const FUNCTION_ARN =
   "arn:aws:lambda:us-east-1:123456789012:function:my-subscriber";
 const QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789012/existing";
+// A queue that isn't in the app, subscribed to with the static `subscribe` of
+// the 4.x Queue, which named what it created after the queue's own name
+const SHARED_ARN = "arn:aws:sqs:us-east-1:123456789012:orders-prod.fifo";
+const STATIC_WRAPPER = `${logicalName("orders-prod.fifo")}Subscriber${logicalName(
+  hashStringToPrettyString(SHARED_ARN, 6),
+)}`;
 
 type QueueClass =
   | typeof import("../../../src/components/aws/queue").Queue
@@ -120,13 +138,50 @@ describe("Queue", () => {
               "MyQueueSubscriberRole",
             ]),
         },
+        // A queue referenced with `get`, under a name of its own, takes its
+        // place. It's given the options the static `subscribe` was.
+        "a subscriber added with the static subscribe": {
+          original: (opts) =>
+            OriginalQueue.subscribe(
+              SHARED_ARN,
+              "src/subscriber.handler",
+              {},
+              opts,
+            ),
+          v5: (opts) =>
+            Queue.get("SharedOrders", SHARED_ARN, opts).subscribe(
+              "src/subscriber.handler",
+            ),
+          unclaimed: [`sst:aws:QueueLambdaSubscriber::${STATIC_WRAPPER}`],
+          // The description names the queue's component now
+          changed: [[`${STATIC_WRAPPER}Function`, ["description"]]],
+          check: () =>
+            expect(pulumi.resources.map((r) => r.name)).toContain(
+              "SharedOrdersEventSourceMapping",
+            ),
+        },
         "a subscriber of a queue referenced with get": {
           create: (Queue, opts) =>
             Queue.get("MyQueue", QUEUE_URL, opts).subscribe(FUNCTION_ARN),
-          unclaimed: [WRAPPER],
+          // Named after the ARN of the queue it looked up
+          unclaimed: ["sst:aws:QueueLambdaSubscriber::MyQueueSubscriberWvswsc"],
         },
       },
     });
+  });
+
+  it("takes a subscriber's ARN in an output", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    new Queue("MyQueue").subscribe(output(FUNCTION_ARN));
+    await pulumi.settle();
+
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    const mapping = pulumi.resources.find(
+      (r) => r.name === "MyQueueEventSourceMapping",
+    )!;
+    expect(mapping.inputs.functionName).toBe(FUNCTION_ARN);
   });
 
   it("exposes the queue and its subscriber on nodes", async () => {

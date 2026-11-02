@@ -24,6 +24,7 @@ const rebuilt = [
   "dns-validated-certificate.ts",
   "https-redirect.ts",
   "bucket.ts",
+  "queue.ts",
 ];
 
 describe("V5 components", () => {

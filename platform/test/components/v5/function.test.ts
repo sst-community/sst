@@ -638,13 +638,16 @@ describe("Function", () => {
       await pulumi.settle();
     });
 
-    it("is built by a runtime made of commands, given in a function part's args in an output", async () => {
+    // A component built the 5.0 way takes a function part's args as a plain
+    // value, so a preview knows the function is created
+    it("is built by a runtime made of commands, given in a function part's args", async () => {
       const { runtime } = await import("../../../src/components/runtime");
       const { Queue } = await import("../../../src/components/aws/v5/queue");
       const ruby = runtime({ lambda: "ruby3.4", dev: { command: "ruby x.rb" } });
-      new Queue("MyQueue").subscribe(
-        output({ handler: "functions/ruby/app.handler", runtime: ruby }) as any,
-      );
+      new Queue("MyQueue").subscribe({
+        handler: "functions/ruby/app.handler",
+        runtime: ruby,
+      });
       await pulumi.settle();
       const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
       expect(fn.inputs.runtime).toBe("ruby3.4");
@@ -723,6 +726,7 @@ describe("Function", () => {
     it("takes the deprecated url.route of Function", async () => {
       new Queue("MyQueue").subscribe({
         handler,
+        // @ts-expect-error The way the 4.x Function takes it works, untyped
         url: { route: { router: router("none"), path: "/jobs" } },
       });
       await pulumi.settle();
@@ -740,6 +744,7 @@ describe("Function", () => {
       expect(() =>
         new Queue("MyQueue").subscribe({
           handler,
+          // @ts-expect-error The way the 4.x Function takes it works, untyped
           url: { route: { router: output(router("oac")), path: "/jobs" } },
         }),
       ).toThrow(/The "url.route.router" of the "MyQueueSubscriber" function has to be a plain value/);
