@@ -857,6 +857,41 @@ describe("Function", () => {
       ).toEqual([]);
     });
 
+    // 4.x left a function part's environment, link and permissions as they
+    // were given, so a `$transform` could spread them. Spreading an output
+    // copies the output, and what's added is lost without an error.
+    it("in a $transform that adds to what a function part is given", async () => {
+      const { $transform } = await import("../../../src/components/component");
+      $transform(OriginalFunction, (args, _opts, name) => {
+        if (!name.startsWith("Spread")) return;
+        args.environment = { ...(args.environment ?? {}), EXTRA: "1" };
+        args.link = [...((args.link as unknown[]) ?? [])];
+      });
+
+      const { Queue } = await import("../../../src/components/aws/v5/queue");
+      const { CronV2 } = await import("../../../src/components/aws/v5/cron-v2");
+      const { Bus } = await import("../../../src/components/aws/v5/bus");
+      new Queue("SpreadQueue").subscribe(handler);
+      new CronV2("SpreadCron", { function: handler, schedule: "rate(1 hour)" });
+      new Bus("SpreadBus").subscribe("Logger", {
+        handler,
+        environment: { MINE: "yes" },
+      });
+      await pulumi.settle();
+
+      for (const name of [
+        "SpreadQueueSubscriberFunction",
+        "SpreadCronFunctionFunction",
+        "SpreadBusSubscriberLoggerFunction",
+      ])
+        expect(inputs(name).environment.variables, name).toMatchObject({
+          EXTRA: "1",
+        });
+      expect(
+        inputs("SpreadBusSubscriberLoggerFunction").environment.variables,
+      ).toMatchObject({ MINE: "yes" });
+    });
+
     it("unless the V5 way of writing it is there too", async () => {
       new Function("MyFunction", {
         handler,

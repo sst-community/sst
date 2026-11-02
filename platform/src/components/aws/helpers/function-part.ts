@@ -194,29 +194,55 @@ export function functionPart(
           part.transform,
           part.name,
           // Written the way the 4.x `Function` takes it, or the V5 one
-          {
-            ...defaults,
-            ...args,
-            link: all([defaults.link, args.link]).apply(([added, link]) => [
-              ...(added ?? []),
-              ...(link ?? []),
-            ]),
-            environment: all([defaults.environment, args.environment]).apply(
-              ([added, environment]) => ({ ...added, ...environment }),
-            ),
-            permissions: all([defaults.permissions, args.permissions]).apply(
-              ([added, permissions]) => [
-                ...(added ?? []),
-                ...(permissions ?? []),
-              ],
-            ),
-          },
+          withDefaults(defaults, args),
           part.opts,
         ),
       ),
     );
   }
 }
+
+/**
+ * The function's args with what the component adds: its other args are
+ * defaults, and its link, environment and permissions are added to the
+ * user's. Each of those is made an output only when one of the two is, so a
+ * `$transform` for functions can spread what it's given, as it could with
+ * the 4.x components: spreading an output copies the output, not its value.
+ */
+function withDefaults(
+  defaults: FunctionDefaults,
+  args: Record<string, any>,
+): Record<string, any> {
+  const merged: Record<string, any> = { ...defaults, ...args };
+  const join = <T>(
+    key: "link" | "environment" | "permissions",
+    combine: (added: T, given: T) => T,
+  ) => {
+    const added = (defaults as Record<string, any>)[key];
+    const given = args[key];
+    if (given === undefined) {
+      if (added !== undefined) merged[key] = added;
+      return;
+    }
+    if (added === undefined) return;
+    merged[key] =
+      isPlain(added) && isPlain(given)
+        ? combine(added, given)
+        : all([added, given]).apply(([added, given]) =>
+            combine(added as T, given as T),
+          );
+  };
+  join<unknown[]>("link", (added, given) => [...added, ...given]);
+  join<Record<string, unknown>>("environment", (added, given) => ({
+    ...added,
+    ...given,
+  }));
+  join<unknown[]>("permissions", (added, given) => [...added, ...given]);
+  return merged;
+}
+
+const isPlain = (value: unknown) =>
+  !Output.isInstance(value) && typeof (value as any)?.then !== "function";
 
 function use(fn: Function | OriginalFunction) {
   return {
