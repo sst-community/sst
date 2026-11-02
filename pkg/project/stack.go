@@ -93,14 +93,16 @@ type CompleteEvent struct {
 	Hints     map[string]string
 	Versions  map[string]int
 	// Moved is whether the state has the marker of a stage on SST 5's
-	// components (MovedMarker)
-	Moved       bool
-	Errors      []Error
-	Finished    bool
-	Old         bool
-	Resources   []apitype.ResourceV3
-	ImportDiffs map[string][]ImportDiff
-	Tunnels     map[string]Tunnel
+	// components (MovedMarker), and MovedComponents the types it says the
+	// stage has in their 5.0 form
+	Moved           bool
+	MovedComponents []string
+	Errors          []Error
+	Finished        bool
+	Old             bool
+	Resources       []apitype.ResourceV3
+	ImportDiffs     map[string][]ImportDiff
+	Tunnels         map[string]Tunnel
 }
 
 type Tunnel struct {

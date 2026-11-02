@@ -12,10 +12,10 @@ describe("where a released resource can be", () => {
   it("is in the component, under its name and each it answers to", async () => {
     // A function a subscriber component of 4.x created, named after it with
     // "Function" added, which a queue's map now gives a name of its own
-    const queue = new Component("sst:aws:Queue", "Orders");
-    const subscriber = `${at}sst:aws:Queue$sst:aws:QueueLambdaSubscriber::OrdersSubscriber`;
+    const queue = new Component("acme:index:Queue", "Orders");
+    const subscriber = `${at}acme:index:Queue$acme:index:Subscriber::OrdersSubscriber`;
     const fn = new Component(
-      "sst:aws:Function",
+      "acme:index:Function",
       "OrdersSubscriber",
       {},
       {
@@ -33,14 +33,14 @@ describe("where a released resource can be", () => {
     );
     expect(addresses).toEqual(
       expect.arrayContaining([
-        `${at}sst:aws:Queue$sst:aws:Function$${dynamic}::OrdersSubscriberRouteKey.sst.aws.KvKeys`,
-        `${at}sst:aws:Queue$sst:aws:QueueLambdaSubscriber$sst:aws:Function$${dynamic}::OrdersSubscriberFunctionRouteKey.sst.aws.KvKeys`,
+        `${at}acme:index:Queue$acme:index:Function$${dynamic}::OrdersSubscriberRouteKey.sst.aws.KvKeys`,
+        `${at}acme:index:Queue$acme:index:Subscriber$acme:index:Function$${dynamic}::OrdersSubscriberFunctionRouteKey.sst.aws.KvKeys`,
       ]),
     );
   });
 
   it("is where the map says, with a parent", async () => {
-    const fn = new Component("sst:aws:Function", "Api");
+    const fn = new Component("acme:index:Function", "Api");
     expect(
       await app.resolve(
         releasedAddresses(

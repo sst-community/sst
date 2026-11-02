@@ -21,7 +21,8 @@ import (
 // programDefine is what the program reads as the globals $app, $cli and
 // $dev. state is what the stage's state has: the components' versions, which
 // the program contract's context() reads, whether the stage has moved to SST
-// 5's components, and whether it's empty. $cli says which version of the
+// 5's components and which it has in their 5.0 form, the types of the
+// components it has, and whether it's empty. $cli says which version of the
 // contract the core speaks.
 func (p *Project) programDefine(input *StackInput, state StageState) (map[string]string, error) {
 	cli := map[string]interface{}{
@@ -36,9 +37,11 @@ func (p *Project) programDefine(input *StackInput, state StageState) (map[string
 			"platform": p.PathPlatformDir(),
 		},
 		"state": map[string]interface{}{
-			"version": state.Versions,
-			"moved":   state.Moved,
-			"empty":   state.Empty,
+			"version":    state.Versions,
+			"moved":      state.Moved,
+			"components": nonNil(state.Components),
+			"types":      nonNil(state.Types),
+			"empty":      state.Empty,
 		},
 	}
 	cliBytes, err := json.Marshal(cli)
@@ -195,4 +198,12 @@ func providerConfigArgs(providers map[string]interface{}) ([]string, error) {
 		}
 	}
 	return args, nil
+}
+
+// nonNil is a list that's written as an empty list rather than null
+func nonNil(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }

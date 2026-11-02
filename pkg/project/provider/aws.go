@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -59,6 +60,9 @@ func (a *AwsProvider) Env() (map[string]string, error) {
 	env["SST_AWS_SECRET_ACCESS_KEY"] = creds.SecretAccessKey
 	env["SST_AWS_SESSION_TOKEN"] = creds.SessionToken
 	env["SST_AWS_REGION"] = a.config.Region
+	if creds.CanExpire {
+		env[EnvAwsExpires] = creds.Expires.UTC().Format(time.RFC3339)
+	}
 	if a.profile != "" {
 		env["AWS_PROFILE"] = a.profile
 	}
@@ -77,6 +81,10 @@ func (a *AwsProvider) Env() (map[string]string, error) {
 // EnvAwsAssumeRoles is the environment variable with the roles the CLI
 // assumed, as JSON
 const EnvAwsAssumeRoles = "SST_AWS_ASSUME_ROLES"
+
+// EnvAwsExpires is the environment variable with when the credentials in
+// SST_AWS_* expire, for those that do
+const EnvAwsExpires = "SST_AWS_CREDENTIALS_EXPIRE"
 
 // AwsRole is a role assumed after the profile's credentials, from app()'s
 // providers.aws.assumeRoles.

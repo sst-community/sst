@@ -557,14 +557,24 @@ before, as with a subscriber's function. Under one of those, a name that starts 
 the component's starts with that address's instead, as Pulumi names a child's alias.
 
 Only a move releases, so only `sst migrate` switches a stage's components. A stage on
-SST 5's components has a marker in its state (`sst:sst:Moved`), and the CLI refuses to
-deploy one that has something deployed and no marker, except with `sst migrate`. A run
-on a stage that has moved, or a new one, leaves the marker before the app's program
-runs, so a deploy that fails partway keeps it; a move leaves it once the program has
-run, unless something in the stage is still SST 4's form of a component that has a 5.0
-form. On a stage that has moved, or a new one, SST 4's form of such a component is
-refused: on one that has moved, deploying it would delete what the 5.0 form wrote. One
-inside another of SST's components moves with that one (`components/move.ts`).
+SST 5's components has a marker in its state (`sst:sst:Moved`), which lists the
+components it has in their 5.0 form, and the CLI refuses to deploy a stage that has
+something deployed and no marker, except with `sst migrate`. A run on a stage that has
+moved, or a new one, leaves the marker before the app's program runs, so a deploy that
+fails partway keeps it, and a remove that doesn't finish puts it back. A move leaves it
+once the program has run, listing every component that has a 5.0 form but those the
+stage kept in SST 4's form. A component counts as moved when the marker lists it, or
+when the stage has none of it, so a new stage starts with all of them (`components/move.ts`):
+
+- SST 4's form of a component that counts as moved is refused: on a stage that has the
+  5.0 form, deploying it would delete what that wrote.
+- Outside a move, the 5.0 form of a component the stage still has in SST 4's form is
+  refused, with a message that says to run `sst migrate`. That's how a component that
+  gains a 5.0 form after a stage moved is switched.
+- One inside another of SST's components moves with that one, and isn't counted.
+
+`mock()` runs as a new stage's first deploy, so a package that still wraps SST 4's form
+of such a component finds out in its tests.
 
 Whatever the map says, the check fails when something that holds data would be
 deleted, replaced or emptied: a bucket, a table, a database, a cache, a file system, a

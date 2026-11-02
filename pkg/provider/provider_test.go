@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
@@ -341,7 +342,7 @@ func isolate(t *testing.T) {
 		"AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ACCESS_KEY_ID",
 		"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ENDPOINT_URL",
 		"SST_AWS_ACCESS_KEY_ID", "SST_AWS_SECRET_ACCESS_KEY", "SST_AWS_SESSION_TOKEN", "SST_AWS_REGION",
-		"SST_AWS_ASSUME_ROLES",
+		"SST_AWS_ASSUME_ROLES", "SST_AWS_CREDENTIALS_EXPIRE",
 	} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
@@ -376,9 +377,31 @@ func TestAwsConfig(t *testing.T) {
 		assert.Equal(t, "eu-west-2", cfg.Region)
 		assert.Equal(t, 10, cfg.RetryMaxAttempts)
 		assert.Nil(t, cfg.BaseEndpoint)
+		// The ones the CLI resolved, which don't expire. Compared without
+		// printing them.
 		creds, err := cfg.Credentials.Retrieve(ctx)
 		require.NoError(t, err)
-		// Compared without printing them
+		if creds.AccessKeyID != "resolved-access-key" || creds.SecretAccessKey != "resolved-secret-key" {
+			t.Error("the credentials aren't the ones the CLI resolved")
+		}
+
+		// Ones that last a while yet are used until then
+		t.Setenv("SST_AWS_CREDENTIALS_EXPIRE", time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+		cfg, err = awsConfig(ctx)
+		require.NoError(t, err)
+		creds, err = cfg.Credentials.Retrieve(ctx)
+		require.NoError(t, err)
+		if creds.AccessKeyID != "resolved-access-key" {
+			t.Error("the credentials aren't the ones the CLI resolved")
+		}
+
+		// Ones that have expired are made again as the CLI made them: from
+		// the profile, which wins over keys in the shell
+		t.Setenv("SST_AWS_CREDENTIALS_EXPIRE", time.Now().Add(-time.Minute).UTC().Format(time.RFC3339))
+		cfg, err = awsConfig(ctx)
+		require.NoError(t, err)
+		creds, err = cfg.Credentials.Retrieve(ctx)
+		require.NoError(t, err)
 		if creds.AccessKeyID != "profile-access-key" || creds.SecretAccessKey != "profile-secret-key" {
 			t.Error("the credentials aren't the profile's")
 		}

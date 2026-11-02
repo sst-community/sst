@@ -14,7 +14,7 @@ import {
 import { nameResource, registerNamingRule } from "./naming.js";
 import type { NamingRule } from "./naming-rules.js";
 import { takenOverTypes, takeoverOf } from "./takeover.js";
-import { oldFormCreated } from "./move.js";
+import { newFormCreated, oldFormCreated } from "./move.js";
 import { VisibleError } from "./error.js";
 import { checkComponent } from "./check.js";
 import path from "path";
@@ -61,14 +61,13 @@ export class Component extends ComponentResource {
     }
     // The app's and its packages' checks see the args as transformed
     checkComponent(type, name, args);
-    // SST 4's form of a component with a 5.0 form. One inside another of
-    // SST's components moves with it.
-    if (
-      !takeoverOf(new.target) &&
-      takenOverTypes().has(type) &&
-      !Component.insideSst(opts?.parent)
-    )
-      oldFormCreated(type, name);
+    // A component with a 5.0 form, in that form or in SST 4's. One inside
+    // another of SST's components moves with it.
+    const how = takeoverOf(new.target);
+    if (!Component.insideSst(opts?.parent)) {
+      if (how) newFormCreated(how.from ?? type, type, name);
+      else if (takenOverTypes().has(type)) oldFormCreated(type, name);
+    }
 
     // `this` is not available to the transformations below until `super`
     // returns, so they reach the component through this variable.

@@ -33,8 +33,9 @@ func TestProgramDefine(t *testing.T) {
 		},
 	}
 	define, err := p.programDefine(&StackInput{Command: "deploy", Dev: true}, StageState{
-		Versions: map[string]int{"Bucket": 2},
-		Moved:    true,
+		Versions:   map[string]int{"Bucket": 2},
+		Moved:      true,
+		Components: []string{"sst:aws:Bucket"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,9 +74,11 @@ func TestProgramDefine(t *testing.T) {
 		Move     bool              `json:"move"`
 		Paths    map[string]string `json:"paths"`
 		State    struct {
-			Version map[string]int `json:"version"`
-			Moved   bool           `json:"moved"`
-			Empty   bool           `json:"empty"`
+			Version    map[string]int `json:"version"`
+			Moved      bool           `json:"moved"`
+			Components []string       `json:"components"`
+			Types      []string       `json:"types"`
+			Empty      bool           `json:"empty"`
 		} `json:"state"`
 	}
 	if err := json.Unmarshal([]byte(define["$cli"]), &cli); err != nil {
@@ -105,11 +108,15 @@ func TestProgramDefine(t *testing.T) {
 	json.Unmarshal([]byte(define["$cli"]), &struct {
 		State *map[string]interface{} `json:"state"`
 	}{&rawState})
-	if keys := sortedKeys(rawState); !reflect.DeepEqual(keys, []string{"empty", "moved", "version"}) {
+	if keys := sortedKeys(rawState); !reflect.DeepEqual(keys, []string{"components", "empty", "moved", "types", "version"}) {
 		t.Fatalf("$cli.state has %v", keys)
 	}
-	if !cli.State.Moved || cli.State.Empty {
+	if !cli.State.Moved || cli.State.Empty || !reflect.DeepEqual(cli.State.Components, []string{"sst:aws:Bucket"}) {
 		t.Fatalf("$cli.state is %+v", cli.State)
+	}
+	// An empty list, not null
+	if cli.State.Types == nil || len(cli.State.Types) != 0 {
+		t.Fatalf("$cli.state.types is %v", cli.State.Types)
 	}
 }
 

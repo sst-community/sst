@@ -30,7 +30,7 @@ import (
 
 type ProgressMode string
 
-var IGNORED_RESOURCES = []string{"sst:sst:Version", "sst:sst:LinkRef", "pulumi:pulumi:Stack"}
+var IGNORED_RESOURCES = []string{"sst:sst:Version", "sst:sst:LinkRef", "sst:sst:Moved", "pulumi:pulumi:Stack"}
 
 const (
 	ProgressModeDeploy  ProgressMode = "deploy"

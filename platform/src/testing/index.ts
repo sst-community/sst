@@ -29,6 +29,10 @@ export {
  * `sst` has the components of each provider whose packages are installed,
  * like `sst.aws`. Using one that isn't fails, and says what to install.
  *
+ * It runs as a new stage's first deploy does, so SST 4's form of a component
+ * that has a 5.0 form is refused, as it is there. With `move` or `recorded`,
+ * it runs on a stage that's deployed.
+ *
  * @example
  * ```ts title="uploads.test.ts"
  * import { expect, test } from "vitest";
@@ -54,6 +58,9 @@ export async function mock(
   },
 ) {
   const engine = mockPulumi({ root: process.cwd(), ...input });
+  // A new stage, unless the test moves one or replays one
+  if (!input?.move && !input?.recorded)
+    (globalThis as any).$cli.state = { version: {}, empty: true };
 
   // What `sst.config.ts` is given when it's built: the app, and whether this
   // is `sst dev`

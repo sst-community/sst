@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -40,7 +41,32 @@ func awsConfig(ctx context.Context) (aws.Config, error) {
 				return aws.Config{}, fmt.Errorf("reading %v: %w", provider.EnvAwsAssumeRoles, err)
 			}
 		}
-		return provider.LoadAwsConfig(ctx, os.Getenv("AWS_PROFILE"), os.Getenv("SST_AWS_REGION"), roles)
+		cfg, err := provider.LoadAwsConfig(ctx, os.Getenv("AWS_PROFILE"), os.Getenv("SST_AWS_REGION"), roles)
+		if err != nil {
+			return aws.Config{}, err
+		}
+		// The credentials the CLI resolved, until they expire: the provider
+		// asks for nothing the CLI already asked for, like a code from an
+		// MFA device
+		if key := os.Getenv("SST_AWS_ACCESS_KEY_ID"); key != "" {
+			resolved := aws.Credentials{
+				AccessKeyID:     key,
+				SecretAccessKey: os.Getenv("SST_AWS_SECRET_ACCESS_KEY"),
+				SessionToken:    os.Getenv("SST_AWS_SESSION_TOKEN"),
+				Source:          "sst",
+			}
+			if value := os.Getenv(provider.EnvAwsExpires); value != "" {
+				expires, err := time.Parse(time.RFC3339, value)
+				if err != nil {
+					return aws.Config{}, fmt.Errorf("reading %v: %w", provider.EnvAwsExpires, err)
+				}
+				resolved.CanExpire, resolved.Expires = true, expires
+			}
+			cfg.Credentials = aws.NewCredentialsCache(&resolvedFirst{resolved: resolved, then: cfg.Credentials}, func(options *aws.CredentialsCacheOptions) {
+				options.ExpiryWindow = time.Minute
+			})
+		}
+		return cfg, nil
 	}
 
 	options := []func(*config.LoadOptions) error{
@@ -69,4 +95,24 @@ func awsConfig(ctx context.Context) (aws.Config, error) {
 		return aws.Config{}, err
 	}
 	return cfg, nil
+}
+
+// resolvedFirst gives the credentials the CLI resolved while they last, and
+// then makes new ones as the CLI made its own
+type resolvedFirst struct {
+	mu       sync.Mutex
+	resolved aws.Credentials
+	used     bool
+	then     aws.CredentialsProvider
+}
+
+func (r *resolvedFirst) Retrieve(ctx context.Context) (aws.Credentials, error) {
+	r.mu.Lock()
+	first := !r.used
+	r.used = true
+	r.mu.Unlock()
+	if first && (!r.resolved.CanExpire || time.Now().Add(time.Minute).Before(r.resolved.Expires)) {
+		return r.resolved, nil
+	}
+	return r.then.Retrieve(ctx)
 }

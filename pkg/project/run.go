@@ -202,8 +202,14 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 
 	state := stageState(completed)
 	if err := p.refuseUnmoved(input, state); err != nil {
+		// Locking the stage put this run in its history
+		if input.Locked == nil {
+			p.DropUpdate(update)
+		}
 		return err
 	}
+	// What a remove that doesn't finish puts back
+	marker := markerOf(completed.Resources)
 
 	define, err := p.programDefine(input, state)
 	if err != nil {
@@ -791,6 +797,20 @@ loop:
 		partialCancel()
 		log.Info("waiting for partial to exit")
 		<-partialDone
+
+		// A remove that didn't finish keeps the marker of a stage on SST 5's
+		// components
+		if input.Command == "remove" && marker != nil {
+			checkpoint, err := workdir.Export()
+			if err != nil {
+				return err
+			}
+			if keepMarker(checkpoint, marker) {
+				if err := workdir.Import(checkpoint); err != nil {
+					return err
+				}
+			}
+		}
 
 		err = workdir.Push(update.ID)
 		if err != nil {
