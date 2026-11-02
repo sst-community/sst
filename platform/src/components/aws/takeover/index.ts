@@ -23,6 +23,7 @@ import "./mysql";
 import "./postgres";
 import "./queue";
 import "./redis";
+import "./router";
 import "./service";
 import "./sns-topic";
 import "./task";

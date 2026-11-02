@@ -285,7 +285,9 @@ Everything above applies. The rest is specific to SST's own components in
   either `Efs` the same way, and the V5 `Service` either `Alb`. A component built the
   5.0 way names neither: it takes an `AnyEfs` and checks it with `isEfs()`
   (`helpers/efs.ts`), and is served through an `AnyRouter` with `routeOf()`
-  (`helpers/router.ts`), which says whether the router signs its requests.
+  (`helpers/router.ts`), which says whether the router signs its requests: as a plain
+  value for a V5 `Router`, so what depends on it is created directly, and as an output
+  for a 4.x one or one referenced with `get`.
   For a `Vpc`, the two kinds are already one thing to a V5 component: it wraps the
   original's args in `TakesVpc<>`, which gives `vpc` the type `AnyVpc` (either `Vpc`)
   in place of the 4.x one, and it checks with `isVpc()`, not `instanceof`. It reads the
@@ -298,8 +300,12 @@ Everything above applies. The rest is specific to SST's own components in
   (`docs/plans/v5-rewrite/plan.md`). The V5 `Vpc` and `Function` are built that way;
   their args are their own, docs included, and `v5-components.test.ts` lists them and
   checks what they import. A 4.x component they take is reached through a helper that
-  takes either kind, as above. The ports before them reuse the original's, as below,
-  until each is rebuilt and added to that list.
+  takes either kind, as above. The `Router` is built that way too, on a V5 `Cdn`, with
+  the CloudFront code it shares with the 4.x one and the sites in `router-code.ts`. The
+  `Cdn` isn't yet: its certificate and its redirect are the 4.x ones, which every
+  component with a domain shares, and they're rebuilt with the DNS adapters, which
+  still create their records inside `.apply()`. The ports before them reuse the
+  original's, as below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
@@ -356,6 +362,7 @@ Everything above applies. The rest is specific to SST's own components in
 | An arg that must not have an output anywhere inside it | `plainDeep(value, what, why?)` in `args.ts` |
 | An `efs` arg: either kind of `Efs`, or an access point's ARN | `AnyEfs`, `isEfs(value)` in `helpers/efs.ts` |
 | Serving a component through a `Router` | `RouteArgs`, `AnyRouter`, `routeOf(route)` in `helpers/router.ts` |
+| A `bucket` arg: either kind of `Bucket` | `AnyBucket` in `helpers/bucket.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |
 | A value made on this machine from things in AWS, like built code | `withoutDependencies(output)` in `args.ts` |
 
@@ -760,4 +767,7 @@ replaced by `get`; `function.ts` for a component 4.x built almost entirely insid
 kept plain so a preview knows its source maps, and what an app creates once shared
 with the 4.x one; `vpc.ts` for args of its own, parts in each AZ from a plain count
 with nothing inside `.apply()`, and a `get` that finds what it can't count with
-lookups that aren't resources.
+lookups that aren't resources; `router.ts` for parts that 4.x kept in wrapper
+components at the top of the app (each route's entries in the key-value store), a
+component part (`Cdn`) that's looked up for `get`, and a setting it gives as a plain
+value so the components served through it don't wait (`_signs`).

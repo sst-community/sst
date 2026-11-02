@@ -7,7 +7,7 @@ import { useProvider } from "./helpers/provider.js";
 import { Input } from "../input.js";
 import { Dns } from "../dns.js";
 import { cloudfront, s3 } from "@pulumi/aws";
-import { CF_BLOCK_CLOUDFRONT_URL_INJECTION } from "./router.js";
+import { CF_BLOCK_CLOUDFRONT_URL_INJECTION } from "./router-code.js";
 
 /**
  * Properties to configure an HTTPS Redirect

@@ -1,8 +1,13 @@
-import crypto from "crypto";
 import { Input, jsonStringify } from "@pulumi/pulumi";
 import { Component } from "../component";
 import { KvRoutesUpdate } from "./providers/kv-routes-update";
 import { KvKeys } from "./providers/kv-keys";
+import {
+  kvNamespace as buildKvNamespace,
+  parsePattern,
+} from "./router-code";
+
+export { buildKvNamespace, parsePattern };
 
 export interface RouterBaseRouteArgs {
   /**
@@ -17,25 +22,6 @@ export interface RouterBaseRouteArgs {
    * The pattern to match.
    */
   pattern: Input<string>;
-}
-
-export function parsePattern(pattern: string) {
-  const [host, ...path] = pattern.split("/");
-  return {
-    host: host
-      .replace(/[.+?^${}()|[\]\\]/g, "\\$&") // Escape special regex chars
-      .replace(/\*/g, ".*"), // Replace * with .*
-    path: "/" + path.join("/"),
-  };
-}
-
-export function buildKvNamespace(name: string) {
-  // In the case multiple sites use the same kv store, we need to namespace the keys
-  return crypto
-    .createHash("md5")
-    .update(`${$app.name}-${$app.stage}-${name}`)
-    .digest("hex")
-    .substring(0, 4);
 }
 
 export function createKvRouteData(

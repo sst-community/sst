@@ -17,6 +17,14 @@ export type Vpc =
 /** The domain the lab account has a hosted zone for, as scrubbed. */
 export const zone = "lab.example.com";
 
+/**
+ * The sites group's router, without the sites, which build on this machine.
+ * The sites route themselves through it and add nothing to it.
+ */
+export function router(aws: Components) {
+  return new aws.Router("Router", { domain: `sites.v5lab.${zone}` });
+}
+
 export function serverless(aws: Components) {
   const uploads = new aws.Bucket("Uploads");
   uploads.notify({

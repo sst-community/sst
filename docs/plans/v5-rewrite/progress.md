@@ -2,6 +2,41 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, the `Router` built the 5.0 way
+
+The maintainer said to continue, with `Nextjs` and `Router` next. The `Router` comes first: every site, and a function's URL, is served through it. Two decisions came first ([Decisions](plan.md#decisions)): a site builds once per deploy, and the V5 `Router` drops inline routes.
+
+**Done, committed (not pushed):**
+
+- **A V5 `Cdn`** (`sst:aws:CDN`, as 4.x spelled it), which the `Router` and the sites are built on. Its domain, with the `name`, `aliases` and `redirects` that name its DNS records, and `wait` are plain values, so its distribution, deploy waiter, certificate and redirect are created directly. It keeps 4.x's names, so a switch moves nothing. It also keeps a quirk of 4.x's: unless `wait` is set to `true`, the waiter only waits for the first deploy.
+- **The V5 `Router`**, built the 5.0 way: its own args and docs, no 4.x component file, and nothing inside an `apply`. `domain`, `edge`, `protection`, `waf` and `waf.logging`, and a route's pattern, are plain values. The distribution, key-value store, request and response functions, cache policy, Lambda@Edge signer and WAF are parts, with 4.x's names. A route is a pair of parts inside the router, its entry in the store and its line in the router's list, where 4.x kept each in a component of its own at the top of the app; the takeover map finds them there. Their entries in the store are the same, byte for byte. `get` finds a router from another stage by its distribution's tags, as 4.x does.
+- **Inline routes and `invalidation`** are turned down with a message saying what to write. `invalidation` never did anything in the 4.x `Router`.
+- **The CloudFront code** the router's and the sites' functions run moved out of the 4.x `router.ts` into `router-code.ts`, which both `Router`s and the sites use. The 4.x file exports it as before.
+- **A function behind a V5 `Router` creates its URL's permissions directly**: the router says whether it signs its requests as a plain value (`routeOf()` in `helpers/router.ts`, which now takes either `Router`). Behind a 4.x one, or one referenced with `get`, it's still an output, which a preview knows. A 4.x site or function can be served through a V5 `Router`: it reads the same values off it.
+- **The rulebook and the docs pages** for the `Cdn` and the `Router`. `AnyBucket` (`helpers/bucket.ts`) takes either `Bucket`, for `routeBucket()`.
+
+**Checked** (all 2,063 platform tests, `tsc`, both pages, the docs site's build):
+
+- **Against what 4.x really deployed:** the recorded state's router (`serverless-sites.json`) is what the 4.x `Router` gives, and the V5 one takes it over with nothing created, changed or left over.
+- The `Cdn` and the `Router` take over 4.x's in every way they're set up, each run as it is, inside another component and with a provider of its own: a domain with aliases, redirects or a certificate of its own, `wait`, code at the edge with a store of the user's, each `protection`, a WAF with and without logging, routes to URLs and to buckets of either kind with every route arg, args given as outputs, patterns of each kind, transforms, and `get`. A switch takes the 4.x route components out of the state and nothing else.
+- A 4.x `Function` served through a V5 `Router` deploys as it did through the 4.x one, and so does a router and its function switched together.
+- A new stage's preview plans everything the `Router` creates but its domain's DNS records (below), and a function's URL permissions behind it, directly.
+- The router's CloudFront code test reads it from both files.
+
+**Reviewed** by a separate agent, which found nothing a switch loses, the store's entries the same byte for byte in every combination it tried, and every getter a 4.x site reads on the V5 `Router`. Its findings, fixed:
+
+- **A 4.x `Function` that links a V5 `Router` and is routed to with `route()` waits on its own route**, and is never deployed: it waits for everything in what it links, and the route is in the router now. A V5 `Function` doesn't, and a test shows it. "Switch from" says to switch the function with the router, or serve it with `url.router`.
+- **The 4.x sites and `Function` didn't type-check with a V5 `Router`**, though they work with one, and its page shows one. The 4.x route type takes either now, a change to types only. 4.x reads the router's distribution through `distributionID`, which waits for the deploy, as it did.
+- The tests: a `Cdn` check that couldn't fail, a test that asserted nothing, no object `transform` case (4.x replaced the tags whole and dropped the ones `get` reads; the V5 one merges them back, said in "Switch from"), and no replay of the recorded router, all added.
+- An empty `domain` is no domain, as in 4.x. The WAF's logging fields take outputs again; only `logging` decides what's created. A plain-value error for a router's domain names the router. The 4.x `HttpsRedirect` imports only the code it uses, and the 4.x route helpers use `router-code.ts`'s.
+
+**Left:**
+
+- **The lab check** of the `Router`, on a stage of its own: the sites group with 4.x sites behind it, and routes of its own to a URL and a bucket, which the lab app now has (`LAB_ROUTER=v5`).
+- **Domains the 5.0 way.** The DNS adapters (`sst.aws.dns()` and the Cloudflare and Vercel ones) create their records inside an `apply`, and the 4.x certificate and redirect the `Cdn` uses are built on them, so a new stage's preview doesn't show a domain's DNS records. Every component with a domain shares them. They're their own item: adapters that take the record's name as a plain value, and a 5.0 certificate whose validation records follow from its domain names. Until then the `Cdn` isn't on the list of components built the 5.0 way.
+- **`Nextjs`**, next, on the V5 `Router` and `Cdn`, built once per deploy.
+- A few args decide a part by whether they're set, and stay inputs, since they're often another resource's output: `edge.viewerRequest.kvStore`, `protection.edgeFunction.arn` and the domain's `cert`. One given as an output that turns out empty still counts as set, where 4.x would have left it out.
+
 ## 2026-11-01: step 4, the `Function` built the 5.0 way
 
 The maintainer said to continue. The `Function` with its dev stubs is the gate's other hard component the recordings already check; what was left was building it the 5.0 way.

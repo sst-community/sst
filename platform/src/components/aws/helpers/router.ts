@@ -1,12 +1,14 @@
-import { Input, Output } from "@pulumi/pulumi";
+import { Input, Output, all } from "@pulumi/pulumi";
 import { DurationSeconds } from "../../duration";
-import { Router as OriginalRouter, normalizeRouteArgs } from "../router";
+import { VisibleError } from "../../error";
+import type { Router as OriginalRouter } from "../router";
+import type { Router } from "../v5/router";
+import { type ProtectionConfig, isSigning } from "../router-code";
 
 /**
- * A `Router` a V5 component can be served through. There's no V5 `Router`
- * yet, so it's the 4.x one; a V5 one joins it here.
+ * A `Router` component: the 4.x one or the V5 one.
  */
-export type AnyRouter = OriginalRouter;
+export type AnyRouter = OriginalRouter | Router;
 
 export interface RouteArgs {
   /**
@@ -18,7 +20,7 @@ export interface RouteArgs {
    * Let's say you have a Router component.
    *
    * ```ts title="sst.config.ts"
-   * const router = new sst.aws.Router("MyRouter", {
+   * const router = new sst.aws.v5.Router("MyRouter", {
    *   domain: "example.com"
    * });
    * ```
@@ -42,7 +44,7 @@ export interface RouteArgs {
    * domain or a wildcard.
    *
    * ```ts {2} title="sst.config.ts"
-   * const router = new sst.aws.Router("MyRouter", {
+   * const router = new sst.aws.v5.Router("MyRouter", {
    *   domain: "*.example.com"
    * });
    * ```
@@ -176,17 +178,54 @@ export interface RouteArgs {
 }
 
 /**
- * What a component served through a router needs to know of it: where its
- * routes are kept, its URL, and whether it signs its requests to the
- * component (`signs`). Whether it signs is read from the router's protection
- * alone, which its settings give, so a preview knows it whatever the route's
- * own fields are.
+ * What a component served through a router needs to know of it: the route,
+ * with where the router keeps its routes and its URL, and whether it signs
+ * its requests to the component (`signs`).
+ *
+ * A V5 `Router` says whether it signs as a plain value, from its settings, so
+ * what depends on it can be created directly. A 4.x one, or one referenced
+ * with `get`, says it as an output: from its settings, or a tag that's looked
+ * up, which a preview knows either way.
  */
 export function routeOf(route: RouteArgs) {
+  const { instance: router, ...rest } = route;
+  const signs: boolean | Output<boolean> =
+    "_signs" in router
+      ? router._signs
+      : router._protection.apply((p: ProtectionConfig) => isSigning(p.mode));
   return {
-    route: normalizeRouteArgs(route)!,
-    signs: route.instance._protection.apply(
-      (p) => p.mode === "oac" || p.mode === "oac-with-edge-signing",
-    ) as Output<boolean>,
+    route: all([rest, router._hasInlineRoutes]).apply(([route, inline]) => {
+      if (inline)
+        throw new VisibleError(
+          "Cannot route the site using the provided router. The Router component uses inline routes which has been deprecated.",
+        );
+      const pathPrefix = route.path
+        ? "/" + route.path.replace(/^\//, "").replace(/\/$/, "")
+        : undefined;
+      return {
+        hostPattern: route.domain
+          ? route.domain
+              .replace(/[.+?^${}()|[\]\\]/g, "\\$&") // Escape special regex chars
+              .replace(/\*/g, ".*") // Replace * with .*
+          : undefined,
+        pathPrefix,
+        routerDistributionId: router.distributionID,
+        routerUrl: router.url.apply(
+          (url) =>
+            (route.domain ? `https://${route.domain}` : url) +
+            (pathPrefix ?? ""),
+        ),
+        routerKvNamespace: router._kvNamespace!,
+        routerKvStoreArn: router._kvStoreArn!,
+        routerProtection: router._protection,
+        routerDistributionArn: router._distributionArn,
+        rewrite: route.rewrite,
+        readTimeout: route.readTimeout,
+        keepAliveTimeout: route.keepAliveTimeout,
+        connectionTimeout: route.connectionTimeout,
+        connectionAttempts: route.connectionAttempts,
+      };
+    }),
+    signs,
   };
 }

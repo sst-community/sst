@@ -103,4 +103,61 @@ describe("a function in a new stage's preview", () => {
       ["PublicUrlInvoke", "*", undefined],
     ]);
   });
+
+  it("plans who may call its URL behind a V5 router, which says plainly whether it signs", async () => {
+    pulumi.reset();
+    const { Function } = await import(
+      "../../../src/components/aws/v5/function"
+    );
+    const { Router } = await import("../../../src/components/aws/v5/router");
+    const signs = new Router("Signs", { protection: "oac-with-edge-signing" });
+    const open = new Router("Open", { domain: "example.com" });
+    new Function("Signed", {
+      handler: "src/api.handler",
+      url: { router: { instance: signs, path: "/api" } },
+    });
+    new Function("Public", {
+      handler: "src/api.handler",
+      url: { router: { instance: open, path: "/api" } },
+    });
+    await pulumi.settle();
+
+    const access = (name: string) =>
+      pulumi.resources
+        .filter((r) => r.name.startsWith(`${name}Url`))
+        .map((r) => [r.name, r.inputs.principal, r.inputs.sourceArn]);
+    expect(access("Signed")).toEqual([
+      ["SignedUrl", undefined, undefined],
+      ["SignedUrlAccess", "cloudfront.amazonaws.com", UNKNOWN],
+      ["SignedUrlInvoke", "cloudfront.amazonaws.com", UNKNOWN],
+    ]);
+    expect(access("Public")).toEqual([
+      ["PublicUrl", undefined, undefined],
+      ["PublicUrlAccess", "*", undefined],
+      ["PublicUrlInvoke", "*", undefined],
+    ]);
+    // The router's own parts are planned too
+    const router = (name: string) =>
+      pulumi.resources
+        .filter((r) => r.name.startsWith(name) && r.type.startsWith("aws:"))
+        .map((r) => r.name)
+        .sort();
+    expect(router("Signs")).toEqual([
+      "SignsCdnDistribution",
+      "SignsCloudfrontFunctionRequest",
+      "SignsEdgeFunction",
+      "SignsEdgeFunctionRole",
+      "SignsKvStore",
+      "SignsServerCachePolicy",
+    ]);
+    // Not yet the domain's DNS records, or the certificate's: the DNS
+    // adapters create them inside an `apply`, until they're built the 5.0 way
+    expect(router("Open")).toEqual(
+      expect.arrayContaining([
+        "OpenCdnDistribution",
+        "OpenCdnSslCertificate",
+        "OpenCdnSslValidation",
+      ]),
+    );
+  });
 });

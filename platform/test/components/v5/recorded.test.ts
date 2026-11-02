@@ -237,6 +237,42 @@ function needless(order: string) {
   );
 }
 
+describe("the lab's router, as v4.23.1 deployed it", () => {
+  let run: Run;
+  beforeAll(async () => {
+    const pulumi = replay("serverless-sites.json", "rec");
+    const aws = await import("../../../src/components/aws/index");
+    const { router } = await import("../../recorded/v5-lab");
+    run = await pulumi.takesOverState(
+      () => router(aws as any),
+      () => router(aws.v5 as any),
+      // Everything but the router: the serverless group, the sites, and the
+      // link references
+      (r) =>
+        r.type === "sst:sst:LinkRef" ||
+        !/^Router/.test(r.parent ? r.parent.split("::").at(-1)! : r.name),
+    );
+  });
+
+  it("is what the 4.x Router deploys", () => {
+    const { deployed } = run;
+    expect(deployed.unclaimed).toEqual([]);
+    expect(deployed.created).toEqual([]);
+    expect(deployed.changed).toEqual([]);
+    expect(deployed.unordered).toEqual([]);
+    expect(deployed.revealed).toEqual([]);
+  });
+
+  it("is taken over by the V5 Router, with nothing changed", () => {
+    const { result } = run;
+    expect(result.unclaimed).toEqual([]);
+    expect(result.created).toEqual([]);
+    expect(result.changed).toEqual([]);
+    expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
+    expect(result.revealed).toEqual([]);
+  });
+});
+
 describe("the lab's serverless group, as v4.23.1 deployed it in sst dev", () => {
   let run: Run;
   beforeAll(async () => {

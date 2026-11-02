@@ -2556,7 +2556,7 @@ export class Function extends component("sst:aws:Function", parts) {
       const route = url.router?.route;
       // A router can sign its requests to the URL. Then only its
       // distribution may call the URL, whatever the authorization is.
-      const isOac = url.router?.signs ?? output(false);
+      const isOac = url.router?.signs ?? false;
 
       /**
        * Lambda Function URLs only accept alias names in the explicit `qualifier`
@@ -2574,7 +2574,7 @@ export class Function extends component("sst:aws:Function", parts) {
       const fnUrl = self.part("url", {
         functionName: durable ? fn.arn : fn.name,
         qualifier: alias?.name,
-        authorizationType: isOac.apply((oac) =>
+        authorizationType: output(isOac).apply((oac) =>
           oac || authorization === "iam" ? "AWS_IAM" : "NONE",
         ),
         invokeMode: streaming.apply((streaming) =>
@@ -2617,9 +2617,10 @@ export class Function extends component("sst:aws:Function", parts) {
       }
 
       // Who may call the URL depends on whether the router signs its
-      // requests. Its settings say, so a preview knows; its distribution is
-      // only passed in.
-      isOac.apply((oac) => {
+      // requests. A V5 router's settings say so plainly. A 4.x one, or one
+      // that's referenced, says so in an output a preview knows. Its
+      // distribution is only passed in.
+      const permit = (oac: boolean) => {
         if (oac) {
           self.part(
             "urlAccess",
@@ -2643,7 +2644,9 @@ export class Function extends component("sst:aws:Function", parts) {
             afterUrl,
           );
         } else if (authorization === "none") allowEveryone();
-      });
+      };
+      if (typeof isOac === "boolean") permit(isOac);
+      else isOac.apply(permit);
 
       const routeNamespace = crypto
         .createHash("md5")

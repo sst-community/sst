@@ -10,10 +10,16 @@ import {
 } from "../../src/components/aws/router";
 
 const require = createRequire(import.meta.url);
-const routerSource = readFileSync(
-  new URL("../../src/components/aws/router.ts", import.meta.url),
-  "utf8",
-);
+// The router's code: the 4.x `Router`'s handler, and the code it shares with
+// the V5 one and the sites
+const routerSource = ["router.ts", "router-code.ts"]
+  .map((file) =>
+    readFileSync(
+      new URL(`../../src/components/aws/${file}`, import.meta.url),
+      "utf8",
+    ),
+  )
+  .join("\n");
 
 type CloudFrontField = {
   value?: string;
