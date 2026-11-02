@@ -296,6 +296,24 @@ describe("Redis", () => {
       );
     });
 
+    // `dev` says what `sst dev` connects to, whatever a deploy does
+    it("connects to the local server in place of an existing cluster", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const redis = new Redis("MyRedis", {
+        vpc,
+        existing: { cluster: "app-dev-myredis" },
+        dev: { port: 6380 },
+      });
+      await pulumi.settle();
+
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Redis"]);
+      expect(await pulumi.resolve([redis.host, redis.port])).toEqual([
+        "localhost",
+        6380,
+      ]);
+    });
+
     it("deploys the cluster when dev isn't set", async () => {
       // @ts-ignore
       global.$dev = true;
@@ -359,6 +377,7 @@ describe("Redis", () => {
       expect(() => new Redis("MyRedis", { vpc: net as any })).toThrow(
         /The "vpc" of the "MyRedis" Redis component isn't a "Vpc" component/,
       );
+      await pulumi.settle();
     });
   });
 

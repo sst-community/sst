@@ -5,7 +5,6 @@ import {
   jsonStringify,
   Output,
   output,
-  Resource,
 } from "@pulumi/pulumi";
 import { RandomPassword } from "@pulumi/random";
 import { elasticache, secretsmanager } from "@pulumi/aws";
@@ -14,8 +13,8 @@ import { ifSet, plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { toGBs } from "../../size";
-import { type AnyVpc, isVpc, subnetsOf } from "../helpers/vpc";
-import { localServerPane } from "../helpers/local-server";
+import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
+import { localServerPane, shownPassword } from "../helpers/local-server";
 
 const parts = {
   /**
@@ -297,7 +296,7 @@ export interface RedisArgs extends ComponentArgs<typeof parts> {
    * ```js
    * {
    *   vpc: {
-   *     subnets: ["subnet-0db7376a7ad4db5fd ", "subnet-06fc7ee8319b2c0ce"],
+   *     subnets: ["subnet-0db7376a7ad4db5fd", "subnet-06fc7ee8319b2c0ce"],
    *     securityGroups: ["sg-0399348378a4c256c"]
    *   }
    * }
@@ -548,19 +547,20 @@ export class Redis extends component("sst:aws:Redis", parts) {
           : `The "nodes" arg of the "${name}" Redis component is now "cluster.nodes". Pass the same number as \`cluster: { nodes }\`; nothing in AWS changes.`,
       );
 
-    // A cluster that's already deployed
-    const existing = this.existingPart("cluster");
-    if (existing) {
-      this.connection = connectTo(existing, authTokenOf(existing));
-      return;
-    }
-
     // In `sst dev`, a Redis server on the user's machine stands in for the
-    // cluster. This is the only place the component handles dev mode.
+    // cluster, one that's already deployed too. This is the only place the
+    // component handles dev mode.
     const dev = plain(args.dev, `The "dev" of the "${name}" Redis`);
     if (dev && $dev) {
       this.runsLocally();
       this.connection = runLocally(dev);
+      return;
+    }
+
+    // A cluster that's already deployed
+    const existing = this.existingPart("cluster");
+    if (existing) {
+      this.connection = connectTo(existing, authTokenOf(existing));
       return;
     }
 
@@ -794,7 +794,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
           interpolate`Make sure your local Redis server is using:
 
   username: "${local.username}"
-  password: "${dev.password || "\x1b[38;5;8m[no password]\x1b[0m"}"
+  password: "${shownPassword(local.password)}"
 
 Listening on "${local.host}:${local.port}"...`,
         ),
@@ -920,12 +920,7 @@ function vpcOf(name: string, vpc: RedisArgs["vpc"]) {
     };
   }
 
-  // Another resource, like a `Vpc.v1` or an `aws.ec2.Vpc`, would otherwise be
-  // read as the ids
-  if (Resource.isInstance(vpc))
-    throw new VisibleError(
-      `The "vpc" of the "${name}" Redis component isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`,
-    );
+  assertVpcIds(vpc, `the "${name}" Redis component`);
   const ids = output(vpc);
   return { subnets: ids.subnets, securityGroups: ids.securityGroups };
 }

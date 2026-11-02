@@ -1,7 +1,6 @@
 import {
   ComponentResourceOptions,
   type Output,
-  Resource,
   all,
   output,
 } from "@pulumi/pulumi";
@@ -17,6 +16,7 @@ import { VisibleError } from "../../error";
 import type { Input } from "../../input";
 import {
   type AnyVpc,
+  assertVpcIds,
   isVpc,
   privateSubnetsOf,
   subnetsByAz,
@@ -334,11 +334,7 @@ export class Efs extends component("sst:aws:Efs", parts) {
           ),
         };
 
-      // Another resource, like a `Vpc.v1`, would otherwise be read as the ids
-      if (Resource.isInstance(args.vpc))
-        throw new VisibleError(
-          `The "vpc" of the "${name}" EFS component isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`,
-        );
+      assertVpcIds(args.vpc, `the "${name}" EFS component`);
       const vpc = output(args.vpc).apply((vpc) => {
         // `vpc.id` wasn't always required, so a config can be without it
         if (!vpc.id)

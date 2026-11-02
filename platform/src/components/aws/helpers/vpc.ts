@@ -18,6 +18,20 @@ export function isVpc(vpc: unknown): vpc is AnyVpc {
   return vpc instanceof OriginalVpc || vpc instanceof Vpc;
 }
 
+/**
+ * Refuse a resource in place of a VPC's ids, in a `vpc` arg that isn't a
+ * `Vpc`. Another resource, like a `Vpc.v1` or an `aws.ec2.Vpc`, would
+ * otherwise be read as the ids.
+ *
+ * @param what The component, for the error: `the "MyRedis" Redis component`.
+ */
+export function assertVpcIds(vpc: unknown, what: string) {
+  if (Resource.isInstance(vpc))
+    throw new VisibleError(
+      `The "vpc" of ${what} isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`,
+    );
+}
+
 /** The ids of a VPC's public or private subnets, from either kind of `Vpc`. */
 export function subnetsOf(
   vpc: AnyVpc,

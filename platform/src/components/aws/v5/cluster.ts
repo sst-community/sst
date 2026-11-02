@@ -1,14 +1,9 @@
-import {
-  ComponentResourceOptions,
-  Output,
-  Resource,
-  output,
-} from "@pulumi/pulumi";
+import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
 import { ecs } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../../parts-component";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
-import { type AnyVpc, isVpc } from "../helpers/vpc";
+import { type AnyVpc, assertVpcIds, isVpc } from "../helpers/vpc";
 
 const parts = {
   /**
@@ -299,12 +294,7 @@ export class Cluster extends component("sst:aws:Cluster", parts) {
 function vpcOf(name: string, vpc: ClusterArgs["vpc"]) {
   if (isVpc(vpc)) return vpc;
 
-  // Another resource, like a `Vpc.v1` or an `aws.ec2.Vpc`, would otherwise be
-  // read as the ids
-  if (Resource.isInstance(vpc))
-    throw new VisibleError(
-      `The "vpc" of the "${name}" Cluster component isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`,
-    );
+  assertVpcIds(vpc, `the "${name}" Cluster component`);
 
   // The ids are checked as they're given, so what's missing fails a preview
   // even where their values aren't known yet, and once more when they are

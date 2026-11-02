@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Postgres` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **The `Postgres`'s own args and docs** (`aws/v5/postgres.ts`), with no 4.x component file imported, and on the clean break's list. Its parts, and what each is created with, are the proof of concept's, which took over 4.x's. `vpc` takes either kind of `Vpc`, or subnet ids.
+- **In `sst dev` with `dev` set, it reports the pane for the local database** with `localServerPane()`, where 4.x created a `DevCommand` in every deploy; a switch takes that out of the state. The password is still asked for in `sst dev` alone. A password from a secret stays a secret in the report, and the core reads it decrypted, as it read 4.x's.
+- **`dev` wins over `existing` in `sst dev`**, in the `Postgres` and the `Redis`: with both, `sst dev` connects to the local server, as `dev`'s docs say. Before, it connected to the deployed one.
+- **`assertVpcIds()`** in `helpers/vpc.ts` refuses another resource where a VPC's ids go. The `Efs`, `Cluster` and `Redis` each had the same check; they and the `Postgres` use it now, and `Mysql` and `Aurora` will.
+- **`shownPassword()`** in `helpers/local-server.ts` shows an empty password as "[no password]". The `Redis`'s pane did that only for a password written as a string, not for one given as an output.
+- Breaking changes, in the plan's table: `Postgres.v1` has no V5 form, `proxyId` fails as soon as it's read without a proxy, and in `sst dev` with `dev`, reading `nodes` says why a resource is missing where 4.x gave `undefined`.
+
+**Checked:** `tsc`, all platform tests (2,283), the docs pages, and the site's build. The `Postgres` takes over 4.x's in every case, with `dev` set in and outside `sst dev` (a secret password included, with nothing revealed), with a `Vpc` of either kind, and with the `Vpc` switched along with it: only 4.x's version marker, and with `dev` its dev command, leave the state. In the lab, `sst dev --mode=mono` on a stage of its own (`LAB_ONLY=panes`, nothing in AWS): the `Postgres`'s pane, with its password from `$util.secret()` and the default username and database, beside the `Redis`'s, the 5.0 `DevCommand` linked to both, and SST 4's `DevCommand`. The pane's message was encrypted in the state. Removed, and cleaned up: 18 state versions and the passphrase. The audit is clean. No RDS database was deployed for this: the parts are the proof of concept's, and the recorded databases group, replayed under the mock, is taken over with nothing changed. A lab run of a real switch is left for when `Mysql` and `Aurora` are built the same way, one stage with a VPC for all three.
+
+**Reviewed**, and fixed: in `sst dev`, reading `nodes` now fails where 4.x gave `undefined`, which the docs and the plan didn't say. With `existing` and `dev`, `sst dev` connected to the deployed database. Tests were missing for `dev` without a password outside `sst dev`, a secret password taken over in `sst dev`, and `sst dev` without `dev` reporting nothing; one test left resources unsettled. A stray space in an example subnet id, in the `Postgres`'s and the `Redis`'s docs.
+
 ## 2026-11-02: step 4, the `Redis` built the 5.0 way, and a 5.0 `DevCommand`
 
 **Done, committed (not pushed):**

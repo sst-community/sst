@@ -1,3 +1,4 @@
+import { output } from "@pulumi/pulumi";
 import type { DevReport } from "../../contract";
 import type { Input } from "../../input";
 
@@ -11,4 +12,14 @@ export function localServerPane(message: Input<string>): DevReport {
     command: "sst print-and-not-quit",
     environment: { SST_DEV_COMMAND_MESSAGE: message },
   };
+}
+
+/**
+ * A password as the pane shows it, with an empty one shown as
+ * "[no password]", in grey.
+ */
+export function shownPassword(password: Input<string>) {
+  return output(password).apply(
+    (password) => password || "\x1b[38;5;8m[no password]\x1b[0m",
+  );
 }

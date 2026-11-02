@@ -213,10 +213,11 @@ the component reads its args.
   IAM statements and `sst.Linkable.env(links)` the environment variables.
 - **Dev mode.** If the component runs locally in `sst dev` and isn't deployed, handle
   that in one place in the constructor: call `this.runsLocally()` and return before
-  creating the parts that aren't deployed. Reading `nodes` then explains why a resource
-  is missing. A part that's created all the same is in `nodes` as usual, like the role
-  a service's containers run as on the user's machine. Keep the values the getters
-  return in one object so the getters don't branch on dev.
+  creating the parts that aren't deployed. Do it before `existing`: given both, `sst dev`
+  uses what runs locally. Reading `nodes` then explains why a resource is missing. A
+  part that's created all the same is in `nodes` as usual, like the role a service's
+  containers run as on the user's machine. Keep the values the getters return in one
+  object so the getters don't branch on dev.
 - **Telling the CLI.** What the CLI needs from a component it reads from what the
   component reported, through the program contract: a function it builds (`function`),
   a command `sst dev` runs (`dev`), a task `sst dev` runs locally (`task`), a bastion
@@ -313,8 +314,9 @@ Everything above applies. The rest is specific to SST's own components in
   original's args in `TakesVpc<>`, which gives `vpc` the type `AnyVpc` (either `Vpc`)
   in place of the 4.x one, and it checks with `isVpc()`, not `instanceof`. It reads the
   subnets with `subnetsOf()` where it needs them as one output, and whether there's a
-  NAT with `hasNat()`, since the two `Vpc`s keep those differently. All are in
-  `helpers/vpc.ts`.
+  NAT with `hasNat()`, since the two `Vpc`s keep those differently. A component
+  built the 5.0 way types `vpc` as `AnyVpc` or the ids, and refuses any other
+  resource there with `assertVpcIds()`. All are in `helpers/vpc.ts`.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **A 5.0 component owns its args.** The 5.0 rewrite makes a clean break from 4.x
   code: a component imports no 4.x component file and builds on none of its types
@@ -335,10 +337,11 @@ Everything above applies. The rest is specific to SST's own components in
   refuses any other component in its place, and the `Task`, whose args a service
   shares are `FargateBaseArgs`, below. So is the `Efs`, which makes a mount target in
   each AZ, kept by the AZ's number in a `Vpc` the app creates, and by its name in any
-  other VPC, looked up with `after()` once a preview knows the subnets. So is the
-  `Redis`, which reports the pane `sst dev` shows for a local server, where 4.x created
-  a `DevCommand` for it. The ports before them reuse the original's, as below, until
-  each is rebuilt and added to that list.
+  other VPC, looked up with `after()` once a preview knows the subnets. So are the
+  `Redis` and the `Postgres`, which report the pane `sst dev` shows for a local server
+  (`helpers/local-server.ts`), where 4.x created a `DevCommand` for it. The ports
+  before them reuse the original's, as below, until each is rebuilt and added to that
+  list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
@@ -392,7 +395,7 @@ Everything above applies. The rest is specific to SST's own components in
 | A resource for each private subnet of a VPC, kept by its AZ | `privateSubnetsOf(vpc, parent, what)` in `helpers/vpc.ts`: by the AZ's number for a `Vpc` the app creates, by its name for one from `get`; and `subnetsByAz(subnets, parent, what)` for subnet ids. Where it's a promise, of what a preview knows, create them with `after()` |
 | Deciding from an output a preview knows, like a lookup's | `knownValue(output)` in `args.ts`, for `after()` |
 | A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
-| A database or cache that runs on the user's machine in `sst dev`: the pane that says how to set up the local server | `localServerPane(message)` in `helpers/local-server.ts`, given to `this.report({ dev })` |
+| A database or cache that runs on the user's machine in `sst dev`: the pane that says how to set up the local server | `localServerPane(message)` in `helpers/local-server.ts`, given to `this.report({ dev })`, with a password in it shown by `shownPassword()` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |

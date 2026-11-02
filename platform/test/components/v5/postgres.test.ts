@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { output } from "@pulumi/pulumi";
+import { output, secret } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
 
 const INSTANCE = "aws:rds/instance:Instance";
@@ -48,14 +48,17 @@ type PostgresClass =
 describe("Postgres", () => {
   let OriginalPostgres: typeof import("../../../src/components/aws/postgres").Postgres;
   let Postgres: typeof import("../../../src/components/aws/v5/postgres").Postgres;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
 
   beforeAll(async () => {
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
     OriginalPostgres = (await import("../../../src/components/aws/postgres")).Postgres;
     Postgres = (await import("../../../src/components/aws/v5/postgres"))
       .Postgres;
     await import("../../../src/components/aws/takeover/postgres");
+    await import("../../../src/components/aws/takeover/vpc");
   });
 
   beforeEach(() => {
@@ -78,7 +81,11 @@ describe("Postgres", () => {
       original: () => OriginalPostgres,
       v5: () => Postgres,
       unclaimed: [VERSION],
-      check: () => expect(resource("MyDatabaseInstance").type).toBe(INSTANCE),
+      // In `sst dev` with `dev` set, neither creates the database
+      check: () =>
+        // @ts-ignore
+        global.$dev ||
+        expect(resource("MyDatabaseInstance").type).toBe(INSTANCE),
       cases: {
         "default database": (Postgres, opts) => {
           new Postgres("MyDatabase", { vpc }, opts);
@@ -177,15 +184,52 @@ describe("Postgres", () => {
             opts,
           );
         },
-        "dev args outside of sst dev": (Postgres, opts) => {
-          new Postgres(
-            "MyDatabase",
-            {
-              vpc,
-              dev: { username: "postgres", password: "password", port: 5433 },
-            },
-            opts,
-          );
+        // The 4.x Postgres created a component for the pane `sst dev` shows
+        // in every deploy. The V5 one reports the pane in `sst dev` alone.
+        "dev args outside of sst dev": {
+          create: (Postgres, opts) => {
+            new Postgres(
+              "MyDatabase",
+              {
+                vpc,
+                dev: { username: "postgres", password: "password", port: 5433 },
+              },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev", VERSION],
+          check: () => expect(pulumi.reportOf("MyDatabase")).toBeUndefined(),
+        },
+        "dev args in sst dev": {
+          create: (Postgres, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new Postgres(
+              "MyDatabase",
+              { vpc, dev: { password: "password", port: 5433 } },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev", VERSION],
+          // The component itself reports the pane, in its outputs
+          changed: [["MyDatabase", ["outputs"]]],
+          check: () =>
+            expect(pulumi.reportOf("MyDatabase")).toHaveProperty("dev"),
+        },
+        // The 4.x dev command kept it secret in its outputs, and so does the
+        // V5 pane
+        "a secret dev password in sst dev": {
+          create: (Postgres, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new Postgres(
+              "MyDatabase",
+              { vpc, dev: { password: secret("password") } },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev", VERSION],
+          changed: [["MyDatabase", ["outputs"]]],
         },
         "a database referenced with get": (Postgres, opts) => {
           Postgres.get("MyDatabase", { id: "app-dev-mydatabase" }, opts);
@@ -204,7 +248,7 @@ describe("Postgres", () => {
           create: (Postgres, opts) => {
             new Postgres(
               "MyDatabase",
-              { vpc: new Vpc("MyVpc"), proxy: true },
+              { vpc: new OriginalVpc("MyVpc"), proxy: true },
               opts,
             );
           },
@@ -213,6 +257,22 @@ describe("Postgres", () => {
               "MyVpcPrivateSubnet1_id",
               "MyVpcPrivateSubnet2_id",
             ]),
+        },
+        "in a Vpc switched with it": {
+          original: (opts) =>
+            new OriginalPostgres(
+              "MyDatabase",
+              { vpc: new OriginalVpc("MyVpc"), proxy: true },
+              opts,
+            ),
+          v5: (opts) =>
+            new Postgres(
+              "MyDatabase",
+              { vpc: new Vpc("MyVpc"), proxy: true },
+              opts,
+            ),
+          // Both version markers, with nothing in AWS behind them
+          unclaimed: [VERSION, "sst:sst:Version::MyVpcVersion"],
         },
         // V5 merges an object transform into the defaults. 4.x
         // replaced a nested object whole, so tags set this way took the place
@@ -281,7 +341,7 @@ describe("Postgres", () => {
       global.$dev = true;
     });
 
-    it("creates nothing but the dev command when dev is set", async () => {
+    it("creates nothing and reports a pane when dev is set", async () => {
       const database = new Postgres("MyDatabase", {
         vpc,
         username: "admin",
@@ -290,10 +350,7 @@ describe("Postgres", () => {
       });
       await pulumi.settle();
 
-      expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:Postgres",
-        "sst:sst:DevCommand",
-      ]);
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Postgres"]);
       expect(
         await pulumi.resolve([
           database.host,
@@ -313,6 +370,39 @@ describe("Postgres", () => {
         "placeholder",
         "placeholder",
       ]);
+      // The pane `sst dev` shows, titled with the component's name
+      expect(pulumi.reportOf("MyDatabase")).toEqual({
+        contract: 1,
+        dev: {
+          command: "sst print-and-not-quit",
+          autostart: true,
+          links: [],
+          environment: {
+            SST_DEV_COMMAND_MESSAGE: [
+              "Make sure your local PostgreSQL server is using:",
+              "",
+              '  username: "admin"',
+              '  password: "local"',
+              '  database: "acme"',
+              "",
+              'Listening on "127.0.0.1:5433"...',
+            ].join("\n"),
+          },
+        },
+      });
+    });
+
+    it("says there's no password in its pane, given an empty one", async () => {
+      const database = new Postgres("MyDatabase", {
+        vpc,
+        dev: { password: output("") },
+      });
+      await pulumi.settle();
+
+      expect(
+        pulumi.reportOf("MyDatabase")?.dev.environment.SST_DEV_COMMAND_MESSAGE,
+      ).toContain('password: "\x1b[38;5;8m[no password]\x1b[0m"');
+      expect(await pulumi.resolve(database.password)).toBe("");
     });
 
     it("uses the dev username and database, and the top-level password", async () => {
@@ -334,10 +424,29 @@ describe("Postgres", () => {
       ).toEqual(["localhost", 5432, "local-user", "top-level", "local"]);
     });
 
+    // The core reads it decrypted, as it read SST 4's `DevCommand`
+    it("keeps a secret password secret in the state", async () => {
+      new Postgres("MyDatabase", { vpc, dev: { password: secret("local") } });
+      await pulumi.settle();
+
+      const message =
+        pulumi.reportOf("MyDatabase")?.dev.environment.SST_DEV_COMMAND_MESSAGE;
+      expect(message).toMatchObject({
+        "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",
+      });
+      expect(message.value).toContain('password: "local"');
+    });
+
     it("needs a password to connect with", () => {
       expect(() => new Postgres("MyDatabase", { vpc, dev: {} })).toThrow(
         /You must provide the password to connect to your locally running Postgres/,
       );
+    });
+
+    it("needs dev as a plain value", () => {
+      expect(
+        () => new Postgres("MyDatabase", { vpc, dev: output({}) as any }),
+      ).toThrow(/The "dev" of the "MyDatabase" database has to be a plain value/);
     });
 
     it("explains why nodes are missing", async () => {
@@ -357,7 +466,32 @@ describe("Postgres", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.some((r) => r.type === INSTANCE)).toBe(true);
+      expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
     });
+
+    // `dev` says what `sst dev` connects to, whatever a deploy does
+    it("connects to the local database in place of an existing one", async () => {
+      const database = new Postgres("MyDatabase", {
+        vpc,
+        existing: { instance: "app-dev-mydatabase" },
+        dev: { password: "local" },
+      });
+      await pulumi.settle();
+
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Postgres"]);
+      expect(await pulumi.resolve([database.host, database.password])).toEqual(
+        ["localhost", "local"],
+      );
+    });
+  });
+
+  // 4.x asked for the password in `sst dev` alone
+  it("deploys with dev args that have no password", async () => {
+    new Postgres("MyDatabase", { vpc, dev: { port: 5433 } });
+    await pulumi.settle();
+
+    expect(pulumi.resources.some((r) => r.type === INSTANCE)).toBe(true);
+    expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
   });
 
   it("creates the database with its defaults", async () => {
@@ -638,13 +772,37 @@ describe("Postgres", () => {
     ).toThrow(/The "username" in the "proxy.credentials" of the "Third" database has to be a plain value/);
   });
 
-  it("rejects a Vpc.v1", async () => {
-    const { Vpc } = await import("../../../src/components/aws/vpc-v1");
-    expect(
-      () =>
-        new Postgres("MyDatabase", {
-          vpc: Object.create(Vpc.prototype),
-        }),
-    ).toThrow(/You are using the "Vpc.v1" component/);
+  describe("in a Vpc", () => {
+    it("is in the private subnets of either kind", async () => {
+      for (const [i, VpcClass] of [OriginalVpc, Vpc].entries()) {
+        pulumi.reset();
+        const net = new VpcClass(`Net${i}`);
+        new Postgres("MyDatabase", { vpc: net, proxy: true });
+        await pulumi.settle();
+
+        const subnets = await pulumi.resolve(net.privateSubnets);
+        expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual(
+          subnets,
+        );
+        expect(resource("MyDatabaseProxy").inputs.vpcSubnetIds).toEqual(
+          subnets,
+        );
+      }
+    });
+
+    it("turns down another resource in its place", async () => {
+      const aws = await import("@pulumi/aws");
+      const { Vpc: VpcV1 } = await import(
+        "../../../src/components/aws/vpc-v1"
+      );
+      for (const [i, net] of [
+        new aws.ec2.Vpc("Net", { cidrBlock: "10.0.0.0/16" }),
+        new VpcV1("Old"),
+      ].entries())
+        expect(() => new Postgres(`Database${i}`, { vpc: net as any })).toThrow(
+          `The "vpc" of the "Database${i}" Postgres component isn't a "Vpc" component`,
+        );
+      await pulumi.settle();
+    });
   });
 });

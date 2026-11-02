@@ -33,6 +33,7 @@ const rebuilt = [
   "task.ts",
   "efs.ts",
   "redis.ts",
+  "postgres.ts",
 ];
 
 describe("V5 components", () => {
