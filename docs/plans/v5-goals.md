@@ -71,7 +71,8 @@ This is about moving to v5. Going back to 4.x isn't a goal (see [Not goals](#not
 
 - On `v5` since 2026-10-12, and out since `5.0.0-alpha.1`. See [v5-sharing.md](v5-sharing.md) and [v5-sharing-host.md](v5-sharing-host.md).
 - A package was deployed to AWS and run in `sst dev`. npm, pnpm and bun apps have each deployed one, and an app without a `package.json` used one from its config.
-- Not done yet: Yarn and Windows, a review of `sst/components` as a public API, and a template package.
+- A template package, `examples/component-package`, is on `v5-community-packages` (2026-10-22), with a CI step that builds and tests it.
+- Not done yet: Yarn and Windows, and a review of `sst/components` as a public API. What's left before integrations can be sent as packages is in [v5-community-packages.md](v5-community-packages.md).
 
 ## 4. Installing v5 changes nothing until you switch a component
 

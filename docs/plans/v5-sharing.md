@@ -75,7 +75,7 @@ In an app, both resolve to the app's own copies in `.sst/platform`, at deploy ti
 2. ~~**A deploy to AWS**~~ of an app that uses a package, and `sst dev` with a function inside a package's component. Done 2026-10-12 ([v5-sharing-host.md](v5-sharing-host.md), step 9). It found a crash in the CLI on a component type with two parts.
 3. **Yarn and Windows.** npm, pnpm (with its `.pnpm` layout) and bun apps have each deployed a package. Yarn and Windows haven't been run.
 4. **`sst/components` reviewed as a public API.** Its `.d.ts` also shows members marked `@internal`.
-5. **A template package**, to copy as a starting point.
+5. ~~**A template package**, to copy as a starting point.~~ `examples/component-package` (`6ce09bd6d`, on `v5-community-packages`), built and tested in CI. See [v5-community-packages.md](v5-community-packages.md).
 
 ## Breaking changes (for the 5.0 release notes)
 

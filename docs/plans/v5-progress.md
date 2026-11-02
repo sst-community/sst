@@ -500,6 +500,21 @@ Then the V5 Function and Task got #187's policy, in a commit of their own: their
 
 The Go tests pass, with `-race` for `cmd/sst/mosaic/aws/...`, and so do the platform's 1,783 tests in 60 files. The docs generator writes the component pages.
 
+## 2026-10-22
+
+### A component package to copy
+
+| Commit | What |
+| --- | --- |
+| `6ce09bd6d` | `examples/component-package`: a `Webhook` component, an `aws.sqs.Queue` and a `v5.Function` running a handler the package ships, with `link()` and three tests under `mock()`. `check.yml` packs `sst` from the commit and runs the package's build and tests. "Write a Package Component" links it, and asks for TypeScript 6. |
+
+Step 1 of [v5-community-packages.md](v5-community-packages.md). Its tests pass with `sst` from npm (`5.0.0-alpha.2`) and with `sst` packed from the branch. Taking an export out of the packed `sst/components/aws` fails the type check.
+
+Learned on the way:
+- `@pulumi/pulumi` accepts TypeScript below 7, its newest version too. npm stops an install that asks for 7, and picks 6 when no version is given.
+- `mock()` records a function's build on `app.graph()`, not on `app.resources`, which `RecordedResource` says has it.
+- `mock()` gives a function URL no address, so a component whose `link()` reads one fails when it's linked. The template's test gives one with `state`.
+
 ## What the harness can and can't see
 
 It records what's registered with the engine and compares, between a 4.x component and its v5 port: each resource's address (through aliases, as Pulumi resolves them), inputs, deploy options, registered outputs, what a function is built from, and what depends on what.
