@@ -23,6 +23,15 @@ The maintainer said to continue, with `Nextjs` and `Router` next. The `Router` c
 - A new stage's preview plans everything the `Router` creates but its domain's DNS records (below), and a function's URL permissions behind it, directly.
 - The router's CloudFront code test reads it from both files.
 
+**Checked in the lab** (stage `router`, `LAB_ONLY=sites`, with a CLI built from the branch):
+
+- Deployed with the 4.x `Router`, its sites (`Nextjs`, `Astro`, `SvelteKit`, `StaticSite`), a route to a URL and one to a bucket. Switched with `LAB_ROUTER=v5`, the sites staying 4.x: `sst migrate --check` showed the router's 4 route entries at a new address, its 2 route components taken out of the state, and nothing of the router created, replaced or released. The check failed on the sites, which build again on every run: the same 10 updates and 11 replacements a plain 4.x diff of the stage shows, none of them from the switch.
+- The deploy kept every resource with the same id but the sites' code, as in 4.x's own diff, the route entries under new names, and deleted only the two route components.
+- The sites, the route to a URL and the route to a bucket answered as before, and the CloudFront URL is still refused. A diff after it showed nothing of the router changing.
+- Removed, and cleaned up.
+
+**Found, for `Nextjs`:** a 4.x site's build is a `command:local:Command` in the state, and a 5.0 site has none, so a move takes it out; `sst migrate --check` has to allow that, as it does a wrapper, since there's nothing in the cloud behind it. And the 4.x `Nextjs` runs its revalidation seeder on every deploy, triggered by the time; the V5 one can trigger it by the build.
+
 **Reviewed** by a separate agent, which found nothing a switch loses, the store's entries the same byte for byte in every combination it tried, and every getter a 4.x site reads on the V5 `Router`. Its findings, fixed:
 
 - **A 4.x `Function` that links a V5 `Router` and is routed to with `route()` waits on its own route**, and is never deployed: it waits for everything in what it links, and the route is in the router now. A V5 `Function` doesn't, and a test shows it. "Switch from" says to switch the function with the router, or serve it with `url.router`.
@@ -32,7 +41,6 @@ The maintainer said to continue, with `Nextjs` and `Router` next. The `Router` c
 
 **Left:**
 
-- **The lab check** of the `Router`, on a stage of its own: the sites group with 4.x sites behind it, and routes of its own to a URL and a bucket, which the lab app now has (`LAB_ROUTER=v5`).
 - **Domains the 5.0 way.** The DNS adapters (`sst.aws.dns()` and the Cloudflare and Vercel ones) create their records inside an `apply`, and the 4.x certificate and redirect the `Cdn` uses are built on them, so a new stage's preview doesn't show a domain's DNS records. Every component with a domain shares them. They're their own item: adapters that take the record's name as a plain value, and a 5.0 certificate whose validation records follow from its domain names. Until then the `Cdn` isn't on the list of components built the 5.0 way.
 - **`Nextjs`**, next, on the V5 `Router` and `Cdn`, built once per deploy.
 - A few args decide a part by whether they're set, and stay inputs, since they're often another resource's output: `edge.viewerRequest.kvStore`, `protection.edgeFunction.arn` and the domain's `cert`. One given as an output that turns out empty still counts as set, where 4.x would have left it out.
