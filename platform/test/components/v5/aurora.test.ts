@@ -1,5 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { type ComponentResourceOptions, output } from "@pulumi/pulumi";
+import {
+  type ComponentResourceOptions,
+  output,
+  secret,
+} from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
 
 const CLUSTER = "aws:rds/cluster:Cluster";
@@ -55,13 +59,16 @@ type AuroraClass =
 describe("Aurora", () => {
   let OriginalAurora: typeof import("../../../src/components/aws/aurora").Aurora;
   let Aurora: typeof import("../../../src/components/aws/v5/aurora").Aurora;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
 
   beforeAll(async () => {
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
     OriginalAurora = (await import("../../../src/components/aws/aurora")).Aurora;
     Aurora = (await import("../../../src/components/aws/v5/aurora")).Aurora;
     await import("../../../src/components/aws/takeover/aurora");
+    await import("../../../src/components/aws/takeover/vpc");
   });
 
   beforeEach(() => {
@@ -82,6 +89,9 @@ describe("Aurora", () => {
       original: () => OriginalAurora,
       v5: () => Aurora,
       check: () => {
+        // In `sst dev` with `dev` set, neither creates the cluster
+        // @ts-ignore
+        if (global.$dev) return;
         expect(resource("MyDatabaseCluster").type).toBe(CLUSTER);
         expect(resource("MyDatabaseInstance").type).toBe(INSTANCE);
       },
@@ -263,22 +273,79 @@ describe("Aurora", () => {
             opts,
           );
         },
-        "dev args outside of sst dev": (Aurora, opts) => {
-          new Aurora(
-            "MyDatabase",
-            {
-              engine: "mysql",
-              vpc,
-              dev: { username: "root", password: "password" },
-            },
-            opts,
-          );
+        // The 4.x Aurora created a component for the pane `sst dev` shows in
+        // every deploy. The V5 one reports the pane in `sst dev` alone.
+        "dev args outside of sst dev": {
+          create: (Aurora, opts) => {
+            new Aurora(
+              "MyDatabase",
+              {
+                engine: "mysql",
+                vpc,
+                dev: { username: "root", password: "password" },
+              },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev"],
+          check: () => expect(pulumi.reportOf("MyDatabase")).toBeUndefined(),
+        },
+        "dev args in sst dev": {
+          create: (Aurora, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new Aurora(
+              "MyDatabase",
+              { engine: "mysql", vpc, dev: { password: "password" } },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev"],
+          // The component itself reports the pane, in its outputs
+          changed: [["MyDatabase", ["outputs"]]],
+          check: () =>
+            expect(pulumi.reportOf("MyDatabase")).toHaveProperty("dev"),
+        },
+        // The 4.x dev command kept it secret in its outputs, and so does the
+        // V5 pane
+        "a secret dev password in sst dev": {
+          create: (Aurora, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new Aurora(
+              "MyDatabase",
+              { engine: "postgres", vpc, dev: { password: secret("password") } },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev"],
+          changed: [["MyDatabase", ["outputs"]]],
+        },
+        "in a Vpc switched with it": {
+          original: (opts) =>
+            new OriginalAurora(
+              "MyDatabase",
+              { engine: "postgres", vpc: new OriginalVpc("MyVpc"), proxy: true },
+              opts,
+            ),
+          v5: (opts) =>
+            new Aurora(
+              "MyDatabase",
+              { engine: "postgres", vpc: new Vpc("MyVpc"), proxy: true },
+              opts,
+            ),
+          // The Vpc's version marker, with nothing in AWS behind it
+          unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
         "a cluster in the private subnets of a Vpc": {
           create: (Aurora, opts) => {
             new Aurora(
               "MyDatabase",
-              { engine: "postgres", vpc: new Vpc("MyVpc"), proxy: true },
+              {
+                engine: "postgres",
+                vpc: new OriginalVpc("MyVpc"),
+                proxy: true,
+              },
               opts,
             );
           },
@@ -384,7 +451,7 @@ describe("Aurora", () => {
       global.$dev = true;
     });
 
-    it("creates nothing but the dev command when dev is set", async () => {
+    it("creates nothing and reports a pane when dev is set", async () => {
       const database = new Aurora("MyDatabase", {
         engine: "postgres",
         vpc,
@@ -394,10 +461,27 @@ describe("Aurora", () => {
       });
       await pulumi.settle();
 
-      expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:Aurora",
-        "sst:sst:DevCommand",
-      ]);
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Aurora"]);
+      // The pane `sst dev` shows, titled with the component's name
+      expect(pulumi.reportOf("MyDatabase")).toEqual({
+        contract: 1,
+        dev: {
+          command: "sst print-and-not-quit",
+          autostart: true,
+          links: [],
+          environment: {
+            SST_DEV_COMMAND_MESSAGE: [
+              "Make sure your local database is using:",
+              "",
+              '  username: "admin"',
+              '  password: "local"',
+              '  database: "acme"',
+              "",
+              'Listening on "127.0.0.1:5432"...',
+            ].join("\n"),
+          },
+        },
+      });
       expect(
         await pulumi.resolve([
           database.host,
@@ -453,12 +537,54 @@ describe("Aurora", () => {
       expect((database as any).getSSTLink().include).toEqual([]);
     });
 
+    it("says there's no password in its pane, given an empty one", async () => {
+      const database = new Aurora("MyDatabase", {
+        engine: "mysql",
+        vpc,
+        dev: { password: output("") },
+      });
+      await pulumi.settle();
+
+      expect(
+        pulumi.reportOf("MyDatabase")?.dev.environment.SST_DEV_COMMAND_MESSAGE,
+      ).toContain('password: "\x1b[38;5;8m[no password]\x1b[0m"');
+      expect(await pulumi.resolve(database.password)).toBe("");
+    });
+
+    // The core reads it decrypted, as it read SST 4's `DevCommand`
+    it("keeps a secret password secret in the state", async () => {
+      new Aurora("MyDatabase", {
+        engine: "postgres",
+        vpc,
+        dev: { password: secret("local") },
+      });
+      await pulumi.settle();
+
+      const message =
+        pulumi.reportOf("MyDatabase")?.dev.environment.SST_DEV_COMMAND_MESSAGE;
+      expect(message).toMatchObject({
+        "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",
+      });
+      expect(message.value).toContain('password: "local"');
+    });
+
     it("needs a password to connect with", () => {
       expect(
         () => new Aurora("MyDatabase", { engine: "postgres", vpc, dev: {} }),
       ).toThrow(
         /You must provide the password to connect to your locally running database/,
       );
+    });
+
+    it("needs dev as a plain value", () => {
+      expect(
+        () =>
+          new Aurora("MyDatabase", {
+            engine: "postgres",
+            vpc,
+            dev: output({}) as any,
+          }),
+      ).toThrow(/The "dev" of the "MyDatabase" database has to be a plain value/);
     });
 
     it("explains why nodes are missing", async () => {
@@ -479,6 +605,82 @@ describe("Aurora", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.some((r) => r.type === CLUSTER)).toBe(true);
+      expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
+    });
+
+    // `dev` says what `sst dev` connects to, whatever a deploy does
+    it("connects to the local database in place of an existing one", async () => {
+      const database = new Aurora("MyDatabase", {
+        engine: "postgres",
+        vpc,
+        existing: { cluster: "app-dev-mydatabase" },
+        dev: { password: "local" },
+      });
+      await pulumi.settle();
+
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Aurora"]);
+      expect(await pulumi.resolve([database.host, database.password])).toEqual(
+        ["localhost", "local"],
+      );
+    });
+  });
+
+  it("uses an existing cluster with dev args outside of sst dev", async () => {
+    const database = new Aurora("MyDatabase", {
+      engine: "postgres",
+      vpc,
+      existing: { cluster: "app-dev-mydatabase" },
+      dev: { password: "local" },
+    });
+    await pulumi.settle();
+
+    expect(resource("MyDatabaseCluster").kind).toBe("read");
+    expect(await pulumi.resolve(database.host)).toBe(
+      "MyDatabaseCluster.cluster.example.com",
+    );
+    expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
+  });
+
+  // 4.x asked for the password in `sst dev` alone
+  it("deploys with dev args that have no password", async () => {
+    new Aurora("MyDatabase", { engine: "postgres", vpc, dev: { port: 5433 } });
+    await pulumi.settle();
+
+    expect(pulumi.resources.some((r) => r.type === CLUSTER)).toBe(true);
+    expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
+  });
+
+  describe("in a Vpc", () => {
+    it("is in the private subnets and security groups of either kind", async () => {
+      for (const [i, VpcClass] of [OriginalVpc, Vpc].entries()) {
+        pulumi.reset();
+        const net = new VpcClass(`Net${i}`);
+        new Aurora("MyDatabase", { engine: "postgres", vpc: net, proxy: true });
+        await pulumi.settle();
+
+        const subnets = await pulumi.resolve(net.privateSubnets);
+        expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual(
+          subnets,
+        );
+        expect(resource("MyDatabaseProxy").inputs.vpcSubnetIds).toEqual(
+          subnets,
+        );
+        expect(resource("MyDatabaseCluster").inputs.vpcSecurityGroupIds).toEqual(
+          await pulumi.resolve(net.securityGroups),
+        );
+      }
+    });
+
+    it("turns down another resource in its place", async () => {
+      const aws = await import("@pulumi/aws");
+      const net = new aws.ec2.Vpc("Net", { cidrBlock: "10.0.0.0/16" });
+      expect(
+        () =>
+          new Aurora("MyDatabase", { engine: "postgres", vpc: net as any }),
+      ).toThrow(
+        /The "vpc" of the "MyDatabase" Aurora component isn't a "Vpc" component/,
+      );
+      await pulumi.settle();
     });
   });
 
@@ -599,6 +801,21 @@ describe("Aurora", () => {
       monitoringInterval: 5,
       promotionTier: 1,
     });
+  });
+
+  // As in 4.x, a function there is given the component as the parent, for
+  // the primary instance and for each replica
+  it("gives the instance's transform function its parent", async () => {
+    const parents: unknown[] = [];
+    const database = new Aurora("MyDatabase", {
+      engine: "postgres",
+      vpc,
+      replicas: 1,
+      transform: { instance: (_args, opts) => void parents.push(opts.parent) },
+    });
+    await pulumi.settle();
+
+    expect(parents).toEqual([database, database]);
   });
 
   it("makes replicas the last to be promoted", async () => {

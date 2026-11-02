@@ -13,7 +13,7 @@ import { ifSet, plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { toGBs } from "../../size";
-import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
+import { type AnyVpc, subnetsAndSecurityGroupsOf } from "../helpers/vpc";
 import { localServerPane, shownPassword } from "../helpers/local-server";
 
 const parts = {
@@ -568,7 +568,10 @@ export class Redis extends component("sst:aws:Redis", parts) {
     const version = all([engine, args.version]).apply(
       ([engine, v]) => v ?? (engine === "redis" ? "7.1" : "7.2"),
     );
-    const vpc = vpcOf(name, args.vpc);
+    const vpc = subnetsAndSecurityGroupsOf(
+      args.vpc,
+      `the "${name}" Redis component`,
+    );
 
     const serverless = plain(
       args.serverless,
@@ -904,25 +907,6 @@ Listening on "${local.host}:${local.port}"...`,
       opts,
     );
   }
-}
-
-/**
- * The subnets and security groups the cluster is in: a `Vpc`'s private
- * subnets, or the ids it was given.
- */
-function vpcOf(name: string, vpc: RedisArgs["vpc"]) {
-  if (isVpc(vpc)) {
-    // The two `Vpc`s type these differently
-    const securityGroups: Input<Input<string>[]> = vpc.securityGroups;
-    return {
-      subnets: subnetsOf(vpc, "private"),
-      securityGroups: output(securityGroups),
-    };
-  }
-
-  assertVpcIds(vpc, `the "${name}" Redis component`);
-  const ids = output(vpc);
-  return { subnets: ids.subnets, securityGroups: ids.securityGroups };
 }
 
 /**

@@ -9,8 +9,8 @@ import {
 import { RandomPassword } from "@pulumi/random";
 import { iam, rds, secretsmanager } from "@pulumi/aws";
 import {
+  type ComponentArgs,
   type LinkInclude,
-  V5Args,
   component,
   many,
   optional,
@@ -18,9 +18,8 @@ import {
 import { plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import { toSeconds } from "../../duration";
+import { type DurationHours, toSeconds } from "../../duration";
 import { transformPart } from "../../transform";
-import { DevCommand } from "../../experimental/dev-command";
 import {
   credentialsSecretOf,
   proxyArgs,
@@ -31,8 +30,8 @@ import {
 } from "../helpers/rds";
 import { permission } from "../permission";
 import { RdsRoleLookup } from "../providers/rds-role-lookup";
-import { type TakesVpc, isVpc } from "../helpers/vpc";
-import type { AuroraArgs as OriginalAuroraArgs } from "../aurora";
+import { type AnyVpc, subnetsAndSecurityGroupsOf } from "../helpers/vpc";
+import { localServerPane, shownPassword } from "../helpers/local-server";
 
 const parts = {
   /**
@@ -102,11 +101,228 @@ const parts = {
   proxyTarget: optional(rds.ProxyTarget),
 };
 
-export interface AuroraArgs
-  extends V5Args<
-    TakesVpc<Omit<OriginalAuroraArgs, "proxy" | "replicas">>,
-    typeof parts
-  > {
+type ACU = `${number} ACU`;
+
+export interface AuroraArgs extends ComponentArgs<typeof parts> {
+  /**
+   * The Aurora engine to use.
+   *
+   * :::danger
+   * Changing the engine will cause the database to be destroyed and recreated.
+   * :::
+   *
+   * @example
+   * ```js
+   * {
+   *   engine: "postgres"
+   * }
+   * ```
+   */
+  engine: Input<"postgres" | "mysql">;
+  /**
+   * The version of the Aurora engine.
+   *
+   * The default is `"17"` for Postgres and `"3.08.0"` for MySQL. Changing this default
+   * doesn't change the version of a cluster that's already deployed.
+   *
+   * Check out the [available Postgres versions](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.html#Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.apg) and [available MySQL versions](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.html#Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.amy) in your region.
+   *
+   * :::tip
+   * Not all versions support scaling to 0 with auto-pause and resume.
+   * :::
+   *
+   * Auto-pause and resume is only supported in the following versions:
+   * - Aurora PostgreSQL 16.3 and higher
+   * - Aurora PostgreSQL 15.7 and higher
+   * - Aurora PostgreSQL 14.12 and higher
+   * - Aurora PostgreSQL 13.15 and higher
+   * - Aurora MySQL 3.08.0 and higher
+   *
+   * :::caution
+   * Changing the version will cause the database to restart on the next `sst deploy`,
+   * causing downtime. Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
+   * :::
+   *
+   * @default `"17"` for Postgres, `"3.08.0"` for MySQL
+   * @example
+   * ```js
+   * {
+   *   version: "17.3"
+   * }
+   * ```
+   */
+  version?: Input<string>;
+  /**
+   * The username of the master user.
+   *
+   * :::danger
+   * Changing the username will cause the database to be destroyed and recreated.
+   * :::
+   *
+   * @default `"postgres"` for Postgres, `"root"` for MySQL
+   * @example
+   * ```js
+   * {
+   *   username: "admin"
+   * }
+   * ```
+   */
+  username?: Input<string>;
+  /**
+   * The password of the master user.
+   * @default A random password is generated.
+   * @example
+   * ```js
+   * {
+   *   password: "Passw0rd!"
+   * }
+   * ```
+   *
+   * You can use a [`Secret`](/docs/component/secret) to manage the password.
+   *
+   * ```js
+   * {
+   *   password: new sst.Secret("MyDBPassword").value
+   * }
+   * ```
+   */
+  password?: Input<string>;
+  /**
+   * Name of a database that is automatically created inside the cluster.
+   *
+   * The name must begin with a letter and contain only lowercase letters, numbers, or
+   * underscores.
+   *
+   * By default, it takes the name of the app, and replaces the hyphens with underscores.
+   *
+   * :::danger
+   * Changing the database name will cause the database to be destroyed and recreated.
+   * :::
+   *
+   * @default Based on the name of the current app
+   * @example
+   * ```js
+   * {
+   *   database: "acme"
+   * }
+   * ```
+   */
+  database?: Input<string>;
+  /**
+   * The Aurora Serverless v2 scaling config.
+   *
+   * By default, the cluster has one DB instance that is used for both writes and reads. The
+   * instance can scale from a minimum number of ACUs to the maximum number of ACUs.
+   *
+   * :::tip
+   * Pick the `min` and `max` ACUs based on the baseline and peak memory usage of your app.
+   * :::
+   *
+   * An ACU or _Aurora Capacity Unit_ is roughly equivalent to 2 GB of memory and a corresponding
+   * amount of CPU and network resources. So pick the minimum and maximum based on the baseline
+   * and peak memory usage of your app.
+   *
+   * If you set a `min` of 0 ACUs, the database will be paused when there are no active
+   * connections in the `pauseAfter` specified time period.
+   *
+   * This is useful for dev environments since you are not charged when the database is paused.
+   * But it's not recommended for production environments because it takes around 15 seconds for
+   * the database to resume.
+   *
+   * @default `{min: "0 ACU", max: "4 ACU"}`
+   */
+  scaling?: Input<{
+    /**
+     * The minimum number of ACUs or _Aurora Capacity Units_. Ranges from 0 to 256, in
+     * increments of 0.5. Where each ACU is roughly equivalent to 2 GB of memory.
+     *
+     * If you set this to 0 ACUs, the database will be paused when there are no active
+     * connections in the `pauseAfter` specified time period.
+     *
+     * :::note
+     * If you set a `min` ACU to 0, the database will be paused after the `pauseAfter` time
+     * period.
+     * :::
+     *
+     * On the next database connection, the database will resume. It takes about 15 seconds for
+     * the database to resume.
+     *
+     * :::tip
+     * Avoid setting a low number of `min` ACUs for production workloads.
+     * :::
+     *
+     * For your production workloads, setting a minimum of 0.5 ACUs might not be a great idea
+     * because:
+     *
+     * 1. It takes longer to scale from a low number of ACUs to a much higher number.
+     * 2. Query performance depends on the buffer cache. So if frequently accessed data cannot
+     *   fit into the buffer cache, you might see uneven performance.
+     * 3. The max connections for a 0.5 ACU instance is capped at 2000.
+     *
+     * You can [read more here](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.setting-capacity.html#aurora-serverless-v2.setting-capacity.incompatible_parameters).
+     *
+     * @default `0 ACU`
+     * @example
+     * ```js
+     * {
+     *   scaling: {
+     *     min: "2 ACU"
+     *   }
+     * }
+     * ```
+     */
+    min?: Input<ACU>;
+    /**
+     * The maximum number of ACUs or _Aurora Capacity Units_. Ranges from 1 to 128 on older
+     * engine versions, and higher on recent ones, in increments of 0.5. Where each ACU is
+     * roughly equivalent to 2 GB of memory. Check out the [capacity
+     * limits](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.setting-capacity.html).
+     *
+     * @default `4 ACU`
+     * @example
+     * ```js
+     * {
+     *   scaling: {
+     *     max: "128 ACU"
+     *   }
+     * }
+     * ```
+     */
+    max?: Input<ACU>;
+    /**
+     * The amount of time before the database is paused when there are no active connections.
+     * Only applies when the `min` is set to 0 ACUs.
+     *
+     * :::note
+     * This only applies when the `min` is set to 0 ACUs.
+     * :::
+     *
+     * Must be between `"5 minutes"` and `"24 hours"`. So if the `min` is set to 0 ACUs, by
+     * default, the database will be auto-paused after `"5 minutes"`.
+     *
+     * When the database is paused, you are not charged for the ACUs. On the next database
+     * connection, the database will resume. It takes about 15 seconds for the database to
+     * resume.
+     *
+     * :::tip
+     * Auto-pause is not recommended for production environments.
+     * :::
+     *
+     * Auto-pause is useful for minimizing costs in the development environments where the
+     * database is not used frequently. It's not recommended for production environments.
+     *
+     * @default `"5 minutes"`
+     * @example
+     * ```js
+     * {
+     *   scaling: {
+     *     pauseAfter: "20 minutes"
+     *   }
+     * }
+     * ```
+     */
+    pauseAfter?: Input<DurationHours>;
+  }>;
   /**
    * The number of read-only Aurora replicas to create.
    *
@@ -114,7 +330,7 @@ export interface AuroraArgs
    * reads. You can add up to 15 read-only replicas to offload the read traffic from the
    * primary instance.
    *
-   * This has to be a plain value.
+   * This has to be a plain value, not an output: it decides which resources are created.
    *
    * @default `0`
    * @example
@@ -126,6 +342,25 @@ export interface AuroraArgs
    */
   replicas?: number;
   /**
+   * Enable [RDS Data API](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api.html)
+   * for the database.
+   *
+   * The RDS Data API provides a secure HTTP endpoint and does not need a persistent connection.
+   * You also don't need the `sst tunnel` or a VPN to connect to it from your local machine.
+   *
+   * RDS Data API is [billed per request](#cost). Check out the [RDS Data API
+   * pricing](https://aws.amazon.com/rds/aurora/pricing/#Data_API_costs) for more details.
+   *
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   dataApi: true
+   * }
+   * ```
+   */
+  dataApi?: Input<boolean>;
+  /**
    * Enable [RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html)
    * for the database.
    *
@@ -136,7 +371,7 @@ export interface AuroraArgs
    * There's an [extra cost](#cost) attached to enabling this. Check out the [RDS Proxy
    * pricing](https://aws.amazon.com/rds/proxy/pricing/) for more details.
    *
-   * Whether there is a proxy has to be a plain value.
+   * This has to be a plain value, not an output: it decides which resources are created.
    *
    * @default `false`
    * @example
@@ -147,6 +382,105 @@ export interface AuroraArgs
    * ```
    */
   proxy?: boolean | ProxyArgs;
+  /**
+   * The VPC to use for the database cluster.
+   *
+   * @example
+   * Create a `Vpc` component.
+   *
+   * ```js
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
+   * ```
+   *
+   * And pass it in. The cluster is in its private subnets.
+   *
+   * ```js
+   * {
+   *   vpc: myVpc
+   * }
+   * ```
+   *
+   * Or pass in a custom VPC configuration.
+   *
+   * ```js
+   * {
+   *   vpc: {
+   *     subnets: ["subnet-0db7376a7ad4db5fd", "subnet-06fc7ee8319b2c0ce"],
+   *     securityGroups: ["sg-0399348378a4c256c"]
+   *   }
+   * }
+   * ```
+   */
+  vpc:
+    | AnyVpc
+    | Input<{
+        /**
+         * A list of subnet IDs in the VPC to deploy the Aurora cluster in.
+         */
+        subnets: Input<Input<string>[]>;
+        /**
+         * A list of VPC security group IDs.
+         */
+        securityGroups: Input<Input<string>[]>;
+      }>;
+  /**
+   * Configure how this component works in `sst dev`.
+   *
+   * By default, your Aurora database is deployed in `sst dev`. But if you want to instead
+   * connect to a locally running database, you can configure the `dev` prop.
+   *
+   * This will skip deploying an Aurora database and link to the locally running database
+   * instead. `sst dev` shows what the local database has to be set up with, in a pane of its
+   * own.
+   *
+   * This has to be a plain value, not an output: it decides whether the database is
+   * deployed. The values inside it can be outputs.
+   *
+   * @example
+   *
+   * Setting the `dev` prop also means that any linked resources will connect to the right
+   * database both in `sst dev` and `sst deploy`.
+   *
+   * ```ts
+   * {
+   *   dev: {
+   *     username: "postgres",
+   *     password: "password",
+   *     database: "postgres",
+   *     host: "localhost",
+   *     port: 5432
+   *   }
+   * }
+   * ```
+   */
+  dev?: {
+    /**
+     * The host of the local database to connect to when running in dev.
+     * @default `"localhost"`
+     */
+    host?: Input<string>;
+    /**
+     * The port of the local database to connect to when running in dev.
+     * @default `5432` for Postgres, `3306` for MySQL
+     */
+    port?: Input<number>;
+    /**
+     * The database of the local database to connect to when running in dev.
+     * @default Inherit from the top-level [`database`](#database).
+     */
+    database?: Input<string>;
+    /**
+     * The username of the local database to connect to when running in dev.
+     * @default Inherit from the top-level [`username`](#username).
+     */
+    username?: Input<string>;
+    /**
+     * The password of the local database to connect to when running in dev. `sst dev`
+     * needs this or the top-level `password`.
+     * @default Inherit from the top-level [`password`](#password).
+     */
+    password?: Input<string>;
+  };
 }
 
 /** What the rest of the app reads from the database, deployed or local. */
@@ -173,16 +507,15 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  * The `Aurora` component lets you add a Aurora Postgres or MySQL cluster to your app
  * using [Amazon Aurora Serverless v2](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.html).
  *
- * It takes the same args as [`sst.aws.Aurora`](/docs/component/aws/aurora) and creates the same
- * resources. It's built from parts, so every resource it creates can be transformed, is
- * available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
  * #### Create an Aurora Postgres cluster
  *
  * ```js title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  * const database = new sst.aws.v5.Aurora("MyDatabase", {
  *   engine: "postgres",
  *   vpc
@@ -192,7 +525,7 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  * #### Create an Aurora MySQL cluster
  *
  * ```js title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  * const database = new sst.aws.v5.Aurora("MyDatabase", {
  *   engine: "mysql",
  *   vpc
@@ -217,7 +550,7 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  * You can link your database to other resources, like a function or your Next.js app.
  *
  * ```ts title="sst.config.ts"
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   link: [database],
  *   vpc
  * });
@@ -296,7 +629,7 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  * ```
  *
  * This will skip deploying the database and link to the locally running Postgres database
- * instead.
+ * instead. [Check out the full example](/docs/examples/#aws-aurora-local).
  *
  * #### Switch from `sst.aws.Aurora`
  *
@@ -309,12 +642,17 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  * const database = new sst.aws.v5.Aurora("MyDatabase", { engine: "postgres", vpc });
  * ```
  *
- * A few things are written differently:
+ * A few things work differently:
  *
  * - `replicas`, `proxy`, its list of `credentials`, and each credential's `username` are
  *   plain values, not outputs. They decide which resources are created.
+ * - With `dev` set, `sst.aws.Aurora` created a component for the pane `sst dev` shows, in
+ *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
+ *   has nothing in AWS behind it.
  * - `nodes` has every resource, not only the cluster and the instance. The secret that
- *   stores the master user's credentials is `nodes.secret`.
+ *   stores the master user's credentials is `nodes.secret`. In `sst dev` with `dev` set,
+ *   reading one of them fails and says why it's missing, where `sst.aws.Aurora` gave
+ *   `undefined`.
  * - `transform.instance` still applies to the primary instance and to each replica. To
  *   change only the replicas, use `transform.replica`, which is applied after it.
  * - If you set `tags` on the cluster with an object in `transform`, it keeps the tags SST
@@ -366,6 +704,23 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
 
     const self = this;
 
+    const engine = output(args.engine);
+    const username = all([args.username, engine]).apply(
+      ([username, engine]) =>
+        username ?? { postgres: "postgres", mysql: "root" }[engine],
+    );
+    const dbName = withDefault(args.database, $app.name.replaceAll("-", "_"));
+
+    // In `sst dev`, a database on the user's machine stands in for the
+    // cluster, one that's already deployed too. This is the only place the
+    // component handles dev mode.
+    const dev = plain(args.dev, `The "dev" of the "${name}" database`);
+    if (dev && $dev) {
+      this.runsLocally();
+      this.connection = runLocally(dev);
+      return;
+    }
+
     // A cluster that's already deployed
     const existing = this.existingPart("cluster");
     if (existing) {
@@ -380,22 +735,6 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       throw new VisibleError(
         `Cannot create more than 15 read-only replicas for the "${name}" Aurora database.`,
       );
-
-    const engine = output(args.engine);
-    const username = all([args.username, engine]).apply(
-      ([username, engine]) =>
-        username ?? { postgres: "postgres", mysql: "root" }[engine],
-    );
-    const dbName = withDefault(args.database, $app.name.replaceAll("-", "_"));
-
-    // In `sst dev`, a database on the user's machine stands in for the
-    // cluster. This is the only place the component handles dev mode.
-    const local = args.dev ? runLocally(args.dev) : undefined;
-    if (local && $dev) {
-      this.runsLocally();
-      this.connection = local;
-      return;
-    }
 
     const version = all([args.version, engine]).apply(
       ([version, engine]) =>
@@ -421,12 +760,10 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
         pauseAfter: pauses ? scaling?.pauseAfter ?? "5 minutes" : undefined,
       };
     });
-    const vpc = isVpc(args.vpc)
-      ? output({
-          subnets: args.vpc.privateSubnets,
-          securityGroups: args.vpc.securityGroups,
-        })
-      : output(args.vpc);
+    const vpc = subnetsAndSecurityGroupsOf(
+      args.vpc,
+      `the "${name}" Aurora component`,
+    );
     // An engine version the user didn't choose isn't moved once it's deployed
     const pinned = (field: string) => (args.version ? [] : [field]);
     const parameterGroupOpts = {
@@ -525,7 +862,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
         args.transform?.instance,
         `${name}Replica${i}`,
         { ...instanceArgs, promotionTier: 15 },
-        { ignoreChanges: pinned("engineVersion") },
+        { parent: self, ignoreChanges: pinned("engineVersion") },
       );
       this.part("replica", `${i}`, replicaArgs, replicaOpts);
     }
@@ -678,8 +1015,10 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       };
     }
 
+    // What `sst dev` connects to, and the pane that says how the local
+    // database has to be set up
     function runLocally(dev: NonNullable<AuroraArgs["dev"]>): Connection {
-      if ($dev && dev.password === undefined && args.password === undefined)
+      if (dev.password === undefined && args.password === undefined)
         throw new VisibleError(
           `You must provide the password to connect to your locally running database either by setting the "dev.password" or by setting the top-level "password" property.`,
         );
@@ -700,21 +1039,16 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
         include: [],
       };
 
-      new DevCommand(`${name}Dev`, {
-        dev: {
-          title: name,
-          autostart: true,
-          command: `sst print-and-not-quit`,
-        },
-        environment: {
-          SST_DEV_COMMAND_MESSAGE: interpolate`Make sure your local database is using:
+      self.report({
+        dev: localServerPane(
+          interpolate`Make sure your local database is using:
 
   username: "${local.username}"
-  password: "${local.password}"
+  password: "${shownPassword(local.password)}"
   database: "${local.database}"
 
 Listening on "${local.host}:${local.port}"...`,
-        },
+        ),
       });
 
       return local;

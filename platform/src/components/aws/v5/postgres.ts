@@ -94,8 +94,7 @@ export interface PostgresArgs extends ComponentArgs<typeof parts> {
   /**
    * The Postgres engine version. Check out the [available versions in your region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.DBVersions.html).
    *
-   * Without a `version`, a database that's deployed keeps the version it has, so a newer
-   * default doesn't upgrade it.
+   * Changing this default doesn't change the version of a database that's already deployed.
    *
    * :::caution
    * Changing the version will cause the database to restart on the next `sst deploy`,
@@ -478,8 +477,8 @@ interface Connection {
  *
  * A few things work differently:
  *
- * - `proxy`, its list of `credentials`, each credential's `username`, and `dev` are plain
- *   values, not outputs. They decide which resources are created.
+ * - `proxy`, its list of `credentials`, and each credential's `username` are plain values,
+ *   not outputs. They decide which resources are created.
  * - With `dev` set, `sst.aws.Postgres` created a component for the pane `sst dev` shows, in
  *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
  *   has nothing in AWS behind it.

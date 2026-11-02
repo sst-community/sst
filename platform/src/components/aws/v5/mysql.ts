@@ -7,10 +7,16 @@ import {
 } from "@pulumi/pulumi";
 import { RandomPassword } from "@pulumi/random";
 import { iam, rds, secretsmanager } from "@pulumi/aws";
-import { V5Args, component, many, optional } from "../../parts-component";
+import {
+  type ComponentArgs,
+  component,
+  many,
+  optional,
+} from "../../parts-component";
 import { plain, withDefault } from "../../args";
+import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import { DevCommand } from "../../experimental/dev-command";
+import type { SizeGbTb } from "../../size";
 import {
   credentialsSecretOf,
   maxStorage,
@@ -22,9 +28,8 @@ import {
   storedPassword,
 } from "../helpers/rds";
 import { RdsRoleLookup } from "../providers/rds-role-lookup";
-import { type TakesVpc, isVpc } from "../helpers/vpc";
-import { Vpc as VpcV1 } from "../vpc-v1";
-import type { MysqlArgs as OriginalMysqlArgs, MysqlGetArgs } from "../mysql";
+import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
+import { localServerPane, shownPassword } from "../helpers/local-server";
 
 const parts = {
   /**
@@ -85,15 +90,127 @@ const parts = {
   proxyTarget: optional(rds.ProxyTarget),
 };
 
-export interface MysqlArgs
-  extends V5Args<
-    TakesVpc<Omit<OriginalMysqlArgs, "proxy" | "replicas">>,
-    typeof parts
-  > {
+export interface MysqlArgs extends ComponentArgs<typeof parts> {
+  /**
+   * The MySQL engine version. Check out the [available versions in your region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/MySQL.Concepts.VersionMgmt.html).
+   *
+   * :::caution
+   * Changing the version will cause the database to restart on the next `sst deploy`,
+   * causing downtime. Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
+   * :::
+   *
+   * Without it, RDS creates the database with its current minor version of MySQL 8.0.
+   * Changing this default doesn't change the version of a database that's already deployed.
+   *
+   * @default `"8.0"`
+   * @example
+   * ```js
+   * {
+   *   version: "8.4.4"
+   * }
+   * ```
+   */
+  version?: Input<string>;
+  /**
+   * The username of the master user.
+   *
+   * :::danger
+   * Changing the username will cause the database to be destroyed and recreated.
+   * :::
+   *
+   * @default `"root"`
+   * @example
+   * ```js
+   * {
+   *   username: "admin"
+   * }
+   * ```
+   */
+  username?: Input<string>;
+  /**
+   * The password of the master user.
+   * @default A random password is generated.
+   * @example
+   * ```js
+   * {
+   *   password: "Passw0rd!"
+   * }
+   * ```
+   *
+   * You can use a [`Secret`](/docs/component/secret) to manage the password.
+   *
+   * ```js
+   * {
+   *   password: new sst.Secret("MyDBPassword").value
+   * }
+   * ```
+   */
+  password?: Input<string>;
+  /**
+   * Name of a database that is automatically created.
+   *
+   * The name must begin with a letter and contain only lowercase letters, numbers, or
+   * underscores. By default, it takes the name of the app, and replaces the hyphens with
+   * underscores.
+   *
+   * :::danger
+   * Changing the database name will cause the database to be destroyed and recreated.
+   * :::
+   *
+   * @default Based on the name of the current app
+   * @example
+   * ```js
+   * {
+   *   database: "acme"
+   * }
+   * ```
+   */
+  database?: Input<string>;
+  /**
+   * The type of instance to use for the database. Check out the [supported instance types](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.DBInstanceClass.Types.html).
+   *
+   * :::caution
+   * Changing the instance type will cause the database to restart on the next `sst deploy`,
+   * causing downtime. Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
+   * :::
+   *
+   * @default `"t4g.micro"`
+   * @example
+   * ```js
+   * {
+   *   instance: "m7g.xlarge"
+   * }
+   * ```
+   */
+  instance?: Input<string>;
+  /**
+   * The maximum storage limit for the database.
+   *
+   * RDS will autoscale your storage to match your usage up to the given limit.
+   *
+   * :::note
+   * You are only billed for the storage you use, not the maximum limit.
+   * :::
+   *
+   * By default, [gp3 storage volumes](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#Concepts.Storage.GeneralSSD)
+   * are used without additional provisioned IOPS. This provides good baseline
+   * performance for most use cases.
+   *
+   * The minimum storage size is 20 GB. And the maximum storage size is 64 TB.
+   *
+   * @default `"20 GB"`
+   * @example
+   * ```js
+   * {
+   *   storage: "100 GB"
+   * }
+   * ```
+   */
+  storage?: Input<SizeGbTb>;
   /**
    * Enable [RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html) for the database.
    *
-   * Whether there is a proxy has to be a plain value.
+   * This has to be a plain value, not an output: it decides which resources are created.
    *
    * @default `false`
    * @example
@@ -105,9 +222,159 @@ export interface MysqlArgs
    */
   proxy?: boolean | ProxyArgs;
   /**
+   * Enable [Multi-AZ](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html)
+   * deployment for the database.
+   *
+   * This creates a standby replica for the database in another availability zone (AZ). The
+   * standby database provides automatic failover in case the primary database fails. However,
+   * when the primary database is healthy, the standby database is not used for serving read
+   * traffic.
+   *
+   * :::caution
+   * Using Multi-AZ will approximately double the cost of the database since it will be
+   * deployed in two AZs.
+   * :::
+   *
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   multiAz: true
+   * }
+   * ```
+   */
+  multiAz?: Input<boolean>;
+  /**
+   * Enable [Blue/Green deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/blue-green-deployments.html)
+   * for version, instance type, and parameter group upgrades.
+   * Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
+   *
+   * When enabled, a staging (green) instance is created, updated,
+   * verified, then promoted to replace the production (blue) instance.
+   * This minimizes downtime during upgrades.
+   *
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   blueGreen: true
+   * }
+   * ```
+   */
+  blueGreen?: Input<boolean>;
+  /**
    * @internal
    */
   replicas?: number;
+  /**
+   * The VPC subnets to use for the database.
+   *
+   * @example
+   * Create a `Vpc` component.
+   *
+   * ```ts title="sst.config.ts"
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
+   * ```
+   *
+   * And pass it in. The database will be placed in the private subnets.
+   *
+   * ```js
+   * {
+   *   vpc: myVpc
+   * }
+   * ```
+   *
+   * Or pass in the subnets of your own VPC.
+   *
+   * ```js
+   * {
+   *   vpc: {
+   *     subnets: ["subnet-0db7376a7ad4db5fd", "subnet-06fc7ee8319b2c0ce"]
+   *   }
+   * }
+   * ```
+   */
+  vpc:
+    | AnyVpc
+    | Input<{
+        /**
+         * A list of subnet IDs in the VPC.
+         */
+        subnets: Input<Input<string>[]>;
+      }>;
+  /**
+   * Configure how this component works in `sst dev`.
+   *
+   * By default, your MySQL database is deployed in `sst dev`. But if you want to instead
+   * connect to a locally running MySQL database, you can configure the `dev` prop.
+   *
+   * :::note
+   * This will not create an RDS database in `sst dev`.
+   * :::
+   *
+   * This will skip deploying an RDS database and link to the locally running MySQL database
+   * instead. `sst dev` shows what the local database has to be set up with, in a pane of its
+   * own.
+   *
+   * This has to be a plain value, not an output: it decides whether the database is
+   * deployed. The values inside it can be outputs.
+   *
+   * @example
+   *
+   * Setting the `dev` prop also means that any linked resources will connect to the right
+   * database both in `sst dev` and `sst deploy`.
+   *
+   * ```ts
+   * {
+   *   dev: {
+   *     username: "root",
+   *     password: "password",
+   *     database: "local",
+   *     host: "localhost",
+   *     port: 3306
+   *   }
+   * }
+   * ```
+   */
+  dev?: {
+    /**
+     * The host of the local MySQL to connect to when running in dev.
+     * @default `"localhost"`
+     */
+    host?: Input<string>;
+    /**
+     * The port of the local MySQL to connect to when running in dev.
+     * @default `3306`
+     */
+    port?: Input<number>;
+    /**
+     * The database of the local MySQL to connect to when running in dev.
+     * @default Inherit from the top-level [`database`](#database).
+     */
+    database?: Input<string>;
+    /**
+     * The username of the local MySQL to connect to when running in dev.
+     * @default Inherit from the top-level [`username`](#username).
+     */
+    username?: Input<string>;
+    /**
+     * The password of the local MySQL to connect to when running in dev. `sst dev`
+     * needs this or the top-level `password`.
+     * @default Inherit from the top-level [`password`](#password).
+     */
+    password?: Input<string>;
+  };
+}
+
+export interface MysqlGetArgs {
+  /**
+   * The ID of the database.
+   */
+  id: Input<string>;
+  /**
+   * The ID of the proxy.
+   */
+  proxyId?: Input<string>;
 }
 
 /** What the rest of the app reads from the database, deployed or local. */
@@ -126,16 +393,15 @@ interface Connection {
  * The `Mysql` component lets you add a MySQL database to your app using
  * [Amazon RDS MySQL](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_MySQL.html).
  *
- * It takes the same args as [`sst.aws.Mysql`](/docs/component/aws/mysql) and creates the same
- * resources. It's built from parts, so every resource it creates can be transformed, is
- * available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
  * #### Create the database
  *
  * ```js title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  * const database = new sst.aws.v5.Mysql("MyDatabase", { vpc });
  * ```
  *
@@ -144,7 +410,7 @@ interface Connection {
  * You can link your database to other resources, like a function or your Next.js app.
  *
  * ```ts title="sst.config.ts"
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   link: [database],
  *   vpc
  * });
@@ -175,7 +441,7 @@ interface Connection {
  * docker run \
  *   --rm \
  *   -p 3306:3306 \
- *   -v $(pwd)/.sst/storage/mysql:/var/lib/mysql/data \
+ *   -v $(pwd)/.sst/storage/mysql:/var/lib/mysql \
  *   -e MYSQL_DATABASE=local \
  *   -e MYSQL_ROOT_PASSWORD=password \
  *   mysql:8.0
@@ -196,7 +462,7 @@ interface Connection {
  * ```
  *
  * This will skip deploying an RDS database and link to the locally running MySQL database
- * instead.
+ * instead. [Check out the full example](/docs/examples/#aws-mysql-local).
  *
  * #### Switch from `sst.aws.Mysql`
  *
@@ -209,12 +475,16 @@ interface Connection {
  * const database = new sst.aws.v5.Mysql("MyDatabase", { vpc });
  * ```
  *
- * A few things are written differently:
+ * A few things work differently:
  *
  * - `proxy`, its list of `credentials`, and each credential's `username` are plain values,
  *   not outputs. They decide which resources are created.
+ * - With `dev` set, `sst.aws.Mysql` created a component for the pane `sst dev` shows, in
+ *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
+ *   has nothing in AWS behind it.
  * - `nodes` has every resource, not only the instance. The secret that stores the master
- *   user's credentials is `nodes.secret`.
+ *   user's credentials is `nodes.secret`. In `sst dev` with `dev` set, reading one of them
+ *   fails and says why it's missing, where `sst.aws.Mysql` gave `undefined`.
  * - `proxyId` fails as soon as it's read when there is no proxy, where `sst.aws.Mysql` failed
  *   on deploy.
  * - If you set `tags` on the instance with an object in `transform`, it keeps the tags
@@ -251,6 +521,19 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
 
     const self = this;
 
+    const username = withDefault(args.username, "root");
+    const dbName = withDefault(args.database, $app.name.replaceAll("-", "_"));
+
+    // In `sst dev`, a MySQL server on the user's machine stands in for the
+    // database, one that's already deployed too. This is the only place the
+    // component handles dev mode.
+    const dev = plain(args.dev, `The "dev" of the "${name}" database`);
+    if (dev && $dev) {
+      this.runsLocally();
+      this.connection = runLocally(dev);
+      return;
+    }
+
     // A database that's already deployed
     const existing = this.existingPart("instance");
     if (existing) {
@@ -262,32 +545,13 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
       return;
     }
 
-    if (args.vpc instanceof VpcV1)
-      throw new VisibleError(
-        `You are using the "Vpc.v1" component. Please migrate to the latest "Vpc" component.`,
-      );
-
-    const username = withDefault(args.username, "root");
-    const dbName = withDefault(args.database, $app.name.replaceAll("-", "_"));
-
-    // In `sst dev`, a MySQL server on the user's machine stands in for the
-    // database. This is the only place the component handles dev mode.
-    const local = args.dev ? runLocally(args.dev) : undefined;
-    if (local && $dev) {
-      this.runsLocally();
-      this.connection = local;
-      return;
-    }
-
     const proxy = plain(args.proxy, `The "proxy" of the "${name}" database`);
     const replicas =
       plain(args.replicas, `The "replicas" of the "${name}" database`) ?? 0;
     const engineVersion = withDefault(args.version, "8.0");
     const instanceType = withDefault(args.instance, "t4g.micro");
     const blueGreen = withDefault(args.blueGreen, false);
-    const vpc = isVpc(args.vpc)
-      ? output({ subnets: args.vpc.privateSubnets })
-      : output(args.vpc);
+    const subnets = subnetsFor(name, args.vpc);
     // An engine version the user didn't choose isn't moved once it's deployed
     const pinned = (field: string) => (args.version ? [] : [field]);
 
@@ -301,7 +565,7 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
       secretString: jsonStringify({ username, password }),
     });
 
-    const subnetGroup = this.part("subnetGroup", { subnetIds: vpc.subnets });
+    const subnetGroup = this.part("subnetGroup", { subnetIds: subnets });
 
     const parameterGroup = this.part(
       "parameterGroup",
@@ -345,15 +609,16 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
         ),
         multiAz: withDefault(args.multiAz, false),
         backupRetentionPeriod: 7,
-        // performance insights is only supported on .micro and .small MySQL instances
+        // Performance Insights isn't supported on .micro and .small MySQL
+        // instances
         // https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PerfInsights.Overview.Engines.html
         performanceInsightsEnabled: instanceType.apply(
           (v) => !v.endsWith(".micro") && !v.endsWith(".small"),
         ),
         blueGreenUpdate: blueGreen.apply((bg) => ({ enabled: bg })),
         tags: {
-          // The same values `Mysql` writes, so either component can
-          // reference a database the other created.
+          // The same values `sst.aws.Mysql` writes, so either component can
+          // reference a database the other created
           "sst:component-version": "1",
           "sst:ref:password": secret.id,
         },
@@ -396,7 +661,7 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
       });
       const rdsProxy = self.part(
         "proxy",
-        proxyArgs("MYSQL", logins, role, vpc.subnets),
+        proxyArgs("MYSQL", logins, role, subnets),
         { dependsOn: [lookup] },
       );
       const targetGroup = self.part("proxyTargetGroup", {
@@ -430,8 +695,8 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
       };
     }
 
-    // A database created by this component, or by the 4.x one, is tagged
-    // with the secret that holds its password.
+    // A database created by this component, or by `sst.aws.Mysql`, is
+    // tagged with the secret that holds its password
     function passwordOf(instance: rds.Instance) {
       return storedPassword(
         credentialsSecretOf(
@@ -443,8 +708,10 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
       );
     }
 
+    // What `sst dev` connects to, and the pane that says how the local
+    // database has to be set up
     function runLocally(dev: NonNullable<MysqlArgs["dev"]>): Connection {
-      if ($dev && dev.password === undefined && args.password === undefined)
+      if (dev.password === undefined && args.password === undefined)
         throw new VisibleError(
           `You must provide the password to connect to your locally running MySQL database either by setting the "dev.password" or by setting the top-level "password" property.`,
         );
@@ -459,21 +726,16 @@ export class Mysql extends component("sst:aws:Mysql", parts) {
         database: dev.database ? output(dev.database) : dbName,
       };
 
-      new DevCommand(`${name}Dev`, {
-        dev: {
-          title: name,
-          autostart: true,
-          command: `sst print-and-not-quit`,
-        },
-        environment: {
-          SST_DEV_COMMAND_MESSAGE: interpolate`Make sure your local MySQL server is using:
+      self.report({
+        dev: localServerPane(
+          interpolate`Make sure your local MySQL server is using:
 
   username: "${local.username}"
-  password: "${local.password}"
+  password: "${shownPassword(local.password)}"
   database: "${local.database}"
 
 Listening on "${local.host}:${local.port}"...`,
-        },
+        ),
       });
 
       return local;
@@ -601,4 +863,11 @@ Listening on "${local.host}:${local.port}"...`,
       opts,
     );
   }
+}
+
+/** The subnets the database is in: a `Vpc`'s private ones, or those given. */
+function subnetsFor(name: string, vpc: MysqlArgs["vpc"]) {
+  if (isVpc(vpc)) return subnetsOf(vpc, "private");
+  assertVpcIds(vpc, `the "${name}" MySQL component`);
+  return output(vpc).subnets;
 }

@@ -32,6 +32,36 @@ export function assertVpcIds(vpc: unknown, what: string) {
     );
 }
 
+/**
+ * The subnets and security groups a component in a VPC is put in: a `Vpc`'s
+ * private subnets and its security groups, or the ids it was given. For a
+ * `Vpc`, each is an output of its own, so what takes only the subnets doesn't
+ * wait for the security groups.
+ *
+ * @param what The component, for the error: `the "MyRedis" Redis component`.
+ */
+export function subnetsAndSecurityGroupsOf(
+  vpc:
+    | AnyVpc
+    | Input<{
+        subnets: Input<Input<string>[]>;
+        securityGroups: Input<Input<string>[]>;
+      }>,
+  what: string,
+) {
+  if (isVpc(vpc)) {
+    // The two `Vpc`s type these differently
+    const securityGroups: Input<Input<string>[]> = vpc.securityGroups;
+    return {
+      subnets: subnetsOf(vpc, "private"),
+      securityGroups: output(securityGroups),
+    };
+  }
+  assertVpcIds(vpc, what);
+  const ids = output(vpc);
+  return { subnets: ids.subnets, securityGroups: ids.securityGroups };
+}
+
 /** The ids of a VPC's public or private subnets, from either kind of `Vpc`. */
 export function subnetsOf(
   vpc: AnyVpc,

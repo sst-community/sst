@@ -316,7 +316,9 @@ Everything above applies. The rest is specific to SST's own components in
   subnets with `subnetsOf()` where it needs them as one output, and whether there's a
   NAT with `hasNat()`, since the two `Vpc`s keep those differently. A component
   built the 5.0 way types `vpc` as `AnyVpc` or the ids, and refuses any other
-  resource there with `assertVpcIds()`. All are in `helpers/vpc.ts`.
+  resource there with `assertVpcIds()`. `subnetsAndSecurityGroupsOf()` gives the
+  subnets and security groups of either, each an output of its own. All are in
+  `helpers/vpc.ts`.
 - **No `registerVersion`.** Keep any tags the original writes at the same value.
 - **A 5.0 component owns its args.** The 5.0 rewrite makes a clean break from 4.x
   code: a component imports no 4.x component file and builds on none of its types
@@ -338,10 +340,11 @@ Everything above applies. The rest is specific to SST's own components in
   shares are `FargateBaseArgs`, below. So is the `Efs`, which makes a mount target in
   each AZ, kept by the AZ's number in a `Vpc` the app creates, and by its name in any
   other VPC, looked up with `after()` once a preview knows the subnets. So are the
-  `Redis` and the `Postgres`, which report the pane `sst dev` shows for a local server
-  (`helpers/local-server.ts`), where 4.x created a `DevCommand` for it. The ports
-  before them reuse the original's, as below, until each is rebuilt and added to that
-  list.
+  `Redis`, the `Postgres`, the `Mysql` and the `Aurora`, which report the pane `sst dev`
+  shows for a local server (`helpers/local-server.ts`), where 4.x created a
+  `DevCommand` for it.
+  The ports before them reuse the original's, as below, until each is rebuilt and
+  added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
@@ -391,7 +394,7 @@ Everything above applies. The rest is specific to SST's own components in
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
-| A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)`, `subnetsOf(vpc, kind)`, `hasNat(vpc)` in `helpers/vpc.ts` |
+| A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)`, `subnetsOf(vpc, kind)`, `hasNat(vpc)`, `assertVpcIds(vpc, what)`, `subnetsAndSecurityGroupsOf(vpc, what)` in `helpers/vpc.ts` |
 | A resource for each private subnet of a VPC, kept by its AZ | `privateSubnetsOf(vpc, parent, what)` in `helpers/vpc.ts`: by the AZ's number for a `Vpc` the app creates, by its name for one from `get`; and `subnetsByAz(subnets, parent, what)` for subnet ids. Where it's a promise, of what a preview knows, create them with `after()` |
 | Deciding from an output a preview knows, like a lookup's | `knownValue(output)` in `args.ts`, for `after()` |
 | A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |

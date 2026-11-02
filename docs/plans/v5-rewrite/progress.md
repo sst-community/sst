@@ -2,6 +2,25 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Mysql` and the `Aurora` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **The `Mysql`'s and the `Aurora`'s own args and docs** (`aws/v5/mysql.ts`, `aws/v5/aurora.ts`), with no 4.x component file imported, and on the clean break's list. Their parts, and what each is created with, are the proofs of concept's, which took over 4.x's. Each takes either kind of `Vpc`, or ids, and refuses another resource in its place.
+- **In `sst dev` with `dev` set, each reports the pane for the local database**, as the `Postgres` does, where 4.x created a `DevCommand` in every deploy, and `dev` wins over `existing`.
+- **The `Aurora` reads a `Vpc`'s subnets and security groups as two outputs again**, as 4.x did, so its subnet group and proxy don't wait for the security group. The proof of concept read them as one. `subnetsAndSecurityGroupsOf()` in `helpers/vpc.ts` does it for the `Aurora` and the `Redis`, which had its own.
+- **Docs:** 4.x's `Aurora` docs gave `scaling.min` a default of `0.5 ACU` where it's `0 ACU`, wrote the `database` example as `databaseName`, gave `dev.port` as `5432` whatever the engine, and spelled PostgreSQL "PostgresSQL"; the V5 page has them right. The `Mysql`'s local example mounted a folder MySQL doesn't keep its data in, and used MySQL's system database as the local one. The `Postgres`'s, the `Mysql`'s and the `Aurora`'s `version` say only what SST does to a deployed database's version, as 4.x's `Mysql` was changed to say on 2026-10-19.
+- Breaking changes, in the plan's table: the `Mysql` and the `Aurora` added to the rows for `nodes` in `sst dev`, and the `Mysql` to the one for `proxyId`. Neither has a `.v1`.
+
+**Checked:** `tsc`, all platform tests (2,318), the docs pages, and the site's build. Each takes over 4.x's in every case, with `dev` set in and outside `sst dev` (a secret password included, with nothing revealed), with a `Vpc` of either kind, and with the `Vpc` switched along with it: only, with `dev`, its dev command leaves the state. Neither was checked in the lab: their panes go through the helper the `Postgres` was checked with, and the recorded databases group, replayed under the mock, is taken over with nothing changed. A lab run of a real switch is left for one stage with a VPC for the three of them.
+
+**Reviewed**, each; neither review found a bug. Fixed from them: the `version` wording the `Mysql` was given went back on what 4.x's was changed to say; the `Mysql`'s local example and its missing link to the full one; 4.x's `Aurora` docs gave `scaling.max` as at most 128 ACU and `pauseAfter` as at most an hour, where recent versions go higher and a pause can wait a day; a `transform.instance` function wasn't given the `Aurora` as the parent for its replicas, where 4.x gave it; the "Switch from" sections listed `dev` as newly plain, which 4.x already had as a plain object; the helper's comment and the rulebook's table of helpers. Tests added for `existing` with `dev` outside `sst dev`, in all three.
+
+**Found:**
+
+- RDS's standard support for MySQL 8.0 ended on 2026-07-31, so a new `Mysql` on the default `"8.0"`, in 4.x and V5, runs on RDS Extended Support, which is billed on top of the instance; the cost on the page doesn't say so. RDS's own default is 8.4 now. The Aurora MySQL default, `3.08.0`, passed its end of standard support on 2026-08-31, though RDS still creates it; its own default is 3.10. Changing a default only changes new databases: one that's deployed without a `version` is pinned. Left for the maintainer to decide.
+- The `aws-mysql-local` example mounts `/var/lib/mysql/data`, where MySQL keeps nothing, so its data isn't kept between runs. It's SST's example; left as it is.
+
 ## 2026-11-02: step 4, the `Postgres` built the 5.0 way
 
 **Done, committed (not pushed):**

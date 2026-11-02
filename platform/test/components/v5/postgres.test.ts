@@ -485,6 +485,19 @@ describe("Postgres", () => {
     });
   });
 
+  it("uses an existing database with dev args outside of sst dev", async () => {
+    const database = new Postgres("MyDatabase", {
+      vpc,
+      existing: { instance: "app-dev-mydatabase" },
+      dev: { password: "local" },
+    });
+    await pulumi.settle();
+
+    expect(resource("MyDatabaseInstance").kind).toBe("read");
+    expect(await pulumi.resolve(database.host)).toBe("shared.db.example.com");
+    expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
+  });
+
   // 4.x asked for the password in `sst dev` alone
   it("deploys with dev args that have no password", async () => {
     new Postgres("MyDatabase", { vpc, dev: { port: 5433 } });

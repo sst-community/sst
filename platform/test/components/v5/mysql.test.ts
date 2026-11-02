@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { output } from "@pulumi/pulumi";
+import { output, secret } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
 
 const INSTANCE = "aws:rds/instance:Instance";
@@ -47,14 +47,17 @@ type MysqlClass =
 describe("Mysql", () => {
   let OriginalMysql: typeof import("../../../src/components/aws/mysql").Mysql;
   let Mysql: typeof import("../../../src/components/aws/v5/mysql").Mysql;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
 
   beforeAll(async () => {
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
     OriginalMysql = (await import("../../../src/components/aws/mysql")).Mysql;
     Mysql = (await import("../../../src/components/aws/v5/mysql"))
       .Mysql;
     await import("../../../src/components/aws/takeover/mysql");
+    await import("../../../src/components/aws/takeover/vpc");
   });
 
   beforeEach(() => {
@@ -74,7 +77,11 @@ describe("Mysql", () => {
     pulumi.takeoverCases({
       original: () => OriginalMysql,
       v5: () => Mysql,
-      check: () => expect(resource("MyDatabaseInstance").type).toBe(INSTANCE),
+      // In `sst dev` with `dev` set, neither creates the database
+      check: () =>
+        // @ts-ignore
+        global.$dev ||
+        expect(resource("MyDatabaseInstance").type).toBe(INSTANCE),
       cases: {
         "default database": (Mysql, opts) => {
           new Mysql("MyDatabase", { vpc }, opts);
@@ -169,15 +176,52 @@ describe("Mysql", () => {
             opts,
           );
         },
-        "dev args outside of sst dev": (Mysql, opts) => {
-          new Mysql(
-            "MyDatabase",
-            {
-              vpc,
-              dev: { username: "root", password: "password", port: 3307 },
-            },
-            opts,
-          );
+        // The 4.x Mysql created a component for the pane `sst dev` shows
+        // in every deploy. The V5 one reports the pane in `sst dev` alone.
+        "dev args outside of sst dev": {
+          create: (Mysql, opts) => {
+            new Mysql(
+              "MyDatabase",
+              {
+                vpc,
+                dev: { username: "root", password: "password", port: 3307 },
+              },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev"],
+          check: () => expect(pulumi.reportOf("MyDatabase")).toBeUndefined(),
+        },
+        "dev args in sst dev": {
+          create: (Mysql, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new Mysql(
+              "MyDatabase",
+              { vpc, dev: { password: "password", port: 3307 } },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev"],
+          // The component itself reports the pane, in its outputs
+          changed: [["MyDatabase", ["outputs"]]],
+          check: () =>
+            expect(pulumi.reportOf("MyDatabase")).toHaveProperty("dev"),
+        },
+        // The 4.x dev command kept it secret in its outputs, and so does the
+        // V5 pane
+        "a secret dev password in sst dev": {
+          create: (Mysql, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new Mysql(
+              "MyDatabase",
+              { vpc, dev: { password: secret("password") } },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::MyDatabaseDev"],
+          changed: [["MyDatabase", ["outputs"]]],
         },
         "a database referenced with get": (Mysql, opts) => {
           Mysql.get("MyDatabase", { id: "app-dev-mydatabase" }, opts);
@@ -196,7 +240,7 @@ describe("Mysql", () => {
           create: (Mysql, opts) => {
             new Mysql(
               "MyDatabase",
-              { vpc: new Vpc("MyVpc"), proxy: true },
+              { vpc: new OriginalVpc("MyVpc"), proxy: true },
               opts,
             );
           },
@@ -205,6 +249,22 @@ describe("Mysql", () => {
               "MyVpcPrivateSubnet1_id",
               "MyVpcPrivateSubnet2_id",
             ]),
+        },
+        "in a Vpc switched with it": {
+          original: (opts) =>
+            new OriginalMysql(
+              "MyDatabase",
+              { vpc: new OriginalVpc("MyVpc"), proxy: true },
+              opts,
+            ),
+          v5: (opts) =>
+            new Mysql(
+              "MyDatabase",
+              { vpc: new Vpc("MyVpc"), proxy: true },
+              opts,
+            ),
+          // The Vpc's version marker, with nothing in AWS behind it
+          unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
         // V5 merges an object transform into the defaults. 4.x replaced
         // a nested object whole, so tags set this way took the place of the
@@ -273,7 +333,7 @@ describe("Mysql", () => {
       global.$dev = true;
     });
 
-    it("creates nothing but the dev command when dev is set", async () => {
+    it("creates nothing and reports a pane when dev is set", async () => {
       const database = new Mysql("MyDatabase", {
         vpc,
         username: "admin",
@@ -282,10 +342,7 @@ describe("Mysql", () => {
       });
       await pulumi.settle();
 
-      expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:Mysql",
-        "sst:sst:DevCommand",
-      ]);
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Mysql"]);
       expect(
         await pulumi.resolve([
           database.host,
@@ -305,6 +362,39 @@ describe("Mysql", () => {
         "placeholder",
         "placeholder",
       ]);
+      // The pane `sst dev` shows, titled with the component's name
+      expect(pulumi.reportOf("MyDatabase")).toEqual({
+        contract: 1,
+        dev: {
+          command: "sst print-and-not-quit",
+          autostart: true,
+          links: [],
+          environment: {
+            SST_DEV_COMMAND_MESSAGE: [
+              "Make sure your local MySQL server is using:",
+              "",
+              '  username: "admin"',
+              '  password: "local"',
+              '  database: "acme"',
+              "",
+              'Listening on "127.0.0.1:3307"...',
+            ].join("\n"),
+          },
+        },
+      });
+    });
+
+    it("says there's no password in its pane, given an empty one", async () => {
+      const database = new Mysql("MyDatabase", {
+        vpc,
+        dev: { password: output("") },
+      });
+      await pulumi.settle();
+
+      expect(
+        pulumi.reportOf("MyDatabase")?.dev.environment.SST_DEV_COMMAND_MESSAGE,
+      ).toContain('password: "\x1b[38;5;8m[no password]\x1b[0m"');
+      expect(await pulumi.resolve(database.password)).toBe("");
     });
 
     it("uses the dev username and database, and the top-level password", async () => {
@@ -326,10 +416,29 @@ describe("Mysql", () => {
       ).toEqual(["localhost", 3306, "local-user", "top-level", "local"]);
     });
 
+    // The core reads it decrypted, as it read SST 4's `DevCommand`
+    it("keeps a secret password secret in the state", async () => {
+      new Mysql("MyDatabase", { vpc, dev: { password: secret("local") } });
+      await pulumi.settle();
+
+      const message =
+        pulumi.reportOf("MyDatabase")?.dev.environment.SST_DEV_COMMAND_MESSAGE;
+      expect(message).toMatchObject({
+        "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",
+      });
+      expect(message.value).toContain('password: "local"');
+    });
+
     it("needs a password to connect with", () => {
       expect(() => new Mysql("MyDatabase", { vpc, dev: {} })).toThrow(
         /You must provide the password to connect to your locally running MySQL/,
       );
+    });
+
+    it("needs dev as a plain value", () => {
+      expect(
+        () => new Mysql("MyDatabase", { vpc, dev: output({}) as any }),
+      ).toThrow(/The "dev" of the "MyDatabase" database has to be a plain value/);
     });
 
     it("explains why nodes are missing", async () => {
@@ -349,7 +458,45 @@ describe("Mysql", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.some((r) => r.type === INSTANCE)).toBe(true);
+      expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
     });
+
+    // `dev` says what `sst dev` connects to, whatever a deploy does
+    it("connects to the local database in place of an existing one", async () => {
+      const database = new Mysql("MyDatabase", {
+        vpc,
+        existing: { instance: "app-dev-mydatabase" },
+        dev: { password: "local" },
+      });
+      await pulumi.settle();
+
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Mysql"]);
+      expect(await pulumi.resolve([database.host, database.password])).toEqual(
+        ["localhost", "local"],
+      );
+    });
+  });
+
+  it("uses an existing database with dev args outside of sst dev", async () => {
+    const database = new Mysql("MyDatabase", {
+      vpc,
+      existing: { instance: "app-dev-mydatabase" },
+      dev: { password: "local" },
+    });
+    await pulumi.settle();
+
+    expect(resource("MyDatabaseInstance").kind).toBe("read");
+    expect(await pulumi.resolve(database.host)).toBe("shared.db.example.com");
+    expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
+  });
+
+  // 4.x asked for the password in `sst dev` alone
+  it("deploys with dev args that have no password", async () => {
+    new Mysql("MyDatabase", { vpc, dev: { port: 3307 } });
+    await pulumi.settle();
+
+    expect(pulumi.resources.some((r) => r.type === INSTANCE)).toBe(true);
+    expect(pulumi.reportOf("MyDatabase")).toBeUndefined();
   });
 
   it("creates the database with its defaults", async () => {
@@ -644,13 +791,37 @@ describe("Mysql", () => {
     ).toThrow(/The "username" in the "proxy.credentials" of the "Third" database has to be a plain value/);
   });
 
-  it("rejects a Vpc.v1", async () => {
-    const { Vpc } = await import("../../../src/components/aws/vpc-v1");
-    expect(
-      () =>
-        new Mysql("MyDatabase", {
-          vpc: Object.create(Vpc.prototype),
-        }),
-    ).toThrow(/You are using the "Vpc.v1" component/);
+  describe("in a Vpc", () => {
+    it("is in the private subnets of either kind", async () => {
+      for (const [i, VpcClass] of [OriginalVpc, Vpc].entries()) {
+        pulumi.reset();
+        const net = new VpcClass(`Net${i}`);
+        new Mysql("MyDatabase", { vpc: net, proxy: true });
+        await pulumi.settle();
+
+        const subnets = await pulumi.resolve(net.privateSubnets);
+        expect(resource("MyDatabaseSubnetGroup").inputs.subnetIds).toEqual(
+          subnets,
+        );
+        expect(resource("MyDatabaseProxy").inputs.vpcSubnetIds).toEqual(
+          subnets,
+        );
+      }
+    });
+
+    it("turns down another resource in its place", async () => {
+      const aws = await import("@pulumi/aws");
+      const { Vpc: VpcV1 } = await import(
+        "../../../src/components/aws/vpc-v1"
+      );
+      for (const [i, net] of [
+        new aws.ec2.Vpc("Net", { cidrBlock: "10.0.0.0/16" }),
+        new VpcV1("Old"),
+      ].entries())
+        expect(() => new Mysql(`Database${i}`, { vpc: net as any })).toThrow(
+          `The "vpc" of the "Database${i}" MySQL component isn't a "Vpc" component`,
+        );
+      await pulumi.settle();
+    });
   });
 });

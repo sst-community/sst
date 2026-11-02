@@ -34,6 +34,8 @@ const rebuilt = [
   "efs.ts",
   "redis.ts",
   "postgres.ts",
+  "mysql.ts",
+  "aurora.ts",
 ];
 
 describe("V5 components", () => {
