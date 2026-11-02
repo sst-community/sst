@@ -1,96 +1,21 @@
-import {
-  ComponentResourceOptions,
-  interpolate,
-  jsonStringify,
-  Output,
-  output,
-} from "@pulumi/pulumi";
-import { RandomPassword } from "@pulumi/random";
-import { iam, rds, secretsmanager } from "@pulumi/aws";
-import {
-  type ComponentArgs,
-  component,
-  many,
-  optional,
-} from "../../parts-component";
-import { plain, withDefault } from "../../args";
+import type { ComponentResourceOptions } from "@pulumi/pulumi";
+import { component } from "../../parts-component";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import type { SizeGbTb } from "../../size";
 import {
-  credentialsSecretOf,
-  maxStorage,
-  proxyArgs,
-  type ProxyArgs,
-  proxyCredentials,
-  proxyRoleArgs,
-  replicaArgs,
-  storedPassword,
-} from "../helpers/rds";
-import { RdsRoleLookup } from "../providers/rds-role-lookup";
-import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
-import { localServerPane, shownPassword } from "../helpers/local-server";
+  createRdsInstance,
+  type RdsConnection,
+  type RdsEngine,
+  type RdsInstanceArgs,
+  type RdsInstanceGetArgs,
+  rdsInstanceParts,
+} from "../helpers/rds-instance";
 
-const parts = {
-  /**
-   * The random password of the master user. It's created when you don't set a `password`.
-   */
-  password: optional(RandomPassword),
-  /**
-   * The Secrets Manager secret that stores the master user's username and password.
-   */
-  secret: secretsmanager.Secret,
-  /**
-   * The version of the secret holding the current username and password.
-   */
-  secretVersion: secretsmanager.SecretVersion,
-  /**
-   * The RDS subnet group.
-   */
-  subnetGroup: rds.SubnetGroup,
-  /**
-   * The RDS parameter group.
-   */
-  parameterGroup: rds.ParameterGroup,
-  /**
-   * The RDS database instance.
-   */
-  instance: rds.Instance,
-  /**
-   * The read replicas of the database instance, by number, from `0`.
-   */
-  replica: many(rds.Instance),
-  /**
-   * The secrets that store the additional credentials the proxy can use, by username.
-   */
-  proxySecret: many(secretsmanager.Secret),
-  /**
-   * The versions of the secrets holding the additional credentials, by username.
-   */
-  proxySecretVersion: many(secretsmanager.SecretVersion),
-  /**
-   * The IAM role that lets the proxy read the secrets.
-   */
-  proxyRole: optional(iam.Role),
-  /**
-   * Waits for the service-linked role RDS needs before the proxy is created.
-   */
-  proxyRoleLookup: optional(RdsRoleLookup),
-  /**
-   * The RDS Proxy.
-   */
-  proxy: optional(rds.Proxy),
-  /**
-   * The proxy's default target group.
-   */
-  proxyTargetGroup: optional(rds.ProxyDefaultTargetGroup),
-  /**
-   * The proxy's target: the database instance.
-   */
-  proxyTarget: optional(rds.ProxyTarget),
-};
+// What it's built from is what every database on an RDS instance is built
+// from (`helpers/rds-instance.ts`)
+const parts = rdsInstanceParts;
 
-export interface PostgresArgs extends ComponentArgs<typeof parts> {
+export interface PostgresArgs extends RdsInstanceArgs {
   /**
    * The Postgres engine version. Check out the [available versions in your region](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.DBVersions.html).
    *
@@ -126,181 +51,6 @@ export interface PostgresArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   username?: Input<string>;
-  /**
-   * The password of the master user.
-   * @default A random password is generated.
-   * @example
-   * ```js
-   * {
-   *   password: "Passw0rd!"
-   * }
-   * ```
-   *
-   * You can use a [`Secret`](/docs/component/secret) to manage the password.
-   *
-   * ```js
-   * {
-   *   password: new sst.Secret("MyDBPassword").value
-   * }
-   * ```
-   */
-  password?: Input<string>;
-  /**
-   * Name of a database that is automatically created.
-   *
-   * The name must begin with a letter and contain only lowercase letters, numbers, or
-   * underscores. By default, it takes the name of the app, and replaces the hyphens with
-   * underscores.
-   *
-   * :::danger
-   * Changing the database name will cause the database to be destroyed and recreated.
-   * :::
-   *
-   * @default Based on the name of the current app
-   * @example
-   * ```js
-   * {
-   *   database: "acme"
-   * }
-   * ```
-   */
-  database?: Input<string>;
-  /**
-   * The type of instance to use for the database. Check out the [supported instance types](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.DBInstanceClass.Types.html).
-   *
-   * :::caution
-   * Changing the instance type will cause the database to restart on the next `sst deploy`,
-   * causing downtime. Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
-   * :::
-   *
-   * @default `"t4g.micro"`
-   * @example
-   * ```js
-   * {
-   *   instance: "m7g.xlarge"
-   * }
-   * ```
-   */
-  instance?: Input<string>;
-  /**
-   * The maximum storage limit for the database.
-   *
-   * RDS will autoscale your storage to match your usage up to the given limit.
-   *
-   * :::note
-   * You are only billed for the storage you use, not the maximum limit.
-   * :::
-   *
-   * By default, [gp3 storage volumes](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#Concepts.Storage.GeneralSSD)
-   * are used without additional provisioned IOPS. This provides good baseline
-   * performance for most use cases.
-   *
-   * The minimum storage size is 20 GB. And the maximum storage size is 64 TB.
-   *
-   * @default `"20 GB"`
-   * @example
-   * ```js
-   * {
-   *   storage: "100 GB"
-   * }
-   * ```
-   */
-  storage?: Input<SizeGbTb>;
-  /**
-   * Enable [RDS Proxy](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-proxy.html) for the database.
-   *
-   * This has to be a plain value, not an output: it decides which resources are created.
-   *
-   * @default `false`
-   * @example
-   * ```js
-   * {
-   *   proxy: true
-   * }
-   * ```
-   */
-  proxy?: boolean | ProxyArgs;
-  /**
-   * Enable [Multi-AZ](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html)
-   * deployment for the database.
-   *
-   * This creates a standby replica for the database in another availability zone (AZ). The
-   * standby database provides automatic failover in case the primary database fails. However,
-   * when the primary database is healthy, the standby database is not used for serving read
-   * traffic.
-   *
-   * :::caution
-   * Using Multi-AZ will approximately double the cost of the database since it will be
-   * deployed in two AZs.
-   * :::
-   *
-   * @default `false`
-   * @example
-   * ```js
-   * {
-   *   multiAz: true
-   * }
-   * ```
-   */
-  multiAz?: Input<boolean>;
-  /**
-   * Enable [Blue/Green deployments](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/blue-green-deployments.html)
-   * for version, instance type, and parameter group upgrades.
-   * Learn more about [upgrading databases](/docs/upgrade-aws-databases/).
-   *
-   * When enabled, a staging (green) instance is created, updated,
-   * verified, then promoted to replace the production (blue) instance.
-   * This minimizes downtime during upgrades.
-   *
-   * @default `false`
-   * @example
-   * ```js
-   * {
-   *   blueGreen: true
-   * }
-   * ```
-   */
-  blueGreen?: Input<boolean>;
-  /**
-   * @internal
-   */
-  replicas?: number;
-  /**
-   * The VPC subnets to use for the database.
-   *
-   * @example
-   * Create a `Vpc` component.
-   *
-   * ```ts title="sst.config.ts"
-   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
-   * ```
-   *
-   * And pass it in. The database will be placed in the private subnets.
-   *
-   * ```js
-   * {
-   *   vpc: myVpc
-   * }
-   * ```
-   *
-   * Or pass in the subnets of your own VPC.
-   *
-   * ```js
-   * {
-   *   vpc: {
-   *     subnets: ["subnet-0db7376a7ad4db5fd", "subnet-06fc7ee8319b2c0ce"]
-   *   }
-   * }
-   * ```
-   */
-  vpc:
-    | AnyVpc
-    | Input<{
-        /**
-         * A list of subnet IDs in the VPC.
-         */
-        subnets: Input<Input<string>[]>;
-      }>;
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -365,28 +115,29 @@ export interface PostgresArgs extends ComponentArgs<typeof parts> {
   };
 }
 
-export interface PostgresGetArgs {
-  /**
-   * The ID of the database.
-   */
-  id: Input<string>;
-  /**
-   * The ID of the proxy.
-   */
-  proxyId?: Input<string>;
-}
+export interface PostgresGetArgs extends RdsInstanceGetArgs {}
 
-/** What the rest of the app reads from the database, deployed or local. */
-interface Connection {
-  id: Output<string>;
-  /** Not set when the database has no proxy. */
-  proxyId?: Output<string>;
-  host: Output<string>;
-  port: Output<number>;
-  username: Output<string>;
-  password: Output<string>;
-  database: Output<string>;
-}
+// How Postgres differs from the other databases on an RDS instance
+const engine: RdsEngine = {
+  engine: "postgres",
+  label: "Postgres",
+  server: "PostgreSQL server",
+  defaults: { version: "17", username: "postgres", port: 5432 },
+  proxyFamily: "POSTGRESQL",
+  parameterGroup: (version) => ({
+    family: version.apply((v) => `postgres${v.split(".")[0]}`),
+    parameters: [
+      { name: "rds.force_ssl", value: "0" },
+      {
+        name: "rds.logical_replication",
+        value: "1",
+        applyMethod: "pending-reboot",
+      },
+    ],
+  }),
+  performanceInsights: () => true,
+  tags: { version: "2", password: "sst:lookup:password" },
+};
 
 /**
  * The `Postgres` component lets you add a Postgres database to your app using
@@ -515,7 +266,7 @@ interface Connection {
  * [RDS Proxy pricing](https://aws.amazon.com/rds/proxy/pricing/) for more details.
  */
 export class Postgres extends component("sst:aws:Postgres", parts) {
-  private connection: Connection;
+  private connection: RdsConnection;
 
   constructor(
     name: string,
@@ -523,227 +274,7 @@ export class Postgres extends component("sst:aws:Postgres", parts) {
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
-
-    const self = this;
-
-    const username = withDefault(args.username, "postgres");
-    const dbName = withDefault(args.database, $app.name.replaceAll("-", "_"));
-
-    // In `sst dev`, a Postgres server on the user's machine stands in for the
-    // database, one that's already deployed too. This is the only place the
-    // component handles dev mode.
-    const dev = plain(args.dev, `The "dev" of the "${name}" database`);
-    if (dev && $dev) {
-      this.runsLocally();
-      this.connection = runLocally(dev);
-      return;
-    }
-
-    // A database that's already deployed
-    const existing = this.existingPart("instance");
-    if (existing) {
-      this.connection = connectTo(
-        existing,
-        args.password ? output(args.password) : passwordOf(existing),
-        this.existingPart("proxy"),
-      );
-      return;
-    }
-
-    const proxy = plain(args.proxy, `The "proxy" of the "${name}" database`);
-    const replicas =
-      plain(args.replicas, `The "replicas" of the "${name}" database`) ?? 0;
-    const engineVersion = withDefault(args.version, "17");
-    const instanceType = withDefault(args.instance, "t4g.micro");
-    const blueGreen = withDefault(args.blueGreen, false);
-    const subnets = subnetsFor(name, args.vpc);
-    // An engine version the user didn't choose isn't moved once it's deployed
-    const pinned = (field: string) => (args.version ? [] : [field]);
-
-    const password = args.password
-      ? output(args.password)
-      : this.part("password", { length: 32, special: false }).result;
-
-    const secret = this.part("secret", { recoveryWindowInDays: 0 });
-    this.part("secretVersion", {
-      secretId: secret.id,
-      secretString: jsonStringify({ username, password }),
-    });
-
-    const subnetGroup = this.part("subnetGroup", { subnetIds: subnets });
-
-    const parameterGroup = this.part(
-      "parameterGroup",
-      {
-        family: engineVersion.apply((v) => `postgres${v.split(".")[0]}`),
-        parameters: [
-          { name: "rds.force_ssl", value: "0" },
-          {
-            name: "rds.logical_replication",
-            value: "1",
-            applyMethod: "pending-reboot",
-          },
-        ],
-      },
-      {
-        ignoreChanges: pinned("family"),
-        // Necessary for the parameter group to be deleted AFTER upgrading the instance.
-        // This is either a Pulumi bug or an undocumented feature.
-        deleteBeforeReplace: false,
-      },
-    );
-
-    const instance = this.part(
-      "instance",
-      {
-        dbName,
-        dbSubnetGroupName: subnetGroup.name,
-        engine: "postgres",
-        engineVersion,
-        instanceClass: interpolate`db.${instanceType}`,
-        username,
-        password,
-        parameterGroupName: parameterGroup.name,
-        applyImmediately: true,
-        allowMajorVersionUpgrade: true,
-        autoMinorVersionUpgrade: false,
-        skipFinalSnapshot: true,
-        storageEncrypted: true,
-        storageType: "gp3",
-        allocatedStorage: 20,
-        maxAllocatedStorage: maxStorage(
-          args.storage,
-          blueGreen,
-          `${name} Postgres`,
-        ),
-        multiAz: withDefault(args.multiAz, false),
-        backupRetentionPeriod: 7,
-        performanceInsightsEnabled: true,
-        blueGreenUpdate: blueGreen.apply((bg) => ({ enabled: bg })),
-        tags: {
-          // The same value `sst.aws.Postgres` writes, so either component can
-          // reference a database the other created
-          "sst:component-version": "2",
-          "sst:lookup:password": secret.id,
-        },
-      },
-      { deleteBeforeReplace: true, ignoreChanges: pinned("engineVersion") },
-    );
-
-    for (let i = 0; i < replicas; i++) {
-      this.part("replica", `${i}`, replicaArgs(instance, i), {
-        ignoreChanges: pinned("engineVersion"),
-      });
-    }
-
-    this.connection = connectTo(
-      instance,
-      password,
-      proxy ? createProxy(proxy === true ? {} : proxy) : undefined,
-    );
-
-    function createProxy(proxy: ProxyArgs) {
-      // A secret for each additional user the proxy can connect as
-      const secrets = proxyCredentials(proxy.credentials, name).map(
-        ({ username, password }) => {
-          const secret = self.part("proxySecret", username, {
-            recoveryWindowInDays: 0,
-          });
-          self.part("proxySecretVersion", username, {
-            secretId: secret.id,
-            secretString: jsonStringify({ username, password }),
-          });
-          return secret;
-        },
-      );
-      // The proxy can connect as the master user and as each of those
-      const logins = [secret, ...secrets];
-
-      const role = self.part("proxyRole", proxyRoleArgs(logins));
-      const lookup = self.part("proxyRoleLookup", {
-        name: "AWSServiceRoleForRDS",
-      });
-      const rdsProxy = self.part(
-        "proxy",
-        proxyArgs("POSTGRESQL", logins, role, subnets),
-        { dependsOn: [lookup] },
-      );
-      const targetGroup = self.part("proxyTargetGroup", {
-        dbProxyName: rdsProxy.name,
-      });
-      self.part("proxyTarget", {
-        dbProxyName: rdsProxy.name,
-        targetGroupName: targetGroup.name,
-        dbInstanceIdentifier: instance.identifier,
-      });
-
-      return rdsProxy;
-    }
-
-    function connectTo(
-      instance: rds.Instance,
-      password: Output<string>,
-      proxy?: rds.Proxy,
-    ): Connection {
-      return {
-        id: instance.identifier,
-        proxyId: proxy?.id,
-        // Connections go through the proxy when there is one
-        host: proxy
-          ? proxy.endpoint
-          : instance.endpoint.apply((endpoint) => endpoint.split(":")[0]),
-        port: instance.port,
-        username: instance.username,
-        password,
-        database: instance.dbName,
-      };
-    }
-
-    // A database created by this component, or by `sst.aws.Postgres`, is
-    // tagged with the secret that holds its password
-    function passwordOf(instance: rds.Instance) {
-      return storedPassword(
-        credentialsSecretOf(
-          instance,
-          "sst:lookup:password",
-          `Failed to get password for Postgres ${name}.`,
-        ),
-        self,
-      );
-    }
-
-    // What `sst dev` connects to, and the pane that says how the local
-    // database has to be set up
-    function runLocally(dev: NonNullable<PostgresArgs["dev"]>): Connection {
-      if (dev.password === undefined && args.password === undefined)
-        throw new VisibleError(
-          `You must provide the password to connect to your locally running Postgres database either by setting the "dev.password" or by setting the top-level "password" property.`,
-        );
-
-      const local = {
-        id: output("placeholder"),
-        proxyId: output("placeholder"),
-        host: output(dev.host ?? "localhost"),
-        port: output(dev.port ?? 5432),
-        username: dev.username ? output(dev.username) : username,
-        password: output(dev.password ?? args.password ?? ""),
-        database: dev.database ? output(dev.database) : dbName,
-      };
-
-      self.report({
-        dev: localServerPane(
-          interpolate`Make sure your local PostgreSQL server is using:
-
-  username: "${local.username}"
-  password: "${shownPassword(local.password)}"
-  database: "${local.database}"
-
-Listening on "${local.host}:${local.port}"...`,
-        ),
-      });
-
-      return local;
-    }
+    this.connection = createRdsInstance(this.builder(), name, args, engine);
   }
 
   /**
@@ -867,11 +398,4 @@ Listening on "${local.host}:${local.port}"...`,
       opts,
     );
   }
-}
-
-/** The subnets the database is in: a `Vpc`'s private ones, or those given. */
-function subnetsFor(name: string, vpc: PostgresArgs["vpc"]) {
-  if (isVpc(vpc)) return subnetsOf(vpc, "private");
-  assertVpcIds(vpc, `the "${name}" Postgres component`);
-  return output(vpc).subnets;
 }

@@ -406,7 +406,9 @@ Everything above applies. The rest is specific to SST's own components in
 | Deciding from an output a preview knows, like a lookup's | `knownValue(output)` in `args.ts`, for `after()` |
 | A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
 | A database or cache that runs on the user's machine in `sst dev`: the pane that says how to set up the local server | `localServerPane(message)` in `helpers/local-server.ts`, given to `this.report({ dev })`, with a password in it shown by `shownPassword()` |
-| An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
+| An RDS database: storage limit, replicas, the proxy, a stored password, and a local one in `sst dev` | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()`, `localDatabase()` in `helpers/rds.ts` |
+| A database on an RDS instance, whole: what the `Postgres` and the `Mysql` share | `rdsInstanceParts`, `RdsInstanceArgs`, and `createRdsInstance(this.builder(), name, args, engine)` with the engine's `RdsEngine`, in `helpers/rds-instance.ts`; the tests in `test/components/v5/rds-instance.suite.ts` |
+| What two components share, as more than args: their parts, built by a helper | `this.builder()`, which gives the helper the component's `part()`, `existingPart()`, `runsLocally()` and `report()`. Declare the shared parts as `const parts = sharedParts`; the docs follow it |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
 | An arg that must not be an output | `plain(value, what, why?)` in `args.ts`; `why` when it doesn't decide which resources are created, like what a build reads |
@@ -846,8 +848,9 @@ with aliases, and a method that looks a part up when it's asked for (`getListene
 `apigatewayv2.ts` for routes, authorizers and a custom domain; `sns-topic.ts` for named subscribers; `bucket.ts` for
 one resource built from many notifications; `cognito-user-pool.ts` for triggers and a
 linkable client; `redis.ts` for a component that runs locally in `sst dev` and reports a pane for it,
-and `get`; `postgres.ts` for the same with an
-optional group of parts (the proxy) and a part per item in a list; `aurora.ts` for a
+and `get`; `postgres.ts` and `mysql.ts` for the same, built by one helper
+(`helpers/rds-instance.ts`), with an optional group of parts (the proxy) and a part
+per item in a list; `aurora.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
 than one part; `cluster.ts` for the smallest one: nothing moved, so no takeover map,
 and a `get` that takes args next to the id; `efs.ts` for a part per item of a list

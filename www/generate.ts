@@ -1962,7 +1962,7 @@ function usePartsOfArgs(
   return partsBySource.get(sourceFile);
 }
 
-function parseParts(file: string): Parts | undefined {
+function parseParts(file: string, name = "parts"): Parts | undefined {
   const source = ts.createSourceFile(
     file,
     fs.readFileSync(file, "utf8"),
@@ -1972,11 +1972,32 @@ function parseParts(file: string): Parts | undefined {
   const declaration = source.statements
     .filter(ts.isVariableStatement)
     .flatMap((s) => [...s.declarationList.declarations])
-    .find((d) => d.name.getText() === "parts");
+    .find((d) => d.name.getText() === name);
   let literal = declaration?.initializer;
   // `const parts = () => ({ ... })`
   if (literal && ts.isArrowFunction(literal)) literal = literal.body as ts.Expression;
   while (literal && ts.isParenthesizedExpression(literal)) literal = literal.expression;
+  // `const parts = rdsInstanceParts`, the parts two components share, from
+  // the file it's imported from
+  if (literal && ts.isIdentifier(literal)) {
+    const shared = literal.getText();
+    const from = source.statements
+      .filter(ts.isImportDeclaration)
+      .find((statement) => {
+        const bindings = statement.importClause?.namedBindings;
+        return (
+          bindings &&
+          ts.isNamedImports(bindings) &&
+          bindings.elements.some((element) => element.name.getText() === shared)
+        );
+      });
+    if (!from) return undefined;
+    const specifier = (from.moduleSpecifier as ts.StringLiteral).text;
+    return parseParts(
+      path.join(path.dirname(file), `${specifier.replace(/\.js$/, "")}.ts`),
+      shared
+    );
+  }
   if (!literal || !ts.isObjectLiteralExpression(literal)) return undefined;
 
   // What each imported name comes from, ie. `sqs` from "@pulumi/aws"
@@ -2843,6 +2864,8 @@ function useHelperInterfaces(
   const walkReflection = (reflection?: TypeDoc.DeclarationReflection) => {
     if (!reflection || seen.has(reflection)) return;
     seen.add(reflection);
+    // What the page doesn't show, like a class's private fields
+    if (reflection.flags.isPrivate || reflection.flags.isProtected) return;
     walkType(reflection.type);
     reflection.children?.forEach(walkReflection);
     for (const signature of reflection.signatures ?? []) {

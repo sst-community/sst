@@ -1,7 +1,6 @@
 import {
   all,
   ComponentResourceOptions,
-  interpolate,
   jsonStringify,
   Output,
   output,
@@ -27,11 +26,11 @@ import {
   proxyCredentials,
   proxyRoleArgs,
   storedPassword,
+  localDatabase,
 } from "../helpers/rds";
 import { permission } from "../permission";
 import { RdsRoleLookup } from "../providers/rds-role-lookup";
 import { type AnyVpc, subnetsAndSecurityGroupsOf } from "../helpers/vpc";
-import { localServerPane, shownPassword } from "../helpers/local-server";
 
 const parts = {
   /**
@@ -1018,40 +1017,27 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
     // What `sst dev` connects to, and the pane that says how the local
     // database has to be set up
     function runLocally(dev: NonNullable<AuroraArgs["dev"]>): Connection {
-      if (dev.password === undefined && args.password === undefined)
-        throw new VisibleError(
-          `You must provide the password to connect to your locally running database either by setting the "dev.password" or by setting the top-level "password" property.`,
-        );
-
-      const host = output(dev.host ?? "localhost");
-      const local = {
+      const local = localDatabase(
+        dev,
+        {
+          password: args.password,
+          username,
+          database: dbName,
+          port: engine.apply(
+            (engine) => ({ postgres: 5432, mysql: 3306 })[engine],
+          ),
+        },
+        { database: "database", server: "database" },
+      );
+      self.report({ dev: local.pane });
+      return {
         id: output("placeholder"),
         clusterArn: output("placeholder"),
         secretArn: output("placeholder"),
-        host,
-        reader: host,
-        port: all([dev.port, engine]).apply(
-          ([port, engine]) => port ?? { postgres: 5432, mysql: 3306 }[engine],
-        ),
-        username: dev.username ? output(dev.username) : username,
-        password: output(dev.password ?? args.password ?? ""),
-        database: dev.database ? output(dev.database) : dbName,
+        ...local.connection,
+        reader: local.connection.host,
         include: [],
       };
-
-      self.report({
-        dev: localServerPane(
-          interpolate`Make sure your local database is using:
-
-  username: "${local.username}"
-  password: "${shownPassword(local.password)}"
-  database: "${local.database}"
-
-Listening on "${local.host}:${local.port}"...`,
-        ),
-      });
-
-      return local;
     }
   }
 

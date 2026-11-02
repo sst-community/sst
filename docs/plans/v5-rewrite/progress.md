@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, one base for the databases on an RDS instance
+
+**Done, committed (not pushed).** The second fix from the [review](plan.md#decisions): the `Postgres` and the `Mysql` differed in 48 of their 873 lines, and their tests in 57 of 827, so a fix was made by hand in each, as several were the same day.
+
+- **`helpers/rds-instance.ts` builds either**: the parts, the args that read the same for each, and the whole of what the constructor does, from the engine's settings (`RdsEngine`: its name, defaults, parameter group, Performance Insights, the tags 4.x writes, the proxy's engine family). Each component keeps its class, its docs, its getters and `get`, and the args that read differently for it (`version`, `username`, `dev`). Each is about 400 lines now.
+- **`localDatabase()`** in `helpers/rds.ts` is what `sst dev` connects to and the pane for it, for the `Postgres`, the `Mysql` and the `Aurora`.
+- **One suite of tests**, `rds-instance.suite.ts`, which each engine's file runs with its own values, beside the tests only it has: its parameter group, and MySQL's Performance Insights.
+- **The docs generator** follows `const parts = rdsInstanceParts` to the file that declares them, and no longer shows a type only a class's private field uses.
+
+**Checked:** `tsc`, all platform tests (2,335): every test of the two components passed unchanged before the suite took their place, the takeover cases included, so they deploy what they did. The two pages have the same sections as before.
+
 ## 2026-11-02: step 4, an architecture review, and component versions
 
 **The review.** Before the rest of the components, the maintainer asked whether the design still holds: the same functionality for developers, a codebase clearly more mature than 4.x's, and custom components still easy to write. An independent review and a read of the code found the design right, and what to fix, now a [decision](plan.md#decisions) with its order. The main one was a bug: an app's or a package's own component that renamed a part with `sst.takeover()`, as the README says to, was refused on a stage SST 5 created, as if it were SST 4's. And after one move, a later map was applied with no check.

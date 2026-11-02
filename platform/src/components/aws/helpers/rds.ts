@@ -1,9 +1,17 @@
-import { all, type Output, type Resource } from "@pulumi/pulumi";
+import {
+  all,
+  interpolate,
+  type Output,
+  output,
+  type Resource,
+} from "@pulumi/pulumi";
 import { iam, rds, secretsmanager } from "@pulumi/aws";
 import { plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type SizeGbTb, toGBs } from "../../size";
+import type { DevReport } from "../../contract";
+import { localServerPane, shownPassword } from "./local-server";
 
 /**
  * An RDS Proxy in front of the database.
@@ -209,4 +217,70 @@ export function storedPassword(secretId: Input<string>, parent: Resource) {
   return secretsmanager
     .getSecretVersionOutput({ secretId }, { parent })
     .secretString.apply((v) => JSON.parse(v).password as string);
+}
+
+/** A database on the user's machine, which `sst dev` connects to. */
+export interface LocalDatabaseArgs {
+  host?: Input<string>;
+  port?: Input<number>;
+  database?: Input<string>;
+  username?: Input<string>;
+  password?: Input<string>;
+}
+
+/**
+ * What `sst dev` connects to in place of a database SST deploys, and the pane
+ * that says how the server on the user's machine has to be set up. What
+ * `dev` doesn't say comes from the component's own args.
+ *
+ * @param dev The component's `dev`.
+ * @param defaults The component's password, username and database, and the
+ * engine's port.
+ * @param what What the messages call the database, as in "your locally
+ * running MySQL database", and the server, as in "your local MySQL server".
+ */
+export function localDatabase(
+  dev: LocalDatabaseArgs,
+  defaults: {
+    password?: Input<string>;
+    username: Input<string>;
+    database: Input<string>;
+    port: Input<number>;
+  },
+  what: { database: string; server: string },
+): {
+  connection: {
+    host: Output<string>;
+    port: Output<number>;
+    username: Output<string>;
+    password: Output<string>;
+    database: Output<string>;
+  };
+  pane: DevReport;
+} {
+  if (dev.password === undefined && defaults.password === undefined)
+    throw new VisibleError(
+      `You must provide the password to connect to your locally running ${what.database} either by setting the "dev.password" or by setting the top-level "password" property.`,
+    );
+
+  const connection = {
+    host: output(dev.host ?? "localhost"),
+    port: output(dev.port ?? defaults.port),
+    // An empty one is as good as none, as in 4.x
+    username: output(dev.username ? dev.username : defaults.username),
+    password: output(dev.password ?? defaults.password ?? ""),
+    database: output(dev.database ? dev.database : defaults.database),
+  };
+  return {
+    connection,
+    pane: localServerPane(
+      interpolate`Make sure your local ${what.server} is using:
+
+  username: "${connection.username}"
+  password: "${shownPassword(connection.password)}"
+  database: "${connection.database}"
+
+Listening on "${connection.host}:${connection.port}"...`,
+    ),
+  };
 }
