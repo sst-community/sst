@@ -115,7 +115,10 @@ the component reads its args.
     user passes an ARN. Create it with `sst.aws.functionPart(this, key, definition,
     defaults)`, or with an id for `many(deferred(sst.aws.v5.Function))`. Its `nodes` entry is
     an `Output`. The user's `transform` for it takes the function's args, including the
-    function's own `transform` and `existing`.
+    function's own `transform` and `existing`. Any part can be deferred: one that's made
+    from a build is created with `this.part()` in what `this.after()` runs (below).
+    `deferred(optional(...))` is one that may not be created: its `nodes` entry is an
+    `Output` that may be `undefined`.
   - `named(part, "Name")`: the resource is named `<ComponentName><Name>` in place of the
     key. The key is what's written in `transform`, `existing` and `nodes`; the name is
     how a deployed app knows the resource, so it's permanent. It wraps a class or
@@ -131,8 +134,13 @@ the component reads its args.
   config on disk. A value that's only known on deploy, like another component's output
   or a link's value, is only ever passed in, as an input.
   - Where a build decides it (a function's source maps, a site's servers), take it from
-    a build that doesn't need what isn't known, and check on deploy that the real build
-    matches.
+    a build that doesn't need what isn't known. A function's build doesn't read its links,
+    so it's built once either way. A site's does: it's built once per deploy, with the
+    values it's deployed with, and a preview builds it without the values it doesn't know
+    (`buildSite()` in `helpers/site-build.ts`). The parts made from it are created in
+    `this.after(build, (built) => { ... })`, which keeps the program running until they
+    are, and fails it if the build fails. Until then their `nodes` entries are outputs
+    that resolve to what was created.
   - A list another component counts, like a `Vpc`'s subnets, is a list of known length
     with an output in each place, not one output of a list.
   - Some V5 components still create parts inside `.apply()` with `optional`, `many` or
@@ -304,7 +312,9 @@ Everything above applies. The rest is specific to SST's own components in
   the CloudFront code it shares with the 4.x one and the sites in `router-code.ts`. The
   `Cdn` isn't yet: its certificate and its redirect are the 4.x ones, which every
   component with a domain shares, and they're rebuilt with the DNS adapters, which
-  still create their records inside `.apply()`. The ports before them reuse the
+  still create their records inside `.apply()`. The `Nextjs` is built that way: it
+  builds its site in the program and creates what the build makes with `after()`, and it
+  shares what the 4.x sites work out from a build in `site-code.ts`. The ports before them reuse the
   original's, as below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
@@ -363,6 +373,8 @@ Everything above applies. The rest is specific to SST's own components in
 | An `efs` arg: either kind of `Efs`, or an access point's ARN | `AnyEfs`, `isEfs(value)` in `helpers/efs.ts` |
 | Serving a component through a `Router` | `RouteArgs`, `AnyRouter`, `routeOf(route)` in `helpers/router.ts` |
 | A `bucket` arg: either kind of `Bucket` | `AnyBucket` in `helpers/bucket.ts` |
+| Building a site in the program, with what it links | `buildSite()` in `helpers/site-build.ts` |
+| A site's files, key-value entries and invalidation, as the 4.x sites make them | `siteFiles()`, `siteKvEntries()`, `siteInvalidation()` in `site-code.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |
 | A value made on this machine from things in AWS, like built code | `withoutDependencies(output)` in `args.ts` |
 
@@ -428,7 +440,9 @@ takeover(ApiGatewayV2, {
 - `childOf(type, component, child)` is the old address of something inside a wrapper
   component. Pass the V5 component as a fourth argument when 4.x created the wrapper
   with the component's own options, so it sat beside the component rather than at the
-  top (`Bucket.notify` does).
+  top (`Bucket.notify` does, and the 4.x `Nextjs` subscribing to its revalidation queue).
+  `childWithin(type, component, child, owner)` is for a wrapper 4.x created inside the
+  component itself, like the 4.x `Nextjs`'s warmer in a `Cron`.
 - `{ name, parent: false }` is something 4.x created with no parent at all.
 - A `moved` function can return several candidates. Addresses that don't exist are
   ignored. A candidate's name can be made from one of the component's outputs, like
@@ -770,4 +784,6 @@ with nothing inside `.apply()`, and a `get` that finds what it can't count with
 lookups that aren't resources; `router.ts` for parts that 4.x kept in wrapper
 components at the top of the app (each route's entries in the key-value store), a
 component part (`Cdn`) that's looked up for `get`, and a setting it gives as a plain
-value so the components served through it don't wait (`_signs`).
+value so the components served through it don't wait (`_signs`); `nextjs.ts` for parts
+made from a build that runs in the program, created with `after()`, and a wrapper 4.x
+kept inside the component (the warmer's `Cron`).
