@@ -3,6 +3,7 @@ import * as aws from "@pulumi/aws";
 import * as cloudflare from "@pulumi/cloudflare";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../helpers/graph";
+import { rejectionsOf } from "../helpers/rejections";
 
 const pulumi = mockPulumi();
 
@@ -330,6 +331,35 @@ describe("Component parts", () => {
     await pulumi.settle();
     expect(east).toBeInstanceOf(aws.s3.Bucket);
     expect(Object.keys(regional.nodes.bucket).sort()).toEqual(["east", "west"]);
+  });
+
+  it("fails the nodes of deferred parts when after() fails", async () => {
+    const failure = new Error("the build failed");
+    const parts = {
+      bucket: many(deferred(aws.s3.Bucket)),
+      log: deferred(optional(aws.s3.Bucket)),
+    };
+    let made: Promise<unknown> | undefined;
+    class Failing extends component("acme:index:Failing", parts) {
+      constructor(name: string) {
+        super(name);
+        made = this.after(Promise.reject(failure), () => {
+          this.part("bucket", "east", {});
+        });
+        this.willCreate("bucket", ["east"]);
+      }
+    }
+    const failures = await rejectionsOf(async () => {
+      const failing = new Failing("Docs");
+      await expect(made).rejects.toBe(failure);
+      // Not `undefined`: what's made from them isn't deployed without them
+      await expect((failing.nodes.bucket.east as any).promise()).rejects.toBe(
+        failure,
+      );
+      await expect((failing.nodes.log as any).promise()).rejects.toBe(failure);
+      await pulumi.settle();
+    });
+    expect(new Set(failures)).toEqual(new Set([failure]));
   });
 
   it("keeps a VisibleError's message as it's written", async () => {

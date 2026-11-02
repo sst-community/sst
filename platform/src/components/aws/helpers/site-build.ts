@@ -8,12 +8,10 @@ import { markUnknowns, unknown } from "../../check";
 import { Semaphore } from "../../../util/semaphore";
 import { lazy } from "../../../util/lazy";
 
-/**
- * How many sites build at once, in a run of the program: as many as
- * `SST_BUILD_CONCURRENCY_SITE` says, one by default. 4.x sites take their turn
- * here too.
- */
-export const siteBuilds = lazy(
+// How many sites build at once, in a run of the program. 4.x sites keep a
+// limit of their own: a failed 4.x build never gives back its turn, and a
+// site built here waiting for it would keep the program running.
+const siteBuilds = lazy(
   () => new Semaphore(parseInt(process.env.SST_BUILD_CONCURRENCY_SITE || "1")),
 );
 
@@ -34,8 +32,8 @@ const TAIL = 50;
  * builds the site twice: in its preview, and again in the deploy.
  *
  * The program waits for the build. Builds take their turn: as many at once as
- * `SST_BUILD_CONCURRENCY_SITE` says, one by default. A failed build fails the
- * program, with the end of its output.
+ * `SST_BUILD_CONCURRENCY_SITE` says, one by default, and as many 4.x sites
+ * besides. A failed build fails the program, with the end of its output.
  *
  * @param name The site's name, for messages.
  * @param sitePath The site's folder, from the app's folder.

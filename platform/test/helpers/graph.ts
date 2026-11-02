@@ -189,8 +189,10 @@ export function mockPulumi(input?: MockInput) {
     try {
       old = engine.takeover(earlier.graph);
     } catch (error: any) {
-      error.message = `As deployed before 4.x renamed or moved a resource: ${error.message}`;
-      throw error;
+      throw new Error(
+        `As deployed before 4.x renamed or moved a resource: ${error.message}`,
+        { cause: error },
+      );
     }
     expect(
       {

@@ -141,13 +141,24 @@ func TestLocalCommand(t *testing.T) {
 	r = Check([]apitype.StepEventMetadata{withDelete}, nil)
 	assert.Len(t, problems(r), 1)
 
-	// Creating or replacing one runs its command
+	// A 4.x site that stays 4.x builds again, as on every deploy
+	astro := urn("sst:aws:Astro$command:local:Command", "WebBuilder")
+	rebuild := step(apitype.OpReplace, astro)
+	rebuild.Keys = []string{"triggers[0]"}
+	assert.Empty(t, problems(Check([]apitype.StepEventMetadata{rebuild}, nil)))
+	inside := urn("acme:index:Web$sst:aws:StaticSite$command:local:Command", "DocsBuilder")
+	assert.Empty(t, problems(Check([]apitype.StepEventMetadata{step(apitype.OpCreate, inside)}, nil)))
+
+	// A command of the user's: creating or replacing one runs it
 	userCommand := urn("command:local:Command", "Seed")
 	r = Check([]apitype.StepEventMetadata{step(apitype.OpCreate, userCommand)}, nil)
 	assert.Len(t, problems(r), 1)
 	replace := step(apitype.OpReplace, userCommand)
 	replace.Keys = []string{"create"}
 	r = Check([]apitype.StepEventMetadata{replace}, nil)
+	assert.Len(t, problems(r), 1)
+	inTheirs := urn("acme:index:Web$command:local:Command", "WebBuilder")
+	r = Check([]apitype.StepEventMetadata{step(apitype.OpCreate, inTheirs)}, nil)
 	assert.Len(t, problems(r), 1)
 }
 

@@ -171,9 +171,9 @@ export class PartsComponent<P extends Parts> extends Component {
   // Resources created through `delegateOpts()`
   private readonly partDelegated = new WeakSet<object>();
   private runningLocally = false;
-  // What `after()` is creating, once it's called: the `nodes` of a deferred
-  // part wait for it
-  private creating?: Promise<void>;
+  // What `after()` is creating, each time it's called: the `nodes` of a
+  // deferred part wait for it, and fail with it
+  private readonly creating: Promise<unknown>[] = [];
   // The ids `after()` will create a deferred `many` part with, by part, from
   // `willCreate()`
   private readonly partPromised: Record<string, Set<string>> = {};
@@ -389,7 +389,9 @@ export class PartsComponent<P extends Parts> extends Component {
    * given to `willCreate()`.
    *
    * The program waits for `create`, and an error in `ready` or in `create`
-   * fails the deploy, once, however many resources wait on it. A preview runs
+   * fails the deploy, once, however many resources wait on it. The `nodes`
+   * entries of deferred parts fail with it too, so nothing made from them is
+   * deployed without them. A preview runs
    * it too, so `ready` has to resolve in a preview: decide what's created from
    * what a preview knows. A site's build leaves out the values a preview
    * doesn't know.
@@ -407,13 +409,7 @@ export class PartsComponent<P extends Parts> extends Component {
   ): Promise<R> {
     const done = runtime.rpcKeepAlive();
     const created = ready.then(create).finally(done);
-    // A failure fails the deploy once, from `created`. The `nodes` waiting
-    // on it resolve to what was created.
-    const settled = created.then(
-      () => {},
-      () => {},
-    );
-    this.creating = (this.creating ?? Promise.resolve()).then(() => settled);
+    this.creating.push(created);
     return created;
   }
 
@@ -693,7 +689,9 @@ export class PartsComponent<P extends Parts> extends Component {
 
     if (!isMany(part)) {
       if (deferred) return deferred();
-      return isDeferred(part) && this.creating ? this.whenCreated(key) : created;
+      return isDeferred(part) && this.creating.length
+        ? this.whenCreated(key)
+        : created;
     }
     // Held by id on an object with no prototype, so `id in nodes.route` is
     // only true for a route that exists, whatever the id is.
@@ -711,7 +709,7 @@ export class PartsComponent<P extends Parts> extends Component {
         get: () =>
           deferred?.[id]
             ? deferred[id]()
-            : this.creating
+            : this.creating.length
               ? this.whenCreated(key, id)
               : output(created?.[id]),
       });
@@ -721,7 +719,10 @@ export class PartsComponent<P extends Parts> extends Component {
 
   // A deferred part's resource, once `after()` has created what it creates
   private whenCreated(key: string, id?: string) {
-    return output(this.creating!.then(() => at(this.partNodes, key, id)));
+    // A failure rejects with the same error, which Pulumi reports once
+    return output(
+      Promise.all(this.creating).then(() => at(this.partNodes, key, id)),
+    );
   }
 
   private existingOf(key: string, id?: string, opts?: CustomResourceOptions) {

@@ -140,9 +140,10 @@ the component reads its args.
     (`buildSite()` in `helpers/site-build.ts`). The parts made from it are created in
     `this.after(build, (built) => { ... })`, which keeps the program running until they
     are, and fails it if the build fails. Until then their `nodes` entries are outputs
-    that resolve to what was created. A `many(deferred(...))` part is listed by id as
-    it's created; when the ids are known before, like a site's regions, name them with
-    `this.willCreate(key, ids)` so `nodes` has them from the start.
+    that resolve to what was created, or fail with the build. A `many(deferred(...))`
+    part is listed by id as it's created; when the ids are known before, like a site's
+    regions, name them with `this.willCreate(key, ids)` so `nodes` has them from the
+    start.
   - A failure the user should read is a `VisibleError`. Its message is shown once and as
     it's written, however many resources wait on what failed.
   - A list another component counts, like a `Vpc`'s subnets, is a list of known length

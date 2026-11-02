@@ -5,9 +5,9 @@
 // A move may keep a resource, at its address or at a new one, and update it in
 // place. Anything else has to be allowed:
 //
-//   - A resource with nothing in the cloud behind it, a component, a
-//     provider, or a command run on this machine without a delete command,
-//     may leave the state or be created.
+//   - A resource with nothing in the cloud behind it may leave the state or
+//     be created: a component, a provider, a 4.x site's build, or a command
+//     run on this machine that's deleted without a delete command.
 //   - A resource the map releases leaves the state without its delete being
 //     called. The part in its place is created, and writes the same thing
 //     again or adopts it.
@@ -351,13 +351,13 @@ func isReplace(op apitype.OpType) bool {
 }
 
 // A resource with nothing behind it in the cloud: a component, the stack, a
-// provider, or a command run on this machine that's deleted without running
-// anything
+// provider, a 4.x site's build, or a command run on this machine that's
+// deleted without running anything
 func isCustom(step apitype.StepEventMetadata) bool {
 	if strings.HasPrefix(step.Type, "pulumi:providers:") || step.Type == "pulumi:pulumi:Stack" {
 		return false
 	}
-	if isLocalCommand(step) {
+	if isSiteBuild(step) || isLocalCommand(step) {
 		return false
 	}
 	for _, state := range []*apitype.StepEventStateMetadata{step.New, step.Old} {
@@ -369,9 +369,37 @@ func isCustom(step apitype.StepEventMetadata) bool {
 	return true
 }
 
-// The delete of a command run on this machine, like the build of a 4.x
-// site, that has no delete command, so it does nothing. Creating or replacing
-// one runs its command, and deleting one with a delete command runs that.
+// The build of a 4.x site: the one command an SST component runs on this
+// machine, `<Site>Builder`, right under the site, with no delete command. A
+// 4.x site builds again on every deploy, which replaces it, so its replace
+// isn't the move's doing, and it writes only the site's files on this machine.
+func isSiteBuild(step apitype.StepEventMetadata) bool {
+	if step.Type != "command:local:Command" {
+		return false
+	}
+	for _, state := range []*apitype.StepEventStateMetadata{step.Old, step.New} {
+		if state == nil {
+			continue
+		}
+		if command, ok := state.Inputs["delete"].(string); ok && command != "" {
+			return false
+		}
+	}
+	parts := strings.Split(step.URN, "::")
+	if len(parts) < 4 {
+		return false
+	}
+	chain := strings.Split(parts[2], "$")
+	if len(chain) < 2 {
+		return false
+	}
+	parent := chain[len(chain)-2]
+	return strings.HasPrefix(parent, "sst:") && strings.HasSuffix(parts[len(parts)-1], "Builder")
+}
+
+// The delete of a command run on this machine that has no delete command, so
+// it does nothing. Creating or replacing one runs its command, and deleting
+// one with a delete command runs that.
 func isLocalCommand(step apitype.StepEventMetadata) bool {
 	if step.Type != "command:local:Command" || step.Op != apitype.OpDelete {
 		return false

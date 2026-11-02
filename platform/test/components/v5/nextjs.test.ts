@@ -4,6 +4,7 @@ import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { rejectionsOf } from "../../helpers/rejections";
 
 const DISTRIBUTION = "aws:cloudfront/distribution:Distribution";
 const DYNAMIC = "pulumi-nodejs:dynamic:Resource";
@@ -514,24 +515,17 @@ describe("Nextjs", () => {
   });
 
   it("fails a deploy once, with the build's own message", async () => {
-    // Every rejection the failed build causes, in place of the test runner's
-    // handler, which would fail the test on the first
-    const failures: unknown[] = [];
-    const collect = (error: unknown) => failures.push(error);
-    const runner = process.listeners("unhandledRejection");
-    process.removeAllListeners("unhandledRejection");
-    process.on("unhandledRejection", collect);
-    try {
-      new Nextjs("Next", {
+    const failures = await rejectionsOf(async () => {
+      const next = new Nextjs("Next", {
         path: site,
         buildCommand: "echo the reason >&2; exit 3",
         warm: 1,
       });
+      // What's made from the server waits for it, and fails with the build
+      const server = (next.nodes.server["us-east-1"] as any).promise();
+      await expect(server).rejects.toThrow(/Failed to build the "Next" site/);
       await pulumi.settle();
-    } finally {
-      process.off("unhandledRejection", collect);
-      for (const listener of runner) process.on("unhandledRejection", listener);
-    }
+    });
     // Pulumi reports an error once, by identity
     expect(failures.length).toBeGreaterThan(0);
     expect(new Set(failures).size).toBe(1);
