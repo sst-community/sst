@@ -1001,6 +1001,9 @@ export interface BucketEventBridgeSubscriberArgs {
  * - A function's args there are typed as [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s.
  *   Args written the way `sst.aws.Function` takes them, like `role` or `live`, still
  *   work, but don't type-check.
+ * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
  * - A `transform` function for `cors` or `lifecycle` is given outputs where
  *   `sst.aws.Bucket` gave it plain values, like `corsRules[0].allowedOrigins` and
  *   `rules`. Change them with `apply`, or set them with an object.

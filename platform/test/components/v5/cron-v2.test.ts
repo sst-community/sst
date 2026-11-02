@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const SCHEDULE = "aws:scheduler/schedule:Schedule";
 const FUNCTION = "aws:lambda/function:Function";
@@ -111,18 +112,34 @@ describe("CronV2", () => {
             opts,
           );
         },
-        "a function given as an output": (Cron, opts) => {
-          new Cron(
-            "MyCronJob",
-            {
-              function: output({
-                handler: "src/cron.handler",
-                memory: "512 MB" as const,
-              }),
-              schedule: output("rate(5 minutes)" as const),
-            },
-            opts,
-          );
+        // 4.x took the function's args in an output. The V5 one takes them
+        // as a plain value, since whether a function is created is decided
+        // from them, with outputs inside.
+        "a function given as an output": {
+          original: (opts) =>
+            new OriginalCronV2(
+              "MyCronJob",
+              {
+                function: output({
+                  handler: "src/cron.handler",
+                  memory: "512 MB" as const,
+                }),
+                schedule: output("rate(5 minutes)" as const),
+              },
+              opts,
+            ),
+          v5: (opts) =>
+            new CronV2(
+              "MyCronJob",
+              {
+                function: {
+                  handler: "src/cron.handler",
+                  memory: output("512 MB" as const),
+                },
+                schedule: output("rate(5 minutes)" as const),
+              },
+              opts,
+            ),
         },
         "a function given as an arn": (Cron, opts) => {
           new Cron(
@@ -468,6 +485,52 @@ describe("CronV2", () => {
     // A job that runs a task has no function
     expect(cron.nodes.function).toBe(undefined);
     expect(named("MyCronJobFunction")).toEqual([]);
+  });
+
+  // Whether a function is created is decided from what's given, which a
+  // preview has to know. The error is thrown inside an apply, on deploy.
+  it("refuses a handler or args in an output, and creates no function", async () => {
+    const errors = await applyErrors(() => {
+      new CronV2("MyCronJob", {
+        function: output("src/cron.handler"),
+        schedule: "rate(1 minute)",
+      });
+      new CronV2("Other", {
+        function: output({ handler: "src/cron.handler" }) as any,
+        schedule: "rate(1 minute)",
+      });
+    }, pulumi.settle);
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    for (const cron of ["MyCronJob", "Other"])
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The "function" of the "${cron}" cron job is an output that isn't a function or the ARN of one.`,
+        ),
+      );
+  });
+
+  // An ARN creates nothing, and nor does a function that's already there, so
+  // either can be an output
+  it("invokes a function, or its ARN, given in an output", async () => {
+    const fn = new Function("MyFunction", { handler: "src/cron.handler" });
+    new CronV2("ByArn", {
+      function: output(FUNCTION_ARN),
+      schedule: "rate(1 minute)",
+    });
+    new CronV2("ByFunction", {
+      function: output(fn),
+      schedule: "rate(1 minute)",
+    });
+    await pulumi.settle();
+
+    expect(resource("ByArnSchedule").inputs.target.arn).toBe(FUNCTION_ARN);
+    expect(resource("ByFunctionSchedule").inputs.target.arn).toBe(
+      "arn:aws:mock:us-east-1:123456789012:MyFunctionFunction",
+    );
+    expect(named("ByArnFunction")).toEqual([]);
+    expect(named("ByFunctionFunction")).toEqual([]);
   });
 
   it("invokes a V5 Function from elsewhere in the app", async () => {

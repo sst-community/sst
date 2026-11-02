@@ -370,6 +370,9 @@ export interface QueueSubscriberArgs {
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check.
+ * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
  * - The subscriber is created with the provider the queue has. `sst.aws.Queue` gave it only
  *   a `provider` passed to the queue itself, so if your queue takes its provider from a
  *   parent component or from `providers`, its subscriber is replaced on switch, its log

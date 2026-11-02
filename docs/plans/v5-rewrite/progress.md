@@ -2,6 +2,20 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `CronV2` built the 5.0 way, and a function part's args
+
+**Done, committed (not pushed):**
+
+- **The `CronV2`'s own args and docs** (`aws/v5/cron-v2.ts`), with no 4.x component file imported, and on the clean break's list. The 4.x `Task` it can run is reached through `AnyTask` (`helpers/task.ts`), and its function goes through `plainFunction()`. A 4.x config that gave the function's args in an output switches by writing them plainly, with outputs inside, which a takeover case shows. Its examples use the 5.0 `Vpc`, since a new stage refuses SST 4's.
+- **A `$transform` for functions can add to what a component's function is given again.** `functionPart()` made a function's `link`, `environment` and `permissions` outputs whatever was given, so a `$transform` that spread `args.environment` copied an output and lost what it added, with no error, in every 5.0 component. They're made outputs only when one side is one, as 4.x left them. A test fails without it.
+- **Each "Switch from" section of a component that creates functions** says that inside a function's args, what it's built from and what decides what's created are plain values, as the 5.0 `Function` takes them.
+
+**Checked:** `tsc`, the docs pages, and all 2,221 platform tests, with a function and its ARN given to a cron job in an output.
+
+**Reviewed**, and fixed: the lost `$transform` additions, the docs and examples above, and the missing tests.
+
+**Left:** the lab check, with the others'.
+
 ## 2026-11-02: step 4, the `Bus` built the 5.0 way
 
 **Done, committed (not pushed):**

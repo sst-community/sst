@@ -1,20 +1,20 @@
 import { all, ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { iam, scheduler } from "@pulumi/aws";
-import { V5Args, component, deferred } from "../../parts-component";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+} from "../../parts-component";
 import { notAnOption, plain } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import type {
-  Function as OriginalFunction,
-  FunctionArgs as OriginalFunctionArgs,
-  FunctionArn,
-} from "../function";
-import { Function, type FunctionArgs } from "./function";
-import { functionPart } from "../helpers/function-part";
-import type { Task as OriginalTask } from "../task";
-import type { Task } from "./task";
-import type { Workflow } from "../workflow";
-import type { CronV2Args as OriginalCronV2Args } from "../cron-v2";
+import { Function } from "./function";
+import {
+  type FunctionInput,
+  functionPart,
+  plainFunction,
+} from "../helpers/function-part";
+import type { AnyTask } from "../helpers/task";
 
 const parts = () => ({
   /**
@@ -32,8 +32,7 @@ const parts = () => ({
   schedule: scheduler.Schedule,
 });
 
-export interface CronV2Args
-  extends V5Args<Omit<OriginalCronV2Args, "job" | "function" | "task">, typeof parts> {
+export interface CronV2Args extends ComponentArgs<typeof parts> {
   /**
    * The function that'll be executed when the cron job runs.
    *
@@ -56,7 +55,9 @@ export interface CronV2Args
    * }
    * ```
    *
-   * You can also pass in a function ARN.
+   * You can also pass in a function you have, or its ARN. Only those can be an output: a
+   * handler and the function's args are plain values, since whether a function is created
+   * is decided from them.
    *
    * ```ts
    * {
@@ -64,15 +65,7 @@ export interface CronV2Args
    * }
    * ```
    */
-  function?: Input<
-    | string
-    | Workflow
-    | OriginalFunction
-    | Function
-    | OriginalFunctionArgs
-    | FunctionArgs
-    | FunctionArn
-  >;
+  function?: FunctionInput;
   /**
    * The task that'll be executed when the cron job runs.
    *
@@ -81,7 +74,7 @@ export interface CronV2Args
    * For example, let's say you have a task.
    *
    * ```js title="sst.config.ts"
-   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const vpc = new sst.aws.v5.Vpc("MyVpc");
    * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
    * const task = new sst.aws.v5.Task("MyTask", { cluster });
    * ```
@@ -95,16 +88,131 @@ export interface CronV2Args
    * });
    * ```
    */
-  task?: OriginalTask | Task;
+  task?: AnyTask;
+  /**
+   * The event that'll be passed to the function or task.
+   *
+   * @example
+   * ```ts
+   * {
+   *   event: {
+   *     foo: "bar",
+   *   }
+   * }
+   * ```
+   *
+   * For Lambda functions, the event will be passed to the function as an event.
+   *
+   * ```ts
+   * function handler(event) {
+   *   console.log(event.foo);
+   * }
+   * ```
+   *
+   * For ECS Fargate tasks, the event will be passed to the task as the `SST_EVENT`
+   * environment variable.
+   *
+   * ```ts
+   * const event = JSON.parse(process.env.SST_EVENT);
+   * console.log(event.foo);
+   * ```
+   */
+  event?: Input<any>;
+  /**
+   * The schedule for the cron job.
+   *
+   * :::note
+   * The cron job continues to run even after you exit `sst dev`.
+   * :::
+   *
+   * @example
+   *
+   * You can use a [rate expression](https://docs.aws.amazon.com/lambda/latest/dg/services-cloudwatchevents-expressions.html).
+   *
+   * ```ts
+   * {
+   *   schedule: "rate(5 minutes)"
+   *   // schedule: "rate(1 minute)"
+   *   // schedule: "rate(5 minutes)"
+   *   // schedule: "rate(1 hour)"
+   *   // schedule: "rate(5 hours)"
+   *   // schedule: "rate(1 day)"
+   *   // schedule: "rate(5 days)"
+   * }
+   * ```
+   * Or a [cron expression](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-rule-schedule.html#eb-cron-expressions).
+   *
+   * ```ts
+   * {
+   *   schedule: "cron(15 10 * * ? *)", // 10:15 AM (UTC) every day
+   * }
+   * ```
+   *
+   * Or an [at expression](https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html#one-time) for a one-time schedule.
+   *
+   * ```ts
+   * {
+   *   schedule: "at(2025-06-01T10:00:00)",
+   * }
+   * ```
+   */
+  schedule: Input<`rate(${string})` | `cron(${string})` | `at(${string})`>;
+  /**
+   * The IANA timezone for the cron schedule. When set, the cron expression is
+   * evaluated in this timezone, with automatic DST handling.
+   *
+   * @default `"UTC"`
+   * @example
+   * ```ts
+   * {
+   *   timezone: "America/New_York"
+   * }
+   * ```
+   */
+  timezone?: Input<string>;
+  /**
+   * Configures whether the cron job is enabled. When disabled, the cron job won't run.
+   * @default true
+   * @example
+   * ```ts
+   * {
+   *   enabled: false
+   * }
+   * ```
+   */
+  enabled?: Input<boolean>;
+  /**
+   * The number of retry attempts for failed invocations. Between 0 and 185.
+   *
+   * @default `0`
+   * @example
+   * ```ts
+   * {
+   *   retries: 3
+   * }
+   * ```
+   */
+  retries?: Input<number>;
+  /**
+   * The ARN of an SQS queue to use as a dead-letter queue. When all retry
+   * attempts are exhausted, failed events are sent to this queue.
+   *
+   * @example
+   * ```ts
+   * {
+   *   dlq: myQueue.arn
+   * }
+   * ```
+   */
+  dlq?: Input<string>;
 }
 
 /**
  * The `CronV2` component lets you add cron jobs to your app
  * using [Amazon EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html). The cron job can invoke a function or a container `Task`.
  *
- * It takes the same args as [`sst.aws.CronV2`](/docs/component/aws/cron-v2) and creates
- * the same resources. It's built from parts, so every resource it creates can be
- * transformed, is available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  * #### Cron job function
@@ -123,7 +231,7 @@ export interface CronV2Args
  * Create a container task and pass in a `schedule` and a `task` that'll be executed.
  *
  * ```ts title="sst.config.ts" {6}
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
  * const task = new sst.aws.v5.Task("MyTask", { cluster });
  *
@@ -192,15 +300,21 @@ export interface CronV2Args
  *
  * A few things are written differently:
  *
- * - The deprecated `job` is gone. Use `function`, which takes the same things. So is
+ * - The deprecated `job` is gone. Use `function`, as written below. So is
  *   `nodes.job`: read `nodes.function`.
  * - The function is named after `function`: `MyCronJobFunction`, where it was
  *   `MyCronJobHandler`. The function you've deployed keeps its name in AWS.
  * - `nodes.function` is empty for a job that runs a task, where `sst.aws.CronV2` failed
  *   when it was read.
- * - The function is a [`sst.aws.v5.Function`](/docs/component/aws/v5/function), so its
- *   definition can be written the way that takes it. The way `sst.aws.Function` takes it
- *   still works.
+ * - `function` can't be a handler or a function's args in an output: whether a function
+ *   is created is decided from them, and a preview has to know. Only a function you
+ *   have, or its ARN, can be an output.
+ * - The function is a [`sst.aws.v5.Function`](/docs/component/aws/v5/function), and its
+ *   args are typed as that takes them. Args written the way `sst.aws.Function` takes them,
+ *   like `role` or `live`, still work, but don't type-check.
+ * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
  * - If you set part of the schedule's `target` with an object in `transform`, the rest
  *   of the target is kept.
  */
@@ -225,7 +339,15 @@ export class CronV2 extends component("sst:aws:CronV2", parts) {
 
     const event = output(args.event || {});
     const fn = args.function
-      ? functionPart(this, "function", args.function, {})
+      ? functionPart(
+          this,
+          "function",
+          plainFunction(
+            args.function,
+            `The "function" of the "${name}" cron job`,
+          ),
+          {},
+        )
       : undefined;
 
     // What the schedule runs, and what it takes to run it

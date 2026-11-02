@@ -324,10 +324,11 @@ Everything above applies. The rest is specific to SST's own components in
   create directly. The `Nextjs` is built that way: it builds its site in the program
   and creates what the build makes with `after()`, and it shares what the 4.x sites
   work out from a build in `site-code.ts`. So are the `Bucket`, the `Queue`, the `SnsTopic`, the
-  `Dynamo` and the `Bus`: the 4.x `Queue` and `SnsTopic` a bucket, a topic or a bus sends
-  to are reached through `AnyQueue` and `AnySnsTopic`, and a function any of them is
-  given goes through `plainFunction()`, so only a function that's already there, or its
-  ARN, can be an output. The ports before them
+  `Dynamo`, the `Bus` and the `CronV2`: the 4.x `Queue` and `SnsTopic` a bucket, a topic
+  or a bus sends to are reached through `AnyQueue` and `AnySnsTopic`, the 4.x `Task` a
+  cron job runs through `AnyTask`, and a function any of them is given goes through
+  `plainFunction()`, so only a function that's already there, or its ARN, can be an
+  output. The ports before them
   reuse the original's, as below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
@@ -389,6 +390,7 @@ Everything above applies. The rest is specific to SST's own components in
 | Serving a component through a `Router` | `RouteArgs`, `AnyRouter`, `routeOf(route)` in `helpers/router.ts` |
 | A `bucket` arg: either kind of `Bucket` | `AnyBucket` in `helpers/bucket.ts` |
 | A `queue` or `topic` arg: either kind of `Queue` or `SnsTopic` | `AnyQueue` in `helpers/queue.ts`, `AnySnsTopic` in `helpers/sns-topic.ts` |
+| A `task` arg: either kind of `Task` | `AnyTask` in `helpers/task.ts` |
 | Building a site in the program, with what it links | `buildSite()` in `helpers/site-build.ts` |
 | A site's files, key-value entries and invalidation, as the 4.x sites make them | `siteFiles()`, `siteKvEntries()`, `siteInvalidation()` in `site-code.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |

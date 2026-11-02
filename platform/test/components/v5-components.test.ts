@@ -28,6 +28,7 @@ const rebuilt = [
   "sns-topic.ts",
   "dynamo.ts",
   "bus.ts",
+  "cron-v2.ts",
 ];
 
 describe("V5 components", () => {
