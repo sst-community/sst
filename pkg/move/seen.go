@@ -5,6 +5,8 @@ import (
 	"sort"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/providers"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 )
 
 // Seen checks that the steps are all of the preview's, against what its
@@ -19,13 +21,19 @@ func Seen(steps []apitype.StepEventMetadata, summary *apitype.SummaryEvent) erro
 	counts := func(op apitype.OpType) bool {
 		return op != apitype.OpSame && op != apitype.OpRead && op != apitype.OpRefresh
 	}
+	// nor the steps Pulumi keeps to itself, like a default provider created
+	// or deleted, as when a move first uses SST's own provider
+	internal := func(step apitype.StepEventMetadata) bool {
+		return step.Op == apitype.OpRemovePendingReplace || step.Op == "extend-parameterize" ||
+			providers.IsDefaultProvider(resource.URN(step.URN))
+	}
 	seen := map[apitype.OpType]int{}
 	// A step can be reported twice: a component's, once when it's registered
 	// and once with its outputs
 	once := map[string]bool{}
 	for _, step := range steps {
 		key := string(step.Op) + " " + step.URN
-		if !step.Logical || !counts(step.Op) || once[key] {
+		if !step.Logical || !counts(step.Op) || internal(step) || once[key] {
 			continue
 		}
 		once[key] = true

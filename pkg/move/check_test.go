@@ -460,6 +460,10 @@ func TestSeen(t *testing.T) {
 		step(apitype.OpCreateReplacement, code),
 		logical(step(apitype.OpReplace, code)),
 		step(apitype.OpDeleteReplaced, code),
+		// Default providers, which the summary doesn't count: SST's own,
+		// first used, and one nothing uses any more
+		logical(step(apitype.OpCreate, "urn:pulumi:dev::app::pulumi:providers:sst::default")),
+		logical(step(apitype.OpDelete, "urn:pulumi:dev::app::pulumi:providers:command::default_1_2_1")),
 	}
 	summary := &apitype.SummaryEvent{ResourceChanges: map[apitype.OpType]int{
 		apitype.OpSame: 4, apitype.OpDelete: 1, apitype.OpCreate: 1, apitype.OpReplace: 1,
