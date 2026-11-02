@@ -9,6 +9,7 @@ import {
   ComponentResource,
   all,
   output,
+  runtime,
 } from "@pulumi/pulumi";
 import { Component } from "./component";
 import { hashStringToPrettyString, logicalName } from "./naming";
@@ -170,6 +171,9 @@ export class PartsComponent<P extends Parts> extends Component {
   // Resources created through `delegateOpts()`
   private readonly partDelegated = new WeakSet<object>();
   private runningLocally = false;
+  // What `after()` is creating, once it's called: the `nodes` of a deferred
+  // part wait for it
+  private creating?: Promise<void>;
   // What the component reported to the core, and whether its outputs, which
   // carry it, are registered
   private reported?: Report;
@@ -368,6 +372,43 @@ export class PartsComponent<P extends Parts> extends Component {
       ? rest
       : [undefined, ...rest];
     return this.lookUp(key, id, resourceId, opts);
+  }
+
+  /**
+   * Create the rest of the parts once something they're made from is ready,
+   * like a site's build: `create` is called with it, and creates them with
+   * `this.part()`. What it returns is what the promise `after()` returns
+   * resolves to. Until it has, the `nodes` entry of a part declared with
+   * `deferred()` is an output that resolves to what `create` created, and to
+   * `undefined` for one it didn't. Declare a part it may not create with
+   * `deferred(optional(...))`.
+   *
+   * The program waits for `create`, and an error in it fails the deploy. A
+   * preview runs it too, so `ready` has to resolve in a preview: decide what's
+   * created from what a preview knows. A site's build leaves out the values a
+   * preview doesn't know.
+   *
+   * @example
+   * ```ts
+   * this.after(buildSite({ ... }), (sitePath) => {
+   *   this.part("server", { handler: "index.handler", bundle: sitePath });
+   * });
+   * ```
+   */
+  protected after<T, R>(
+    ready: Promise<T>,
+    create: (value: T) => R | Promise<R>,
+  ): Promise<R> {
+    const done = runtime.rpcKeepAlive();
+    const created = ready.then(create).finally(done);
+    // A failure fails the deploy once, from `created`. The `nodes` waiting
+    // on it resolve to what was created.
+    const settled = created.then(
+      () => {},
+      () => {},
+    );
+    this.creating = (this.creating ?? Promise.resolve()).then(() => settled);
+    return created;
   }
 
   /**
@@ -620,7 +661,10 @@ export class PartsComponent<P extends Parts> extends Component {
         `Cannot access \`nodes.${key}\` of "${this.componentName}" in \`sst dev\`. It runs locally there, so the resource isn't created.`,
       );
 
-    if (!isMany(part)) return deferred ? deferred() : created;
+    if (!isMany(part)) {
+      if (deferred) return deferred();
+      return isDeferred(part) && this.creating ? this.whenCreated(key) : created;
+    }
     // Held by id on an object with no prototype, so `id in nodes.route` is
     // only true for a route that exists, whatever the id is.
     if (!isDeferred(part)) return Object.assign(byId(), created);
@@ -630,10 +674,20 @@ export class PartsComponent<P extends Parts> extends Component {
     for (const id of Object.keys({ ...deferred, ...created })) {
       Object.defineProperty(many, id, {
         enumerable: true,
-        get: () => (deferred?.[id] ? deferred[id]() : output(created[id])),
+        get: () =>
+          deferred?.[id]
+            ? deferred[id]()
+            : this.creating
+              ? this.whenCreated(key, id)
+              : output(created[id]),
       });
     }
     return many;
+  }
+
+  // A deferred part's resource, once `after()` has created what it creates
+  private whenCreated(key: string, id?: string) {
+    return output(this.creating!.then(() => at(this.partNodes, key, id)));
   }
 
   private existingOf(key: string, id?: string, opts?: CustomResourceOptions) {

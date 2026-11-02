@@ -20,6 +20,7 @@ import "./efs";
 import "./email";
 import "./function";
 import "./mysql";
+import "./nextjs";
 import "./postgres";
 import "./queue";
 import "./redis";

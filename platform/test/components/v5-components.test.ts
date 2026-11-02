@@ -15,7 +15,7 @@ const files = fs
 
 // The 5.0 rewrite makes a clean break from 4.x code. These are built the 5.0
 // way; the others still lean on 4.x until each is rebuilt.
-const rebuilt = ["vpc.ts", "function.ts", "router.ts"];
+const rebuilt = ["vpc.ts", "function.ts", "router.ts", "nextjs.ts"];
 
 describe("V5 components", () => {
   let takeoverOf: typeof import("../../src/components/takeover").takeoverOf;

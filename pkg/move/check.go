@@ -5,8 +5,9 @@
 // A move may keep a resource, at its address or at a new one, and update it in
 // place. Anything else has to be allowed:
 //
-//   - A resource with nothing in the cloud behind it, a component or a
-//     provider, may leave the state or be created.
+//   - A resource with nothing in the cloud behind it, a component, a
+//     provider, or a command run on this machine without a delete command,
+//     may leave the state or be created.
 //   - A resource the map releases leaves the state without its delete being
 //     called. The part in its place is created, and writes the same thing
 //     again or adopts it.
@@ -349,10 +350,13 @@ func isReplace(op apitype.OpType) bool {
 	return false
 }
 
-// A resource with nothing behind it in the cloud: a component, the stack, or
-// a provider
+// A resource with nothing behind it in the cloud: a component, the stack, a
+// provider, or a command run on this machine
 func isCustom(step apitype.StepEventMetadata) bool {
 	if strings.HasPrefix(step.Type, "pulumi:providers:") || step.Type == "pulumi:pulumi:Stack" {
+		return false
+	}
+	if isLocalCommand(step) {
 		return false
 	}
 	for _, state := range []*apitype.StepEventStateMetadata{step.New, step.Old} {
@@ -361,6 +365,24 @@ func isCustom(step apitype.StepEventMetadata) bool {
 		}
 	}
 	// Without either, it's taken as one, which only makes the check stricter
+	return true
+}
+
+// A command run on this machine, like the build of a 4.x site. Deleting one
+// runs its delete command, so only one without a delete command has nothing
+// behind it.
+func isLocalCommand(step apitype.StepEventMetadata) bool {
+	if step.Type != "command:local:Command" {
+		return false
+	}
+	for _, state := range []*apitype.StepEventStateMetadata{step.Old, step.New} {
+		if state == nil {
+			continue
+		}
+		if command, ok := state.Inputs["delete"].(string); ok && command != "" {
+			return false
+		}
+	}
 	return true
 }
 

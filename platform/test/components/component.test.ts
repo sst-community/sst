@@ -294,8 +294,6 @@ describe("Component parts", () => {
     class Later extends component("acme:index:Later", parts) {
       constructor(name: string) {
         super(name);
-        // @ts-expect-error A deferred part isn't created with `part()`
-        (): unknown => this.part("bucket", {});
         const part = this.partHandle("bucket");
         const bucket = output("ready").apply(
           () => new aws.s3.Bucket(part.name, {}, part.opts),

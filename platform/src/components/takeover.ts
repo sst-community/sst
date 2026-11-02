@@ -34,6 +34,11 @@ export interface OldAddress {
          * created for.
          */
         beside?: Resource;
+        /**
+         * The component that one was created in. A 4.x site kept its warmer
+         * in a component of its own, inside the site.
+         */
+        within?: Resource;
       };
 }
 
@@ -213,7 +218,16 @@ function addressOf(old: OldAddress) {
     return { name: old.name, parent: rootStackResource };
   if (!old.parent) return { name: old.name };
 
-  const { type, name, beside } = old.parent;
+  const { type, name, beside, within } = old.parent;
+  // The address of `within`, with the type and the name added
+  if (within)
+    return {
+      name: old.name,
+      parent: all([within.urn, name]).apply(([urn, name]) => {
+        const [stack, project, types] = urn.split("::");
+        return [stack, project, `${types}$${type}`, name].join("::");
+      }),
+    };
   if (!beside)
     return {
       name: old.name,

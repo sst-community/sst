@@ -504,21 +504,24 @@ export function mockPulumi(input?: MockInput) {
     /**
      * Lets pending `.apply()` chains and registrations finish: waits until
      * nothing new has been registered for a few rounds, resources or a
-     * component's outputs, and nothing is being read or written on disk.
+     * component's outputs, nothing is being read or written on disk, and no
+     * command is running.
      */
     async settle() {
-      // A function's code is zipped on disk, which takes real time, and more
-      // of it when other test files run alongside. What's registered after
-      // the zip would otherwise be missed.
-      const onDisk = () =>
+      // A function's code is zipped on disk, and a site is built by a command,
+      // which take real time, and more of it when other test files run
+      // alongside. What's registered after them would otherwise be missed.
+      const busy = () =>
         process
           .getActiveResourcesInfo()
-          .some((resource) => /^(FSReq|FileHandle|Zlib)/i.test(resource));
+          .some((resource) =>
+            /^(FSReq|FileHandle|Zlib|ProcessWrap)/i.test(resource),
+          );
       for (let quiet = 0, seen = -1; quiet < 3; ) {
         for (let i = 0; i < 50; i++)
           await new Promise((resolve) => setImmediate(resolve));
         await new Promise((resolve) => setTimeout(resolve, 2));
-        quiet = activity === seen && !onDisk() ? quiet + 1 : 0;
+        quiet = activity === seen && !busy() ? quiet + 1 : 0;
         seen = activity;
       }
     },

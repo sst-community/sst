@@ -1,4 +1,4 @@
-import { Input, Output, all } from "@pulumi/pulumi";
+import { Input, Output, all, output } from "@pulumi/pulumi";
 import { DurationSeconds } from "../../duration";
 import { VisibleError } from "../../error";
 import type { Router as OriginalRouter } from "../router";
@@ -194,14 +194,14 @@ export function routeOf(route: RouteArgs) {
       ? router._signs
       : router._protection.apply((p: ProtectionConfig) => isSigning(p.mode));
   return {
+    /** The path it's served under, like `/docs`, without what the router gives. */
+    pathPrefix: output(rest.path).apply(pathPrefixOf),
     route: all([rest, router._hasInlineRoutes]).apply(([route, inline]) => {
       if (inline)
         throw new VisibleError(
           "Cannot route the site using the provided router. The Router component uses inline routes which has been deprecated.",
         );
-      const pathPrefix = route.path
-        ? "/" + route.path.replace(/^\//, "").replace(/\/$/, "")
-        : undefined;
+      const pathPrefix = pathPrefixOf(route.path);
       return {
         hostPattern: route.domain
           ? route.domain
@@ -228,4 +228,9 @@ export function routeOf(route: RouteArgs) {
     }),
     signs,
   };
+}
+
+// A route's path as the router matches it: `/docs`, from `docs/` or `/docs`
+function pathPrefixOf(path?: string) {
+  return path ? "/" + path.replace(/^\//, "").replace(/\/$/, "") : undefined;
 }

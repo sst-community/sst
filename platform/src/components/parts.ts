@@ -19,33 +19,44 @@ import type { PartTransform, PartialArgs } from "./transform";
  */
 export type Parts = Record<string, UnnamedPart | NamedPart>;
 
-type UnnamedPart = PartClass | DeferredPart | ManyPart | OptionalPart;
+type UnnamedPart =
+  | PartClass
+  | DeferredPart<PartClass | OptionalPart>
+  | ManyPart
+  | OptionalPart;
 
 export type PartClass = new (name: string, args: any, opts?: any) => any;
 
 /** A part declared with `deferred()`. */
-export interface DeferredPart<C extends PartClass = PartClass> {
+export interface DeferredPart<C extends PartClass | OptionalPart = PartClass> {
   deferred: C;
 }
 
 /**
  * Declare a part that is created later, or not at all. A subscriber's
  * function is one: it's created once the definition is known, and it isn't
- * created when the user passes the ARN of a function they already have.
+ * created when the user passes the ARN of a function they already have. A
+ * site's server is another: it's created once the site is built.
  *
- * The part's entry in `nodes` is an `Output` of the resource. Create the
- * function with `functionPart()`.
+ * The part's entry in `nodes` is an `Output` of the resource. Create a
+ * function from a definition with `functionPart()`. Create anything else with
+ * `this.part()` in what `this.after()` runs. Wrap a part that may not be
+ * created at all in `optional()`: its entry is then an `Output` that may be
+ * `undefined`.
  *
  * ```ts
  * const parts = () => ({
  *   subscriber: deferred(Function),
  *   eventSourceMapping: aws.lambda.EventSourceMapping,
+ *   cache: deferred(optional(aws.dynamodb.Table)),
  * });
  *
  * functionPart(this, "subscriber", "src/subscriber.handler", {});
  * ```
  */
-export function deferred<C extends PartClass>(cls: C): DeferredPart<C> {
+export function deferred<C extends PartClass | OptionalPart>(
+  cls: C,
+): DeferredPart<C> {
   return { deferred: cls };
 }
 
@@ -138,7 +149,7 @@ export type PartClassOf<T> =
   T extends NamedPart<infer U>
     ? PartClassOf<U>
     : T extends DeferredPart<infer C>
-      ? C
+      ? PartClassOf<C>
       : T extends ManyPart<infer M>
         ? PartClassOf<M>
         : T extends OptionalPart<infer C>
@@ -155,7 +166,9 @@ export function partClass(part: Parts[string] | DeferredPart): PartClass {
   const declared = unnamed(part);
   if (typeof declared === "function") return declared;
   if ("many" in declared) return partClass(declared.many);
-  return "optional" in declared ? declared.optional : declared.deferred;
+  return "optional" in declared
+    ? declared.optional
+    : partClass(declared.deferred);
 }
 
 /** Whether a part's resources are created later, or not at all. */
@@ -207,18 +220,25 @@ export type Transforms<P extends Parts> = {
  */
 export type Nodes<P extends Parts> = {
   [K in keyof P]: Unnamed<P[K]> extends DeferredPart<infer C>
-    ? Output<InstanceType<C>>
+    ? DeferredNode<C>
     : Unnamed<P[K]> extends ManyPart<infer M>
       ? Record<
           string,
           M extends DeferredPart<infer C>
-            ? Output<InstanceType<C>>
+            ? DeferredNode<C>
             : InstanceType<PartClassOf<M>>
         >
       : Unnamed<P[K]> extends OptionalPart<infer C>
         ? InstanceType<C> | undefined
         : InstanceType<PartClassOf<P[K]>>;
 };
+
+// A deferred part's entry in `nodes`: an output of its resource, which may be
+// `undefined` for one that's also optional
+type DeferredNode<C> =
+  C extends OptionalPart<infer D>
+    ? Output<InstanceType<D> | undefined>
+    : Output<InstanceType<PartClassOf<C>>>;
 
 /**
  * The `existing` option for a component: resources to use in place of ones
@@ -288,12 +308,8 @@ export type ManyKeys<P extends Parts> = {
 export type SingleKeys<P extends Parts> = Exclude<keyof P & string, ManyKeys<P>>;
 
 /**
- * The parts `this.part()` creates. A deferred part is left out: it's created
- * with `functionPart()`, which makes its `nodes` entry an `Output`.
+ * The parts `this.part()` creates: all of them. A deferred one is created
+ * there in what `this.after()` runs, and a deferred function from a definition
+ * with `functionPart()`.
  */
-export type CreatedKeys<P extends Parts> = {
-  [K in keyof P]: Unnamed<P[K]> extends DeferredPart | ManyPart<DeferredPart>
-    ? never
-    : K;
-}[keyof P] &
-  string;
+export type CreatedKeys<P extends Parts> = keyof P & string;

@@ -20,6 +20,7 @@ export * from "./efs";
 export * from "./email";
 export * from "./function";
 export * from "./mysql";
+export * from "./nextjs";
 export * from "./postgres";
 export * from "./queue";
 export * from "./redis";

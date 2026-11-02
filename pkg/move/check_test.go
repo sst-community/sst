@@ -127,6 +127,21 @@ func TestNothingInTheCloud(t *testing.T) {
 	assert.Len(t, r.Created, 2)
 }
 
+// A 4.x site builds with a command run on this machine, which the V5 one
+// doesn't keep in the state
+func TestLocalCommand(t *testing.T) {
+	builder := urn("sst:aws:Nextjs$command:local:Command", "WebBuilder")
+	r := Check([]apitype.StepEventMetadata{step(apitype.OpDelete, builder)}, nil)
+	assert.Empty(t, problems(r))
+	assert.Len(t, r.Left, 1)
+
+	// Deleting one with a delete command runs it
+	withDelete := step(apitype.OpDelete, builder)
+	withDelete.Old.Inputs = map[string]interface{}{"delete": "rm -rf build"}
+	r = Check([]apitype.StepEventMetadata{withDelete}, nil)
+	assert.Len(t, problems(r), 1)
+}
+
 func TestCreatesAndDeletesNeedTheMap(t *testing.T) {
 	steps := []apitype.StepEventMetadata{
 		step(apitype.OpCreate, urn("sst:aws:Function$aws:lambda:Permission", "ApiUrlAccess")),
