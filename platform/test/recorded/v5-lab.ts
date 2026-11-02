@@ -25,6 +25,22 @@ export function router(aws: Components) {
   return new aws.Router("Router", { domain: `sites.v5lab.${zone}` });
 }
 
+/**
+ * The sites group's Next.js site, at the router's root. The lab builds it
+ * with OpenNext; a test builds it with `buildCommand`, from files it makes.
+ */
+export function next(
+  aws: Components,
+  instance: InstanceType<Components["Router"]>,
+  buildCommand?: string,
+) {
+  return new aws.Nextjs("Next", {
+    path: "sites/next",
+    router: { instance },
+    buildCommand,
+  });
+}
+
 export function serverless(aws: Components) {
   const uploads = new aws.Bucket("Uploads");
   uploads.notify({

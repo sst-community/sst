@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mockPulumi } from "../../helpers/graph";
 import { SECRET, SIG } from "../../../src/testing/state";
 
@@ -71,7 +71,9 @@ function replay(file: string, stage: string) {
         .readFileSync(path.join(states, file), "utf8")
         .replaceAll("/home/user/v5-lab", app),
     ),
-    sourcemaps: () => [sourcemap],
+    // OpenNext bundles a site's functions itself, without source maps
+    sourcemaps: (functionID) =>
+      functionID.startsWith("Next") ? [] : [sourcemap],
     call: (args) => lookups[args.token]?.(args.inputs),
     // The lab account's bootstrap, where functions' code went
     cli: (method) =>
@@ -207,6 +209,13 @@ function keepsSecrets(result: Run["result"], built: boolean) {
 // Orders the 4.x components remove resources in that nothing in AWS needs
 function needless(order: string) {
   return (
+    // A 4.x site creates what it makes from its build inside an apply that
+    // waits for the router's outputs, as in the Nextjs suite. Nothing about
+    // the site's server or its entries needs the router's distribution or
+    // store removed after them.
+    /^Next(Server\w+Function|KvKeys\.sst\.aws\.KvKeys) before Router(KvStore|CdnDistribution)$/.test(
+      order,
+    ) ||
     // A 4.x route or authorizer function depends on the API, as in the
     // ApiGatewayV2 suite
     /Function before ApiApi$/.test(order) ||
@@ -271,6 +280,155 @@ describe("the lab's router, as v4.23.1 deployed it", () => {
     expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
     expect(result.revealed).toEqual([]);
   });
+});
+
+// The lab's Next.js site as OpenNext built it for the recording: the files
+// it uploaded, its build id, and the functions OpenNext made. Their contents
+// aren't in the state, only their hashes, so the files differ in those.
+const NEXT_BUILD = "HLZHFoR50xzPRABLSxHHA";
+function writeNextBuild(dir: string, files: string[]) {
+  const write = (file: string, content: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), content);
+  };
+  const handler = "export const handler = async () => ({});";
+  write(".next/BUILD_ID", NEXT_BUILD);
+  write(".next/routes-manifest.json", JSON.stringify({ basePath: "" }));
+  write(
+    ".next/prerender-manifest.json",
+    JSON.stringify({ routes: { "/about": {}, "/_not-found": {} } }),
+  );
+  write(
+    ".open-next/open-next.output.json",
+    JSON.stringify({
+      edgeFunctions: {},
+      origins: {
+        s3: { type: "s3", originPath: "_assets", copy: [] },
+        default: {
+          type: "function",
+          handler: "index.handler",
+          bundle: ".open-next/server-functions/default",
+        },
+        imageOptimizer: {
+          type: "function",
+          handler: "index.handler",
+          bundle: ".open-next/image-optimization-function",
+        },
+      },
+      behaviors: [],
+      additionalProps: {
+        initializationFunction: {
+          handler: "index.handler",
+          bundle: ".open-next/initialization-function",
+        },
+        revalidationFunction: {
+          handler: "index.handler",
+          bundle: ".open-next/revalidation-function",
+        },
+      },
+    }),
+  );
+  for (const bundle of [
+    "server-functions/default",
+    "image-optimization-function",
+    "revalidation-function",
+    "dynamodb-provider",
+  ])
+    write(`.open-next/${bundle}/index.mjs`, handler);
+  for (const key of files)
+    write(
+      key
+        .replace(/^_assets\//, ".open-next/assets/")
+        .replace(/^_cache\//, ".open-next/cache/"),
+      key,
+    );
+}
+
+describe("the lab's Next.js site, as v4.23.1 deployed it", () => {
+  const site = path.join(app, "sites/next");
+  let run: Run;
+  beforeAll(async () => {
+    const pulumi = replay("serverless-sites.json", "rec");
+    const recorded = JSON.parse(
+      fs.readFileSync(path.join(states, "serverless-sites.json"), "utf8"),
+    ).checkpoint.latest.resources.find((r: any) =>
+      r.urn.endsWith("::NextAssetFiles.sst.aws.BucketFiles"),
+    );
+    writeNextBuild(
+      site,
+      recorded.inputs.files.map((file: { key: string }) => file.key),
+    );
+    const aws = await import("../../../src/components/aws/index");
+    const lab = await import("../../recorded/v5-lab");
+    run = await pulumi.takesOverState(
+      () => lab.next(aws as any, lab.router(aws as any), "true"),
+      () => lab.next(aws.v5 as any, lab.router(aws.v5 as any), "true"),
+      // Everything but the router and the site: the serverless group, the
+      // other sites, and the link references
+      (r) =>
+        r.type === "sst:sst:LinkRef" ||
+        !/^(Router|Next)/.test(
+          r.parent ? r.parent.split("::").at(-1)! : r.name,
+        ),
+    );
+  });
+  afterAll(() =>
+    fs.rmSync(path.join(app, "sites"), { recursive: true, force: true }),
+  );
+
+  // What changed, by name and field. The values aren't shown: the 4.x
+  // build command's are the machine's environment.
+  const fields = (changed: Run["result"]["changed"]) =>
+    changed.map(({ name, fields }) => [name, fields]);
+
+  it("is what the 4.x Nextjs deploys, but for what a build changes", () => {
+    const { deployed } = run;
+    expect(deployed.unclaimed).toEqual([]);
+    expect(deployed.created).toEqual([]);
+    // A 4.x site changes on every deploy: it's built again, with new hashes
+    expect(fields(deployed.changed)).toEqual([
+      // The command that built it runs again, here the test's
+      ["NextBuilder", ["create", "environment", "triggers", "update"]],
+      // Since v4.23.1, a subscriber's function is named without "Function"
+      // twice (#214), so its code is uploaded under a new key
+      ["NextRevalidationEventsSubscriberDsnwmmFunctionCode", ["key"]],
+      // The test's files aren't what was built, only where it was
+      ["NextAssetFiles.sst.aws.BucketFiles", ["files"]],
+      // The mock's stand-in for the CLI's build names the handler of a
+      // function given a bundle another way
+      ["NextRevalidationSeederFunction", ["handler"]],
+      ["NextRevalidationEventsSubscriberDsnwmmFunctionFunction", ["handler"]],
+      // 4.x seeds the ISR table on every deploy
+      ["NextRevalidationSeed", ["triggers"]],
+      ["NextImageOptimizerFunction", ["handler"]],
+    ]);
+    expect(deployed.unordered).toEqual([]);
+    expect(deployed.revealed).toEqual([]);
+  });
+
+  it("is taken over by the V5 Nextjs", () => {
+    const { result } = run;
+    // What has nothing in the cloud behind it: the command that built the
+    // site, and the revalidation subscriber's wrapper
+    expect(result.unclaimed).toEqual([
+      "command:local:Command::NextBuilder",
+      "sst:aws:QueueLambdaSubscriber::NextRevalidationEventsSubscriberDsnwmm",
+    ]);
+    expect(result.created).toEqual([]);
+    expect(fields(result.changed)).toEqual([
+      // The revalidation subscriber moves into its queue, and its name with
+      // it: the path of its links' file, and the key of its code, which the
+      // V5 Function's state map lists as replaced
+      ["NextRevalidationEventsSubscriberDsnwmmFunction", ["environment"]],
+      // Seeded again once, then when what it seeds changes
+      ["NextRevalidationSeed", ["triggers"]],
+      ["NextRevalidationEventsSubscriberDsnwmmCode", ["key"]],
+    ]);
+    expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
+  });
+
+  it("keeps secret what was secret, but for what's made from a function's ARN", () =>
+    keepsSecrets(run.result, true));
 });
 
 describe("the lab's serverless group, as v4.23.1 deployed it in sst dev", () => {
