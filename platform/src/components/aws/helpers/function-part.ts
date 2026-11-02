@@ -45,6 +45,56 @@ export type FunctionDefinition = Input<
   | Workflow
 >;
 
+/**
+ * A function to run: the handler of one to create, its args, a function you
+ * already have, or the ARN of one. A handler and the args are plain values,
+ * since whether a function is created is decided from them. A function you
+ * have, or its ARN, can be an output.
+ */
+export type FunctionInput =
+  | Input<string>
+  | FunctionArgs
+  | Input<Function>
+  | Input<OriginalFunction>
+  | Input<Workflow>;
+
+/**
+ * A function a component takes the 5.0 way, checked: what's created is
+ * decided from what was passed, and a preview has to know it, so only a
+ * function that's already there, or its ARN, can be an output. Pass what it
+ * returns to `functionPart()`.
+ *
+ * ```ts
+ * functionPart(this, "subscriber", plainFunction(args.subscriber, `The subscriber of the "${name}" queue`), {});
+ * ```
+ *
+ * @param what The arg, for the error.
+ */
+export function plainFunction(
+  definition: FunctionInput,
+  what: string,
+): FunctionDefinition {
+  if (
+    !Output.isInstance(definition) &&
+    typeof (definition as any)?.then !== "function"
+  )
+    return definition;
+  // What it resolves to creates nothing, so it can wait for the deploy
+  return output(definition as Input<any>).apply((value: unknown) => {
+    if (typeof value === "string" && value.startsWith("arn:"))
+      return value as FunctionArn;
+    if (
+      value instanceof Function ||
+      value instanceof OriginalFunction ||
+      value instanceof Workflow
+    )
+      return value;
+    throw new VisibleError(
+      `${what} is an output that isn't a function or the ARN of one. A handler or the function's args have to be a plain value, since whether a function is created is decided from them. To use a function you have, pass the function itself or its ARN.`,
+    );
+  });
+}
+
 /** Args a component adds to its function. Its link, environment and permissions are added to the user's. */
 export type FunctionDefaults = Pick<
   FunctionArgs,

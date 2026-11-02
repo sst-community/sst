@@ -319,23 +319,26 @@ Everything above applies. The rest is specific to SST's own components in
   their args are their own, docs included, and `v5-components.test.ts` lists them and
   checks what they import. A 4.x component they take is reached through a helper that
   takes either kind, as above. The `Router` is built that way too, on a V5 `Cdn`, with
-  the CloudFront code it shares with the 4.x one and the sites in `router-code.ts`. The
-  `Cdn` isn't yet: its certificate and its redirect are the 4.x ones, which every
-  component with a domain shares, and they're rebuilt with the DNS adapters, which
-  still create their records inside `.apply()`. The `Nextjs` is built that way: it
-  builds its site in the program and creates what the build makes with `after()`, and it
-  shares what the 4.x sites work out from a build in `site-code.ts`. The ports before them reuse the
-  original's, as below, until each is rebuilt and added to that list.
+  the CloudFront code it shares with the 4.x one and the sites in `router-code.ts`. So
+  is the `Cdn`, with the 5.0 certificate and redirect, whose DNS records the adapters
+  create directly. The `Nextjs` is built that way: it builds its site in the program
+  and creates what the build makes with `after()`, and it shares what the 4.x sites
+  work out from a build in `site-code.ts`. So is the `Bucket`: the 4.x `Queue` and
+  `SnsTopic` it notifies are reached through `AnyQueue` and `AnySnsTopic`, and a
+  function it's given goes through `plainFunction()`, so only a function that's already
+  there, or its ARN, can be an output. The ports before them reuse the original's, as
+  below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
   the mock's `reset()` start a new run with `newRun()`, so a test sees what a run
   creates whatever ran before it. Both `Function`s share theirs from
   `helpers/function-shared.ts`.
-- **Reuse the original's arg types**: `interface QueueArgs extends
-  V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare only what has to
-  change. For an arg that has to become a plain value, write
-  `cors?: Plain<OriginalBucketArgs["cors"]>` (`Plain` is in `args.ts`): the docs generator follows it back to the original's docs.
+- **A port that isn't rebuilt yet reuses the original's arg types**: `interface
+  QueueArgs extends V5Args<OriginalQueueArgs, typeof parts> {}`. `Omit` and re-declare
+  only what has to change. For an arg that has to become a plain value, write
+  `triggers?: Plain<OriginalCognitoUserPoolArgs["triggers"]>` (`Plain` is in
+  `args.ts`): the docs generator follows it back to the original's docs.
   An arg's docs come with it, examples included. Where an example creates a component
   that has a V5 form (`new sst.aws.Queue("MyQueue", { dlq })`, `sst.aws.Vpc.get(...)`),
   the docs generator writes the V5 one on the V5 page. So declare an arg again only
@@ -367,6 +370,7 @@ Everything above applies. The rest is specific to SST's own components in
 | For | Use |
 | --- | --- |
 | A function from a handler, args, an ARN, a function or a `Workflow` | `functionPart()` in `helpers/function-part.ts` |
+| A function arg, built the 5.0 way: a handler or args as a plain value, or a function or its ARN, which can be an output | `FunctionInput`, and `plainFunction(definition, what)` before `functionPart()`, in `helpers/function-part.ts` |
 | Letting a service invoke that function | `invokePermissionArgs(fn, principal, sourceArn)` in `helpers/function-permission.ts` |
 | A custom domain (`name`, `dns`, `cert`) | `customDomain()` and `CustomDomainArgs` in `helpers/custom-domain.ts` |
 | Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
@@ -383,6 +387,7 @@ Everything above applies. The rest is specific to SST's own components in
 | An `efs` arg: either kind of `Efs`, or an access point's ARN | `AnyEfs`, `isEfs(value)` in `helpers/efs.ts` |
 | Serving a component through a `Router` | `RouteArgs`, `AnyRouter`, `routeOf(route)` in `helpers/router.ts` |
 | A `bucket` arg: either kind of `Bucket` | `AnyBucket` in `helpers/bucket.ts` |
+| A `queue` or `topic` arg: either kind of `Queue` or `SnsTopic` | `AnyQueue` in `helpers/queue.ts`, `AnySnsTopic` in `helpers/sns-topic.ts` |
 | Building a site in the program, with what it links | `buildSite()` in `helpers/site-build.ts` |
 | A site's files, key-value entries and invalidation, as the 4.x sites make them | `siteFiles()`, `siteKvEntries()`, `siteInvalidation()` in `site-code.ts` |
 | An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |

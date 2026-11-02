@@ -4,19 +4,40 @@ import { mockPulumi, type TakeoverWay } from "../../helpers/graph";
 
 // A policy document is worked out by AWS. Here it's the statements it's given,
 // so two policies compare equal when their statements are the same. A bucket
-// that's looked up is named what it was looked up by, and so is a bus.
+// that's looked up is named what it was looked up by, and so is a bus. A
+// function that publishes versions, like a workflow's, is invoked by its
+// version.
 const pulumi = mockPulumi({
   state: (args) =>
     args.type === "aws:s3/bucket:Bucket" && args.id
       ? { bucket: args.id }
       : args.type === "aws:cloudwatch/eventBus:EventBus" && args.id
         ? { name: args.id }
-        : {},
+        : args.type === "aws:lambda/function:Function"
+          ? versioned(`arn:aws:mock:us-east-1:123456789012:${args.name}`)
+          : {},
   call: (args) =>
     args.token === "aws:iam/getPolicyDocument:getPolicyDocument"
       ? { json: JSON.stringify(sorted(args.inputs)) }
       : undefined,
 });
+
+function versioned(arn: string) {
+  const invoke = (api: string, path: string) =>
+    `arn:aws:apigateway:us-east-1:lambda:path/${api}/functions/${arn}/${path}`;
+  return {
+    qualifiedArn: `${arn}:3`,
+    invokeArn: invoke("2015-03-31", "invocations"),
+    qualifiedInvokeArn: invoke("2015-03-31", "invocations").replace(
+      arn,
+      `${arn}:3`,
+    ),
+    responseStreamingInvokeArn: invoke(
+      "2021-11-15",
+      "response-streaming-invocations",
+    ),
+  };
+}
 
 function sorted(value: any): any {
   if (Array.isArray(value)) return value.map(sorted);
@@ -149,6 +170,13 @@ describe("Bucket", () => {
     pulumi.takeoverCases({
       original: () => OriginalBucket,
       v5: () => Bucket,
+      // A function that links the 4.x bucket waits for everything in it, its
+      // CORS rules too, and so do the permission and the notification made
+      // from the function. Nothing in AWS needs that: the CORS rules and the
+      // notification configuration are each a setting of the bucket of their
+      // own, removed with no regard to the other.
+      needlessOrder:
+        /^MyBucket(PermissionResizer|Notification) before MyBucketCors$/,
       cases: {
         ...Object.fromEntries(
           Object.entries(cases).map(([name, args]) => [
@@ -244,6 +272,30 @@ describe("Bucket", () => {
               "MyBucketSubscriberResizerLogGroup",
               "MyBucketSubscriberResizerRole",
             ]),
+        },
+        // A function's links go into its code, which the check compares, and
+        // a subscriber that links its own bucket has to be created at all
+        "a notification to a function that links the bucket": {
+          create: (Bucket, opts) => {
+            const bucket = new Bucket("MyBucket", {}, opts);
+            return bucket.notify({
+              notifications: [
+                {
+                  name: "Resizer",
+                  function: { handler: "src/resize.handler", link: [bucket] },
+                },
+              ],
+            } as NotifyArgs);
+          },
+          unclaimed: [WRAPPER],
+          changed: [
+            [
+              "MyBucketNotificationsNotificationResizerFunction",
+              ["description"],
+            ],
+          ],
+          check: () =>
+            expect(names()).toContain("MyBucketSubscriberResizerFunction"),
         },
         "eventBridge with a notification to a queue": {
           create: notify({
@@ -655,6 +707,131 @@ describe("Bucket", () => {
       ).toThrow(/The "name" of each notification of the "MyBucket" bucket has to be a plain value/);
       await pulumi.settle();
     });
+
+    // Whether a function is created is decided from what's given, which a
+    // preview has to know. An ARN creates nothing, so it can be an output.
+    it("takes a function in an output only as an ARN", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const bucket = new Bucket("MyBucket")
+        .notify({
+          eventBridge: true,
+          notifications: [{ name: "Auditor", function: output(FUNCTION_ARN) }],
+        })
+        .subscribeEventBridge("Resizer", output(FUNCTION_ARN));
+      await pulumi.settle();
+
+      expect(
+        pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+      ).toEqual([]);
+      expect(Object.keys(bucket.nodes.permission)).toEqual(["Auditor"]);
+      expect(Object.keys(bucket.nodes.eventBridgePermission)).toEqual([
+        "Resizer",
+      ]);
+      expect(
+        resource("MyBucketNotification").inputs.lambdaFunctions[0]
+          .lambdaFunctionArn,
+      ).toBe(FUNCTION_ARN);
+      expect(resource("MyBucketEventBridgeTargetResizer").inputs.arn).toBe(
+        FUNCTION_ARN,
+      );
+    });
+
+    it("turns down a handler or args in an output", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const { plainFunction } = await import(
+        "../../../src/components/aws/helpers/function-part"
+      );
+      const what = `The "function" of the "A" notification`;
+      for (const given of [
+        output("src/subscriber.handler"),
+        output({ handler: "src/subscriber.handler" }) as any,
+      ]) {
+        // The error is thrown inside an apply. Handle the promises Pulumi
+        // derives from the output too, or they're reported as unhandled.
+        const out = plainFunction(given, what) as any;
+        out.isKnown.catch(() => {});
+        out.isSecret.catch(() => {});
+        out.allResources?.().catch(() => {});
+        await expect(out.promise()).rejects.toThrow(
+          `${what} is an output that isn't a function or the ARN of one.`,
+        );
+      }
+      // What's plain is passed on as it is
+      const args = { handler: "src/subscriber.handler" };
+      expect(plainFunction(args, what)).toBe(args);
+      expect(plainFunction("src/subscriber.handler", what)).toBe(
+        "src/subscriber.handler",
+      );
+    });
+
+    it("takes a function you have, or an output of one", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const { Function } = await import(
+        "../../../src/components/aws/v5/function"
+      );
+      const { Function: OriginalFunction } = await import(
+        "../../../src/components/aws/function"
+      );
+      const { Workflow } = await import("../../../src/components/aws/workflow");
+      const mine = new Function("Mine", { handler: "src/mine.handler" });
+      const old = new OriginalFunction("Old", { handler: "src/old.handler" });
+      const flow = new Workflow("Flow", { handler: "src/flow.handler" });
+      new Bucket("MyBucket")
+        .notify({
+          eventBridge: true,
+          notifications: [
+            { name: "Mine", function: mine },
+            { name: "Old", function: old },
+            { name: "Flow", function: flow },
+            { name: "Later", function: output(mine) },
+          ],
+        })
+        .subscribeEventBridge("Resizer", output(old));
+      await pulumi.settle();
+
+      // No function of the bucket's own
+      expect(
+        names().filter((name) => /^MyBucket(EventBridge)?Subscriber/.test(name)),
+      ).toEqual([]);
+      const invoked = (permission: string) =>
+        resource(permission).inputs.function;
+      expect(invoked("MyBucketPermissionMine")).toMatch(/Mine/);
+      expect(invoked("MyBucketPermissionLater")).toBe(
+        invoked("MyBucketPermissionMine"),
+      );
+      expect(invoked("MyBucketPermissionOld")).toMatch(/Old/);
+      expect(invoked("MyBucketPermissionFlow")).toMatch(/Flow/);
+      expect(invoked("MyBucketEventBridgePermissionResizer")).toBe(
+        invoked("MyBucketPermissionOld"),
+      );
+    });
+
+    it("takes a queue or a topic in an output", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const queue = new OriginalQueue("Orders");
+      const topic = new OriginalSnsTopic("Uploads");
+      new Bucket("MyBucket").notify({
+        notifications: [
+          { name: "Orders", queue: output(queue) as any },
+          { name: "Uploads", topic: output(topic) as any },
+        ],
+      });
+      await pulumi.settle();
+
+      const { inputs } = resource("MyBucketNotification");
+      expect(inputs.queues[0].queueArn).toMatch(/Orders/);
+      expect(inputs.topics[0].topicArn).toMatch(/Uploads/);
+    });
+
+    // A subscriber that links its own bucket, a function given by its ARN in
+    // an output, and the rest: `bucket-preview.test.ts` runs the same as a
+    // new stage's preview, which has to plan all of it
+    it("creates what a new stage's preview plans", async () => {
+      const { EVERY_PART, everyPart } = await import("./bucket-every-part");
+      await everyPart();
+      await pulumi.settle();
+      expect(names()).toEqual(EVERY_PART);
+    });
   });
 
   describe("args", () => {
@@ -667,6 +844,20 @@ describe("Bucket", () => {
           new RegExp(`The "${arg}" of the "MyBucket" bucket has to be a plain value`),
         );
       await pulumi.settle();
+    });
+
+    it("takes cors: true as the default configuration", async () => {
+      new Bucket("MyBucket", { cors: true });
+      await pulumi.settle();
+      expect(resource("MyBucketCors").inputs.corsRules).toEqual([
+        {
+          allowedHeaders: ["*"],
+          allowedMethods: ["DELETE", "GET", "HEAD", "POST", "PUT"],
+          allowedOrigins: ["*"],
+          exposeHeaders: ["ETag"],
+          maxAgeSeconds: 0,
+        },
+      ]);
     });
 
     it("says where the options that are gone went", async () => {

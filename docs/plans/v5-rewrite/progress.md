@@ -2,6 +2,23 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Bucket` built the 5.0 way
+
+The first of the rest of Core, after the gate. The `Bucket` is the most used of them, and the sites and a router's bucket routes build on it.
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/bucket.ts`), with no 4.x component file imported, and on the clean break's list. The 4.x `Queue` and `SnsTopic` it can notify are reached through `AnyQueue` (`helpers/queue.ts`) and `AnySnsTopic` (`helpers/sns-topic.ts`).
+- **A function it's given is decided from what a preview knows.** A notification's `function`, and the subscriber of `subscribeEventBridge`, is a handler or args as a plain value, or a function or its ARN, which can be an output. `plainFunction()` in `helpers/function-part.ts` checks it, with `FunctionInput` as its type, and refuses a handler or args in an output with a message. The other components that create functions take it as each is rebuilt.
+- **`cors: true`** is taken, as its docs said.
+- **The rulebook** lists the new helpers and the `Bucket` among the components built the 5.0 way.
+
+**Checked:** `tsc`, the docs page, and all 2,194 platform tests. A new stage's preview plans exactly what a deploy creates for a bucket with a part of every kind (`bucket-preview.test.ts`). A notification whose function links the bucket switches with only the function's description changed. In 4.x its permission and the notification also waited for the bucket's CORS rules, which nothing in AWS needs; the test names that order with the reason.
+
+**Reviewed**, and fixed: the "Switch from" section lacked three changes (each notification is a plain value, a `transform` function for `cors` or `lifecycle` is given outputs, and the 4.x way of writing a function's args no longer type-checks); a lifecycle example with a prefix that matches nothing; an output of a function component, which creates nothing, was refused; and the tests the rulebook asks for.
+
+**Left:** the lab check, a 4.x deploy of a bucket with every feature (`LAB_ONLY=bucket` in the lab app), `--check`, the move and a comparison by id.
+
 ## 2026-11-02: `main` merged in, with credentials kept out of the state
 
 The maintainer asked to bring `main`'s fix for SST's Cloudflare and Vercel resources onto `v5-rewrite`.

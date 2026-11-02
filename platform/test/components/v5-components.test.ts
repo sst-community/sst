@@ -23,6 +23,7 @@ const rebuilt = [
   "cdn.ts",
   "dns-validated-certificate.ts",
   "https-redirect.ts",
+  "bucket.ts",
 ];
 
 describe("V5 components", () => {
