@@ -343,6 +343,12 @@ export function mockPulumi(input?: MockInput) {
     "stack",
     input?.preview ?? false,
   );
+  // The app's region, which the CLI sets for the AWS provider: the one a
+  // recorded stage was deployed in, or the one the lookups give
+  pulumi.runtime.setConfig(
+    "aws:region",
+    replay?.region(undefined) ?? "us-east-1",
+  );
 
   // The mocks above are not told about a resource's parent or options, so
   // read them off the registration request itself.

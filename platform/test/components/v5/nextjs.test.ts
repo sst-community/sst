@@ -10,6 +10,8 @@ const DYNAMIC = "pulumi-nodejs:dynamic:Resource";
 const FUNCTION_URL =
   "https://abcdefghijklmnopqrstuvwxyz012345.lambda-url.us-east-1.on.aws/";
 const EDGE_ARN = "arn:aws:lambda:us-east-1:123456789012:function:signer:3";
+const STORE_ARN =
+  "arn:aws:cloudfront::123456789012:key-value-store/their-store";
 
 // A Next.js app as OpenNext builds it. `buildCommand: "true"` stands in for
 // the build, so what it would have made is made here.
@@ -108,6 +110,16 @@ const pulumi = mockPulumi({
       return { qualifiedArn: `${args.name}:1` };
     if (args.type === "aws:lambda/functionUrl:FunctionUrl")
       return { functionUrl: FUNCTION_URL };
+    if (args.type === "aws:acm/certificate:Certificate")
+      return {
+        domainValidationOptions: [
+          {
+            resourceRecordType: "CNAME",
+            resourceRecordName: "_abc.example.com.",
+            resourceRecordValue: "_def.acm-validations.aws.",
+          },
+        ],
+      };
     return {};
   },
 });
@@ -162,7 +174,7 @@ describe("Nextjs", () => {
       // warmer, the server it links, URL and all. Nothing in AWS needs any of
       // it removed first.
       needlessOrder:
-        /( before Router(KvStore|CdnDistribution)| before Uploads(Cors|Policy)|^Next(Warmer\w+|Prewarm\w+) before NextServer\w+Url(Invoke|Access)?)$/,
+        /^(NextServer\w+Function before Router(KvStore|CdnDistribution)|NextKvKeys\S* before RouterCdnDistribution|Next\S+ before UploadsCors|Next(WarmerTarget|WarmerPermission|Prewarm)\w+ before NextServer\w+Url(Access|Invoke)?)$/,
       cases: {
         "on a distribution of its own": {
           create: (Nextjs, opts) =>
@@ -353,6 +365,113 @@ describe("Nextjs", () => {
             ),
           ...isr,
         },
+        "with a domain that redirects": {
+          create: (Nextjs, opts) =>
+            new Nextjs(
+              "Next",
+              {
+                path: site,
+                buildCommand: "true",
+                domain: {
+                  name: "example.com",
+                  aliases: ["app.example.com"],
+                  redirects: ["www.example.com"],
+                },
+              },
+              opts,
+            ),
+          ...isr,
+        },
+        "in a VPC": {
+          create: (Nextjs, opts) =>
+            new Nextjs(
+              "Next",
+              {
+                path: site,
+                buildCommand: "true",
+                vpc: {
+                  privateSubnets: ["subnet-0a1", "subnet-0b2"],
+                  securityGroups: ["sg-0c3"],
+                },
+              },
+              opts,
+            ),
+          ...isr,
+        },
+        "with edge code on a store of the user's": {
+          create: (Nextjs, opts) =>
+            new Nextjs(
+              "Next",
+              {
+                path: site,
+                buildCommand: "true",
+                edge: {
+                  viewerRequest: {
+                    injection: "event.request.headers.a = {value: '1'};",
+                    kvStore: STORE_ARN,
+                  },
+                },
+              },
+              opts,
+            ),
+          ...isr,
+          check: () => expect(names()).not.toContain("NextKvStore"),
+        },
+        "with the server transformed": {
+          create: (Nextjs, opts) =>
+            new Nextjs(
+              "Next",
+              {
+                path: site,
+                buildCommand: "true",
+                transform: {
+                  server: (args: any): undefined => {
+                    args.memory = "3008 MB";
+                    args.description = "The site's server";
+                  },
+                },
+              },
+              opts,
+            ),
+          ...isr,
+          check: () =>
+            expect(resource("NextServerUseast1Function").inputs).toMatchObject({
+              memorySize: 3008,
+              description: "The site's server",
+            }),
+        },
+        "in two regions behind a Router that signs": {
+          create: (Nextjs, opts) => {
+            const router = new Router("Router", { protection: "oac" });
+            return new Nextjs(
+              "Next",
+              {
+                path: site,
+                buildCommand: "true",
+                regions: ["us-east-1", "eu-west-1"],
+                router: { instance: router },
+              },
+              opts,
+            );
+          },
+          ...isr,
+        },
+        "deployed in sst dev": {
+          create: (Nextjs, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            return new Nextjs(
+              "Next",
+              {
+                path: site,
+                buildCommand: "exit 1",
+                dev: { command: "next dev" },
+              },
+              opts,
+            );
+          },
+          check: () => expect(names()).toContain("NextDevServer"),
+        },
       },
     });
   });
@@ -392,6 +511,64 @@ describe("Nextjs", () => {
     ).rejects.toThrow(
       /`echo first; echo the reason >&2; exit 3` exited with 3\.\n[\s\S]*the reason/,
     );
+  });
+
+  it("fails a deploy once, with the build's own message", async () => {
+    // Every rejection the failed build causes, in place of the test runner's
+    // handler, which would fail the test on the first
+    const failures: unknown[] = [];
+    const collect = (error: unknown) => failures.push(error);
+    const runner = process.listeners("unhandledRejection");
+    process.removeAllListeners("unhandledRejection");
+    process.on("unhandledRejection", collect);
+    try {
+      new Nextjs("Next", {
+        path: site,
+        buildCommand: "echo the reason >&2; exit 3",
+        warm: 1,
+      });
+      await pulumi.settle();
+    } finally {
+      process.off("unhandledRejection", collect);
+      for (const listener of runner) process.on("unhandledRejection", listener);
+    }
+    // Pulumi reports an error once, by identity
+    expect(failures.length).toBeGreaterThan(0);
+    expect(new Set(failures).size).toBe(1);
+    expect((failures[0] as Error).message).toBe(
+      'Failed to build the "Next" site: `echo the reason >&2; exit 3` exited with 3.\nthe reason',
+    );
+    expect(names()).not.toContain("NextServerUseast1");
+  });
+
+  it("has its server in nodes from the start, without regions", async () => {
+    const next = new Nextjs("Next", {
+      path: site,
+      buildCommand: "true",
+      warm: 1,
+    });
+    expect(Object.keys(next.nodes.server)).toEqual(["us-east-1"]);
+    expect(Object.keys(next.nodes.warmer)).toEqual(["us-east-1"]);
+    expect(Object.keys(next.nodes.prewarm)).toEqual(["us-east-1"]);
+    expect(Object.keys(next.nodes.urlAccess)).toEqual(["us-east-1"]);
+    expect(Object.keys(next.nodes.cloudFrontUrlAccess)).toEqual([]);
+    const server = await pulumi.resolve(next.nodes.server["us-east-1"]);
+    expect(server.constructor.name).toBe("Function");
+    await pulumi.settle();
+  });
+
+  it("has its server in nodes once it's created, given a provider of its own", async () => {
+    const { Provider } = await import("@pulumi/aws");
+    const next = new Nextjs(
+      "Next",
+      { path: site, buildCommand: "true" },
+      { provider: new Provider("West", { region: "us-west-2" }) },
+    );
+    // The provider's region is read in the deploy
+    expect(Object.keys(next.nodes.server)).toEqual([]);
+    await pulumi.settle();
+    // The mock's lookups give us-east-1, whatever the provider
+    expect(Object.keys(next.nodes.server)).toEqual(["us-east-1"]);
   });
 
   it("gives each server by region, and ISR's parts, as outputs", async () => {

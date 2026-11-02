@@ -1,10 +1,6 @@
 import { output, CustomResourceOptions } from "@pulumi/pulumi";
-import { Semaphore } from "../../../util/semaphore";
 import { local } from "@pulumi/command";
-
-const limiter = new Semaphore(
-  parseInt(process.env.SST_BUILD_CONCURRENCY_SITE || "1"),
-);
+import { siteBuilds } from "./site-build.js";
 
 export function siteBuilder(
   name: string,
@@ -13,6 +9,8 @@ export function siteBuilder(
 ) {
   // Wait for all arg values to be resolved before acquiring the semaphore.
   return output(args).apply(async (args) => {
+    // Shared with the sites built in the program, so they take turns
+    const limiter = siteBuilds();
     await limiter.acquire(name);
 
     let waitOn;

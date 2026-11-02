@@ -307,6 +307,43 @@ describe("Component parts", () => {
     expect(bucket).toBeInstanceOf(aws.s3.Bucket);
   });
 
+  it("lists the ids after() will create a deferred part with, before it has", async () => {
+    const parts = {
+      bucket: many(deferred(aws.s3.Bucket)),
+      log: deferred(aws.s3.Bucket),
+    };
+    class Regional extends component("acme:index:Regional", parts) {
+      constructor(name: string) {
+        super(name);
+        this.after(Promise.resolve(["east", "west"]), (ids) => {
+          for (const id of ids) this.part("bucket", id, {});
+        });
+        this.willCreate("bucket", ["east"]);
+        expect(() => this.willCreate("log" as any, ["east"])).toThrow(
+          /"log" of the "Docs" component isn't declared with `many\(deferred\(...\)\)`/,
+        );
+      }
+    }
+    const regional = new Regional("Docs");
+    expect(Object.keys(regional.nodes.bucket)).toEqual(["east"]);
+    const east = await pulumi.resolve(regional.nodes.bucket.east);
+    await pulumi.settle();
+    expect(east).toBeInstanceOf(aws.s3.Bucket);
+    expect(Object.keys(regional.nodes.bucket).sort()).toEqual(["east", "west"]);
+  });
+
+  it("keeps a VisibleError's message as it's written", async () => {
+    const { inspect } = await import("util");
+    const { VisibleError } = await import("../../src/components/error");
+    const error = new VisibleError("The site failed to build.", "the reason");
+    // As Pulumi does, for each input it fails to serialize
+    error.message = `error serializing property "files": ${error.message}`;
+    expect(error.message).toBe("The site failed to build.\nthe reason");
+    expect(inspect(error)).toMatch(
+      /^VisibleError: The site failed to build\.\nthe reason\n {4}at /,
+    );
+  });
+
   it("keeps a part it creates in sst dev in nodes, and explains the rest", async () => {
     const parts = { role: aws.iam.Role, bucket: aws.s3.Bucket };
     class Worker extends component("acme:index:Worker", parts) {

@@ -174,6 +174,9 @@ export class PartsComponent<P extends Parts> extends Component {
   // What `after()` is creating, once it's called: the `nodes` of a deferred
   // part wait for it
   private creating?: Promise<void>;
+  // The ids `after()` will create a deferred `many` part with, by part, from
+  // `willCreate()`
+  private readonly partPromised: Record<string, Set<string>> = {};
   // What the component reported to the core, and whether its outputs, which
   // carry it, are registered
   private reported?: Report;
@@ -381,12 +384,15 @@ export class PartsComponent<P extends Parts> extends Component {
    * resolves to. Until it has, the `nodes` entry of a part declared with
    * `deferred()` is an output that resolves to what `create` created, and to
    * `undefined` for one it didn't. Declare a part it may not create with
-   * `deferred(optional(...))`.
+   * `deferred(optional(...))`. A part declared with `many(deferred(...))` is
+   * listed in `nodes` by id as it's created, or from the start with the ids
+   * given to `willCreate()`.
    *
-   * The program waits for `create`, and an error in it fails the deploy. A
-   * preview runs it too, so `ready` has to resolve in a preview: decide what's
-   * created from what a preview knows. A site's build leaves out the values a
-   * preview doesn't know.
+   * The program waits for `create`, and an error in `ready` or in `create`
+   * fails the deploy, once, however many resources wait on it. A preview runs
+   * it too, so `ready` has to resolve in a preview: decide what's created from
+   * what a preview knows. A site's build leaves out the values a preview
+   * doesn't know.
    *
    * @example
    * ```ts
@@ -409,6 +415,30 @@ export class PartsComponent<P extends Parts> extends Component {
     );
     this.creating = (this.creating ?? Promise.resolve()).then(() => settled);
     return created;
+  }
+
+  /**
+   * Say which ids `after()` will create a part declared with
+   * `many(deferred(...))` with, when they're known before it runs, like the
+   * regions a site's server is deployed to. `nodes` lists them from the
+   * start, each an output that resolves to the resource once it's created.
+   * Without this, an id is listed once its resource is created.
+   *
+   * List only the ids `create` always creates.
+   *
+   * @example
+   * ```ts
+   * this.willCreate("server", regions);
+   * ```
+   */
+  protected willCreate(key: ManyKeys<P>, ids: string[]) {
+    const part = this.partClasses[key];
+    if (!part || !isMany(part) || !isDeferred(part))
+      throw new VisibleError(
+        `"${key}" of the "${this.componentName}" component isn't declared with \`many(deferred(...))\`, so its resources are listed in \`nodes\` as they're created.`,
+      );
+    const promised = (this.partPromised[key] ??= new Set());
+    for (const id of ids) promised.add(id);
   }
 
   /**
@@ -671,7 +701,11 @@ export class PartsComponent<P extends Parts> extends Component {
 
     // Each is read when asked for: one given as an ARN has no resource
     const many = byId();
-    for (const id of Object.keys({ ...deferred, ...created })) {
+    const ids = new Set([
+      ...Object.keys({ ...deferred, ...created }),
+      ...(this.partPromised[key] ?? []),
+    ]);
+    for (const id of ids) {
       Object.defineProperty(many, id, {
         enumerable: true,
         get: () =>
@@ -679,7 +713,7 @@ export class PartsComponent<P extends Parts> extends Component {
             ? deferred[id]()
             : this.creating
               ? this.whenCreated(key, id)
-              : output(created[id]),
+              : output(created?.[id]),
       });
     }
     return many;

@@ -5,6 +5,7 @@ import { globSync } from "glob";
 import type { Loader } from "esbuild";
 import {
   ComponentResourceOptions,
+  Config,
   Input,
   Output,
   all,
@@ -84,7 +85,13 @@ const parts = () => ({
   assetFiles: BucketFiles,
   /**
    * The AWS Lambda function that renders the site, one in each of the `regions`,
-   * by region. Each is an output: it's created once the site is built.
+   * by region: `nodes.server["us-east-1"]`. Each is an output, as it's created
+   * once the site is built.
+   *
+   * Without `regions`, the server is in the app's region. When the site is given
+   * an AWS provider of its own, its region isn't known until the deploy reads it,
+   * so the server is listed once it's created. Set `regions` to have it from the
+   * start.
    */
   server: many(deferred(Function)),
   /**
@@ -1448,14 +1455,24 @@ interface Built {
  * router are kept. A few things are written differently:
  *
  * - The site is built in the deploy itself, once, with the values of what it's linked to.
- *   `sst diff` builds it too, without the values that aren't known until the deploy.
  *   `sst.aws.Nextjs` built it with a command it kept in the state, which goes.
+ * - `sst diff` builds the site too, to show what the build creates. Values that aren't known
+ *   until the deploy, like those of what the same deploy creates on a new stage, are left
+ *   out of that build, and a link none of whose properties are known is passed with only
+ *   its `type`. A build that checks its environment, or reads a link while it prerenders,
+ *   has to allow for that. `sst.aws.Nextjs` skipped its build in `sst diff` then.
+ * - A deploy that previews first, on a stage with checks or with a policy pack, builds the
+ *   site twice: in the preview, and in the deploy.
  * - `regions`, `warm`, `protection`, `edge`, `router`, `invalidation`, `imageOptimization`
  *   and `server` have to be plain values, not outputs: they decide what's created. So do
- *   `path`, `buildCommand` and `openNextVersion`, which the build reads.
+ *   `path`, `buildCommand` and `openNextVersion`, which the build reads, and the `name`,
+ *   `aliases` and `redirects` of `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
- * - `nodes.server` holds the server of each region, by region, each an output.
- *   `nodes.revalidationQueue` and `nodes.revalidationTable` are outputs that are
+ * - `nodes.server` holds the server of each region, by region, each an output:
+ *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
+ *   is given an AWS provider of its own, the server is listed once it's created; set
+ *   `regions` to have it from the start.
+ * - `nodes.revalidationQueue` and `nodes.revalidationTable` are outputs that are
  *   `undefined` when the build turns ISR off, and the revalidation function is the queue's
  *   `nodes.subscriber`.
  * - `transform.revalidationEventsSubscriber` becomes the `subscriber` in the queue's own
@@ -1525,6 +1542,8 @@ export class Nextjs extends component("sst:aws:Nextjs", parts) {
 
     // The args that decide which resources are created are read first
     const regionsArg = regionsOf();
+    // The server's regions, when they're known before the build
+    const serverRegions = regionsArg ?? appRegion();
     const warm = plain(args.warm, option("warm"));
     const invalidation = plainDeep(args.invalidation, option("invalidation"));
     const imageOptimization = plainDeep(
@@ -1572,14 +1591,7 @@ export class Nextjs extends component("sst:aws:Nextjs", parts) {
     }).then(loadBuild);
     const built = this.after(build, createFromBuild);
     const builtOutput = output(built);
-    // The servers are in `nodes` before they're created, when the regions
-    // are known: each is an output of the server
-    for (const region of regionsArg ?? [])
-      this.partHandle("server", region).defer(() =>
-        builtOutput.apply(
-          (built) => built.servers.find((s) => s.region === region)!.server,
-        ),
-      );
+    promiseRegionalParts();
 
     const assetFiles = this.part("assetFiles", {
       bucketName: bucket.name,
@@ -1685,6 +1697,37 @@ export class Nextjs extends component("sst:aws:Nextjs", parts) {
         );
       regions.forEach(checkRegion);
       return regions;
+    }
+
+    // Without `regions`, the server is in the region of the site's AWS
+    // provider. When that's the app's, its region is in the app's config. One
+    // given to the site is read in the deploy.
+    function appRegion() {
+      if (self.getProvider("aws::")) return;
+      const region = new Config("aws").get("region");
+      if (!region) return;
+      checkRegion(region);
+      return [region];
+    }
+
+    // The parts made for each region are in `nodes` before they're created,
+    // when the regions are known
+    function promiseRegionalParts() {
+      if (!serverRegions) return;
+      self.willCreate("server", serverRegions);
+      if (warm)
+        for (const key of [
+          "warmer",
+          "warmerRule",
+          "warmerTarget",
+          "warmerPermission",
+          "prewarm",
+        ] as const)
+          self.willCreate(key, serverRegions);
+      if (routing.signs === false) self.willCreate("urlAccess", serverRegions);
+      if (routing.signs === true)
+        for (const key of ["cloudFrontUrlAccess", "cloudFrontInvoke"] as const)
+          self.willCreate(key, serverRegions);
     }
 
     function checkRegion(region: string) {
@@ -2056,13 +2099,13 @@ async function handler(event) {
     // Creates what's made from the build: the functions, ISR, the warmer and
     // the permissions
     async function createFromBuild(build: Build): Promise<Built> {
-      const regions = regionsArg ?? [
+      const regions = serverRegions ?? [
         await known(
           getRegionOutput({}, { parent: self }).region,
           "The region of the site's server",
         ),
       ];
-      if (!regionsArg) regions.forEach(checkRegion);
+      if (!serverRegions) regions.forEach(checkRegion);
       const signs =
         typeof routing.signs === "boolean"
           ? routing.signs

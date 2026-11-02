@@ -140,6 +140,15 @@ func TestLocalCommand(t *testing.T) {
 	withDelete.Old.Inputs = map[string]interface{}{"delete": "rm -rf build"}
 	r = Check([]apitype.StepEventMetadata{withDelete}, nil)
 	assert.Len(t, problems(r), 1)
+
+	// Creating or replacing one runs its command
+	userCommand := urn("command:local:Command", "Seed")
+	r = Check([]apitype.StepEventMetadata{step(apitype.OpCreate, userCommand)}, nil)
+	assert.Len(t, problems(r), 1)
+	replace := step(apitype.OpReplace, userCommand)
+	replace.Keys = []string{"create"}
+	r = Check([]apitype.StepEventMetadata{replace}, nil)
+	assert.Len(t, problems(r), 1)
 }
 
 func TestCreatesAndDeletesNeedTheMap(t *testing.T) {

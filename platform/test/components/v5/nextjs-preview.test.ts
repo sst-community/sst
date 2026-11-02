@@ -84,11 +84,16 @@ describe("a Nextjs site in a new stage's preview", () => {
   it("is built without what isn't known, and plans everything a deploy creates", async () => {
     const { Nextjs } = await import("../../../src/components/aws/v5/nextjs");
     const { Queue } = await import("../../../src/components/aws/v5/queue");
+    const { Linkable } = await import("../../../src/components/linkable");
     const jobs = new Queue("Jobs");
+    // A link none of whose properties are known: they come from an output
+    const settings = new Linkable("Settings", {
+      properties: jobs.url.apply((url) => ({ url })),
+    });
     new Nextjs("Next", {
       path: site,
       buildCommand: "env > build-env.txt",
-      link: [jobs],
+      link: [jobs, settings],
       environment: { QUEUE_URL: jobs.url, STATIC: "1" },
     });
     await pulumi.settle();
@@ -102,6 +107,13 @@ describe("a Nextjs site in a new stage's preview", () => {
     const link = env.find((line) => line.startsWith("SST_RESOURCE_Jobs="));
     expect(JSON.parse(link!.split("=").slice(1).join("="))).toEqual({
       type: "sst.aws.Queue",
+    });
+    // Still linked, with its type
+    const linked = env.find((line) =>
+      line.startsWith("SST_RESOURCE_Settings="),
+    );
+    expect(JSON.parse(linked!.split("=").slice(1).join("="))).toEqual({
+      type: "sst.sst.Linkable",
     });
 
     const inSite = pulumi.resources

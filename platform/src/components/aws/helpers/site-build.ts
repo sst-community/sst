@@ -8,8 +8,12 @@ import { markUnknowns, unknown } from "../../check";
 import { Semaphore } from "../../../util/semaphore";
 import { lazy } from "../../../util/lazy";
 
-// How many sites build at once, in a run of the program
-const limiter = lazy(
+/**
+ * How many sites build at once, in a run of the program: as many as
+ * `SST_BUILD_CONCURRENCY_SITE` says, one by default. 4.x sites take their turn
+ * here too.
+ */
+export const siteBuilds = lazy(
   () => new Semaphore(parseInt(process.env.SST_BUILD_CONCURRENCY_SITE || "1")),
 );
 
@@ -24,7 +28,10 @@ const TAIL = 50;
  * with. A preview, `sst diff`, doesn't know the values of what's created on
  * the deploy, so it builds without them, to learn what the build makes and
  * what to create for it. A link whose properties aren't known is passed with
- * the ones that are.
+ * the ones that are, or with only its type when none are.
+ *
+ * A deploy that previews first, on a stage with checks or with a policy pack,
+ * builds the site twice: in its preview, and again in the deploy.
  *
  * The program waits for the build. Builds take their turn: as many at once as
  * `SST_BUILD_CONCURRENCY_SITE` says, one by default. A failed build fails the
@@ -48,7 +55,7 @@ export async function buildSite(input: {
   ) as Record<string, string>;
   const links = await linkEnvironment(input.link);
 
-  const limit = limiter();
+  const limit = siteBuilds();
   await limit.acquire(name);
   try {
     await run(name, command, path.resolve(context().paths.root, sitePath), {
@@ -89,11 +96,11 @@ async function linkEnvironment(links?: Input<any[]>) {
       definition: { properties?: unknown } | typeof unknown;
     };
     const { urn, definition } = resolved;
-    if (urn === unknown || definition === unknown) continue;
-    const properties = definition.properties;
-    if (properties === unknown) continue;
+    if (urn === unknown) continue;
+    // With none of its properties known, it's still linked, with its type
+    const properties = definition === unknown ? unknown : definition.properties;
     env[`SST_RESOURCE_${urn.split("::").at(-1)}`] = JSON.stringify({
-      ...(withoutUnknowns(properties) as Record<string, unknown>),
+      ...(withoutUnknowns(properties) as Record<string, unknown> | undefined),
       type: linkType(urn.split("::").at(-2)!),
     });
   }
@@ -138,7 +145,13 @@ function run(
       lines.push(...chunk.toString().split("\n"));
       if (lines.length > TAIL * 2) lines.splice(0, lines.length - TAIL);
     };
-    const child = spawn(command, { cwd, env, shell: true });
+    // Nothing is typed into the build: one that asks fails, not waits
+    const child = spawn(command, {
+      cwd,
+      env,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     child.stdout.on("data", keep);
     child.stderr.on("data", keep);
     child.on("error", (err) =>

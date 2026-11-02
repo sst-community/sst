@@ -351,7 +351,8 @@ func isReplace(op apitype.OpType) bool {
 }
 
 // A resource with nothing behind it in the cloud: a component, the stack, a
-// provider, or a command run on this machine
+// provider, or a command run on this machine that's deleted without running
+// anything
 func isCustom(step apitype.StepEventMetadata) bool {
 	if strings.HasPrefix(step.Type, "pulumi:providers:") || step.Type == "pulumi:pulumi:Stack" {
 		return false
@@ -368,22 +369,18 @@ func isCustom(step apitype.StepEventMetadata) bool {
 	return true
 }
 
-// A command run on this machine, like the build of a 4.x site. Deleting one
-// runs its delete command, so only one without a delete command has nothing
-// behind it.
+// The delete of a command run on this machine, like the build of a 4.x
+// site, that has no delete command, so it does nothing. Creating or replacing
+// one runs its command, and deleting one with a delete command runs that.
 func isLocalCommand(step apitype.StepEventMetadata) bool {
-	if step.Type != "command:local:Command" {
+	if step.Type != "command:local:Command" || step.Op != apitype.OpDelete {
 		return false
 	}
-	for _, state := range []*apitype.StepEventStateMetadata{step.Old, step.New} {
-		if state == nil {
-			continue
-		}
-		if command, ok := state.Inputs["delete"].(string); ok && command != "" {
-			return false
-		}
+	if step.Old == nil {
+		return false
 	}
-	return true
+	command, ok := step.Old.Inputs["delete"].(string)
+	return !ok || command == ""
 }
 
 // The fields that make a replace, from each of its steps
