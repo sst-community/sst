@@ -88,8 +88,21 @@ export const movedTypes = perRun((): Set<string> => {
 // created that have a 5.0 form, and those the marker it left lists
 const run = perRun(() => ({
   oldForms: new Set<string>(),
+  newForms: new Set<string>(),
   left: undefined as Set<string> | undefined,
 }));
+
+// A move switches all of a component at once. One that kept some in SST 4's
+// form would list none of them as moved, and a later deploy could switch the
+// others back without a move, deleting what their 5.0 form wrote.
+function splitError(name: string, form: string, type: string) {
+  const className = type.replaceAll(":", ".");
+  return new VisibleError(
+    form === "old"
+      ? `"${name}" is SST 4's ${className}, and this move switches others to their 5.0 form. A move switches all of a component at once: use its 5.0 form.`
+      : `"${name}" is SST 5's ${className}, and this move keeps others in SST 4's form. A move switches all of a component at once: use the 5.0 form for each.`,
+  );
+}
 
 /**
  * Note a component created in its SST 4 form when it has a 5.0 form. It's
@@ -107,6 +120,7 @@ export function oldFormCreated(type: string, name: string) {
         ? `"${name}" is SST 4's ${className}. A new stage starts on SST 5's components: use its 5.0 form.`
         : `"${name}" is SST 4's ${className}, and this stage has moved to its 5.0 form. Use the 5.0 form: a stage doesn't go back to SST 4's components by a deploy.`,
     );
+  if (moving() && run().newForms.has(type)) throw splitError(name, "old", type);
   run().oldForms.add(type);
 }
 
@@ -119,7 +133,12 @@ export function oldFormCreated(type: string, name: string) {
  * @internal
  */
 export function newFormCreated(from: string, type: string, name: string) {
-  if (moving() || !stageMoved() || movedTypes().has(from)) return;
+  if (moving()) {
+    if (run().oldForms.has(from)) throw splitError(name, "new", from);
+    run().newForms.add(from);
+    return;
+  }
+  if (!stageMoved() || movedTypes().has(from)) return;
   throw new VisibleError(
     `"${name}" is SST 5's ${type.replaceAll(
       ":",

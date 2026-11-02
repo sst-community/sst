@@ -41,30 +41,49 @@ func awsConfig(ctx context.Context) (aws.Config, error) {
 				return aws.Config{}, fmt.Errorf("reading %v: %w", provider.EnvAwsAssumeRoles, err)
 			}
 		}
-		cfg, err := provider.LoadAwsConfig(ctx, os.Getenv("AWS_PROFILE"), os.Getenv("SST_AWS_REGION"), roles)
-		if err != nil {
-			return aws.Config{}, err
+		profile, region := os.Getenv("AWS_PROFILE"), os.Getenv("SST_AWS_REGION")
+		key := os.Getenv("SST_AWS_ACCESS_KEY_ID")
+		if key == "" {
+			return provider.LoadAwsConfig(ctx, profile, region, roles)
 		}
 		// The credentials the CLI resolved, until they expire: the provider
 		// asks for nothing the CLI already asked for, like a code from an
-		// MFA device
-		if key := os.Getenv("SST_AWS_ACCESS_KEY_ID"); key != "" {
-			resolved := aws.Credentials{
-				AccessKeyID:     key,
-				SecretAccessKey: os.Getenv("SST_AWS_SECRET_ACCESS_KEY"),
-				SessionToken:    os.Getenv("SST_AWS_SESSION_TOKEN"),
-				Source:          "sst",
+		// MFA device. Only then are they made as the CLI made its own.
+		resolved := aws.Credentials{
+			AccessKeyID:     key,
+			SecretAccessKey: os.Getenv("SST_AWS_SECRET_ACCESS_KEY"),
+			SessionToken:    os.Getenv("SST_AWS_SESSION_TOKEN"),
+			Source:          "sst",
+		}
+		if value := os.Getenv(provider.EnvAwsExpires); value != "" {
+			expires, err := time.Parse(time.RFC3339, value)
+			if err != nil {
+				return aws.Config{}, fmt.Errorf("reading %v: %w", provider.EnvAwsExpires, err)
 			}
-			if value := os.Getenv(provider.EnvAwsExpires); value != "" {
-				expires, err := time.Parse(time.RFC3339, value)
-				if err != nil {
-					return aws.Config{}, fmt.Errorf("reading %v: %w", provider.EnvAwsExpires, err)
-				}
-				resolved.CanExpire, resolved.Expires = true, expires
+			resolved.CanExpire, resolved.Expires = true, expires
+		}
+		made := sync.OnceValues(func() (aws.Config, error) {
+			return provider.LoadAwsConfig(ctx, profile, region, roles)
+		})
+		then := aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+			cfg, err := made()
+			if err != nil {
+				return aws.Credentials{}, err
 			}
-			cfg.Credentials = aws.NewCredentialsCache(&resolvedFirst{resolved: resolved, then: cfg.Credentials}, func(options *aws.CredentialsCacheOptions) {
+			return cfg.Credentials.Retrieve(ctx)
+		})
+		// Made directly, so nothing reads the developer's AWS files until
+		// the credentials are made again: the provider runs in another
+		// folder, where a relative path in AWS_CONFIG_FILE reads another file
+		cfg := aws.Config{
+			Region:           region,
+			RetryMaxAttempts: 10,
+			Credentials: aws.NewCredentialsCache(&resolvedFirst{resolved: resolved, then: then}, func(options *aws.CredentialsCacheOptions) {
 				options.ExpiryWindow = time.Minute
-			})
+			}),
+		}
+		if cfg.Region == "" {
+			cfg.Region = "us-east-1"
 		}
 		return cfg, nil
 	}

@@ -112,6 +112,20 @@ describe("the marker of a stage on SST 5's components", () => {
       expect(() => new sst.aws.Bucket("Uploads")).toThrow(/has moved/);
     });
 
+    it("is switched all at once by a move", () => {
+      stage({ move: true, types: [Bucket] });
+      new sst.aws.v5.Bucket("Files");
+      expect(() => new sst.aws.Bucket("Uploads")).toThrow(
+        '"Uploads" is SST 4\'s sst.aws.Bucket, and this move switches others to their 5.0 form. A move switches all of a component at once: use its 5.0 form.',
+      );
+      newRun();
+      stage({ move: true, types: [Bucket] });
+      new sst.aws.Bucket("Uploads");
+      expect(() => new sst.aws.v5.Bucket("Files")).toThrow(
+        "\"Files\" is SST 5's sst.aws.Bucket, and this move keeps others in SST 4's form. A move switches all of a component at once: use the 5.0 form for each.",
+      );
+    });
+
     it("is refused when a move creates it after it left the marker", () => {
       // As inside an `apply` the program didn't wait for
       stage({ move: true, types: [Bucket] });

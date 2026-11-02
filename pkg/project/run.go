@@ -208,8 +208,13 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 		}
 		return err
 	}
-	// What a remove that doesn't finish puts back
-	marker := markerOf(completed.Resources)
+	// What a remove that doesn't finish puts back, as the state has it
+	var marker *apitype.ResourceV3
+	if input.Command == "remove" && state.Moved {
+		if checkpoint, err := workdir.Export(); err == nil && checkpoint.Latest != nil {
+			marker = markerOf(checkpoint.Latest.Resources)
+		}
+	}
 
 	define, err := p.programDefine(input, state)
 	if err != nil {
@@ -799,16 +804,10 @@ loop:
 		<-partialDone
 
 		// A remove that didn't finish keeps the marker of a stage on SST 5's
-		// components
+		// components. Its state is saved either way.
 		if input.Command == "remove" && marker != nil {
-			checkpoint, err := workdir.Export()
-			if err != nil {
-				return err
-			}
-			if keepMarker(checkpoint, marker) {
-				if err := workdir.Import(checkpoint); err != nil {
-					return err
-				}
+			if err := p.keepMarker(workdir, marker); err != nil {
+				log.Error("keeping the marker of a stage on SST 5's components", "err", err)
 			}
 		}
 

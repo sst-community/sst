@@ -571,6 +571,9 @@ when the stage has none of it, so a new stage starts with all of them (`componen
 - Outside a move, the 5.0 form of a component the stage still has in SST 4's form is
   refused, with a message that says to run `sst migrate`. That's how a component that
   gains a 5.0 form after a stage moved is switched.
+- A move switches all of a component at once: one that switches some and keeps others
+  in SST 4's form is refused, since a later deploy could switch those back without a
+  move.
 - One inside another of SST's components moves with that one, and isn't counted.
 
 `mock()` runs as a new stage's first deploy, so a package that still wraps SST 4's form

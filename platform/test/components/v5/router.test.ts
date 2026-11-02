@@ -272,12 +272,14 @@ describe("Router", () => {
           },
           unclaimed: ["sst:aws:RouterUrlRoute::MyRouterRoute/api"],
         },
-        "routes to buckets of each kind, with and without args": {
+        // A move switches all of a component at once, so a stage doesn't
+        // have both kinds of bucket; "a route to a bucket" has 4.x's
+        "routes to V5 buckets, with and without args": {
           create: (Router, opts) => {
             const router = new Router("MyRouter", {}, opts);
             router.routeBucket(
               "/old",
-              new OriginalBucket("OldFiles", { access: "cloudfront" }),
+              new Bucket("OldFiles", { access: "cloudfront" }),
             );
             router.routeBucket(
               "/new",

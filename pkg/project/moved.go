@@ -142,3 +142,16 @@ func keepMarker(checkpoint *apitype.CheckpointV3, marker *apitype.ResourceV3) bo
 	checkpoint.Latest.Resources = append(resources, *marker)
 	return true
 }
+
+// keepMarker puts the marker back in the state a remove left in workdir, when
+// the remove didn't finish
+func (p *Project) keepMarker(workdir *PulumiWorkdir, marker *apitype.ResourceV3) error {
+	checkpoint, err := workdir.Export()
+	if err != nil {
+		return err
+	}
+	if !keepMarker(checkpoint, marker) {
+		return nil
+	}
+	return workdir.Import(checkpoint)
+}
