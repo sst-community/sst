@@ -323,9 +323,9 @@ Everything above applies. The rest is specific to SST's own components in
   is the `Cdn`, with the 5.0 certificate and redirect, whose DNS records the adapters
   create directly. The `Nextjs` is built that way: it builds its site in the program
   and creates what the build makes with `after()`, and it shares what the 4.x sites
-  work out from a build in `site-code.ts`. So are the `Bucket` and the `Queue`: the 4.x
-  `Queue` and `SnsTopic` a bucket notifies are reached through `AnyQueue` and
-  `AnySnsTopic`, and a function either is given goes through `plainFunction()`, so only
+  work out from a build in `site-code.ts`. So are the `Bucket`, the `Queue` and the `SnsTopic`:
+  the 4.x `Queue` and `SnsTopic` they send to are reached through `AnyQueue` and
+  `AnySnsTopic`, and a function they're given goes through `plainFunction()`, so only
   a function that's already there, or its ARN, can be an output. The ports before them
   reuse the original's, as below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource

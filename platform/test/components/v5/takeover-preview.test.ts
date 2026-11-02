@@ -19,8 +19,9 @@ describe("a subscriber in a new stage's preview", () => {
   it("is planned, though its old address isn't known yet", async () => {
     // The group, as an app has it, with the takeover maps
     const { v5 } = await import("../../../src/components/aws/index");
-    const { Queue, Bucket, Dynamo } = v5;
+    const { Queue, Bucket, Dynamo, SnsTopic } = v5;
     new Queue("Jobs").subscribe("src/subscriber.handler");
+    new SnsTopic("Events").subscribe("Logger", "src/subscriber.handler");
     new Bucket("Files").notify({
       notifications: [{ name: "Uploads", function: "src/subscriber.handler" }],
     });
@@ -36,5 +37,7 @@ describe("a subscriber in a new stage's preview", () => {
     expect(names).toContain("JobsEventSourceMapping");
     expect(names).toContain("FilesSubscriberUploads");
     expect(names).toContain("ItemsSubscriberChanges");
+    expect(names).toContain("EventsSubscriberLogger");
+    expect(names).toContain("EventsSubscriptionLogger");
   });
 });

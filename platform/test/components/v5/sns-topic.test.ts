@@ -1,12 +1,45 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mockPulumi, type TakeoverWay } from "../../helpers/graph";
+import { logicalName } from "../../../src/components/naming";
 
-const pulumi = mockPulumi();
+// A topic that's looked up by its ARN has that ARN, and the name in it. A
+// function that publishes versions, like a workflow's, is invoked by its
+// version.
+const pulumi = mockPulumi({
+  state: (args) =>
+    args.type === "aws:sns/topic:Topic" && args.id
+      ? { arn: args.id, name: args.id.split(":")[5] }
+      : args.type === "aws:lambda/function:Function"
+        ? versioned(`arn:aws:mock:us-east-1:123456789012:${args.name}`)
+        : {},
+});
+
+function versioned(arn: string) {
+  const invoke = (api: string, path: string) =>
+    `arn:aws:apigateway:us-east-1:lambda:path/${api}/functions/${arn}/${path}`;
+  return {
+    qualifiedArn: `${arn}:3`,
+    invokeArn: invoke("2015-03-31", "invocations"),
+    qualifiedInvokeArn: invoke("2015-03-31", "invocations").replace(
+      arn,
+      `${arn}:3`,
+    ),
+    responseStreamingInvokeArn: invoke(
+      "2021-11-15",
+      "response-streaming-invocations",
+    ),
+  };
+}
 
 const FUNCTION_ARN =
   "arn:aws:lambda:us-east-1:123456789012:function:my-subscriber";
 const QUEUE_ARN = "arn:aws:sqs:us-east-1:123456789012:orders";
 const TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:existing";
+// A topic that isn't in the app, subscribed to with the static `subscribe`
+// and `subscribeQueue` of the 4.x SnsTopic. They named what they created after
+// the topic's own name, at the top of the app, with the app's provider.
+const SHARED_ARN = "arn:aws:sns:us-east-1:123456789012:events-prod.fifo";
+const STATIC = `${logicalName("events-prod.fifo")}Subscriber`;
 
 describe("SnsTopic", () => {
   let OriginalSnsTopic: typeof import("../../../src/components/aws/sns-topic").SnsTopic;
@@ -182,6 +215,123 @@ describe("SnsTopic", () => {
     expect(subscription.inputs.protocol).toBe("sqs");
     expect(subscription.inputs.endpoint).toBe(
       "arn:aws:mock:us-east-1:123456789012:OrdersQueue",
+    );
+  });
+
+  // A topic referenced with `get`, under a name of its own, takes their
+  // place. The static methods took no options, so what they created is found
+  // where it was, wherever the topic is now.
+  describe("takes over subscribers added with the 4.x SnsTopic's static methods", () => {
+    for (const [way, opts] of [
+      ["as it is", () => ({})],
+      ["inside another component", async () => {
+        const { ComponentResource } = await import("@pulumi/pulumi");
+        return { parent: new ComponentResource("test:index:Parent", "Parent") };
+      }],
+    ] as const)
+      it(way, async () => {
+        const result = await pulumi.takesOver(
+          () => {
+            OriginalSnsTopic.subscribe("Emailer", SHARED_ARN, "src/email.handler");
+            OriginalSnsTopic.subscribeQueue("Orders", SHARED_ARN, QUEUE_ARN);
+          },
+          async () =>
+            SnsTopic.get("SharedEvents", SHARED_ARN, await opts())
+              .subscribe("Emailer", "src/email.handler")
+              .subscribeQueue("Orders", QUEUE_ARN),
+        );
+        expect(result.unclaimed.sort()).toEqual([
+          `sst:aws:SnsTopicLambdaSubscriber::${STATIC}Emailer`,
+          `sst:aws:SnsTopicQueueSubscriber::${STATIC}Orders`,
+        ]);
+        // The function's description names the topic's component now
+        expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
+          [`${STATIC}EmailerFunction`, ["description"]],
+        ]);
+        expect(result.unordered).toEqual([]);
+        expect(result.revealed).toEqual([]);
+        expect(pulumi.resources.map((r) => r.name)).toEqual(
+          expect.arrayContaining([
+            "SharedEventsSubscriptionEmailer",
+            "SharedEventsSubscriptionOrders",
+          ]),
+        );
+        const component = pulumi.resources.find(
+          (r) => r.name === "SharedEvents",
+        )!;
+        expect(component.parent.endsWith("::Parent")).toBe(
+          way === "inside another component",
+        );
+      });
+  });
+
+  it("takes a subscriber's ARN in an output", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    new SnsTopic("MyTopic").subscribe("Emailer", output(FUNCTION_ARN));
+    await pulumi.settle();
+
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    const subscription = pulumi.resources.find(
+      (r) => r.name === "MyTopicSubscriptionEmailer",
+    )!;
+    expect(subscription.inputs.endpoint).toBe(FUNCTION_ARN);
+  });
+
+  it("takes a subscriber written any way that has a name", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    const { Function } = await import(
+      "../../../src/components/aws/v5/function"
+    );
+    const { Function: OriginalFunction } = await import(
+      "../../../src/components/aws/function"
+    );
+    const { Workflow } = await import("../../../src/components/aws/workflow");
+    const { Queue } = await import("../../../src/components/aws/v5/queue");
+    const { Queue: OriginalQueue } = await import(
+      "../../../src/components/aws/queue"
+    );
+    const topic = new SnsTopic("MyTopic")
+      .subscribe("Handler", "src/email.handler")
+      .subscribe("Args", { handler: "src/email.handler", timeout: "60 seconds" })
+      .subscribe("Arn", FUNCTION_ARN)
+      .subscribe("Later", output(FUNCTION_ARN))
+      .subscribe("Mine", new Function("Mine", { handler: "src/a.handler" }))
+      .subscribe("Old", new OriginalFunction("Old", { handler: "src/b.handler" }))
+      .subscribe("Flow", new Workflow("Flow", { handler: "src/c.handler" }))
+      .subscribeQueue("QueueArn", QUEUE_ARN)
+      .subscribeQueue("QueueLater", output(QUEUE_ARN))
+      .subscribeQueue("Jobs", new Queue("Jobs"))
+      .subscribeQueue("OldJobs", new OriginalQueue("OldJobs"));
+    await pulumi.settle();
+
+    expect(Object.keys(topic.nodes.subscription).sort()).toEqual([
+      "Args",
+      "Arn",
+      "Flow",
+      "Handler",
+      "Jobs",
+      "Later",
+      "Mine",
+      "Old",
+      "OldJobs",
+      "QueueArn",
+      "QueueLater",
+    ]);
+  });
+
+  // 4.x also took a subscriber without a name, which shifts the arguments
+  it("refuses a subscriber without a name, and says what to write", () => {
+    const topic = new SnsTopic("MyTopic") as any;
+    expect(() => topic.subscribe("src/email.handler")).toThrow(
+      `"subscribe" on the "MyTopic" topic takes the subscriber's name first, like subscribe("MySubscriber", ...).`,
+    );
+    expect(() => topic.subscribe(FUNCTION_ARN, { filter: {} })).toThrow(
+      /takes the subscriber's name first/,
+    );
+    expect(() => topic.subscribeQueue(QUEUE_ARN)).toThrow(
+      /like subscribeQueue\("MySubscriber", \.\.\.\)/,
     );
   });
 

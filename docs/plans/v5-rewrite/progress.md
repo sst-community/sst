@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `SnsTopic` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/sns-topic.ts`), with no 4.x component file imported, and on the clean break's list. Its function subscribers go through `plainFunction()`, and a queue subscriber is either kind of `Queue` (`AnyQueue`) or an ARN.
+- **What 4.x's static `SnsTopic.subscribe(name, topicArn, ...)` and `subscribeQueue(name, topicArn, ...)` created is kept.** They named it after the topic's own name, at the top of the app, and `get(name, topicArn)` with the method takes their place.
+- **A subscriber without a name**, which 4.x took and marked deprecated, is refused with the call to write. 4.x named one after what it subscribed and its filter, so a switch can't find it.
+- **The "Switch from" section** says what the methods return now, where a subscriber's `transform` went, and not to give `get` a `provider` for what the static methods created.
+
+**Checked:** `tsc`, the docs page, and all 2,203 platform tests. The static methods' case runs as it is and with the topic inside another component, with a component named apart from its topic, and fails without the map's new name. A new stage's preview plans a topic's subscriber. Every form a subscriber can be given with a name is taken.
+
+**Reviewed**, and fixed: the docs' wording on the static methods and the provider, an example of a subscriber's args that had been dropped, and tests for the forms the name check must take. As in 4.x, a topic named like another topic component can claim that component's old subscriber in a switch that adds a subscriber of the same name to both; the map says so.
+
+**Left:** the lab check, with the `Bucket`'s and the `Queue`'s (`LAB_ONLY=bucket` in the lab app now covers all three, with a static subscribe each for the queue and the topic).
+
 ## 2026-11-02: step 4, the `Queue` built the 5.0 way
 
 **Done, committed (not pushed):**

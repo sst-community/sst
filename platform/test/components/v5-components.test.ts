@@ -25,6 +25,7 @@ const rebuilt = [
   "https-redirect.ts",
   "bucket.ts",
   "queue.ts",
+  "sns-topic.ts",
 ];
 
 describe("V5 components", () => {
