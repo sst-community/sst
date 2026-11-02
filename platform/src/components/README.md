@@ -328,8 +328,11 @@ Everything above applies. The rest is specific to SST's own components in
   `plainFunction()`, so only a function that's already there, or its ARN, can be an
   output. So is the `Cluster`, which takes either kind of `Vpc` through `AnyVpc` and
   refuses any other component in its place, and the `Task`, whose args a service
-  shares are `FargateBaseArgs`, below. The ports before them reuse the original's, as
-  below, until each is rebuilt and added to that list.
+  shares are `FargateBaseArgs`, below. So is the `Efs`, which makes a mount target in
+  each AZ, kept by the AZ's number in a `Vpc` the app creates, and by its name in any
+  other VPC, looked up with `after()` once a preview knows the subnets. The ports
+  before them reuse the original's, as below, until each is rebuilt and added to that
+  list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
@@ -380,6 +383,8 @@ Everything above applies. The rest is specific to SST's own components in
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
 | A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)`, `subnetsOf(vpc, kind)`, `hasNat(vpc)` in `helpers/vpc.ts` |
+| A resource for each private subnet of a VPC, kept by its AZ | `privateSubnetsOf(vpc, parent, what)` in `helpers/vpc.ts`: by the AZ's number for a `Vpc` the app creates, by its name for one from `get`; and `subnetsByAz(subnets, parent, what)` for subnet ids. Where it's a promise, of what a preview knows, create them with `after()` |
+| Deciding from an output a preview knows, like a lookup's | `knownValue(output)` in `args.ts`, for `after()` |
 | A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |

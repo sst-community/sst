@@ -1,4 +1,7 @@
-import { Input, Output, output } from "@pulumi/pulumi";
+import { Input, Output, Resource, output } from "@pulumi/pulumi";
+import { ec2 } from "@pulumi/aws";
+import { knownValue } from "../../args";
+import { VisibleError } from "../../error";
 import { Vpc as OriginalVpc } from "../vpc";
 import { Vpc } from "../v5/vpc";
 
@@ -23,6 +26,79 @@ export function subnetsOf(
   const ids: Input<Input<string>[]> =
     kind === "public" ? vpc.publicSubnets : vpc.privateSubnets;
   return output(ids);
+}
+
+/**
+ * A VPC's private subnets, each by the key a resource made for it is kept
+ * under, one in each AZ:
+ *
+ * - For a `Vpc` the app creates, the AZ's number, as the VPC keeps its own
+ *   subnets. A V5 `Vpc` gives them as the program runs; a 4.x one, which made
+ *   its subnets in the order of its AZs, once a preview knows them. Either
+ *   way the keys are the same, so switching the `Vpc` keeps what's made.
+ * - For a `Vpc` from `get`, the AZ's name, since its lookup keeps no order,
+ *   as `subnetsByAz()` finds it.
+ *
+ * A promise resolves to `undefined` while a preview doesn't know the subnets.
+ * Each subnet is an output of its own, so what's made with it depends on it.
+ *
+ * @param parent What the lookups are made for.
+ * @param what What the subnets are for, for the error messages: `the "MyEfs"
+ * EFS component`.
+ */
+export function privateSubnetsOf(
+  vpc: AnyVpc,
+  parent: Resource,
+  what: string,
+):
+  | Record<string, Output<string>>
+  | Promise<Record<string, Output<string>> | undefined> {
+  if (vpc instanceof Vpc && vpc.privateSubnetsByAz)
+    return vpc.privateSubnetsByAz;
+  if (vpc instanceof OriginalVpc && !vpc.isReferenced)
+    return knownValue(vpc.nodes.privateSubnets).then(
+      (subnets) =>
+        subnets &&
+        Object.fromEntries(subnets.map((subnet, i) => [`${i + 1}`, subnet.id])),
+    );
+  return subnetsByAz(subnetsOf(vpc, "private"), parent, what);
+}
+
+/**
+ * Subnets by the name of the AZ each is in, looked up once a preview knows
+ * their ids, or `undefined` while it doesn't. Two subnets in one AZ are
+ * refused. Each subnet is an output of the list's, so what's made with it
+ * still depends on what made the list.
+ *
+ * @param parent What the lookups are made for.
+ * @param what What the subnets are for, for the error messages.
+ */
+export function subnetsByAz(
+  subnets: Output<string[]>,
+  parent: Resource,
+  what: string,
+): Promise<Record<string, Output<string>> | undefined> {
+  return knownValue(subnets).then(async (ids) => {
+    if (!ids) return undefined;
+    const zones = await Promise.all(
+      ids.map((id) =>
+        ec2
+          .getSubnet({ id }, { parent })
+          .then((subnet) => subnet.availabilityZone),
+      ),
+    );
+    const byAz: Record<string, Output<string>> = {};
+    const seen: Record<string, string> = {};
+    zones.forEach((az, i) => {
+      if (seen[az])
+        throw new VisibleError(
+          `Two of the subnets of ${what} are in "${az}": "${seen[az]}" and "${ids[i]}". What's made for each subnet is kept by its AZ, so there can be one in each.`,
+        );
+      seen[az] = ids[i];
+      byAz[az] = subnets.apply((list) => list[i]);
+    });
+    return byAz;
+  });
 }
 
 /**

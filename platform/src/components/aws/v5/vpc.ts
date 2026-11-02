@@ -368,6 +368,8 @@ interface Network {
   // Whether the private subnets reach the internet. Not known for a VPC
   // that's referenced.
   nat?: boolean;
+  // The private subnets by the AZ's number, for a VPC that's created
+  privateSubnetsByAz?: Record<string, Output<string>>;
 }
 
 /**
@@ -658,6 +660,9 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
       securityGroups: output([this.nodes.securityGroup.id]),
       bastion: output(bastionInstance?.id),
       nat: nat !== undefined,
+      privateSubnetsByAz: Object.fromEntries(
+        privateSubnets.map((subnet, i) => [ids[i], subnet.id]),
+      ),
     };
 
     // A zone for each AZ: as given, or the region's first ones
@@ -1033,6 +1038,15 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
    */
   public get hasNat() {
     return this.network.nat;
+  }
+
+  /**
+   * The private subnets by the AZ's number, as they're kept in `nodes`.
+   * `undefined` for a VPC that's referenced with `get`.
+   * @internal
+   */
+  public get privateSubnetsByAz() {
+    return this.network.privateSubnetsByAz;
   }
 
   /**

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const FILE_SYSTEM = "aws:efs/fileSystem:FileSystem";
 const ACCESS_POINT = "aws:efs/accessPoint:AccessPoint";
@@ -10,10 +11,19 @@ const LAMBDA = "aws:lambda/function:Function";
 const mockArn = (name: string) => `arn:aws:mock:us-east-1:123456789012:${name}`;
 
 const lookups: string[] = [];
+// The AZ a subnet is in, by the last letter of its id: `subnet-0a1b` is in
+// us-east-1b. The mock's own ids end in `_id`.
+const azOf = (id: string) => id.replace(/_id$/, "").slice(-1).toLowerCase();
+
 const pulumi = mockPulumi({
   state: (args) => {
     // A VPC that's looked up has the CIDR block it has
-    if (args.type === VPC && args.id) return { cidrBlock: "10.9.0.0/16" };
+    if (args.type === VPC && args.id)
+      return {
+        cidrBlock: "10.9.0.0/16",
+        // A V5 `Vpc` from `get` is one SST created
+        tagsAll: { "sst:ref-version": "2" },
+      };
     if (args.type === ACCESS_POINT && args.id)
       return {
         arn: `arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/${args.id}`,
@@ -27,6 +37,44 @@ const pulumi = mockPulumi({
   call: (args) => {
     if (args.token === "aws:index/getAvailabilityZones:getAvailabilityZones")
       return { names: ["us-east-1a", "us-east-1b"] };
+    // A VPC given by its ids is looked up for its CIDR block
+    if (args.token === "aws:ec2/getVpc:getVpc")
+      return { id: args.inputs.id, cidrBlock: "10.9.0.0/16" };
+    // What a V5 `Vpc` from `get` looks up: the subnets it finds, in no
+    // order, and the AZ each is in, by the last letter of its id. The VPC
+    // `vpc-twice` has two private subnets in one AZ.
+    const filter = (name: string) =>
+      args.inputs.filters?.find((f: any) => f.name === name)?.values[0];
+    if (args.token === "aws:ec2/getSubnets:getSubnets")
+      return {
+        ids:
+          filter("tag:Name") === "*Public*"
+            ? ["subnet-pub-a", "subnet-pub-b"]
+            : filter("vpc-id") === "vpc-twice"
+              ? ["subnet-one-a", "subnet-two-a"]
+              : ["subnet-priv-b", "subnet-priv-a"],
+      };
+    if (args.token === "aws:ec2/getSubnet:getSubnet")
+      return {
+        id: args.inputs.id,
+        availabilityZone: `us-east-1${azOf(args.inputs.id)}`,
+        cidrBlock: "10.9.0.0/24",
+      };
+    if (args.token === "aws:ec2/getInternetGateway:getInternetGateway")
+      return { internetGatewayId: "igw-shared" };
+    if (args.token === "aws:ec2/getSecurityGroups:getSecurityGroups")
+      return { ids: ["sg-default"] };
+    if (args.token === "aws:ec2/getRouteTable:getRouteTable")
+      return { routeTableId: `rtb-${args.inputs.subnetId}` };
+    if (args.token === "aws:ec2/getNatGateways:getNatGateways")
+      return { ids: [] };
+    if (args.token === "aws:ec2/getInstances:getInstances")
+      return { ids: [], publicIps: [] };
+    if (args.token === "aws:route53/getZone:getZone")
+      return {
+        linkedServiceDescription:
+          "arn:aws:servicediscovery:us-east-1:123456789012:namespace/ns-shared",
+      };
     if (args.token === "aws:efs/getAccessPoints:getAccessPoints") {
       lookups.push(args.inputs.fileSystemId);
       return { ids: ["fsap-first", "fsap-second"] };
@@ -39,6 +87,7 @@ describe("Efs", () => {
   let OriginalEfs: typeof import("../../../src/components/aws/efs").Efs;
   let Efs: typeof import("../../../src/components/aws/v5/efs").Efs;
   let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let V5Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
   let Cluster: typeof import("../../../src/components/aws/v5/cluster").Cluster;
   let Function: typeof import("../../../src/components/aws/v5/function").Function;
   let Service: typeof import("../../../src/components/aws/v5/service").Service;
@@ -49,6 +98,7 @@ describe("Efs", () => {
     OriginalEfs = (await import("../../../src/components/aws/efs")).Efs;
     Efs = (await import("../../../src/components/aws/v5/efs")).Efs;
     Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    V5Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
     Cluster = (await import("../../../src/components/aws/v5/cluster")).Cluster;
     Function = (await import("../../../src/components/aws/v5/function"))
       .Function;
@@ -56,6 +106,7 @@ describe("Efs", () => {
     Task = (await import("../../../src/components/aws/v5/task")).Task;
     aws = await import("@pulumi/aws");
     await import("../../../src/components/aws/takeover/efs");
+    await import("../../../src/components/aws/takeover/vpc");
     await import("../../../src/components/aws/takeover/function");
     await import("../../../src/components/aws/takeover/service");
     await import("../../../src/components/aws/takeover/task");
@@ -77,6 +128,18 @@ describe("Efs", () => {
       .filter((r) => r.type.startsWith("aws:") && r.name.startsWith("MyEfs"))
       .map((r) => r.name);
   const customVpc = { id: "vpc-1", subnets: ["subnet-0a1b", "subnet-2c3d"] };
+  // What a switch changes: a mount target is now removed before it's made
+  // again, since EFS allows one in each AZ. Nothing in AWS changes.
+  const removedFirst = (...subnets: string[]) =>
+    subnets.map((subnet): [string, string[]] => [
+      `MyEfsMountTarget${subnet}`,
+      ["options.deleteBeforeReplace"],
+    ]);
+  const inVpc = removedFirst(
+    "MyVpcPrivateSubnet1_id",
+    "MyVpcPrivateSubnet2_id",
+  );
+  const inIds = removedFirst("subnet-0a1b", "subnet-2c3d");
   const takesOver = async (original: () => void, v5: () => void) => {
     const result = await pulumi.takesOver(original, v5);
     return {
@@ -93,11 +156,16 @@ describe("Efs", () => {
       original: () => OriginalEfs,
       v5: () => Efs,
       check: () => expect(resource("MyEfsFileSystem").type).toBe(FILE_SYSTEM),
+      // The 4.x Efs made its security group from the VPC's id together with
+      // its subnets, so the group waited on them, which it doesn't need. The
+      // mount targets, which do, still go before the subnets.
+      needlessOrder: /^MyEfsSecurityGroup before MyVpcPrivateSubnet\d$/,
       cases: {
         "in a Vpc": {
           create: (Efs, opts) => {
             new Efs("MyEfs", { vpc: new Vpc("MyVpc") }, opts);
           },
+          changed: inVpc,
           check: () =>
             expect(
               pulumi.resources.filter((r) => r.type === MOUNT_TARGET),
@@ -107,56 +175,76 @@ describe("Efs", () => {
           create: (Efs, opts) => {
             new Efs("MyEfs", { vpc: customVpc }, opts);
           },
+          // The VPC is looked up with a function, not read into the state
+          unclaimed: [`${VPC}::MyEfsVpc`],
+          changed: inIds,
           check: () => {
-            // The VPC is looked up as it was, under the component
-            expect(resource("MyEfsVpc")).toMatchObject({
-              kind: "read",
-              options: { id: "vpc-1" },
-            });
+            expect(names()).not.toContain("MyEfsVpc");
             expect(
               pulumi.resources.filter((r) => r.type === MOUNT_TARGET),
             ).toHaveLength(2);
           },
         },
-        "the ids as an output, with its own throughput and performance": (
-          Efs,
-          opts,
-        ) => {
-          new Efs(
-            "MyEfs",
-            {
-              vpc: output({ id: "vpc-1", subnets: [output("subnet-0a1b")] }),
-              throughput: "bursting",
-              performance: output("max-io" as const),
-            },
-            opts,
-          );
+        // The V5 one takes the ids as a plain object, with outputs inside
+        "the ids as an output, with its own throughput and performance": {
+          original: (opts) => {
+            new OriginalEfs(
+              "MyEfs",
+              {
+                vpc: output({
+                  id: "vpc-1",
+                  subnets: [output("subnet-0a1b")],
+                }),
+                throughput: "bursting",
+                performance: output("max-io" as const),
+              },
+              opts,
+            );
+          },
+          v5: (opts) => {
+            new Efs(
+              "MyEfs",
+              {
+                vpc: { id: output("vpc-1"), subnets: [output("subnet-0a1b")] },
+                throughput: "bursting",
+                performance: output("max-io" as const),
+              },
+              opts,
+            );
+          },
+          unclaimed: [`${VPC}::MyEfsVpc`],
+          changed: removedFirst("subnet-0a1b"),
         },
-        "transform functions": (Efs, opts) => {
-          new Efs(
-            "MyEfs",
-            {
-              vpc: customVpc,
-              transform: {
-                fileSystem: (args: any) => {
-                  args.throughputMode = "provisioned";
-                  args.provisionedThroughputInMibps = 8;
-                  return undefined;
-                },
-                securityGroup: (args: any) => {
-                  args.description = "Files";
-                  return undefined;
-                },
-                accessPoint: (args: any) => {
-                  args.posixUser = { uid: 1000, gid: 1000 };
-                  return undefined;
+        "transform functions": {
+          unclaimed: [`${VPC}::MyEfsVpc`],
+          changed: inIds,
+          create: (Efs, opts) => {
+            new Efs(
+              "MyEfs",
+              {
+                vpc: customVpc,
+                transform: {
+                  fileSystem: (args: any) => {
+                    args.throughputMode = "provisioned";
+                    args.provisionedThroughputInMibps = 8;
+                    return undefined;
+                  },
+                  securityGroup: (args: any) => {
+                    args.description = "Files";
+                    return undefined;
+                  },
+                  accessPoint: (args: any) => {
+                    args.posixUser = { uid: 1000, gid: 1000 };
+                    return undefined;
+                  },
                 },
               },
-            },
-            opts,
-          );
+              opts,
+            );
+          },
         },
         "mounted by a function, a service and a task": {
+          changed: inVpc,
           create: (Efs, opts) => {
             const vpc = new Vpc("MyVpc");
             const efs = new Efs("MyEfs", { vpc }, opts);
@@ -258,13 +346,14 @@ describe("Efs", () => {
       const efs = new Efs("MyEfs", { vpc: customVpc });
       await pulumi.settle();
 
+      // By the AZ each subnet is in, which is looked up. The VPC is looked up
+      // with a function, so it isn't in the state.
       expect(created().sort()).toEqual([
         "MyEfsAccessPoint",
         "MyEfsFileSystem",
-        "MyEfsMountTargetSubnet0a1b",
-        "MyEfsMountTargetSubnet2c3d",
+        "MyEfsMountTargetUseast1b",
+        "MyEfsMountTargetUseast1d",
         "MyEfsSecurityGroup",
-        "MyEfsVpc",
       ]);
       expect(resource("MyEfsFileSystem").inputs).toMatchObject({
         performanceMode: "generalPurpose",
@@ -282,11 +371,15 @@ describe("Efs", () => {
           },
         ],
       });
-      expect(resource("MyEfsMountTargetSubnet2c3d").inputs).toEqual({
+      expect(resource("MyEfsMountTargetUseast1d").inputs).toEqual({
         fileSystemId: "MyEfsFileSystem_id",
         subnetId: "subnet-2c3d",
         securityGroups: ["MyEfsSecurityGroup_id"],
       });
+      // EFS allows one in each AZ, so a new one can't be made beside it
+      expect(
+        resource("MyEfsMountTargetUseast1d").options.deleteBeforeReplace,
+      ).toBe(true);
       expect(resource("MyEfsAccessPoint").inputs).toMatchObject({
         fileSystemId: "MyEfsFileSystem_id",
         posixUser: { uid: 0, gid: 0 },
@@ -314,9 +407,9 @@ describe("Efs", () => {
       expect(names()).not.toContain("MyEfsVpc");
     });
 
-    // A subnet can't be deleted while a mount target is in it. A mount target
-    // is given its subnet's id as a plain value, and still depends on the
-    // subnets: through its security group, which is given the VPC they're in.
+    // A subnet can't be deleted while a mount target is in it. The mount
+    // target is given its subnet as an output of the VPC's, so it depends on
+    // it, though it's created once a preview knows the subnets.
     it("removes a mount target before the subnet it's in", async () => {
       const vpc = new Vpc("MyVpc");
       new Efs("MyEfs", { vpc });
@@ -334,15 +427,15 @@ describe("Efs", () => {
 
       const dependencies = resource("MyEfsAccessPoint").options.dependencies;
       for (const target of [
-        "MyEfsMountTargetSubnet0a1b",
-        "MyEfsMountTargetSubnet2c3d",
+        "MyEfsMountTargetUseast1b",
+        "MyEfsMountTargetUseast1d",
       ])
         expect(dependencies.some((urn: string) => urn.endsWith(target))).toBe(
           true,
         );
     });
 
-    it("has every part in nodes, the mount targets by subnet", async () => {
+    it("has every part in nodes, the mount targets by their AZ", async () => {
       const efs = new Efs("MyEfs", { vpc: customVpc });
       await pulumi.settle();
 
@@ -350,30 +443,30 @@ describe("Efs", () => {
       expect(efs.nodes.accessPoint).toBeInstanceOf(aws.efs.AccessPoint);
       expect(efs.nodes.securityGroup).toBeInstanceOf(aws.ec2.SecurityGroup);
       expect(Object.keys(efs.nodes.mountTarget)).toEqual([
-        "subnet-0a1b",
-        "subnet-2c3d",
+        "us-east-1b",
+        "us-east-1d",
       ]);
-      expect(efs.nodes.mountTarget["subnet-0a1b"]).toBeInstanceOf(
-        aws.efs.MountTarget,
-      );
+      expect(
+        await pulumi.resolve(efs.nodes.mountTarget["us-east-1b"].subnetId),
+      ).toBe("subnet-0a1b");
     });
 
-    it("transforms the mount targets, each with its subnet", async () => {
+    it("transforms the mount targets, each with its key", async () => {
       new Efs("MyEfs", {
         vpc: customVpc,
         transform: {
-          mountTarget: (args, _opts, _name, subnet) => {
-            if (subnet === "subnet-0a1b") args.ipAddress = "10.9.0.10";
+          mountTarget: (args, _opts, _name, key) => {
+            if (key === "us-east-1b") args.ipAddress = "10.9.0.10";
           },
         },
       });
       await pulumi.settle();
 
-      expect(resource("MyEfsMountTargetSubnet0a1b").inputs.ipAddress).toBe(
+      expect(resource("MyEfsMountTargetUseast1b").inputs.ipAddress).toBe(
         "10.9.0.10",
       );
       expect(
-        resource("MyEfsMountTargetSubnet2c3d").inputs.ipAddress,
+        resource("MyEfsMountTargetUseast1d").inputs.ipAddress,
       ).toBeUndefined();
     });
 
@@ -397,13 +490,136 @@ describe("Efs", () => {
         });
 
       expect(await takesOver(create(OriginalEfs), create(Efs))).toEqual({
-        unclaimed: [],
-        changed: [["MyEfsAccessPoint", ["rootDirectory"]]],
+        unclaimed: [`${VPC}::MyEfsVpc`],
+        changed: expect.arrayContaining([
+          ["MyEfsAccessPoint", ["rootDirectory"]],
+          ...inIds,
+        ]),
       });
       expect(resource("MyEfsAccessPoint").inputs.rootDirectory).toEqual({
         path: "/",
         creationInfo: { ownerUid: 1000, ownerGid: 1000, permissions: "755" },
       });
+    });
+  });
+
+  describe("the VPC it's in", () => {
+    it("has a mount target in each AZ of a Vpc it's given, by the AZ's number", async () => {
+      const efs = new Efs("MyEfs", { vpc: new V5Vpc("MyVpc") });
+      await pulumi.settle();
+
+      expect(Object.keys(efs.nodes.mountTarget)).toEqual(["1", "2"]);
+      expect(resource("MyEfsMountTarget1").inputs.subnetId).toBe(
+        "MyVpcPrivateSubnet1_id",
+      );
+      expect(resource("MyEfsMountTarget2").inputs.subnetId).toBe(
+        "MyVpcPrivateSubnet2_id",
+      );
+    });
+
+    // So a new stage's preview, which doesn't know the subnets' ids, has
+    // them. The subnets of any other VPC are looked up first.
+    it("makes them without waiting for the subnets, in a Vpc it creates", async () => {
+      const efs = new Efs("MyEfs", { vpc: new V5Vpc("MyVpc") });
+
+      expect(Object.keys(efs.nodes.mountTarget)).toEqual(["1", "2"]);
+      await pulumi.settle();
+    });
+
+    it("keeps its mount targets when it's switched with its Vpc", async () => {
+      const result = await takesOver(
+        () => new OriginalEfs("MyEfs", { vpc: new Vpc("MyVpc") }),
+        () => new Efs("MyEfs", { vpc: new V5Vpc("MyVpc") }),
+      );
+
+      expect(result.unclaimed).toEqual(["sst:sst:Version::MyVpcVersion"]);
+      expect(result.changed).toEqual(inVpc);
+    });
+
+    // Its lookup keeps no order, so they're kept by the AZ each is in
+    it("has one in each AZ of a Vpc from get, by the AZ's name", async () => {
+      const efs = new Efs("MyEfs", { vpc: V5Vpc.get("MyVpc", "vpc-shared") });
+      await pulumi.settle();
+
+      expect(Object.keys(efs.nodes.mountTarget).sort()).toEqual([
+        "us-east-1a",
+        "us-east-1b",
+      ]);
+      expect(
+        await pulumi.resolve(efs.nodes.mountTarget["us-east-1a"].subnetId),
+      ).toBe("subnet-priv-a");
+      expect(
+        resource("MyEfsAccessPoint").options.dependencies.filter(
+          (urn: string) => urn.includes("efs/mountTarget"),
+        ),
+      ).toHaveLength(2);
+    });
+
+    it("refuses a Vpc from get with two private subnets in one AZ", async () => {
+      const errors = await applyErrors(
+        () => new Efs("MyEfs", { vpc: V5Vpc.get("MyVpc", "vpc-twice") }),
+        pulumi.settle,
+      );
+
+      expect([...new Set(errors)]).toContainEqual(
+        expect.stringContaining(
+          'Two of the subnets of the "MyEfs" EFS component are in "us-east-1a": "subnet-one-a" and "subnet-two-a".',
+        ),
+      );
+      expect(names()).not.toContain("MyEfsMountTargetUsEast1a");
+    });
+
+    // Each is kept by its subnet's AZ, so an edit of the list changes only
+    // the AZs it adds or removes
+    it("keeps the others when a subnet is removed from the ids, or they're reordered", async () => {
+      const create = (subnets: string[]) => () =>
+        new Efs("MyEfs", { vpc: { id: "vpc-1", subnets } });
+
+      expect(
+        await takesOver(
+          create(["subnet-0a1b", "subnet-2c3d"]),
+          create(["subnet-2c3d"]),
+        ),
+      ).toEqual({
+        unclaimed: [`${MOUNT_TARGET}::MyEfsMountTargetUseast1b`],
+        changed: [],
+      });
+      expect(
+        await takesOver(
+          create(["subnet-0a1b", "subnet-2c3d"]),
+          create(["subnet-2c3d", "subnet-0a1b"]),
+        ),
+      ).toEqual({ unclaimed: [], changed: [] });
+    });
+
+    // As the 4.x Efs was often given a Vpc's subnets
+    it("takes the ids in an output", async () => {
+      const vpc = new V5Vpc("MyVpc");
+      const efs = new Efs("MyEfs", {
+        vpc: { id: vpc.id, subnets: vpc.privateSubnets },
+      });
+      await pulumi.settle();
+
+      expect(Object.keys(efs.nodes.mountTarget)).toHaveLength(2);
+    });
+
+    it("refuses ids without subnets", async () => {
+      const errors = await applyErrors(
+        () => new Efs("MyEfs", { vpc: { id: "vpc-1" } as any }),
+        pulumi.settle,
+      );
+
+      expect([...new Set(errors)]).toContainEqual(
+        'Missing "vpc.subnets" for the "MyEfs" EFS component. The mount targets are created in them.',
+      );
+    });
+
+    it("refuses another resource in place of a Vpc", () => {
+      expect(
+        () => new Efs("InAnEc2Vpc", { vpc: new aws.ec2.Vpc("Raw", {}) as any }),
+      ).toThrow(
+        'The "vpc" of the "InAnEc2Vpc" EFS component isn\'t a "Vpc" component. Pass a "Vpc", or the ids of a VPC.',
+      );
     });
   });
 

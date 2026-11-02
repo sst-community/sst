@@ -209,6 +209,10 @@ function keepsSecrets(result: Run["result"], built: boolean) {
 // Orders the 4.x components remove resources in that nothing in AWS needs
 function needless(order: string) {
   return (
+    // The 4.x Efs made its security group from the VPC's id together with
+    // its subnets, as in the Efs suite. The group doesn't need them; the
+    // mount targets, which do, still go before the subnets.
+    /^FilesSecurityGroup before NetPrivateSubnet\d$/.test(order) ||
     // A 4.x site creates what it makes from its build inside an apply that
     // waits for the router's outputs, as in the Nextjs suite. Nothing about
     // the site's server or its entries needs the router's distribution or
@@ -594,7 +598,15 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
       "sst:sst:DevCommand::OnSharedDevCommandOnShared",
       "sst:sst:DevCommand::WebDevCommandWeb",
     ]);
-    expect(result.changed).toEqual([]);
+    // The file system's mount targets, one in each AZ, are now removed
+    // before they're made again, since EFS allows one in each. Nothing in
+    // AWS changes.
+    expect(result.changed.map((c) => [c.name, c.fields])).toEqual(
+      ["FilesMountTarget", "FilesMountTarget"].map((name) => [
+        expect.stringMatching(new RegExp(`^${name}subnet-`)),
+        ["options.deleteBeforeReplace"],
+      ]),
+    );
     expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
     // A function in the VPC is removed before the subnets its network
     // interfaces are in

@@ -391,6 +391,8 @@ export class Vpc extends Component implements Link.Linkable {
   private elasticIps: Output<ec2.Eip[]>;
   private _publicSubnets: Output<ec2.Subnet[]>;
   private _privateSubnets: Output<ec2.Subnet[]>;
+  // Whether it's a VPC from `get`, whose subnets were looked up in no order
+  private referenced = false;
   private publicRouteTables: Output<ec2.RouteTable[]>;
   private privateRouteTables: Output<ec2.RouteTable[]>;
   private bastionInstance: Output<ec2.Instance | undefined>;
@@ -411,6 +413,7 @@ export class Vpc extends Component implements Link.Linkable {
 
     if (args && "ref" in args) {
       const ref = reference();
+      this.referenced = true;
       this.vpc = ref.vpc;
       this.internetGateway = ref.internetGateway;
       this.securityGroup = ref.securityGroup;
@@ -1488,6 +1491,14 @@ export class Vpc extends Component implements Link.Linkable {
   /**
    * A list of private subnet IDs in the VPC.
    */
+  /**
+   * Whether it's a VPC from `get`, whose subnets were looked up in no order.
+   * @internal
+   */
+  public get isReferenced() {
+    return this.referenced;
+  }
+
   public get privateSubnets() {
     return this._privateSubnets.apply((subnets) =>
       subnets.map((subnet) => subnet.id),

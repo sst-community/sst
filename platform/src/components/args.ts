@@ -121,6 +121,22 @@ export function notAnOption(args: object, option: string, instead: string) {
 }
 
 /**
+ * The value of an output once a preview knows it, or `undefined` while it
+ * doesn't, like the ids of subnets a new stage is about to create. In a
+ * deploy, every value is known once it's resolved. For deciding from what a
+ * preview knows with `after()`.
+ */
+export function knownValue<T>(value: Output<T>): Promise<T | undefined> {
+  const resolved = value as unknown as {
+    isKnown: Promise<boolean>;
+    promise(): Promise<T>;
+  };
+  return resolved.isKnown.then((known) =>
+    known ? resolved.promise() : undefined,
+  );
+}
+
+/**
  * The same value, without the resources it came from: what's given it doesn't
  * depend on them, though it still waits for the value. For a value that's
  * made on this machine from things in AWS, like a function's built code,

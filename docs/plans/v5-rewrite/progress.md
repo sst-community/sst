@@ -2,6 +2,25 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Efs` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/efs.ts`), with no 4.x component file imported, and on the clean break's list.
+- **No mount target is made inside an `apply`** (the maintainer chose this design from three, on 2026-11-02). 4.x, and the `v5` branch's port, made one for each subnet once the subnets' ids were known, named after each id, so a new stage's `sst diff` didn't list them. Now each is kept by its availability zone, EFS's own rule of one mount target in each:
+  - In a `Vpc` the app creates, by the AZ's number, as the `Vpc` keeps its subnets: made directly for a V5 `Vpc`, which gives its private subnets by that number, and once a preview knows them for a 4.x one, from the order 4.x made them in. The keys are the same, so switching the `Vpc` too keeps them.
+  - In any other VPC, one from `get` or one given by its subnets' ids, by the AZ's name, looked up for each subnet and made with `after()` once a preview knows the subnets. A lookup keeps no order, and an edit of the ids, removing one or reordering them, changes only the AZs it adds or removes. Two subnets in one AZ are refused. Subnets the same deploy creates outside a `Vpc` aren't known to a preview, so `sst diff` can't list their mount targets; the docs say so.
+  - `privateSubnetsOf()` and `subnetsByAz()` in `helpers/vpc.ts` give a VPC's subnets that way, each still an output of what made it, so a mount target is removed before its subnet. `knownValue()` in `args.ts` reads what a preview knows of an output. The 4.x `Vpc` says whether it's from `get`, which changes nothing for an app.
+- **A mount target is removed before it's made again** (`deleteBeforeReplace`). 4.x made the new one first, which EFS refuses when a subnet in an AZ is replaced.
+- **The VPC given by its ids is looked up with a function**, where 4.x read it into the state; a switch drops that read.
+- **A map** moves 4.x's mount targets, named after their subnets' ids, to their keys.
+
+**Checked:** `tsc`, the docs page, and all platform tests: each kind of VPC, the switch with the `Vpc`, removing and reordering ids, the refusals, that a created `Vpc` doesn't wait for the subnets (which fails on the old code), a new stage's preview, and the lab's recorded VPC groups, whose two real mount targets are kept with only the new option.
+
+**Reviewed**, and fixed: the first version kept given ids by their place in the list, so removing one but the last left a deploy stuck on EFS's one mount target in each AZ, and treated a 4.x `Vpc` from `get` as ordered; both are kept by AZ name now. Also a raw error for ids without subnets, and the docs. Not tested under the mock: a 4.x `Vpc` from `get`, which takes the same path as a V5 one.
+
+**Left:** the lab check, with the containers group.
+
 ## 2026-11-02: step 4, the `Task` built the 5.0 way
 
 **Done, committed (not pushed):**
