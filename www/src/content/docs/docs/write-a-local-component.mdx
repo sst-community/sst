@@ -340,15 +340,18 @@ const parts = {
 };
 ```
 
-Or give the resource its new name, and say where it was.
+Or give the resource its new name, and say where it was in the component's next version.
 
 ```ts title="sst.config.ts"
 sst.takeover(Uploads, {
+  version: 2,
   moved: { files: "bucket" },
 });
 ```
 
-The same call lets a new component take over from another one. Give it the other component's type in `from`, and keep the name you gave the component.
+A component with no map is at version 1. Each stage records the version it has, so on a stage that has version 1, `sst deploy` refuses version 2 and says to move it. `sst migrate --check` shows what the move does, and `sst migrate` makes it. A new stage starts at the latest version. Each later change is the next version, and a stage further behind moves through each one.
+
+The same call lets a new component take over from another one, in its version 1. Give it the other component's type in `from`, and keep the name you gave the component.
 
 ---
 

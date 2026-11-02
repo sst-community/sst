@@ -243,8 +243,15 @@ the component reads its args.
   has the examples.
 - **Renaming a part later.** A part's key is in the name of its resource, so a new key
   is a new resource. To change the key and keep what's deployed, declare the part with
-  the name it had: `files: sst.named(aws.s3.Bucket, "Bucket")`. Or give the resource its
-  new name and say where it was: `sst.takeover(Uploads, { moved: { files: "bucket" } })`.
+  the name it had: `files: sst.named(aws.s3.Bucket, "Bucket")`, and nothing else changes.
+  Or give the resource its new name and say where it was, in the component's next
+  version: `sst.takeover(Uploads, { version: 2, moved: { files: "bucket" } })`. A
+  component with no map is at version 1. Each stage records the version it has, so on
+  one that has version 1 a deploy refuses version 2, and `sst migrate` moves it, checked
+  first as `sst migrate --check` shows. A new stage starts at the latest. Each later
+  change is the next version, and a stage further behind is moved through each. A
+  key in `moved` is the old part's own name; for one declared with `sst.named()`, give
+  its old address with a function. `app.takeover(saved)` tests a map under the mock.
 - **Sharing it as a package.** A package imports `component` and the rest from
   `sst/components`, SST's components for a provider from its group, like
   `sst/components/aws`, and each provider from its package. Its repo installs `sst`,
@@ -539,8 +546,10 @@ takeover(ApiGatewayV2, {
   from it.
 - A function definition can still be written the way the 4.x `Function` takes it
   (`role`, `logging.logGroup`, `live`, `url.route`). The V5 one takes those too.
+- A map from 4.x is a component's version 1, so it takes no `version`. A change to a V5
+  component after it's released that moves its resources ships version 2.
 - `takeover()` also takes `from`, the type a component had, for one that takes over
-  from a component of another type. No V5 component needs it.
+  from a component of another type. Only version 1 can. No V5 component needs it.
 - One of SST's own provider resources (`KvKeys`, `BucketFiles`) adds its type to its
   name: `MyFunctionRouteKey.sst.aws.KvKeys`. As a part it's matched without that. If it
   moved, write its old name in full, as a function in `moved`.

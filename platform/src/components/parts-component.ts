@@ -30,8 +30,17 @@ import {
 import type { Permission } from "./aws/permission";
 import type { binding } from "./cloudflare/binding";
 import type { env } from "./linkable";
-import { aliasOf, releasedAddresses, takeoverOf } from "./takeover";
-import { moving, reportPart } from "./move";
+import {
+  type OldAddress,
+  type ReleasedAddress,
+  type Takeover,
+  aliasOf,
+  formerTypeOf,
+  mapsAfter,
+  releasedAddresses,
+  versionOf,
+} from "./takeover";
+import { mapsFrom, moving, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
 import { notAnOption } from "./args";
@@ -61,6 +70,41 @@ export { type PartTransform, type PartialArgs } from "./transform";
  * `sst.aws.permission()`, a Cloudflare binding from `sst.cloudflare.binding()`,
  * or environment variables from `sst.env()`.
  */
+/**
+ * What a helper needs to build parts on a component's behalf, for what two
+ * components share: the component, and its own `part()`, `existingPart()`,
+ * `runsLocally()` and `report()`. A component hands it over with
+ * `this.builder()`.
+ *
+ * @internal
+ */
+export interface PartsBuilder<P extends Parts> {
+  /** The component the parts are built for. */
+  component: PartsComponent<P>;
+  part: {
+    <K extends SingleKeys<P> & CreatedKeys<P>>(
+      key: K,
+      args: PartArgs<P[K]>,
+      opts?: CustomResourceOptions,
+    ): InstanceType<PartClassOf<P[K]>>;
+    <K extends ManyKeys<P> & CreatedKeys<P>>(
+      key: K,
+      id: string,
+      args: PartArgs<P[K]>,
+      opts?: CustomResourceOptions,
+    ): InstanceType<PartClassOf<P[K]>>;
+  };
+  existingPart: {
+    <K extends SingleKeys<P>>(key: K): InstanceType<PartClassOf<P[K]>> | undefined;
+    <K extends ManyKeys<P>>(
+      key: K,
+      id: string,
+    ): InstanceType<PartClassOf<P[K]>> | undefined;
+  };
+  runsLocally(): void;
+  report(report: Report): void;
+}
+
 export type LinkInclude =
   | Permission
   | ReturnType<typeof binding>
@@ -451,6 +495,22 @@ export class PartsComponent<P extends Parts> extends Component {
   }
 
   /**
+   * Hand a helper what it needs to build parts on this component's behalf,
+   * for what two components share, like the `Postgres` and the `Mysql`.
+   *
+   * @internal
+   */
+  protected builder(): PartsBuilder<P> {
+    return {
+      component: this,
+      part: this.part.bind(this),
+      existingPart: this.existingPart.bind(this),
+      runsLocally: () => this.runsLocally(),
+      report: (report) => this.report(report),
+    };
+  }
+
+  /**
    * Tell the core about this component, through the program contract: a
    * function it builds, a command or a task `sst dev` runs, a bastion `sst
    * tunnel` connects through, or a URL to show when a deploy is done. Each
@@ -627,18 +687,24 @@ export class PartsComponent<P extends Parts> extends Component {
     if (moving()) this.reportMoved(part, child.resource);
   }
 
-  // While the stage moves, tell the core what the state map says about a
-  // part: that it's new, replaced, or in the place of what's released
+  // While the stage moves, tell the core what the maps it takes over with say
+  // about a part: that it's new, replaced, or in the place of what's released
   private reportMoved(part: PartRef, resource: Resource) {
-    const how = takeoverOf(this.constructor);
-    if (!how) return;
-    const added = how.added?.includes(part.key) ?? false;
-    const replaced = how.replaced?.[part.key];
-    const released = how.released?.[part.key]?.(this, {
-      name: this.componentName,
-      id: part.id,
-    });
-    if (!added && !replaced && !released) return;
+    const maps = this.takeoverMaps();
+    let added = false;
+    let replaced: string | undefined;
+    const released: ReleasedAddress[] = [];
+    for (const [map, key] of this.keysIn(maps, part.key)) {
+      if (key === undefined) continue;
+      added ||= map.added?.includes(key) ?? false;
+      replaced ??= map.replaced?.[key];
+      const old = map.released?.[key]?.(this, {
+        name: this.componentName,
+        id: part.id,
+      });
+      released.push(...[old ?? []].flat());
+    }
+    if (!added && !replaced && !released.length) return;
     reportPart({
       component: this.urn,
       type: this.componentType,
@@ -648,9 +714,9 @@ export class PartsComponent<P extends Parts> extends Component {
       urn: all([]).apply(() => resource.urn),
       ...(added ? { added } : {}),
       ...(replaced ? { replaced } : {}),
-      releases: [released ?? []]
-        .flat()
-        .map((old) => releasedAddresses(old, this, this.componentName)),
+      releases: released.map((old) =>
+        releasedAddresses(old, this, this.componentName),
+      ),
     });
   }
 
@@ -776,36 +842,71 @@ export class PartsComponent<P extends Parts> extends Component {
       : lookup.get(name, resourceId, undefined, lookupOpts);
   }
 
-  // Where a part's resource lived in the component this one takes over from.
-  // `name` is the part's own.
-  private aliasesOf(key: string, name: string, id?: string) {
-    const moved = takeoverOf(this.constructor)?.moved?.[key];
-    if (!moved) return [];
-
-    // A part that only changed its key was named the way 4.x names things:
-    // the component, the key, then the id.
-    const old =
-      typeof moved === "string"
-        ? { name: `${this.componentName}${logicalName(moved)}${logicalName(id ?? "")}` }
-        : moved(this, { name: this.componentName, id });
-    // Each old address that isn't known yet stands in under a name of its own
-    return [old ?? []]
-      .flat()
-      .map((address, i) => aliasOf(address, i === 0 ? name : `${name}-${i}`));
+  // The maps this run takes the component over with: those from the version
+  // the stage has it at to its own. None when the stage has none of it, or has
+  // it at this version, as on every deploy after the one that moved it.
+  private takeoverMaps() {
+    const from = mapsFrom(
+      this.componentType,
+      versionOf(this.constructor),
+      formerTypeOf(this.constructor),
+      this.nested,
+    );
+    return from === undefined ? [] : mapsAfter(this.constructor, from);
   }
 
-  // Where a resource created on this component's behalf lived, by the map
+  // Each map with the key the part has once that map has taken over: the
+  // part's own key for the last, and for each before it what the next one
+  // says it was. `undefined` once a map says where it was by its address, as
+  // what came before can't be followed by its key.
+  private keysIn(maps: Takeover<Parts, any>[], key: string) {
+    const keys: [Takeover<Parts, any>, string | undefined][] = [];
+    let current: string | undefined = key;
+    for (const map of [...maps].reverse()) {
+      keys.unshift([map, current]);
+      const moved: unknown = current && map.moved?.[current];
+      if (typeof moved === "string") current = moved;
+      else if (moved) current = undefined;
+    }
+    return keys;
+  }
+
+  // Where a part's resource lived at each version the stage moves it from.
+  // `name` is the part's own.
+  private aliasesOf(key: string, name: string, id?: string) {
+    const old: OldAddress[] = [];
+    for (const [map, current] of this.keysIn(this.takeoverMaps(), key)) {
+      const moved = current === undefined ? undefined : map.moved?.[current];
+      if (!moved) continue;
+      if (typeof moved !== "string") {
+        old.push(...[moved(this, { name: this.componentName, id }) ?? []].flat());
+        continue;
+      }
+      // Before SST 5 a part was named the way 4.x names things: the component,
+      // the key, then the id. After, the way SST 5 does.
+      const idPart =
+        id === undefined
+          ? ""
+          : (map.version ?? 1) === 1
+            ? logicalName(id)
+            : idName(id);
+      old.push({ name: `${this.componentName}${logicalName(moved)}${idPart}` });
+    }
+    // Each old address that isn't known yet stands in under a name of its own
+    return old.map((address, i) =>
+      aliasOf(address, i === 0 ? name : `${name}-${i}`),
+    );
+  }
+
+  // Where a resource created on this component's behalf lived, by the maps
   private delegatedAliases(name: string, type: string) {
-    const delegated = takeoverOf(this.constructor)?.delegated;
-    if (!delegated) return [];
-    const old = delegated(this, {
-      name,
-      type,
-      componentName: this.componentName,
-    });
-    return [old ?? []]
-      .flat()
-      .map((address, i) => aliasOf(address, i === 0 ? name : `${name}-${i}`));
+    const old = this.takeoverMaps().flatMap((map) => [
+      map.delegated?.(this, { name, type, componentName: this.componentName }) ??
+        [],
+    ].flat());
+    return old.map((address, i) =>
+      aliasOf(address, i === 0 ? name : `${name}-${i}`),
+    );
   }
 
   private nameOf(key: string, id?: string) {

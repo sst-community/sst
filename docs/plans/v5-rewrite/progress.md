@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, an architecture review, and component versions
+
+**The review.** Before the rest of the components, the maintainer asked whether the design still holds: the same functionality for developers, a codebase clearly more mature than 4.x's, and custom components still easy to write. An independent review and a read of the code found the design right, and what to fix, now a [decision](plan.md#decisions) with its order. The main one was a bug: an app's or a package's own component that renamed a part with `sst.takeover()`, as the README says to, was refused on a stage SST 5 created, as if it were SST 4's. And after one move, a later map was applied with no check.
+
+**Done, committed (not pushed): component versions** ([decision](plan.md#decisions)).
+
+- **Maps are numbered.** `sst.takeover(C, { version: 2, moved })`; version 1 takes over from a component's form before SST 5, and is the default. A component with no map is at version 1, SST 4's form at 0. A map's keys may be what a part was called in its version.
+- **The state records each component's version** in `sst:sst:Versions`, left at the end of every deploy and waiting for everything it deployed, so it has what an app or a package registered as the program ran, components inside SST's own included, and a deploy that fails partway leaves the one before. The marker keeps saying the stage is on SST 5, with a list the record takes the place of. The core reads both, and tells the program which types the stage has only inside SST's components.
+- **A stage behind a component's version is refused by a deploy and a diff**, and `sst migrate` moves it, applying every map from the stage's version on, following renamed keys through each, checked as the first move is. A stage ahead of it, deployed with newer code, is refused by a deploy, a diff and a move: deploying an older branch would delete what a move kept. A refresh and a remove run whatever the versions. Aliases are given only to a component that's behind, not on every deploy. A move's marker waits for everything it deploys, so a move that fails partway is run again.
+- **For what components share, a helper can build parts on a component's behalf** with `this.builder()`, typed, without reaching into the component.
+
+**Checked:** `tsc`, all platform tests (2,335), the Go tests. On a local Floci stage, nothing in AWS: an app's own component at version 1 deployed; version 2 refused by a deploy; `sst migrate --check` and the move kept the bucket under its new key; `sst diff` showed no changes; the record listed version 2; version 1 deployed again was refused and changed nothing. A first build deleted the moved bucket there, because only a component with a map was checked; every component is now. Removed, and the target's files deleted.
+
+**Reviewed**, and fixed: a component inside SST's own got no aliases, since the core leaves those out of the stage's types; a map registered as the program ran was missing from the marker, so the next deploy refused the component; a move that failed partway left the marker with versions it hadn't reached; a move with older code wasn't refused. The decision's wording, and the README's note on a part declared with `sst.named()`.
+
 ## 2026-11-02: step 4, the lab check of the `Postgres`, `Mysql`, `Aurora` and `Redis`, with the `Vpc`
 
 **Checked in the lab** (a stage of its own, the only one with a VPC, with a CLI built from the branch). The lab app's databases group: a `Postgres` with a proxy, a `Mysql`, a `Redis`, an `Aurora` and a `Dsql`, in a VPC with a NAT gateway in each AZ and a bastion, and a function linked to all five that says which properties each link gives it. The move switched the `Vpc` with them.

@@ -1188,9 +1188,10 @@ describe("Component parts", () => {
       ).toEqual({ unclaimed: [], changed: [], unordered: [], revealed: [] });
       expect(names()).toEqual(["Docs", "DocsBucket"]);
 
-      // Given its new name, and told where it was: the resource is kept
+      // Given its new name, and told where it was in its next version: the
+      // resource is kept
       const Moved = define(aws.s3.Bucket);
-      takeover(Moved, { moved: { files: "bucket" } });
+      takeover(Moved, { version: 2, moved: { files: "bucket" } });
       expect(
         await pulumi.takesOver(
           () => new Before("Docs", { teams: [] }),
@@ -1223,12 +1224,13 @@ describe("Component parts", () => {
         ),
       ).toEqual({ unclaimed: [], changed: [], unordered: [], revealed: [] });
       // What the map says about the parts is told to the core only while the
-      // stage moves (move.test.ts)
-      takeover(After, { from: "docs:index:Uploads", added: ["audit"] });
-      new After("Docs", { teams: [], audit: true });
+      // stage moves (move.test.ts). A class that extends it can have a map of
+      // its own.
+      class WithAudit extends After {}
+      takeover(WithAudit, { from: "docs:index:Uploads", added: ["audit"] });
+      new WithAudit("Docs", { teams: [], audit: true });
       await pulumi.settle();
       expect(pulumi.moved()).toEqual([]);
-      takeover(After, { from: "docs:index:Uploads" });
 
       // A class that extends it takes over the same way
       class Extended extends After {}

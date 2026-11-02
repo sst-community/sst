@@ -15,7 +15,8 @@ func TestHoldsResources(t *testing.T) {
 	marker := resourceAt("urn:pulumi:dev::app::sst:sst:Moved::Moved", MovedMarker)
 
 	assert.False(t, holdsResources(nil), "a new stage")
-	assert.False(t, holdsResources([]apitype.ResourceV3{stack, provider, marker}), "the stack, its providers and the marker aren't deployed")
+	record := resourceAt("urn:pulumi:dev::app::sst:sst:Versions::Versions", VersionsRecord)
+	assert.False(t, holdsResources([]apitype.ResourceV3{stack, provider, marker, record}), "the stack, its providers, the marker and the record aren't deployed")
 	assert.True(t, holdsResources([]apitype.ResourceV3{stack, provider, bucket}))
 }
 
@@ -27,9 +28,10 @@ func TestComponentTypes(t *testing.T) {
 	}
 	custom := resourceAt("urn:pulumi:dev::app::sst:aws:Bucket$aws:s3/bucketV2:BucketV2::UploadsBucket", "aws:s3/bucketV2:BucketV2")
 	custom.Custom = true
-	types := componentTypes([]apitype.ResourceV3{
+	types, nested := componentTypes([]apitype.ResourceV3{
 		component("urn:pulumi:dev::app::pulumi:pulumi:Stack::app-dev", "pulumi:pulumi:Stack"),
 		component("urn:pulumi:dev::app::sst:sst:Moved::Moved", MovedMarker),
+		component("urn:pulumi:dev::app::sst:sst:Versions::Versions", VersionsRecord),
 		component("urn:pulumi:dev::app::sst:aws:Bucket::Uploads", "sst:aws:Bucket"),
 		custom,
 		// Inside one of SST's components, it moves with it
@@ -40,12 +42,19 @@ func TestComponentTypes(t *testing.T) {
 		component("urn:pulumi:dev::app::acme:index:Wrapper::Wrapper", "acme:index:Wrapper"),
 	})
 	assert.Equal(t, []string{"acme:index:Wrapper", "sst:aws:Bucket", "sst:aws:Nextjs"}, types)
+	// What it has only inside SST's components: a function, here
+	assert.Equal(t, []string{"sst:aws:Function"}, nested)
 }
 
 func TestMovedComponents(t *testing.T) {
-	assert.Equal(t, []string{"sst:aws:Bucket", "sst:aws:Nextjs"}, movedComponents(map[string]interface{}{
+	assert.Equal(t, map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 2}, movedComponents(map[string]interface{}{
+		"components": map[string]interface{}{"sst:aws:Bucket": float64(1), "acme:index:Uploads": float64(2)},
+	}))
+	// A marker written before components had versions
+	assert.Equal(t, map[string]int{"sst:aws:Bucket": 1, "sst:aws:Nextjs": 1}, movedComponents(map[string]interface{}{
 		"components": []interface{}{"sst:aws:Bucket", "sst:aws:Nextjs"},
 	}))
+	assert.Empty(t, movedComponents(map[string]interface{}{"components": map[string]interface{}{"x": "1", "y": float64(0)}}))
 	assert.Empty(t, movedComponents(map[string]interface{}{}))
 	assert.Empty(t, movedComponents(nil))
 }
@@ -71,14 +80,17 @@ func TestStageState(t *testing.T) {
 	state := stageState(&CompleteEvent{
 		Versions:        map[string]int{"Uploads": 1},
 		Moved:           true,
-		MovedComponents: []string{"sst:aws:Bucket"},
-		Resources:       []apitype.ResourceV3{bucket},
+		MovedComponents: map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 2},
+		// The last deploy that finished recorded what it created
+		RecordedVersions: map[string]int{"acme:index:Uploads": 1},
+		Resources:        []apitype.ResourceV3{bucket},
 	})
 	assert.Equal(t, StageState{
 		Versions:   map[string]int{"Uploads": 1},
 		Moved:      true,
-		Components: []string{"sst:aws:Bucket"},
+		Components: map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 1},
 		Types:      []string{"sst:aws:Bucket"},
+		Nested:     []string{},
 		Empty:      false,
 	}, state)
 	assert.True(t, stageState(&CompleteEvent{}).Empty)

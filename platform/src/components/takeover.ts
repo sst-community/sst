@@ -52,13 +52,21 @@ export interface ReleasedAddress extends OldAddress {
 }
 
 /**
- * How a component takes over from the one it replaces, so that switching to
- * it keeps the resources that are already deployed.
+ * How a component takes over from what it was before, so that a stage keeps
+ * the resources that are already deployed: from its form before SST 5, or
+ * from its own earlier version.
  *
  * A deployed component with the same type and name becomes this component.
  * Each of its resources is matched to the part with the same key. List a part
  * under `moved` when it used to have a different key, or lived in a different
  * component.
+ *
+ * Each map is numbered. Version 1 takes over from the component's form before
+ * SST 5, like SST 4's. A later change to a component that moves its resources
+ * ships the next version, which takes over from the one before it. A
+ * component with no map is at version 1. A stage records the version of each
+ * component it has; one that's behind is moved by `sst migrate`, which applies
+ * every map from the stage's version on, and a plain deploy refuses it.
  *
  * `sst migrate --check` fails on anything else a move would create, delete or
  * replace in the cloud, unless it's listed under `added`, `replaced` or
@@ -67,12 +75,19 @@ export interface ReleasedAddress extends OldAddress {
  */
 export interface Takeover<P extends Parts, C = unknown> {
   /**
+   * The version this map takes the component to, from the one before it.
+   * Version 1 takes over from its form before SST 5.
+   *
+   * @default `1`
+   */
+  version?: number;
+  /**
    * The type of the component this one takes over from, when that isn't this
-   * component's own type.
+   * component's own type. Only version 1 can change the type.
    */
   from?: string;
   moved?: {
-    [K in keyof P]?:
+    [K in PartKey<P>]?:
       | string
       | ((
           component: C,
@@ -81,20 +96,20 @@ export interface Takeover<P extends Parts, C = unknown> {
         ) => OldAddress | OldAddress[] | undefined);
   };
   /** Parts the component it takes over didn't have. A move creates them. */
-  added?: (keyof P)[];
+  added?: PartKey<P>[];
   /**
    * Parts a move replaces, each with what changes for the user, as the
    * migration guide says it: "The function's URL changes." Only a part that
    * holds no data can be replaced.
    */
-  replaced?: { [K in keyof P]?: string };
+  replaced?: { [K in PartKey<P>]?: string };
   /**
    * Parts that take the place of resources a move can't carry over, as when
    * the type changes. Those leave the state without their delete being
    * called, and the part writes the same thing again or adopts it by its id.
    */
   released?: {
-    [K in keyof P]?: (
+    [K in PartKey<P>]?: (
       component: C,
       /** The component's name, and the part's id for a `many` part. */
       part: { name: string; id?: string },
@@ -118,9 +133,14 @@ export interface Takeover<P extends Parts, C = unknown> {
   ) => OldAddress | OldAddress[] | undefined;
 }
 
+// A part's key in a map: one of the component's parts, or, in a map of an
+// earlier version, what a part was called then
+export type PartKey<P extends Parts> = (keyof P & string) | (string & {});
+
 // By class and not by type: a component and the one that replaces it can
-// have the same type
-const takeovers = new Map<Function, Takeover<any, any>>();
+// have the same type. Each class's maps are kept in the order of their
+// versions.
+const takeovers = new Map<Function, Takeover<any, any>[]>();
 
 /**
  * Say how a component takes over from the one it replaces. This lives apart
@@ -137,8 +157,14 @@ const takeovers = new Map<Function, Takeover<any, any>>();
  * });
  * ```
  *
+ * A later change ships the next version:
+ *
+ * ```ts
+ * takeover(Uploads, { version: 2, moved: { files: "bucket" } });
+ * ```
+ *
  * @param component The component that takes over.
- * @param how The parts that moved, and the type it takes over from when that's another type.
+ * @param how Its version, the parts that moved, and the type it takes over from when that's another type.
  */
 export function takeover<P extends Parts, C>(
   component: {
@@ -148,35 +174,100 @@ export function takeover<P extends Parts, C>(
   },
   how: Takeover<P, C>,
 ) {
-  takeovers.set(component, how);
+  const version = how.version ?? 1;
+  const type = component.__pulumiType.replaceAll(":", ".");
+  if (!Number.isInteger(version) || version < 1)
+    throw new Error(
+      `The map of ${type} has version ${version}. A version is a whole number from 1.`,
+    );
+  if (how.from && version !== 1)
+    throw new Error(
+      `Version ${version} of ${type} names the type it takes over from. Only version 1 can: a component keeps its type after that.`,
+    );
+  const maps = takeovers.get(component) ?? [];
+  if (maps.some((map) => (map.version ?? 1) === version))
+    throw new Error(`${type} has two maps for version ${version}.`);
+  takeovers.set(
+    component,
+    [...maps, how].sort((a, b) => (a.version ?? 1) - (b.version ?? 1)),
+  );
 }
 
 /**
- * How a component's class takes over, or the class it extends.
+ * The maps of a component's class, or of the class it extends, in the order
+ * of their versions.
  * @internal
  */
 export function takeoverOf(
   component: Function | undefined,
-): Takeover<Parts, any> | undefined {
+): Takeover<Parts, any>[] | undefined {
   for (let cls = component; cls; cls = Object.getPrototypeOf(cls)) {
-    const how = takeovers.get(cls);
-    if (how) return how;
+    const maps = takeovers.get(cls);
+    if (maps) return maps;
   }
 }
 
 /**
- * The types of the components a state map takes over from: those with a 5.0
- * form. A map that takes over from another type covers that type only.
+ * The version of a component's class: that of its last map, or 1.
+ * @internal
+ */
+export function versionOf(component: Function | undefined): number {
+  const maps = takeoverOf(component);
+  return maps ? (maps[maps.length - 1].version ?? 1) : 1;
+}
+
+/**
+ * The type a component's class took over from before SST 5, when it has a
+ * form from then and that had another type.
+ * @internal
+ */
+export function formerTypeOf(component: Function | undefined) {
+  return takeoverOf(component)?.find((map) => (map.version ?? 1) === 1)?.from;
+}
+
+/**
+ * The maps that take a component's class from the given version to its own,
+ * in order.
+ * @internal
+ */
+export function mapsAfter(component: Function | undefined, version: number) {
+  return (takeoverOf(component) ?? []).filter(
+    (map) => (map.version ?? 1) > version,
+  );
+}
+
+/**
+ * The types of the components that have a form before SST 5, which a
+ * version 1 map takes over from. A map that takes over from another type
+ * covers that type only.
  * @internal
  */
 export function takenOverTypes(): Set<string> {
   const types = new Set<string>();
-  for (const [component, how] of takeovers)
-    types.add(
-      how.from ??
-        (component as unknown as { __pulumiType: string }).__pulumiType,
-    );
+  for (const [component, maps] of takeovers) {
+    const first = maps.find((map) => (map.version ?? 1) === 1);
+    if (first)
+      types.add(
+        first.from ??
+          (component as unknown as { __pulumiType: string }).__pulumiType,
+      );
+  }
   return types;
+}
+
+/**
+ * The version of each component class that has a map, by type. Two classes
+ * of one type, like SST 4's and SST 5's form, give the larger.
+ * @internal
+ */
+export function versionedTypes(): Map<string, number> {
+  const versions = new Map<string, number>();
+  for (const [component] of takeovers) {
+    const type = (component as unknown as { __pulumiType: string })
+      .__pulumiType;
+    versions.set(type, Math.max(versions.get(type) ?? 0, versionOf(component)));
+  }
+  return versions;
 }
 
 /**

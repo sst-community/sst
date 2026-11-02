@@ -13,8 +13,18 @@ import {
 } from "@pulumi/pulumi";
 import { nameResource, registerNamingRule } from "./naming.js";
 import type { NamingRule } from "./naming-rules.js";
-import { takenOverTypes, takeoverOf } from "./takeover.js";
-import { newFormCreated, oldFormCreated } from "./move.js";
+import {
+  formerTypeOf,
+  takenOverTypes,
+  takeoverOf,
+  versionOf,
+} from "./takeover.js";
+import {
+  mapsFrom,
+  newFormCreated,
+  noteCreated,
+  oldFormCreated,
+} from "./move.js";
 import { VisibleError } from "./error.js";
 import { checkComponent } from "./check.js";
 import path from "path";
@@ -48,6 +58,12 @@ export class Component extends ComponentResource {
   protected readonly componentType: string;
   /** The name the component was created with. */
   protected readonly componentName: string;
+  /**
+   * Whether it's inside one of SST's components, and moves with it.
+   *
+   * @internal
+   */
+  protected readonly nested: boolean;
 
   constructor(
     type: string,
@@ -61,12 +77,23 @@ export class Component extends ComponentResource {
     }
     // The app's and its packages' checks see the args as transformed
     checkComponent(type, name, args);
-    // A component with a 5.0 form, in that form or in SST 4's. One inside
-    // another of SST's components moves with it.
-    const how = takeoverOf(new.target);
-    if (!Component.insideSst(opts?.parent)) {
-      if (how) newFormCreated(how.from ?? type, type, name);
-      else if (takenOverTypes().has(type)) oldFormCreated(type, name);
+    // Every component is at a version: the one its maps take it to, or 1. SST
+    // 4's form of one that has a 5.0 form is version 0. One inside another of
+    // SST's components moves with it, so only its maps are applied.
+    const nested = Component.insideSst(opts?.parent);
+    const version =
+      takeoverOf(new.target) === undefined && takenOverTypes().has(type)
+        ? 0
+        : versionOf(new.target);
+    if (!nested) {
+      if (version === 0) oldFormCreated(type, name);
+      else
+        newFormCreated(
+          formerTypeOf(new.target) ?? type,
+          type,
+          name,
+          version,
+        );
     }
 
     // `this` is not available to the transformations below until `super`
@@ -77,7 +104,10 @@ export class Component extends ComponentResource {
       ...opts,
       // A deployed component this one takes over from becomes this one.
       // Pulumi carries the alias over to its children.
-      aliases: [...(opts?.aliases ?? []), ...takeoverAliases(new.target, opts)],
+      aliases: [
+        ...(opts?.aliases ?? []),
+        ...takeoverAliases(new.target, type, nested, opts),
+      ],
       transformations: [
         // Ensure logical and physical names are prefixed
         (args) => nameResource({ type, name }, args),
@@ -101,6 +131,8 @@ export class Component extends ComponentResource {
     self = this;
     this.componentType = type;
     this.componentName = name;
+    this.nested = nested;
+    noteCreated(type, version, this, nested);
   }
 
   // Whether a resource is one of SST's components, or inside one
@@ -180,13 +212,20 @@ export class Component extends ComponentResource {
 }
 
 // The addresses of the component this one takes over from, when that one
-// has another type: the same address with the old type. When the component is also given an old name or
+// has another type: the same address with the old type, while the stage still
+// has it in that form. When the component is also given an old name or
 // parent, as a part that moved is, the old type goes with each of those too.
 // Pulumi reads every alias on its own, so two that each say one thing don't
 // add up to the address that had both.
-function takeoverAliases(component: Function, opts?: ComponentResourceOptions) {
-  const from = takeoverOf(component)?.from;
-  if (!from) return [];
+function takeoverAliases(
+  component: Function,
+  type: string,
+  nested: boolean,
+  opts?: ComponentResourceOptions,
+) {
+  const from = formerTypeOf(component);
+  if (!from || mapsFrom(type, versionOf(component), from, nested) !== 0)
+    return [];
   const moved = (opts?.aliases ?? []).flatMap((alias) =>
     typeof alias === "object" &&
     !Output.isInstance(alias) &&

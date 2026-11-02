@@ -12,83 +12,121 @@ import (
 // MovedMarker is the type of the resource that says a stage is on SST 5's
 // components. The program leaves one in the state (platform/src/components/
 // move.ts) when the stage moves, when it's new, and in every deploy after,
-// with the types of the components the stage has in their 5.0 form. A stage
+// with the version of each component the stage has in a 5.0 form. A stage
 // that has anything deployed and no marker was deployed with SST 4's
 // components, and only `sst migrate` deploys it: a plain deploy would switch
 // its components without the move's check, and delete what the move releases,
 // like a site's files, which the new resources had just written again.
 const MovedMarker = "sst:sst:Moved"
 
+// VersionsRecord is the type of the record of the version of each component a
+// deploy created, which the program leaves once everything it deployed is
+// deployed. What it lists takes the place of what the marker lists, which a
+// deploy that failed partway wrote before it began.
+const VersionsRecord = "sst:sst:Versions"
+
 // StageState is what the program is told about the stage's state.
 type StageState struct {
 	// Versions are the components' versions, by name, as 4.x recorded them
 	Versions map[string]int
-	// Moved is whether the state has the marker, and Components the types it
-	// says the stage has in their 5.0 form
+	// Moved is whether the state has the marker, and Components the version
+	// of each component it says the stage has in a 5.0 form, by type. SST 4's
+	// form is version 0, and isn't listed.
 	Moved      bool
-	Components []string
+	Components map[string]int
 	// Types are the types of the components the state has, other than those
-	// inside one of SST's components, which move with it
-	Types []string
+	// inside one of SST's components, which move with it, and Nested those it
+	// has only inside them
+	Types  []string
+	Nested []string
 	// Empty is whether nothing is deployed: a new stage, or a removed one
 	Empty bool
 }
 
 // stageState reads what the program is told from what the stage's state has.
 func stageState(completed *CompleteEvent) StageState {
+	components := map[string]int{}
+	for typ, version := range completed.MovedComponents {
+		components[typ] = version
+	}
+	for typ, version := range completed.RecordedVersions {
+		components[typ] = version
+	}
+	top, nested := componentTypes(completed.Resources)
 	return StageState{
 		Versions:   completed.Versions,
 		Moved:      completed.Moved,
-		Components: completed.MovedComponents,
-		Types:      componentTypes(completed.Resources),
+		Components: components,
+		Types:      top,
+		Nested:     nested,
 		Empty:      !holdsResources(completed.Resources),
 	}
 }
 
-// movedComponents reads the types the marker lists, from its outputs
-func movedComponents(outputs interface{}) []string {
-	types := []string{}
+// movedComponents reads the version of each component the marker lists, by
+// type, from its outputs. A marker written before components had versions
+// lists only their types, each at version 1.
+func movedComponents(outputs interface{}) map[string]int {
+	versions := map[string]int{}
 	record, _ := outputs.(map[string]interface{})
-	list, _ := record["components"].([]interface{})
-	for _, item := range list {
-		if value, ok := item.(string); ok {
-			types = append(types, value)
+	switch listed := record["components"].(type) {
+	case map[string]interface{}:
+		for typ, version := range listed {
+			if number, ok := version.(float64); ok && number >= 1 {
+				versions[typ] = int(number)
+			}
+		}
+	case []interface{}:
+		for _, item := range listed {
+			if typ, ok := item.(string); ok {
+				versions[typ] = 1
+			}
 		}
 	}
-	return types
+	return versions
 }
 
 // componentTypes are the types of the components in a state, but those inside
-// one of SST's components
-func componentTypes(resources []apitype.ResourceV3) []string {
+// one of SST's components, and the types it has only inside those
+func componentTypes(resources []apitype.ResourceV3) ([]string, []string) {
 	found := map[string]bool{}
+	inside := map[string]bool{}
 	for _, res := range resources {
 		if res.Custom || !deployed(res) {
 			continue
 		}
 		chain := strings.Split(string(res.URN.QualifiedType()), "$")
-		inside := false
+		nested := false
 		for _, parent := range chain[:len(chain)-1] {
 			if strings.HasPrefix(parent, "sst:") {
-				inside = true
+				nested = true
 			}
 		}
-		if !inside {
+		if nested {
+			inside[string(res.Type)] = true
+		} else {
 			found[string(res.Type)] = true
 		}
 	}
-	types := []string{}
+	types, only := []string{}, []string{}
 	for typ := range found {
 		types = append(types, typ)
 	}
+	for typ := range inside {
+		if !found[typ] {
+			only = append(only, typ)
+		}
+	}
 	sort.Strings(types)
-	return types
+	sort.Strings(only)
+	return types, only
 }
 
 // deployed is whether a resource is something deployed: not the stack, a
 // provider, or the marker
 func deployed(res apitype.ResourceV3) bool {
 	return res.Type != "pulumi:pulumi:Stack" && res.Type != MovedMarker &&
+		res.Type != VersionsRecord &&
 		!strings.HasPrefix(string(res.Type), "pulumi:providers:")
 }
 

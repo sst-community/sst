@@ -66,6 +66,10 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 			complete.MovedComponents = movedComponents(parsePlaintext(res.Outputs))
 			continue
 		}
+		if res.Type == VersionsRecord {
+			complete.RecordedVersions = movedComponents(parsePlaintext(res.Outputs))
+			continue
+		}
 		outputs, ok := parsePlaintext(res.Outputs).(map[string]interface{})
 		if !ok {
 			continue

@@ -39,8 +39,9 @@ func (p *Project) programDefine(input *StackInput, state StageState) (map[string
 		"state": map[string]interface{}{
 			"version":    state.Versions,
 			"moved":      state.Moved,
-			"components": nonNil(state.Components),
+			"components": nonNilMap(state.Components),
 			"types":      nonNil(state.Types),
+			"nested":     nonNil(state.Nested),
 			"empty":      state.Empty,
 		},
 	}
@@ -206,4 +207,12 @@ func nonNil(list []string) []string {
 		return []string{}
 	}
 	return list
+}
+
+// nonNilMap is the map, or an empty one, so the program reads an object
+func nonNilMap(versions map[string]int) map[string]int {
+	if versions == nil {
+		return map[string]int{}
+	}
+	return versions
 }
