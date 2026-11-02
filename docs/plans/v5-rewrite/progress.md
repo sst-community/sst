@@ -2,6 +2,26 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Redis` built the 5.0 way, and a 5.0 `DevCommand`
+
+**Done, committed (not pushed):**
+
+- **The `Redis`'s own args and docs** (`aws/v5/redis.ts`), with no 4.x component file imported, and on the clean break's list. `vpc` takes either kind of `Vpc`, or ids; another resource in its place is refused.
+- **The deprecated `nodes` is refused** with what to write: `cluster.nodes` where neither `cluster` nor `serverless` is set, and nothing where one is, since 4.x ignored it there. Left in and ignored, it would reshard the cluster ([decision](plan.md#decisions)).
+- **In `sst dev` with `dev` set, it reports the pane for the local server** through the program contract, with `localServerPane()` in `helpers/local-server.ts`, which `Postgres`, `Mysql` and `Aurora` will use too. 4.x created a `DevCommand` for it in every deploy; a switch takes that out of the state, with nothing in AWS behind it. The pane is keyed by the component's name (`MyRedis`, so `SST_CHILD=MyRedis`), where 4.x's was `MyRedisDev`. Outside `sst dev` nothing is reported.
+- **A 5.0 `DevCommand`**, `sst.x.v5.DevCommand` (`experimental/v5/dev-command.ts`), for an app's own commands: SST 4's args less the internal `aws`, with `dev.command` required. SST 4's documented `npm run dev` as its default, but `sst dev` runs nothing without a command. It reports what `sst dev` runs in `sst dev` alone, so a deploy no longer keeps it, with its environment, in the state. It has no takeover map, so SST 4's `DevCommand`, which SST 4's components create, isn't refused on a new stage ([decision](plan.md#decisions)).
+- **The docs generator** names the experimental V5 components `sst.x.v5`, leaves out an empty `nodes`, gives the note about objects in `transform` only to a component that has one, and escapes braces in a type it can't resolve. That last one, and an unclosed code block on the V5 `Efs`'s page, broke the site's build; both are fixed.
+
+**Checked:** `tsc`, all platform tests (2,267), the docs pages, and the site's build. The `Redis` takes over 4.x's in every case, with a `Vpc` of either kind and with the `Vpc` switched along with it: only 4.x's version markers, and with `dev` set its dev command, leave the state. Its subnet group no longer waits for the VPC's security group, which it never used; the cluster still does. In the lab, `sst dev --mode=mono` on a stage of its own (`LAB_ONLY=panes`, nothing in AWS): the `Redis`'s pane, the 5.0 `DevCommand` with its environment and its link to the cache, and SST 4's `DevCommand` beside them each ran. Removed, and cleaned up: 28 state versions and the passphrase. The audit is clean.
+
+**Reviewed**, and fixed: the `nodes` message told someone with `cluster` set to write `cluster.nodes`, which would have resharded the cluster. A `transform.cluster` function is given outputs where 4.x gave plain values; the docs say so now. An empty `dev.password` showed as `""` in the pane, where 4.x said there was none. The cost text still said `nodes`, and the docs didn't say `Redis.v1` has no V5 form.
+
+**Found:**
+
+- The breaking changes of the ports before this one, like the `Cluster`'s `vpc.serviceSubnets`, aren't in the plan's Decisions table, which [goal 7](goals.md#7-every-breaking-change-has-a-way-across) asks for. Their "Switch from" sections have them.
+- `sst dev --mode=basic` runs no dev commands; `--mode=mono` does.
+- The docs generator doesn't resolve the V5 `Nextjs`'s `assets.fileOptions` type, so its page shows the type as text, where the 4.x page lists its fields.
+
 ## 2026-11-02: step 4, the lab check of the `Cluster`, `Task` and `Efs`, with the `Vpc`
 
 **Checked in the lab** (a stage of its own, the only one with a VPC, with a CLI built from the branch). The lab app's containers group: a cluster, a file system, two services (one with a load balancer and a domain of its own, one on a shared ALB with a domain), a task run by a cron job, and a function that mounts the file system and counts its visits in it. The lab app can now create its VPC with the 5.0 `Vpc` (`LAB_NET=v5`), so the move switched the `Vpc` with everything in it.

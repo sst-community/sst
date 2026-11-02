@@ -213,6 +213,11 @@ function needless(order: string) {
     // its subnets, as in the Efs suite. The group doesn't need them; the
     // mount targets, which do, still go before the subnets.
     /^FilesSecurityGroup before NetPrivateSubnet\d$/.test(order) ||
+    // The 4.x Redis read the VPC's subnets and security groups as one
+    // output, so its subnet group depended on the security group too. A
+    // subnet group has nothing to do with it; the cluster, which does, is
+    // still removed before it.
+    /^RedisSubnetGroup before NetSecurityGroup$/.test(order) ||
     // A 4.x site creates what it makes from its build inside an apply that
     // waits for the router's outputs, as in the Nextjs suite. Nothing about
     // the site's server or its entries needs the router's distribution or

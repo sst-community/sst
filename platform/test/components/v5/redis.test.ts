@@ -19,10 +19,16 @@ const pulumi = mockPulumi({
       : args.type === SERVERLESS
         ? { endpoints: [{ address: "serverless.cache.example.com", port: 6379 }] }
         : {},
-  call: (args) =>
-    args.token === "aws:secretsmanager/getSecretVersion:getSecretVersion"
-      ? { secretString: JSON.stringify({ authToken: "stored-token" }) }
-      : undefined,
+  call: (args) => {
+    switch (args.token) {
+      case "aws:secretsmanager/getSecretVersion:getSecretVersion":
+        return { secretString: JSON.stringify({ authToken: "stored-token" }) };
+      // For a `Vpc`
+      case "aws:index/getAvailabilityZones:getAvailabilityZones":
+        return { names: ["us-east-1a", "us-east-1b"] };
+    }
+    return undefined;
+  },
 });
 
 const vpc = { subnets: ["subnet-1", "subnet-2"], securityGroups: ["sg-1"] };
@@ -34,11 +40,16 @@ type RedisClass =
 describe("Redis", () => {
   let OriginalRedis: typeof import("../../../src/components/aws/redis").Redis;
   let Redis: typeof import("../../../src/components/aws/v5/redis").Redis;
+  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
 
   beforeAll(async () => {
     OriginalRedis = (await import("../../../src/components/aws/redis")).Redis;
     Redis = (await import("../../../src/components/aws/v5/redis")).Redis;
+    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/redis");
+    await import("../../../src/components/aws/takeover/vpc");
   });
 
   beforeEach(() => {
@@ -77,8 +88,12 @@ describe("Redis", () => {
         "cluster mode with three nodes": (Redis, opts) => {
           new Redis("MyRedis", { vpc, cluster: { nodes: 3 } }, opts);
         },
-        "nodes without cluster": (Redis, opts) => {
-          new Redis("MyRedis", { vpc, nodes: 2 }, opts);
+        // The V5 one takes the number of nodes as `cluster.nodes` alone
+        "nodes without cluster": {
+          original: (opts) =>
+            new OriginalRedis("MyRedis", { vpc, nodes: 2 }, opts),
+          v5: (opts) =>
+            new Redis("MyRedis", { vpc, cluster: { nodes: 2 } }, opts),
         },
         transforms: (Redis, opts) => {
           new Redis(
@@ -99,12 +114,63 @@ describe("Redis", () => {
             opts,
           );
         },
-        "dev args outside of sst dev": (Redis, opts) => {
-          new Redis(
-            "MyRedis",
-            { vpc, dev: { host: "localhost", port: 6380 } },
-            opts,
-          );
+        // The 4.x Redis created a component for the pane `sst dev` shows in
+        // every deploy. The V5 one reports the pane in `sst dev` alone.
+        "dev args outside of sst dev": {
+          create: (Redis, opts) => {
+            new Redis(
+              "MyRedis",
+              { vpc, dev: { host: "localhost", port: 6380 } },
+              opts,
+            );
+          },
+          unclaimed: [
+            "sst:sst:DevCommand::MyRedisDev",
+            "sst:sst:Version::MyRedisVersion",
+          ],
+          check: () => expect(pulumi.reportOf("MyRedis")).toBeUndefined(),
+        },
+        "dev args in sst dev": {
+          create: (Redis, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new Redis(
+              "MyRedis",
+              { vpc, dev: { host: "localhost", port: 6380 } },
+              opts,
+            );
+          },
+          unclaimed: [
+            "sst:sst:DevCommand::MyRedisDev",
+            "sst:sst:Version::MyRedisVersion",
+          ],
+          // The component itself reports the pane, in its outputs
+          changed: [["MyRedis", ["outputs"]]],
+          check: () => expect(pulumi.reportOf("MyRedis")).toHaveProperty("dev"),
+        },
+        // The 4.x Redis read the VPC's subnets and security groups as one
+        // output, so its subnet group waited for the security group. A subnet
+        // group has nothing to do with it; the cluster still does.
+        "in a Vpc": {
+          create: (Redis, opts) => {
+            new Redis("MyRedis", { vpc: new OriginalVpc("MyVpc") }, opts);
+          },
+          unordered: ["MyRedisSubnetGroup before MyVpcSecurityGroup"],
+        },
+        "in a Vpc switched with it": {
+          original: (opts) =>
+            new OriginalRedis(
+              "MyRedis",
+              { vpc: new OriginalVpc("MyVpc") },
+              opts,
+            ),
+          v5: (opts) => new Redis("MyRedis", { vpc: new Vpc("MyVpc") }, opts),
+          // Both version markers, with nothing in AWS behind them
+          unclaimed: [
+            "sst:sst:Version::MyRedisVersion",
+            "sst:sst:Version::MyVpcVersion",
+          ],
+          unordered: ["MyRedisSubnetGroup before MyVpcSecurityGroup"],
         },
         "a cluster referenced with get": (Redis, opts) => {
           Redis.get("MyRedis", "app-dev-myredis", opts);
@@ -161,7 +227,7 @@ describe("Redis", () => {
   });
 
   describe("in sst dev", () => {
-    it("creates nothing but the dev command when dev is set", async () => {
+    it("creates nothing and reports a pane when dev is set", async () => {
       // @ts-ignore
       global.$dev = true;
       const redis = new Redis("MyRedis", {
@@ -170,14 +236,53 @@ describe("Redis", () => {
       });
       await pulumi.settle();
 
-      expect(pulumi.resources.map((r) => r.type).sort()).toEqual([
-        "sst:aws:Redis",
-        "sst:sst:DevCommand",
-      ]);
+      expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Redis"]);
       expect(
         await pulumi.resolve([redis.host, redis.port, redis.username, redis.password]),
       ).toEqual(["127.0.0.1", 6380, "default", "local"]);
       expect(await pulumi.resolve(redis.clusterId)).toBe("placeholder");
+      // The pane `sst dev` shows, titled with the component's name
+      expect(pulumi.reportOf("MyRedis")).toEqual({
+        contract: 1,
+        dev: {
+          command: "sst print-and-not-quit",
+          autostart: true,
+          links: [],
+          environment: {
+            SST_DEV_COMMAND_MESSAGE: [
+              "Make sure your local Redis server is using:",
+              "",
+              '  username: "default"',
+              '  password: "local"',
+              "",
+              'Listening on "127.0.0.1:6380"...',
+            ].join("\n"),
+          },
+        },
+      });
+    });
+
+    it.each([
+      ["none", {}],
+      ["an empty one", { password: "" }],
+    ])("says there's no password in its pane, given %s", async (_, given) => {
+      // @ts-ignore
+      global.$dev = true;
+      const redis = new Redis("MyRedis", { vpc, dev: given });
+      await pulumi.settle();
+
+      expect(
+        pulumi.reportOf("MyRedis")?.dev.environment.SST_DEV_COMMAND_MESSAGE,
+      ).toContain("[no password]");
+      // Linked resources get an empty one, as with `sst.aws.Redis`
+      expect(await pulumi.resolve(redis.password)).toBe("");
+    });
+
+    it("needs dev as a plain value", () => {
+      const { output } = require("@pulumi/pulumi");
+      expect(
+        () => new Redis("MyRedis", { vpc, dev: output({}) as any }),
+      ).toThrow(/The "dev" of the "MyRedis" Redis has to be a plain value/);
     });
 
     it("explains why nodes are missing", async () => {
@@ -198,6 +303,62 @@ describe("Redis", () => {
       await pulumi.settle();
 
       expect(pulumi.resources.some((r) => r.type === CLUSTER)).toBe(true);
+    });
+  });
+
+  describe("turns down the number of nodes given as nodes", () => {
+    it("with what to write in its place", () => {
+      expect(() => new Redis("MyRedis", { vpc, nodes: 2 } as any)).toThrow(
+        /The "nodes" arg of the "MyRedis" Redis component is now "cluster.nodes"/,
+      );
+    });
+
+    // `sst.aws.Redis` read it only when neither was set, and a 0 not at all:
+    // moving it to `cluster.nodes` would change the cluster
+    it.each([
+      ["cluster: true", { cluster: true }],
+      ["cluster: false", { cluster: false }],
+      ["cluster.nodes", { cluster: { nodes: 2 } }],
+      ["serverless", { serverless: true }],
+      ["nodes: 0", { nodes: 0 }],
+    ])("to be removed, with %s", (_, given) => {
+      expect(
+        () => new Redis("MyRedis", { vpc, nodes: 3, ...given } as any),
+      ).toThrow(/is gone, and `sst.aws.Redis` ignored it here. Remove it/);
+    });
+  });
+
+  describe("in a Vpc", () => {
+    it("is in the private subnets of either kind", async () => {
+      const { Vpc: OriginalVpc } = await import(
+        "../../../src/components/aws/vpc"
+      );
+      const { Vpc } = await import("../../../src/components/aws/v5/vpc");
+      for (const [i, VpcClass] of [OriginalVpc, Vpc].entries()) {
+        pulumi.reset();
+        const net = new VpcClass(`Net${i}`);
+        new Redis("MyRedis", { vpc: net });
+        await pulumi.settle();
+
+        const group = pulumi.resources.find(
+          (r) => r.name === "MyRedisSubnetGroup",
+        )!;
+        expect(group.inputs.subnetIds).toEqual(
+          await pulumi.resolve(net.privateSubnets),
+        );
+        const cluster = pulumi.resources.find((r) => r.type === CLUSTER)!;
+        expect(cluster.inputs.securityGroupIds).toEqual(
+          await pulumi.resolve(net.securityGroups),
+        );
+      }
+    });
+
+    it("turns down another resource in its place", async () => {
+      const aws = await import("@pulumi/aws");
+      const net = new aws.ec2.Vpc("Net", { cidrBlock: "10.0.0.0/16" });
+      expect(() => new Redis("MyRedis", { vpc: net as any })).toThrow(
+        /The "vpc" of the "MyRedis" Redis component isn't a "Vpc" component/,
+      );
     });
   });
 

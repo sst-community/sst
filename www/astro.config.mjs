@@ -295,6 +295,7 @@ const sidebar = [
       "docs/component/secret",
       "docs/component/linkable",
       "docs/component/experimental/dev-command",
+      "docs/component/experimental/v5/dev-command",
     ],
   },
 ];

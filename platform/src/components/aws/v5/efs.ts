@@ -108,7 +108,8 @@ export interface EfsArgs extends ComponentArgs<typeof parts> {
    *     subnets: ["subnet-0db7376a7ad4db5fd", "subnet-06fc7ee8319b2c0ce"]
    *   }
    * }
-   * ```   *
+   * ```
+   *
    * Keep giving the VPC the same way. The mount targets in a `Vpc` your app creates are
    * kept by the AZ's number, and in any other VPC by the AZ's name, so passing the `Vpc`
    * in place of its ids, or the other way around, makes them again, which EFS refuses

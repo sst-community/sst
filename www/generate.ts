@@ -904,7 +904,10 @@ async function generateComponentDoc(
       renderSwitchNotes(
         renderAbout(useClassComment(component)),
         fullClassName,
-        original
+        original,
+        useModuleInterfaces(component)
+          .find((c) => c.name === `${className}Args`)
+          ?.children?.some((c) => c.name === "transform") ?? false
       ),
       renderConstructor(component)
         .join("\n")
@@ -1109,10 +1112,13 @@ function renderType(
     throw new Error(`Unsupported type "${type.type}"`);
   }
   function renderUnknownType(type: TypeDoc.SomeType & { name?: string }) {
+    // MDX reads a brace as the start of an expression
     return `<code class="type">${(type.name ?? "unknown")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")}</code>`;
+      .replace(/>/g, "&gt;")
+      .replace(/\{/g, "&#123;")
+      .replace(/\}/g, "&#125;")}</code>`;
   }
   function renderIntrisicType(type: TypeDoc.IntrinsicType) {
     return `<code class="primitive">${type.name}</code>`;
@@ -1832,7 +1838,8 @@ function findSwitchSection(lines: string[]) {
 function renderSwitchNotes(
   about: string[],
   fullClassName: string,
-  original?: string
+  original: string | undefined,
+  hasTransform: boolean
 ) {
   if (!original) return about;
   const lines = about.join("\n").split("\n");
@@ -1841,7 +1848,12 @@ function renderSwitchNotes(
 
   const originalName = `${originalNamespace(fullClassName)}.${original}`;
   const notes = [
-    `- An object in \`transform\` is merged into the defaults, nested objects included, where \`${originalName}\` replaced a nested object whole. To replace one, use a function.`,
+    // A component without parts has no `transform`
+    ...(hasTransform
+      ? [
+          `- An object in \`transform\` is merged into the defaults, nested objects included, where \`${originalName}\` replaced a nested object whole. To replace one, use a function.`,
+        ]
+      : []),
     `- \`$transform(${originalName}, ...)\` applies to it too, and one for \`${fullClassName}\` applies to \`${originalName}\`. The two have the same type.`,
   ];
 
@@ -1853,7 +1865,9 @@ function renderSwitchNotes(
   if (first === -1) {
     let end = section.end;
     while (lines[end - 1].trim() === "") end--;
-    lines.splice(end, 0, "", "Two things to know:", "", ...notes);
+    const intro =
+      notes.length === 1 ? "One thing to know:" : "Two things to know:";
+    lines.splice(end, 0, "", intro, "", ...notes);
     return lines;
   }
   let last = first;
@@ -2276,7 +2290,10 @@ function renderProperties(module: TypeDoc.DeclarationReflection) {
     (c) =>
       c.getSignature &&
       !c.getSignature.comment?.modifierTags.has("@internal") &&
-      !c.getSignature.comment?.blockTags.find((t) => t.tag === "@deprecated")
+      !c.getSignature.comment?.blockTags.find((t) => t.tag === "@deprecated") &&
+      // A component made of no parts, like the V5 `DevCommand`, has nothing
+      // in `nodes`
+      !(c.name === "nodes" && useParts(module)?.parts.length === 0)
   );
   if (!getters.length) return lines;
 
@@ -2910,9 +2927,14 @@ function useClassProviderNamespace(module: TypeDoc.DeclarationReflection) {
     );
   }
 
-  // ie. `aws`, or `aws/v5` for a V5 component
+  // ie. `aws`, or `aws/v5` for a V5 component. The experimental components
+  // are `sst.x`, so a V5 one is `sst.x.v5`.
   if (isV5Source(fileName))
-    return `sst.${fileName.split("/").slice(-3, -1).join(".")}`;
+    return `sst.${fileName
+      .split("/")
+      .slice(-3, -1)
+      .map((part) => (part === "experimental" ? "x" : part))
+      .join(".")}`;
   const namespace = fileName.split("/").slice(-2, -1)[0];
   return namespace === "components" ? "sst" : `sst.${namespace}`;
 }
@@ -3237,6 +3259,7 @@ async function buildComponents() {
       "../platform/src/config.ts",
       "../platform/src/global-config.d.ts",
       "../platform/src/components/experimental/dev-command.ts",
+      "../platform/src/components/experimental/v5/dev-command.ts",
       "../platform/src/components/linkable.ts",
       "../platform/src/components/secret.ts",
       "../platform/src/components/aws/analog.ts",

@@ -225,6 +225,11 @@ the component reads its args.
   it is an error. Don't name an output for the CLI. `context()` from `sst/components`
   gives the app, the stage, whether it's `sst dev`, the command and the paths. In a
   test, `app.reportOf(name)` is what a component reported.
+  A component doesn't create a `DevCommand` for a command of its own: it reports
+  `dev`. The 5.0 `DevCommand` (`sst.x.v5.DevCommand`, in `experimental/v5/`) is for
+  an app's own commands, and reports the same way. It has no takeover map, so SST 4's
+  `DevCommand` isn't refused on a new stage: SST 4's components still create it inside
+  them.
 - **Physical names.** SST knows how to name the resource types its own components use.
   For another type, `sst.Component.naming("aws:athena/workgroup:Workgroup", { field:
   "name", max: 128 })`, or `false` to leave it to the provider. A resource that's looked
@@ -330,9 +335,10 @@ Everything above applies. The rest is specific to SST's own components in
   refuses any other component in its place, and the `Task`, whose args a service
   shares are `FargateBaseArgs`, below. So is the `Efs`, which makes a mount target in
   each AZ, kept by the AZ's number in a `Vpc` the app creates, and by its name in any
-  other VPC, looked up with `after()` once a preview knows the subnets. The ports
-  before them reuse the original's, as below, until each is rebuilt and added to that
-  list.
+  other VPC, looked up with `after()` once a preview knows the subnets. So is the
+  `Redis`, which reports the pane `sst dev` shows for a local server, where 4.x created
+  a `DevCommand` for it. The ports before them reuse the original's, as below, until
+  each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
@@ -386,6 +392,7 @@ Everything above applies. The rest is specific to SST's own components in
 | A resource for each private subnet of a VPC, kept by its AZ | `privateSubnetsOf(vpc, parent, what)` in `helpers/vpc.ts`: by the AZ's number for a `Vpc` the app creates, by its name for one from `get`; and `subnetsByAz(subnets, parent, what)` for subnet ids. Where it's a promise, of what a preview knows, create them with `after()` |
 | Deciding from an output a preview knows, like a lookup's | `knownValue(output)` in `args.ts`, for `after()` |
 | A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `domainOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts` |
+| A database or cache that runs on the user's machine in `sst dev`: the pane that says how to set up the local server | `localServerPane(message)` in `helpers/local-server.ts`, given to `this.report({ dev })` |
 | An RDS database: storage limit, replicas, the proxy, a stored password | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()` in `helpers/rds.ts` |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
@@ -820,7 +827,8 @@ The existing ports are the reference, all in `aws/v5/`: `alb.ts` for a custom do
 with aliases, and a method that looks a part up when it's asked for (`getListener`);
 `apigatewayv2.ts` for routes, authorizers and a custom domain; `sns-topic.ts` for named subscribers; `bucket.ts` for
 one resource built from many notifications; `cognito-user-pool.ts` for triggers and a
-linkable client; `redis.ts` for dev mode and `get`; `postgres.ts` for the same with an
+linkable client; `redis.ts` for a component that runs locally in `sst dev` and reports a pane for it,
+and `get`; `postgres.ts` for the same with an
 optional group of parts (the proxy) and a part per item in a list; `aurora.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
 than one part; `cluster.ts` for the smallest one: nothing moved, so no takeover map,

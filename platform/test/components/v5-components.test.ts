@@ -32,6 +32,7 @@ const rebuilt = [
   "cluster.ts",
   "task.ts",
   "efs.ts",
+  "redis.ts",
 ];
 
 describe("V5 components", () => {
