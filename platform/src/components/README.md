@@ -274,13 +274,11 @@ Everything above applies. The rest is specific to SST's own components in
   `sst:aws:Queue`. An app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`.
 - **The same type is what makes it the same component.** A deployed `sst:aws:Queue`
   named `MyQueue` is the one `new sst.aws.v5.Queue("MyQueue")` creates, so it's kept, and
-  so is each resource in it that has the name it had. Going back to the 4.x component
-  keeps those too, except for the components 4.x versions (`Vpc`, `Cluster`, `Postgres`,
-  `Redis`): the V5 one drops 4.x's version marker, and 4.x reads a component without
-  one as its first version and refuses to deploy. Its message says to rename the
-  component to `.v1`, which would create it again, so don't. The way back for those is
-  the copy of the state from before the switch. What links the component sees no change,
-  and a `$transform` for either applies to both.
+  so is each resource in it that has the name it had. A stage doesn't go back to the
+  4.x component by a deploy: once it has moved, the CLI refuses SST 4's form of what
+  moved (`move.ts`), and the way back is the copy of the state `sst migrate` saves.
+  What links the component sees no change, and a `$transform` for either applies to
+  both.
 - **Where a file needs both, the 4.x one is `Original…`.** That goes for the class and
   for its types: `import type { Queue as OriginalQueue } from "../queue"`. In prose,
   say which one you mean: "the 4.x `Queue`" in a code comment, `sst.aws.Queue` and
@@ -328,8 +326,9 @@ Everything above applies. The rest is specific to SST's own components in
   or a bus sends to are reached through `AnyQueue` and `AnySnsTopic`, the 4.x `Task` a
   cron job runs through `AnyTask`, and a function any of them is given goes through
   `plainFunction()`, so only a function that's already there, or its ARN, can be an
-  output. The ports before them
-  reuse the original's, as below, until each is rebuilt and added to that list.
+  output. So is the `Cluster`, which takes either kind of `Vpc` through `AnyVpc` and
+  refuses any other component in its place. The ports before them reuse the
+  original's, as below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and

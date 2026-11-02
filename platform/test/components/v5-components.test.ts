@@ -29,6 +29,7 @@ const rebuilt = [
   "dynamo.ts",
   "bus.ts",
   "cron-v2.ts",
+  "cluster.ts",
 ];
 
 describe("V5 components", () => {

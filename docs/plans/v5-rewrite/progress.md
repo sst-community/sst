@@ -2,6 +2,22 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Cluster` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/cluster.ts`), with no 4.x component file imported, and on the clean break's list. Its `vpc` is either kind of `Vpc` (`AnyVpc`) or the ids of a VPC.
+- **What 4.x took and 5.0 doesn't:** the deprecated `vpc.serviceSubnets` is refused with what to write (`vpc.containerSubnets`, the same subnets), and `forceUpgrade`, which upgraded a `Cluster.v1`, is no longer an arg; one left in is ignored. Any resource in place of a `Vpc`, a `Vpc.v1` or an `aws.ec2.Vpc`, is refused, where it was read as the ids and failed on what's missing.
+- **The ids are checked as they're given**, so a preview fails on what's missing even when their values aren't known yet, and once more when they are.
+- **The docs no longer call the ids "equivalent" to a `Vpc`**: given ids, the containers get no public IP, so they need subnets with a NAT, and the example now shows that.
+- **The notes on going back to a 4.x component after a switch were stale**, in the rulebook and the `Vpc`'s docs: since the marker, the CLI refuses SST 4's form of what moved, and the way back is the copy `sst migrate` saves.
+
+**Checked:** `tsc`, the docs page, and all platform tests, with a 4.x service and task in a switched cluster given ids, a `forceUpgrade` left in, and each refusal, each failing without its check.
+
+**Reviewed**, and fixed: the docs above, the checks made only once the values were known, a plain resource read as the ids, and the missing cases. The review's way back for the 4.x `Cluster` (setting `forceUpgrade`) doesn't apply: the CLI refuses it first.
+
+**Left:** the lab check, with the containers group.
+
 ## 2026-11-02: step 4, the `CronV2` built the 5.0 way, and a function part's args
 
 **Done, committed (not pushed):**

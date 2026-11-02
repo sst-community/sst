@@ -1,15 +1,14 @@
-import { ComponentResourceOptions, output } from "@pulumi/pulumi";
+import {
+  ComponentResourceOptions,
+  Output,
+  Resource,
+  output,
+} from "@pulumi/pulumi";
 import { ecs } from "@pulumi/aws";
-import { V5Args, component } from "../../parts-component";
+import { type ComponentArgs, component } from "../../parts-component";
 import { VisibleError } from "../../error";
-import { type AnyVpc, type TakesVpc, isVpc } from "../helpers/vpc";
-import { Vpc as VpcV1 } from "../vpc-v1";
-import type { Vpc as OriginalVpc } from "../vpc";
-import type {
-  Cluster as OriginalCluster,
-  ClusterArgs as OriginalClusterArgs,
-  ClusterGetArgs,
-} from "../cluster";
+import type { Input } from "../../input";
+import { type AnyVpc, isVpc } from "../helpers/vpc";
 
 const parts = {
   /**
@@ -24,26 +23,120 @@ const parts = {
   capacityProviders: ecs.ClusterCapacityProviders,
 };
 
-export interface ClusterArgs
-  extends V5Args<TakesVpc<OriginalClusterArgs>, typeof parts> {}
+export interface ClusterArgs extends ComponentArgs<typeof parts> {
+  /**
+   * The VPC the cluster's services and tasks run in.
+   *
+   * @example
+   * Create a `Vpc` component.
+   *
+   * ```js title="sst.config.ts"
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
+   * ```
+   *
+   * Or reference an existing VPC.
+   *
+   * ```js title="sst.config.ts"
+   * const myVpc = sst.aws.v5.Vpc.get("MyVpc", "vpc-12345678901234567");
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   vpc: myVpc
+   * }
+   * ```
+   *
+   * In a `Vpc`, the containers and a public load balancer are in its public subnets, and
+   * the containers get a public IP to reach the internet. An internal load balancer is in
+   * its private subnets.
+   *
+   * You can also pass the ids of a VPC. Every load balancer is then in
+   * `loadBalancerSubnets`, and the containers don't get a public IP, so put them in
+   * subnets that reach the internet through a NAT. For example, a `Vpc`'s private
+   * subnets:
+   *
+   * ```js
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc", { nat: "managed" });
+   * ```
+   *
+   * ```js
+   * {
+   *   vpc: {
+   *     id: myVpc.id,
+   *     securityGroups: myVpc.securityGroups,
+   *     containerSubnets: myVpc.privateSubnets,
+   *     loadBalancerSubnets: myVpc.publicSubnets,
+   *     cloudmapNamespaceId: myVpc.nodes.cloudmapNamespace.id,
+   *     cloudmapNamespaceName: myVpc.nodes.cloudmapNamespace.name
+   *   }
+   * }
+   * ```
+   *
+   * A `Task` can be given a public IP with its `publicIp` instead.
+   */
+  vpc:
+    | AnyVpc
+    | Input<{
+        /**
+         * The ID of the VPC.
+         */
+        id: Input<string>;
+        /**
+         * A list of VPC security group IDs for the services and tasks.
+         */
+        securityGroups: Input<Input<string>[]>;
+        /**
+         * A list of subnet IDs in the VPC to place the containers in.
+         */
+        containerSubnets: Input<Input<string>[]>;
+        /**
+         * A list of public subnet IDs in the VPC. A `Task` with `public` set runs in
+         * these.
+         */
+        publicSubnets?: Input<Input<string>[]>;
+        /**
+         * A list of subnet IDs in the VPC to place the load balancer in.
+         */
+        loadBalancerSubnets: Input<Input<string>[]>;
+        /**
+         * The ID of the Cloud Map namespace the services are registered in. Given with
+         * `cloudmapNamespaceName`.
+         */
+        cloudmapNamespaceId?: Input<string>;
+        /**
+         * The name of the Cloud Map namespace the services are registered in. Given with
+         * `cloudmapNamespaceId`.
+         */
+        cloudmapNamespaceName?: Input<string>;
+      }>;
+}
 
-// Where the services and tasks run: either kind of `Vpc`, or the ids of one
-type Network = AnyVpc | Exclude<OriginalCluster["vpc"], OriginalVpc>;
+export interface ClusterGetArgs {
+  /**
+   * The ID of the cluster.
+   */
+  id: Input<string>;
+  /**
+   * The VPC the cluster's services and tasks run in.
+   */
+  vpc: ClusterArgs["vpc"];
+}
 
 /**
  * The `Cluster` component lets you create an [ECS cluster](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/clusters.html)
  * for your app.
  *
- * It takes the same args as [`sst.aws.Cluster`](/docs/component/aws/cluster) and creates the
- * same resources. It's built from parts, so every resource it creates can be transformed, is
- * available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
  * #### Create the cluster
  *
  * ```ts title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
  * ```
  *
@@ -84,7 +177,10 @@ type Network = AnyVpc | Exclude<OriginalCluster["vpc"], OriginalVpc>;
  * - The deprecated `addService` and `addTask` are gone. Create the service or the task,
  *   and pass it the cluster. Those methods also gave it the cluster's `provider`, so pass
  *   that along if the cluster has one.
- * - `sst.aws.Cluster.v1` has no V5 form.
+ * - The deprecated `vpc.serviceSubnets` is gone. Pass the same subnets as
+ *   `vpc.containerSubnets`; nothing in AWS changes.
+ * - `forceUpgrade` isn't taken: remove it. It upgraded a cluster from `Cluster.v1`, and
+ *   `sst.aws.Cluster.v1` has no V5 form.
  * - `get` takes any ECS cluster. `sst.aws.Cluster.get` refused one without the version
  *   tag SST puts on the clusters it creates.
  * - `nodes.cluster` is the cluster, not an output of it. `nodes` also has the capacity
@@ -93,7 +189,7 @@ type Network = AnyVpc | Exclude<OriginalCluster["vpc"], OriginalVpc>;
  *   sets next to yours. It's added back when you switch.
  */
 export class Cluster extends component("sst:aws:Cluster", parts) {
-  private network: Network;
+  private network: ReturnType<typeof vpcOf>;
 
   constructor(
     name: string,
@@ -102,7 +198,7 @@ export class Cluster extends component("sst:aws:Cluster", parts) {
   ) {
     super(name, args, opts);
 
-    this.network = networkOf(name, args.vpc);
+    this.network = vpcOf(name, args.vpc);
 
     // A cluster that's already deployed is used as it is
     if (this.existingPart("cluster")) return;
@@ -199,36 +295,45 @@ export class Cluster extends component("sst:aws:Cluster", parts) {
 }
 
 // The VPC as the services and tasks in the cluster read it: the component, or
-// the ids with the subnets of the containers under one name
-function networkOf(
-  name: string,
-  vpc: ClusterArgs["vpc"],
-): Network {
-  if (vpc instanceof VpcV1)
-    throw new VisibleError(
-      `You are using the "Vpc.v1" component. Please migrate to the latest "Vpc" component.`,
-    );
-
+// the ids it was given
+function vpcOf(name: string, vpc: ClusterArgs["vpc"]) {
   if (isVpc(vpc)) return vpc;
 
-  return output(vpc).apply((vpc) => {
-    if (vpc.containerSubnets && vpc.serviceSubnets)
-      throw new VisibleError(
-        `You cannot provide both "vpc.containerSubnets" and "vpc.serviceSubnets" in the "${name}" Cluster component. The "serviceSubnets" property has been deprecated. Use "containerSubnets" instead.`,
-      );
-    if (!vpc.containerSubnets && !vpc.serviceSubnets)
-      throw new VisibleError(
-        `Missing "vpc.containerSubnets" for the "${name}" Cluster component.`,
-      );
-    if (!vpc.cloudmapNamespaceId !== !vpc.cloudmapNamespaceName)
-      throw new VisibleError(
-        `You must provide both "vpc.cloudmapNamespaceId" and "vpc.cloudmapNamespaceName" for the "${name}" Cluster component.`,
-      );
+  // Another resource, like a `Vpc.v1` or an `aws.ec2.Vpc`, would otherwise be
+  // read as the ids
+  if (Resource.isInstance(vpc))
+    throw new VisibleError(
+      `The "vpc" of the "${name}" Cluster component isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`,
+    );
 
-    return {
-      ...vpc,
-      containerSubnets: (vpc.containerSubnets ?? vpc.serviceSubnets)!,
-      serviceSubnets: undefined,
-    };
+  // The ids are checked as they're given, so what's missing fails a preview
+  // even where their values aren't known yet, and once more when they are
+  if (!Output.isInstance(vpc) && !(vpc instanceof Promise)) checkIds(name, vpc);
+  return output(vpc).apply((vpc) => {
+    checkIds(name, vpc);
+    return vpc;
   });
+}
+
+function checkIds(
+  name: string,
+  vpc: {
+    containerSubnets?: unknown;
+    cloudmapNamespaceId?: unknown;
+    cloudmapNamespaceName?: unknown;
+  },
+) {
+  // 4.x also took the subnets of the containers as `serviceSubnets`
+  if ((vpc as { serviceSubnets?: unknown }).serviceSubnets)
+    throw new VisibleError(
+      `The "vpc.serviceSubnets" property of the "${name}" Cluster component has been renamed to "vpc.containerSubnets". Update your code to use "vpc.containerSubnets" instead.`,
+    );
+  if (!vpc.containerSubnets)
+    throw new VisibleError(
+      `Missing "vpc.containerSubnets" for the "${name}" Cluster component.`,
+    );
+  if (!vpc.cloudmapNamespaceId !== !vpc.cloudmapNamespaceName)
+    throw new VisibleError(
+      `You must provide both "vpc.cloudmapNamespaceId" and "vpc.cloudmapNamespaceName" for the "${name}" Cluster component.`,
+    );
 }

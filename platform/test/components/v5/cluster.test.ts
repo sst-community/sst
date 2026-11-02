@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const CLUSTER = "aws:ecs/cluster:Cluster";
 const CAPACITY_PROVIDERS =
@@ -76,6 +77,10 @@ describe("Cluster", () => {
     cloudmapNamespaceId: "ns-1",
     cloudmapNamespaceName: "internal",
   };
+  const containerInsights = (args: any) => {
+    args.settings = [{ name: "containerInsights", value: "enabled" }];
+    return undefined;
+  };
   const takesOver = async (original: () => void, v5: () => void) => {
     const result = await pulumi.takesOver(original, v5);
     return {
@@ -101,34 +106,40 @@ describe("Cluster", () => {
         "in a VPC given by its ids": (Cluster, opts) => {
           new Cluster("MyCluster", { vpc: customVpc }, opts);
         },
-        "the ids as an output, with the deprecated serviceSubnets": (
-          Cluster,
-          opts,
-        ) => {
-          const { containerSubnets, ...vpc } = customVpc;
-          new Cluster(
-            "MyCluster",
-            { vpc: output({ ...vpc, serviceSubnets: containerSubnets }) },
-            opts,
-          );
+        // The V5 one takes the same subnets as `containerSubnets`
+        "the ids as an output, with the deprecated serviceSubnets": {
+          original: (opts) => {
+            const { containerSubnets, ...vpc } = customVpc;
+            new OriginalCluster(
+              "MyCluster",
+              { vpc: output({ ...vpc, serviceSubnets: containerSubnets }) },
+              opts,
+            );
+          },
+          v5: (opts) => {
+            new Cluster("MyCluster", { vpc: output(customVpc) }, opts);
+          },
         },
-        "a transform function, and forceUpgrade left in": (Cluster, opts) => {
-          new Cluster(
-            "MyCluster",
-            {
-              vpc: customVpc,
-              forceUpgrade: "v2",
-              transform: {
-                cluster: (args: any) => {
-                  args.settings = [
-                    { name: "containerInsights", value: "enabled" },
-                  ];
-                  return undefined;
-                },
+        // The V5 one has no `forceUpgrade`
+        "a transform function, and forceUpgrade": {
+          original: (opts) => {
+            new OriginalCluster(
+              "MyCluster",
+              {
+                vpc: customVpc,
+                forceUpgrade: "v2",
+                transform: { cluster: containerInsights },
               },
-            },
-            opts,
-          );
+              opts,
+            );
+          },
+          v5: (opts) => {
+            new Cluster(
+              "MyCluster",
+              { vpc: customVpc, transform: { cluster: containerInsights } },
+              opts,
+            );
+          },
         },
         "a service and a task in it": {
           create: (Cluster, opts) => {
@@ -190,21 +201,27 @@ describe("Cluster", () => {
   // The 4.x Service and Task read the same things off the V5 cluster as off
   // their own, though their types only name the 4.x one.
   describe("with what runs in it", () => {
-    it("changes nothing for a 4.x service and task when the cluster is switched", async () => {
-      const app = (Cluster: any) => () => {
-        const cluster = new Cluster("MyCluster", { vpc: new Vpc("MyVpc") });
-        new OriginalService("MyService", { cluster, image: "nginx:latest" });
-        new OriginalTask("MyTask", { cluster, image: "nginx:latest" });
-      };
+    it.each([
+      ["a Vpc", () => new Vpc("MyVpc")],
+      ["the ids of a VPC", () => customVpc],
+    ])(
+      "changes nothing for a 4.x service and task when the cluster in %s is switched",
+      async (_, vpc) => {
+        const app = (Cluster: any) => () => {
+          const cluster = new Cluster("MyCluster", { vpc: vpc() });
+          new OriginalService("MyService", { cluster, image: "nginx:latest" });
+          new OriginalTask("MyTask", { cluster, image: "nginx:latest" });
+        };
 
-      expect(await takesOver(app(OriginalCluster), app(Cluster))).toEqual({
-        unclaimed: ["sst:sst:Version::MyClusterVersion"],
-        changed: [],
-      });
-      expect(resource("MyServiceService").inputs.cluster).toBe(
-        "arn:aws:mock:us-east-1:123456789012:MyClusterCluster",
-      );
-    });
+        expect(await takesOver(app(OriginalCluster), app(Cluster))).toEqual({
+          unclaimed: ["sst:sst:Version::MyClusterVersion"],
+          changed: [],
+        });
+        expect(resource("MyServiceService").inputs.cluster).toBe(
+          "arn:aws:mock:us-east-1:123456789012:MyClusterCluster",
+        );
+      },
+    );
 
     it("changes nothing in AWS when the cluster, its service and its task are all switched", async () => {
       const result = await takesOver(
@@ -371,32 +388,81 @@ describe("Cluster", () => {
       const cluster = new Cluster("MyCluster", { vpc: customVpc });
       await pulumi.settle();
 
-      expect(await pulumi.resolve(cluster.vpc)).toEqual({
-        ...customVpc,
-        serviceSubnets: undefined,
-      });
+      expect(await pulumi.resolve(cluster.vpc)).toEqual(customVpc);
     });
 
-    it("reads the deprecated serviceSubnets as the subnets of the containers", async () => {
-      const { containerSubnets, ...vpc } = customVpc;
-      const cluster = new Cluster("MyCluster", {
-        vpc: { ...vpc, serviceSubnets: containerSubnets },
-      });
-      const original = new OriginalCluster("Theirs", {
-        vpc: { ...vpc, serviceSubnets: containerSubnets },
-      });
+    // As the 4.x one gives them to its services and tasks
+    it("gives the ids as the 4.x Cluster does", async () => {
+      const cluster = new Cluster("MyCluster", { vpc: output(customVpc) });
+      const original = new OriginalCluster("Theirs", { vpc: customVpc });
       await pulumi.settle();
 
-      const resolved = await pulumi.resolve(cluster.vpc);
-      expect(resolved).toEqual({ ...customVpc, serviceSubnets: undefined });
-      expect(resolved).toEqual(await pulumi.resolve(original.vpc));
+      expect(await pulumi.resolve(cluster.vpc)).toEqual(
+        await pulumi.resolve(original.vpc),
+      );
     });
 
-    it("refuses a Vpc.v1", () => {
-      const vpc = Object.create(VpcV1.prototype);
-      expect(() => new Cluster("MyCluster", { vpc })).toThrow(
-        /You are using the "Vpc.v1" component/,
+    it("refuses the deprecated serviceSubnets, with what to write", async () => {
+      const { containerSubnets, ...vpc } = customVpc;
+      const ids = { ...vpc, serviceSubnets: containerSubnets } as any;
+      const message = (name: string) =>
+        `The "vpc.serviceSubnets" property of the "${name}" Cluster component has been renamed to "vpc.containerSubnets".`;
+
+      // As they're given, when the cluster is created
+      expect(() => new Cluster("Given", { vpc: ids })).toThrow(
+        message("Given"),
       );
+      // In an output, once they're known. Each promise an output keeps
+      // reports the error.
+      const errors = await applyErrors(
+        () => new Cluster("InAnOutput", { vpc: output(ids) }),
+        pulumi.settle,
+      );
+      expect([...new Set(errors)]).toEqual([
+        expect.stringContaining(message("InAnOutput")),
+      ]);
+    });
+
+    it("refuses ids it can't place the containers or the services with", async () => {
+      const { containerSubnets, cloudmapNamespaceName, ...vpc } = customVpc;
+
+      expect(() => new Cluster("NoSubnets", { vpc: vpc as any })).toThrow(
+        'Missing "vpc.containerSubnets" for the "NoSubnets" Cluster component.',
+      );
+      expect(
+        () =>
+          new Cluster("HalfANamespace", { vpc: { ...vpc, containerSubnets } }),
+      ).toThrow(
+        'You must provide both "vpc.cloudmapNamespaceId" and "vpc.cloudmapNamespaceName" for the "HalfANamespace" Cluster component.',
+      );
+      // Ids whose values aren't known yet are checked again once they are
+      const errors = await applyErrors(
+        () =>
+          new Cluster("Later", {
+            vpc: { ...customVpc, containerSubnets: output(undefined as any) },
+          }),
+        pulumi.settle,
+      );
+      expect([...new Set(errors)]).toEqual([
+        'Missing "vpc.containerSubnets" for the "Later" Cluster component.',
+      ]);
+    });
+
+    it("refuses another resource in place of a Vpc", async () => {
+      const message = (name: string) =>
+        `The "vpc" of the "${name}" Cluster component isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`;
+
+      expect(
+        () => new Cluster("InAVpcV1", { vpc: new VpcV1("Old") as any }),
+      ).toThrow(message("InAVpcV1"));
+      expect(
+        () =>
+          new Cluster("InAnEc2Vpc", {
+            vpc: new aws.ec2.Vpc("Raw", {}) as any,
+          }),
+      ).toThrow(message("InAnEc2Vpc"));
+      // What the Vpc.v1 creates, before the next test
+      await pulumi.settle();
     });
   });
 
@@ -469,6 +535,16 @@ describe("Cluster", () => {
       expect(() => (cluster as any).addTask("MyTask", {})).toThrow(
         'new sst.aws.v5.Task("MyTask", { cluster, ...args })',
       );
+    });
+
+    // It upgraded a cluster from `Cluster.v1`, which has no V5 form
+    it("ignores a forceUpgrade left in", async () => {
+      const create = (args: object) => () =>
+        new Cluster("MyCluster", { vpc: customVpc, ...args });
+
+      expect(
+        await takesOver(create({}), create({ forceUpgrade: "v2" })),
+      ).toEqual({ unclaimed: [], changed: [] });
     });
 
     it("refuses a part it doesn't have", () => {
