@@ -83,8 +83,11 @@ func TestHTTPTransport(t *testing.T) {
 		}
 	})
 
+	// Each case that starts sst dev's side has a port of its own: a server is
+	// closed a moment after its context is, so the next case on the same port
+	// could find it still listening
 	t.Run("turns down a request without the token", func(t *testing.T) {
-		h := NewHTTP(path)
+		h := NewHTTP(filepath.Join(t.TempDir(), "dev.transport.json"))
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		_, err := h.Connect(ctx)
@@ -104,12 +107,13 @@ func TestHTTPTransport(t *testing.T) {
 	})
 
 	t.Run("says when its port is taken", func(t *testing.T) {
-		h := NewHTTP(path)
+		own := filepath.Join(t.TempDir(), "dev.transport.json")
+		h := NewHTTP(own)
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		_, err := h.Connect(ctx)
 		require.NoError(t, err)
-		_, err = NewHTTP(path).Connect(ctx)
+		_, err = NewHTTP(own).Connect(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "in use")
 	})
