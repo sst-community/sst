@@ -296,6 +296,8 @@ func TestNewUpload(t *testing.T) {
 	// A key that changes in more than its hash, as when a map renames the
 	// function, needs the map
 	assert.Len(t, failed(upload(code, "assets/ApiOld-code-"+before+".zip", "assets/Api-code-"+after+".zip")), 1)
+	// Nor one whose name, in hex letters, runs into the hash
+	assert.Len(t, failed(upload(code, "assets/Cafe"+before+".zip", "assets/Bead"+after+".zip")), 1)
 	// A key with no hash in it doesn't follow from the file
 	assert.Len(t, failed(upload(code, "assets/api.zip", "assets/api-v2.zip")), 1)
 	assert.Len(t, failed(upload(code, "assets/api-1.zip", "assets/api-2.zip")), 1)
@@ -544,6 +546,12 @@ func TestLookups(t *testing.T) {
 	assert.Empty(t, problems(r))
 	assert.Len(t, r.Released, 2)
 	assert.Contains(t, r.Released[0].Why, "SST 4's lookups")
+
+	// SST 4's Cloudflare lookups have the domain in their name
+	docs := urn("sst:aws:CDN$pulumi-nodejs:dynamic:Resource", "WebCNAMEdocs.sst.devZoneLookup.sst.cloudflare.ZoneLookup")
+	r = Check([]apitype.StepEventMetadata{step(apitype.OpDelete, docs)}, nil)
+	assert.Empty(t, problems(r))
+	assert.Len(t, r.Released, 1)
 
 	// Another of SST's resources isn't one
 	waiter := urn("sst:aws:CDN$pulumi-nodejs:dynamic:Resource", "WebWaiter.sst.aws.DistributionDeploymentWaiter")

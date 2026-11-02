@@ -426,9 +426,25 @@ var uploadTypes = map[string]bool{
 	"aws:s3/bucketObjectv2:BucketObjectv2": true,
 }
 
-// A hash of what's in a file, as a key that follows from it has: an MD5,
-// SHA-1 or SHA-256 in hex
-var contentHash = regexp.MustCompile(`[0-9a-fA-F]{32,}`)
+// A run of hex digits, which is a hash of what's in a file when it's as long
+// as one: an MD5, SHA-1, SHA-256 or SHA-512 in hex. A run of another length,
+// as when a name that ends in hex letters is right before the hash, isn't.
+var hexRun = regexp.MustCompile(`[0-9a-fA-F]+`)
+
+var hashLengths = map[int]bool{32: true, 40: true, 64: true, 128: true}
+
+// withoutHashes is a key with each hash in it as "#", and how many there were
+func withoutHashes(key string) (string, int) {
+	found := 0
+	template := hexRun.ReplaceAllStringFunc(key, func(run string) string {
+		if !hashLengths[len(run)] {
+			return run
+		}
+		found++
+		return "#"
+	})
+	return template, found
+}
 
 // A file uploaded again because it changed: an object whose key follows from
 // what's in it, as SST keys a function's code and its source maps, replaced
@@ -451,10 +467,12 @@ func isNewUpload(steps []apitype.StepEventMetadata) bool {
 		}
 		before, _ := step.Old.Inputs["key"].(string)
 		after, _ := step.New.Inputs["key"].(string)
-		if before == "" || after == "" || before == after || !contentHash.MatchString(before) {
+		if before == "" || after == "" || before == after {
 			return false
 		}
-		if contentHash.ReplaceAllString(before, "#") != contentHash.ReplaceAllString(after, "#") {
+		was, hashes := withoutHashes(before)
+		now, _ := withoutHashes(after)
+		if hashes == 0 || was != now {
 			return false
 		}
 		found = true

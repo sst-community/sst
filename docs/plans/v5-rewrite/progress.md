@@ -2,6 +2,36 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, domains the 5.0 way
+
+Every component with a domain created its DNS records through the adapters, inside an `apply`, and looked up each record's zone with a resource, so a new stage's preview showed none of them ([decision](plan.md#decisions)).
+
+**Done, committed (not pushed):**
+
+- **The adapters' 5.0 form** (`dns-adapter.ts`, and `dns-adapter.ts` in `aws/`, `cloudflare/` and `vercel/`), which `sst.aws.dns()`, `sst.cloudflare.dns()` and `sst.vercel.dns()` also give: `record`, `alias` and `caa`, which create directly and name from plain values as 4.x did. A record whose name in DNS isn't known yet is named after a `key`.
+- **Zones found with functions.** SST's provider serves its first function, `sst:aws:getHostedZone`: it lists the zones once a run, takes the longest zone the domain ends with, a public one over a private one of the same name, and refuses two alike, where 4.x took the first listed and kept it in the state. Cloudflare's zone comes from Cloudflare's provider. `--check` releases SST 4's lookups, and the move marks them retained, so their delete isn't called.
+- **A 5.0 certificate** (`aws/v5/dns-validated-certificate.ts`): one validation record for each domain, and one for a domain and its wildcard, named after the domain. Its map gives each record's old name, made from its name in DNS, which the certificate gives once it's deployed: a new entry in the takeover maps, `delegated`, for what an adapter creates on a component's behalf.
+- **A 5.0 redirect** (`aws/v5/https-redirect.ts`), with the CloudFront function 4.x created at the top of the app moved inside it.
+- **The `Cdn` rebuilt on them**, with domain args of its own, and on the clean break's list with the certificate and the redirect.
+- **The mock** gives a certificate's validation records as ACM does, one for each domain, and the same zone from 4.x's lookups and 5.0's functions. A recorded state answers the zone function from 4.x's lookup.
+
+**Checked:** all 2,182 platform tests, `tsc`, `go test ./...`. In a new stage's preview, a CDN with aliases and a redirect plans all 11 DNS records; 4.x's `Cdn` planned none. The recorded router and Next.js site switch with nothing changed, the certificate taking over its real validation record by its old name. A switch keeps every record on Route 53, Cloudflare and Vercel.
+
+**Reviewed**, and fixed:
+
+- A certificate on Cloudflare or Vercel failed: its CAA records were created before the map could read its validation records. The takeover cases now switch a CDN on each adapter.
+- A redirect inside a component with a provider of its own was listed as replaced. Pulumi does replace a resource whose provider changes, and the replacement keeps the function's name, which CloudFront refuses, so a move would have stopped partway. The map no longer lists it, so `--check` refuses that move before anything changes.
+- The zone function looked up once per record, on every run, and took zones in Route 53's order: listed once a run, with the choice above.
+- A 4.x Cloudflare lookup with `.sst.` in its domain wasn't recognised as one. A hex name right before a hash counted as part of it, so a rename passed as an upload; only a run as long as a hash counts now.
+- A domain in another case than ACM's found no validation record: matched in any case, with a message.
+
+**Checked in the lab** (stage `dom`, `LAB_ONLY=sites` with `LAB_REDIRECT=1`, the 4.x Astro and SvelteKit sites kept), with the code before the review's fixes, none of which changes what it ran: Route 53 with one public zone, no provider of its own, and SHA-256 keys:
+
+- Deployed with the 4.x router, with a domain and a `www.` redirect. Switched with `LAB_ROUTER=v5 LAB_NEXT=v5 LAB_ROUTE_FILES=v5`.
+- `sst migrate --check` passed: 146 kept, 14 at a new address (the two validation records and the redirect's function among them), the six zone lookups released, and the Astro and SvelteKit servers' code uploaded again as uploads.
+- `sst migrate`: the state had no lookups, the records and the function kept their ids under their new names, and the marker listed 25 components, the certificate and the redirect among them. The site's bucket lost nothing, the key-value entries were the same, and the sites and the redirect answered as before. A diff after showed only what a new build changes.
+- Removed, and cleaned up.
+
 ## 2026-11-01: step 4, what any deploy changes in a move
 
 A stage that keeps 4.x server-rendered sites failed `sst migrate --check`: their servers' code and source maps are uploaded again on every deploy, under new keys, and nothing maps them. The same would fail any later move of a stage whose code changed since its last deploy, or that has a 5.0 site, whose build changes its code each time too.

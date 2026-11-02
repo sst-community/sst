@@ -1009,9 +1009,6 @@ function deployOptions(r: RecordedResource, againstState = false) {
   );
 }
 
-// What the lookups nearly every component makes return. Without these a
-// region is `undefined`, and an IAM policy is empty whatever it's given, so
-// two policies would always compare as the same.
 // SST 4's lookups, made with resources, by the kind each adds to its name.
 // 5.0 makes them with functions, and a move releases them.
 const LOOKUPS = [".sst.aws.HostedZoneLookup", ".sst.cloudflare.ZoneLookup"];
@@ -1026,7 +1023,20 @@ function isLookup(r: RecordedResource) {
 // What AWS gives back that a component reads, as AWS gives it: an ACM
 // certificate's validation records, one for each domain, which a domain and
 // its wildcard share
+// The zone a domain is in: the one named after its last two labels, as SST's
+// lookups and the zone functions all find it
+function zoneOf(domain: string) {
+  const name = domain.replace(/\.$/, "").split(".").slice(-2).join(".");
+  return { id: `${name.replace(".", "-")}-zone`, name };
+}
+
 function given(args: pulumi.runtime.MockResourceArgs): Record<string, any> {
+  if (args.name.endsWith(".sst.aws.HostedZoneLookup"))
+    return { zoneId: zoneOf(args.inputs.domain).id };
+  if (args.name.endsWith(".sst.cloudflare.ZoneLookup")) {
+    const zone = zoneOf(args.inputs.domain);
+    return { zoneId: zone.id, zoneName: zone.name };
+  }
   if (args.type === "aws:acm/certificate:Certificate") {
     const domains: string[] = [
       args.inputs.domainName,
@@ -1047,6 +1057,9 @@ function given(args: pulumi.runtime.MockResourceArgs): Record<string, any> {
   return {};
 }
 
+// What the lookups nearly every component makes return. Without these a
+// region is `undefined`, and an IAM policy is empty whatever it's given, so
+// two policies would always compare as the same.
 const lookups: Record<string, (inputs: any) => Record<string, any>> = {
   "aws:index/getRegion:getRegion": () => ({
     name: "us-east-1",
@@ -1062,11 +1075,9 @@ const lookups: Record<string, (inputs: any) => Record<string, any>> = {
   }),
   // A zone for each domain of two labels, like `example.com`
   "cloudflare:index/getZones:getZones": (inputs) => ({
-    results:
-      inputs.name?.split(".").length === 2
-        ? [{ id: `${inputs.name.replace(".", "-")}-zone`, name: inputs.name }]
-        : [],
+    results: inputs.name?.split(".").length === 2 ? [zoneOf(inputs.name)] : [],
   }),
+  "sst:aws:getHostedZone": (inputs) => ({ zoneId: zoneOf(inputs.domain).id }),
 };
 
 function urn(type: string, name: string, parent: string) {

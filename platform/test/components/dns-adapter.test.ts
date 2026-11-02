@@ -67,6 +67,13 @@ describe("the DNS adapters", () => {
       expect(input("WebARecordAppexamplecom", "aliases")).toEqual([
         { name: "d1.cloudfront.net", zoneId: "Z2", evaluateTargetHealth: true },
       ]);
+      // In the zone SST's provider finds
+      expect(input("WebARecordAppexamplecom", "zoneId")).toBe(
+        "example-com-zone",
+      );
+      expect(input("WebSslCNAMERecordExamplecom", "zoneId")).toBe(
+        "example-com-zone",
+      );
       // No lookup is a resource
       expect(
         pulumi.resources.filter((r) => r.name.includes("ZoneLookup")),

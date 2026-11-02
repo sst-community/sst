@@ -349,6 +349,16 @@ export function cdnDomain(
  * - `nodes.distribution` is the distribution itself. In `sst.aws.Cdn` it was an output
  *   that waited for the distribution to be deployed. `url` still waits for it.
  * - `transform` also takes the `waiter`, the `certificate` and the `redirect`.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for
+ *   SST 4's adapters doesn't work.
+ * - The DNS records that validate the certificate are named after the domains they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup` and `ZoneLookup` leave the state.
+ * - A CDN with `domain.redirects`, created with a provider of its own, can't switch
+ *   yet: SST 4 created the redirect's CloudFront function with the app's provider,
+ *   and moving it to another provider would replace it under the same name.
+ *   `sst migrate --check` says so.
  */
 export class Cdn extends component("sst:aws:CDN", parts) {
   private readonly deployed: Output<unknown>;

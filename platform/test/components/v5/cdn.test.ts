@@ -28,10 +28,14 @@ const pulumi = mockPulumi({
 describe("Cdn", () => {
   let OriginalCdn: typeof import("../../../src/components/aws/cdn").Cdn;
   let Cdn: typeof import("../../../src/components/aws/v5/cdn").Cdn;
+  let cloudflare: typeof import("../../../src/components/cloudflare/dns");
+  let vercel: typeof import("../../../src/components/vercel/dns");
 
   beforeAll(async () => {
     OriginalCdn = (await import("../../../src/components/aws/cdn")).Cdn;
     Cdn = (await import("../../../src/components/aws/v5/cdn")).Cdn;
+    cloudflare = await import("../../../src/components/cloudflare/dns");
+    vercel = await import("../../../src/components/vercel/dns");
     // What the V5 Cdn creates for a domain takes over 4.x's by these
     await import(
       "../../../src/components/aws/takeover/dns-validated-certificate"
@@ -101,6 +105,80 @@ describe("Cdn", () => {
             expect(names()).toContain("MyCdnAAAARecordExamplecom");
           },
         },
+        // Each adapter names its records, and the certificate's, as 4.x
+        // did. One that isn't Route 53 also lets Amazon issue the
+        // certificate, with CAA records, and finds the zone another way.
+        "a domain on Cloudflare": {
+          create: (Cdn, opts) => {
+            new Cdn(
+              "MyCdn",
+              {
+                ...origin,
+                domain: {
+                  name: "app.example.com",
+                  aliases: ["*.app.example.com"],
+                  redirects: ["www.example.com"],
+                  dns: cloudflare.dns(),
+                },
+              },
+              opts,
+            );
+          },
+          check: () => {
+            expect(names()).toContain("MyCdnCNAMERecordAppexamplecom");
+            expect(names()).toContain("MyCdnSslCNAMERecordAppexamplecom");
+            expect(names()).toContain(
+              "MyCdnSslCAAapp.example.comRecord.sst.cloudflare.DnsRecord",
+            );
+          },
+          changed: (way) =>
+            way === "with another provider"
+              ? [
+                  [
+                    "MyCdnRedirectCloudfrontFunctionRequest",
+                    ["options.provider"],
+                  ],
+                ]
+              : [],
+        },
+        "a domain on Cloudflare in a zone it's given": {
+          create: (Cdn, opts) => {
+            new Cdn(
+              "MyCdn",
+              {
+                ...origin,
+                domain: {
+                  name: "app.example.com",
+                  dns: cloudflare.dns({ zone: "zone-1" }),
+                },
+              },
+              opts,
+            );
+          },
+          check: () =>
+            expect(names()).toContain("MyCdnSslCNAMERecordAppexamplecom"),
+        },
+        "a domain on Vercel": {
+          create: (Cdn, opts) => {
+            new Cdn(
+              "MyCdn",
+              {
+                ...origin,
+                domain: {
+                  name: "example.com",
+                  aliases: ["app.example.com"],
+                  dns: vercel.dns({ domain: "example.com" }),
+                },
+              },
+              opts,
+            );
+          },
+          check: () => {
+            expect(names()).toContain("MyCdnALIASRecordExamplecom");
+            expect(names()).toContain("MyCdnCNAMERecordAppexamplecom");
+            expect(names()).toContain("MyCdnSslCaaRecord.sst.vercel.DnsRecord");
+          },
+        },
         "a domain with aliases that share a record's name": {
           create: (Cdn, opts) => {
             new Cdn(
@@ -135,7 +213,8 @@ describe("Cdn", () => {
           check: () => expect(names()).toContain("MyCdnRedirect"),
           // 4.x created the redirect's function with the app's provider,
           // whatever the redirect's was. V5 uses the redirect's, which
-          // replaces it, as the redirect's map says.
+          // would replace it under the same name: the map doesn't list
+          // that, so the move's check refuses it.
           changed: (way) =>
             way === "with another provider"
               ? [

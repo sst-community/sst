@@ -3,6 +3,7 @@ import { acm } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../../parts-component";
 import { plain } from "../../args";
 import { logicalName } from "../../naming";
+import { VisibleError } from "../../error";
 import type { DnsAdapter } from "../../dns-adapter";
 
 const parts = {
@@ -91,14 +92,10 @@ export class DnsValidatedCertificate extends component(
       subjectAlternativeNames: alternativeNames,
     });
 
-    // A domain other than Route 53 has to let Amazon issue its certificates
-    const caa =
-      dns.provider === "aws"
-        ? []
-        : dns.caa(name, domainName, this.delegateOpts());
-
     // ACM validates a domain and its wildcard with one record. Records whose
-    // domains make the same name have their place in the list added.
+    // domains make the same name have their place in the list added. What
+    // each one is named after is known before anything is created on its
+    // behalf, as the map reads it then.
     const domains = [
       ...new Set([domainName, ...alternativeNames].map(withoutWildcard)),
     ];
@@ -107,16 +104,32 @@ export class DnsValidatedCertificate extends component(
       const named = logicalName(domain);
       const key = seen.has(named) ? `${domain}${i}` : domain;
       seen.add(named);
-      const option = certificate.domainValidationOptions.apply(
-        (options) =>
-          options.find((o) => withoutWildcard(o.domainName) === domain)!,
-      );
+      const option = certificate.domainValidationOptions.apply((options) => {
+        // ACM gives domains in lowercase
+        const found = options.find(
+          (o) =>
+            withoutWildcard(o.domainName).toLowerCase() ===
+            domain.toLowerCase(),
+        );
+        if (!found)
+          throw new VisibleError(
+            `ACM gave the "${name}" certificate no DNS record to validate "${domain}".`,
+          );
+        return found;
+      });
       return {
         key,
         name: option.resourceRecordName,
         value: option.resourceRecordValue,
       };
     });
+
+    // A domain other than Route 53 has to let Amazon issue its certificates
+    const caa =
+      dns.provider === "aws"
+        ? []
+        : dns.caa(name, domainName, this.delegateOpts());
+
     const records = this.records.map((record) =>
       dns.record(
         name,

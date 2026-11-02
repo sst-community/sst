@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/plugin"
@@ -490,8 +492,50 @@ func TestInvoke(t *testing.T) {
 }
 
 func TestFunctions(t *testing.T) {
-	served := functions(envAws())
+	served := functions(func() (aws.Config, error) { return aws.Config{}, errors.New("no AWS here") })
 	assert.Len(t, served, 1)
 	_, err := served["sst:aws:getHostedZone"](context.Background(), resource.PropertyMap{})
 	assert.ErrorContains(t, err, "needs a domain")
+	// The zones are listed once, and so is what failed
+	args := resource.NewPropertyMapFromMap(map[string]any{"domain": "example.com"})
+	_, err = served["sst:aws:getHostedZone"](context.Background(), args)
+	assert.ErrorContains(t, err, "no AWS here")
+	_, err = served["sst:aws:getHostedZone"](context.Background(), args)
+	assert.ErrorContains(t, err, "no AWS here")
+}
+
+func TestPickZone(t *testing.T) {
+	zone := func(id, name string, private bool) types.HostedZone {
+		return types.HostedZone{Id: aws.String("/hostedzone/" + id), Name: aws.String(name), Config: &types.HostedZoneConfig{PrivateZone: private}}
+	}
+	zones := []types.HostedZone{
+		zone("ZAPEX", "example.com.", false),
+		zone("ZSUB", "sub.example.com.", false),
+		zone("ZINTERNAL", "internal.example.com.", true),
+		zone("ZPUBLIC", "both.example.com.", false),
+		zone("ZPRIVATE", "both.example.com.", true),
+	}
+	for domain, want := range map[string]string{
+		"example.com":             "ZAPEX",
+		"app.example.com":         "ZAPEX",
+		"*.example.com":           "ZAPEX",
+		"_abc.example.com.":       "ZAPEX",
+		"api.sub.example.com":     "ZSUB",
+		"Sub.Example.com":         "ZSUB",
+		"db.internal.example.com": "ZINTERNAL",
+		"www.both.example.com":    "ZPUBLIC",
+	} {
+		got, err := pickZone(zones, domain)
+		require.NoError(t, err, domain)
+		assert.Equal(t, want, got, domain)
+	}
+
+	_, err := pickZone(zones, "example.org")
+	assert.ErrorContains(t, err, "could not find hosted zone for domain example.org")
+
+	// Two of the same kind aren't guessed between
+	twice := append(zones, zone("ZAGAIN", "example.com.", false))
+	_, err = pickZone(twice, "app.example.com")
+	assert.ErrorContains(t, err, "there are 2 hosted zones named example.com")
+	assert.ErrorContains(t, err, "`zone`")
 }

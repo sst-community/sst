@@ -54,10 +54,10 @@ var dataKinds = map[string][]string{
 }
 
 // SST 4's lookups, made with resources, by the kind each adds to its name.
-// SST 5 makes them with functions of its provider. Nothing in the cloud is
-// behind one, so a move releases it: it leaves the state without its delete,
-// which only the CLI's RPC for SST 4 can run
-// (docs/plans/v5-rewrite/reference.md, SST's provider resources).
+// SST 5 makes them with functions. Nothing in the cloud is behind one, so a
+// move releases it: it leaves the state without its delete being called, so
+// the move doesn't need what ran SST 4's lookups, which goes with SST 4's
+// components (docs/plans/v5-rewrite/reference.md, SST's provider resources).
 var lookupKinds = map[string]bool{
 	"sst.aws.HostedZoneLookup":  true,
 	"sst.cloudflare.ZoneLookup": true,
@@ -186,11 +186,12 @@ func emptiedBy(urn string) []string {
 	return dataKinds[kindOf(urn)]
 }
 
-// The kind one of SST's provider resources adds to its name, as
-// "sst.aws.VectorTable"
+// The kind one of SST's provider resources adds to the end of its name, as
+// "sst.aws.VectorTable". The name before it may have ".sst." in it too: SST
+// 4's Cloudflare lookups put a domain in it, like "docs.sst.dev".
 func kindOf(urn string) string {
 	name := urn[strings.LastIndex(urn, "::")+2:]
-	at := strings.Index(name, ".sst.")
+	at := strings.LastIndex(name, ".sst.")
 	if at == -1 {
 		return ""
 	}
