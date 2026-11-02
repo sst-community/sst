@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mockPulumi, type TakeoverWay } from "../../helpers/graph";
 import { logicalName } from "../../../src/components/naming";
+import { applyErrors } from "../../helpers/apply-errors";
 
 // A topic that's looked up by its ARN has that ARN, and the name in it. A
 // function that publishes versions, like a workflow's, is invoked by its
@@ -263,6 +264,55 @@ describe("SnsTopic", () => {
           way === "inside another component",
         );
       });
+  });
+
+  // 4.x gave a function subscriber only a `provider` passed to the topic
+  // itself, so one the topic took from a parent didn't reach it. The V5
+  // subscriber has the topic's, so a switch replaces it, as "Switch from" says.
+  it("replaces the subscribers of a topic that takes its provider from a parent", async () => {
+    const { ComponentResource } = await import("@pulumi/pulumi");
+    const { Provider } = await import("@pulumi/aws");
+    const inParent = (Topic: typeof SnsTopic | typeof OriginalSnsTopic) => {
+      const parent = new ComponentResource("test:index:Parent", "Parent", {}, {
+        providers: { aws: new Provider("East", { region: "us-east-1" }) },
+      });
+      const topic = new Topic("MyTopic", {}, { parent });
+      topic.subscribe("Emailer", "src/email.handler");
+      topic.subscribeQueue("Orders", QUEUE_ARN);
+    };
+    const result = await pulumi.takesOver(
+      () => inParent(OriginalSnsTopic),
+      () => inParent(SnsTopic),
+    );
+    const replaced = result.changed
+      .filter((c) => c.fields.includes("options.provider"))
+      .map((c) => c.name);
+    expect(replaced).toContain("MyTopicSubscriberEmailerLogGroup");
+    expect(replaced).toContain("MyTopicSubscriberEmailerSubscription");
+    expect(replaced).toContain("MyTopicSubscriberOrdersSubscription");
+    expect(result.changed.map((c) => c.name)).not.toContain("MyTopicTopic");
+  });
+
+  // Whether a function is created is decided from what's given, which a
+  // preview has to know. The error is thrown inside an apply, on deploy.
+  it("refuses a handler or args in an output, and creates no function", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    const errors = await applyErrors(
+      () =>
+        new SnsTopic("MyTopic")
+          .subscribe("Later", output("src/email.handler"))
+          .subscribe("LaterArgs", output({ handler: "src/email.handler" }) as any),
+      pulumi.settle,
+    );
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    for (const subscriber of ["Later", "LaterArgs"])
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The subscriber "${subscriber}" of the "MyTopic" topic is an output that isn't a function or the ARN of one.`,
+        ),
+      );
   });
 
   it("takes a subscriber's ARN in an output", async () => {

@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { type ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { mockPulumi, type TakeoverWay } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const TABLE = "aws:dynamodb/table:Table";
 // What the 4.x Dynamo wraps each subscription in: nothing in AWS behind it
@@ -532,6 +533,98 @@ describe("Dynamo", () => {
     expect(() =>
       (table as any).subscribe({ handler: "src/indexer.handler" }, {}),
     ).toThrow(/needs a name/);
+    // A handler and the subscription's args, shifted into the name's place
+    expect(() =>
+      (table as any).subscribe("src/indexer.handler", { filters: [] }),
+    ).toThrow(/needs a name/);
+  });
+
+  // Whether a function is created is decided from what's given, which a
+  // preview has to know. The error is thrown inside an apply, on deploy, so
+  // this collects it where the mock would fail the run.
+  // 4.x gave a subscriber only a `provider` passed to the table itself, so one
+  // the table took from a parent didn't reach it. The V5 subscriber has the
+  // table's, so a switch replaces it, as "Switch from" says.
+  it("replaces a subscriber of a table that takes its provider from a parent", async () => {
+    const { ComponentResource } = await import("@pulumi/pulumi");
+    const { Provider } = await import("@pulumi/aws");
+    const inParent = (Table: DynamoClass) => {
+      const parent = new ComponentResource("test:index:Parent", "Parent", {}, {
+        providers: { aws: new Provider("East", { region: "us-east-1" }) },
+      });
+      new Table("MyTable", streaming, { parent }).subscribe(
+        "Indexer",
+        "src/indexer.handler",
+      );
+    };
+    const result = await pulumi.takesOver(
+      () => inParent(OriginalDynamo),
+      () => inParent(Dynamo),
+    );
+    const replaced = result.changed
+      .filter((c) => c.fields.includes("options.provider"))
+      .map((c) => c.name)
+      .sort();
+    expect(replaced).toEqual([
+      "MyTableSubscriberIndexerCode",
+      "MyTableSubscriberIndexerEventSourceMapping",
+      "MyTableSubscriberIndexerFunction",
+      "MyTableSubscriberIndexerLogGroup",
+      "MyTableSubscriberIndexerRole",
+    ]);
+    // The table isn't
+    expect(result.changed.map((c) => c.name)).not.toContain("MyTableTable");
+  });
+
+  it("refuses a handler or args in an output, and creates no function", async () => {
+    const errors = await applyErrors(
+      () =>
+        new Dynamo("MyTable", streaming)
+          .subscribe("Later", output("src/indexer.handler"))
+          .subscribe("LaterArgs", output({ handler: "src/indexer.handler" }) as any),
+      pulumi.settle,
+    );
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    for (const subscriber of ["Later", "LaterArgs"])
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The subscriber "${subscriber}" of the "MyTable" table is an output that isn't a function or the ARN of one.`,
+        ),
+      );
+  });
+
+  it("takes a subscriber written any way that has a name", async () => {
+    const { Function } = await import(
+      "../../../src/components/aws/v5/function"
+    );
+    const table = new Dynamo("MyTable", streaming)
+      .subscribe("Handler", "src/indexer.handler")
+      .subscribe("Args", { handler: "src/indexer.handler", timeout: "60 seconds" })
+      .subscribe("Arn", FUNCTION_ARN)
+      .subscribe("Later", output(FUNCTION_ARN))
+      .subscribe("Mine", new Function("Mine", { handler: "src/mine.handler" }));
+    await pulumi.settle();
+
+    expect(Object.keys(table.nodes.eventSourceMapping).sort()).toEqual([
+      "Args",
+      "Arn",
+      "Handler",
+      "Later",
+      "Mine",
+    ]);
+    // Only a handler and args create a function of the table's own
+    expect(
+      pulumi.resources
+        .filter((r) => r.type === "sst:aws:Function")
+        .map((r) => r.name)
+        .sort(),
+    ).toEqual(["Mine", "MyTableSubscriberArgs", "MyTableSubscriberHandler"]);
+    const mapping = (name: string) =>
+      pulumi.resources.find((r) => r.name === `MyTableEventSourceMapping${name}`)!
+        .inputs.functionName;
+    expect(mapping("Later")).toBe(FUNCTION_ARN);
   });
 
   it("says where a subscriber's transform goes", () => {

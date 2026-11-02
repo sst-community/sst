@@ -186,9 +186,10 @@ export interface SnsTopicSubscriberArgs {
  *   `sst.aws.SnsTopic` named such a subscriber after what it subscribed and its filter,
  *   so a switch can't find it. Remove the subscriber and deploy before you switch, then add it back
  *   with a name.
- * - The function `subscribe` takes is a plain value, unless it's a function you have or
- *   its ARN: whether a function is created is decided from it. Its args are typed as
- *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s. Args written the way
+ * - `subscribe` no longer takes a handler or a function's args in an output: whether a
+ *   function is created is decided from them, and a preview has to know. Only a function
+ *   you have, or its ARN, can be an output. The args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check.
  * - `subscribe` and `subscribeQueue` return the topic, where they returned the
@@ -201,11 +202,13 @@ export interface SnsTopicSubscriberArgs {
  *   the same for `subscribeQueue`. What those created is kept, as long as you don't give
  *   `get` a `provider`: `sst.aws.SnsTopic` created them with your app's, and another one
  *   replaces them, a function's log group included.
- * - A queue subscriber is created with the topic's `provider`. `sst.aws.SnsTopic` created
- *   it with your app's provider, whatever the topic was given. If your topic has a
- *   `provider` and a queue subscribed to it, the subscription and the queue's policy are
- *   replaced on switch: remove the subscriber and deploy before you switch, then add it
- *   back.
+ * - A subscriber is created with the provider the topic has. `sst.aws.SnsTopic` gave a
+ *   function subscriber only a `provider` passed to the topic itself, and a queue
+ *   subscriber your app's provider, whatever the topic had. So if your topic has a
+ *   `provider` and a queue subscribed to it, or takes its provider from a parent component
+ *   or from `providers`, those subscribers are replaced on switch, a function's log group
+ *   with it, which `sst migrate --check` refuses: remove them and deploy before you
+ *   switch, then add them back.
  *
  * #### Use a topic you already have
  *

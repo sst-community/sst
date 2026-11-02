@@ -26,6 +26,7 @@ const rebuilt = [
   "bucket.ts",
   "queue.ts",
   "sns-topic.ts",
+  "dynamo.ts",
 ];
 
 describe("V5 components", () => {

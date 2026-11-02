@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Dynamo` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/dynamo.ts`), with no 4.x component file imported, and on the clean break's list. Its subscriber goes through `plainFunction()`. A subscriber without a name is refused in every shifted form 4.x took, a handler with the subscription's args included. The map already found what the static `Dynamo.subscribe` created.
+- **A subscriber of a component that takes its provider from a parent, or from `providers`, is replaced on switch**, for the `Dynamo`, `Queue` and `SnsTopic`: 4.x gave it only a `provider` passed to the component itself, and the 5.0 subscriber has the component's. Its log group goes with it, so `sst migrate --check` refuses the move; each "Switch from" section says to remove the subscriber and deploy first. A test shows it for each.
+- **A handler or args in an output is refused, and no function created**, now tested at each of the four components, through `applyErrors()` in the tests' helpers, which collects what's thrown inside an `apply` where the mock would fail the run. Before, removing `plainFunction()` from a component failed no test.
+- The "Switch from" sections say the plain-function rule the same way in all four, and the `Dynamo`'s says a table `transform` is given its keys as outputs too.
+
+**Checked:** `tsc`, the docs pages, and all 2,211 platform tests. Each new refusal test fails with `plainFunction()` taken out of its component.
+
+**Reviewed**, and fixed: the provider a subscriber inherits, the untested guard, and the docs above. The table's own resource is unchanged, so nothing here can replace or empty it.
+
+**Left:** the lab check, with the others'.
+
 ## 2026-11-02: step 4, the `SnsTopic` built the 5.0 way
 
 **Done, committed (not pushed):**

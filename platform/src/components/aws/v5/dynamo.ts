@@ -1,25 +1,27 @@
 import {
   ComponentResourceOptions,
+  Output,
   all,
   interpolate,
   output,
 } from "@pulumi/pulumi";
 import { dynamodb, lambda } from "@pulumi/aws";
-import { V5Args, component, deferred, many } from "../../parts-component";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+} from "../../parts-component";
 import { ifSet } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import type {
-  DynamoArgs as OriginalDynamoArgs,
-  DynamoSubscriberArgs as OriginalDynamoSubscriberArgs,
-} from "../dynamo";
-import type {
-  FunctionArgs as OriginalFunctionArgs,
-  FunctionArn,
-} from "../function";
 import { Function } from "./function";
 import { filterCriteria } from "../helpers/event-source";
-import { functionPart } from "../helpers/function-part";
+import {
+  type FunctionInput,
+  functionPart,
+  plainFunction,
+} from "../helpers/function-part";
 import { permission } from "../permission";
 
 const parts = () => ({
@@ -38,10 +40,309 @@ const parts = () => ({
   eventSourceMapping: many(lambda.EventSourceMapping),
 });
 
-export interface DynamoArgs extends V5Args<OriginalDynamoArgs, typeof parts> {}
+export interface DynamoArgs extends ComponentArgs<typeof parts> {
+  /**
+   * An object defining the fields of the table that'll be used to create indexes. The key is the name of the field and the value is the type.
+   *
+   * :::note
+   * You don't need to define all your fields here, just the ones you want to use for indexes.
+   * :::
+   *
+   * While you can have fields field types other than `string`, `number`, and `binary`; you can only use these types for your indexes.
+   *
+   * :::caution
+   * Field types cannot be changed after table creation. Any changes to field types will be ignored.
+   * :::
+   *
+   * @example
+   * ```js
+   * {
+   *   fields: {
+   *     userId: "string",
+   *     noteId: "string"
+   *   }
+   * }
+   * ```
+   */
+  fields: Input<Record<string, "string" | "number" | "binary">>;
+  /**
+   * Define the table's primary index. You can only have one primary index.
+   *
+   * @example
+   * ```js
+   * {
+   *   primaryIndex: { hashKey: "userId", rangeKey: "noteId" }
+   * }
+   * ```
+   */
+  primaryIndex: Input<{
+    /**
+     * The hash key field of the index. This field needs to be defined in the `fields`.
+     */
+    hashKey: Input<string>;
+    /**
+     * The range key field of the index. This field needs to be defined in the `fields`.
+     */
+    rangeKey?: Input<string>;
+  }>;
+  /**
+   * Configure the table's global secondary indexes.
+   *
+   * You can have up to 20 global secondary indexes per table. And each global secondary index should have a unique name.
+   *
+   * @example
+   *
+   * ```js
+   * {
+   *   globalIndexes: {
+   *     CreatedAtIndex: { hashKey: "userId", rangeKey: "createdAt" }
+   *   }
+   * }
+   * ```
+   *
+   * Use an array to create a composite key with multiple attributes.
+   *
+   * ```js
+   * {
+   *   globalIndexes: {
+   *     RegionCategoryIndex: {
+   *       hashKey: ["region", "category"],
+   *       rangeKey: "createdAt"
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  globalIndexes?: Input<
+    Record<
+      string,
+      Input<{
+        /**
+         * The hash key field of the index. This field needs to be defined in the `fields`.
+         *
+         * You can also pass in an array of field names to create a composite key with
+         * up to 4 attributes using the [multi-attribute keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.DesignPattern.MultiAttributeKeys.html) pattern.
+         *
+         * @example
+         * ```js
+         * {
+         *   hashKey: ["region", "category"]
+         * }
+         * ```
+         */
+        hashKey: Input<string | string[]>;
+        /**
+         * The range key field of the index. This field needs to be defined in the `fields`.
+         *
+         * You can also pass in an array of field names to create a composite key with
+         * up to 4 attributes using the [multi-attribute keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.DesignPattern.MultiAttributeKeys.html) pattern.
+         *
+         * @example
+         * ```js
+         * {
+         *   rangeKey: ["createdAt", "status"]
+         * }
+         * ```
+         */
+        rangeKey?: Input<string | string[]>;
+        /**
+         * The fields to project into the index.
+         * @default `"all"`
+         * @example
+         * Project only the key fields: `userId` and `createdAt`.
+         * ```js
+         * {
+         *   hashKey: "userId",
+         *   rangeKey: "createdAt",
+         *   projection: "keys-only"
+         * }
+         * ```
+         *
+         * Project the `noteId` field in addition to the key fields.
+         * ```js
+         * {
+         *   hashKey: "userId",
+         *   rangeKey: "createdAt",
+         *   projection: ["noteId"]
+         * }
+         * ```
+         */
+        projection?: Input<"all" | "keys-only" | Input<string>[]>;
+      }>
+    >
+  >;
+  /**
+   * Configure the table's local secondary indexes.
+   *
+   * Unlike global indexes, local indexes use the same `hashKey` as the `primaryIndex` of the table.
+   *
+   * You can have up to 5 local secondary indexes per table. And each local secondary index should have a unique name.
+   *
+   * @example
+   * ```js
+   * {
+   *   localIndexes: {
+   *     CreatedAtIndex: { rangeKey: "createdAt" }
+   *   }
+   * }
+   * ```
+   */
+  localIndexes?: Input<
+    Record<
+      string,
+      Input<{
+        /**
+         * The range key field of the index. This field needs to be defined in the `fields`.
+         */
+        rangeKey: Input<string>;
+        /**
+         * The fields to project into the index.
+         * @default `"all"`
+         * @example
+         * Project only the key field: `createdAt`.
+         * ```js
+         * {
+         *   rangeKey: "createdAt",
+         *   projection: "keys-only"
+         * }
+         * ```
+         *
+         * Project the `noteId` field in addition to the key field.
+         * ```js
+         * {
+         *   rangeKey: "createdAt",
+         *   projection: ["noteId"]
+         * }
+         * ```
+         */
+        projection?: Input<"all" | "keys-only" | Input<string>[]>;
+      }>
+    >
+  >;
+  /**
+   * Enable [DynamoDB Streams](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.html) for the table.
+   *
+   * :::note
+   * Streams are not enabled by default since there's a cost attached to storing them.
+   * :::
+   *
+   * When an item in the table is modified, the stream captures the information and sends it to your subscriber function.
+   *
+   * :::tip
+   * The `new-and-old-images` stream type is a good default option since it has both the new and old items.
+   * :::
+   *
+   * You can configure what will be written to the stream:
+   *
+   * - `new-image`: The entire item after it was modified.
+   * - `old-image`: The entire item before it was modified.
+   * - `new-and-old-images`:	Both the new and the old items. A good default to use since it contains all the data.
+   * - `keys-only`: Only the keys of the fields of the modified items. If you are worried about the costs, you can use this since it stores the least amount of data.
+   * @default Disabled
+   * @example
+   * ```js
+   * {
+   *   stream: "new-and-old-images"
+   * }
+   * ```
+   */
+  stream?: Input<
+    "keys-only" | "new-image" | "old-image" | "new-and-old-images"
+  >;
+  /**
+   * The field in the table to store the _Time to Live_ or TTL timestamp in. This field should
+   * be of type `number`. When the TTL timestamp is reached, the item will be deleted.
+   *
+   * Read more about [Time to Live](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html).
+   *
+   * @example
+   * Here the TTL field in our table is called `expireAt`.
+   * ```js
+   * {
+   *   ttl: "expireAt"
+   * }
+   * ```
+   */
+  ttl?: Input<string>;
+  /**
+   * Enable deletion protection for the table. When enabled, the table cannot be deleted.
+   *
+   * @example
+   * ```js
+   * {
+   *   deletionProtection: true,
+   * }
+   * ```
+   */
+  deletionProtection?: Input<boolean>;
+}
 
-export interface DynamoSubscriberArgs
-  extends Omit<OriginalDynamoSubscriberArgs, "transform"> {}
+export interface DynamoSubscriberArgs {
+  /**
+   * Filter the records processed by the `subscriber` function.
+   *
+   * :::tip
+   * You can pass in up to 5 different filters.
+   * :::
+   *
+   * You can pass in up to 5 different filter policies. These will logically ORed together. Meaning that if any single policy matches, the record will be processed.
+   *
+   * :::tip
+   * Learn more about the [filter rule syntax](https://docs.aws.amazon.com/lambda/latest/dg/invocation-eventfiltering.html#filtering-syntax).
+   * :::
+   *
+   * @example
+   * For example, if your DynamoDB table's stream contains the follow record.
+   * ```js
+   * {
+   *   eventID: "1",
+   *   eventVersion: "1.0",
+   *   dynamodb: {
+   *     ApproximateCreationDateTime: "1678831218.0",
+   *     Keys: {
+   *       CustomerName: {
+   *           "S": "AnyCompany Industries"
+   *       },
+   *       NewImage: {
+   *         AccountManager: {
+   *           S: "Pat Candella"
+   *         },
+   *         PaymentTerms: {
+   *           S: "60 days"
+   *         },
+   *         CustomerName: {
+   *           S: "AnyCompany Industries"
+   *         }
+   *       },
+   *       SequenceNumber: "111",
+   *       SizeBytes: 26,
+   *       StreamViewType: "NEW_IMAGE"
+   *     }
+   *   }
+   * }
+   * ```
+   *
+   * To process only those records where the `CustomerName` is `AnyCompany Industries`.
+   *
+   * ```js
+   * {
+   *   filters: [
+   *     {
+   *       dynamodb: {
+   *         Keys: {
+   *           CustomerName: {
+   *             S: ["AnyCompany Industries"]
+   *           }
+   *         }
+   *       }
+   *     }
+   *   ]
+   * }
+   * ```
+   */
+  filters?: Input<Input<Record<string, any>>[]>;
+}
+
 
 // A field of any other type is created as binary, as `Dynamo` creates it
 const fieldType = (type: string) =>
@@ -53,9 +354,8 @@ type IndexKey = string | string[];
 /**
  * The `Dynamo` component lets you add an [Amazon DynamoDB](https://aws.amazon.com/dynamodb/) table to your app.
  *
- * It takes the same args as [`sst.aws.Dynamo`](/docs/component/aws/dynamo). It's built
- * from parts, so every resource it creates can be transformed, is available in `nodes`,
- * and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -129,7 +429,7 @@ type IndexKey = string | string[];
  * You can link the table to other resources, like a function or your Next.js app.
  *
  * ```ts title="sst.config.ts"
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   link: [table]
  * });
  * ```
@@ -170,6 +470,17 @@ type IndexKey = string | string[];
  *   table's `transform`.
  * - Every subscriber has a name. One that was added without a name isn't kept: remove it
  *   and deploy before you switch, then add it back with a name.
+ * - `subscribe` no longer takes a handler or a function's args in an output: whether a
+ *   function is created is decided from them, and a preview has to know. Only a function
+ *   you have, or its ARN, can be an output. The args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check.
+ * - A subscriber is created with the provider the table has. `sst.aws.Dynamo` gave it only
+ *   a `provider` passed to the table itself, so if your table takes its provider from a
+ *   parent component or from `providers`, its subscribers are replaced on switch, their
+ *   log groups with them, which `sst migrate --check` refuses: remove them and deploy
+ *   before you switch, then add them back.
  * - To subscribe to the stream of a table that isn't in your app, reference the table with
  *   `get` and subscribe to that, in place of the static `subscribe`.
  *
@@ -184,8 +495,8 @@ type IndexKey = string | string[];
  *   looked up and to nothing else. If you pass `get` a `provider` and subscribe to that
  *   table, the subscriber is replaced on switch, to be created with that provider: remove
  *   it and deploy before you switch, then add it back.
- * - A `transform` function for the table is given the table's indexes, attributes and
- *   stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
+ * - A `transform` function for the table is given the table's keys, indexes, attributes
+ *   and stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
  *
  * #### Use a table you already have
  *
@@ -282,7 +593,9 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
    * :::
    *
    * @param name The name of the subscriber.
-   * @param subscriber The function that'll be notified.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
@@ -318,7 +631,9 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
    * });
    * ```
    *
-   * Or pass in the ARN of an existing Lambda function.
+   * Or pass in the ARN of an existing Lambda function. A function you pass in, or its ARN,
+   * isn't given permission to read the stream: link the table to a function in your app,
+   * or give the function's role that permission yourself.
    *
    * ```js title="sst.config.ts"
    * table.subscribe("MySubscriber", "arn:aws:lambda:us-east-1:123456789012:function:my-function");
@@ -340,10 +655,18 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
    */
   public subscribe(
     name: string,
-    subscriber: Input<string | OriginalFunctionArgs | FunctionArn>,
+    subscriber: FunctionInput,
     args: DynamoSubscriberArgs = {},
   ) {
-    if (typeof name !== "string" || subscriber === undefined)
+    // `sst.aws.Dynamo` also took a subscriber without a name, which shifts
+    // the arguments: the subscriber is where the name goes
+    const shifted =
+      typeof subscriber === "object" &&
+      subscriber !== null &&
+      !Output.isInstance(subscriber) &&
+      Object.getPrototypeOf(subscriber) === Object.prototype &&
+      !("handler" in subscriber);
+    if (typeof name !== "string" || subscriber === undefined || shifted)
       throw new VisibleError(
         `A subscriber of the "${this.componentName}" table needs a name: subscribe("MySubscriber", "src/subscriber.handler").`,
       );
@@ -353,20 +676,29 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
     ]);
 
     const streamArn = this.streamArn;
-    const fn = functionPart(this, "subscriber", name, subscriber, {
-      description: `Subscribed to ${this.componentName}`,
-      permissions: [
-        {
-          actions: [
-            "dynamodb:DescribeStream",
-            "dynamodb:GetRecords",
-            "dynamodb:GetShardIterator",
-            "dynamodb:ListStreams",
-          ],
-          resources: [streamArn],
-        },
-      ],
-    });
+    const fn = functionPart(
+      this,
+      "subscriber",
+      name,
+      plainFunction(
+        subscriber,
+        `The subscriber "${name}" of the "${this.componentName}" table`,
+      ),
+      {
+        description: `Subscribed to ${this.componentName}`,
+        permissions: [
+          {
+            actions: [
+              "dynamodb:DescribeStream",
+              "dynamodb:GetRecords",
+              "dynamodb:GetShardIterator",
+              "dynamodb:ListStreams",
+            ],
+            resources: [streamArn],
+          },
+        ],
+      },
+    );
     this.part("eventSourceMapping", name, {
       eventSourceArn: streamArn,
       functionName: fn.targetArn,

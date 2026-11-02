@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 import {
   hashStringToPrettyString,
   logicalName,
@@ -168,6 +169,51 @@ describe("Queue", () => {
         },
       },
     });
+  });
+
+  // 4.x gave the subscriber only a `provider` passed to the queue itself, so
+  // one the queue took from a parent didn't reach it. The V5 subscriber has
+  // the queue's, so a switch replaces it, as "Switch from" says.
+  it("replaces the subscriber of a queue that takes its provider from a parent", async () => {
+    const { ComponentResource } = await import("@pulumi/pulumi");
+    const { Provider } = await import("@pulumi/aws");
+    const inParent = (Q: QueueClass) => {
+      const parent = new ComponentResource("test:index:Parent", "Parent", {}, {
+        providers: { aws: new Provider("East", { region: "us-east-1" }) },
+      });
+      new Q("MyQueue", {}, { parent }).subscribe("src/subscriber.handler");
+    };
+    const result = await pulumi.takesOver(
+      () => inParent(OriginalQueue),
+      () => inParent(Queue),
+    );
+    const replaced = result.changed
+      .filter((c) => c.fields.includes("options.provider"))
+      .map((c) => c.name);
+    expect(replaced).toContain("MyQueueSubscriberVkxuomLogGroup");
+    expect(replaced).toContain("MyQueueSubscriberVkxuomEventSourceMapping");
+    expect(result.changed.map((c) => c.name)).not.toContain("MyQueueQueue");
+  });
+
+  // Whether a function is created is decided from what's given, which a
+  // preview has to know. The error is thrown inside an apply, on deploy.
+  it("refuses a handler or args in an output, and creates no function", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    const errors = await applyErrors(() => {
+      new Queue("MyQueue").subscribe(output("src/subscriber.handler"));
+      new Queue("Other").subscribe(
+        output({ handler: "src/subscriber.handler" }) as any,
+      );
+    }, pulumi.settle);
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    for (const queue of ["MyQueue", "Other"])
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The subscriber of the "${queue}" queue is an output that isn't a function or the ARN of one.`,
+        ),
+      );
   });
 
   it("takes a subscriber's ARN in an output", async () => {

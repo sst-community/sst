@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { mockPulumi, type TakeoverWay } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 // A policy document is worked out by AWS. Here it's the statements it's given,
 // so two policies compare equal when their statements are the same. A bucket
@@ -761,6 +762,38 @@ describe("Bucket", () => {
       expect(plainFunction(args, what)).toBe(args);
       expect(plainFunction("src/subscriber.handler", what)).toBe(
         "src/subscriber.handler",
+      );
+    });
+
+    it("refuses a handler or args in an output, and creates no function", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const errors = await applyErrors(
+        () =>
+          new Bucket("MyBucket")
+            .notify({
+              eventBridge: true,
+              notifications: [
+                { name: "Later", function: output("src/resize.handler") },
+              ],
+            })
+            .subscribeEventBridge(
+              "LaterArgs",
+              output({ handler: "src/resize.handler" }) as any,
+            ),
+        pulumi.settle,
+      );
+      expect(
+        pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+      ).toEqual([]);
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The "function" of the "Later" notification of the "MyBucket" bucket is an output that isn't a function or the ARN of one.`,
+        ),
+      );
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The EventBridge subscriber "LaterArgs" of the "MyBucket" bucket is an output that isn't a function or the ARN of one.`,
+        ),
       );
     });
 

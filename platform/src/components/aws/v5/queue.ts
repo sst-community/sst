@@ -364,11 +364,17 @@ export interface QueueSubscriberArgs {
  *
  * A few things are written differently:
  *
- * - The function `subscribe` takes is a plain value, unless it's a function you have or
- *   its ARN: whether a function is created is decided from it. Its args are typed as
- *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s. Args written the way
+ * - `subscribe` no longer takes a handler or a function's args in an output: whether a
+ *   function is created is decided from them, and a preview has to know. Only a function
+ *   you have, or its ARN, can be an output. The args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check.
+ * - The subscriber is created with the provider the queue has. `sst.aws.Queue` gave it only
+ *   a `provider` passed to the queue itself, so if your queue takes its provider from a
+ *   parent component or from `providers`, its subscriber is replaced on switch, its log
+ *   group with it, which `sst migrate --check` refuses: remove it and deploy before you
+ *   switch, then add it back.
  * - `subscribe` returns the queue, where it returned the subscriber: its function is
  *   `queue.nodes.subscriber`, and its event source mapping
  *   `queue.nodes.eventSourceMapping`.

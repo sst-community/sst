@@ -995,8 +995,9 @@ export interface BucketEventBridgeSubscriberArgs {
  *   since they decide what's created. The fields of `cors` and each rule can still be
  *   outputs.
  * - So are the list of `notifications` that `notify` takes, each notification in it, and
- *   its `name`. A notification's `function` is a plain value too, unless it's a function
- *   you have or its ARN, and so is the function `subscribeEventBridge` takes.
+ *   its `name`. A notification's `function`, and the function `subscribeEventBridge`
+ *   takes, can't be a handler or a function's args in an output: whether a function is
+ *   created is decided from them. Only a function you have, or its ARN, can be one.
  * - A function's args there are typed as [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s.
  *   Args written the way `sst.aws.Function` takes them, like `role` or `live`, still
  *   work, but don't type-check.
