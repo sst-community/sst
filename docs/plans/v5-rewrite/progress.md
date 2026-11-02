@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the lab check of the `Bucket`, `Queue`, `SnsTopic`, `Dynamo`, `Bus` and `CronV2`
+
+**Checked in the lab** (a stage of its own, with a CLI built from the branch, the maintainer having said to catch up on what wasn't tested). The lab app's bucket group deploys all six: a bucket with versioning, CORS, a lifecycle rule, CloudFront access, a statement of its own, a function, a queue and a topic notified, and an EventBridge subscriber; queues with subscribers; a topic with a function and a queue subscribed; a table with a stream subscriber; a bus with a function and a queue subscribed; a cron job. Each of the queue, topic, table and bus also has a subscriber from 4.x's static methods, which `get` takes the place of.
+
+- **Deployed with SST 4**, then switched all six at once. `sst migrate --check` passed: 121 kept (84 at a new address, 10 functions updated in place), 13 taken out of the state with nothing in the cloud behind them (4.x's wrapper components), 9 created with nothing behind them (the components from `get`, their links, the marker), and the functions' code uploaded again under new keys. Nothing released, nothing deleted.
+- **The move** kept every resource that has an id: the state's ids compared one by one, and every setting in AWS (the bucket's policy, CORS, lifecycle, notifications and EventBridge, each queue's policy, the topic's subscriptions, the event source mappings by id, the rules, the table's stream) was the same, but for the order of entries in the queues' policies. 4.x's lookup of the default event bus went, which has nothing behind it. Then `sst diff` showed no changes.
+- **Everything still runs:** an upload, a delete, an item and an event reached each subscriber once, by every path: the bucket's function, queue and EventBridge rule; the topic's function and queue, and the queue's subscriber; the table's stream; the bus's function and queue; and each subscriber from `get`.
+- **Found:** two subscriber functions' descriptions change on switch, from 4.x's wrapper's name to the component's ("Subscribed to BucketEvents"), an update in place. 4.x names a function's log group with a suffix of its own, so a function's logs are in the group its logging settings name, not `/aws/lambda/<name>`.
+- Removed, and cleaned up.
+
 ## 2026-11-02: step 4, the `Efs` built the 5.0 way
 
 **Done, committed (not pushed):**

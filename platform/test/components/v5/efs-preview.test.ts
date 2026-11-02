@@ -4,13 +4,13 @@ import { mockPulumi } from "../../helpers/graph";
 // What isn't known until a resource is created, as Pulumi marks it on the wire
 const UNKNOWN = "04da6b54-80e4-46f7-96ec-b56ff0331ba9";
 
-// A new stage's preview: everything is about to be created, so of each
-// resource only what it was given is known, and nothing AWS gives back. The
-// lookups' inputs are known, so they're answered.
 // The AZ a subnet is in, by the last letter of its id: `subnet-0a1b` is in
 // us-east-1b. The mock's own ids end in `_id`.
 const azOf = (id: string) => id.replace(/_id$/, "").slice(-1).toLowerCase();
 
+// A new stage's preview: everything is about to be created, so of each
+// resource only what it was given is known, and nothing AWS gives back. The
+// lookups' inputs are known, so they're answered.
 const pulumi = mockPulumi({
   preview: true,
   state: (args) => {
