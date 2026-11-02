@@ -72,15 +72,20 @@ func awsConfig(ctx context.Context) (aws.Config, error) {
 			}
 			return cfg.Credentials.Retrieve(ctx)
 		})
-		// Made directly, so nothing reads the developer's AWS files until
-		// the credentials are made again: the provider runs in another
-		// folder, where a relative path in AWS_CONFIG_FILE reads another file
-		cfg := aws.Config{
-			Region:           region,
-			RetryMaxAttempts: 10,
-			Credentials: aws.NewCredentialsCache(&resolvedFirst{resolved: resolved, then: then}, func(options *aws.CredentialsCacheOptions) {
+		// The rest of the setup as the SDK reads it, like a CA bundle, FIPS
+		// endpoints or the retry mode, as the CLI's has
+		options := []func(*config.LoadOptions) error{
+			config.WithRetryMaxAttempts(10),
+			config.WithCredentialsProvider(aws.NewCredentialsCache(&resolvedFirst{resolved: resolved, then: then}, func(options *aws.CredentialsCacheOptions) {
 				options.ExpiryWindow = time.Minute
-			}),
+			})),
+		}
+		if region != "" {
+			options = append(options, config.WithRegion(region))
+		}
+		cfg, err := config.LoadDefaultConfig(ctx, options...)
+		if err != nil {
+			return aws.Config{}, err
 		}
 		if cfg.Region == "" {
 			cfg.Region = "us-east-1"

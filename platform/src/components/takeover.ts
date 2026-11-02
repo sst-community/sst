@@ -150,15 +150,16 @@ export function takeoverOf(
 
 /**
  * The types of the components a state map takes over from: those with a 5.0
- * form.
+ * form. A map that takes over from another type covers that type only.
  * @internal
  */
 export function takenOverTypes(): Set<string> {
   const types = new Set<string>();
-  for (const [component, how] of takeovers) {
-    types.add((component as unknown as { __pulumiType: string }).__pulumiType);
-    if (how.from) types.add(how.from);
-  }
+  for (const [component, how] of takeovers)
+    types.add(
+      how.from ??
+        (component as unknown as { __pulumiType: string }).__pulumiType,
+    );
   return types;
 }
 

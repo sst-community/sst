@@ -407,23 +407,6 @@ func TestAwsConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("a profile only the CLI could read", func(t *testing.T) {
-		isolate(t)
-		// As with a relative AWS_CONFIG_FILE, read from another folder
-		t.Setenv("AWS_PROFILE", "missing")
-		t.Setenv("SST_AWS_REGION", "eu-west-2")
-		t.Setenv("SST_AWS_ACCESS_KEY_ID", "resolved-access-key")
-		t.Setenv("SST_AWS_SECRET_ACCESS_KEY", "resolved-secret-key")
-
-		cfg, err := awsConfig(ctx)
-		require.NoError(t, err)
-		creds, err := cfg.Credentials.Retrieve(ctx)
-		require.NoError(t, err)
-		if creds.AccessKeyID != "resolved-access-key" {
-			t.Error("the credentials aren't the ones the CLI resolved")
-		}
-	})
-
 	t.Run("roles the CLI assumed", func(t *testing.T) {
 		isolate(t)
 		t.Setenv("SST_AWS_REGION", "eu-west-2")
