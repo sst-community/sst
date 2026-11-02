@@ -106,9 +106,9 @@ Breaking changes are allowed in 5.0: args, defaults, names, how a component is b
 **How it's checked:**
 
 - The codemod moves the 196 examples and each recorded app, with only what the guide lists left to do by hand.
-- Each breaking change is in the Decisions table of the plan, with its rule or its line in the guide.
+- Each breaking change is in the plan's [breaking changes so far](plan.md#breaking-changes-so-far), with its rule or its line in the guide.
 
-**Where it stands (2026-10-31):** not started.
+**Where it stands (2026-11-02):** every breaking change of the components built the 5.0 way so far is in the plan's table, with its way across. The codemod and the guide aren't started.
 
 ## 8. What a package builds on holds still within 5.x
 
@@ -138,3 +138,4 @@ Breaking changes are allowed in 5.0: args, defaults, names, how a component is b
 | 2026-10-31 | Set: goals 1 to 8. |
 | 2026-10-31 | Goal 4: what says a stage was deployed is a snapshot or an update that deployed, not a passphrase, which a diff or a secret can create first. |
 | 2026-11-01 | Goal 3: a component, a wrapper or a provider, with nothing in the cloud behind it, needs no listing in a map to leave the state or be created. The goal already said such a thing may leave. |
+| 2026-11-02 | Goal 7: each breaking change is checked against the plan's table of breaking changes, which has each one's way across, in place of the Decisions table, which keeps the decisions behind them. The maintainer asked for the table. |

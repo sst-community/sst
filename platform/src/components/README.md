@@ -811,7 +811,10 @@ For a component with function parts, test a function that links the component.
 6. Write the class doc, including a "Switch from `sst.aws.<Name>`" section that lists what's
    written differently and what changes on deploy. The docs generator adds the two notes
    every port has to its list. Document each part where it's declared: those comments
-   become the `transform`, `existing` and `nodes` docs.
+   become the `transform`, `existing` and `nodes` docs. Add each breaking change, what a
+   user writes or reads differently, to the breaking changes so far in
+   `docs/plans/v5-rewrite/plan.md`, with its way across: a codemod rule, a line in the
+   guide, or the `sst migrate --check` refusal.
 7. `cd www && bun ./generate.ts components` generates the page. The docs generator and
    the sidebar find every file in `aws/v5/`, so there's nothing to add to either.
    It fails when the page has `sst.aws.<Name>` outside the "Switch from" section, other
