@@ -14,7 +14,7 @@ import {
 } from "../../parts-component";
 import { notAnOption, plain, withDefault } from "../../args";
 import { VisibleError } from "../../error";
-import { devStub } from "../../contract";
+import { devStub, context } from "../../contract";
 import {
   type Container,
   type ContainerArgs,
@@ -430,7 +430,7 @@ export class Task extends component("sst:aws:Task", parts) {
       );
     // In `sst dev` a stub is deployed in place of the task. It hands what
     // the task is run with to the process on the user's machine.
-    const dev = $dev && args.dev !== false;
+    const dev = context().dev && args.dev !== false;
     const region = getRegionOutput({}, opts).region;
     const architecture = withDefault(args.architecture, "x86_64" as const);
     const cpu = cpuOf(args);
@@ -556,8 +556,8 @@ export class Task extends component("sst:aws:Task", parts) {
             SST_TASK_ID: name,
             SST_REGION: process.env.SST_AWS_REGION!,
             ...stub.environment,
-            SST_APP: $app.name,
-            SST_STAGE: $app.stage,
+            SST_APP: context().app.name,
+            SST_STAGE: context().app.stage,
           }),
         ),
       };

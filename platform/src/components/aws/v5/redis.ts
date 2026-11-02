@@ -13,6 +13,7 @@ import { ifSet, plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { toGBs } from "../../size";
+import { context } from "../../contract";
 import { type AnyVpc, subnetsAndSecurityGroupsOf } from "../helpers/vpc";
 import { localServerPane, shownPassword } from "../helpers/local-server";
 
@@ -551,7 +552,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
     // cluster, one that's already deployed too. This is the only place the
     // component handles dev mode.
     const dev = plain(args.dev, `The "dev" of the "${name}" Redis`);
-    if (dev && $dev) {
+    if (dev && context().dev) {
       this.runsLocally();
       this.connection = runLocally(dev);
       return;

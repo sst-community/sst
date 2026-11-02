@@ -15,6 +15,7 @@ import {
 import { plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import type { SizeGbTb } from "../../size";
+import { context } from "../../contract";
 import {
   credentialsSecretOf,
   type LocalDatabaseArgs,
@@ -351,13 +352,16 @@ export function createRdsInstance(
   const self = builder.component;
 
   const username = withDefault(args.username, engine.defaults.username);
-  const dbName = withDefault(args.database, $app.name.replaceAll("-", "_"));
+  const dbName = withDefault(
+    args.database,
+    context().app.name.replaceAll("-", "_"),
+  );
 
   // In `sst dev`, a server on the user's machine stands in for the
   // database, one that's already deployed too. This is the only place the
   // component handles dev mode.
   const dev = plain(args.dev, `The "dev" of the "${name}" database`);
-  if (dev && $dev) {
+  if (dev && context().dev) {
     builder.runsLocally();
     const local = localDatabase(
       dev,

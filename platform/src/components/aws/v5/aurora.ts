@@ -19,6 +19,7 @@ import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type DurationHours, toSeconds } from "../../duration";
 import { transformPart } from "../../transform";
+import { context } from "../../contract";
 import {
   credentialsSecretOf,
   proxyArgs,
@@ -708,13 +709,16 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       ([username, engine]) =>
         username ?? { postgres: "postgres", mysql: "root" }[engine],
     );
-    const dbName = withDefault(args.database, $app.name.replaceAll("-", "_"));
+    const dbName = withDefault(
+      args.database,
+      context().app.name.replaceAll("-", "_"),
+    );
 
     // In `sst dev`, a database on the user's machine stands in for the
     // cluster, one that's already deployed too. This is the only place the
     // component handles dev mode.
     const dev = plain(args.dev, `The "dev" of the "${name}" database`);
-    if (dev && $dev) {
+    if (dev && context().dev) {
       this.runsLocally();
       this.connection = runLocally(dev);
       return;

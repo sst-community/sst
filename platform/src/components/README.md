@@ -224,7 +224,9 @@ the component reads its args.
   for `sst tunnel` (`tunnel`), and a URL to show after a deploy (`hint`). Call
   `this.report({ ... })` in the constructor, before `registerOutputs()`; a report after
   it is an error. Don't name an output for the CLI. `context()` from `sst/components`
-  gives the app, the stage, whether it's `sst dev`, the command and the paths. In a
+  gives the app, the stage, whether it's `sst dev`, the command and the paths. A
+  component reads them there, not from `$app`, `$dev` or `$cli`, which are for an app's
+  config. In a
   test, `app.reportOf(name)` is what a component reported.
   A component doesn't create a `DevCommand` for a command of its own: it reports
   `dev`. The 5.0 `DevCommand` (`sst.x.v5.DevCommand`, in `experimental/v5/`) is for

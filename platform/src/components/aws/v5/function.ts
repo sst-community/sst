@@ -53,7 +53,7 @@ import { Size, toMBs } from "../../size";
 import type { Loader } from "esbuild";
 import type { EsbuildOptions } from "../../esbuild";
 import { rpc } from "../../rpc/rpc";
-import { devStub } from "../../contract";
+import { devStub, context } from "../../contract";
 import { type Runtime, commandsOf, isRuntime } from "../../runtime";
 import { warnOnce } from "../../../util/warn";
 import { type AnyVpc, hasNat, isVpc } from "../helpers/vpc";
@@ -1786,7 +1786,7 @@ export class Function extends component("sst:aws:Function", parts) {
     const dev =
       plain(args.dev, option("dev")) !== false &&
       !(args.dev === undefined && original.live === false) &&
-      $dev;
+      context().dev;
     const logging = normalizeLogging();
     const url = normalizeUrl();
     const python = plain(args.python, option("python"));
@@ -2203,7 +2203,7 @@ export class Function extends component("sst:aws:Function", parts) {
       return output(args.copyFiles ?? []).apply((copyFiles) =>
         Promise.all(
           copyFiles.map(async (entry) => {
-            const from = path.join($cli.paths.root, entry.from);
+            const from = path.join(context().paths.root, entry.from);
             const to = entry.to || entry.from;
             if (path.isAbsolute(to))
               throw new VisibleError(
@@ -2292,8 +2292,8 @@ export class Function extends component("sst:aws:Function", parts) {
       ]).apply(([environment, bootstrap, key, link, streaming, bundle, stub]) => {
         const result = environment ?? {};
         result.SST_RESOURCE_App = JSON.stringify({
-          name: $app.name,
-          stage: $app.stage,
+          name: context().app.name,
+          stage: context().app.stage,
         });
         for (const linkable of link || []) {
           if (!Link.isLinkable(linkable)) continue;
@@ -2312,8 +2312,8 @@ export class Function extends component("sst:aws:Function", parts) {
           result.SST_REGION = process.env.SST_AWS_REGION!;
           Object.assign(result, stub!.environment);
           result.SST_FUNCTION_ID = name;
-          result.SST_APP = $app.name;
-          result.SST_STAGE = $app.stage;
+          result.SST_APP = context().app.name;
+          result.SST_STAGE = context().app.stage;
           result.SST_ASSET_BUCKET = bootstrap.asset;
           if (process.env.SST_FUNCTION_TIMEOUT) {
             result.SST_FUNCTION_TIMEOUT = process.env.SST_FUNCTION_TIMEOUT;
@@ -2388,7 +2388,7 @@ export class Function extends component("sst:aws:Function", parts) {
                   type: "Service",
                   identifiers: ["lambda.amazonaws.com"],
                 },
-                ...($dev
+                ...(context().dev
                   ? [
                       {
                         type: "AWS",
@@ -2438,7 +2438,7 @@ export class Function extends component("sst:aws:Function", parts) {
         context: {
           // Read once the code is built, so the image is built after it
           location: built.apply(() =>
-            path.join($cli.paths.work, "artifacts", `${name}-src`),
+            path.join(context().paths.work, "artifacts", `${name}-src`),
           ),
         },
         cacheFrom: ifSet(cached, () => [{ registry: { ref: cacheRef } }]),
@@ -2468,7 +2468,7 @@ export class Function extends component("sst:aws:Function", parts) {
       const zip = all([built, entry, copyFiles, args.bundle]).apply(
         ([built, entry, copyFiles, customBundle]) =>
           zipCode({
-            to: path.resolve($cli.paths.work, "artifacts", name, "code.zip"),
+            to: path.resolve(context().paths.work, "artifacts", name, "code.zip"),
             bundle: built.bundle,
             sourcemaps: built.sourcemaps,
             copyFiles,
@@ -2522,7 +2522,7 @@ export class Function extends component("sst:aws:Function", parts) {
         const stub = logicalName(path.basename(bundle));
         const created = zipCode({
           to: path.resolve(
-            $cli.paths.work,
+            context().paths.work,
             "artifacts",
             `dev-bridge-${region}-${stub}`,
             "code.zip",
@@ -2653,7 +2653,7 @@ export class Function extends component("sst:aws:Function", parts) {
 
       const routeNamespace = crypto
         .createHash("md5")
-        .update(`${$app.name}-${$app.stage}-${name}`)
+        .update(`${context().app.name}-${context().app.stage}-${name}`)
         .digest("hex")
         .substring(0, 4);
       self.part("routeKey", {
