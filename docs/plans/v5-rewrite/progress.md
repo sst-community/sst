@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-01: step 4, what any deploy changes in a move
+
+A stage that keeps 4.x server-rendered sites failed `sst migrate --check`: their servers' code and source maps are uploaded again on every deploy, under new keys, and nothing maps them. The same would fail any later move of a stage whose code changed since its last deploy, or that has a 5.0 site, whose build changes its code each time too.
+
+**Done, committed (not pushed):**
+
+- **A file uploaded again because it changed isn't the move's doing** ([decision](plan.md#decisions)). `--check` lets an object in a bucket be replaced without a map when only its key changed, in nothing but a hash of what's in it, as SST keys a function's code and its source maps. A key that changes in anything else needs the map, as when a map renames a function, and so do a key a preview doesn't know, a move to another bucket, and anything that isn't an object in a bucket. What a map says comes first. It's judged from the preview alone, so it holds for a 4.x component a move keeps, a 5.0 one in a later move, and an app's own objects.
+
+**Checked:** `go test ./...`. On a Floci stage, no AWS: the 4.x target group deployed with a build from before the refusal, then a function's code changed. Before, `--check` failed on its two functions' code and source maps; with the rule, it passed, listing all four as uploaded again. The switch to the V5 components with the same change passed too, with the maps' own words for the same four. Removed, and the stage's files deleted.
+
+**Found:** Floci's ECR registry, a container Floci starts with the Docker socket the core gives it, had run since the day's first Floci run: neither `sst target stop` nor `sst target reset` stops what the target's container started. Removed by hand. Left for step 3's target, with the Floci package.
+
 ## 2026-11-01: step 4, SST's own resources in the `sst` binary, and the move that releases them
 
 The maintainer asked for the long-term direction for SST's provider resources and for how a move releases, then said yes to it ([decisions](plan.md#decisions)). This closes the gate's last item: releasing `BucketFiles` and `KvKeys`.

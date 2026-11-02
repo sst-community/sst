@@ -23,7 +23,7 @@ A breaking change may replace a resource that holds no data, only when the compo
 
 **How it's checked:**
 
-- `sst migrate --check` fails on any replace the map doesn't list.
+- `sst migrate --check` fails on any replace the map doesn't list, but a file uploaded again because it changed, under a key that follows from what's in it, as any deploy uploads a function's new code.
 - In the lab, after a real deploy, the states before and after are compared by type and cloud id. The lab's `compare-state.py` does this today, and is brought into the CLI.
 
 **Where it stands (2026-11-01):** `sst migrate --check` fails on a replace the map doesn't list, and on any replace of what holds data. v5's takeover maps kept every resource's id in AWS on 2026-10-01, 73 of them under new names ([the report](../v5-aws-test-2026-10-01.md)). The comparison by cloud id isn't in the CLI yet.

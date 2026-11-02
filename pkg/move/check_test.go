@@ -252,6 +252,62 @@ func TestReplacedWhereItMoved(t *testing.T) {
 	assert.Len(t, r.Replaced, 1)
 }
 
+// A 4.x server-rendered site that stays 4.x builds again on every deploy, and
+// its server's code and source maps are uploaded again under new keys. So is
+// any function's code that changed since the last deploy.
+func TestNewUpload(t *testing.T) {
+	const before = "3f1c9a0e5b7d2c4f6a8e0b1d3c5f7a9e2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a"
+	const after = "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+	upload := func(address, old, new string, replaceKeys ...string) []apitype.StepEventMetadata {
+		if len(replaceKeys) == 0 {
+			replaceKeys = []string{"key"}
+		}
+		withKeys := inputs(map[string]any{"key": old}, map[string]any{"key": new})
+		deleted := step(apitype.OpDeleteReplaced, address)
+		deleted.New = nil
+		return []apitype.StepEventMetadata{
+			step(apitype.OpCreateReplacement, address, keys(replaceKeys...), withKeys),
+			step(apitype.OpReplace, address, keys(replaceKeys...), withKeys),
+			deleted,
+		}
+	}
+	server := urn("sst:aws:Astro$sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2", "AstroServerUswest2Code")
+	sourcemap := urn("sst:aws:Astro$sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2", "AstroServerUswest2Sourcemap0")
+	arn := "arn:aws:logs:us-west-2:123456789012:log-group:/aws/lambda/app-dev-AstroServerUswest2Function-abcdef"
+
+	steps := append(
+		upload(server, "assets/AstroServerUswest2-code-"+before+".zip", "assets/AstroServerUswest2-code-"+after+".zip"),
+		upload(sourcemap, "sourcemap/"+arn+"/"+before+".index.mjs.map", "sourcemap/"+arn+"/"+after+".index.mjs.map")...,
+	)
+	r := Check(steps, nil)
+	assert.Empty(t, problems(r))
+	assert.Equal(t, []Change{
+		{URN: server, Type: "aws:s3/bucketObjectv2:BucketObjectv2", Why: "Its file changed, and its key follows from the file: any deploy uploads it again under the new key."},
+		{URN: sourcemap, Type: "aws:s3/bucketObjectv2:BucketObjectv2", Why: "Its file changed, and its key follows from the file: any deploy uploads it again under the new key."},
+	}, r.Replaced)
+
+	// What the map says comes first
+	r = Check(upload(code, "assets/Api-code-"+before+".zip", "assets/Api-code-"+after+".zip"), []Part{{URN: code, Key: "code", Replaced: "Uploaded again."}})
+	assert.Equal(t, "Uploaded again.", r.Replaced[0].Why)
+
+	failed := func(steps []apitype.StepEventMetadata) [][2]string {
+		return problems(Check(steps, nil))
+	}
+	// A key that changes in more than its hash, as when a map renames the
+	// function, needs the map
+	assert.Len(t, failed(upload(code, "assets/ApiOld-code-"+before+".zip", "assets/Api-code-"+after+".zip")), 1)
+	// A key with no hash in it doesn't follow from the file
+	assert.Len(t, failed(upload(code, "assets/api.zip", "assets/api-v2.zip")), 1)
+	assert.Len(t, failed(upload(code, "assets/api-1.zip", "assets/api-2.zip")), 1)
+	// A key a preview doesn't know yet
+	assert.Len(t, failed(upload(code, "assets/Api-code-"+before+".zip", "04da6b54-80e4-46f7-96ec-b56ff0331ba9")), 1)
+	// Into another bucket
+	assert.Len(t, failed(upload(code, "assets/Api-code-"+before+".zip", "assets/Api-code-"+after+".zip", "bucket", "key")), 1)
+	// Nor anything that isn't an object in a bucket
+	layer := urn("aws:lambda/layerVersion:LayerVersion", "Deps")
+	assert.Len(t, failed(upload(layer, "deps-"+before, "deps-"+after)), 1)
+}
+
 func TestDataIsNeverLost(t *testing.T) {
 	steps := []apitype.StepEventMetadata{
 		step(apitype.OpCreateReplacement, queue, keys("fifoQueue")),

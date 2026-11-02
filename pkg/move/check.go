@@ -13,12 +13,16 @@
 //     again or adopts it.
 //   - A part the map lists as new is created.
 //   - A part the map lists as replaced is replaced, unless it holds data.
+//   - A file uploaded under a key that follows from what's in it, like a
+//     function's code, is replaced when the file changed, as any deploy
+//     replaces it.
 //
 // Nothing that holds data is deleted, replaced or emptied, whatever the map
 // says.
 package move
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
@@ -227,6 +231,8 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: "Nothing in the cloud is behind it."})
 			case replaced[urn].Replaced != "":
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: replaced[urn].Replaced})
+			case isNewUpload(steps):
+				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: "Its file changed, and its key follows from the file: any deploy uploads it again under the new key."})
 			default:
 				problem(urn, step, "replace", "No component's state map says it's replaced."+changedBecause(fields))
 			}
@@ -409,6 +415,48 @@ func isLocalCommand(step apitype.StepEventMetadata) bool {
 	}
 	command, ok := step.Old.Inputs["delete"].(string)
 	return !ok || command == ""
+}
+
+// The types of an object uploaded to a bucket
+var uploadTypes = map[string]bool{
+	"aws:s3/bucketObject:BucketObject":     true,
+	"aws:s3/bucketObjectv2:BucketObjectv2": true,
+}
+
+// A hash of what's in a file, as a key that follows from it has: an MD5,
+// SHA-1 or SHA-256 in hex
+var contentHash = regexp.MustCompile(`[0-9a-fA-F]{32,}`)
+
+// A file uploaded again because it changed: an object whose key follows from
+// what's in it, as SST keys a function's code and its source maps, replaced
+// only because that key changed, in nothing but its hash. Any deploy does
+// this when the code changes, and a server-rendered site's build changes its
+// code on every deploy, so it isn't the move's doing. Nothing is lost: the
+// new object has what's on disk now, and what used the old one is updated to
+// the new one in the same deploy.
+func isNewUpload(steps []apitype.StepEventMetadata) bool {
+	if keys := replaceKeys(steps); len(keys) != 1 || keys[0] != "key" {
+		return false
+	}
+	found := false
+	for _, step := range steps {
+		if !uploadTypes[step.Type] {
+			return false
+		}
+		if step.Old == nil || step.New == nil {
+			continue
+		}
+		before, _ := step.Old.Inputs["key"].(string)
+		after, _ := step.New.Inputs["key"].(string)
+		if before == "" || after == "" || before == after || !contentHash.MatchString(before) {
+			return false
+		}
+		if contentHash.ReplaceAllString(before, "#") != contentHash.ReplaceAllString(after, "#") {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 // The fields that make a replace, from each of its steps
