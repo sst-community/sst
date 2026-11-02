@@ -138,7 +138,10 @@ describe("A component's parts, while the stage moves", () => {
       pulumi.moved().map((part) => [part.key, part.releases]),
     );
     expect(releases).toEqual({
+      // Where it can be: in the component it takes over from, or in this one
+      // under the same name
       code: [
+        "urn:pulumi:stack::project::acme:index:NewSite$acme:index:Code::DocsCode",
         "urn:pulumi:stack::project::acme:index:OldSite$acme:index:Code::DocsCode",
       ],
       logs: [

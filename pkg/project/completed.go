@@ -61,6 +61,10 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 	complete.Resources = deployment.Resources
 
 	for _, res := range complete.Resources {
+		if res.Type == MovedMarker {
+			complete.Moved = true
+			continue
+		}
 		outputs, ok := parsePlaintext(res.Outputs).(map[string]interface{})
 		if !ok {
 			continue

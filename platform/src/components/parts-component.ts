@@ -30,7 +30,7 @@ import {
 import type { Permission } from "./aws/permission";
 import type { binding } from "./cloudflare/binding";
 import type { env } from "./linkable";
-import { aliasOf, releasedAddress, takeoverOf } from "./takeover";
+import { aliasOf, releasedAddresses, takeoverOf } from "./takeover";
 import { moving, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
@@ -641,7 +641,7 @@ export class PartsComponent<P extends Parts> extends Component {
       ...(replaced ? { replaced } : {}),
       releases: [released ?? []]
         .flat()
-        .map((old) => releasedAddress(old, this.urn, how.from)),
+        .map((old) => releasedAddresses(old, this, this.componentName)),
     });
   }
 

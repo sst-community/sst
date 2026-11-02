@@ -31,6 +31,10 @@ type StackInput struct {
 	// Release is what a move takes out of the state without deleting it,
 	// marked retained before the deploy runs (release.go)
 	Release []Released
+	// Locked is the stage's lock, when the caller took it and keeps it after
+	// the run, as Lock returned it: sst migrate holds it from its check to
+	// the end of the move, so nothing changes the stage in between
+	Locked *provider.Update
 	// previewFirst runs a deploy with Pulumi's preview first, as when the
 	// program turned out to have checks
 	previewFirst bool
@@ -80,14 +84,17 @@ type Task struct {
 }
 
 type CompleteEvent struct {
-	UpdateID    string
-	Links       common.Links
-	Devs        Devs
-	Functions   map[string]FunctionReport
-	Tasks       map[string]Task
-	Outputs     map[string]interface{}
-	Hints       map[string]string
-	Versions    map[string]int
+	UpdateID  string
+	Links     common.Links
+	Devs      Devs
+	Functions map[string]FunctionReport
+	Tasks     map[string]Task
+	Outputs   map[string]interface{}
+	Hints     map[string]string
+	Versions  map[string]int
+	// Moved is whether the state has the marker of a stage on SST 5's
+	// components (MovedMarker)
+	Moved       bool
 	Errors      []Error
 	Finished    bool
 	Old         bool
@@ -149,6 +156,12 @@ func (p *Project) ResolvePolicyPackPath(policyPath string) (string, error) {
 
 func (p *Project) Lock(command string) (*provider.Update, error) {
 	return provider.Lock(p.home, p.Version(), command, p.app.Name, p.app.Stage)
+}
+
+// DropUpdate takes an update out of the stage's history: one whose lock was
+// taken for a run that didn't happen, like a move whose check failed.
+func (p *Project) DropUpdate(update *provider.Update) error {
+	return provider.RemoveUpdate(p.home, p.app.Name, p.app.Stage, update.ID)
 }
 
 func (s *Project) Unlock() error {

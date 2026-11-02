@@ -160,11 +160,11 @@ func RemoveUpdate(backend Home, app, stage, id string) error {
 	return backend.Remove(context.TODO(), historyKey("update", app, stage, id))
 }
 
-// Cleanup removes a stage's event logs and snapshots, after a remove that
-// left nothing. Its update history stays.
+// Cleanup removes a stage's event logs and snapshots, and the states moves
+// started from, after a remove that left nothing. Its update history stays.
 func Cleanup(backend Home, app, stage string) error {
 	ctx := context.TODO()
-	for _, kind := range []string{"eventlog", "snapshot"} {
+	for _, kind := range []string{"eventlog", "snapshot", "migrate"} {
 		keys, err := backend.List(ctx, Key{Kind: kind, App: app, Stage: stage})
 		if err != nil {
 			return err

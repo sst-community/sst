@@ -375,6 +375,10 @@ declare global {
     };
     state: {
       version: Record<string, number>;
+      /** Whether the stage has moved to SST 5's components. */
+      moved?: boolean;
+      /** Whether nothing is deployed on the stage. */
+      empty?: boolean;
     };
   };
 }

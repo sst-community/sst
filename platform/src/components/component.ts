@@ -8,11 +8,13 @@ import {
   Input,
   all,
   Output,
+  Resource,
   ResourceTransformationArgs,
 } from "@pulumi/pulumi";
 import { nameResource, registerNamingRule } from "./naming.js";
 import type { NamingRule } from "./naming-rules.js";
-import { takeoverOf } from "./takeover.js";
+import { takenOverTypes, takeoverOf } from "./takeover.js";
+import { oldFormCreated } from "./move.js";
 import { VisibleError } from "./error.js";
 import { checkComponent } from "./check.js";
 import path from "path";
@@ -59,6 +61,14 @@ export class Component extends ComponentResource {
     }
     // The app's and its packages' checks see the args as transformed
     checkComponent(type, name, args);
+    // SST 4's form of a component with a 5.0 form. One inside another of
+    // SST's components moves with it.
+    if (
+      !takeoverOf(new.target) &&
+      takenOverTypes().has(type) &&
+      !Component.insideSst(opts?.parent)
+    )
+      oldFormCreated(type, name);
 
     // `this` is not available to the transformations below until `super`
     // returns, so they reach the component through this variable.
@@ -92,6 +102,15 @@ export class Component extends ComponentResource {
     self = this;
     this.componentType = type;
     this.componentName = name;
+  }
+
+  // Whether a resource is one of SST's components, or inside one
+  private static insideSst(resource: Resource | undefined): boolean {
+    for (let at = resource; at; at = (at as any).__parentResource) {
+      if (at instanceof Component && at.componentType.startsWith("sst:"))
+        return true;
+    }
+    return false;
   }
 
   /**

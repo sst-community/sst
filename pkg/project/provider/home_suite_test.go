@@ -359,10 +359,14 @@ func testPrune(t *testing.T, home Home, app string) {
 
 func testCleanup(t *testing.T, home Home, app string) {
 	ids := deployN(t, home, app, "dev", 2)
+	// The state a move started from
+	if err := PushMoveCopy(home, ids[0], app, "dev", checkpoint(app, "dev", 1)); err != nil {
+		t.Fatal(err)
+	}
 	if err := Cleanup(home, app, "dev"); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	for _, kind := range []string{"snapshot", "eventlog"} {
+	for _, kind := range []string{"snapshot", "eventlog", "migrate"} {
 		if got := listed(t, home, kind, app, "dev"); len(got) != 0 {
 			t.Fatalf("%s: expected none, got %v", kind, got)
 		}

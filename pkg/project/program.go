@@ -19,10 +19,11 @@ import (
 // purpose.
 
 // programDefine is what the program reads as the globals $app, $cli and
-// $dev. versions are the components' versions read from the state. The
-// program contract's context() reads them, and $cli says which version of
-// the contract the core speaks.
-func (p *Project) programDefine(input *StackInput, versions map[string]int) (map[string]string, error) {
+// $dev. state is what the stage's state has: the components' versions, which
+// the program contract's context() reads, whether the stage has moved to SST
+// 5's components, and whether it's empty. $cli says which version of the
+// contract the core speaks.
+func (p *Project) programDefine(input *StackInput, state StageState) (map[string]string, error) {
 	cli := map[string]interface{}{
 		"command":  input.Command,
 		"contract": ContractVersion,
@@ -35,7 +36,9 @@ func (p *Project) programDefine(input *StackInput, versions map[string]int) (map
 			"platform": p.PathPlatformDir(),
 		},
 		"state": map[string]interface{}{
-			"version": versions,
+			"version": state.Versions,
+			"moved":   state.Moved,
+			"empty":   state.Empty,
 		},
 	}
 	cliBytes, err := json.Marshal(cli)

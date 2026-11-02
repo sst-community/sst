@@ -149,6 +149,20 @@ export function takeoverOf(
 }
 
 /**
+ * The types of the components a state map takes over from: those with a 5.0
+ * form.
+ * @internal
+ */
+export function takenOverTypes(): Set<string> {
+  const types = new Set<string>();
+  for (const [component, how] of takeovers) {
+    types.add((component as unknown as { __pulumiType: string }).__pulumiType);
+    if (how.from) types.add(how.from);
+  }
+  return types;
+}
+
+/**
  * The Pulumi alias for an old address of the resource named `name`.
  *
  * An old address can be made from a value that isn't known in a preview, like
@@ -180,36 +194,56 @@ export function aliasOf(old: OldAddress, name: string): Input<Alias> {
 }
 
 /**
- * The address of a resource a part releases. One with no `parent` was in the
- * component this one takes over from: `component` is this one's address, and
- * `from` the type of the one it takes over, when that's another type.
+ * The addresses a resource a part releases can be at. One with no `parent` was
+ * in the component this one takes over from: at this component's address, or
+ * at one it answers to through an alias, like the type it takes over from, or
+ * the name a parent's map gave it before. Under an alias, a name that starts
+ * with the component's starts with the alias's instead, as Pulumi names a
+ * child's alias.
  *
+ * @param component This component, and its name.
  * @internal
  */
-export function releasedAddress(
+export function releasedAddresses(
   old: ReleasedAddress,
-  component: Input<string>,
-  from?: string,
-): Output<string> {
-  const parent: Input<string> | undefined =
-    old.parent === false
-      ? undefined
-      : old.parent
-        ? (addressOf(old).parent as Input<string>)
-        : output(component).apply((urn) => (from ? withType(urn, from) : urn));
-  return all([parent, old.name]).apply(([parent, name]) => {
-    if (!parent)
-      return `urn:pulumi:${getStack()}::${getProject()}::${old.type}::${name}`;
-    const [stack, project, types] = parent.split("::");
-    return [stack, project, `${types}$${old.type}`, name].join("::");
-  });
+  component: Resource,
+  componentName: string,
+): Output<string[]> {
+  if (old.parent !== undefined) {
+    const parent =
+      old.parent === false
+        ? undefined
+        : (addressOf(old).parent as Input<string>);
+    return all([parent, old.name]).apply(([parent, name]) => [
+      parent
+        ? childAddress(parent, old.type, name)
+        : `urn:pulumi:${getStack()}::${getProject()}::${old.type}::${name}`,
+    ]);
+  }
+  // What Pulumi resolved the component's aliases to
+  const aliases: Input<string>[] = (component as any).__aliases ?? [];
+  return all([component.urn, all(aliases), old.name]).apply(
+    ([urn, aliases, name]) => [
+      ...new Set(
+        [urn, ...aliases].map((parent) =>
+          childAddress(
+            parent,
+            old.type,
+            name.startsWith(componentName)
+              ? parent.slice(parent.lastIndexOf("::") + 2) +
+                  name.slice(componentName.length)
+              : name,
+          ),
+        ),
+      ),
+    ],
+  );
 }
 
-// The address with its own type swapped for another
-function withType(urn: string, type: string) {
-  const [stack, project, types, name] = urn.split("::");
-  const chain = [...types.split("$").slice(0, -1), type].join("$");
-  return [stack, project, chain, name].join("::");
+// The address of a resource named `name` of a type, inside the one at `parent`
+function childAddress(parent: string, type: string, name: string) {
+  const [stack, project, types] = parent.split("::");
+  return [stack, project, `${types}$${type}`, name].join("::");
 }
 
 function addressOf(old: OldAddress) {

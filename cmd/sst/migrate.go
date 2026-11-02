@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/move"
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/project/provider"
 	"github.com/sst/sst/v3/pkg/server"
 	"golang.org/x/sync/errgroup"
 )
@@ -33,13 +35,15 @@ var CmdMigrate = &cli.Command{
 			"sst migrate --check --stage dev",
 			"```",
 			"",
-			"Without `--check`, it moves the stage. It checks the move first, and stops there if the check fails. Then it saves a copy of the stage's state in its home, takes out of the state what the components' state maps release, without deleting it, and deploys:",
+			"Without `--check`, it moves the stage. It takes the stage's lock, checks the move, and stops there if the check fails. Then it saves a copy of the stage's state in its home, takes out of the state what the components' state maps release, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so what it deploys is what it checked:",
 			"",
 			"```bash frame=\"none\"",
 			"sst migrate --stage dev",
 			"```",
 			"",
 			"A resource is released when the one that takes its place can't be carried over from it, like a site's files, which SST now uploads with a resource of a new type. The new one writes the same thing again.",
+			"",
+			"A stage deployed with SST 4 can't be deployed with `sst deploy` or `sst dev` until it has moved. Its `sst diff` still runs, and so do `sst refresh` and `sst remove`.",
 		}, "\n"),
 	},
 	Flags: []cli.Flag{
@@ -132,8 +136,30 @@ var CmdMigrate = &cli.Command{
 			return err
 		}
 
+		// A move holds the stage's lock from its check to its end, so what's
+		// deployed is what was checked
+		var locked *provider.Update
+		if moving {
+			locked, err = p.Lock("deploy")
+			if err != nil {
+				if errors.Is(err, provider.ErrLockExists) {
+					bus.Publish(&project.ConcurrentUpdateEvent{})
+				}
+				return finish(err)
+			}
+			defer p.Unlock()
+		}
+		// Taking the lock put the move in the stage's history; one that
+		// doesn't run leaves it out
+		forget := func() {
+			if locked != nil {
+				p.DropUpdate(locked)
+			}
+		}
+
 		result, err := checkMove(c, p, s.URL())
 		if err != nil {
+			forget()
 			return finish(err)
 		}
 		if jsonOutput {
@@ -148,6 +174,7 @@ var CmdMigrate = &cli.Command{
 		if !result.OK() {
 			unchanged := ""
 			if moving {
+				forget()
 				unchanged = " Nothing was changed."
 			}
 			return finish(util.NewReadableError(nil, fmt.Sprintf("The stage can't move as it is: %v.%v", count(len(result.Problems), "change a move may not make", "changes a move may not make"), unchanged)))
@@ -156,9 +183,9 @@ var CmdMigrate = &cli.Command{
 			return finish(nil)
 		}
 
-		// The move the check passed. Under the deploy's lock, the state is
-		// saved and what the maps release is marked retained, so it leaves the
-		// state without its delete, and the components apply their maps.
+		// The move the check passed. Under the same lock, the state is saved
+		// and what the maps release is marked retained, so it leaves the state
+		// without its delete, and the components apply their maps.
 		released := []project.Released{}
 		for _, r := range result.Released {
 			released = append(released, project.Released{URN: r.URN, Type: r.Type})
@@ -167,6 +194,7 @@ var CmdMigrate = &cli.Command{
 			Command: "deploy",
 			Move:    true,
 			Release: released,
+			Locked:  locked,
 			Dev:     c.Bool("dev"),
 			Server:  s.URL(),
 			Verbose: c.Bool("verbose"),

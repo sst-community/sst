@@ -551,6 +551,20 @@ releases it with `sstResource(kind, address)` (`aws/takeover/helpers.ts`). `sst 
 marks what's released as retained in the state, so Pulumi takes it out without calling
 its delete, which would delete what it wrote. The takeover tests run the V5 side as a
 move, and check that what takes a released resource's place is given what it was.
+A released resource with no `parent` is looked for in the component at each address it
+answers to: its own, the type it takes over from, and a name a parent's map gave it
+before, as with a subscriber's function. Under one of those, a name that starts with
+the component's starts with that address's instead, as Pulumi names a child's alias.
+
+Only a move releases, so only `sst migrate` switches a stage's components. A stage on
+SST 5's components has a marker in its state (`sst:sst:Moved`), and the CLI refuses to
+deploy one that has something deployed and no marker, except with `sst migrate`. A run
+on a stage that has moved, or a new one, leaves the marker before the app's program
+runs, so a deploy that fails partway keeps it; a move leaves it once the program has
+run, unless something in the stage is still SST 4's form of a component that has a 5.0
+form. On a stage that has moved, or a new one, SST 4's form of such a component is
+refused: on one that has moved, deploying it would delete what the 5.0 form wrote. One
+inside another of SST's components moves with that one (`components/move.ts`).
 
 Whatever the map says, the check fails when something that holds data would be
 deleted, replaced or emptied: a bucket, a table, a database, a cache, a file system, a

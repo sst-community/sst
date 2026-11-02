@@ -79,7 +79,10 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 		ID: id.Descending(),
 	}
 	var err error
-	if input.Command != "diff" {
+	if input.Locked != nil {
+		update = input.Locked
+		log = log.With("updateID", update.ID)
+	} else if input.Command != "diff" {
 		update, err = p.Lock(input.Command)
 		if err != nil {
 			if err == provider.ErrLockExists {
@@ -175,11 +178,12 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 		}
 	}
 
-	// A move releases what the components' maps say it does: marked retained
-	// in the state this deploy runs from, under its lock
-	if input.Command == "deploy" && len(input.Release) > 0 {
-		if err := p.release(workdir, update.ID, input.Release); err != nil {
-			return util.NewReadableError(err, "The move can't release what it has to: "+err.Error()+".")
+	// A move saves the state as it was, and releases what the components'
+	// maps say it does: marked retained in the state this deploy runs from,
+	// under its lock
+	if input.Command == "deploy" && input.Move {
+		if err := p.beginMove(workdir, update.ID, input.Release); err != nil {
+			return util.NewReadableError(err, "The move can't start: "+err.Error()+".")
 		}
 	}
 
@@ -196,7 +200,12 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	bus.Publish(completed)
 	log.Info("got previous deployment")
 
-	define, err := p.programDefine(input, completed.Versions)
+	state := stageState(completed)
+	if err := p.refuseUnmoved(input, state); err != nil {
+		return err
+	}
+
+	define, err := p.programDefine(input, state)
 	if err != nil {
 		return err
 	}
@@ -335,7 +344,9 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	case "refresh":
 		args = append([]string{"refresh", "--yes", "--run-program"}, args...)
 	case "deploy":
-		if input.PolicyPath != "" || input.previewFirst || previewFirst(workdir) {
+		// A move, too: its state is saved and marked before it runs, and
+		// it isn't run again from the marked one
+		if input.PolicyPath != "" || input.previewFirst || input.Move || previewFirst(workdir) {
 			withPreview = true
 			// Preview first, so a mandatory policy or a check stops the
 			// deploy before anything is changed

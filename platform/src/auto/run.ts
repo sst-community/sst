@@ -9,6 +9,7 @@ import {
 import { VisibleError } from "../components/error";
 import { checkNames } from "../components/check";
 import { newRun } from "../util/lazy";
+import { leaveMarker } from "../components/move";
 
 export async function run(program: automation.PulumiFn) {
   process.chdir($cli.paths.root);
@@ -19,12 +20,15 @@ export async function run(program: automation.PulumiFn) {
 
   newRun();
   Link.reset();
+  // The marker that says the stage is on SST 5's components
+  leaveMarker("before");
   let outputs: Record<string, any>;
   try {
     outputs = (await program()) || {};
   } catch (error) {
     explainUndefined(error);
   }
+  leaveMarker("after");
   outputs._protect = $app.protect;
   // Kept with the state, so the next deploy runs a preview first and a
   // check's finding stops it before anything changes

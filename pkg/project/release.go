@@ -15,16 +15,12 @@ type Released struct {
 	Type string
 }
 
-// release marks what a move releases as retained in the state the deploy
-// runs from. Pulumi then takes each one out of the state without calling its
-// delete, which would remove what it wrote, like a site's files. It's the one
-// edit a move makes to the state; aliases carry everything that moves.
-//
-// The state as it was is saved in the home first.
-func (p *Project) release(workdir *PulumiWorkdir, updateID string, released []Released) error {
-	if len(released) == 0 {
-		return nil
-	}
+// beginMove saves the state a move starts from in the home, then marks what
+// the move releases as retained in the state the deploy runs from. Pulumi
+// then takes each one out of the state without calling its delete, which
+// would remove what it wrote, like a site's files. It's the one edit a move
+// makes to the state; aliases carry everything that moves.
+func (p *Project) beginMove(workdir *PulumiWorkdir, updateID string, released []Released) error {
 	data, err := os.ReadFile(workdir.state())
 	if err != nil {
 		return err
@@ -37,7 +33,10 @@ func (p *Project) release(workdir *PulumiWorkdir, updateID string, released []Re
 		return err
 	}
 	if err := provider.PushMoveCopy(p.home, updateID, p.app.Name, p.app.Stage, data); err != nil {
-		return err
+		return fmt.Errorf("saving a copy of the state: %w", err)
+	}
+	if len(released) == 0 {
+		return nil
 	}
 	return workdir.Import(checkpoint)
 }
@@ -46,6 +45,9 @@ func (p *Project) release(workdir *PulumiWorkdir, updateID string, released []Re
 // state with the type its map names: one that isn't means the stage changed
 // since the move was checked, and nothing is marked.
 func retain(checkpoint *apitype.CheckpointV3, released []Released) error {
+	if len(released) == 0 {
+		return nil
+	}
 	if checkpoint.Latest == nil {
 		return fmt.Errorf("the stage has no state to release anything from")
 	}

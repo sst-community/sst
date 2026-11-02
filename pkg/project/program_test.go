@@ -32,7 +32,10 @@ func TestProgramDefine(t *testing.T) {
 			State:     &State{Retention: &retention},
 		},
 	}
-	define, err := p.programDefine(&StackInput{Command: "deploy", Dev: true}, map[string]int{"Bucket": 2})
+	define, err := p.programDefine(&StackInput{Command: "deploy", Dev: true}, StageState{
+		Versions: map[string]int{"Bucket": 2},
+		Moved:    true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +64,8 @@ func TestProgramDefine(t *testing.T) {
 
 	// $cli is the command, the version of the program contract the core
 	// speaks, whether it's sst dev, whether the stage is moving to new
-	// components, the paths, and the versions of the components in the state.
+	// components, the paths, and from the state the versions of the
+	// components, whether the stage has moved and whether it's empty.
 	var cli struct {
 		Command  string            `json:"command"`
 		Contract int               `json:"contract"`
@@ -70,6 +74,8 @@ func TestProgramDefine(t *testing.T) {
 		Paths    map[string]string `json:"paths"`
 		State    struct {
 			Version map[string]int `json:"version"`
+			Moved   bool           `json:"moved"`
+			Empty   bool           `json:"empty"`
 		} `json:"state"`
 	}
 	if err := json.Unmarshal([]byte(define["$cli"]), &cli); err != nil {
@@ -94,6 +100,16 @@ func TestProgramDefine(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cli.State.Version, map[string]int{"Bucket": 2}) {
 		t.Fatalf("$cli.state.version is %v", cli.State.Version)
+	}
+	var rawState map[string]interface{}
+	json.Unmarshal([]byte(define["$cli"]), &struct {
+		State *map[string]interface{} `json:"state"`
+	}{&rawState})
+	if keys := sortedKeys(rawState); !reflect.DeepEqual(keys, []string{"empty", "moved", "version"}) {
+		t.Fatalf("$cli.state has %v", keys)
+	}
+	if !cli.State.Moved || cli.State.Empty {
+		t.Fatalf("$cli.state is %+v", cli.State)
 	}
 }
 
