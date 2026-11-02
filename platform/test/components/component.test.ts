@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as aws from "@pulumi/aws";
 import * as cloudflare from "@pulumi/cloudflare";
-import { output } from "@pulumi/pulumi";
+import { ComponentResource, output } from "@pulumi/pulumi";
 import { mockPulumi } from "../helpers/graph";
 import { rejectionsOf } from "../helpers/rejections";
 
@@ -360,6 +360,50 @@ describe("Component parts", () => {
       await pulumi.settle();
     });
     expect(new Set(failures)).toEqual(new Set([failure]));
+  });
+
+  it("compares what a part releases with what it writes in its place", async () => {
+    const { takeover } = await import("../../src/components/takeover");
+    const parts = { code: aws.s3.BucketObjectv2 };
+    class Site extends component("acme:index:Site", parts) {
+      constructor(name: string) {
+        super(name);
+        this.part("code", { bucket: "docs", key: "code.zip" });
+      }
+    }
+    takeover(Site, {
+      released: {
+        code: (_, { name }) => ({
+          type: "aws:s3/bucketObject:BucketObject",
+          name: `${name}Code`,
+        }),
+      },
+    });
+    // The same object, as an older type
+    const deployed = (key: string) => () => {
+      const site = new ComponentResource("acme:index:Site", "Docs");
+      new aws.s3.BucketObject(
+        "DocsCode",
+        { bucket: "docs", key },
+        { parent: site },
+      );
+    };
+    const code = (result: { changed: { name: string; fields: string[] }[] }) =>
+      result.changed.filter((c) => c.name === "DocsCode").map((c) => c.fields);
+
+    // Written again as it was: it isn't left behind, and nothing changes
+    const same = await pulumi.takesOver(deployed("code.zip"), () => {
+      new Site("Docs");
+    });
+    expect(same.unclaimed).toEqual([]);
+    expect(code(same)).toEqual([]);
+
+    // Written another way: what changes is said
+    const other = await pulumi.takesOver(deployed("old.zip"), () => {
+      new Site("Docs");
+    });
+    expect(other.unclaimed).toEqual([]);
+    expect(code(other)).toEqual([["key"]]);
   });
 
   it("keeps a VisibleError's message as it's written", async () => {

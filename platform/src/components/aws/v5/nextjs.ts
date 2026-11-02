@@ -44,9 +44,9 @@ import { parseLambdaEdgeArn } from "../helpers/arn";
 import { useProvider } from "../helpers/provider";
 import { type RouteArgs, routeOf } from "../helpers/router";
 import { buildSite } from "../helpers/site-build";
-import { BucketFiles } from "../providers/bucket-files";
+import { BucketFiles } from "../resources/bucket-files";
 import { DistributionInvalidation } from "../providers/distribution-invalidation";
-import { KvKeys } from "../providers/kv-keys";
+import { KvKeys } from "../resources/kv-keys";
 import { KvRoutesUpdate } from "../providers/kv-routes-update";
 import {
   CF_BLOCK_CLOUDFRONT_URL_INJECTION,
@@ -1452,7 +1452,10 @@ interface Built {
  *
  * Change `sst.aws.Nextjs` to `sst.aws.v5.Nextjs` and keep the name. The site's bucket, its
  * functions, its ISR queue and table, and its CloudFront distribution or its entry in the
- * router are kept. A few things are written differently:
+ * router are kept. Its files and its entries in the key-value store are written again by
+ * resources of a new type, which the `sst` binary serves, and `sst migrate` takes the old
+ * ones out of the state without deleting what they wrote. A few things are written
+ * differently:
  *
  * - The site is built in the deploy itself, once, with the values of what it's linked to.
  *   `sst.aws.Nextjs` built it with a command it kept in the state, which goes.

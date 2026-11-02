@@ -662,14 +662,14 @@ describe("Nextjs", () => {
     expect(names()).toEqual(
       expect.arrayContaining([
         "NextAssets",
-        "NextAssetFiles.sst.aws.BucketFiles",
+        "NextAssetFiles",
         "NextServerUseast1",
         "NextImageOptimizer",
         "NextRevalidationEvents",
         "NextRevalidationTable",
         "NextRevalidationSeeder",
         "NextRevalidationSeed",
-        "NextKvKeys.sst.aws.KvKeys",
+        "NextKvKeys",
         "NextInvalidation.sst.aws.DistributionInvalidation",
         "NextCdn",
         "NextKvStore",

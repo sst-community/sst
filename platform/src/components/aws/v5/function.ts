@@ -73,7 +73,7 @@ import {
 } from "../helpers/function-code";
 import { devStubCode, linkEncryptionKey } from "../helpers/function-shared";
 import { FunctionEnvironmentUpdate } from "../providers/function-environment-update";
-import { KvKeys } from "../providers/kv-keys";
+import { KvKeys } from "../resources/kv-keys";
 import { KvRoutesUpdate } from "../providers/kv-routes-update";
 
 const parts = {
@@ -1707,7 +1707,10 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  * #### Switch from `sst.aws.Function`
  *
  * Change `sst.aws.Function` to `sst.aws.v5.Function` and keep the name. The function, its
- * role, log group, code and URL are kept. A few things are written differently:
+ * role, log group, code and URL are kept. Behind a router, its route's entry in the router's
+ * store is written again by a resource of a new type, which the `sst` binary serves, and
+ * `sst migrate` takes the old one out of the state without deleting it. A few things are
+ * written differently:
  *
  * - `handler`, `bundle`, `runtime`, `architecture`, `nodejs` and `copyFiles` have to be
  *   plain values, not outputs: the function is built from them, and a preview has to

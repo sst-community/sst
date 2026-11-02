@@ -213,6 +213,20 @@ export function mockPulumi(input?: MockInput) {
     engine.reset();
   };
 
+  // The V5 side runs as the stage moves, so each component tells the core
+  // what its state map says, and what a part releases is compared with the
+  // part that takes its place
+  const asMove = async (run: () => Promise<unknown>) => {
+    const cli = (globalThis as any).$cli;
+    const was = cli.move;
+    cli.move = true;
+    try {
+      await run();
+    } finally {
+      cli.move = was;
+    }
+  };
+
   return {
     ...engine,
     /**
@@ -249,8 +263,10 @@ export function mockPulumi(input?: MockInput) {
       const asDeployed = engine.compare(recorded);
 
       await newRun();
-      v5();
-      await engine.settle();
+      await asMove(async () => {
+        v5();
+        await engine.settle();
+      });
       const result = engine.compare(before);
       claimsBeforeRenames(before, result);
       return { deployed: asDeployed, result };
@@ -268,8 +284,10 @@ export function mockPulumi(input?: MockInput) {
       if (before.length === 0) throw new Error("The original created nothing");
 
       await newRun();
-      v5();
-      await engine.settle();
+      await asMove(async () => {
+        v5();
+        await engine.settle();
+      });
       const result = engine.takeover(before);
       claimsBeforeRenames(before, result);
       return result;
@@ -355,7 +373,7 @@ export function mockPulumi(input?: MockInput) {
               if (before.length === 0)
                 throw new Error("The original created nothing");
 
-              await deploy(suite.v5(), test.v5, true);
+              await asMove(() => deploy(suite.v5(), test.v5, true));
               const result = mock.takeover(before);
               const wrappers = expected(test.wrappers);
               const isWrapper = (r: string) =>

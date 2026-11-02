@@ -363,7 +363,7 @@ describe("Router", () => {
 
     const key = pulumi.resources.find(
       (r) =>
-        r.type === DYNAMIC &&
+        r.type === "sst:aws:KvKeys" &&
         r.name.startsWith("MyRouterRouteKey") &&
         r.inputs.entries.metadata.includes("lambda-url"),
     )!;
@@ -381,7 +381,7 @@ describe("Router", () => {
     });
     const plain = pulumi.resources.find(
       (r) =>
-        r.type === DYNAMIC &&
+        r.type === "sst:aws:KvKeys" &&
         r.name.startsWith("MyRouterRouteKey") &&
         r.inputs.entries.metadata.includes("8080"),
     )!;

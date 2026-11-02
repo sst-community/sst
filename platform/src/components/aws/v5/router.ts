@@ -27,7 +27,7 @@ import { RETENTION } from "../logging";
 import { parseLambdaEdgeArn } from "../helpers/arn";
 import { useProvider } from "../helpers/provider";
 import type { AnyBucket } from "../helpers/bucket";
-import { KvKeys } from "../providers/kv-keys";
+import { KvKeys } from "../resources/kv-keys";
 import { KvRoutesUpdate } from "../providers/kv-routes-update";
 import {
   CF_BLOCK_CLOUDFRONT_URL_INJECTION,
@@ -973,8 +973,10 @@ interface Routing {
  * #### Switch from `sst.aws.Router`
  *
  * Change `sst.aws.Router` to `sst.aws.v5.Router` and keep the name. The distribution, its
- * domain, the key-value store, the functions and every route are kept. A few things are
- * written differently:
+ * domain, the key-value store, the functions and every route are kept. Each route's entries
+ * in the store are written again by a resource of a new type, which the `sst` binary
+ * serves, and `sst migrate` takes the old ones out of the state without deleting them. A few
+ * things are written differently:
  *
  * - `routes` is gone. Add each route with `route()` or `routeBucket()`. A router that's
  *   deployed with `routes` switches to `route()` on `sst.aws.Router` first, then to this

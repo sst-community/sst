@@ -121,14 +121,14 @@ describe("a Nextjs site in a new stage's preview", () => {
       .map((r) => r.name)
       .sort();
     expect(inSite).toEqual([
-      "NextAssetFiles.sst.aws.BucketFiles",
+      "NextAssetFiles",
       "NextAssets",
       "NextCdn",
       "NextCloudfrontFunctionRequest",
       "NextImageOptimizer",
       "NextImageOptimizerPublicFunctionUrlAccess",
       "NextInvalidation.sst.aws.DistributionInvalidation",
-      "NextKvKeys.sst.aws.KvKeys",
+      "NextKvKeys",
       "NextKvStore",
       "NextPublicFunctionUrlAccessUseast1",
       "NextRevalidationEvents",

@@ -644,6 +644,15 @@ export function mockPulumi(input?: MockInput) {
           answersTo(r, claims.get(r.parent)),
         );
 
+      // What a part releases, as its component told the core while the stage
+      // moved: the resource leaves the state without its delete, and the
+      // part takes its place
+      const releasedTo = new Map<string, string>();
+      for (const part of moved)
+        for (const address of part.releases ?? [])
+          releasedTo.set(address, part.urn);
+      const releases: [RecordedResource, RecordedResource][] = [];
+
       const unclaimed: string[] = [];
       const pairs: [RecordedResource, RecordedResource][] = [];
       const claimed = new Set<RecordedResource>();
@@ -658,7 +667,13 @@ export function mockPulumi(input?: MockInput) {
               .map((r) => r.name)
               .join(" and ")}`,
           );
-        if (claimants.length === 0)
+        const releasedBy = resources.find(
+          (r) => urn(r.type, r.name, r.parent) === releasedTo.get(address),
+        );
+        if (claimants.length === 0 && releasedBy) {
+          releases.push([before, releasedBy]);
+          claimed.add(releasedBy);
+        } else if (claimants.length === 0)
           unclaimed.push(`${before.type}::${before.name}`);
         else {
           pairs.push([before, claimants[0]]);
@@ -792,6 +807,30 @@ export function mockPulumi(input?: MockInput) {
           ),
         }));
 
+      // What takes a released resource's place has to write the same thing
+      // again: it's given what that was, but for the code a dynamic resource
+      // keeps of its provider
+      for (const [before, now] of releases) {
+        const { __provider, ...was } = before.inputs;
+        const state = before.fromState === true;
+        const pair = {
+          name: before.name,
+          original: stable(state ? comparable(was) : withoutSecrets(was)),
+          now: stable(
+            state
+              ? asStateHas(was, now.inputs, built)
+              : withoutSecrets(now.inputs),
+            state || replay ? undefined : asOriginal(now.name),
+          ),
+        };
+        const fields = Object.keys({ ...pair.original, ...pair.now }).filter(
+          (key) =>
+            JSON.stringify(pair.original[key]) !==
+            JSON.stringify(pair.now[key]),
+        );
+        if (fields.length) changed.push({ ...pair, fields } as any);
+      }
+
       // A deploy removes resources in the reverse of the order they depend
       // on each other, so a dependency is also a promise about teardown:
       // what depends on a resource is removed before it. Each one the
@@ -875,6 +914,8 @@ export function mockPulumi(input?: MockInput) {
         hidden: hidden.sort(),
         created,
         pairs,
+        /** Each resource released, and the part that takes its place. */
+        releases,
       };
     },
   };

@@ -731,7 +731,8 @@ describe("Function", () => {
         pulumi
           .graph()
           .filter((r) => r.name.startsWith("MyQueueSubscriberRout"))
-          .map((r) => r.name.split(".")[0]),
+          .map((r) => r.name.split(".")[0])
+          .sort(),
       ).toEqual(["MyQueueSubscriberRouteKey", "MyQueueSubscriberRoutesUpdate"]);
     });
 

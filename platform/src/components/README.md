@@ -538,13 +538,19 @@ takeover(Site, {
   // as when the type changes. The old one leaves the state without its delete
   // being called; the part writes the same thing again, or adopts it by its id.
   released: {
-    files: (_, { name }) => ({
-      type: "pulumi-nodejs:dynamic:Resource",
-      name: `${name}AssetFiles.sst.aws.BucketFiles`,
-    }),
+    files: (_, { name }) => sstResource("BucketFiles", { name: `${name}AssetFiles` }),
   },
 });
 ```
+
+SST's own resources, like a site's files (`BucketFiles`) and a router's entries
+(`KvKeys`), are served by the `sst` binary as a Pulumi provider: use the classes in
+`aws/resources/`, not the 4.x dynamic ones in `aws/providers/`. 4.x's were dynamic
+resources with their kind added to their name, so a part that takes the place of one
+releases it with `sstResource(kind, address)` (`aws/takeover/helpers.ts`). `sst migrate`
+marks what's released as retained in the state, so Pulumi takes it out without calling
+its delete, which would delete what it wrote. The takeover tests run the V5 side as a
+move, and check that what takes a released resource's place is given what it was.
 
 Whatever the map says, the check fails when something that holds data would be
 deleted, replaced or emptied: a bucket, a table, a database, a cache, a file system, a

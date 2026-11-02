@@ -1,5 +1,6 @@
 import { takeover } from "../../takeover";
 import { Function } from "../v5/function";
+import { sstResource } from "./helpers";
 
 takeover(Function, {
   moved: {
@@ -20,6 +21,12 @@ takeover(Function, {
   },
   // Each is an object keyed by what's in it, and is uploaded under a new key
   // whenever the function's code changes, as when it's renamed
+  // Its route's entry in a router's key-value store was one of SST's own
+  // dynamic resources
+  released: {
+    routeKey: (_, { name }) =>
+      sstResource("KvKeys", { name: `${name}RouteKey` }),
+  },
   replaced: {
     code: "The function's code is uploaded again, under a new key.",
     sourcemap: "The function's source map is uploaded again, under a new key.",
