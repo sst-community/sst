@@ -22,7 +22,6 @@ type WorkerAssetsInputs struct {
 	Manifest   AssetManifest `json:"manifest"`
 	Directory  string `json:"directory"`
 	AccountId  string `json:"accountId"`
-	ApiToken   string `json:"apiToken"`
 	ScriptName string `json:"scriptName"`
 }
 
@@ -53,7 +52,7 @@ type UploadResponse struct {
 
 
 func (r *WorkerAssets) Create(input *WorkerAssetsInputs, output *CreateResult[WorkerAssetsOutputs]) error {
-	jwt, err := r.handleUpload(input.Manifest, input.Directory, input.AccountId, input.ScriptName, input.ApiToken)
+	jwt, err := r.handleUpload(input.Manifest, input.Directory, input.AccountId, input.ScriptName)
 	if err != nil {
 		return err
 	}
@@ -72,7 +71,7 @@ func (r *WorkerAssets) Create(input *WorkerAssetsInputs, output *CreateResult[Wo
 }
 
 func (r *WorkerAssets) Update(input *UpdateInput[WorkerAssetsInputs, WorkerAssetsOutputs], output *UpdateResult[WorkerAssetsOutputs]) error {
-	jwt, err := r.handleUpload(input.News.Manifest, input.News.Directory, input.News.AccountId, input.News.ScriptName, input.News.ApiToken)
+	jwt, err := r.handleUpload(input.News.Manifest, input.News.Directory, input.News.AccountId, input.News.ScriptName)
 	if err != nil {
 		return err
 	}
@@ -89,10 +88,10 @@ func (r *WorkerAssets) Update(input *UpdateInput[WorkerAssetsInputs, WorkerAsset
 	return nil
 }
 
-func (r *WorkerAssets) handleUpload(manifest AssetManifest, directory, accountId, scriptName, apiToken string) (string, error) {
+func (r *WorkerAssets) handleUpload(manifest AssetManifest, directory, accountId, scriptName string) (string, error) {
 
 	// Initialize assets upload session
-	initResponse, err := r.uploadAssetManifest(accountId, scriptName, apiToken, manifest)
+	initResponse, err := r.uploadAssetManifest(accountId, scriptName, manifest)
 	if err != nil {
 		return "", err
 	}
@@ -120,7 +119,7 @@ func (r *WorkerAssets) handleUpload(manifest AssetManifest, directory, accountId
 			defer wg.Done()
 			// Each worker processes buckets from the channel
 			for hashes := range bucketsChan {
-				jwt, err := r.uploadAssets(manifest, directory, accountId, apiToken, hashes, initResponse.Jwt)
+				jwt, err := r.uploadAssets(manifest, directory, accountId, hashes, initResponse.Jwt)
 				if err != nil {
 					errChan <- fmt.Errorf("bucket %v upload failed: %w", hashes, err)
 					return
@@ -166,7 +165,7 @@ func (r *WorkerAssets) handleUpload(manifest AssetManifest, directory, accountId
 	return completionJwt, nil
 }
 
-func (r *WorkerAssets) uploadAssetManifest(accountId, scriptName, apiToken string, manifest AssetManifest) (*InitializeAssetsResponse, error) {
+func (r *WorkerAssets) uploadAssetManifest(accountId, scriptName string, manifest AssetManifest) (*InitializeAssetsResponse, error) {
 	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/workers/scripts/%s/assets-upload-session", accountId, scriptName)
 
 	jsonBody, err := json.Marshal(map[string]interface{}{
@@ -181,7 +180,9 @@ func (r *WorkerAssets) uploadAssetManifest(accountId, scriptName, apiToken strin
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiToken)
+	if err := r.authorize(req); err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -211,7 +212,7 @@ func (r *WorkerAssets) uploadAssetManifest(accountId, scriptName, apiToken strin
 	return &result.Result, nil
 }
 
-func (r *WorkerAssets) uploadAssets(manifest AssetManifest, directory, accountId, apiToken string, hashes []string, jwt string) (string, error) {
+func (r *WorkerAssets) uploadAssets(manifest AssetManifest, directory, accountId string, hashes []string, jwt string) (string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 

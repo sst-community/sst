@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/sst/sst/v3/pkg/project"
 )
@@ -15,6 +16,17 @@ import (
 type VercelResource struct {
 	context context.Context
 	project *project.Project
+}
+
+// authorize sets the token the CLI has for Vercel's API, VERCEL_API_TOKEN, on
+// a request. It's not in the resource's inputs, which are saved to the state.
+func (r *VercelResource) authorize(req *http.Request) error {
+	token := os.Getenv("VERCEL_API_TOKEN")
+	if token == "" {
+		return fmt.Errorf("VERCEL_API_TOKEN is not set: it's the access token for Vercel's API")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return nil
 }
 
 type VercelDnsRecord struct {
@@ -28,7 +40,6 @@ type VercelDnsRecordInputs struct {
 	Value      string `json:"value"`
 	MxPriority int    `json:"mxPriority,omitempty"`
 	TeamId     string `json:"teamId,omitempty"`
-	ApiToken   string `json:"apiToken"`
 }
 
 type VercelDnsRecordOutputs struct {
@@ -95,7 +106,9 @@ func (r *VercelDnsRecord) createOrUpdateRecord(input *VercelDnsRecordInputs) (st
 	}
 	
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+input.ApiToken)
+	if err := r.authorize(req); err != nil {
+		return "", err
+	}
 	
 	client := &http.Client{}
 	resp, err := client.Do(req)

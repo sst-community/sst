@@ -9,13 +9,36 @@ import (
 	"net/http"
 	"strings"
 
+	cloudflare "github.com/cloudflare/cloudflare-go"
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/project/provider"
 )
 
 // Base resource for Cloudflare providers
 type CloudflareResource struct {
 	context context.Context
 	project *project.Project
+}
+
+// authorize sets the credentials the CLI has for Cloudflare's API on a
+// request: the app's cloudflare provider's, or else the environment's. They're
+// not in the resource's inputs, which are saved to the state.
+func (r *CloudflareResource) authorize(req *http.Request) error {
+	var api *cloudflare.API
+	if loaded, ok := r.project.Provider("cloudflare"); ok {
+		cf, ok := loaded.(*provider.CloudflareProvider)
+		if !ok {
+			return fmt.Errorf("the cloudflare provider is a %T", loaded)
+		}
+		api = cf.Api()
+	} else {
+		var err error
+		if api, err = provider.NewCloudflareAPI(nil); err != nil {
+			return err
+		}
+	}
+	provider.AuthorizeCloudflare(api, req)
+	return nil
 }
 
 type CloudflareDnsRecord struct {
@@ -34,7 +57,6 @@ type CloudflareDnsRecordInputs struct {
 	Name     string  `json:"name"`
 	Value    *string `json:"value,omitempty"`
 	Proxied  *bool   `json:"proxied,omitempty"`
-	ApiToken string  `json:"apiToken"`
 	Data     *Data   `json:"data,omitempty"`
 }
 
@@ -117,7 +139,9 @@ func (r *CloudflareDnsRecord) createOrUpdateRecord(input *CloudflareDnsRecordInp
 	}
 	
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+input.ApiToken)
+	if err := r.authorize(req); err != nil {
+		return "", err
+	}
 	
 	client := &http.Client{}
 	resp, err := client.Do(req)
