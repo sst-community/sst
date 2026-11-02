@@ -79,26 +79,49 @@ func (h *HTTP) settings() (*httpSettings, error) {
 			return nil, err
 		}
 		data, _ = json.Marshal(made)
-		if err := os.MkdirAll(filepath.Dir(h.path), 0755); err != nil {
+		published, err := publish(h.path, data)
+		if err != nil {
 			return nil, err
 		}
-		// Another process may make them at the same time, and the first wins
-		file, err := os.OpenFile(h.path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if errors.Is(err, os.ErrExist) {
+		// Another process made them at the same time, and the first wins
+		if !published {
 			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		_, err = file.Write(data)
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			return nil, err
 		}
 		return made, nil
 	}
+}
+
+// publish writes data to path in one step, only when nothing is there yet,
+// readable by the developer alone. It's written under another name first and
+// linked into place, which fails when path exists: a file created and then
+// written could be read empty by another process, which would take it for a
+// broken one, remove it and make its own.
+func publish(path string, data []byte) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false, err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return false, err
+	}
+	defer os.Remove(temp.Name())
+	_, err = temp.Write(data)
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := os.Chmod(temp.Name(), 0600); err != nil {
+		return false, err
+	}
+	if err := os.Link(temp.Name(), path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func newHTTPSettings() (*httpSettings, error) {
