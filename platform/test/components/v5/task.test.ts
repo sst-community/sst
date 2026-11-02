@@ -4,6 +4,7 @@ import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const TASK_DEFINITION = "aws:ecs/taskDefinition:TaskDefinition";
 const IMAGE = "docker-build:index:Image";
@@ -996,15 +997,50 @@ describe("Task", () => {
       ).toThrow(/as "existing: { executionRole }" in the "MyTask" task/);
     });
 
-    it("can't have both public and publicIp", () => {
+    // 4.x refused the two together, and marked "publicIp" deprecated. It's
+    // the one way to give a task in a VPC of your own a public IP without
+    // making it public, so the V5 one keeps it, and refuses only what can't be.
+    it("takes public with publicIp, unless publicIp is false", async () => {
+      const both = new Task("Both", {
+        cluster: cluster(),
+        image: "nginx:latest",
+        public: true,
+        publicIp: true,
+      });
+      await pulumi.settle();
+      expect(await pulumi.resolve(both.assignPublicIp)).toBe(true);
+      expect(named("BothPublicSecurityGroup")).toEqual([
+        "BothPublicSecurityGroup",
+      ]);
+
       expect(
         () =>
           new Task("MyTask", {
             cluster: cluster(),
+            image: "nginx:latest",
             public: true,
-            publicIp: true,
+            publicIp: false,
           }),
-      ).toThrow(/Do not set both "public" and "publicIp" for the "MyTask" Task/);
+      ).toThrow(
+        `"publicIp" can't be false when "public" is true in the "MyTask" task: a public task has a public IP.`,
+      );
+    });
+
+    it("can't be public in a VPC given by its ids without public subnets", async () => {
+      const { publicSubnets, ...vpc } = customVpc;
+      const errors = await applyErrors(
+        () =>
+          new Task("MyTask", {
+            cluster: new ClusterClass("MyCluster", { vpc }),
+            image: "nginx:latest",
+            public: true,
+          }),
+        pulumi.settle,
+      );
+
+      expect([...new Set(errors)]).toEqual([
+        'Set "vpc.publicSubnets" on the Cluster to use "public" on the "MyTask" Task.',
+      ]);
     });
 
     it("can't have both containers and a top-level image", () => {

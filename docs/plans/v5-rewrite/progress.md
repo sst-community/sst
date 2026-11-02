@@ -2,6 +2,20 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Task` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/task.ts`), with no 4.x component file imported, and on the clean break's list. What a task and a service both run, and with what, is `FargateBaseArgs` in `helpers/fargate.ts`, with a container's args, `ContainerArgs`, the 5.0 way: their docs are the 5.0 components' own, written for any page. The `Service` takes them when it's rebuilt. The tables of the CPU and memory Fargate allows moved into the helper too; the 4.x file imports them from there.
+- **`publicIp` is kept, not deprecated.** 4.x marked it deprecated in favor of `public` and refused the two together, but `public` also opens a security group to everything and moves the task to the public subnets, so a task in a cluster given the ids of a VPC had no other way to get a public IP. The V5 `Task` refuses only `public` with `publicIp: false`. Every 4.x state switches as it is, since 4.x never took both.
+- **Docs fixed on the way:** a log group's default name, which has the app, the stage and a random suffix, and is read only when the log group is created; what a public IP does and doesn't do; that a role passed in `existing` gets nothing from `link`, `permissions` or `sst dev`; and two typos from 4.x.
+
+**Checked:** `tsc`, the docs page (the `Service`'s page is unchanged), and all 2,226 platform tests, with a public task in a VPC given by ids without public subnets, and a task given both `public` and `publicIp`.
+
+**Reviewed**, and fixed: the docs above, examples in the helper that still created the 4.x `Vpc`, the tables read from a 4.x file, and the two cases. Left for the `Service`'s rebuild: a container's `health` and `dev` are still typed from the 4.x `ServiceArgs`. The page lists `existing.image`, which the component refuses with what to write, as before.
+
+**Left:** the lab check, with the containers group.
+
 ## 2026-11-02: step 4, the `Cluster` built the 5.0 way
 
 **Done, committed (not pushed):**

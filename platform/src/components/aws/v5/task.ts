@@ -6,14 +6,19 @@ import {
 } from "@pulumi/pulumi";
 import { cloudwatch, ec2, ecs, getRegionOutput, iam } from "@pulumi/aws";
 import { Image } from "@pulumi/docker-build";
-import { V5Args, component, many, optional } from "../../parts-component";
+import {
+  type ComponentArgs,
+  component,
+  many,
+  optional,
+} from "../../parts-component";
 import { notAnOption, plain, withDefault } from "../../args";
 import { VisibleError } from "../../error";
 import { devStub } from "../../contract";
 import {
   type Container,
   type ContainerArgs,
-  type FargateArgs,
+  type FargateBaseArgs,
   containerImage,
   containersOf,
   cpuOf,
@@ -26,7 +31,7 @@ import {
   taskRoleArgs,
 } from "../helpers/fargate";
 import { permission } from "../permission";
-import type { TaskArgs as OriginalTaskArgs } from "../task";
+import type { Input } from "../../input";
 
 const parts = {
   /**
@@ -57,15 +62,7 @@ const parts = {
   publicSecurityGroup: optional(ec2.SecurityGroup),
 };
 
-export interface TaskArgs
-  extends V5Args<
-      Omit<
-        OriginalTaskArgs,
-        "cluster" | "containers" | "volumes" | "taskRole" | "executionRole"
-      >,
-      typeof parts
-    >,
-    FargateArgs {
+export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
   /**
    * The containers to run in the task.
    *
@@ -119,6 +116,105 @@ export interface TaskArgs
    * container can be an output.
    */
   containers?: ContainerArgs[];
+  /**
+   * Make the task publicly accessible from the internet.
+   *
+   * :::note
+   * Tasks in a `Vpc` are placed in public subnets with a public IP by default for
+   * outbound internet access. The `public` property controls whether the task is
+   * _reachable_ from the internet.
+   * :::
+   *
+   * A public task runs in the cluster's public subnets, with a security group that lets
+   * anything in. If the cluster was given the ids of a VPC, give it `vpc.publicSubnets`
+   * too.
+   *
+   * It has to be a plain value: it decides whether the security group is created.
+   *
+   * @default false
+   *
+   * @example
+   * ```ts
+   * {
+   *   public: true
+   * }
+   * ```
+   */
+  public?: boolean;
+  /**
+   * Give the task a public IP address, so it can reach the internet from a public subnet
+   * without a NAT.
+   *
+   * A task in a `Vpc` has one by default, since it runs in the VPC's public subnets. A
+   * task in a cluster that was given the ids of a VPC doesn't, unless you set this. A
+   * `public` task always has one.
+   *
+   * It only helps in a public subnet: in a cluster given the ids of a VPC, the task runs in
+   * `vpc.containerSubnets`, and in private subnets a public IP does nothing. In a `Vpc`,
+   * `false` leaves the task in a public subnet with no way out, so it can't pull its image
+   * or send its logs unless the VPC has endpoints for them.
+   *
+   * @default `true` in a `Vpc`, `false` otherwise
+   * @example
+   * ```ts
+   * {
+   *   publicIp: true
+   * }
+   * ```
+   */
+  publicIp?: boolean;
+  /**
+   * Configure how this component works in `sst dev`.
+   *
+   * :::note
+   * In `sst dev` a _stub_ version of your task is deployed.
+   * :::
+   *
+   * By default, your task is not deployed in `sst dev`. Instead, you can set the `dev.command`
+   * and it'll run locally in a **Tasks** tab in the `sst dev` multiplexer.
+   *
+   * Here's what happens when you run `sst dev`:
+   *
+   * 1. A _stub_ version of your task is deployed. This is a minimal image that starts up
+   *    faster.
+   * 2. When your task is started through the SDK, the stub version is provisioned. This can
+   *    take roughly **10 - 20 seconds**.
+   * 3. The stub version proxies the payload to your local machine using the same events
+   *    system used by [Live](/docs/live/).
+   * 4. The `dev.command` is called to run your task locally. Once complete, the stub version
+   *    of your task is stopped as well.
+   *
+   * The advantage with this approach is that you can test your task locally even if it's invoked
+   * remotely, or through a cron job.
+   *
+   * :::note
+   * You are charged for the time it takes to run the stub version of your task.
+   * :::
+   *
+   * Since the stub version runs while your task is running, you are charged for the time it
+   * takes to run. This is roughly **$0.02 per hour**.
+   *
+   * What the `dev.command` prints shows in the **Tasks** tab. To also print it in the
+   * task's log group, through the stub, set `SST_DEV_CLOUDWATCH_LOGS=true` when you run
+   * `sst dev`. [Read more about logs](/docs/live/#logs).
+   *
+   * To disable this and deploy your task in `sst dev`, pass in `false`. Read more about
+   * [Live](/docs/live/) and [`sst dev`](/docs/reference/cli/#dev).
+   */
+  dev?:
+    | false
+    | {
+        /**
+         * The command that `sst dev` runs in dev mode.
+         */
+        command?: Input<string>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default The `image.context` of the first container, or your app's root when
+         * its image is a reference
+         */
+        directory?: Input<string>;
+      };
 }
 
 /**
@@ -126,9 +222,8 @@ export interface TaskArgs
  * work, like data processing. It uses [Amazon ECS](https://aws.amazon.com/ecs/) on
  * [AWS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html).
  *
- * It takes the same args as [`sst.aws.Task`](/docs/component/aws/task) and creates the same
- * resources. It's built from parts, so every resource it creates can be transformed, is
- * available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -137,7 +232,7 @@ export interface TaskArgs
  * Tasks are run inside an ECS Cluster. If you haven't already, create one.
  *
  * ```ts title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
  * ```
  *
@@ -209,7 +304,7 @@ export interface TaskArgs
  *
  * #### Task SDK
  *
- * With the [Task JS SDK](/docs/component/aws/task#sdk), you can run your tasks, stop your
+ * With the [Task JS SDK](/docs/component/aws/v5/task#sdk), you can run your tasks, stop your
  * tasks, and get the status of your tasks.
  *
  * For example, you can link the task to a function in your app.
@@ -248,6 +343,10 @@ export interface TaskArgs
  * });
  * ```
  *
+ * A role you pass is used as it is. What `link` and `permissions` grant isn't added to
+ * the task role, and in `sst dev` neither is what the stub needs: to reach your machine,
+ * and to let your AWS account assume the role.
+ *
  * #### Switch from `sst.aws.Task`
  *
  * Change `sst.aws.Task` to `sst.aws.v5.Task` and keep the name. The task definition, its
@@ -279,8 +378,8 @@ export interface TaskArgs
  *
  * By default, this uses a _Linux/X86_ _Fargate_ container with 0.25 vCPUs at $0.04048 per
  * vCPU per hour and 0.5 GB of memory at $0.004445 per GB per hour. It includes 20GB of
- * _Ephemeral Storage_ for free with additional storage at $0.000111 per GB per hour. When
- * using an SST VPC, each task also gets a public IPv4 address at $0.005 per hour.
+ * _Ephemeral Storage_ for free with additional storage at $0.000111 per GB per hour. In a
+ * `Vpc`, or with `publicIp`, each task also gets a public IPv4 address at $0.005 per hour.
  *
  * It works out to $0.04048 x 0.25 + $0.004445 x 0.5 + $0.005. Or **$0.02 per hour**
  * your task runs for.
@@ -321,14 +420,14 @@ export class Task extends component("sst:aws:Task", parts) {
       "image",
       `Set the "image" of the container to the image's reference in the "${name}" task.`,
     );
-    if (args.public !== undefined && args.publicIp !== undefined)
-      throw new VisibleError(
-        `Do not set both "public" and "publicIp" for the "${name}" Task. "publicIp" has been deprecated, use "public" instead.`,
-      );
 
     const cluster = args.cluster;
     const isPublic =
       plain(args.public, `The "public" of the "${name}" task`) ?? false;
+    if (isPublic && args.publicIp === false)
+      throw new VisibleError(
+        `"publicIp" can't be false when "public" is true in the "${name}" task: a public task has a public IP.`,
+      );
     // In `sst dev` a stub is deployed in place of the task. It hands what
     // the task is run with to the process on the user's machine.
     const dev = $dev && args.dev !== false;
@@ -339,7 +438,7 @@ export class Task extends component("sst:aws:Task", parts) {
     const storage = storageOf(args);
     const containers = containersOf("task", args, name);
     const vpc = networkOf(cluster);
-    // A task in an SST VPC is in a public subnet, and needs a public IP to
+    // A task in a `Vpc` is in a public subnet, and needs a public IP to
     // reach the internet
     const hasPublicIp = isPublic || (args.publicIp ?? vpc.isSstVpc);
 
@@ -514,7 +613,7 @@ export class Task extends component("sst:aws:Task", parts) {
 
   /**
    * Linking a task gives the linked resource what it needs to run it with the
-   * [Task SDK](/docs/component/aws/task#sdk), and lets it run, describe and stop the task.
+   * [Task SDK](/docs/component/aws/v5/task#sdk), and lets it run, describe and stop the task.
    */
   public link() {
     return {

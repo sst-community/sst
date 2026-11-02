@@ -30,20 +30,118 @@ import { toGBs, toMBs } from "../../size";
 import { transformPart } from "../../transform";
 import type { Cluster as OriginalCluster } from "../cluster";
 import { Efs as OriginalEfs } from "../efs";
-import {
-  type FargateBaseArgs,
-  type FargateContainerArgs,
-  supportedCpus,
-  supportedMemories,
-} from "../fargate";
 import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
 import type { Cluster } from "../v5/cluster";
 import { Efs } from "../v5/efs";
+import type { FunctionPermissionArgs } from "../v5/function";
 import type { ServiceArgs } from "../service";
 import { bootstrap } from "./bootstrap";
 import { imageBuilder } from "./container-builder";
 import { isVpc } from "./vpc";
+
+// The CPU a task can have, in CPU units, and the memory it can have with each,
+// in MB
+export const supportedCpus = {
+  "0.25 vCPU": 256,
+  "0.5 vCPU": 512,
+  "1 vCPU": 1024,
+  "2 vCPU": 2048,
+  "4 vCPU": 4096,
+  "8 vCPU": 8192,
+  "16 vCPU": 16384,
+};
+
+export const supportedMemories = {
+  "0.25 vCPU": {
+    "0.5 GB": 512,
+    "1 GB": 1024,
+    "2 GB": 2048,
+  },
+  "0.5 vCPU": {
+    "1 GB": 1024,
+    "2 GB": 2048,
+    "3 GB": 3072,
+    "4 GB": 4096,
+  },
+  "1 vCPU": {
+    "2 GB": 2048,
+    "3 GB": 3072,
+    "4 GB": 4096,
+    "5 GB": 5120,
+    "6 GB": 6144,
+    "7 GB": 7168,
+    "8 GB": 8192,
+  },
+  "2 vCPU": {
+    "4 GB": 4096,
+    "5 GB": 5120,
+    "6 GB": 6144,
+    "7 GB": 7168,
+    "8 GB": 8192,
+    "9 GB": 9216,
+    "10 GB": 10240,
+    "11 GB": 11264,
+    "12 GB": 12288,
+    "13 GB": 13312,
+    "14 GB": 14336,
+    "15 GB": 15360,
+    "16 GB": 16384,
+  },
+  "4 vCPU": {
+    "8 GB": 8192,
+    "9 GB": 9216,
+    "10 GB": 10240,
+    "11 GB": 11264,
+    "12 GB": 12288,
+    "13 GB": 13312,
+    "14 GB": 14336,
+    "15 GB": 15360,
+    "16 GB": 16384,
+    "17 GB": 17408,
+    "18 GB": 18432,
+    "19 GB": 19456,
+    "20 GB": 20480,
+    "21 GB": 21504,
+    "22 GB": 22528,
+    "23 GB": 23552,
+    "24 GB": 24576,
+    "25 GB": 25600,
+    "26 GB": 26624,
+    "27 GB": 27648,
+    "28 GB": 28672,
+    "29 GB": 29696,
+    "30 GB": 30720,
+  },
+  "8 vCPU": {
+    "16 GB": 16384,
+    "20 GB": 20480,
+    "24 GB": 24576,
+    "28 GB": 28672,
+    "32 GB": 32768,
+    "36 GB": 36864,
+    "40 GB": 40960,
+    "44 GB": 45056,
+    "48 GB": 49152,
+    "52 GB": 53248,
+    "56 GB": 57344,
+    "60 GB": 61440,
+  },
+  "16 vCPU": {
+    "32 GB": 32768,
+    "40 GB": 40960,
+    "48 GB": 49152,
+    "56 GB": 57344,
+    "64 GB": 65536,
+    "72 GB": 73728,
+    "80 GB": 81920,
+    "88 GB": 90112,
+    "96 GB": 98304,
+    "104 GB": 106496,
+    "112 GB": 114688,
+    "120 GB": 122880,
+  },
+};
 
 /** Where a task or service runs: the VPC of its cluster. */
 export type Network = {
@@ -107,7 +205,7 @@ export interface FargateArgs {
    * The ECS Cluster to use. Create one in your app, if you haven't already.
    *
    * ```js title="sst.config.ts"
-   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const vpc = new sst.aws.v5.Vpc("MyVpc");
    * const myCluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
    * ```
    *
@@ -127,7 +225,7 @@ export interface FargateArgs {
    * Create an EFS file system.
    *
    * ```ts title="sst.config.ts"
-   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const vpc = new sst.aws.v5.Vpc("MyVpc");
    * const fileSystem = new sst.aws.v5.Efs("MyFileSystem", { vpc });
    * ```
    *
@@ -186,10 +284,386 @@ export interface FargateArgs {
 }
 
 /**
- * A container of the task or service.
+ * What a task and a service both run, and with what.
  */
-export interface ContainerArgs
-  extends Omit<FargateContainerArgs, "name" | "volumes"> {
+export interface FargateBaseArgs extends FargateArgs {
+  /**
+   * The CPU architecture of the container.
+   * @default `"x86_64"`
+   * @example
+   * ```js
+   * {
+   *   architecture: "arm64"
+   * }
+   * ```
+   */
+  architecture?: Input<"x86_64" | "arm64">;
+  /**
+   * The amount of CPU allocated to the container. If there are multiple containers, this is
+   * the total amount of CPU shared across all the containers.
+   *
+   * :::note
+   * [View the valid combinations](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html#fargate-tasks-size) of CPU and memory.
+   * :::
+   *
+   * @default `"0.25 vCPU"`
+   * @example
+   * ```js
+   * {
+   *   cpu: "1 vCPU"
+   * }
+   * ```
+   */
+  cpu?: keyof typeof supportedCpus;
+  /**
+   * The amount of memory allocated to the container. If there are multiple containers, this is
+   * the total amount of memory shared across all the containers.
+   *
+   * :::note
+   * [View the valid combinations](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-tasks-services.html#fargate-tasks-size) of CPU and memory.
+   * :::
+   *
+   * @default `"0.5 GB"`
+   *
+   * @example
+   * ```js
+   * {
+   *   memory: "2 GB"
+   * }
+   * ```
+   */
+  memory?: `${number} GB`;
+  /**
+   * The amount of ephemeral storage (in GB) allocated to the container.
+   *
+   * @default `"20 GB"`
+   *
+   * @example
+   * ```js
+   * {
+   *   storage: "100 GB"
+   * }
+   * ```
+   */
+  storage?: `${number} GB`;
+  /**
+   * [Link resources](/docs/linking/) to your containers. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your app using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of components to link to the containers.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: Input<any[]>;
+  /**
+   * Permissions and the resources that you need to access. These permissions are
+   * used to create the [task role](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html).
+   *
+   * :::tip
+   * If you `link` a resource, the permissions to access it are automatically added.
+   * :::
+   *
+   * @example
+   * Allow the container to read and write to an S3 bucket called `my-bucket`.
+   *
+   * ```js
+   * {
+   *   permissions: [
+   *     {
+   *       actions: ["s3:GetObject", "s3:PutObject"],
+   *       resources: ["arn:aws:s3:::my-bucket/*"]
+   *     },
+   *   ]
+   * }
+   * ```
+   *
+   * Allow the container to perform all actions on an S3 bucket called `my-bucket`.
+   *
+   * ```js
+   * {
+   *   permissions: [
+   *     {
+   *       actions: ["s3:*"],
+   *       resources: ["arn:aws:s3:::my-bucket/*"]
+   *     },
+   *   ]
+   * }
+   * ```
+   *
+   * Granting the container permissions to access all resources.
+   *
+   * ```js
+   * {
+   *   permissions: [
+   *     {
+   *       actions: ["*"],
+   *       resources: ["*"]
+   *     },
+   *   ]
+   * }
+   * ```
+   */
+  permissions?: Input<FunctionPermissionArgs[]>;
+  /**
+   * Configure the Docker build command for building the image or specify a pre-built image.
+   *
+   * @default Build a Docker image from the Dockerfile in the root directory.
+   * @example
+   *
+   * Building a Docker image.
+   *
+   * Prior to building the image, SST will automatically add the `.sst` directory
+   * to the `.dockerignore` if not already present.
+   *
+   * ```js
+   * {
+   *   image: {
+   *     context: "./app",
+   *     dockerfile: "Dockerfile",
+   *     args: {
+   *       MY_VAR: "value"
+   *     }
+   *   }
+   * }
+   * ```
+   *
+   * Alternatively, you can pass in a pre-built image.
+   *
+   * ```js
+   * {
+   *   image: "nginxdemos/hello:plain-text"
+   * }
+   * ```
+   */
+  image?: Input<
+    | string
+    | {
+        /**
+         * The path to the [Docker build context](https://docs.docker.com/build/building/context/#local-context). The path is relative to your project's `sst.config.ts`.
+         * @default `"."`
+         * @example
+         *
+         * To change where the Docker build context is located.
+         *
+         * ```js
+         * {
+         *   context: "./app"
+         * }
+         * ```
+         */
+        context?: Input<string>;
+        /**
+         * The path to the [Dockerfile](https://docs.docker.com/reference/cli/docker/image/build/#file).
+         * The path is relative to the build `context`.
+         * @default `"Dockerfile"`
+         * @example
+         * To use a different Dockerfile.
+         * ```js
+         * {
+         *   dockerfile: "Dockerfile.prod"
+         * }
+         * ```
+         */
+        dockerfile?: Input<string>;
+        /**
+         * Key-value pairs of [build args](https://docs.docker.com/build/guide/build-args/) to pass to the Docker build command.
+         * @example
+         * ```js
+         * {
+         *   args: {
+         *     MY_VAR: "value"
+         *   }
+         * }
+         * ```
+         */
+        args?: Input<Record<string, Input<string>>>;
+        /**
+         * Key-value pairs of [build secrets](https://docs.docker.com/build/building/secrets/) to pass to the Docker build.
+         *
+         * Unlike build args, secrets are not persisted in the final image. They are
+         * available in the Dockerfile via [`--mount=type=secret`](https://docs.docker.com/build/building/secrets/#secret-mounts).
+         *
+         * @example
+         * ```js
+         * {
+         *   secrets: {
+         *     MY_TOKEN: "my-secret-token",
+         *   }
+         * }
+         * ```
+         *
+         * Then in the Dockerfile, reference it as a file:
+         * ```dockerfile title="Dockerfile"
+         * RUN --mount=type=secret,id=MY_TOKEN \
+         *   cat /run/secrets/MY_TOKEN
+         * ```
+         *
+         * Or as an environment variable:
+         * ```dockerfile title="Dockerfile"
+         * RUN --mount=type=secret,id=MY_TOKEN,env=MY_TOKEN \
+         *   echo $MY_TOKEN
+         * ```
+         */
+        secrets?: Input<Record<string, Input<string>>>;
+        /**
+         * Tags to apply to the Docker image.
+         * @example
+         * ```js
+         * {
+         *   tags: ["v1.0.0", "commit-613c1b2"]
+         * }
+         * ```
+         */
+        tags?: Input<Input<string>[]>;
+        /**
+         * The stage to build up to in a [multi-stage Dockerfile](https://docs.docker.com/build/building/multi-stage/#stop-at-a-specific-build-stage).
+         * @example
+         * ```js
+         * {
+         *   target: "stage1"
+         * }
+         * ```
+         */
+        target?: Input<string>;
+        /**
+         * Controls whether Docker build cache is enabled.
+         * @default `true`
+         * @example
+         * Disable Docker build caching, useful for environments like Localstack where
+         * ECR cache export is not supported.
+         * ```js
+         * {
+         *   image: {
+         *     cache: false
+         *   }
+         * }
+         * ```
+         */
+        cache?: Input<boolean>;
+      }
+  >;
+  /**
+   * The command to override the default command in the container.
+   * @example
+   * ```js
+   * {
+   *   command: ["npm", "run", "start"]
+   * }
+   * ```
+   */
+  command?: Input<Input<string>[]>;
+  /**
+   * The entrypoint that overrides the default entrypoint in the container.
+   * @example
+   * ```js
+   * {
+   *   entrypoint: ["/usr/bin/my-entrypoint"]
+   * }
+   * ```
+   */
+  entrypoint?: Input<string[]>;
+  /**
+   * Key-value pairs of values that are set as [container environment variables](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/taskdef-envfiles.html).
+   * The keys need to:
+   *
+   * 1. Start with a letter.
+   * 2. Be at least 2 characters long.
+   * 3. Contain only letters, numbers, or underscores.
+   *
+   * @example
+   *
+   * ```js
+   * {
+   *   environment: {
+   *     DEBUG: "true"
+   *   }
+   * }
+   * ```
+   */
+  environment?: Input<Record<string, Input<string>>>;
+  /**
+   * A list of Amazon S3 object ARNs pointing to [environment files](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/use-environment-file.html)
+   * used to load environment variables into the container.
+   *
+   * Each file must be a plain text file in `.env` format.
+   *
+   * @example
+   * Create an S3 bucket and upload an environment file.
+   *
+   * ```ts title="sst.config.ts"
+   * const bucket = new sst.aws.v5.Bucket("EnvBucket");
+   * const file = new aws.s3.BucketObjectv2("EnvFile", {
+   *   bucket: bucket.name,
+   *   key: "test.env",
+   *   content: ["FOO=hello", "BAR=world"].join("\n"),
+   * });
+   * ```
+   *
+   * And pass in the ARN of the environment file.
+   *
+   * ```js title="sst.config.ts"
+   * {
+   *   environmentFiles: [file.arn]
+   * }
+   * ```
+   */
+  environmentFiles?: Input<Input<string>[]>;
+  /**
+   * Key-value pairs of AWS Systems Manager Parameter Store parameter ARNs or AWS Secrets
+   * Manager secret ARNs. The values will be loaded into the container as environment
+   * variables.
+   * @example
+   * ```js
+   * {
+   *   ssm: {
+   *     DATABASE_PASSWORD: "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret-123abc"
+   *   }
+   * }
+   * ```
+   */
+  ssm?: Input<Record<string, Input<string>>>;
+  /**
+   * Configure the logs in CloudWatch.
+   * @default `{ retention: "1 month" }`
+   * @example
+   * ```js
+   * {
+   *   logging: {
+   *     retention: "forever"
+   *   }
+   * }
+   * ```
+   */
+  logging?: Input<{
+    /**
+     * The duration the logs are kept in CloudWatch.
+     * @default `"1 month"`
+     */
+    retention?: Input<keyof typeof RETENTION>;
+    /**
+     * The name of the CloudWatch log group. If omitted, the name is made from the cluster's
+     * name, the app, the stage, the name you give this component with a random suffix, and
+     * the container's name.
+     *
+     * It's read when the log group is created. Changing it later changes nothing.
+     * @default `"/sst/cluster/${CLUSTER_NAME}/${APP}-${STAGE}-${NAME}-${SUFFIX}/${CONTAINER_NAME}"`
+     */
+    name?: Input<string>;
+  }>;
+}
+
+/**
+ * A container to run, and what it runs.
+ */
+export interface ContainerArgs {
   /**
    * The name of the container.
    *
@@ -197,6 +671,149 @@ export interface ContainerArgs
    * value: the container's log group and image are named after it.
    */
   name: string;
+  /**
+   * The amount of CPU allocated to the container.
+   *
+   * By default, a container can use up to all the CPU allocated to all the containers. If set,
+   * this container is capped at this allocation even if more idle CPU is available.
+   *
+   * The sum of all the containers' CPU must be less than or equal to the total available CPU.
+   *
+   * @example
+   * ```js
+   * {
+   *   cpu: "0.25 vCPU"
+   * }
+   * ```
+   */
+  cpu?: `${number} vCPU`;
+  /**
+   * The amount of memory allocated to the container.
+   *
+   * By default, a container can use up to all the memory allocated to all the containers. If
+   * set, the container is capped at this allocation. If exceeded, the container will be killed
+   * even if there is idle memory available.
+   *
+   * The sum of all the containers' memory must be less than or equal to the total available
+   * memory.
+   *
+   * @example
+   * ```js
+   * {
+   *   memory: "0.5 GB"
+   * }
+   * ```
+   */
+  memory?: `${number} GB`;
+  /**
+   * Configure the Docker image for the container. Same as the top-level [`image`](#image).
+   */
+  image?: Input<
+    | string
+    | {
+        /**
+         * The path to the Docker build context. Same as the top-level
+         * [`image.context`](#image-context).
+         */
+        context?: Input<string>;
+        /**
+         * The path to the Dockerfile. Same as the top-level
+         * [`image.dockerfile`](#image-dockerfile).
+         */
+        dockerfile?: Input<string>;
+        /**
+         * Key-value pairs of build args. Same as the top-level [`image.args`](#image-args).
+         */
+        args?: Input<Record<string, Input<string>>>;
+        /**
+         * Key-value pairs of [build secrets](https://docs.docker.com/build/building/secrets/) to pass to the Docker build.
+         *
+         * Unlike build args, secrets are not persisted in the final image. They are
+         * available in the Dockerfile via [`--mount=type=secret`](https://docs.docker.com/build/building/secrets/#secret-mounts).
+         *
+         * @example
+         * ```js
+         * {
+         *   secrets: {
+         *     MY_TOKEN: "my-secret-token",
+         *   }
+         * }
+         * ```
+         *
+         * Then in the Dockerfile, reference it as a file:
+         * ```dockerfile title="Dockerfile"
+         * RUN --mount=type=secret,id=MY_TOKEN \
+         *   cat /run/secrets/MY_TOKEN
+         * ```
+         *
+         * Or as an environment variable:
+         * ```dockerfile title="Dockerfile"
+         * RUN --mount=type=secret,id=MY_TOKEN,env=MY_TOKEN \
+         *   echo $MY_TOKEN
+         * ```
+         */
+        secrets?: Input<Record<string, Input<string>>>;
+        /**
+         * Tags to apply to the Docker image.
+         * @example
+         * ```js
+         * {
+         *   tags: ["v1.0.0", "commit-613c1b2"]
+         * }
+         * ```
+         */
+        tags?: Input<Input<string>[]>;
+        /**
+         * The stage to build up to. Same as the top-level [`image.target`](#image-target).
+         */
+        target?: Input<string>;
+        /**
+         * Controls whether Docker build cache is enabled. Same as the top-level
+         * [`image.cache`](#image-cache).
+         * @default `true`
+         */
+        cache?: Input<boolean>;
+      }
+  >;
+  /**
+   * The command to override the default command in the container. Same as the top-level
+   * [`command`](#command).
+   */
+  command?: Input<string[]>;
+  /**
+   * The entrypoint to override the default entrypoint in the container. Same as the top-level
+   * [`entrypoint`](#entrypoint).
+   */
+  entrypoint?: Input<string[]>;
+  /**
+   * Key-value pairs of values that are set as container environment variables. Same as the
+   * top-level [`environment`](#environment).
+   */
+  environment?: Input<Record<string, Input<string>>>;
+  /**
+   * A list of Amazon S3 file paths of environment files to load environment variables
+   * from. Same as the top-level [`environmentFiles`](#environmentFiles).
+   */
+  environmentFiles?: Input<Input<string>[]>;
+  /**
+   * Configure the logs in CloudWatch. Same as the top-level [`logging`](#logging).
+   */
+  logging?: Input<{
+    /**
+     * The duration the logs are kept in CloudWatch. Same as the top-level [`logging.retention`](#logging-retention).
+     */
+    retention?: Input<keyof typeof RETENTION>;
+    /**
+     * The name of the CloudWatch log group. Same as the top-level [`logging.name`](#logging-name).
+     */
+    name?: Input<string>;
+  }>;
+  /**
+   * Key-value pairs of AWS Systems Manager Parameter Store parameter ARNs or AWS Secrets
+   * Manager secret ARNs. The values will be loaded into the container as environment
+   * variables. Same as the top-level [`ssm`](#ssm).
+   */
+  ssm?: FargateBaseArgs["ssm"];
   /**
    * Mount Amazon EFS file systems into the container. Same as the top-level
    * [`volumes`](#volumes).

@@ -30,6 +30,7 @@ const rebuilt = [
   "bus.ts",
   "cron-v2.ts",
   "cluster.ts",
+  "task.ts",
 ];
 
 describe("V5 components", () => {

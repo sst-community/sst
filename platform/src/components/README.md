@@ -327,8 +327,9 @@ Everything above applies. The rest is specific to SST's own components in
   cron job runs through `AnyTask`, and a function any of them is given goes through
   `plainFunction()`, so only a function that's already there, or its ARN, can be an
   output. So is the `Cluster`, which takes either kind of `Vpc` through `AnyVpc` and
-  refuses any other component in its place. The ports before them reuse the
-  original's, as below, until each is rebuilt and added to that list.
+  refuses any other component in its place, and the `Task`, whose args a service
+  shares are `FargateBaseArgs`, below. The ports before them reuse the original's, as
+  below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`util/lazy.ts`), not a static of a class: the CLI's run and
@@ -408,9 +409,11 @@ the way `functionPart()` does. Reach for that only when `this.part()` can't do i
 Args that several components take are declared once, in a helper. The docs generator
 reads every file in `aws/helpers/`, and a helper file gets no page of its own:
 
-- An interface the components' args extend, for args they share. `FargateArgs` in
-  `helpers/fargate.ts` is the `cluster` and `volumes` of a task and a service. Its
-  args show on each page as the component's own.
+- An interface the components' args extend, for args they share. `FargateBaseArgs` in
+  `helpers/fargate.ts` is what a task and a service both run, and with what, built the
+  5.0 way; `FargateArgs`, which it extends, is their `cluster` and `volumes`, which the
+  `Service` takes alone until it's rebuilt. Their args show on each page as the
+  component's own.
 - A named type the args use. `ContainerArgs` in `helpers/fargate.ts` and `ProxyArgs` in
   `helpers/rds.ts` get a section on each page that uses them, as if the page's file
   declared them.
