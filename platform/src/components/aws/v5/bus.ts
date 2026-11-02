@@ -4,22 +4,23 @@ import {
   output,
 } from "@pulumi/pulumi";
 import { cloudwatch, lambda, sqs } from "@pulumi/aws";
-import { V5Args, component, deferred, many } from "../../parts-component";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+} from "../../parts-component";
 import type { Input } from "../../input";
 import { Function } from "./function";
 import {
-  type FunctionDefinition,
+  type FunctionInput,
   functionPart,
+  plainFunction,
 } from "../helpers/function-part";
 import { invokePermissionArgs } from "../helpers/function-permission";
 import { sendPolicyArgs } from "../helpers/queue-policy";
+import type { AnyQueue } from "../helpers/queue";
 import { permission } from "../permission";
-import type { Queue as OriginalQueue } from "../queue";
-import type { Queue } from "./queue";
-import type {
-  BusArgs as OriginalBusArgs,
-  BusSubscriberArgs as OriginalBusSubscriberArgs,
-} from "../bus";
 
 const parts = () => ({
   /**
@@ -51,18 +52,138 @@ const parts = () => ({
   queuePolicy: many(sqs.QueuePolicy),
 });
 
-export interface BusArgs extends V5Args<OriginalBusArgs, typeof parts> {}
+export interface BusArgs extends ComponentArgs<typeof parts> {
+  /**
+   * Configure logging for the EventBus.
+   *
+   * @example
+   *
+   * ```js
+   * new sst.aws.v5.Bus("MyBus", {
+   *   logging: {
+   *     level: "error",
+   *     detail: true,
+   *   },
+   * });
+   * ```
+   */
+  logging?: Input<{
+    /**
+     * The level of logging.
+     */
+    level: Input<"error" | "info" | "trace">;
+    /**
+     * Whether to include the event detail in the log.
+     * @default `false`
+     */
+    detail?: Input<boolean>;
+  }>;
+}
 
-export interface BusSubscriberArgs
-  extends Omit<OriginalBusSubscriberArgs, "transform"> {}
+export interface BusSubscriberArgs {
+  /**
+   * Configures whether the subscriber is enabled. When disabled, the EventBridge
+   * rule is still created, but it won't receive events.
+   *
+   * @default true
+   * @example
+   * ```ts
+   * {
+   *   enabled: false
+   * }
+   * ```
+   */
+  enabled?: Input<boolean>;
+  /**
+   * Filter the messages that'll be processed by the subscriber.
+   *
+   * If any single property in the pattern doesn't match
+   * an attribute assigned to the message, then the pattern rejects the message.
+   *
+   *
+   * :::tip
+   * Learn more about [event patterns](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns.html).
+   * :::
+   *
+   * @example
+   * For example, if your EventBus message contains this in a JSON format.
+   * ```js
+   * {
+   *   source: "my.source",
+   *   detail: {
+   *      price_usd: 210.75
+   *   },
+   *   "detail-type": "orderPlaced"
+   * }
+   * ```
+   *
+   * Then this pattern accepts the message.
+   *
+   * ```js
+   * {
+   *   pattern: {
+   *     source: ["my.source", "my.source2"]
+   *   }
+   * }
+   * ```
+   */
+  pattern?: Input<{
+    /**
+     * A list of `source` values to match against. The `source` indicates where the
+     * event originated.
+     *
+     * @example
+     *
+     * ```js
+     * {
+     *   pattern: {
+     *     source: ["my.source", "my.source2"]
+     *   }
+     * }
+     * ```
+     */
+    source?: (string | any)[];
+    /**
+     * An object of `detail` values to match against, where the key is the name and
+     * the value is the pattern to match. The `detail` contains the actual
+     * data associated with the event.
+     *
+     * @example
+     * ```js
+     * {
+     *   pattern: {
+     *     detail: {
+     *       price_usd: [{numeric: [">=", 100]}]
+     *     }
+     *   }
+     * }
+     * ```
+     */
+    detail?: Record<string, any>;
+    /**
+     * A list of `detail-type` values to match against. The `detail-type` typically
+     * defines the kind of event that is emitted.
+     *
+     * @example
+     * ```js
+     * {
+     *   pattern: {
+     *     detailType: ["orderPlaced"]
+     *   }
+     * }
+     * ```
+     */
+    detailType?: (string | any)[];
+  }>;
+}
+
 
 /**
  * The `Bus` component lets you add an [Amazon EventBridge Event Bus](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html) to your app.
  *
- * It takes the same args as [`sst.aws.Bus`](/docs/component/aws/bus) and creates the same
- * resources. It's built from parts, so every resource it creates can be transformed, is
- * available in `nodes`, and can be swapped for one you already have. That includes the
- * resources of each subscriber, which are kept inside the bus.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have. That includes the resources of
+ * each subscriber, which are kept inside the bus.
  *
  * @example
  *
@@ -104,26 +225,40 @@ export interface BusSubscriberArgs
  *
  * - `sst.aws.Bus.subscribe` and `sst.aws.Bus.subscribeQueue`, which took the ARN of a bus
  *   that isn't in your app, are `get` followed by `subscribe` or `subscribeQueue`. `get`
- *   takes the bus's name. What they created is kept.
+ *   takes the bus's name. What they created is kept, as long as `get` isn't given a
+ *   provider, directly, through its `parent`, or in `providers`: `sst.aws.Bus` created it
+ *   with your app's, and another one replaces it, a function's log group included.
  *
  *   ```ts title="sst.config.ts" del={1} ins={2}
  *   sst.aws.Bus.subscribe("MySubscriber", busArn, "src/subscriber.handler");
  *   sst.aws.v5.Bus.get("Shared", "my-shared-bus").subscribe("MySubscriber", "src/subscriber.handler");
  *   ```
  *
+ * - `subscribe` no longer takes a handler or a function's args in an output: whether a
+ *   function is created is decided from them, and a preview has to know. Only a function
+ *   you have, or its ARN, can be an output. The args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check.
+ * - `subscribe` and `subscribeQueue` return the bus, where they returned the subscriber:
+ *   what each one created is in the bus's `nodes`, by the subscriber's name, like
+ *   `bus.nodes.rule.MySubscriber`.
  * - A subscriber's `transform` is the bus's: its `rule` and `target` apply to every
  *   subscriber, and a function there is given the subscriber's name.
- * - A queue subscriber is created with the bus's `provider`. `sst.aws.Bus` created it with
- *   your app's provider, whatever the bus was given. If your bus has a `provider` and a queue
- *   subscribed to it, the queue's rule, target and policy are replaced on switch: remove the
- *   subscriber and deploy before you switch, then add it back.
+ * - A subscriber is created with the provider the bus has. `sst.aws.Bus` gave a function
+ *   subscriber only a `provider` passed to the bus itself, and a queue subscriber your
+ *   app's provider, whatever the bus had. So if your bus has a `provider` and a queue
+ *   subscribed to it, or takes its provider from a parent component or from `providers`,
+ *   those subscribers are replaced on switch, a function's log group with it, which
+ *   `sst migrate --check` refuses: remove them and deploy before you switch, then add them
+ *   back.
  *
  * #### Link the bus to a resource
  *
  * You can link the bus to other resources, like a function or your Next.js app.
  *
  * ```ts title="sst.config.ts"
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   link: [bus]
  * });
  * ```
@@ -183,8 +318,9 @@ export class Bus extends component("sst:aws:Bus", parts) {
    * Subscribe to this EventBus with a function.
    *
    * @param name The name of the subscriber.
-   * @param subscriber The function that'll be notified: its handler, its args, a function
-   * component, or the ARN of a function.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
@@ -205,14 +341,21 @@ export class Bus extends component("sst:aws:Bus", parts) {
    */
   public subscribe(
     name: string,
-    subscriber: FunctionDefinition,
+    subscriber: FunctionInput,
     args: BusSubscriberArgs = {},
   ) {
     this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);
     const rule = this.subscriberRule(name, args);
-    const fn = functionPart(this, "subscriber", name, subscriber, {
-      description: interpolate`Subscribed to ${this.name}`,
-    });
+    const fn = functionPart(
+      this,
+      "subscriber",
+      name,
+      plainFunction(
+        subscriber,
+        `The subscriber "${name}" of the "${this.componentName}" bus`,
+      ),
+      { description: interpolate`Subscribed to ${this.name}` },
+    );
     const permission = this.part(
       "permission",
       name,
@@ -244,7 +387,7 @@ export class Bus extends component("sst:aws:Bus", parts) {
    */
   public subscribeQueue(
     name: string,
-    queue: Input<string | OriginalQueue | Queue>,
+    queue: Input<string | AnyQueue>,
     args: BusSubscriberArgs = {},
   ) {
     this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);

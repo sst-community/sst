@@ -2,6 +2,19 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Bus` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/bus.ts`), with no 4.x component file imported, and on the clean break's list. Its function subscribers go through `plainFunction()`, and a queue subscriber is either kind of `Queue` or an ARN. The map already found what 4.x's static `Bus.subscribe` and `subscribeQueue` created.
+- **The "Switch from" section** says the plain-function rule, what the methods return, and which provider each subscriber is created with: as for the `SnsTopic`, a provider a bus takes from a parent, or one that reaches `get` any way, replaces a subscriber 4.x created with another.
+
+**Checked:** `tsc`, the docs page, and all 2,218 platform tests, with a case for a subscriber that links its bus, and for a static subscriber created from a handler, which keeps its function.
+
+**Reviewed**, and fixed: the static methods' line in the `Bus` and `SnsTopic` docs named only a `provider` given to `get` directly, and the two cases above were missing.
+
+**Left:** the lab check, with the others'.
+
 ## 2026-11-02: step 4, the `Dynamo` built the 5.0 way
 
 **Done, committed (not pushed):**

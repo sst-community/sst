@@ -323,11 +323,11 @@ Everything above applies. The rest is specific to SST's own components in
   is the `Cdn`, with the 5.0 certificate and redirect, whose DNS records the adapters
   create directly. The `Nextjs` is built that way: it builds its site in the program
   and creates what the build makes with `after()`, and it shares what the 4.x sites
-  work out from a build in `site-code.ts`. So are the `Bucket`, the `Queue`, the `SnsTopic` and the
-  `Dynamo`: the 4.x `Queue` and `SnsTopic` a bucket or a topic sends to are reached
-  through `AnyQueue` and `AnySnsTopic`, and a function any of them is given goes through
-  `plainFunction()`, so only a function that's already there, or its ARN, can be an
-  output. The ports before them
+  work out from a build in `site-code.ts`. So are the `Bucket`, the `Queue`, the `SnsTopic`, the
+  `Dynamo` and the `Bus`: the 4.x `Queue` and `SnsTopic` a bucket, a topic or a bus sends
+  to are reached through `AnyQueue` and `AnySnsTopic`, and a function any of them is
+  given goes through `plainFunction()`, so only a function that's already there, or its
+  ARN, can be an output. The ports before them
   reuse the original's, as below, until each is rebuilt and added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
@@ -336,7 +336,7 @@ Everything above applies. The rest is specific to SST's own components in
   creates whatever ran before it. Both `Function`s share theirs from
   `helpers/function-shared.ts`.
 - **A port that isn't rebuilt yet reuses the original's arg types**: `interface
-  BusArgs extends V5Args<OriginalBusArgs, typeof parts> {}`. `Omit` and re-declare
+  EmailArgs extends V5Args<OriginalEmailArgs, typeof parts> {}`. `Omit` and re-declare
   only what has to change. For an arg that has to become a plain value, write
   `triggers?: Plain<OriginalCognitoUserPoolArgs["triggers"]>` (`Plain` is in
   `args.ts`): the docs generator follows it back to the original's docs.

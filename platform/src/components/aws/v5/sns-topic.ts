@@ -199,9 +199,10 @@ export interface SnsTopicSubscriberArgs {
  *   whose function form is given the subscriber's name.
  * - `sst.aws.SnsTopic.subscribe(name, topicArn, subscriber)` becomes
  *   `sst.aws.v5.SnsTopic.get("SharedEvents", topicArn).subscribe(name, subscriber)`, and
- *   the same for `subscribeQueue`. What those created is kept, as long as you don't give
- *   `get` a `provider`: `sst.aws.SnsTopic` created them with your app's, and another one
- *   replaces them, a function's log group included.
+ *   the same for `subscribeQueue`. What those created is kept, as long as `get` isn't
+ *   given a provider, directly, through its `parent`, or in `providers`:
+ *   `sst.aws.SnsTopic` created them with your app's, and another one replaces them, a
+ *   function's log group included.
  * - A subscriber is created with the provider the topic has. `sst.aws.SnsTopic` gave a
  *   function subscriber only a `provider` passed to the topic itself, and a queue
  *   subscriber your app's provider, whatever the topic had. So if your topic has a
