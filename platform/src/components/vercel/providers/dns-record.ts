@@ -26,7 +26,8 @@ export class DnsRecord extends dynamic.Resource {
         ...args,
         recordId: undefined,
         teamId: process.env.VERCEL_TEAM_ID,
-        apiToken: process.env.VERCEL_API_TOKEN!,
+        // The CLI calls Vercel's API with VERCEL_API_TOKEN: inputs are saved
+        // to the state.
       },
       opts,
     );

@@ -3,10 +3,28 @@
 
 const CLOUDFLARE_API_BASE_URL =
   process.env.CLOUDFLARE_API_BASE_URL ?? "https://api.cloudflare.com/client/v4";
-// Read when a request is made, not when this file loads, so SST's components
-// load without the app's globals, as in a test
-const apiToken = () =>
-  $app.providers?.cloudflare?.apiToken || process.env.CLOUDFLARE_API_TOKEN;
+
+// The credentials the CLI resolved for Cloudflare's API, or else the
+// environment's, read on each request: the code of the dynamic providers that
+// call `cfFetch` is saved to the state, with the values it captures.
+function credentials(): Record<string, string> {
+  const env = process.env;
+  const token = env.SST_CLOUDFLARE_API_TOKEN;
+  if (token) return { Authorization: `Bearer ${token}` };
+  const key = env.SST_CLOUDFLARE_API_KEY;
+  const email = env.SST_CLOUDFLARE_EMAIL;
+  if (key && email) return { "X-Auth-Key": key, "X-Auth-Email": email };
+  // An app without the Cloudflare provider in its config, as the CLI would
+  // resolve them
+  if (env.CLOUDFLARE_API_KEY && env.CLOUDFLARE_EMAIL)
+    return {
+      "X-Auth-Key": env.CLOUDFLARE_API_KEY,
+      "X-Auth-Email": env.CLOUDFLARE_EMAIL,
+    };
+  if (env.CLOUDFLARE_API_TOKEN)
+    return { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` };
+  return {};
+}
 
 export interface FetchError {
   code: number;
@@ -39,7 +57,7 @@ export async function cfFetch<ResultType>(
       const ret = await fetch(`${CLOUDFLARE_API_BASE_URL}${resource}`, {
         ...init,
         headers: {
-          Authorization: `Bearer ${apiToken()}`,
+          ...credentials(),
           ...init.headers,
         },
       });

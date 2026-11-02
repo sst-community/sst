@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: `main` merged in, with credentials kept out of the state
+
+The maintainer asked to bring `main`'s fix for SST's Cloudflare and Vercel resources onto `v5-rewrite`.
+
+**Done, committed (not pushed):**
+
+- **`main` merged into `v5-rewrite`:** SST's Cloudflare and Vercel resources call the API with the credentials the CLI resolved. The RPC resources get them in Go. The dynamic providers written in TypeScript read `SST_CLOUDFLARE_*` from the program's environment on each call, as SST reads `SST_AWS_*` for AWS. A site's build doesn't get them. Each of these resources updates once on its next deploy. The 5.0 Cloudflare and Vercel adapters still create their CAA records with SST 4's record resource, so those records keep nothing secret in their inputs now either.
+- **The Cloudflare fetch helper:** `v5-rewrite` read the token when a request was made, from `$app` or the environment. `main`'s reads only the environment, so the code saved with SST's dynamic providers reads nothing from the app's config. The merge keeps `main`'s.
+- **`cloudflare.go`:** `v5-rewrite` had moved the Cloudflare home out of it, and the merge put back the import the new code needs.
+
+**Checked:**
+
+- All Go tests, `tsc`, and the platform's 2,184 tests. The new test builds each Cloudflare and Vercel resource SST makes, and a server-rendered site's build, with credentials in the config and the environment. It finds none in their inputs or their saved code. It fails on the code from before the fix, with the site's build given the CLI's credentials, and with the fetch helper reading `$app`.
+- Not checked against Cloudflare or Vercel: the lab has neither.
+
 ## 2026-11-01: step 4, domains the 5.0 way
 
 Every component with a domain created its DNS records through the adapters, inside an `apply`, and looked up each record's zone with a resource, so a new stage's preview showed none of them ([decision](plan.md#decisions)).

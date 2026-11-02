@@ -17,7 +17,6 @@ type WorkerScript struct {
 
 type WorkerScriptInputs struct {
 	AccountId  string `json:"accountId"`
-	ApiToken   string `json:"apiToken"`
 	ScriptName string `json:"scriptName"`
 	Content    struct {
 		Filename string `json:"filename"`
@@ -101,7 +100,6 @@ type WorkerScriptInputs struct {
 
 type WorkerScriptOutputs struct {
 	AccountId  string `json:"accountId"`
-	ApiToken   string `json:"apiToken"`
 	ScriptName string `json:"scriptName"`
 }
 
@@ -115,7 +113,6 @@ func (r *WorkerScript) Create(input *WorkerScriptInputs, output *CreateResult[Wo
 		ID:   "script",
 		Outs: WorkerScriptOutputs{
 			AccountId: input.AccountId,
-			ApiToken: input.ApiToken,
 			ScriptName: input.ScriptName,
 		},
 	}
@@ -131,7 +128,6 @@ func (r *WorkerScript) Update(input *UpdateInput[WorkerScriptInputs, WorkerScrip
 	*output = UpdateResult[WorkerScriptOutputs]{
 		Outs: WorkerScriptOutputs{
 			AccountId: input.News.AccountId,
-			ApiToken: input.News.ApiToken,
 			ScriptName: input.News.ScriptName,
 		},
 	}
@@ -208,7 +204,9 @@ func (r *WorkerScript) handleUpdate(input *WorkerScriptInputs) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
-	req.Header.Set("Authorization", "Bearer "+input.ApiToken)
+	if err := r.authorize(req); err != nil {
+		return err
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -502,7 +500,9 @@ func (r *WorkerScript) handleDelete(input *WorkerScriptOutputs) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+input.ApiToken)
+	if err := r.authorize(req); err != nil {
+		return err
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)

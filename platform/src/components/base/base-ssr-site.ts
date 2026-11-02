@@ -16,6 +16,14 @@ export interface BaseSsrSiteArgs {
   path?: string;
 }
 
+// What the CLI passes on for SST's own calls to Cloudflare's API, which a
+// site's build has no use for
+const CLI_CREDENTIALS = [
+  "SST_CLOUDFLARE_API_TOKEN",
+  "SST_CLOUDFLARE_API_KEY",
+  "SST_CLOUDFLARE_EMAIL",
+];
+
 export function buildApp(
   parent: Resource,
   name: string,
@@ -102,7 +110,11 @@ export function buildApp(
             dir: path.join($cli.paths.root, sitePath),
             environment: linkEnvs.apply((linkEnvs) => ({
               SST: "1",
-              ...process.env,
+              ...Object.fromEntries(
+                Object.entries(process.env).filter(
+                  ([key]) => !CLI_CREDENTIALS.includes(key),
+                ),
+              ),
               ...(environment ?? {}),
               ...linkEnvs,
               ...(extraBuildEnvironment ?? {}),
