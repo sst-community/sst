@@ -2,6 +2,55 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, the `ApiGatewayV1` built the 5.0 way, and its lab check
+
+**Done, committed (not pushed):**
+
+- **`ApiGatewayV1`** (`aws/v5/apigatewayv1.ts`), with the usage plan and the API key as small 5.0 components of their own (`apigatewayv1-usage-plan.ts`, `apigatewayv1-api-key.ts`), at the top of the app as SST 4 made them, so nothing of theirs moves.
+  - The routes and authorizers are inside the API, by the route's name or the route itself, where SST 4 kept each in a component of its own. `route` and `routeIntegration` return the API.
+  - Each path's resource is kept under the hash SST 4 named it with. SST 4 hashed the text Pulumi gives an output in place of its value, which isn't `outputId`; the 5.0 form keeps today's text as a constant, so a later Pulumi doesn't rename the resources.
+  - What CORS adds to each path keeps the name SST 4 gave it, made from the AWS id of the path's resource, which the move keeps: the map's names are outputs, as the `Efs`'s are.
+  - `deploy()` stays. A route after it, or a second `deploy()`, is refused.
+  - An edge API's certificate is made in `after()`, once the API's region is known, so it gets the provider SST 4 gave it: the API's own in us-east-1, one of its own elsewhere.
+  - The deployment is listed under `replaced`: its triggers are keyed by URNs, which the move changes, so the switch deploys the API once more, with the same routes.
+- **Better than SST 4,** each change listed in "Switch from":
+  - A refresh doesn't deploy the API again. A refresh reads empty settings back from AWS as `[]`, `{}` or `""`, which changed SST 4's triggers (each resource's outputs) after every refresh (found in the lab). The 5.0 triggers leave empty settings out.
+  - A route added after `deploy()` is refused. SST 4 deployed it without CORS for its path.
+  - An authorizer's function takes a `Function` or an ARN.
+  - SST 4's transforms (`transform.route`, `transform.accessLog`) are refused with what to write, before the component turns down a key it doesn't have.
+
+**Checked:** `tsc`, the platform tests, and the three docs pages. One full run failed a Remix case that passes alone: under the suite's load, the SST 4 site registered its outputs after the mock's `settle()` had stopped waiting, which waits only until it sees nothing happen three times. That gap in the test harness is older than this change. The API takes over SST 4's in 14 cases, each three ways: routes by route, by name and to integrations, streaming, CORS on and off, the three kinds of authorizer, auth and API keys on routes, a usage plan and key, edge, regional and private endpoints, a domain with a path, one it didn't create, a linked route, and its resources transformed.
+
+**Reviewed.** Fixed from it:
+
+- An edge API with a provider of its own in us-east-1 would have had its certificate replaced: SST 4 read that provider's region. Now decided once the region is known, as above.
+- "Switch from" said SST 4 didn't deploy a route added after `deploy()`; it did, without CORS. It now says to move it above `deploy()` with SST 4 first.
+- A part's doc named SST 4's component, which the docs generator refuses outside "Switch from".
+- A route that takes its provider from a parent is replaced on switch, as with the other ports; now in "Switch from".
+- `transform.route.args` is refused with what to write.
+- The hashed text is now a constant.
+- The stage is read from `context()`.
+- The route `name` docs.
+- A takeover case with a linked route.
+
+**Checked in the lab** (a stage of its own, no VPC, with a CLI built from the branch). An edge API with a domain and a base path, its certificate made in us-east-1 from us-west-2. Five routes: four to functions, one named and one keyed, and one to a mock integration. A token authorizer whose name isn't a logical name, CORS, a usage plan with a key, and an SST 4 function linked to the API and the key, which calls the keyed route.
+
+- **Deployed with SST 4, and called:**
+  - each route answered;
+  - the authorizer refused no token (401) and a wrong one (403), and passed the right one through;
+  - the keyed route refused a call without its key, and the linked function's call with it answered;
+  - CORS answered `OPTIONS` with its headers, and an unknown path's error had them;
+  - the stage, domain mapping, usage plan and access log were as set.
+- **`sst migrate --check` passed:**
+  - 102 resources kept, 68 at a new address and 6 updated in place (the stage's deployment and five functions' code);
+  - 7 taken out with nothing in the cloud behind them (SST 4's route and authorizer components, and its dynamic-resource provider);
+  - 3 of SST 4's zone lookups released;
+  - 6 replacements: the deployment, as the map says, and five functions' code under new keys.
+- **The move** kept 85 resources by id, 62 of them under a new name. The same 15 answers before and after.
+- **`sst diff` after the move:** no changes.
+- **A refresh** then showed a new deployment in the next diff: SST 4's design, carried over, and fixed above. With the fix, a deploy that added a route served it (through the domain and with CORS) once API Gateway had it live, about half a minute later. A refresh after that left `sst diff` with no changes.
+- **Removed, and cleaned up:** `sst remove` deleted 119 resources. Then the stage's 131 state versions and markers, its `migrate` copy among them, its passphrase, and 7 source maps. One of the maps is the 5.0 handler's for the added route: the 5.0 `Function` keeps its source maps on delete as SST 4's does (`retainOnDelete`, so an error logged before a deploy can still be mapped), and so a removed stage leaves them behind. Nothing of it is left in API Gateway (APIs, domain names, usage plans, keys), ACM in either region, Route 53 or CloudWatch Logs.
+
 ## 2026-11-03: step 4, seven of Kept built the 5.0 way, a map for every 5.0 component, and their lab check
 
 **Done, committed (not pushed):**

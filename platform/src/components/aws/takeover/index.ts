@@ -9,6 +9,7 @@
 import "./alb";
 import "./analog";
 import "./apigateway-websocket";
+import "./apigatewayv1";
 import "./apigatewayv2";
 import "./app-sync";
 import "./astro";

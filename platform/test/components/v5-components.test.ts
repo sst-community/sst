@@ -60,6 +60,9 @@ const rebuilt = [
   "realtime.ts",
   "workflow.ts",
   "apigateway-websocket.ts",
+  "apigatewayv1.ts",
+  "apigatewayv1-usage-plan.ts",
+  "apigatewayv1-api-key.ts",
 ];
 
 describe("V5 components", () => {
