@@ -36,6 +36,7 @@ const rebuilt = [
   "postgres.ts",
   "mysql.ts",
   "aurora.ts",
+  "dsql.ts",
 ];
 
 describe("V5 components", () => {

@@ -1,8 +1,10 @@
 import { runtime } from "@pulumi/pulumi";
 import { Provider, Region } from "@pulumi/aws";
-import { lazy } from "../../../util/lazy";
+import { perRun } from "../../../util/lazy";
 
-const useProviderCache = lazy(() => new Map<string, Provider>());
+// A provider for a region is made once in each run, and shared by every
+// component that creates something in that region
+const useProviderCache = perRun(() => new Map<string, Provider>());
 
 export const useProvider = (region: Region) => {
   const cache = useProviderCache();

@@ -47,12 +47,15 @@ describe("Dsql", () => {
   let OriginalDsql: typeof import("../../../src/components/aws/dsql").Dsql;
   let Dsql: typeof import("../../../src/components/aws/v5/dsql").Dsql;
   let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let VpcV5: typeof import("../../../src/components/aws/v5/vpc").Vpc;
 
   beforeAll(async () => {
     OriginalDsql = (await import("../../../src/components/aws/dsql")).Dsql;
     Dsql = (await import("../../../src/components/aws/v5/dsql")).Dsql;
     Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    VpcV5 = (await import("../../../src/components/aws/v5/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/dsql");
+    await import("../../../src/components/aws/takeover/vpc");
   });
 
   beforeEach(() => {
@@ -264,6 +267,33 @@ describe("Dsql", () => {
       cases: {
         "a cluster in a Vpc": (Dsql, opts) => {
           new Dsql("MyCluster", { vpc: new Vpc("MyVpc") }, opts);
+        },
+        // How an app moves: the VPC goes to its 5.0 form along with the cluster
+        "both endpoints, in a Vpc switched with it": {
+          original: (opts) =>
+            new OriginalDsql(
+              "MyCluster",
+              {
+                vpc: {
+                  instance: new Vpc("MyVpc"),
+                  endpoints: { management: true, connection: true },
+                },
+              },
+              opts,
+            ),
+          v5: (opts) =>
+            new Dsql(
+              "MyCluster",
+              {
+                vpc: {
+                  instance: new VpcV5("MyVpc"),
+                  endpoints: { management: true, connection: true },
+                },
+              },
+              opts,
+            ),
+          // The 4.x Vpc's version marker, with nothing in AWS behind it
+          unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
         "both endpoints": (Dsql, opts) => {
           new Dsql(
@@ -498,6 +528,50 @@ describe("Dsql", () => {
     expect(cluster.nodes.connectionEndpoint).toBe(undefined);
   });
 
+  it("takes either kind of Vpc", async () => {
+    new Dsql("MyCluster", { vpc: new VpcV5("MyVpc") });
+    await pulumi.settle();
+
+    const subnets = pulumi.resources
+      .filter((r) => r.type === "aws:ec2/subnet:Subnet")
+      .filter((r) => r.name.startsWith("MyVpcPrivateSubnet"))
+      .map((r) => `${r.name}_id`)
+      .sort();
+    expect(subnets).toHaveLength(2);
+    expect(resource("MyClusterConnectionEndpoint").inputs).toMatchObject({
+      vpcId: "MyVpcVpc_id",
+      subnetIds: subnets,
+    });
+    expect(
+      resource("MyClusterDsqlEndpointSecurityGroup").inputs.ingress,
+    ).toMatchObject([{ fromPort: 5432, cidrBlocks: ["10.0.0.0/16"] }]);
+  });
+
+  it("refuses a vpc that isn't a Vpc", () => {
+    const message =
+      /The "vpc" of the "MyCluster" DSQL cluster isn't a "Vpc" component/;
+    expect(
+      () => new Dsql("MyCluster", { vpc: { id: "vpc-123" } as any }),
+    ).toThrow(message);
+    expect(
+      () =>
+        new Dsql("MyCluster", {
+          vpc: { instance: { id: "vpc-123" } as any },
+        }),
+    ).toThrow(message);
+  });
+
+  it("refuses a witness that's its peer region", () => {
+    expect(
+      () =>
+        new Dsql("MyCluster", {
+          regions: { witness: "us-east-2", peer: "us-east-2" },
+        }),
+    ).toThrow(
+      /The witness region of the "MyCluster" DSQL cluster is its peer region, "us-east-2"/,
+    );
+  });
+
   it("can't have VPC endpoints for a multi-region cluster", () => {
     expect(
       () => new Dsql("MyCluster", { regions, vpc: new Vpc("MyVpc") }),
@@ -557,8 +631,10 @@ describe("Dsql", () => {
       regions,
       backup: true,
       transform: {
-        backupVault: (args, _opts, name) => {
+        backupVault: (args, opts, name) => {
           seen.push(name);
+          // Each vault is the component's, whichever region it's in
+          expect(opts.parent).toBeDefined();
           args.forceDestroy = true;
           args.tags = { team: "data" };
         },
@@ -641,10 +717,9 @@ describe("Dsql", () => {
       await pulumi.settle();
 
       expect(names()).toEqual(["MyCluster", "MyClusterCluster"]);
-      expect(await pulumi.resolve([cluster.region, cluster.endpoint])).toEqual([
-        "us-east-1",
-        "abc123.dsql.us-east-1.on.aws",
-      ]);
+      expect(
+        await pulumi.resolve([cluster.id, cluster.region, cluster.endpoint]),
+      ).toEqual(["abc123", "us-east-1", "abc123.dsql.us-east-1.on.aws"]);
       expect(() => cluster.peer).toThrow(/single-region cluster/);
     });
 
@@ -655,7 +730,9 @@ describe("Dsql", () => {
       });
       await pulumi.settle();
 
+      // The peer is read with a provider for its region
       expect(names()).toEqual([
+        "AwsProvider.sst.us-east-2",
         "MyCluster",
         "MyClusterCluster",
         "MyClusterPeerCluster",
@@ -695,6 +772,20 @@ describe("Dsql", () => {
       expect(await pulumi.resolve(cluster.peer.endpoint)).toBe(
         "def456.dsql.us-east-1.on.aws",
       );
+    });
+
+    it("takes its peer's id as an output", async () => {
+      const cluster = Dsql.get("MyCluster", {
+        id: "abc123",
+        peer: { id: output("def456"), region: "us-east-2" },
+      });
+      await pulumi.settle();
+
+      expect(resource("MyClusterPeerCluster")).toMatchObject({
+        kind: "read",
+        options: { id: "def456" },
+      });
+      expect(await pulumi.resolve(cluster.peer.region)).toBe("us-east-2");
     });
 
     it("needs the region of a peer given by id", () => {

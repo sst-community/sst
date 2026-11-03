@@ -2,6 +2,22 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Dsql` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/dsql.ts`), with no 4.x component file reached, and on the clean break's list. Its `vpc` is either kind of `Vpc`, alone or as `vpc.instance` with the endpoints to create, and the endpoints are in its private subnets read with `subnetsOf()`. Any other value is refused with what to pass, where it failed on a missing property.
+- **A witness region that's the peer region is refused** when both are plain, where AWS refused it on deploy.
+- **`id`**, the cluster's identifier, which `get` asks for and had no getter, and **`DsqlGetArgs`** with its docs. A peer's id can be an output.
+- **The peer region's vault gets the component as its parent in the options its transform sees**, as the vault in the app's region does and as 4.x gave both.
+- **The provider for another region is made once in each run** (`useProvider()`, shared with 4.x), as the rule for what an app shares says. The CLI runs the program once in each process, so nothing changes there; under the mock, a test saw the provider an earlier test had made, and one test's expectation was wrong because of it.
+
+**Checked:** `tsc`, the docs page, and all platform tests, with a V5 `Vpc`, a `vpc` that isn't one, the witness check, the peer vault's options, and a peer id given as an output.
+
+**Reviewed:** every resource matches 4.x's, in every combination of `regions`, `vpc` and `backup`, with the three renames in the map, and `perRun()` changes nothing for the CLI, since no caller of `useProvider()` runs before the run starts. Fixed from it: a takeover case where the cluster switches with its `Vpc`, as an app moves, and a note in `PORTING.md` that said the provider was made once in a process.
+
+Left: a lab check. The single-region cluster in a VPC, which the October lab run and the VPC recording cover, deploys the same; what's renamed (the peering's two sides and the peer region's vault) is multi-region, and needs a second region in the lab account.
+
 ## 2026-11-02: step 4, the rest of the review's fixes
 
 **Done, committed (not pushed).** The smaller fixes the [review](plan.md#decisions) asked for:

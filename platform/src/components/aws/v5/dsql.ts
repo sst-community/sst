@@ -21,7 +21,7 @@ import {
 } from "../helpers/arn";
 import { useProvider } from "../helpers/provider";
 import { permission } from "../permission";
-import { type AnyVpc, isVpc } from "../helpers/vpc";
+import { type AnyVpc, isVpc, subnetsOf } from "../helpers/vpc";
 
 const parts = {
   /**
@@ -104,9 +104,9 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   regions?: {
-    /** The witness region. Must differ from both cluster regions. */
+    /** The witness region. It has to differ from both cluster regions. */
     witness: Input<string>;
-    /** The AWS region for the peer cluster. */
+    /** The AWS region of the peer cluster. */
     peer: string;
   };
 
@@ -170,16 +170,21 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
 
   /**
    * Create AWS PrivateLink interface endpoints in a VPC for private connectivity.
-   * This allows lambdas placed inside a VPC without NAT gateways to connect to the DSQL instance.
+   * This lets functions in a VPC without a NAT gateway connect to the cluster.
+   *
+   * The endpoints are in the VPC's private subnets, and take connections from anywhere
+   * in the VPC.
    *
    * :::note
-   * Currently only single region VPC is supported.
+   * Only a single-region cluster can have VPC endpoints.
    * :::
+   *
+   * Which endpoints are created has to be decided by plain values.
    *
    * @example
    *
    * ```ts title="sst.config.ts"
-   * const myVpc = new sst.aws.Vpc("MyVpc");
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
    *
    * const cluster = new sst.aws.v5.Dsql("MyCluster", {
    *   vpc: myVpc
@@ -189,7 +194,7 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
    * #### Customize VPC endpoints
    *
    * ```ts title="sst.config.ts"
-   * const myVpc = new sst.aws.Vpc("MyVpc");
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
    *
    * const cluster = new sst.aws.v5.Dsql("MyCluster", {
    *   vpc: {
@@ -207,15 +212,17 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
     | {
         /** The VPC to create the endpoints in. */
         instance: AnyVpc;
+        /** Which endpoints to create. */
         endpoints?: {
           /**
-           * Endpoint for control plane ops (create, get, update, delete clusters).
+           * An endpoint for the control plane: creating, reading, updating and deleting
+           * clusters.
            *
            * @default `false`
            */
           management?: boolean;
           /**
-           * Endpoint for PostgreSQL client connections.
+           * An endpoint for PostgreSQL client connections.
            *
            * @default `true`
            */
@@ -224,12 +231,31 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
       };
 }
 
+export interface DsqlGetArgs {
+  /**
+   * The identifier of the cluster.
+   */
+  id: Input<string>;
+  /**
+   * The peer of a multi-region cluster.
+   */
+  peer?: {
+    /**
+     * The identifier of the peer cluster.
+     */
+    id: Input<string>;
+    /**
+     * The AWS region of the peer cluster.
+     */
+    region: string;
+  };
+}
+
 /**
  * The `Dsql` component lets you add an [Amazon Aurora DSQL](https://aws.amazon.com/rds/aurora/dsql/) cluster to your app.
  *
- * It takes the same args as [`sst.aws.Dsql`](/docs/component/aws/dsql) and creates the same
- * resources. It's built from parts, so every resource it creates can be transformed, is
- * available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -269,7 +295,7 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
  * #### With private VPC endpoints
  *
  * ```ts title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  *
  * const cluster = new sst.aws.v5.Dsql("MyCluster", {
  *   vpc: {
@@ -306,7 +332,7 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
  * const cluster = new sst.aws.v5.Dsql("MyCluster");
  * ```
  *
- * A few things are written differently:
+ * A few things work differently:
  *
  * - `regions.peer` is a plain value, not an output. It decides which region the peer's
  *   resources are created in.
@@ -342,6 +368,7 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
+    const self = this;
 
     const regions = plain(
       args.regions,
@@ -371,7 +398,7 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
       return;
     }
 
-    const vpc = plain(args.vpc, `The "vpc" of the "${name}" DSQL cluster`);
+    const vpc = endpointsOf(name, args.vpc);
     const backups = plain(
       args.backup,
       `The "backup" of the "${name}" DSQL cluster`,
@@ -379,6 +406,14 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
     if (regions && vpc)
       throw new VisibleError(
         `Cannot use "vpc" with multi-region "regions". VPC endpoints are only supported for single-region clusters.`,
+      );
+    if (
+      regions &&
+      typeof regions.witness === "string" &&
+      regions.witness === regions.peer
+    )
+      throw new VisibleError(
+        `The witness region of the "${name}" DSQL cluster is its peer region, "${regions.peer}". The witness has to be a third region.`,
       );
 
     const cluster = this.part("cluster", {
@@ -411,14 +446,7 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
     }
 
     if (vpc) {
-      const instance = isVpc(vpc) ? vpc : vpc.instance;
-      const endpoints = isVpc(vpc) ? undefined : vpc.endpoints;
-      const what = `of the "vpc.endpoints" of the "${name}" DSQL cluster`;
-      const management =
-        plain(endpoints?.management, `The "management" ${what}`) ?? false;
-      const connection =
-        plain(endpoints?.connection, `The "connection" ${what}`) ?? true;
-
+      const { instance, management, connection } = vpc;
       const fromVpc = (port: number) => ({
         protocol: "tcp",
         fromPort: port,
@@ -446,7 +474,7 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
         vpcId: instance.id,
         serviceName,
         vpcEndpointType: "Interface",
-        subnetIds: instance.privateSubnets,
+        subnetIds: subnetsOf(instance, "private"),
         privateDnsEnabled: true,
         securityGroupIds: [securityGroup.id],
       });
@@ -531,10 +559,15 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
         transform,
         `${name}PeerBackupVault`,
         {},
-        { ...peer },
+        { parent: self, ...peer },
       );
       return [vaultArgs, vaultOpts] as const;
     }
+  }
+
+  /** The identifier of the cluster. */
+  public get id() {
+    return this.nodes.cluster.identifier;
   }
 
   /** The region of the cluster. */
@@ -542,7 +575,10 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
     return this.nodes.cluster.region;
   }
 
-  /** The endpoint of the cluster. */
+  /**
+   * The endpoint of the cluster. With a VPC connection endpoint, it's the endpoint's
+   * private name, so what connects from inside the VPC doesn't leave it.
+   */
   public get endpoint() {
     // Use the private VPC endpoint hostname when available so linked functions
     // inside the VPC don't route through the public IP.
@@ -631,23 +667,27 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
    *
    * ```ts title="sst.config.ts"
    * const cluster = sst.aws.v5.Dsql.get("MyCluster", {
-   *   id: "app-dev-mycluster",
+   *   id: "kzttrvbdg4k2o5ze2m2rrwdj7u",
    *   peer: {
-   *     id: "kzttrvbdg4k2o5ze2m2rrwdj7u",
+   *     id: "abtrvbdg4k2o5ze2m2rrwdj7xy",
    *     region: "us-east-2",
    *   }
    * });
    * ```
+   *
+   * You can find the identifiers by outputting them in the stage that created the
+   * cluster.
+   *
+   * ```ts title="sst.config.ts"
+   * return {
+   *   id: cluster.id,
+   *   peerId: cluster.nodes.peerCluster?.identifier
+   * };
+   * ```
    */
   public static get(
     name: string,
-    args: {
-      id: Input<string>;
-      peer?: {
-        id: string;
-        region: string;
-      };
-    },
+    args: DsqlGetArgs,
     opts?: ComponentResourceOptions,
   ) {
     return new Dsql(
@@ -662,4 +702,25 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
       opts,
     );
   }
+}
+
+// The VPC the endpoints are created in, and which of them are created
+function endpointsOf(name: string, vpc: DsqlArgs["vpc"]) {
+  const what = `the "${name}" DSQL cluster`;
+  const given = plain(vpc, `The "vpc" of ${what}`);
+  if (!given) return undefined;
+
+  const instance = isVpc(given) ? given : given.instance;
+  if (!isVpc(instance))
+    throw new VisibleError(
+      `The "vpc" of ${what} isn't a "Vpc" component. Pass a "Vpc", or one as "vpc.instance" with the endpoints to create.`,
+    );
+
+  const endpoints = isVpc(given) ? undefined : given.endpoints;
+  const of = `of the "vpc.endpoints" of ${what}`;
+  return {
+    instance,
+    management: plain(endpoints?.management, `The "management" ${of}`) ?? false,
+    connection: plain(endpoints?.connection, `The "connection" ${of}`) ?? true,
+  };
 }

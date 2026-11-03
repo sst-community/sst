@@ -80,7 +80,8 @@ has no 4.x components.
   other VPC, looked up with `after()` once a preview knows the subnets. So are the
   `Redis`, the `Postgres`, the `Mysql` and the `Aurora`, which report the pane `sst dev`
   shows for a local server (`helpers/local-server.ts`), where 4.x created a
-  `DevCommand` for it.
+  `DevCommand` for it. So is the `Dsql`, whose parts in the peer region are created
+  with a provider for that region (`useProvider()`).
   The ports before them reuse the original's, as below, until each is rebuilt and
   added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
@@ -486,9 +487,9 @@ describe("takes over a deployed Queue", () => {
   a renamed resource's new name as its old one wherever another resource refers to it.
   It doesn't in the resource's own inputs: its own name there is the name SST gave it,
   like a `Name` tag, and a new one is a change.
-- A provider made with `useProvider()` is registered once in a process, so only the
-  first test that needs it has it in its graph. The check leaves providers themselves
-  out of what it compares.
+- A provider made with `useProvider()` is made once in each run, so each test that
+  needs it has it in its graph. The check leaves providers themselves out of what it
+  compares.
 - A secret input is recorded as an object with the value under `value`. A value made
   from a secret is a secret too, so a port that reads something next to a secret (a
   task's volumes next to its built image) can turn a plain input into one. The check
