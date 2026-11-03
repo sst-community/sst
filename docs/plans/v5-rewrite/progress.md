@@ -2,6 +2,15 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the lab check of the load balancers' domains, with the containers group
+
+**Checked in the lab** (a stage of its own, the only one with a VPC, with a CLI built from the branch). The lab app's containers group: a `Service` with a load balancer and a domain of its own, an `Alb` with a domain and a `Service` on it, a `Task` with a `CronV2`, an `Efs`, and a function in the VPC that mounts the file system, all switched at once with the `Vpc`.
+
+- **Deployed with SST 4.** `sst migrate --check` passed: 110 kept (16 at a new address, nothing updated in place), 1 replaced (the bastion, which the 5.0 `Vpc` gives one image, as its docs say), 6 released (SST 4's lookups of the hosted zone), 5 taken out of the state with nothing in the cloud behind them (4.x's version markers and the `DevCommand`s of services without a command), and 3 created.
+- **The move** kept every resource by id but the bastion. Each DNS record kept its id: both domains' alias records, and both certificates' validation records under their new names. Then `sst diff` showed no changes.
+- **The same answers before and after:** the service's page through its domain and its redirect to https, the `Alb`'s domain, and the function's count of visits in the file system, which went on from where it was.
+- Removed, and cleaned up: the stage's 144 state versions, its passphrase, a source map and three inactive task definitions. The asset registry holds one build cache, `Web-cache`, pushed hours before this stage; its tag names the component, not the app, so it was left.
+
 ## 2026-11-02: step 4, the lab check of the serverless group with today's components
 
 **Checked in the lab** (a stage of its own, no VPC, with a CLI built from the branch). The lab app's serverless group: a `Bucket`, `Queue`s, an `SnsTopic`, a `Dynamo`, a `CognitoUserPool` with a trigger and a client, a `Function` with a URL, an `ApiGatewayV2` with a domain and a Lambda authorizer, an `AppSync` with a Lambda data source, a `CronV2`, a `Bus` and an `Email` whose sender is a domain, all switched at once.
