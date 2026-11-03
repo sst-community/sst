@@ -352,8 +352,9 @@ export function mockPulumi(input?: MockInput) {
                 strict: boolean,
               ) => {
                 await newRun();
-                if (written) written(opts());
-                else if (test.create) test.create(Component, opts());
+                // A case may be async, to import what it creates
+                if (written) await written(opts());
+                else if (test.create) await test.create(Component, opts());
                 else throw new Error(`The "${name}" case creates nothing`);
                 await mock.settle();
                 // The options have to reach the V5 component itself, and

@@ -53,6 +53,13 @@ const rebuilt = [
   "analog.ts",
   "remix.ts",
   "react.ts",
+  "step-functions.ts",
+  "cron.ts",
+  "cognito-identity-pool.ts",
+  "auth.ts",
+  "realtime.ts",
+  "workflow.ts",
+  "apigateway-websocket.ts",
 ];
 
 describe("V5 components", () => {
@@ -107,6 +114,16 @@ describe("V5 components", () => {
     // A part that has another name, or another place, than it had in the
     // component it replaces is in a map in `aws/takeover/`, imported from its
     // `index.ts`.
+    // The map is how the CLI knows a type's 4.x form has this 5.0 form:
+    // without one, a new stage takes the 4.x form, and a plain deploy can
+    // switch it, where only `sst migrate` releases what a switch releases.
+    it("has a takeover map, even an empty one", () => {
+      expect(
+        takeoverOf(component),
+        `Add aws/takeover/${file}, with "takeover(${component.name}, {})" when nothing moved, and import it from aws/takeover/index.ts`,
+      ).toBeDefined();
+    });
+
     it("has its takeover map loaded, when it has one", () => {
       if (!fs.existsSync(new URL(`../takeover/${file}`, dir))) return;
       expect(
@@ -158,15 +175,28 @@ const eitherKind: Record<string, string[]> = {
   "aws/helpers/bucket.ts": ["aws/bucket.ts"],
   "aws/helpers/queue.ts": ["aws/queue.ts"],
   "aws/helpers/sns-topic.ts": ["aws/sns-topic.ts"],
+  "aws/helpers/bus.ts": ["aws/bus.ts"],
   "aws/helpers/task.ts": ["aws/task.ts"],
   "aws/helpers/router.ts": ["aws/router.ts"],
   // A load balancer a service shares
   "aws/helpers/alb.ts": ["aws/alb.ts"],
   // A task's or a service's cluster, and a file system it mounts
   "aws/helpers/fargate.ts": ["aws/cluster.ts", "aws/efs.ts"],
-  // A function given as either \`Function\`, or a \`Workflow\`, which has no
-  // 5.0 form yet
+  // A function given as either \`Function\`, or either \`Workflow\`
   "aws/helpers/function-part.ts": ["aws/function.ts", "aws/workflow.ts"],
+  // The states the 4.x and V5 \`StepFunctions\` share. They take the 4.x
+  // \`Function\`'s permission type, and \`task.ts\` the 4.x components the 4.x
+  // one's integrations take, types only. The V5 one's integrations are its
+  // own. When the 4.x components go, these imports go with them.
+  "aws/step-functions/state.ts": ["aws/function.ts"],
+  "aws/step-functions/map.ts": ["aws/function.ts"],
+  "aws/step-functions/task.ts": [
+    "aws/function.ts",
+    "aws/sns-topic.ts",
+    "aws/queue.ts",
+    "aws/task.ts",
+    "aws/bus.ts",
+  ],
 };
 
 // The 4.x component files a file reaches: those it imports, and those the
@@ -192,7 +222,11 @@ function fourXReached(start: typeof dir) {
       if (isFourX) {
         if (!eitherKind[name]?.includes(targetName))
           reached.add(`${targetName}, through ${name}`);
-      } else if (targetName.startsWith("aws/helpers/")) walk(target);
+      } else if (
+        targetName.startsWith("aws/helpers/") ||
+        targetName.startsWith("aws/step-functions/")
+      )
+        walk(target);
     }
   };
   walk(start);

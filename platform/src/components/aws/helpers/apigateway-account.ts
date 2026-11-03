@@ -6,12 +6,12 @@ import {
   interpolate,
 } from "@pulumi/pulumi";
 import { $print } from "../../component";
-import { lazy } from "../../../util/lazy";
+import { perRun } from "../../../util/lazy";
 
 // The account is a singleton per provider, so gateways on the same provider
 // share one read. The read uses the first gateway's
 // `<Name>APIGatewayAccount` name.
-const useAccountReads = lazy(
+const useAccountReads = perRun(
   () => new Map<ProviderResource | undefined, apigateway.Account>(),
 );
 
@@ -30,11 +30,15 @@ function useAccountRead(namePrefix: string, opts: ComponentResourceOptions) {
   return account;
 }
 
-let cloudWatchRole: iam.Role | undefined;
+// Made once in each run of the program, like the account's read
+const cloudWatchRoles = perRun(() => ({
+  role: undefined as iam.Role | undefined,
+}));
 
 function useCloudWatchRole(opts: ComponentResourceOptions) {
   const partition = getPartitionOutput(undefined, opts).partition;
-  cloudWatchRole ??= new iam.Role(
+  const made = cloudWatchRoles();
+  made.role ??= new iam.Role(
     `APIGatewayPushToCloudWatchLogsRole`,
     {
       assumeRolePolicy: jsonStringify({
@@ -55,7 +59,7 @@ function useCloudWatchRole(opts: ComponentResourceOptions) {
     },
     { retainOnDelete: true, provider: opts.provider },
   );
-  return cloudWatchRole;
+  return made.role;
 }
 
 export function setupApiGatewayAccount(

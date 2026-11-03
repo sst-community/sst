@@ -2811,7 +2811,8 @@ function useV5Names(prop: TypeDoc.Reflection, text: string) {
   const file = (prop as TypeDoc.DeclarationReflection).sources?.[0]?.fileName;
   if (!isV5Source(currentPage) || !file || isV5Source(file) || isHelperSource(file))
     return text;
-  return text.replace(/\bsst\.aws\.(\w+)(?=\(|\.get\()/g, (match, name) =>
+  // A component's constructor, and its static methods: `sst.aws.StepFunctions.pass(`
+  return text.replace(/\bsst\.aws\.(\w+)(?=\(|\.\w+\()/g, (match, name) =>
     v5Classes.has(name) ? `sst.aws.v5.${name}` : match
   );
 }

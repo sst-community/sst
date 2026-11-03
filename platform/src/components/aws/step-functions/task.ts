@@ -23,7 +23,7 @@ import { Queue } from "../queue";
 import { Task as ServiceTask } from "../task";
 import { Bus } from "../bus";
 
-interface TaskBaseArgs extends StateArgs {
+export interface TaskBaseArgs extends StateArgs {
   /**
    * Specifies how a `Task` state integrates with the specified AWS service.
    *

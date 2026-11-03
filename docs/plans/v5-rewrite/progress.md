@@ -2,6 +2,57 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, seven of Kept built the 5.0 way, a map for every 5.0 component, and their lab check
+
+**Done, committed (not pushed):**
+
+- **`StepFunctions`, `Cron`, `CognitoIdentityPool`, `Auth`, `Realtime`, `Workflow` and `ApiGatewayWebSocket`** (`aws/v5/`), each built the 5.0 way: its own args, no 4.x file, nothing created inside an `apply`, a "Switch from" section, and on the clean break's list.
+  - `StepFunctions`: the state classes are SST 4's (`aws/step-functions/`, which the clean-break test now walks). The five integrations that take a component have their own args and take the V5 `Function`, `SnsTopic`, `Queue`, `Task` and `Bus` as well as the 4.x ones. `lambdaInvoke` creates a V5 `Function`, under the name SST 4 gave its function.
+  - `Cron` is the old, rule-based `Cron`, under its own type ([open question 3](plan.md#open-questions)). Its function is moved from `<name>Handler` to `<name>Function`. `job` is refused.
+  - `CognitoIdentityPool`'s `get` reads the pool, its roles and their attachment inside the component.
+  - `Auth`'s table, issuer and router are the V5 `Dynamo`, `Function` and `Router`. `authorizer` and `forceUpgrade` are refused, and `Auth.v1` has no 5.0 form ([open question 4](plan.md#open-questions)).
+  - `Realtime` keeps each subscriber inside the component, by the hash SST 4 named it with, where SST 4 kept each in a component of its own.
+  - `Workflow`'s function is a V5 `Function`, with versions and durable execution. SST 4's shape of `transform.function` is refused with what to write.
+  - `ApiGatewayWebSocket` keeps each route and authorizer inside the component, as the `ApiGatewayV2` does. Its domain is on the 5.0 certificate and adapters. An authorizer's `jwt`, `payload` and `response` are refused.
+- **A map for every 5.0 component, even an empty one.** Only a type with a map counts as taken over. Without one, a new stage could use the 4.x form, and a plain deploy could then switch it, which only `sst migrate` should do. `Cdn`, `Cluster` and `CognitoUserPoolClient` were missing one; a test now checks every component in `aws/v5/`, and `PORTING.md` says so.
+- **Shared:**
+  - `AnyBus` (`helpers/bus.ts`) and `AnyFunction` take either kind.
+  - A function part takes the V5 `Workflow`.
+  - API Gateway's account and its log role are read once per run, not once per process.
+  - The V5 `Router` can be told not to report its URL, so `Auth` reports only its own.
+  - The docs generator renames static methods (`sst.aws.StepFunctions.pass(`) in the examples too.
+  - The takeover tests' helper waits for a case that's async. The `Workflow`'s case on a bus imports the `Bus`, and failed under the full suite's load, when the import finished after the helper had looked.
+- **Better than SST 4,** each change listed in its component's "Switch from":
+  - `StepFunctions` with `logging: false` deploys. SST 4's sent AWS a log destination of `undefined:*`, which AWS turns down (found in the lab).
+  - The `StepFunctions` integrations and `Cron`'s `task` take the V5 components.
+  - `nodes` has what SST 4's left out: `StepFunctions`'s role and log group, `Cron`'s permission and role, the identity pool's attachment, `Realtime`'s authorizer permission.
+  - `ApiGatewayWebSocket` refuses a JWT authorizer when the app runs, where SST 4's failed in the deploy (API Gateway doesn't take one on a WebSocket API), and `nodes.domainName` is `undefined` without a domain, where SST 4's threw.
+  - The docs' examples were fixed: the `choice` example gives each `lambdaInvoke` a function and has its missing comma.
+
+**Checked:** `tsc`, all platform tests, and the seven docs pages. Each component takes over SST 4's in its cases: 192 tests in the seven files.
+
+**Reviewed.** No state bug left. Fixed from it:
+
+- the missing maps, above;
+- `ApiGatewayWebSocket`'s authorizer, whose old name SST 4 didn't pass through `logicalName`;
+- a route called `default` beside `$default`, which had the same old name;
+- SST 4's `transform.function` on a `Workflow`, which was dropped without a word;
+- docs slips, and tests for what wasn't tested.
+
+**Checked in the lab** (a stage of its own, no VPC). The seven, with a 4.x `Queue` for a state machine to send to: a standard state machine that invokes a function and sends to the queue, an issuer with its table, a WebSocket API with a Lambda authorizer on `$connect`, a realtime server with a subscriber, a cron job, an identity pool and a workflow.
+
+- **Deployed with SST 4**, and called: the state machine ran both tasks; the issuer answered with its storage; the WebSocket refused a client without the token and ran `sendMessage` for one with it; the realtime subscriber got a message published to its topic; the rule, the pool's two roles and the workflow's durable version were in AWS.
+- **`sst migrate --check`** with a new state machine added refused it: "add it after the move". Without it, it passed:
+  - 109 resources kept, 46 at a new address and 6 updated in place;
+  - 6 components taken out, with nothing in the cloud behind them (the routes', the authorizer's and the subscriber's);
+  - 6 replacements: functions' code, uploaded again under a new key where the function's name changed.
+- **The move** kept 79 of the 85 resources in AWS by id, 40 of them under a new name. The other 6 were those code objects.
+- **The same answers before and after,** on every call above.
+- **`sst diff` after the move:** no changes.
+- **After the move,** a 5.0 `StepFunctions` with `logging: false` deployed, with logging off, and its express machine ran.
+- **`sst refresh`** changed no resource, and `sst diff` after it showed no changes.
+- **Removed, and cleaned up:** the stage's 127 state versions and markers, its `migrate` copy among them, its passphrase, and 14 source maps the SST 4 functions left. Nothing of it is left in IoT, Step Functions, Cognito, EventBridge, API Gateway, Lambda or IAM. The cleanup after the framework sites' check had missed 32 of its stage's state files; they're deleted too.
+
 ## 2026-11-02: step 4, the six framework sites built the 5.0 way, and their lab check
 
 The maintainer decided that every component gets a 5.0 form, so these come first: the sites on the base the `Nextjs`, `Astro` and `SvelteKit` share.

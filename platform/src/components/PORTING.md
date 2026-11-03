@@ -199,7 +199,10 @@ Changing `sst.aws.Queue` to `sst.aws.v5.Queue` with the same name has to keep th
 deployed resources. The component and every part with the name it had are kept as they
 are, because the type is the same. What moved goes in a **takeover map**,
 `aws/takeover/<name>.ts`, imported from `aws/takeover/index.ts`. The component itself
-knows nothing about 4.x. A component with nothing that moved has no map.
+knows nothing about 4.x. A component with nothing that moved still has a map, an empty
+one, `takeover(Cdn, {})`: the maps are how the CLI knows a 4.x type has a 5.0 form, so
+that a new stage refuses the 4.x one and only `sst migrate` switches a stage to it.
+`v5-components.test.ts` checks each component has one.
 
 A map is a file that's imported for what it does, not for what it exports. The CLI
 bundles a config with esbuild, which leaves such a file out of a package that says it

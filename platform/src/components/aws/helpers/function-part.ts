@@ -4,6 +4,7 @@ import { transformPart } from "../../transform";
 import type {
   DeferredPart,
   ManyPart,
+  NamedPart,
   Parts,
   PartsComponent,
 } from "../../parts-component";
@@ -13,7 +14,8 @@ import {
   FunctionArn,
 } from "../function";
 import { Function, FunctionArgs } from "../v5/function";
-import { Workflow } from "../workflow";
+import { Workflow as OriginalWorkflow } from "../workflow";
+import { Workflow } from "../v5/workflow";
 import { splitQualifiedFunctionArn } from "./arn";
 
 /**
@@ -31,6 +33,9 @@ export type FunctionPart = Output<{
   targetResponseStreamingInvokeArn: Output<string>;
 }>;
 
+/** A `Function` component: the 4.x one or the V5 one. */
+export type AnyFunction = Function | OriginalFunction;
+
 /**
  * What a user can pass for a function: a handler, its args, or one they
  * have, as its ARN, the function itself, or the workflow it runs.
@@ -43,6 +48,7 @@ export type FunctionDefinition = Input<
   | Function
   | OriginalFunction
   | Workflow
+  | OriginalWorkflow
 >;
 
 /**
@@ -56,7 +62,8 @@ export type FunctionInput =
   | FunctionArgs
   | Input<Function>
   | Input<OriginalFunction>
-  | Input<Workflow>;
+  | Input<Workflow>
+  | Input<OriginalWorkflow>;
 
 /**
  * A function a component takes the 5.0 way, checked: what's created is
@@ -86,7 +93,8 @@ export function plainFunction(
     if (
       value instanceof Function ||
       value instanceof OriginalFunction ||
-      value instanceof Workflow
+      value instanceof Workflow ||
+      value instanceof OriginalWorkflow
     )
       return value;
     throw new VisibleError(
@@ -175,7 +183,11 @@ export function functionPart(
   function create(definition: unknown) {
     if (definition instanceof Function || definition instanceof OriginalFunction)
       return use(definition);
-    if (definition instanceof Workflow) return use(definition.getFunction());
+    if (
+      definition instanceof Workflow ||
+      definition instanceof OriginalWorkflow
+    )
+      return use(definition.getFunction());
     if (typeof definition === "string" && definition.startsWith("arn:"))
       return useArn(definition);
 
@@ -277,7 +289,11 @@ function useArn(arn: string) {
 }
 
 type FunctionKeys<P extends Parts> = {
-  [K in keyof P]: P[K] extends DeferredPart<typeof Function> ? K : never;
+  [K in keyof P]: P[K] extends
+    | DeferredPart<typeof Function>
+    | NamedPart<DeferredPart<typeof Function>>
+    ? K
+    : never;
 }[keyof P] &
   string;
 type ManyFunctionKeys<P extends Parts> = {

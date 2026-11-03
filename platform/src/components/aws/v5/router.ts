@@ -787,6 +787,10 @@ export interface RouterArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   waf?: boolean | WafArgs;
+  /**
+   * @internal
+   */
+  _skipHint?: boolean;
 }
 
 // The router's `protection`, as an object
@@ -1017,7 +1021,7 @@ export class Router extends component("sst:aws:Router", parts) {
 
     const cdn = this.existingPart("cdn");
     this.routing = cdn ? this.reference(name, cdn) : this.create(name, args);
-    this.report({ hint: this.url });
+    if (!args._skipHint) this.report({ hint: this.url });
   }
 
   private create(name: string, args: RouterArgs): Routing {
