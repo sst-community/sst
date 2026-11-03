@@ -31,6 +31,7 @@ import "./efs";
 import "./email";
 import "./function";
 import "./https-redirect";
+import "./kinesis-stream";
 import "./microvm";
 import "./mysql";
 import "./nextjs";

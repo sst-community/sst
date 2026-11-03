@@ -30,6 +30,7 @@ export * from "./efs";
 export * from "./email";
 export * from "./function";
 export * from "./https-redirect";
+export * from "./kinesis-stream";
 export * from "./microvm";
 export * from "./mysql";
 export * from "./nextjs";

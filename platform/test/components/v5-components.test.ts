@@ -65,6 +65,7 @@ const rebuilt = [
   "apigatewayv1-api-key.ts",
   "microvm.ts",
   "vector.ts",
+  "kinesis-stream.ts",
 ];
 
 describe("V5 components", () => {

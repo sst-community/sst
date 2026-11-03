@@ -2,6 +2,32 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, the `KinesisStream` built the 5.0 way, and its lab check
+
+**Done, committed (not pushed):**
+
+- **`KinesisStream`** (`aws/v5/kinesis-stream.ts`), as the 5.0 `Dynamo`'s stream subscribers are built. SST 4 kept each subscription in a component of its own at the top of the app; the 5.0 one keeps the subscriber's function and event source mapping inside the stream, by the subscriber's name, and `subscribe` returns the stream. A subscriber without a name, a subscriber's own `transform`, and a handler or args in an output are refused with what to write.
+  - The map finds a subscriber where either of SST 4's forms put it: after the stream's component, or, for the static `subscribe`, after the stream's own name.
+  - The subscriber's function keeps SST 4's description, after the component it was in, so a switch updates nothing.
+  - SST 4's static `subscribe`, which took a stream's ARN, becomes `get(name, stream).subscribe(...)`. It's kept, `@internal`, only to say so.
+- **Better than SST 4:** `get` references a stream by its name or its ARN, so a stream in another stage can be shared, and an SST 4 config's ARN works as it's written.
+
+**Checked:** `tsc`, the platform tests (3,561), and the docs page. The `KinesisStream` has 34 tests. The takeover runs in 8 cases, each three ways: a stream, transformed, subscribers given as ARNs with filters and SST 4's transform, from a handler, from function args, one that links its stream, a function's ARN in an output, and in `sst dev`. Tests of their own cover the static form (with an ARN, with a handler, and on a stream of the app), `get`'s options, and a provider from a parent.
+
+**Reviewed.** Fixed from it:
+
+- A subscriber of the static form would have had its description updated: from `get`, it's described after the stream's own name, as the static `subscribe` named it.
+- `get` takes the ARN the static form was given, where it took only a name.
+- "Switch from" now says that a provider or parent given to `get` replaces the subscriber, and no longer says `nodes.stream` was an output, which it wasn't.
+- Tests for a linked subscriber, the static form with a handler and on a stream of the app, and `get`'s options. The mock now gives a created stream the ARN of its physical name, as AWS does.
+
+**Checked in the lab** (a stage of its own, and a CLI built from the branch). A stream with a subscriber filtered to one kind of record, and one subscribed the static way: on SST 4 by the stream's ARN, on 5.0 through `get` given that ARN. Each wrote what it got to a bucket. An SST 4 function put one record each subscriber should get and one the filter drops, and waited for them.
+
+- **Deployed with SST 4, and called:** both subscribers recorded the record, and the filtered one didn't get the other. A first call, made before the event source mappings were enabled, recorded nothing: they start at the latest record.
+- **`sst migrate --check` passed:** 37 resources kept, 13 at a new address, and the static subscriber's function updated in place. Its code is uploaded again under a new key, as the `Function`'s map says, since the function is named after `get`'s component now. Nothing released, and SST 4's two subscriber components taken out with nothing in the cloud behind them.
+- **The move** kept 25 resources by id, 7 under a new name. The only new one is that code. `sst diff` showed no changes, both subscribers recorded a new record, and the filter held. `get` found the stream by the name in its ARN, and a refresh followed by `sst diff` showed no changes.
+- **Removed, and cleaned up:** `sst remove` deleted 35 resources. Then the stage's 79 state versions and markers, its `migrate` copy among them, its passphrase, and 3 source maps of SST 4's functions. Nothing of it is left: no stream, event source mapping, function, role, bucket or log group.
+
 ## 2026-11-03: step 4, the `Vector` built the 5.0 way, the first of Community, and its lab check
 
 **Done, committed (not pushed):**
