@@ -52,9 +52,10 @@ const documentedSources = new Set<string>();
 // The helper files hold arg types that several V5 components share. They're
 // read so a page can show those types, and get no page of their own.
 const HELPERS = "platform/src/components/aws/helpers/";
-// The V5 components, by class name, and the source file of the page that's
-// being written
-const v5Classes = new Set<string>();
+// The V5 components' class names, by the name of the component each replaces:
+// its own, or with the version it drops (`CronV2` for `Cron`). And the source
+// file of the page that's being written
+const v5Classes = new Map<string, string>();
 let currentPage = "";
 // The interfaces from helper files that each page shows
 const sharedInterfaces = new Map<
@@ -82,7 +83,10 @@ if (!cmd || cmd === "components") {
     const sourceFile = component.sources![0].fileName;
     if (isHelperSource(sourceFile)) continue;
     documentedSources.add(sourceFile);
-    if (isV5Source(sourceFile)) v5Classes.add(useClassName(component));
+    if (isV5Source(sourceFile)) {
+      const name = useClassName(component);
+      v5Classes.set(name + versionDropped(sourceFile, name), name);
+    }
   }
 
   for (const component of components) {
@@ -886,11 +890,17 @@ async function generateComponentDoc(
   const dir = path.dirname(outputFilePath);
   fs.mkdirSync(dir, { recursive: true });
 
-  // The component a V5 component replaces has its name, one folder up
+  // The component a V5 component replaces has its name, one folder up, with
+  // the version it drops: `cron.ts`'s `Cron` replaces `cron-v2.ts`'s `CronV2`
+  const dropped = versionDropped(sourceFile, className);
   const original =
     isV5Source(sourceFile) &&
-    documentedSources.has(sourceFile.replace("/v5/", "/"))
-      ? className
+    documentedSources.has(
+      sourceFile
+        .replace("/v5/", "/")
+        .replace(/\.ts$/, dropped ? `-${dropped.toLowerCase()}.ts` : ".ts")
+    )
+      ? className + dropped
       : undefined;
 
   fs.writeFileSync(
@@ -1814,6 +1824,17 @@ function renderConstructor(module: TypeDoc.DeclarationReflection) {
 // next to the `sst.aws.Queue` it replaces
 function isHelperSource(fileName: string) {
   return fileName.startsWith(HELPERS);
+}
+// A V5 component that drops the version SST 4 put in its name keeps the type,
+// which has it: `Cron` is `sst:aws:CronV2`. The version, as `V2`, or "".
+function versionDropped(sourceFile: string, className: string) {
+  if (!isV5Source(sourceFile)) return "";
+  const code = fs.readFileSync(path.join("..", sourceFile), "utf8");
+  return (
+    code.match(
+      new RegExp(`\\bcomponent\\(\\s*"sst:\\w+:${className}(V\\d+)"`)
+    )?.[1] ?? ""
+  );
 }
 function isV5Source(fileName: string) {
   return /^platform\/src\/components\/\w+\/v5\//.test(fileName);
@@ -2816,7 +2837,7 @@ function useV5Names(prop: TypeDoc.Reflection, text: string) {
   // A component's constructor, its static methods, and its name in code:
   // `sst.aws.StepFunctions.pass(`, or `sst.aws.Workflow` in the SDK's docs
   return text.replace(/\bsst\.aws\.(\w+)(?=\(|\.\w+\(|`)/g, (match, name) =>
-    v5Classes.has(name) ? `sst.aws.v5.${name}` : match
+    v5Classes.has(name) ? `sst.aws.v5.${v5Classes.get(name)}` : match
   );
 }
 

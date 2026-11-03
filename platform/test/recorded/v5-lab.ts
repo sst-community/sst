@@ -14,6 +14,14 @@ export type Vpc =
   | InstanceType<typeof aws.Vpc>
   | InstanceType<typeof aws.v5.Vpc>;
 
+/**
+ * SST 4's `CronV2`, which is `Cron` in 5.0: the same type, without the
+ * version. 4.x's own `Cron` is the one `CronV2` replaced.
+ */
+function cron(aws: Components): Components["Cron"] {
+  return (aws as { CronV2?: Components["Cron"] }).CronV2 ?? aws.Cron;
+}
+
 /** The domain the lab account has a hosted zone for, as scrubbed. */
 export const zone = "lab.example.com";
 
@@ -155,7 +163,7 @@ export function serverless(aws: Components) {
   });
   graph.addResolver("Query hello", { dataSource: lambdaDS.name });
 
-  new aws.CronV2("Tick", {
+  new (cron(aws))("Tick", {
     function: "functions/log.handler",
     schedule: "rate(1 hour)",
   });
@@ -232,7 +240,7 @@ export function containers(aws: Components, vpc: Vpc) {
     image: "public.ecr.aws/docker/library/busybox:stable",
     command: ["echo", "ran"],
   });
-  new aws.CronV2("Nightly", { task: job, schedule: "rate(1 day)" });
+  new (cron(aws))("Nightly", { task: job, schedule: "rate(1 day)" });
 
   // A function in the VPC that mounts the file system and can run the task
   const mounted = new aws.Function("Mounted", {

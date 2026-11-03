@@ -1,11 +1,9 @@
 import { all, ComponentResourceOptions, output } from "@pulumi/pulumi";
-import { cloudwatch, iam, lambda } from "@pulumi/aws";
+import { iam, scheduler } from "@pulumi/aws";
 import {
   type ComponentArgs,
   component,
   deferred,
-  named,
-  optional,
 } from "../../parts-component";
 import { notAnOption, plain } from "../../args";
 import type { Input } from "../../input";
@@ -20,26 +18,18 @@ import type { AnyTask } from "../helpers/task";
 
 const parts = () => ({
   /**
-   * The AWS Lambda function the cron job runs, when it's given a handler or the
-   * function's args. An output, as it's created once its args are known.
+   * The function that's invoked when the cron job runs. There isn't one when the job runs
+   * a task.
    */
   function: deferred(Function),
   /**
-   * The permission for EventBridge to invoke the function.
+   * The IAM role EventBridge Scheduler assumes to invoke the function or run the task.
    */
-  permission: optional(lambda.Permission),
+  role: iam.Role,
   /**
-   * The EventBridge rule that runs on the schedule.
+   * The EventBridge Scheduler schedule.
    */
-  rule: cloudwatch.EventRule,
-  /**
-   * The IAM role EventBridge runs the task as, when the cron job runs a task.
-   */
-  role: named(optional(iam.Role), "TargetRole"),
-  /**
-   * The rule's target: the function or the task.
-   */
-  target: cloudwatch.EventTarget,
+  schedule: scheduler.Schedule,
 });
 
 export interface CronArgs extends ComponentArgs<typeof parts> {
@@ -65,16 +55,15 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
    * }
    * ```
    *
-   * You can also pass in a function ARN.
+   * You can also pass in a function you have, or its ARN. Only those can be an output: a
+   * handler and the function's args are plain values, since whether a function is created
+   * is decided from them.
    *
    * ```ts
    * {
    *   function: "arn:aws:lambda:us-east-1:000000000000:function:my-sst-app-jayair-MyFunction",
    * }
    * ```
-   *
-   * A handler or the function's args have to be plain values, since whether a function is
-   * created is decided from them. A function you have, or its ARN, can be an output.
    */
   function?: FunctionInput;
   /**
@@ -85,19 +74,19 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
    * For example, let's say you have a task.
    *
    * ```js title="sst.config.ts"
-   * const myCluster = new sst.aws.v5.Cluster("MyCluster");
-   * const myTask = new sst.aws.v5.Task("MyTask", { cluster: myCluster });
+   * const vpc = new sst.aws.v5.Vpc("MyVpc");
+   * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
+   * const task = new sst.aws.v5.Task("MyTask", { cluster });
    * ```
    *
    * You can then pass in the task to the cron job.
    *
    * ```js title="sst.config.ts"
    * new sst.aws.v5.Cron("MyCronJob", {
-   *   task: myTask,
+   *   task,
    *   schedule: "rate(1 minute)"
    * });
    * ```
-   *
    */
   task?: AnyTask;
   /**
@@ -158,8 +147,29 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
    *   schedule: "cron(15 10 * * ? *)", // 10:15 AM (UTC) every day
    * }
    * ```
+   *
+   * Or an [at expression](https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html#one-time) for a one-time schedule.
+   *
+   * ```ts
+   * {
+   *   schedule: "at(2025-06-01T10:00:00)",
+   * }
+   * ```
    */
-  schedule: Input<`rate(${string})` | `cron(${string})`>;
+  schedule: Input<`rate(${string})` | `cron(${string})` | `at(${string})`>;
+  /**
+   * The IANA timezone for the cron schedule. When set, the cron expression is
+   * evaluated in this timezone, with automatic DST handling.
+   *
+   * @default `"UTC"`
+   * @example
+   * ```ts
+   * {
+   *   timezone: "America/New_York"
+   * }
+   * ```
+   */
+  timezone?: Input<string>;
   /**
    * Configures whether the cron job is enabled. When disabled, the cron job won't run.
    * @default true
@@ -171,22 +181,38 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   enabled?: Input<boolean>;
+  /**
+   * The number of retry attempts for failed invocations. Between 0 and 185.
+   *
+   * @default `0`
+   * @example
+   * ```ts
+   * {
+   *   retries: 3
+   * }
+   * ```
+   */
+  retries?: Input<number>;
+  /**
+   * The ARN of an SQS queue to use as a dead-letter queue. When all retry
+   * attempts are exhausted, failed events are sent to this queue.
+   *
+   * @example
+   * ```ts
+   * {
+   *   dlq: myQueue.arn
+   * }
+   * ```
+   */
+  dlq?: Input<string>;
 }
 
 /**
- * The `Cron` component has been deprecated. Use [`CronV2`](/docs/component/aws/v5/cron-v2) instead.
- *
- * :::caution
- * This component has been deprecated.
- * :::
- *
  * The `Cron` component lets you add cron jobs to your app
- * using [Amazon Event Bus](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html). The cron job can invoke a `Function` or a container `Task`.
+ * using [Amazon EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html). The cron job can invoke a function or a container `Task`.
  *
- * `CronV2` uses EventBridge Scheduler, so switching a cron job to it replaces its rule
- * with a schedule. This one keeps an app's rule as it is, and moves to 5.0 with it.
- *
- * @deprecated Use [`CronV2`](/docs/component/aws/v5/cron-v2) instead.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  * #### Cron job function
@@ -204,13 +230,43 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  *
  * Create a container task and pass in a `schedule` and a `task` that'll be executed.
  *
- * ```ts title="sst.config.ts" {5}
- * const myCluster = new sst.aws.v5.Cluster("MyCluster");
- * const myTask = new sst.aws.v5.Task("MyTask", { cluster: myCluster });
+ * ```ts title="sst.config.ts" {6}
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
+ * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
+ * const task = new sst.aws.v5.Task("MyTask", { cluster });
  *
  * new sst.aws.v5.Cron("MyCronJob", {
- *   task: myTask,
+ *   task,
  *   schedule: "rate(1 day)"
+ * });
+ * ```
+ *
+ * #### Set a timezone
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Cron("MyCronJob", {
+ *   function: "src/cron.handler",
+ *   schedule: "cron(15 10 * * ? *)",
+ *   timezone: "America/New_York"
+ * });
+ * ```
+ *
+ * #### Configure retries
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Cron("MyCronJob", {
+ *   function: "src/cron.handler",
+ *   schedule: "rate(1 minute)",
+ *   retries: 3
+ * });
+ * ```
+ *
+ * #### One-time schedule
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Cron("MyCronJob", {
+ *   function: "src/cron.handler",
+ *   schedule: "at(2025-06-01T10:00:00)"
  * });
  * ```
  *
@@ -226,40 +282,65 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  * });
  * ```
  *
- * #### Switch from `sst.aws.Cron`
+ * #### Switch from `sst.aws.CronV2`
  *
- * Change `sst.aws.Cron` to `sst.aws.v5.Cron` and keep the name. The rule, its target, the
- * permission and the task's role are kept. A few things are written differently:
+ * Change `sst.aws.CronV2` to `sst.aws.v5.Cron`, without the version, and keep the name. The
+ * schedule, its role and the function you've deployed are kept.
  *
- * - `job` is gone. Use `function`.
- * - The function is `nodes.function`, and `transform.function`. `sst.aws.Cron` called it the
- *   handler, `<name>Handler`; it's moved to `<name>Function`, not replaced. `nodes.job` is
- *   gone.
- * - A handler or the function's args have to be plain values, not outputs: whether a
- *   function is created is decided from them. A function you have, or its ARN, can be an
- *   output.
- * - `task` takes the V5 `Task` as well as the 4.x one.
- * - `nodes` has the permission and the task's role too, and `transform` takes them.
+ * ```ts title="sst.config.ts" del={1-4} ins={5-8}
+ * new sst.aws.CronV2("MyCronJob", {
+ *   function: "src/cron.handler",
+ *   schedule: "rate(1 minute)"
+ * });
+ * new sst.aws.v5.Cron("MyCronJob", {
+ *   function: "src/cron.handler",
+ *   schedule: "rate(1 minute)"
+ * });
+ * ```
+ *
+ * A few things are written differently:
+ *
+ * - It's named `Cron`. `sst.aws.CronV2` had the version in its name because it replaced
+ *   SST 4's first `Cron`, which has no 5.0 form. It keeps its type, `sst:aws:CronV2`, which
+ *   is what a deployed one has.
+ * - The deprecated `job` is gone. Use `function`, as written below. So is
+ *   `nodes.job`: read `nodes.function`.
+ * - The function is named after `function`: `MyCronJobFunction`, where it was
+ *   `MyCronJobHandler`. The function you've deployed keeps its name in AWS.
+ * - `nodes.function` is empty for a job that runs a task, where `sst.aws.CronV2` failed
+ *   when it was read.
+ * - `function` can't be a handler or a function's args in an output: whether a function
+ *   is created is decided from them, and a preview has to know. Only a function you
+ *   have, or its ARN, can be an output.
+ * - The function is a [`sst.aws.v5.Function`](/docs/component/aws/v5/function), and its
+ *   args are typed as that takes them. Args written the way `sst.aws.Function` takes them,
+ *   like `role` or `live`, still work, but don't type-check.
+ * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
+ * - If you set part of the schedule's `target` with an object in `transform`, the rest
+ *   of the target is kept.
  */
-export class Cron extends component("sst:aws:Cron", parts) {
-  constructor(name: string, args: CronArgs, opts?: ComponentResourceOptions) {
+export class Cron extends component("sst:aws:CronV2", parts) {
+  constructor(
+    name: string,
+    args: CronArgs,
+    opts?: ComponentResourceOptions,
+  ) {
     super(name, args, opts);
-    notAnOption(args, "job", `Use "function" in the "${name}" cron job.`);
 
+    notAnOption(args, "job", `Use "function" in the "${name}" cron job.`);
     const task = plain(args.task, `The "task" of the "${name}" cron job`);
     if (args.function && task)
       throw new VisibleError(
         `You cannot provide both a function and a task in the "${name}" Cron component.`,
       );
+    if (!args.function && !task)
+      throw new VisibleError(
+        `You must provide either a function or a task in the "${name}" Cron component.`,
+      );
+
     const event = output(args.event || {});
-
-    const rule = this.part("rule", {
-      scheduleExpression: args.schedule,
-      state: output(args.enabled ?? true).apply((enabled) =>
-        enabled ? "ENABLED" : "DISABLED",
-      ),
-    });
-
     const fn = args.function
       ? functionPart(
           this,
@@ -271,88 +352,90 @@ export class Cron extends component("sst:aws:Cron", parts) {
           {},
         )
       : undefined;
-    if (fn)
-      this.part("permission", {
-        action: "lambda:InvokeFunction",
-        function: fn.arn,
-        qualifier: fn.qualifier.apply((qualifier) => qualifier!),
-        principal: "events.amazonaws.com",
-        sourceArn: rule.arn,
-      });
 
-    const role = task
-      ? this.part("role", {
-          assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
-            Service: "events.amazonaws.com",
-          }),
-          inlinePolicies: [
-            {
-              name: "inline",
-              policy: iam.getPolicyDocumentOutput({
+    // What the schedule runs, and what it takes to run it
+    const runs = fn
+      ? [{ actions: ["lambda:InvokeFunction"], resources: [fn.targetArn] }]
+      : [
+          {
+            actions: ["ecs:RunTask"],
+            resources: [task!.nodes.taskDefinition.arn],
+          },
+          {
+            actions: ["iam:PassRole"],
+            resources: [
+              task!.nodes.executionRole.arn,
+              task!.nodes.taskRole.arn,
+            ],
+          },
+        ];
+    const role = this.part("role", {
+      assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
+        Service: "scheduler.amazonaws.com",
+      }),
+      inlinePolicies: [
+        {
+          name: "inline",
+          policy: output(args.dlq).apply(
+            (dlq) =>
+              iam.getPolicyDocumentOutput({
                 statements: [
-                  {
-                    actions: ["ecs:RunTask"],
-                    resources: [task.nodes.taskDefinition.arn],
-                  },
-                  {
-                    actions: ["iam:PassRole"],
-                    resources: [
-                      task.nodes.executionRole.arn,
-                      task.nodes.taskRole.arn,
-                    ],
-                  },
+                  ...runs,
+                  // Failed events are sent to the dead-letter queue
+                  ...(dlq
+                    ? [{ actions: ["sqs:SendMessage"], resources: [dlq] }]
+                    : []),
                 ],
               }).json,
-            },
-          ],
-        })
-      : undefined;
+          ),
+        },
+      ],
+    });
 
-    this.part(
-      "target",
-      fn
+    const retries = {
+      retryPolicy: { maximumRetryAttempts: output(args.retries ?? 0) },
+      deadLetterConfig: args.dlq ? { arn: args.dlq } : undefined,
+    };
+    this.part("schedule", {
+      scheduleExpression: args.schedule,
+      scheduleExpressionTimezone: args.timezone,
+      flexibleTimeWindow: { mode: "OFF" },
+      state: output(args.enabled ?? true).apply((enabled) =>
+        enabled ? "ENABLED" : "DISABLED",
+      ),
+      target: fn
         ? {
             arn: fn.targetArn,
-            rule: rule.name,
+            roleArn: role.arn,
             // A function is given the event as it is
             input: event.apply((event) => JSON.stringify(event)),
+            ...retries,
           }
-        : task
-          ? {
-              arn: task.cluster,
-              rule: rule.name,
-              ecsTarget: {
-                launchType: "FARGATE",
-                taskDefinitionArn: task.nodes.taskDefinition.arn,
-                networkConfiguration: {
-                  subnets: task.subnets,
-                  securityGroups: task.securityGroups,
-                  assignPublicIp: task.assignPublicIp,
-                },
+        : {
+            arn: task!.cluster,
+            roleArn: role.arn,
+            // A task's containers are given the event in `SST_EVENT`
+            input: all([event, task!.containers]).apply(([event, containers]) =>
+              JSON.stringify({
+                containerOverrides: containers.map((name: string) => ({
+                  name,
+                  environment: [
+                    { name: "SST_EVENT", value: JSON.stringify(event) },
+                  ],
+                })),
+              }),
+            ),
+            ecsParameters: {
+              taskDefinitionArn: task!.nodes.taskDefinition.arn,
+              launchType: "FARGATE",
+              networkConfiguration: {
+                subnets: task!.subnets,
+                securityGroups: task!.securityGroups,
+                assignPublicIp: task!.assignPublicIp,
               },
-              roleArn: role!.arn,
-              // A task's containers are given the event in `SST_EVENT`
-              input: all([
-                event,
-                output(task.containers as Input<string[]>),
-              ]).apply(([event, containers]) =>
-                JSON.stringify({
-                  containerOverrides: containers.map((name: string) => ({
-                    name,
-                    environment: [
-                      { name: "SST_EVENT", value: JSON.stringify(event) },
-                    ],
-                  })),
-                }),
-              ),
-            }
-          : missingTarget(),
-    );
-
-    function missingTarget(): never {
-      throw new VisibleError(
-        `You must provide either a function or a task in the "${name}" Cron component.`,
-      );
-    }
+            },
+            ...retries,
+          },
+    });
   }
 }

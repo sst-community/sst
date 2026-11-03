@@ -15,6 +15,10 @@ has no 4.x components.
 - **The V5 component has the original's name, in the `v5` folder.** `Queue` in
   `aws/queue.ts` is ported as `Queue` in `aws/v5/queue.ts`, with the same type,
   `sst:aws:Queue`. An app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`.
+  One SST 4 named with a version, because it replaced a first one that has no 5.0
+  form, drops the version from its name and its file, and keeps its type: `CronV2` in
+  `aws/cron-v2.ts` is ported as `Cron` in `aws/v5/cron.ts`, as `sst:aws:CronV2`. The
+  tests and the docs generator find the original from the version in the type.
 - **The same type is what makes it the same component.** A deployed `sst:aws:Queue`
   named `MyQueue` is the one `new sst.aws.v5.Queue("MyQueue")` creates, so it's kept, and
   so is each resource in it that has the name it had. A stage doesn't go back to the
@@ -69,7 +73,7 @@ has no 4.x components.
   create directly. The `Nextjs` is built that way: it builds its site in the program
   and creates what the build makes with `after()`, and it shares what the 4.x sites
   work out from a build in `site-code.ts`. So are the `Bucket`, the `Queue`, the `SnsTopic`, the
-  `Dynamo`, the `Bus` and the `CronV2`: the 4.x `Queue` and `SnsTopic` a bucket, a topic
+  `Dynamo`, the `Bus` and the `Cron` (SST 4's `CronV2`): the 4.x `Queue` and `SnsTopic` a bucket, a topic
   or a bus sends to are reached through `AnyQueue` and `AnySnsTopic`, the 4.x `Task` a
   cron job runs through `AnyTask`, and a function any of them is given goes through
   `plainFunction()`, so only a function that's already there, or its ARN, can be an
@@ -284,7 +288,8 @@ takeover(ApiGatewayV2, {
   V5 component.
 - The docs generator writes those two as the last notes of every "Switch from" section:
   that an object in `transform` is merged, and that a `$transform` for the original
-  applies. The original is the component of the same name, one folder up. Don't write
+  applies. The original is the component of the same name, one folder up, or with
+  the version its type has. Don't write
   them in the class doc.
 - Something 4.x created outside the component with nothing in AWS behind it needs no
   old address. The 4.x `Service` creates a `DevCommand` at the top of the app for each
@@ -522,7 +527,7 @@ describe("takes over a deployed Queue", () => {
 - `await pulumi.settle()` after creating resources in every test, or they leak into the
   next one.
 - A 4.x component that's passed in can be the real one: a `Vpc`, `Cluster` and `Task`
-  all deploy under the mock (see `v5/cron-v2.test.ts`).
+  all deploy under the mock (see `v5/cron.test.ts`).
 - Give the mock extra `state` for outputs the code reads (see `v5/apigatewayv2.test.ts`).
   A resource that's looked up comes back with no name or ARN unless `state` gives it
   one. The region, partition, account and IAM policy lookups have defaults.
@@ -568,7 +573,8 @@ For a component with function parts, test a function that links the component.
 
 1. Read the original and every wrapper component it creates. Note each resource's
    logical name, parent and options.
-2. Write `aws/v5/<name>.ts`, with the original's file name and class name: parts, args,
+2. Write `aws/v5/<name>.ts`, with the original's file name and class name, less a
+   version SST 4 put in them (see the top of this file): parts, args,
    constructor, methods, `link()`, `static get`.
    Give it the original's type. What the original registers for the CLI, as `_hint`,
    `_dev`, `_task`, `_tunnel` or `_metadata`, the V5 one reports with `this.report()`.
@@ -614,7 +620,7 @@ group of parts; `task.ts` for parts per item of a plain list (containers), a par
 that's built later, a stub in `sst dev`, and what it reports to the CLI; `service.ts` for
 groups of parts that depend on an arg (a load balancer of its own, or one it
 shares), parts made from a plain list of rules, a part that's read from `nodes` and
-only exists sometimes, and a part that's created in `sst dev` too; `cron-v2.ts` for a
+only exists sometimes, and a part that's created in `sst dev` too; `cron.ts` for a
 function the component may be given or may create, next to another component it's
 given (a `Task`); `dynamo.ts` for required args next to `get`, and a static method
 replaced by `get`; `function.ts` for a component 4.x built almost entirely inside

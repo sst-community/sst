@@ -166,7 +166,7 @@ The links go to each component's page, where its "Switch from" section has the d
 | [`Bus`](/docs/component/aws/v5/bus/) | The static `subscribe` and `subscribeQueue` become `get(...)` and then the method. A subscriber's `transform` moves to the bus's. |
 | [`Cluster`](/docs/component/aws/v5/cluster/) | Switch its services and tasks first. `addService` and `addTask` are gone. `Cluster.v1` has no v5 form. |
 | [`CognitoUserPool`](/docs/component/aws/v5/cognito-user-pool/) | An identity provider's `transform` becomes `transform.identityProvider`. `domain` and `triggers` are plain. |
-| [`CronV2`](/docs/component/aws/v5/cron-v2/) | `job` becomes `function`, and `nodes.job` becomes `nodes.function`. |
+| [`CronV2`](/docs/component/aws/v5/cron/) | Becomes `sst.aws.v5.Cron`, without the version: the first `Cron` has no v5 form. `job` becomes `function`, and `nodes.job` becomes `nodes.function`. |
 | [`Dsql`](/docs/component/aws/v5/dsql/) | `regions.peer` is plain. `transform.peerBackupVault` changes only the peer's vault. |
 | [`Dynamo`](/docs/component/aws/v5/dynamo/) | Every subscriber needs a name. The static `subscribe` becomes `get(...).subscribe(...)`. A subscriber's resources are in the table's `nodes`. |
 | [`Efs`](/docs/component/aws/v5/efs/) | Switch what mounts it first. |

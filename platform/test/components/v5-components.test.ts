@@ -28,7 +28,7 @@ const rebuilt = [
   "sns-topic.ts",
   "dynamo.ts",
   "bus.ts",
-  "cron-v2.ts",
+  "cron.ts",
   "cluster.ts",
   "task.ts",
   "efs.ts",
@@ -54,7 +54,6 @@ const rebuilt = [
   "remix.ts",
   "react.ts",
   "step-functions.ts",
-  "cron.ts",
   "cognito-identity-pool.ts",
   "auth.ts",
   "realtime.ts",
@@ -64,10 +63,8 @@ const rebuilt = [
   "apigatewayv1-usage-plan.ts",
   "apigatewayv1-api-key.ts",
   "microvm.ts",
-  "vector.ts",
   "kinesis-stream.ts",
   "open-search.ts",
-  "opencontrol.ts",
 ];
 
 describe("V5 components", () => {
@@ -100,7 +97,9 @@ describe("V5 components", () => {
 
     // A deployed component becomes the V5 one when the name is kept, because
     // the two have the same type. The class is named the same, and so is the
-    // file.
+    // file. One that SST 4 named with a version, because it replaced a first
+    // one that has no 5.0 form, drops the version and keeps the type: `Cron`,
+    // in `cron.ts`, replaces `CronV2`, in `cron-v2.ts`, as `sst:aws:CronV2`.
     it("has the name and type of the component it replaces", async () => {
       // 4.x spelled the `Cdn`'s type in capitals and TanStack Start's with a
       // small "s", and named the certificate's type for what it is, and a
@@ -111,11 +110,20 @@ describe("V5 components", () => {
           DnsValidatedCertificate: "Certificate",
           TanStackStart: "TanstackStart",
         }[component.name as string] ?? component.name;
-      expect(component.__pulumiType).toBe(`sst:aws:${typeName}`);
-      const original = await import(`../../src/components/aws/${name}.ts`);
+      const version = (component.__pulumiType as string).match(
+        new RegExp(`^sst:aws:${typeName}V(\\d+)$`),
+      )?.[1];
+      expect(component.__pulumiType).toBe(
+        `sst:aws:${typeName}${version ? `V${version}` : ""}`,
+      );
+      const originalName = version
+        ? `${component.name}V${version}`
+        : component.name;
+      const originalFile = version ? `${name}-v${version}.ts` : file;
+      const original = await import(`../../src/components/aws/${originalFile}`);
       expect(
-        original[component.name]?.__pulumiType,
-        `aws/${file} has to export the ${component.name} this one replaces`,
+        original[originalName]?.__pulumiType,
+        `aws/${originalFile} has to export the ${originalName} this one replaces`,
       ).toBe(component.__pulumiType);
     });
 

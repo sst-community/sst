@@ -921,9 +921,9 @@ describe("Task", () => {
   });
 
   it("is run by a cron job", async () => {
-    const { CronV2 } = await import("../../../src/components/aws/v5/cron-v2");
-    await import("../../../src/components/aws/takeover/cron-v2");
-    new CronV2("MyCronJob", {
+    const { Cron } = await import("../../../src/components/aws/v5/cron");
+    await import("../../../src/components/aws/takeover/cron");
+    new Cron("MyCronJob", {
       task: new Task("MyTask", { cluster: cluster(), image: "nginx:latest" }),
       schedule: "rate(1 day)",
     });

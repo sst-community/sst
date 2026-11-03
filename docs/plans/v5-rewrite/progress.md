@@ -2,6 +2,25 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, `CronV2` is `Cron` in 5.0
+
+**Done, not committed:** the maintainer decided that a 5.0 component drops the version SST 4 put in its name, where it can ([decision](plan.md#decisions)). With SST 4's first `Cron` left out of 5.0, `CronV2` is `sst.aws.v5.Cron`.
+
+- The file is `aws/v5/cron.ts`, with its map and tests renamed to match, and its args are `CronArgs`. Its type stays `sst:aws:CronV2`, which a deployed one has: `sst:aws:Cron` is the first `Cron`'s, and a 5.0 component of that type would be taken for it. "Switch from" says so.
+- The rule is written in `PORTING.md`: a component drops the version from its name and its file, and keeps its type. The naming test and the docs generator find the original from the version in the type, so there's no list of renamed components to keep. On a 5.0 page, an inherited example of `sst.aws.CronV2(` is shown as `sst.aws.v5.Cron(`, and one of the first `sst.aws.Cron(` is left alone.
+- The recorded lab program calls `CronV2` on SST 4's side and `Cron` on 5.0's.
+- The plan's open question of which `Cron` is `sst.aws.v5.Cron` is settled, and the breaking changes have a row for the rename. Cloudflare's `StaticSiteV2` becomes `StaticSite` when it's ported. `ApiGatewayV1` and `ApiGatewayV2` keep their names: they're AWS's names for its two APIs, and both stay.
+
+## 2026-11-03: step 4, SST 4's deprecated components left out of 5.0
+
+**Done, not committed:** the maintainer decided to leave SST 4's deprecated components out of 5.0, and to add one back if users ask for it ([decision](plan.md#decisions)): `Cron`, `Vector` and `OpenControl`, and Cloudflare's first `StaticSite`. SST 4 names what to use instead of each.
+
+- The 5.0 forms of `Cron`, `Vector` and `OpenControl` are removed, with their maps and their tests. Each was ported, reviewed and lab-checked first, as the entries below say, and comes back from the history as it was: `Cron` from `de729d193`, `Vector` from `e574fea61`, `OpenControl` from `9e35da796`.
+- Cloudflare's first `StaticSite` won't be ported, and its `sst.cloudflare.x.StaticSite` alias goes with it.
+- The plan's breaking changes say what an app does with SST 4 before it moves: a `Cron` becomes a `CronV2`, a Cloudflare `StaticSite` a `StaticSiteV2`, a `Vector`'s vectors move out before it's removed, and an `OpenControl` is removed. The rows for the `Cron`'s and the `Vector`'s 5.0 forms are gone.
+- The open question of which `Cron` is `sst.aws.v5.Cron` is now whether the 5.0 `CronV2` takes the name.
+- The sites' map still takes over SST 4's warmer, which SST 4 kept in a `Cron`: it names the type, not the 5.0 form.
+
 ## 2026-11-03: step 4, the `OpenControl` built the 5.0 way, the last of Community, and its lab check
 
 **Done, committed (not pushed):**

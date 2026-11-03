@@ -1139,8 +1139,8 @@ describe("Component parts", () => {
     });
 
     it("takes another component as a part", async () => {
-      const { CronV2 } = await import("../../src/components/aws/v5/cron-v2");
-      const parts = { table: aws.dynamodb.Table, cleanup: CronV2 };
+      const { Cron } = await import("../../src/components/aws/v5/cron");
+      const parts = { table: aws.dynamodb.Table, cleanup: Cron };
       class Sessions extends component("docs:index:Sessions", parts) {
         constructor(name: string, args: ComponentArgs<typeof parts> = {}) {
           super(name, args);
@@ -1156,7 +1156,7 @@ describe("Component parts", () => {
       });
       await pulumi.settle();
 
-      expect(sessions.nodes.cleanup).toBeInstanceOf(CronV2);
+      expect(sessions.nodes.cleanup).toBeInstanceOf(Cron);
       expect(resource("LoginsCleanup").type).toBe("sst:aws:CronV2");
       expect(resource("LoginsCleanupSchedule").inputs).toMatchObject({
         scheduleExpression: "rate(1 day)",

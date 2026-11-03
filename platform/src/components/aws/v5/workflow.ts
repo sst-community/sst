@@ -209,7 +209,7 @@ export interface WorkflowArgs
  *   handler: "src/workflow.handler",
  * });
  *
- * new sst.aws.v5.CronV2("MyCron", {
+ * new sst.aws.v5.Cron("MyCron", {
  *   schedule: "rate(1 minute)",
  *   function: workflow,
  * });
@@ -323,7 +323,7 @@ export interface WorkflowArgs
  * - `runtime` and `logging` have to be plain values, not outputs: the function is built
  *   with the runtime, and whether there are logs decides whether a log group is created.
  *   What's in `logging` can be an output.
- * - A workflow can be given to the V5 `CronV2`, `Bus` and the other V5 components that take
+ * - A workflow can be given to the V5 `Cron`, `Bus` and the other V5 components that take
  *   a function, as `sst.aws.Workflow` could be to theirs. SST 4's components don't take the
  *   V5 one: switch a component the workflow is given to with it.
  * - `role` isn't one of its args, as it isn't the V5 `Function`'s. To give the function a
