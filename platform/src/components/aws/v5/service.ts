@@ -18,7 +18,7 @@ import {
 } from "@pulumi/aws";
 import { Image } from "@pulumi/docker-build";
 import {
-  V5Args,
+  type ComponentArgs,
   component,
   deferred,
   many,
@@ -27,17 +27,20 @@ import {
 import { ifSet, notAnOption, plain, plainDeep, withDefault } from "../../args";
 import { type DurationMinutes, toSeconds } from "../../duration";
 import { VisibleError } from "../../error";
-import { DevCommand } from "../../experimental/dev-command";
+import { DevCommand } from "../../experimental/v5/dev-command";
 import type { Input } from "../../input";
 import { hashStringToPrettyString } from "../../naming";
 import { transformPart } from "../../transform";
-import { Alb as OriginalAlb } from "../alb";
+import { context } from "../../contract";
+import { type AnyAlb, isAlb } from "../helpers/alb";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import type { DomainArgs } from "../helpers/domain";
 import {
   type Container,
   type ContainerArgs,
-  type FargateArgs,
+  type FargateBaseArgs,
+  type ServiceDev,
+  type ServiceHealth,
   containerImage,
   containersOf,
   cpuOf,
@@ -58,8 +61,6 @@ import {
   securityGroupArgs,
 } from "../helpers/load-balancer-args";
 import { URL_UNAVAILABLE } from "../linkable";
-import type { ServiceArgs as OriginalServiceArgs } from "../service";
-import { Alb } from "./alb";
 
 const parts = () => ({
   /**
@@ -149,8 +150,8 @@ const parts = () => ({
    */
   autoScalingRequestCountPolicy: optional(appautoscaling.Policy),
   /**
-   * What `sst dev` runs in place of each container, by the container's name. It's
-   * added once the container's `dev` settings are known.
+   * What `sst dev` runs in place of each container that has a `dev.command`, by the
+   * container's name.
    */
   devCommand: many(DevCommand),
 });
@@ -163,7 +164,7 @@ export interface ServiceContainerArgs extends ContainerArgs {
    * Configure the health check for the container. Same as the top-level
    * [`health`](#health).
    */
-  health?: OriginalServiceArgs["health"];
+  health?: ServiceHealth;
   /**
    * Configure how this container works in `sst dev`. Same as the top-level
    * [`dev`](#dev).
@@ -780,7 +781,7 @@ export interface ServiceAlbArgs {
    * }
    * ```
    */
-  instance: OriginalAlb | Alb;
+  instance: AnyAlb;
   /**
    * The rules for routing traffic from the ALB to this service's containers.
    * Each rule must have explicit conditions and priority.
@@ -794,21 +795,8 @@ export interface ServiceAlbArgs {
 }
 
 export interface ServiceArgs
-  extends V5Args<
-      Omit<
-        OriginalServiceArgs,
-        | "cluster"
-        | "containers"
-        | "volumes"
-        | "taskRole"
-        | "executionRole"
-        | "public"
-        | "loadBalancer"
-        | "scaling"
-      >,
-      typeof parts
-    >,
-    FargateArgs {
+  extends ComponentArgs<typeof parts>,
+    FargateBaseArgs {
   /**
    * Configure a load balancer to route traffic to the containers.
    *
@@ -1026,15 +1014,242 @@ export interface ServiceArgs
    * container can be an output.
    */
   containers?: ServiceContainerArgs[];
+  /**
+   * Configure how this component works in `sst dev`.
+   *
+   * :::note
+   * In `sst dev` your service is not deployed.
+   * :::
+   *
+   * By default, your service in not deployed in `sst dev`. Instead, you can set the
+   * `dev.command` and it'll be started locally in a separate tab in the
+   * `sst dev` multiplexer. Read more about [`sst dev`](/docs/reference/cli/#dev).
+   *
+   * This makes it so that the container doesn't have to be redeployed on every change. To
+   * disable this and deploy your service in `sst dev`, pass in `false`.
+   */
+  dev?: ServiceDev;
+  /**
+   * Configure the CloudMap service registry for the service.
+   *
+   * This creates an `srv` record in the CloudMap service. This is needed if you want to connect
+   * an `ApiGatewayV2` VPC link to the service.
+   *
+   * API Gateway will forward requests to the given port on the service.
+   *
+   * @example
+   * ```js
+   * {
+   *   serviceRegistry: {
+   *     port: 80
+   *   }
+   * }
+   * ```
+   */
+  serviceRegistry?: Input<{
+    /**
+     * The port in the service to forward requests to.
+     */
+    port: number;
+  }>;
+  /**
+   * Configure the capacity provider; regular Fargate or Fargate Spot, for this service.
+   *
+   * :::tip
+   * Fargate Spot is a good option for dev or PR environments.
+   * :::
+   *
+   * Fargate Spot allows you to run containers on spare AWS capacity at around 50% discount
+   * compared to regular Fargate. [Learn more about Fargate
+   * pricing](https://aws.amazon.com/fargate/pricing/).
+   *
+   * :::note
+   * AWS might shut down Fargate Spot instances to reclaim capacity.
+   * :::
+   *
+   * There are a couple of caveats:
+   *
+   * 1. AWS may reclaim this capacity and **turn off your service** after a two-minute warning.
+   *    This is rare, but it can happen.
+   * 2. If there's no spare capacity, you'll **get an error**.
+   *
+   * This makes Fargate Spot a good option for dev or PR environments. You can set this using.
+   *
+   * ```js
+   * {
+   *   capacity: "spot"
+   * }
+   * ```
+   *
+   * You can also configure the % of regular vs spot capacity you want through the `weight` prop.
+   * And optionally set the `base` or first X number of tasks that'll be started using a given
+   * capacity.
+   *
+   * For example, the `base: 1` says that the first task uses regular Fargate, and from that
+   * point on there will be an even split between the capacity providers.
+   *
+   * ```js
+   * {
+   *   capacity: {
+   *     fargate: { weight: 1, base: 1 },
+   *     spot: { weight: 1 }
+   *   }
+   * }
+   * ```
+   *
+   * The `base` works in tandem with the `scaling` prop. So setting `base` to X doesn't mean
+   * it'll start those tasks right away. It means that as your service scales up, according to
+   * the `scaling` prop, it'll ensure that the first X tasks will be with the given capacity.
+   *
+   * :::caution
+   * Changing `capacity` requires taking down and recreating the ECS service.
+   * :::
+   *
+   * And this is why you can only set the `base` for only one capacity provider. So you
+   * are not allowed to do the following.
+   *
+   * ```js
+   * {
+   *   capacity: {
+   *     fargate: { weight: 1, base: 1 },
+   *     // This will give you an error
+   *     spot: { weight: 1, base: 1 }
+   *   }
+   * }
+   * ```
+   *
+   * When you change the `capacity`, the ECS service is terminated and recreated. This will
+   * cause some temporary downtime.
+   *
+   * @default Regular Fargate
+   *
+   * @example
+   *
+   * Here are some examples settings.
+   *
+   * - Use only Fargate Spot.
+   *
+   *   ```js
+   *   {
+   *     capacity: "spot"
+   *   }
+   *   ```
+   * - Use 50% regular Fargate and 50% Fargate Spot.
+   *
+   *   ```js
+   *   {
+   *     capacity: {
+   *       fargate: { weight: 1 },
+   *       spot: { weight: 1 }
+   *     }
+   *   }
+   *   ```
+   * - Use 50% regular Fargate and 50% Fargate Spot. And ensure that the first 2 tasks use
+   *   regular Fargate.
+   *
+   *   ```js
+   *   {
+   *     capacity: {
+   *       fargate: { weight: 1, base: 2 },
+   *       spot: { weight: 1 }
+   *     }
+   *   }
+   *   ```
+   */
+  capacity?: Input<
+    | "spot"
+    | {
+        /**
+         * Configure how the regular Fargate capacity is allocated.
+         */
+        fargate?: Input<{
+          /**
+           * Start the first `base` number of tasks with the given capacity.
+           *
+           * :::caution
+           * You can only specify `base` for one capacity provider.
+           * :::
+           */
+          base?: Input<number>;
+          /**
+           * Ensure the given ratio of tasks are started for this capacity.
+           */
+          weight: Input<number>;
+        }>;
+        /**
+         * Configure how the Fargate spot capacity is allocated.
+         */
+        spot?: Input<{
+          /**
+           * Start the first `base` number of tasks with the given capacity.
+           *
+           * :::caution
+           * You can only specify `base` for one capacity provider.
+           * :::
+           */
+          base?: Input<number>;
+          /**
+           * Ensure the given ratio of tasks are started for this capacity.
+           */
+          weight: Input<number>;
+        }>;
+      }
+  >;
+  /**
+   * Configure the health check that ECS runs on your containers.
+   *
+   * :::tip
+   * This health check is different from the [`loadBalancer.health`](#loadbalancer-health) check.
+   * :::
+   *
+   * This health check is run by ECS. While, `loadBalancer.health` is run by the load balancer,
+   * if you are using one. This is off by default. While the load balancer one
+   * cannot be disabled.
+   *
+   * This config maps to the `HEALTHCHECK` parameter of the `docker run` command. Learn
+   * more about [container health checks](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_HealthCheck.html).
+   *
+   * @default Health check is disabled
+   * @example
+   * ```js
+   * {
+   *   health: {
+   *     command: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"],
+   *     startPeriod: "60 seconds",
+   *     timeout: "5 seconds",
+   *     interval: "30 seconds",
+   *     retries: 3
+   *   }
+   * }
+   * ```
+   */
+  health?: ServiceHealth;
+  /**
+   * Configure if `sst deploy` should wait for the service to be stable.
+   *
+   * :::tip
+   * For non-prod environments it might make sense to pass in `false`.
+   * :::
+   *
+   * Waiting for this process to finish ensures that new content will be available after
+   * the deploy finishes. However, this process can sometimes take more than 5 mins.
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   wait: true
+   * }
+   * ```
+   */
+  wait?: Input<boolean>;
 }
 
 /**
  * The `Service` component lets you create containers that are always running, like web or
  * application servers. It uses [Amazon ECS](https://aws.amazon.com/ecs/) on [AWS Fargate](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html).
  *
- * It takes the same args as [`sst.aws.Service`](/docs/component/aws/service) and creates the
- * same resources. It's built from parts, so every resource it creates can be transformed,
- * is available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -1043,7 +1258,7 @@ export interface ServiceArgs
  * Services are run inside an ECS Cluster. If you haven't already, create one.
  *
  * ```ts title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  * const cluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
  * ```
  *
@@ -1216,7 +1431,7 @@ export interface ServiceArgs
  * const service = new sst.aws.v5.Service("MyService", { cluster });
  * ```
  *
- * A few things are written differently:
+ * A few things work differently:
  *
  * - `taskRole: "my-task-role"` becomes `existing: { taskRole: "my-task-role" }`, and the
  *   same for `executionRole`.
@@ -1241,12 +1456,15 @@ export interface ServiceArgs
  *   there are several of, it's also given which one.
  * - `transform.listenerRule` applies to the rules of the service's own load balancer too,
  *   not only to the rules on an `Alb`.
+ * - `loadBalancer.instance` takes either `Alb`, and refuses anything else.
  * - If you set part of the ECS service's `networkConfiguration` or
  *   `deploymentCircuitBreaker`, of a target group's `healthCheck`, or of the task
  *   definition's `runtimePlatform`, with an object in `transform`, the rest of it is kept.
  *
  * One thing changes on the first deploy, and nothing in AWS: what `sst dev` runs for each
  * container is kept inside the service now, so it's listed as removed and created again.
+ * It's created only for a container with a `dev.command`: `sst dev` ran nothing for one
+ * without.
  *
  * ---
  *
@@ -1346,7 +1564,8 @@ export class Service extends component("sst:aws:Service", parts) {
     // In `sst dev` the service isn't deployed. Each container's command runs
     // on the user's machine, as the task role.
     const dev =
-      plain(args.dev, `The "dev" of the "${name}" service`) !== false && $dev;
+      plain(args.dev, `The "dev" of the "${name}" service`) !== false &&
+      context().dev;
     const region = getRegionOutput({}, opts).region;
     const architecture = withDefault(args.architecture, "x86_64" as const);
     const cpu = cpuOf(args);
@@ -1359,25 +1578,34 @@ export class Service extends component("sst:aws:Service", parts) {
 
     const taskRole = this.part("taskRole", taskRoleArgs(args, opts, dev));
 
-    // What `sst dev` runs in place of each container, in a tab of its own.
-    // The settings are read first: `sst dev` is told them as they are.
-    for (const container of containers)
-      all([container.dev, container.image]).apply(([dev, image]) =>
-        this.part("devCommand", container.name, {
-          link: args.link,
-          dev: {
-            title: containers.length === 1 ? name : `${name}${container.name}`,
-            autostart: true,
-            directory: typeof image === "string" ? "" : image?.context ?? ".",
-            ...dev,
-          },
-          environment: output(container.environment).apply((environment) => ({
-            ...environment,
-            AWS_REGION: region,
-          })),
-          aws: { role: taskRole.arn },
-        }),
+    // What `sst dev` runs in place of each container with a dev command, in a
+    // pane of its own. `sst dev` runs nothing for one without.
+    for (const container of containers) {
+      const settings = plain(
+        container.dev,
+        `The "dev" of the "${container.name}" container of the "${name}" service`,
       );
+      // An empty command too, as `sst dev` skipped it
+      if (!settings || !settings.command) continue;
+      this.part("devCommand", container.name, {
+        link: args.link,
+        dev: {
+          command: settings.command,
+          title: containers.length === 1 ? name : `${name}${container.name}`,
+          autostart: settings.autostart,
+          directory:
+            settings.directory ??
+            output(container.image).apply((image) =>
+              typeof image === "string" ? "" : image?.context ?? ".",
+            ),
+        },
+        environment: output(container.environment).apply((environment) => ({
+          ...environment,
+          AWS_REGION: region,
+        })),
+        aws: { role: taskRole.arn },
+      });
+    }
 
     if (dev) {
       this.runsLocally();
@@ -1825,7 +2053,7 @@ export class Service extends component("sst:aws:Service", parts) {
           part.transform,
           part.name,
           {
-            name: `${name}.${$app.stage}.${$app.name}`,
+            name: `${name}.${context().app.stage}.${context().app.name}`,
             namespaceId,
             forceDestroy: true,
             dnsConfig: {
@@ -2106,7 +2334,7 @@ function sharedBalancer(
   args: ServiceAlbArgs,
   containers: Container[],
 ) {
-  if (!(args.instance instanceof OriginalAlb || args.instance instanceof Alb))
+  if (!isAlb(args.instance))
     throw new VisibleError(
       `The "loadBalancer.instance" of the "${name}" service has to be an "Alb".`,
     );

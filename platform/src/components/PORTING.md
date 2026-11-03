@@ -83,7 +83,14 @@ has no 4.x components.
   `DevCommand` for it. So is the `Dsql`, whose parts in the peer region are created
   with a provider for that region (`useProvider()`). So is the `ApiGatewayV2`, whose
   domain is made with `domainOf()` (`helpers/domain.ts`), the 5.0 certificate and the
-  adapters, as the `Cdn`'s is.
+  adapters, as the `Cdn`'s is, and so are the `AppSync` and the `CognitoUserPool`. So is
+  the `Email`, whose DKIM records, named in DNS after tokens SES gives once the identity
+  is created, are created directly with a `key` and given their old names by a
+  `delegated` map, as the certificate's validation records are. So are the `Alb` and the
+  `Service`, whose load balancers' domains go through `loadBalancerDomain()`
+  (`helpers/load-balancer-args.ts`); a service reaches a 4.x `Alb` through `AnyAlb`
+  (`helpers/alb.ts`), and its panes in `sst dev` are SST 5's `DevCommand`, one for each
+  container with a command, created directly.
   The ports before them reuse the original's, as below, until each is rebuilt and
   added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
@@ -135,6 +142,7 @@ has no 4.x components.
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
+| A shared load balancer: either kind of `Alb` | `AnyAlb`, `isAlb(value)` in `helpers/alb.ts` |
 | A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)`, `subnetsOf(vpc, kind)`, `hasNat(vpc)`, `assertVpcIds(vpc, what)`, `subnetsAndSecurityGroupsOf(vpc, what)` in `helpers/vpc.ts` |
 | A resource for each private subnet of a VPC, kept by its AZ | `privateSubnetsOf(vpc, parent, what)` in `helpers/vpc.ts`: by the AZ's number for a `Vpc` the app creates, by its name for one from `get`; and `subnetsByAz(subnets, parent, what)` for subnet ids. Where it's a promise, of what a preview knows, create them with `after()` |
 | Deciding from an output a preview knows, like a lookup's | `knownValue(output)` in `args.ts`, for `after()` |

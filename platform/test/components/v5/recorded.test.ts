@@ -590,7 +590,8 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
     expect(result.unclaimed).toEqual([
       // What `sst dev` runs for a service was kept at the top of the app,
       // with nothing in AWS behind it. The V5 one keeps it inside the
-      // service.
+      // service, for a container with a command: these have none, and `sst
+      // dev` ran nothing for them.
       "sst:sst:DevCommand::OnSharedDev",
       "sst:sst:DevCommand::WebDev",
       // 4.x's version markers, with nothing in AWS behind them
@@ -599,10 +600,7 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
       "sst:sst:Version::PostgresVersion",
       "sst:sst:Version::RedisVersion",
     ]);
-    expect(result.created).toEqual([
-      "sst:sst:DevCommand::OnSharedDevCommandOnShared",
-      "sst:sst:DevCommand::WebDevCommandWeb",
-    ]);
+    expect(result.created).toEqual([]);
     // The file system's mount targets, one in each AZ, are now removed
     // before they're made again, since EFS allows one in each. Nothing in
     // AWS changes.

@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Service` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/service.ts`): what it took from 4.x's (`dev`, `serviceRegistry`, `capacity`, `health`, `wait`) is its own now, on the `FargateBaseArgs` it shares with the `Task`, and it's on the clean break's list. The 4.x `Alb` it can share is reached through `helpers/alb.ts`, which takes either kind; any other `loadBalancer.instance` is refused, where 4.x ignored it.
+- **Its panes in `sst dev` are SST 5's `DevCommand`**, one for each container with a `dev.command`, created directly where they were created inside an `apply`. `sst dev` ran nothing for a container without a command, so none is created for it. SST 5's `DevCommand` takes the role the command runs as (`aws.role`, internal, as SST 4's had) and reads `context()`.
+- **It reads `context()`** for `sst dev`, the app and the stage, not `$dev` and `$app`.
+
+**Checked:** `tsc`, the docs page, and all platform tests. The tests that compare what `sst dev` runs read SST 4's `_dev` and SST 5's report alike, and compare only in `sst dev`, where SST 5's `DevCommand` reports.
+
+**Reviewed:** nothing in AWS changes on switch, each pane has the same command, directory, autostart, title, links, environment and role, and the args are read as 4.x read them. Fixed from it: a container whose `dev.command` is empty has no pane, as one without, where SST 5's `DevCommand` would have refused it.
+
 ## 2026-11-02: step 4, the `Alb` built the 5.0 way, and the load balancers' domains
 
 **Done, committed (not pushed):**

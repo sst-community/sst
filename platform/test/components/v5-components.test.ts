@@ -43,6 +43,7 @@ const rebuilt = [
   "cognito-user-pool-client.ts",
   "email.ts",
   "alb.ts",
+  "service.ts",
 ];
 
 describe("V5 components", () => {
@@ -147,6 +148,8 @@ const eitherKind: Record<string, string[]> = {
   "aws/helpers/sns-topic.ts": ["aws/sns-topic.ts"],
   "aws/helpers/task.ts": ["aws/task.ts"],
   "aws/helpers/router.ts": ["aws/router.ts"],
+  // A load balancer a service shares
+  "aws/helpers/alb.ts": ["aws/alb.ts"],
   // A task's or a service's cluster, and a file system it mounts
   "aws/helpers/fargate.ts": ["aws/cluster.ts", "aws/efs.ts"],
   // A function given as either \`Function\`, or a \`Workflow\`, which has no

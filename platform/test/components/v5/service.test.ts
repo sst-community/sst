@@ -138,12 +138,18 @@ describe("Service", () => {
     const json = resource(name).inputs.containerDefinitions;
     return JSON.parse(typeof json === "string" ? json : json.value);
   };
-  // What `sst dev` is told to run, by the title of its tab
+  // What `sst dev` runs, by the title of its pane: what SST 4's DevCommand
+  // registered as `_dev`, or what SST 5's reports. `sst dev` runs nothing for
+  // one without a command.
   const devCommands = () =>
     Object.fromEntries(
       pulumi.resources
         .filter((r) => r.type === DEV_COMMAND)
-        .map((r) => pulumi.outputsOf(r.name)!._dev)
+        .map((r) => {
+          const outputs = pulumi.outputsOf(r.name)!;
+          return outputs._dev ?? outputs._sst?.dev;
+        })
+        .filter((dev) => dev?.command)
         .map((dev) => [dev.title, dev]),
     );
 
@@ -1066,17 +1072,23 @@ describe("Service", () => {
     // wherever the service is and however it's reached
     const placements: Record<string, (Service: ServiceClass) => any> = {
       "in an SST VPC": (Service) =>
-        new Service("MyService", { cluster: cluster(), image: "nginx:latest" }),
+        new Service("MyService", {
+          cluster: cluster(),
+          image: "nginx:latest",
+          dev: { command: "npm start" },
+        }),
       "behind a load balancer": (Service) =>
         new Service("MyService", {
           cluster: cluster(),
           image: "nginx:latest",
+          dev: { command: "npm start" },
           loadBalancer: { rules: [{ listen: "80/http" }] },
         }),
       "behind a load balancer with a domain": (Service) =>
         new Service("MyService", {
           cluster: cluster(),
           image: "nginx:latest",
+          dev: { command: "npm start" },
           loadBalancer: {
             domain: { name: "example.com", dns: false, cert: CERT_ARN },
             rules: [{ listen: "443/https", forward: "80/http" }],
@@ -1089,6 +1101,7 @@ describe("Service", () => {
             cloudmapNamespaceName: "internal",
           }),
           image: "nginx:latest",
+          dev: { command: "npm start" },
           loadBalancer: {
             instance: alb(),
             rules: [
@@ -1108,6 +1121,7 @@ describe("Service", () => {
             cloudmapNamespaceName: "internal",
           }),
           image: "nginx:latest",
+          dev: { command: "npm start" },
         }),
     };
 
@@ -1135,14 +1149,15 @@ describe("Service", () => {
               service: service.service,
               link: service.getSSTLink().properties,
               role: service.nodes.taskRole.arn,
-              dev: devCommands(),
+              // What `sst dev` runs, which matters to it alone
+              dev: dev ? devCommands() : {},
             });
           };
 
           const original = await read(OriginalService);
           expect(await read(Service)).toEqual(original);
           expect(original.service).toMatch(dev ? /^dev\./ : /^MyService\./);
-          expect(original.dev.MyService.aws.role).toBe(original.role);
+          if (dev) expect(original.dev.MyService.aws.role).toBe(original.role);
         });
       }
 
@@ -1166,7 +1181,6 @@ describe("Service", () => {
           context: { location: app },
           dockerfile: { location: path.join(app, "Dockerfile") },
         });
-        expect(devCommands().MyService.directory).toBe(".");
       } finally {
         paths.root = root;
       }
@@ -1307,6 +1321,29 @@ describe("Service", () => {
           check: () => expect(resource("MyServiceService").type).toBe(SERVICE),
         },
       },
+    });
+
+    it("gives a container with no command, or an empty one, no pane", async () => {
+      new Service("MyService", {
+        cluster: cluster(),
+        containers: [
+          { name: "none", image: "nginx:latest" },
+          { name: "empty", image: "nginx:latest", dev: { command: "" } },
+          {
+            name: "app",
+            image: "nginx:latest",
+            dev: { command: "node app.js" },
+          },
+        ],
+      });
+      await pulumi.settle();
+
+      expect(Object.keys(devCommands())).toEqual(["MyServiceapp"]);
+      expect(
+        pulumi.resources
+          .filter((r) => r.type === DEV_COMMAND)
+          .map((r) => r.name),
+      ).toEqual(["MyServiceDevCommandApp"]);
     });
 
     it("runs each container's command in place of the service", async () => {
@@ -1451,7 +1488,6 @@ describe("Service", () => {
       "MyServiceAutoScalingMemoryPolicy",
       "MyServiceAutoScalingTarget",
       "MyServiceCloudmapService",
-      "MyServiceDevCommandMyService",
       "MyServiceExecutionRole",
       "MyServiceLogGroupMyService",
       "MyServiceService",

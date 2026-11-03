@@ -2,6 +2,7 @@ import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { component } from "../../parts-component";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
+import { context } from "../../contract";
 
 // It creates nothing: it tells `sst dev` what to run
 const parts = {};
@@ -71,6 +72,13 @@ export interface DevCommandArgs {
    * ```
    */
   environment?: Input<Record<string, Input<string>>>;
+  /**
+   * The AWS role the command runs as, like a service's task role.
+   * @internal
+   */
+  aws?: {
+    role: Input<string>;
+  };
 }
 
 /**
@@ -140,7 +148,7 @@ export class DevCommand extends component("sst:sst:DevCommand", parts) {
       );
 
     // What it runs matters to `sst dev` alone
-    if (!$dev) return;
+    if (!context().dev) return;
     this.report({
       dev: {
         command: args.dev.command,
@@ -149,6 +157,7 @@ export class DevCommand extends component("sst:sst:DevCommand", parts) {
         title: args.dev.title,
         link: args.link,
         environment: args.environment,
+        aws: args.aws,
       },
     });
   }
