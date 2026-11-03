@@ -2,7 +2,7 @@ import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import type { ec2, lb } from "@pulumi/aws";
 import { plainDeep } from "../../args";
 import type { Input } from "../../input";
-import { type CustomDomainArgs, customDomain } from "./custom-domain";
+import { type DomainArgs, domainOf } from "./domain";
 
 /**
  * The args of a load balancer's security group. It lets everything in and
@@ -40,25 +40,23 @@ export function forbidden() {
 }
 
 /**
- * How a load balancer's custom domain is set up, with the other names it
- * answers to. The aliases are plain: a DNS record is named after each.
+ * A load balancer's custom domain, checked as `domainOf()` checks one, with
+ * the other names it answers to. The aliases are plain: a DNS record is named
+ * after each.
  *
  * @param owner What the domain belongs to, for error messages.
  */
-export function domainOf(
-  domain:
-    | string
-    | (Partial<CustomDomainArgs> & { aliases?: string[] })
-    | undefined,
+export function loadBalancerDomain(
+  domain: string | (Partial<DomainArgs> & { aliases?: string[] }) | undefined,
   owner: string,
 ) {
   if (!domain) return undefined;
-  const custom = customDomain(domain, owner);
-  const names =
+  const checked = domainOf(domain, owner);
+  const aliases =
     (typeof domain === "object"
       ? plainDeep(domain.aliases, `The domain's "aliases" in ${owner}`)
       : undefined) ?? [];
-  return { ...custom, aliases: names };
+  return { ...checked, aliases };
 }
 
 /**
@@ -69,12 +67,12 @@ export function domainOf(
  */
 export function pointDomainAt(
   name: string,
-  domain: NonNullable<ReturnType<typeof domainOf>>,
+  domain: NonNullable<ReturnType<typeof loadBalancerDomain>>,
   loadBalancer: lb.LoadBalancer,
   opts: ComponentResourceOptions,
 ) {
-  const pointAt = (prefix: string, record: Input<string>) =>
-    domain.dns?.createAlias(
+  const pointAt = (prefix: string, record: string) =>
+    domain.dns?.alias(
       prefix,
       {
         name: record,

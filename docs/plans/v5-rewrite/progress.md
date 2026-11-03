@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Alb` built the 5.0 way, and the load balancers' domains
+
+**Done, committed (not pushed):**
+
+- **The `Alb`'s own args and docs** (`aws/v5/alb.ts`), with no 4.x component file reached, and on the clean break's list. Its `vpc` is either kind of `Vpc` or the ids; any other resource is refused, where it was read as the ids.
+- **A load balancer's domain on the 5.0 certificate and adapters.** `helpers/load-balancer-args.ts` builds `loadBalancerDomain()` (renamed from `domainOf()`, which is `helpers/domain.ts`'s) on `domainOf()`, and points the domain and its aliases with the adapters' `alias()`. The `Service`, which shares it, has its domain on them too, ahead of its rebuild, with its docs saying so.
+- **`helpers/custom-domain.ts` is gone**: nothing uses SST 4's adapters through it now.
+
+**Checked:** `tsc`, the docs pages, and all platform tests, with the `Alb` switched with its `Vpc`, the `Alb`'s and the `Service`'s domains on Route 53, with aliases, taking over 4.x's, a resource refused as the `vpc`, and a domain's name refused as an output. The tests' own certificate mocks gave ACM one validation record for any domain; they use the shared mock now, which gives one for each, so a domain with an alias and a wildcard has the two records 4.x made for it.
+
+**Reviewed:** the certificate, its records, the alias records on each adapter, the load balancer, its listeners and its security group keep their 4.x names and inputs, for the `Alb` and the `Service`, and the new record count is 4.x's. Fixed from it: an `Alb` with an https listener and no domain is refused as the config is read, as a `Service` is, where AWS refused it on deploy.
+
 ## 2026-11-02: step 4, the `Email` built the 5.0 way
 
 **Done, committed (not pushed):**

@@ -5,20 +5,26 @@ import {
   output,
 } from "@pulumi/pulumi";
 import { ec2, lb } from "@pulumi/aws";
-import { V5Args, component, many, optional } from "../../parts-component";
+import {
+  type ComponentArgs,
+  component,
+  many,
+  optional,
+} from "../../parts-component";
+import type { Prettify } from "../../component";
 import { plainDeep, withDefault } from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
-import { DnsValidatedCertificate } from "../dns-validated-certificate";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { listenerKey } from "../helpers/load-balancer";
 import {
-  domainOf,
   forbidden,
+  loadBalancerDomain,
   pointDomainAt,
   securityGroupArgs,
 } from "../helpers/load-balancer-args";
-import { type TakesVpc, isVpc, subnetsOf } from "../helpers/vpc";
-import type { AlbArgs as OriginalAlbArgs } from "../alb";
+import { type DomainArgs } from "../helpers/domain";
+import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
 
 const parts = () => ({
   /**
@@ -41,23 +47,159 @@ const parts = () => ({
   listener: many(lb.Listener),
 });
 
-export interface AlbArgs
-  extends V5Args<TakesVpc<OriginalAlbArgs>, typeof parts> {}
+export interface AlbListenerArgs {
+  /**
+   * The port to listen on.
+   *
+   * @example
+   * ```js
+   * {
+   *   port: 443
+   * }
+   * ```
+   */
+  port: number;
+  /**
+   * The protocol to listen on. Only `http` and `https` are supported (ALB-only).
+   *
+   * @example
+   * ```js
+   * {
+   *   protocol: "https"
+   * }
+   * ```
+   */
+  protocol: "http" | "https";
+}
+
+export interface AlbDomainArgs extends DomainArgs {
+  /**
+   * Alias domains that should also point to this load balancer. A plain list: each alias
+   * gets DNS records of its own, and is on the certificate.
+   *
+   * @example
+   * ```js
+   * {
+   *   domain: {
+   *     name: "app1.example.com",
+   *     aliases: ["app2.example.com"]
+   *   }
+   * }
+   * ```
+   */
+  aliases?: string[];
+}
+
+export interface AlbArgs extends ComponentArgs<typeof parts> {
+  /**
+   * The VPC to deploy the ALB in: a `Vpc` component, or the ids of a VPC.
+   *
+   * @example
+   *
+   * Using a `Vpc` component:
+   * ```js
+   * {
+   *   vpc: myVpc
+   * }
+   * ```
+   *
+   * Using the ids of a VPC:
+   * ```js
+   * {
+   *   vpc: {
+   *     id: "vpc-0123456789abcdef0",
+   *     publicSubnets: ["subnet-abc", "subnet-def"],
+   *     privateSubnets: ["subnet-ghi", "subnet-jkl"]
+   *   }
+   * }
+   * ```
+   */
+  vpc:
+    | AnyVpc
+    | Input<{
+        /**
+         * The VPC ID.
+         */
+        id: Input<string>;
+        /**
+         * The public subnet IDs.
+         */
+        publicSubnets: Input<Input<string>[]>;
+        /**
+         * The private subnet IDs.
+         */
+        privateSubnets: Input<Input<string>[]>;
+      }>;
+  /**
+   * Configure if the load balancer should be public (internet-facing) or private (internal).
+   *
+   * When set to `false`, the load balancer endpoint will only be accessible within the VPC.
+   *
+   * @default `true`
+   */
+  public?: Input<boolean>;
+  /**
+   * Set a custom domain for the load balancer.
+   *
+   * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
+   * providers, you'll need to pass in a `cert` that validates domain ownership and add the
+   * DNS records.
+   *
+   * The domain has to be a plain value, and so do its `name`, `aliases` and `dns`: they
+   * decide the certificate and the DNS records.
+   *
+   * When SST creates the certificate, the load balancer is created after the certificate
+   * is validated, and removed before the certificate.
+   *
+   * @example
+   *
+   * ```js
+   * {
+   *   domain: "example.com"
+   * }
+   * ```
+   *
+   * For domains on Cloudflare:
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com",
+   *     dns: sst.cloudflare.dns()
+   *   }
+   * }
+   * ```
+   */
+  domain?: string | Prettify<AlbDomainArgs>;
+  /**
+   * The listeners for the load balancer. Each entry creates a listener on the specified
+   * port and protocol. A plain list: each listener is named after its protocol and port.
+   *
+   * @example
+   * ```js
+   * {
+   *   listeners: [
+   *     { port: 80, protocol: "http" },
+   *     { port: 443, protocol: "https" }
+   *   ]
+   * }
+   * ```
+   */
+  listeners: AlbListenerArgs[];
+}
 
 /**
  * The `Alb` component lets you create a standalone Application Load Balancer that can be
  * shared across multiple services.
  *
- * It takes the same args as [`sst.aws.Alb`](/docs/component/aws/alb) and creates the same
- * resources. It's built from parts, so every resource it creates can be transformed, is
- * available in `nodes`, and can be swapped for one you already have.
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
  * #### Create a shared ALB
  *
  * ```ts title="sst.config.ts"
- * const vpc = new sst.aws.Vpc("MyVpc");
+ * const vpc = new sst.aws.v5.Vpc("MyVpc");
  *
  * const alb = new sst.aws.v5.Alb("SharedAlb", {
  *   vpc,
@@ -111,6 +253,16 @@ export interface AlbArgs
  *   `HTTPS443`.
  * - A `domain` with `dns: false` and no `cert` is refused. There's nothing to validate
  *   a certificate with.
+ * - `domain`, with its `name`, `aliases` and `dns`, has to be a plain value, not an
+ *   output. `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domains they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - A `vpc` that's another resource, not a `Vpc` or the ids of a VPC, is refused.
+ * - An https listener without a `domain` is refused as the config is read, where AWS
+ *   refused it on deploy.
  */
 export class Alb extends component("sst:aws:Alb", parts) {
   // What the services on the load balancer and what links to it read
@@ -143,7 +295,12 @@ export class Alb extends component("sst:aws:Alb", parts) {
 
     const of = `the "${name}" load balancer`;
     const listeners = plainDeep(args.listeners, `The "listeners" of ${of}`);
-    const domain = domainOf(args.domain, of);
+    const domain = loadBalancerDomain(args.domain, of);
+    // An https listener needs the domain's certificate
+    if (!domain && listeners.some((l) => l.protocol === "https"))
+      throw new VisibleError(
+        `An https listener of ${of} needs a certificate. Set the "domain" of the load balancer.`,
+      );
 
     // In the public subnets, or in the private ones when it's internal
     const isPublic = withDefault(args.public, true);
@@ -153,7 +310,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
           publicSubnets: subnetsOf(args.vpc, "public"),
           privateSubnets: subnetsOf(args.vpc, "private"),
         }
-      : output(args.vpc);
+      : (assertVpcIds(args.vpc, of), output(args.vpc));
     const vpcId = output(vpc.id);
     const subnets = isPublic.apply((isPublic) =>
       isPublic ? vpc.publicSubnets : vpc.privateSubnets,

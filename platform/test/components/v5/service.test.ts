@@ -39,16 +39,6 @@ const pulumi = mockPulumi({
       return {
         arn: `arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/${args.name}/73e2d6bc24d8a067`,
       };
-    if (args.type === "aws:acm/certificate:Certificate")
-      return {
-        domainValidationOptions: [
-          {
-            resourceRecordType: "CNAME",
-            resourceRecordName: "_abc.example.com.",
-            resourceRecordValue: "_def.acm-validations.aws.",
-          },
-        ],
-      };
     return {};
   },
   call: (args) => {
@@ -94,6 +84,10 @@ describe("Service", () => {
     Efs = (await import("../../../src/components/aws/efs")).Efs;
     Bucket = (await import("../../../src/components/aws/v5/bucket")).Bucket;
     await import("../../../src/components/aws/takeover/service");
+    // What the V5 one creates for a domain takes over 4.x's by this
+    await import(
+      "../../../src/components/aws/takeover/dns-validated-certificate"
+    );
     await import("../../../src/components/aws/takeover/bucket");
 
     app = fs.mkdtempSync(path.join(os.tmpdir(), "sst-service-"));
@@ -529,12 +523,14 @@ describe("Service", () => {
               opts,
             );
           },
+          // Two validation records, one for the domain and its wildcard and
+          // one for "www.", and an A and an AAAA record for each of the three
           check: () =>
             expect(
               pulumi.resources.filter(
                 (r) => r.type === "aws:route53/record:Record",
               ).length,
-            ).toBe(7),
+            ).toBe(8),
         },
         "a domain with a certificate of its own": {
           create: (Service, opts) => {
@@ -1012,8 +1008,9 @@ describe("Service", () => {
                 cluster: cluster(),
                 image: "nginx:latest",
                 loadBalancer: {
+                  // A plain value: the DNS records are named after it
                   domain: {
-                    name: output("example.com"),
+                    name: "example.com",
                     aliases: ["www.example.com"],
                   },
                   public: output(false),

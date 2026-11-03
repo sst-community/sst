@@ -26,16 +26,6 @@ const pulumi = mockPulumi({
         dnsName: `${args.name}.us-east-1.elb.amazonaws.com`,
         zoneId: "Z35SXDOTRQ7X7K",
       };
-    if (args.type === "aws:acm/certificate:Certificate")
-      return {
-        domainValidationOptions: [
-          {
-            resourceRecordType: "CNAME",
-            resourceRecordName: "_abc.example.com.",
-            resourceRecordValue: "_def.acm-validations.aws.",
-          },
-        ],
-      };
     return {};
   },
   call: (args) => {
@@ -53,6 +43,7 @@ describe("Alb", () => {
   let OriginalAlb: typeof import("../../../src/components/aws/alb").Alb;
   let Alb: typeof import("../../../src/components/aws/v5/alb").Alb;
   let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let VpcV5: typeof import("../../../src/components/aws/v5/vpc").Vpc;
   let Cluster: typeof import("../../../src/components/aws/v5/cluster").Cluster;
   let Service: typeof import("../../../src/components/aws/v5/service").Service;
   let aws: typeof import("@pulumi/aws");
@@ -61,10 +52,16 @@ describe("Alb", () => {
     OriginalAlb = (await import("../../../src/components/aws/alb")).Alb;
     Alb = (await import("../../../src/components/aws/v5/alb")).Alb;
     Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    VpcV5 = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    await import("../../../src/components/aws/takeover/vpc");
     Cluster = (await import("../../../src/components/aws/v5/cluster")).Cluster;
     Service = (await import("../../../src/components/aws/v5/service")).Service;
     aws = await import("@pulumi/aws");
     await import("../../../src/components/aws/takeover/alb");
+    // What the V5 one creates for a domain takes over 4.x's by this
+    await import(
+      "../../../src/components/aws/takeover/dns-validated-certificate"
+    );
     await import("../../../src/components/aws/takeover/service");
   });
 
@@ -119,6 +116,23 @@ describe("Alb", () => {
             expect(pulumi.reportOf("MyAlb")?.hint).toBe(
               "http://MyAlbLoadBalancer.us-east-1.elb.amazonaws.com",
             ),
+        },
+        // How an app moves: the VPC goes to its 5.0 form along with it
+        "http listeners, in a Vpc switched with it": {
+          original: (opts) =>
+            new OriginalAlb(
+              "MyAlb",
+              { vpc: new Vpc("MyVpc"), listeners: http },
+              opts,
+            ),
+          v5: (opts) =>
+            new Alb(
+              "MyAlb",
+              { vpc: new VpcV5("MyVpc"), listeners: http },
+              opts,
+            ),
+          // The 4.x Vpc's version marker, with nothing in AWS behind it
+          unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
         "internal, in a VPC given by its ids": (Alb, opts) => {
           new Alb(
@@ -542,6 +556,40 @@ describe("Alb", () => {
             },
           }),
       ).toThrow(/The domain's "aliases" in the "MyAlb" load balancer/);
+      expect(
+        () =>
+          new Alb("MyAlb", {
+            vpc: customVpc,
+            listeners: http,
+            domain: { name: output("example.com") as any },
+          }),
+      ).toThrow(
+        /The domain "name" of the "MyAlb" load balancer has to be a plain value/,
+      );
+    });
+
+    it("refuses an https listener without a domain", () => {
+      expect(
+        () =>
+          new Alb("MyAlb", {
+            vpc: customVpc,
+            listeners: [{ port: 443, protocol: "https" }],
+          }),
+      ).toThrow(
+        `An https listener of the "MyAlb" load balancer needs a certificate. Set the "domain" of the load balancer.`,
+      );
+    });
+
+    it("refuses a vpc that isn't a Vpc or its ids", () => {
+      expect(
+        () =>
+          new Alb("MyAlb", {
+            vpc: new aws.ec2.Vpc("Other", { cidrBlock: "10.0.0.0/16" }) as any,
+            listeners: http,
+          }),
+      ).toThrow(
+        /The "vpc" of the "MyAlb" load balancer isn't a "Vpc" component/,
+      );
     });
 
     it("refuses a domain with nothing to validate a certificate with", () => {

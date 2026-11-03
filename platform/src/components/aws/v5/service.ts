@@ -32,8 +32,8 @@ import type { Input } from "../../input";
 import { hashStringToPrettyString } from "../../naming";
 import { transformPart } from "../../transform";
 import { Alb as OriginalAlb } from "../alb";
-import { DnsValidatedCertificate } from "../dns-validated-certificate";
-import type { CustomDomainArgs } from "../helpers/custom-domain";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import type { DomainArgs } from "../helpers/domain";
 import {
   type Container,
   type ContainerArgs,
@@ -52,7 +52,7 @@ import {
 } from "../helpers/fargate";
 import { listenerKey, targetKey } from "../helpers/load-balancer";
 import {
-  domainOf,
+  loadBalancerDomain,
   forbidden,
   pointDomainAt,
   securityGroupArgs,
@@ -187,7 +187,7 @@ export interface ServiceContainerArgs extends ContainerArgs {
   };
 }
 
-export interface ServiceDomainArgs extends CustomDomainArgs {
+export interface ServiceDomainArgs extends DomainArgs {
   /**
    * The custom domain you want to use.
    *
@@ -219,8 +219,10 @@ export interface ServiceDomainArgs extends CustomDomainArgs {
    *   }
    * }
    * ```
+   *
+   * A plain value: the DNS records are named after it.
    */
-  name: Input<string>;
+  name: string;
   /**
    * Alias domains that should be used. A plain list: each alias gets DNS records of
    * its own.
@@ -1224,6 +1226,11 @@ export interface ServiceArgs
  *   So are `scaling` and its `cpuUtilization`, `memoryUtilization` and `requestCount`, and
  *   the list of `containers`, each container and its `name`. They decide which resources
  *   are created.
+ * - A domain's `dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work. The DNS records that validate its certificate are named after the
+ *   domains they validate, and a domain's hosted zone is found without a resource: SST
+ *   4's `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
  * - `nodes.service` and `nodes.taskDefinition` are the resources, not outputs of them.
  *   `nodes` also has the log groups, images, listeners, target groups and scaling
  *   policies.
@@ -1971,7 +1978,7 @@ function ownBalancer(
         `You must provide a custom domain for ${rule.listenProtocol.toUpperCase()} protocol.`,
       );
 
-  const domain = domainOf(args.domain, of);
+  const domain = loadBalancerDomain(args.domain, of);
 
   const health = Object.fromEntries(
     Object.entries(plain(args.health, `The "health" of ${of}`) ?? {}).map(
