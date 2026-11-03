@@ -84,6 +84,7 @@ Change one only on purpose, and record it here with its date.
 | 2026-11-02 | **An architecture review before the rest of the components** found the design right and these to fix, in this order ([progress](progress.md)): component versions; one base for what the database components share, with one set of tests; the clean-break test following imports through helpers; the rebuilt components reading `context()`, not the globals; the README split into an author's guide and a porting appendix that goes at 5.0; the template package merged in from `v5-community-packages`; the public API trimmed before it's held still; and the swap from `aws/v5/` to `aws/`, with where 4.x's code goes for the tests that need it, made a step. A shared base for the sites comes out of `Nextjs` before `Astro`, `SvelteKit` and `StaticSite` are built. What happens to each Kept, Community and Cloudflare component is the maintainer's to decide. |
 | 2026-10-31 | **Releasing 5.0 next to 4.x** (npm's tags, the docs site) is worked out near the release. |
 | 2026-10-31 | **No timeline.** Getting it right matters more than when. |
+| 2026-11-02 | **Every component gets a 5.0 form: none is dropped or left to a package.** The maintainer's decision: "we will need to port them all." A stage can't move to 5.0 while it has a component with no 5.0 form, so one that's dropped or left to a package strands the apps that use it on 4.x. That's the 15 Kept, the 4 Community and the 17 Cloudflare components of [v5-core-set.md](../v5-core-set.md), whose tiers no longer decide what's ported. A deprecated one, the AWS `Cron` and Cloudflare's first `StaticSite`, may instead be taken over by what replaces it (`CronV2`, `StaticSiteV2`), through a map that takes over from another type, if that works for it. Order: the six framework sites on the sites' base (`TanStackStart`, `Remix`, `React`, `Nuxt`, `SolidStart`, `Analog`), the rest of Kept, Community, then Cloudflare, which needs a Cloudflare account for its lab checks and a recorded Cloudflare app. Each the way the AWS ones were: a takeover map, tests, a review, and a lab check. |
 
 ## The design
 
@@ -543,7 +544,7 @@ Each comes when it's needed, with its own exit test.
 ## Open questions
 
 1. **How long does `main` get fixes after 5.0.0?** Users stay on 4.x until their components have a 5.0 form, so they need to know. Proposed: a date set when 5.0.0 is released, at least six months out, in its release notes.
-2. **What happens to each Kept and Community component?** Ported, left to a package, or dropped with what to use instead. Settled in [v5-core-set.md](../v5-core-set.md) before step 5.
+2. ~~**What happens to each Kept and Community component?**~~ Settled 2026-11-02: every one is ported ([decision](#decisions)).
 
 ## Status
 

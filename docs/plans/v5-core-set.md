@@ -117,6 +117,8 @@ Cloudflare's components are used a lot: `Worker`, `Bucket`, `Astro` and `Kv` eac
 
 ## Open questions
 
+Settled 2026-11-02 for the 5.0 rewrite: every component, in every tier and Cloudflare's, gets a 5.0 form ([decision](v5-rewrite/plan.md#decisions)). The tiers below no longer decide what's ported, only the order.
+
 1. **The borderline ones.** `StepFunctions` (186 public files, and two requests here this week) could be Core. `CognitoIdentityPool` and `Auth` could be Core. `AppSync`, `Mysql` and `Dsql` are in Core only because they're ported.
 2. **Cloudflare**, as above.
 3. **The new sites.** `TanStackStart` and the other frameworks share `ssr-site.ts` with the Core sites, so a port of one is cheap once it's done. Kept, or Core once `ssr-site.ts` is ported?
