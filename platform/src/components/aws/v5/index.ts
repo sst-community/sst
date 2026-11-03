@@ -35,6 +35,8 @@ export * from "./microvm";
 export * from "./mysql";
 export * from "./nextjs";
 export * from "./nuxt";
+export * from "./open-search";
+export * from "./opencontrol";
 export * from "./postgres";
 export * from "./queue";
 export * from "./react";

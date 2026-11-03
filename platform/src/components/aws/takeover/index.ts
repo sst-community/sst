@@ -36,6 +36,8 @@ import "./microvm";
 import "./mysql";
 import "./nextjs";
 import "./nuxt";
+import "./open-search";
+import "./opencontrol";
 import "./postgres";
 import "./queue";
 import "./react";

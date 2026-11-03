@@ -66,6 +66,8 @@ const rebuilt = [
   "microvm.ts",
   "vector.ts",
   "kinesis-stream.ts",
+  "open-search.ts",
+  "opencontrol.ts",
 ];
 
 describe("V5 components", () => {

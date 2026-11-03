@@ -2,6 +2,55 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, the `OpenControl` built the 5.0 way, the last of Community, and its lab check
+
+**Done, committed (not pushed):**
+
+- **`OpenControl`** (`aws/v5/opencontrol.ts`), deprecated as SST 4's is. Its key and its server's function keep their names, so its map is empty. The server is a 5.0 `Function`, given the key as `OPENCONTROL_KEY` and a URL without CORS, as SST 4 gave it.
+  - `server` is a plain value, a handler or a function's args: the function is created from it. A function's ARN is refused, since the server is reached through the URL of the function the component creates. So are `existing.server` and `existing.key`, with what to write.
+  - `nodes` has the key, and `nodes.server` is an output of the 5.0 `Function`.
+
+**Checked:** `tsc`, the platform tests (3,638), and the docs page. The `OpenControl` has 25 tests. The takeover runs in 7 cases, each three ways: a server from a handler, from function args with a link, with a URL of its own, with permissions of its own, with a key of its own, in `sst dev`, and in `sst dev` with args and a link. Tests of their own cover the key and the URL, what's refused, and `transform` for the server and the key.
+
+**Reviewed.** Fixed from it:
+
+- With an `OPENCONTROL_KEY` of the app's own, the 5.0 merge of the server's environment would have left out the generated key, and with it the secret: the state would have held the environment unencrypted from the switch on, and the function would no longer have waited on the key. The defaults' environment is an output now, as SST 4's was, and a case covers it.
+- `existing.server` was taken and used as it was, with no key and no URL; `existing.key` was looked up. Both are refused.
+- "Switch from" says what inside the server's args is a plain value, and that `nodes.server` is an output of the 5.0 `Function`; the plan's breaking changes have a row for it, with `Auth`'s issuer.
+- Tests: the key is a secret in the mock, as it is in AWS, and the cases and tests above.
+
+**Checked in the lab** (a stage of its own, and a CLI built from the branch). A server from function args, with an environment variable of its own, that says whether it has a 16-character key.
+
+- **Deployed with SST 4, and called:** it had its key and its variable.
+- **`sst migrate --check` passed:** 15 resources kept, 2 at a new address and none updated in place; nothing replaced, released or taken out.
+- **The move** kept all 10 resources by id, 2 under a new name. `sst diff` after it showed no changes. The server answered at the same URL with its key and its variable, and its environment is still encrypted in the state.
+- **Removed, and cleaned up:** `sst remove` deleted 15 resources. Then the stage's 45 state versions and markers, its `migrate` copy among them, its passphrase, and its function's source map. Nothing of it is left: no function, URL, role or log group.
+
+## 2026-11-03: step 4, the `OpenSearch` built the 5.0 way, and its lab check
+
+**Done, committed (not pushed):**
+
+- **`OpenSearch`** (`aws/v5/open-search.ts`). The domain, its policy, the generated password and the secret it's kept in keep their names, so its map is empty.
+  - With `dev` set, SST 4 created a `DevCommand` for the pane `sst dev` shows, in every deploy. The 5.0 one tells `sst dev` through the program contract, and creates nothing in `sst dev`: reading `nodes` there says why it's empty.
+  - `get` looks the domain up inside the component, with the component's provider, and reads the username and password from the domain's tags, as SST 4 did.
+- **Better than SST 4:** `get` takes the domain's name or its ARN, the component's `id`. SST 4's docs said to pass the `id`, but SST 4 could only look a domain up by its name. An object in `transform` for the domain's `tags` keeps SST's tags next to the app's, so `get` still finds the username and password, where SST 4 dropped them.
+
+**Checked:** `tsc`, the platform tests (3,638), and the docs page. The `OpenSearch` has 40 tests. The takeover runs in 10 cases, each three ways: a domain, one with everything set, tags set with an object in `transform`, a nested setting set with one, a master user given by its ARN in a function, a username with a generated password, a password of its own, `dev` outside `sst dev`, `dev` in `sst dev`, and a domain referenced with `get`. Tests of their own cover the domain and its secret, the links, the storage minimum, `get` by name and by ARN, and `sst dev`.
+
+**Reviewed.** Fixed from it:
+
+- "Switch from" names each of the domain's nested settings an object in `transform` now merges into, and says to replace `advancedSecurityOptions` in a function for a master user given by its ARN; a case covers it.
+- A "Switch from" bullet that described no change is gone, and one says that `get` looks up with the component's provider.
+- Tests for a username alone, a password alone, and the master user above.
+- From reading the docs page after: `get`'s example called the domain's name its ID, which is its ARN.
+
+**Checked in the lab** (a stage of its own, and a CLI built from the branch). A domain with `dev` set and a `get` of it, linked to an SST 4 function that indexed a document through the first and read it back through the second. SST 4's `get` was given the domain's name: given the `id`, as its docs said, it failed in AWS, which is why the 5.0 `get` takes the ARN. The 5.0 one was given the `id`.
+
+- **Deployed with SST 4, and called:** the document was indexed and found, with the same master user through both.
+- **`sst migrate --check` passed:** 24 resources kept, none at a new address and none updated in place; nothing replaced or released, and 2 resources taken out with nothing in the cloud behind them, SST 4's `DevCommand` among them.
+- **The move** kept every resource by id. `sst diff` after it showed no changes. The document indexed before the switch was found after it, next to a new one.
+- **Removed, and cleaned up:** `sst remove` deleted the domain, its secret and the function, after a 14-minute wait for the domain. Then the stage's 70 state versions and markers, its `migrate` copy among them, its passphrase, and the SST 4 function's source map. Nothing of it is left: no domain, secret, function, role or log group.
+
 ## 2026-11-03: step 4, the `KinesisStream` built the 5.0 way, and its lab check
 
 **Done, committed (not pushed):**
