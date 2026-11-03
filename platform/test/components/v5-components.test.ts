@@ -41,6 +41,7 @@ const rebuilt = [
   "app-sync.ts",
   "cognito-user-pool.ts",
   "cognito-user-pool-client.ts",
+  "email.ts",
 ];
 
 describe("V5 components", () => {

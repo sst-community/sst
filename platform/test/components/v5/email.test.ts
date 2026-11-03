@@ -9,7 +9,12 @@ const pulumi = mockPulumi({
       case "aws:sesv2/emailIdentity:EmailIdentity":
         return {
           arn: `arn:aws:ses:us-east-1:123456789012:identity/${args.inputs.emailIdentity}`,
-          dkimSigningAttributes: { tokens: ["tokena", "tokenb", "tokenc"] },
+          // None when it signs with a key of your own
+          dkimSigningAttributes: args.inputs.dkimSigningAttributes
+            ?.domainSigningPrivateKey
+            ? { tokens: [] }
+            : // Not in order, as SES may give them
+              { tokens: ["tokenc", "tokena", "tokenb"] },
         };
       default:
         return {};
@@ -17,17 +22,31 @@ const pulumi = mockPulumi({
   },
 });
 
+// A domain that signs with a DKIM key of its own
+const byodkim = {
+  identity: {
+    dkimSigningAttributes: {
+      domainSigningPrivateKey: "key",
+      domainSigningSelector: "sel",
+    },
+  },
+};
+
 const TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:bounces";
 const BUS_ARN = "arn:aws:events:us-east-1:123456789012:event-bus/mail";
 
 describe("Email", () => {
   let OriginalEmail: typeof import("../../../src/components/aws/email").Email;
   let Email: typeof import("../../../src/components/aws/v5/email").Email;
+  let cloudflare: typeof import("../../../src/components/cloudflare/dns");
+  let vercel: typeof import("../../../src/components/vercel/dns");
 
   beforeAll(async () => {
     OriginalEmail = (await import("../../../src/components/aws/email")).Email;
     Email = (await import("../../../src/components/aws/v5/email")).Email;
     await import("../../../src/components/aws/takeover/email");
+    cloudflare = await import("../../../src/components/cloudflare/dns");
+    vercel = await import("../../../src/components/vercel/dns");
   });
 
   beforeEach(() => pulumi.reset());
@@ -93,6 +112,39 @@ describe("Email", () => {
             );
           },
         },
+        "a domain on Cloudflare": (Email, opts) =>
+          new Email(
+            "MyEmail",
+            {
+              sender: "example.com",
+              dns: cloudflare.dns(),
+              mailFrom: { domain: "mail.example.com" },
+            },
+            opts,
+          ),
+        "a domain that signs with a key of its own": {
+          original: (opts) =>
+            new OriginalEmail(
+              "MyEmail",
+              { sender: "example.com", transform: byodkim },
+              opts,
+            ),
+          v5: (opts) =>
+            new Email(
+              "MyEmail",
+              { sender: "example.com", dkim: false, transform: byodkim },
+              opts,
+            ),
+        },
+        "a domain on Vercel": (Email, opts) =>
+          new Email(
+            "MyEmail",
+            {
+              sender: "example.com",
+              dns: vercel.dns({ domain: "example.com" }),
+            },
+            opts,
+          ),
         "a domain whose DNS records are added by hand": (Email, opts) =>
           new Email("MyEmail", { sender: "example.com", dns: false }, opts),
         "events, one with a name that isn't capitalized": {
@@ -163,6 +215,70 @@ describe("Email", () => {
     ]);
     // The DNS records aren't parts: they're the DNS adapter's
     expect(Object.keys(domain.nodes)).not.toContain("record");
+  });
+
+  it("names a domain's DKIM records after their place, so a preview knows them", async () => {
+    new Email("MyEmail", { sender: "example.com" });
+    await pulumi.settle();
+
+    const dkim = pulumi.resources
+      .filter((r) => r.inputs.type === "CNAME")
+      .map((r) => [r.name, r.inputs.name])
+      .sort();
+    expect(dkim).toEqual([
+      [
+        "MyEmailCNAMERecordDkim1domainkeyexamplecom",
+        "tokena._domainkey.example.com",
+      ],
+      [
+        "MyEmailCNAMERecordDkim2domainkeyexamplecom",
+        "tokenb._domainkey.example.com",
+      ],
+      [
+        "MyEmailCNAMERecordDkim3domainkeyexamplecom",
+        "tokenc._domainkey.example.com",
+      ],
+    ]);
+  });
+
+  it("signs with a key of your own, and still creates the domain's other records", async () => {
+    const { applyErrors } = await import("../../helpers/apply-errors");
+    const own = await applyErrors(
+      () =>
+        new Email("Own", {
+          sender: "example.com",
+          dkim: false,
+          mailFrom: { domain: "mail.example.com" },
+          transform: byodkim,
+        }),
+      pulumi.settle,
+    );
+    expect(own).toEqual([]);
+    expect(
+      pulumi.resources
+        .filter((r) => r.type === "aws:route53/record:Record")
+        .map((r) => `${r.inputs.type} ${r.inputs.name}`)
+        .sort(),
+    ).toEqual([
+      "MX mail.example.com",
+      "TXT _dmarc.example.com",
+      "TXT mail.example.com",
+    ]);
+
+    pulumi.reset();
+    const told = await applyErrors(
+      () => new Email("Told", { sender: "example.com", transform: byodkim }),
+      pulumi.settle,
+    );
+    expect(told).toContainEqual(
+      expect.stringContaining(
+        `SES gave the "Told" email 0 DKIM tokens. It gives 3 when it signs with a key of its own. To sign with your own key, set "dkim" to false`,
+      ),
+    );
+    expect(
+      () =>
+        new Email("Address", { sender: "spongebob@example.com", dkim: false }),
+    ).toThrow(`The "dkim" property is only valid when "sender" is a domain.`);
   });
 
   it("names the configuration set as 4.x did", async () => {

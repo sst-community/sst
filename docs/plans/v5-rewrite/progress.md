@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Email` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/email.ts`), with no 4.x component file reached, and on the clean break's list.
+- **Its DNS records on the 5.0 adapters, none created inside an `apply`.** 4.x created a domain's DKIM records once SES had given the identity's tokens, named after them, so a preview of a new stage showed none. The V5 one creates the three directly, named after their place (`dkim1` to `dkim3`), with the tokens in order as their values; its map gives each its old name from the token, as the certificate's does. The DMARC and MAIL FROM records keep the names they had, since those are known up front.
+- **A DKIM key of your own** (set through `transform.identity`) gives no tokens, so `dkim: false` says not to create the DKIM records, and the domain's other records are still created, as 4.x did. Without it, a deploy says to set it.
+
+**Checked:** `tsc`, the docs page, and all platform tests, with a domain on Route 53, Cloudflare and Vercel taking over 4.x's, its MAIL FROM records on Cloudflare, and the DKIM records' names. The recorded serverless group found the tokens secret: the identity's `dkimSigningAttributes` can hold a signing key, so Pulumi keeps the whole of it secret, and the records' names would have been too. The tokens go in public DNS records, so they're read with `unsecret()`.
+
+**Reviewed:** every resource and record keeps its 4.x name on each adapter, and the DKIM map gives each key the record of its token whatever order SES gives them in. Fixed from it: a stage signing with its own key was told to set `dns: false`, which would have removed its DMARC and MAIL FROM records; it's `dkim: false` now, which leaves them. The test's tokens come out of order, and a stage signing with its own key takes over 4.x's.
+
 ## 2026-11-02: step 4, the `CognitoUserPool` built the 5.0 way
 
 **Done, committed (not pushed):**
