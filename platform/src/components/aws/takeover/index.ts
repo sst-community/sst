@@ -50,5 +50,6 @@ import "./step-functions";
 import "./svelte-kit";
 import "./tan-stack-start";
 import "./task";
+import "./vector";
 import "./vpc";
 import "./workflow";

@@ -2,6 +2,34 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, the `Vector` built the 5.0 way, the first of Community, and its lab check
+
+**Done, committed (not pushed):**
+
+- **`Vector`** (`aws/v5/vector.ts`), deprecated as SST 4's is. SST 4 kept its database in a `Postgres.v1` inside it, which has no 5.0 form. The 5.0 one takes that database's cluster, instance and subnet group over as parts of its own, through `childWithin` in its map, and a move takes the `Postgres` component out of the state. Its table and its three functions keep their names.
+  - What SST 4 took only through `transform.postgres` the 5.0 one takes as args of its own: `vpc`, `version`, `scaling` and `databaseName`, with SST 4's defaults and types. Changing a cluster's subnet group would replace it, so an app that put the database in a VPC needs `vpc`.
+  - `transform.postgres` is refused, before the component turns down a key it doesn't have, with what to write. So is `vpc: "default"`, SST 4's name for the default VPC: leave `vpc` out.
+  - `get` passes the cluster in `existing` and looks its instance up, as the 5.0 `Aurora` does, and takes `opts`.
+- **Better than SST 4:** `vpc` takes either kind of `Vpc`, and the database's settings are args, documented, where SST 4 had them only in a transform of a component the docs didn't show.
+
+**Checked:** `tsc`, the platform tests (3,521), and the docs page, which now has the SDK's `VectorClient` (the generator's fix in the `MicroVm` entry). The `Vector` has 33 tests. The takeover runs in 7 cases, each three ways: a vector database, in a VPC by its ids, in a `Vpc`, its database transformed, its database's settings, its database protected by a function, linked by a function, and in `sst dev`. `get` is a case of its own, since SST 4's took no options.
+
+**Reviewed.** Fixed from it:
+
+- A cluster given a version through `transform.postgres` kept changes to it in SST 4, and would have ignored them after the switch: `version` is an arg now, and without one the version is ignored, as in SST 4.
+- The refusal's message said to write ACU strings as the cluster's numbers: `scaling` takes them as SST 4 did.
+- `vpc: "default"` was taken and made a subnet group with no subnets: it's refused.
+- "Switch from" now says where a function's resource options go, and that a `$transform` of `Postgres` no longer reaches the database.
+- Tests for the database's settings, a function-form transform, a linked function and the link's values.
+- The docs: the subnet group in the intro, when the table isn't created, and `get`'s example id.
+
+**Checked in the lab** (a stage of its own, the database in a VPC set through `transform.postgres` as SST 4 needed, since the lab account has no default VPC, and a CLI built from the branch). An SST 4 function linked to the database put and queried a vector through the SDK.
+
+- **Deployed with SST 4, and called:** the query found nothing, the put stored the vector, and the query then found it.
+- **`sst migrate --check` passed:** 55 resources kept, the database's 3 at a new address and none updated in place; nothing replaced or released, and SST 4's `Postgres` taken out with nothing in the cloud behind it.
+- **The move** kept all 41 resources by id, the 3 under a new name. `sst diff` after it showed no changes. The query found the vector put before the switch, and a remove and a put then worked through the 5.0 form.
+- **Removed, and cleaned up:** `sst remove` deleted 51 resources. Then the stage's 85 state versions and markers, its `migrate` copy among them, its passphrase, and the SST 4 function's source map. Nothing of it is left: no RDS cluster, instance, subnet group or snapshot, no VPC, subnet or security group, and no role, function, secret or log group.
+
 ## 2026-11-03: step 4, the `MicroVm` built the 5.0 way, the last of Kept, and its lab check
 
 **Done, committed (not pushed):**

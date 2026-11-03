@@ -49,5 +49,6 @@ export * from "./step-functions";
 export * from "./svelte-kit";
 export * from "./tan-stack-start";
 export * from "./task";
+export * from "./vector";
 export * from "./vpc";
 export * from "./workflow";
