@@ -1,11 +1,8 @@
 import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { cognito } from "@pulumi/aws";
-import { V5Args, component } from "../../parts-component";
+import { type ComponentArgs, component } from "../../parts-component";
 import { withDefault } from "../../args";
 import type { Input } from "../../input";
-import type {
-  CognitoUserPoolClientArgs as OriginalCognitoUserPoolClientArgs,
-} from "../cognito-user-pool";
 
 const parts = {
   /**
@@ -14,12 +11,49 @@ const parts = {
   client: cognito.UserPoolClient,
 };
 
-export interface CognitoUserPoolClientArgs
-  extends V5Args<OriginalCognitoUserPoolClientArgs, typeof parts> {
+export interface CognitoUserPoolClientArgs extends ComponentArgs<typeof parts> {
   /**
    * The Cognito user pool ID.
    */
   userPool: Input<string>;
+  /**
+   * A list of identity providers that are supported for this client.
+   * @default `["COGNITO"]`
+   * @example
+   *
+   * :::tip
+   * Reference federated identity providers using their `providerName` property.
+   * :::
+   *
+   * If you are using a federated identity provider.
+   *
+   * ```js title="sst.config.ts"
+   * const provider = userPool.addIdentityProvider("MyProvider", {
+   *   type: "oidc",
+   *   details: {
+   *     authorize_scopes: "email profile",
+   *     client_id: "your-client-id",
+   *     client_secret: "your-client-secret"
+   *   },
+   * });
+   * ```
+   *
+   * Make sure to pass in `provider.providerName` instead of hardcoding it to `"MyProvider"`.
+   *
+   * ```ts title="sst.config.ts" {2}
+   * userPool.addClient("Web", {
+   *   providers: [provider.providerName]
+   * });
+   * ```
+   *
+   * This ensures the client is created after the provider.
+   */
+  providers?: Input<Input<string>[]>;
+  /**
+   * List of allowed callback URLs for the identity providers.
+   * @default `["https://example.com"]`
+   */
+  callbackUrls?: Input<Input<string>[]>;
 }
 
 /**
@@ -39,7 +73,7 @@ export interface CognitoUserPoolClientArgs
  * ```ts title="sst.config.ts"
  * const client = userPool.addClient("Web");
  *
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   link: [client]
  * });
  * ```

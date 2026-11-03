@@ -7,30 +7,31 @@ import {
 } from "@pulumi/pulumi";
 import { cognito, getRegionOutput, lambda } from "@pulumi/aws";
 import {
-  V5Args,
+  type ComponentArgs,
   component,
   deferred,
   many,
   optional,
 } from "../../parts-component";
+import type { Prettify } from "../../component";
 import { ifSet, plain, withDefault } from "../../args";
-import type { Plain } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import { DnsValidatedCertificate } from "../dns-validated-certificate";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
-import { CustomDomainArgs, customDomain } from "../helpers/custom-domain";
-import { FunctionPart, functionPart } from "../helpers/function-part";
+import { type DomainArgs, domainOf } from "../helpers/domain";
+import {
+  type FunctionInput,
+  type FunctionPart,
+  functionPart,
+  plainFunction,
+} from "../helpers/function-part";
 import { invokePermissionArgs } from "../helpers/function-permission";
 import { useProvider } from "../helpers/provider";
 import { permission } from "../permission";
-import type {
-  CognitoIdentityProviderArgs,
-  CognitoUserPoolArgs as OriginalCognitoUserPoolArgs,
-} from "../cognito-user-pool";
 import {
   CognitoUserPoolClient,
-  CognitoUserPoolClientArgs,
+  type CognitoUserPoolClientArgs,
 } from "./cognito-user-pool-client";
 
 const parts = () => ({
@@ -63,7 +64,87 @@ const parts = () => ({
   identityProvider: many(cognito.IdentityProvider),
 });
 
-type Triggers = NonNullable<Plain<OriginalCognitoUserPoolArgs["triggers"]>>;
+export interface CognitoUserPoolTriggers {
+  /**
+   * The ARN of the AWS KMS key used for encryption.
+   *
+   * When `customEmailSender` or `customSmsSender` are configured, Cognito encrypts the
+   * verification code and temporary passwords before sending them to your Lambda functions.
+   */
+  kmsKey?: Input<string>;
+  /**
+   * Triggered after the user successfully responds to the previous challenge, and a new
+   * challenge needs to be created.
+   */
+  createAuthChallenge?: FunctionInput;
+  /**
+   * Triggered during events like user sign-up, password recovery, email/phone number
+   * verification, and when an admin creates a user. Use this trigger to customize the
+   * email provider.
+   */
+  customEmailSender?: FunctionInput;
+  /**
+   * Triggered during events like user sign-up, password recovery, email/phone number
+   * verification, and when an admin creates a user. Use this trigger to customize the
+   * message that is sent to your users.
+   */
+  customMessage?: FunctionInput;
+  /**
+   * Triggered when an SMS message needs to be sent, such as for MFA or verification codes.
+   * Use this trigger to customize the SMS provider.
+   */
+  customSmsSender?: FunctionInput;
+  /**
+   * Triggered after each challenge response to determine the next action. Evaluates whether the
+   * user has completed the authentication process or if additional challenges are needed.
+   */
+  defineAuthChallenge?: FunctionInput;
+  /**
+   * Triggered after a successful authentication event. Use this to perform custom actions,
+   * such as logging or modifying user attributes, after the user is authenticated.
+   */
+  postAuthentication?: FunctionInput;
+  /**
+   * Triggered after a user is successfully confirmed; sign-up or email/phone number
+   * verification. Use this to perform additional actions, like sending a welcome email or
+   * initializing user data, after user confirmation.
+   */
+  postConfirmation?: FunctionInput;
+  /**
+   * Triggered before the authentication process begins. Use this to implement custom
+   * validation or checks (like checking if the user is banned) before continuing
+   * authentication.
+   */
+  preAuthentication?: FunctionInput;
+  /**
+   * Triggered before the user sign-up process completes. Use this to perform custom
+   * validation, auto-confirm users, or auto-verify attributes based on custom logic.
+   */
+  preSignUp?: FunctionInput;
+  /**
+   * Triggered before tokens are generated in the authentication process. Use this to
+   * customize or add claims to the tokens that will be generated and returned to the user.
+   */
+  preTokenGeneration?: FunctionInput;
+  /**
+   * The version of the preTokenGeneration trigger to use. Higher versions have access to
+   * more information that support new features.
+   * @default `"v1"`
+   */
+  preTokenGenerationVersion?: "v1" | "v2";
+  /**
+   * Triggered when a user attempts to sign in but does not exist in the current user pool.
+   * Use this to import and validate users from an existing user directory into the
+   * Cognito User Pool during sign-in.
+   */
+  userMigration?: FunctionInput;
+  /**
+   * Triggered after the user responds to a custom authentication challenge. Use this to
+   * verify the user's response to the challenge and determine whether to continue
+   * authenticating the user.
+   */
+  verifyAuthChallengeResponse?: FunctionInput;
+}
 
 export interface CognitoUserPoolPrefixDomainArgs {
   /**
@@ -75,23 +156,214 @@ export interface CognitoUserPoolPrefixDomainArgs {
   prefix: Input<string>;
 }
 
-export interface CognitoUserPoolDomainArgs extends CustomDomainArgs {
+export interface CognitoUserPoolDomainArgs extends DomainArgs {
   /**
-   * The custom domain name. Must be a subdomain (e.g., `auth.example.com`).
+   * The custom domain name. Must be a subdomain (e.g., `auth.example.com`). A plain value:
+   * the DNS records are named after it.
    */
-  name: Input<string>;
+  name: string;
   /**
-   * ARN of an existing ACM certificate in `us-east-1`. By default, a certificate
-   * is created and validated automatically.
+   * The ARN of an ACM (AWS Certificate Manager) certificate that proves ownership of the
+   * domain. By default, a certificate is created and validated automatically.
+   *
+   * Cognito serves a custom domain through CloudFront, which takes its certificate from the
+   * `us-east-1` region. The one that's created for you is created there, and one you pass
+   * in has to be there too.
    */
   cert?: Input<string>;
 }
 
-export interface CognitoUserPoolArgs
-  extends V5Args<Omit<OriginalCognitoUserPoolArgs, "domain" | "triggers">, typeof parts> {
+export interface CognitoUserPoolArgs extends ComponentArgs<typeof parts> {
   /**
-   * Configure triggers for this User Pool. Each one takes the handler path,
-   * the function args, or a function ARN.
+   * Configure the different ways a user can sign in besides using their username.
+   *
+   * :::note
+   * You cannot change the aliases property once the User Pool has been created.
+   * Learn more about [aliases](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases).
+   * :::
+   *
+   * @default User can only sign in with their username.
+   * @example
+   *
+   * ```ts
+   * {
+   *   aliases: ["email"]
+   * }
+   * ```
+   */
+  aliases?: Input<Input<"email" | "phone" | "preferred_username">[]>;
+  /**
+   * Allow users to be able to sign up and sign in with an email addresses or phone number
+   * as their username.
+   *
+   * :::note
+   * You cannot change the usernames property once the User Pool has been created.
+   * Learn more about [aliases](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases).
+   * :::
+   *
+   * @default User can only sign in with their username.
+   * @example
+   *
+   * ```ts
+   * {
+   *   usernames: ["email"]
+   * }
+   * ```
+   */
+  usernames?: Input<Input<"email" | "phone">[]>;
+  /**
+   * Enable advanced security features.
+   *
+   * Learn more about [advanced security](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-pool-settings-advanced-security.html).
+   *
+   * @default Advanced security is disabled.
+   * @example
+   *
+   * ```ts
+   * {
+   *   advancedSecurity: "enforced"
+   * }
+   * ```
+   */
+  advancedSecurity?: Input<"audit" | "enforced">;
+  /**
+   * Configure the multi-factor authentication (MFA) settings for the User Pool.
+   *
+   * If you enable MFA using `on` or `optional`, you need to configure either `sms` or
+   * `softwareToken` as well.
+   *
+   * @default MFA is disabled.
+   * @example
+   *
+   * ```ts
+   * {
+   *   mfa: "on"
+   * }
+   * ```
+   */
+  mfa?: Input<"on" | "optional">;
+  /**
+   * Configure the SMS settings for the User Pool.
+   *
+   * @default No SMS settings.
+   * @example
+   *
+   * ```ts
+   * {
+   *   sms: {
+   *     externalId: "1234567890",
+   *     snsCallerArn: "arn:aws:iam::1234567890:role/CognitoSnsCaller",
+   *     snsRegion: "us-east-1",
+   *   }
+   * }
+   * ```
+   */
+  sms?: Input<{
+    /**
+     * The external ID used in IAM role trust relationships.
+     *
+     * Learn more about [external IDs](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html).
+     */
+    externalId: Input<string>;
+    /**
+     * The ARN of the IAM role that Amazon Cognito can assume to access the Amazon SNS
+     *
+     */
+    snsCallerArn: Input<string>;
+    /**
+     * The AWS Region that Amazon Cognito uses to send SMS messages.
+     */
+    snsRegion?: Input<string>;
+  }>;
+  /**
+   * The message template for SMS messages sent to users who are being authenticated.
+   *
+   * The template must include the `{####}` placeholder, which will be replaced with the
+   * verification code.
+   *
+   * @default The default message template.
+   * @example
+   *
+   * ```ts
+   * {
+   *   smsAuthenticationMessage: "Your authentication code is {####}"
+   * }
+   * ```
+   */
+  smsAuthenticationMessage?: Input<string>;
+  /**
+   * Configure the verification message sent to users who are being authenticated.
+   */
+  verify?: Input<{
+    /**
+     * Subject line for Email messages sent to users who are being authenticated.
+     *
+     * @default `"Verify your new account"`
+     * @example
+     *
+     * ```ts
+     * {
+     *   verify: {
+     *     emailSubject: "Verify your new Awesome account"
+     *   }
+     * }
+     * ```
+     */
+    emailSubject?: Input<string>;
+    /**
+     * The template for email messages sent to users who are being authenticated.
+     *
+     * The template must include the `{####}` placeholder, which will be replaced with the
+     * verification code.
+     *
+     * @default `"The verification code to your new account is {####}"`
+     * @example
+     *
+     * ```ts
+     * {
+     *   verify: {
+     *     emailMessage: "The verification code to your new Awesome account is {####}"
+     *   }
+     * }
+     * ```
+     */
+    emailMessage?: Input<string>;
+    /**
+     * The template for SMS messages sent to users who are being authenticated.
+     *
+     * The template must include the `{####}` placeholder, which will be replaced with the
+     * verification code.
+     *
+     * @default `"The verification code to your new account is {####}"`
+     * @example
+     *
+     * ```ts
+     * {
+     *   verify: {
+     *     smsMessage: "The verification code to your new Awesome account is {####}"
+     *   }
+     * }
+     * ```
+     */
+    smsMessage?: Input<string>;
+  }>;
+  /**
+   * Enable software token MFA for the User Pool.
+   *
+   * @default `false`
+   * @example
+   *
+   * ```ts
+   * {
+   *   softwareToken: true
+   * }
+   * ```
+   */
+  softwareToken?: Input<boolean>;
+  /**
+   * Configure triggers for this User Pool. Each one takes the handler path or the function
+   * args, which are plain values, or a function you already have, or its ARN. The
+   * `triggers` are a plain value too: they decide which functions are created.
    *
    * The functions are in the user pool's `nodes.trigger`, by trigger, and
    * `transform.trigger` changes them.
@@ -108,11 +380,13 @@ export interface CognitoUserPoolArgs
    * }
    * ```
    */
-  triggers?: Plain<OriginalCognitoUserPoolArgs["triggers"]>;
+  triggers?: Prettify<CognitoUserPoolTriggers>;
   /**
    * Configure a domain for the User Pool's hosted UI.
    *
-   * You can use either a Cognito-provided prefix domain or your own custom domain.
+   * You can use either a Cognito-provided prefix domain or your own custom domain. The
+   * domain has to be a plain value, and so do a custom domain's `name` and `dns`: they
+   * decide the certificate and the DNS records.
    *
    * @example
    *
@@ -151,14 +425,41 @@ export interface CognitoUserPoolArgs
   domain?:
     | string
     | CognitoUserPoolPrefixDomainArgs
-    | CognitoUserPoolDomainArgs;
+    | Prettify<CognitoUserPoolDomainArgs>;
 }
 
 export interface CognitoUserPoolAddClientArgs
   extends Omit<CognitoUserPoolClientArgs, "userPool"> {}
 
-export interface CognitoUserPoolIdentityProviderArgs
-  extends Omit<CognitoIdentityProviderArgs, "transform"> {}
+export interface CognitoUserPoolIdentityProviderArgs {
+  /**
+   * The type of identity provider.
+   */
+  type: Input<"oidc" | "saml" | "google" | "facebook" | "apple" | "amazon">;
+  /**
+   * Configure the identity provider details, including the scopes, URLs, and identifiers.
+   *
+   * ```ts
+   * {
+   *   authorize_scopes: "email profile",
+   *   client_id: "your-client-id",
+   *   client_secret: "your-client-secret"
+   * }
+   * ```
+   */
+  details: Input<Record<string, Input<string>>>;
+  /**
+   * Define a mapping between identity provider attributes and user pool attributes.
+   *
+   * ```ts
+   * {
+   *   email: "email",
+   *   username: "sub"
+   * }
+   * ```
+   */
+  attributes?: Input<Record<string, Input<string>>>;
+}
 
 /**
  * The `CognitoUserPool` component lets you add a [Amazon Cognito User Pool](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-identity-pools.html) to your app.
@@ -247,7 +548,7 @@ export interface CognitoUserPoolIdentityProviderArgs
  * available as `Resource.Web.id` and `Resource.Web.secret`.
  *
  * ```ts title="sst.config.ts"
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   link: [client]
  * });
  * ```
@@ -256,23 +557,46 @@ export interface CognitoUserPoolIdentityProviderArgs
  *
  * Change `sst.aws.CognitoUserPool` to `sst.aws.v5.CognitoUserPool` and keep the name. The
  * user pool, its domain, its clients, its identity providers and its trigger functions are
- * kept. A few things are written differently:
- *
- * - `addIdentityProvider` returns the Cognito identity provider. `provider.providerName`
- *   reads as before.
- * - An identity provider's own `transform` becomes the user pool's
- *   `transform.identityProvider`.
- * - `domain`, `domain.dns` and `triggers` have to be plain values, not outputs.
- * - `get` gives its options to the component, so a `provider` or `parent` you pass it
- *   applies to what you add to the user pool too. `sst.aws.CognitoUserPool.get` gave them
- *   to the user pool it looked up and to nothing else. If you pass `get` a `provider` and
- *   add a client to that user pool, the client is replaced on switch, to be created with
- *   that provider, and gets a new ID.
+ * kept.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const userPool = new sst.aws.CognitoUserPool("MyUserPool");
  * const userPool = new sst.aws.v5.CognitoUserPool("MyUserPool");
  * ```
+ *
+ * A few things work differently:
+ *
+ * - `addIdentityProvider` returns the Cognito identity provider. `provider.providerName`
+ *   reads as before.
+ * - An identity provider's own `transform` becomes the user pool's
+ *   `transform.identityProvider`.
+ * - `domain`, with a custom domain's `name` and `dns`, has to be a plain value, not an
+ *   output. So do `triggers`, and each trigger's handler or function args: they decide
+ *   what's created. A function you already have, or its ARN, can still be an output.
+ * - A function's args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domain they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - An identity provider is created inside the user pool, with the provider the user pool
+ *   has. `sst.aws.CognitoUserPool` created it beside the user pool, with only a `provider`
+ *   passed to the user pool itself. So if your user pool takes its provider from a parent
+ *   component or from `providers`, its identity providers are replaced on switch: remove
+ *   them and deploy before you switch, then add them back.
+ * - `get` gives its options to the component, so a `provider` you pass it reaches the
+ *   clients and identity providers you add, and a `parent` or `providers` the identity
+ *   providers. `sst.aws.CognitoUserPool.get` gave them to the user pool it looked up and
+ *   to nothing else. So a client or an identity provider added to a user pool from `get`
+ *   with a provider is replaced on switch, and a client gets a new ID.
+ * - `nodes.userPool` is the user pool, not an output of it. `nodes` has every resource,
+ *   the certificate, the trigger functions and the identity providers included.
  */
 export class CognitoUserPool extends component(
   "sst:aws:CognitoUserPool",
@@ -370,7 +694,7 @@ export class CognitoUserPool extends component(
 
   // The function behind each trigger, and what the user pool is told about
   // them.
-  private createTriggers(triggers: Triggers | undefined) {
+  private createTriggers(triggers: CognitoUserPoolTriggers | undefined) {
     const name = this.componentName;
     plain(triggers, `The "triggers" of the "${name}" user pool`);
     if (!triggers) return undefined;
@@ -386,9 +710,16 @@ export class CognitoUserPool extends component(
     for (const trigger of TRIGGERS) {
       const definition = triggers[trigger];
       if (!definition) continue;
-      functions[trigger] = functionPart(this, "trigger", trigger, definition, {
-        description: `Subscribed to ${trigger} from ${name}`,
-      });
+      functions[trigger] = functionPart(
+        this,
+        "trigger",
+        trigger,
+        plainFunction(
+          definition,
+          `The "${trigger}" trigger of the "${name}" user pool`,
+        ),
+        { description: `Subscribed to ${trigger} from ${name}` },
+      );
     }
     const arn = (trigger: Trigger) => functions[trigger]?.targetArn;
     // Some triggers take the version of the event they're sent
@@ -437,7 +768,7 @@ export class CognitoUserPool extends component(
       return interpolate`https://${domain.prefix}.auth.${region}.amazoncognito.com`;
     }
 
-    const custom = customDomain(domain, `the "${name}" user pool`);
+    const custom = domainOf(domain, `the "${name}" user pool`);
 
     // Cognito serves a custom domain through CloudFront, which takes its
     // certificates from us-east-1.
@@ -453,7 +784,7 @@ export class CognitoUserPool extends component(
       { userPoolId: userPool.id, domain: custom.name, certificateArn },
       opts,
     );
-    custom.dns?.createAlias(
+    custom.dns?.alias(
       name,
       {
         name: custom.name,

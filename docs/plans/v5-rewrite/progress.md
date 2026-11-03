@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `CognitoUserPool` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/cognito-user-pool.ts`): the user pool's, its triggers', an identity provider's, and its client's (`aws/v5/cognito-user-pool-client.ts`), with no 4.x component file reached. Both are on the clean break's list.
+- **Its custom domain on the 5.0 certificate**, in `us-east-1` as Cognito's CloudFront needs, and the DNS adapters, through `domainOf()`. A prefix domain is as it was.
+- **Each trigger's handler or function args are a plain value**, as `triggers` already was; a function you already have, or its ARN, can be an output.
+
+**Checked:** `tsc`, the docs page, and all platform tests, with the domain on Route 53, Cloudflare and Vercel taking over 4.x's, the certificate's provider in `us-east-1`, an output refused for a trigger's handler, and a function's ARN taken as one.
+
+**Reviewed:** the user pool's settings, each trigger, the domain, clients and identity providers match 4.x's. Fixed from it: 4.x created an identity provider beside the user pool with only a `provider` passed to it, so a user pool that takes its provider from a parent or `providers` has its identity providers replaced on switch. The docs and the plan say so now, with a test that pins it, and say what a `get`'s `parent` reaches, and that `nodes.userPool` is the user pool, not an output.
+
 ## 2026-11-02: step 4, the `AppSync` built the 5.0 way
 
 **Done, committed (not pushed):**

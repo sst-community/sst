@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const pulumi = mockPulumi({
   // What the 4.x component wraps things in. They have nothing in AWS behind
@@ -15,16 +16,6 @@ const pulumi = mockPulumi({
         };
       case "aws:cognito/userPoolClient:UserPoolClient":
         return { clientSecret: "shh" };
-      case "aws:acm/certificate:Certificate":
-        return {
-          domainValidationOptions: [
-            {
-              resourceRecordType: "CNAME",
-              resourceRecordName: "_abc.auth.example.com.",
-              resourceRecordValue: "_def.acm-validations.aws.",
-            },
-          ],
-        };
       default:
         return {};
     }
@@ -74,6 +65,10 @@ describe("CognitoUserPool", () => {
       "../../../src/components/aws/v5/cognito-user-pool"
     ));
     await import("../../../src/components/aws/takeover/cognito-user-pool");
+    // What the V5 user pool creates for a domain takes over 4.x's by this
+    await import(
+      "../../../src/components/aws/takeover/dns-validated-certificate"
+    );
     await import("../../../src/components/aws/takeover/function");
   });
 
@@ -465,6 +460,71 @@ describe("CognitoUserPool", () => {
         }),
     ).toThrow(/"triggers" of the "Other" user pool has to be a plain value/);
     await pulumi.settle();
+  });
+
+  it("needs a plain value for a function it creates", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    const errors = await applyErrors(() => {
+      new CognitoUserPool("MyUserPool", {
+        triggers: { preSignUp: output("src/signup.handler") },
+      });
+    }, pulumi.settle);
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    expect(errors).toContainEqual(
+      expect.stringContaining(
+        `The "preSignUp" trigger of the "MyUserPool" user pool is an output that isn't a function or the ARN of one.`,
+      ),
+    );
+  });
+
+  it("takes a function's ARN as an output", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    new CognitoUserPool("MyUserPool", {
+      triggers: { preSignUp: output(FUNCTION_ARN) },
+    });
+    await pulumi.settle();
+
+    expect(registered(POOL)[0].inputs.lambdaConfig).toEqual({
+      preSignUp: FUNCTION_ARN,
+    });
+  });
+
+  it("points a custom domain at itself with a certificate in us-east-1", async () => {
+    new CognitoUserPool("MyUserPool", { domain: "auth.example.com" });
+    await pulumi.settle();
+
+    const certificate = pulumi.resources.find(
+      (r) => r.type === "aws:acm/certificate:Certificate",
+    )!;
+    expect(certificate.options.provider).toMatch(/::AwsProvider\.sst\.us-east-1::/);
+    expect(pulumi.resources.map((r) => r.name)).toEqual(
+      expect.arrayContaining([
+        "MyUserPoolARecordAuthexamplecom",
+        "MyUserPoolAAAARecordAuthexamplecom",
+      ]),
+    );
+  });
+
+  // 4.x created an identity provider beside the user pool, given only a
+  // `provider` passed to the user pool. The V5 one is inside it, so it takes
+  // the user pool's provider however it's given, which the docs warn of.
+  it("gives an identity provider the user pool's providers", async () => {
+    const { Provider } = await import("@pulumi/aws");
+    const opts = { providers: { aws: new Provider("Map", { region: "us-west-2" }) } };
+    const google = {
+      type: "google" as const,
+      details: { client_id: "id", client_secret: "secret" },
+    };
+    new OriginalCognitoUserPool("Old", {}, opts).addIdentityProvider("OldGoogle", google);
+    new CognitoUserPool("New", {}, opts).addIdentityProvider("Google", google);
+    await pulumi.settle();
+
+    const providerOf = (name: string) =>
+      pulumi.resources.find((r) => r.name === name)!.options.provider ?? "";
+    expect(providerOf("OldGoogleIdentityProvider")).not.toMatch(/::Map::/);
+    expect(providerOf("NewIdentityProviderGoogle")).toMatch(/::Map::/);
   });
 
   it("rejects settings that don't go together", async () => {

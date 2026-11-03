@@ -39,6 +39,8 @@ const rebuilt = [
   "dsql.ts",
   "apigatewayv2.ts",
   "app-sync.ts",
+  "cognito-user-pool.ts",
+  "cognito-user-pool-client.ts",
 ];
 
 describe("V5 components", () => {
