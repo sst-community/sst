@@ -36,7 +36,6 @@ export {
   named,
   optional,
   type ComponentArgs,
-  type V5Args,
   type DeferredPart,
   type Existing,
   type LinkDefinition,
@@ -54,11 +53,3 @@ export {
  * experimental packages, you may be fired for using
  */
 export * as x from "./experimental/index";
-
-import { Link } from "./link";
-
-/**
- * @deprecated
- * Use sst.Linkable.wrap instead.
- */
-export const linkable = Link.linkable;

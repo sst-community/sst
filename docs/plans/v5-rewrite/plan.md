@@ -393,6 +393,7 @@ Every breaking change of the components built the 5.0 way, with its way across: 
 | 2026-11-02 | `Redis` | The deprecated `nodes` becomes `cluster.nodes` where neither `cluster` nor `serverless` is set, and goes where one is, since 4.x ignored it there. It's refused with what to write. | Codemod. |
 | 2026-11-02 | `Postgres`, `Mysql` | `proxyId` fails as soon as it's read when there's no proxy, where 4.x failed on deploy. | Guide: read it only with `proxy` set. |
 | 2026-11-02 | `Postgres`, `Mysql`, `Aurora` | In `sst dev` with `dev` set, reading a resource in `nodes` fails and says why it's missing, where 4.x gave `undefined`. | Guide: read `nodes` only outside `sst dev` (`$dev`), or without `dev`. |
+| 2026-11-02 | Every app | `sst.linkable`, deprecated in 4.x, is gone: `sst.Linkable.wrap`, which takes the same. `sst.V5Args` isn't public: a component's args extend `sst.ComponentArgs`. | Codemod: rename the call. |
 | 2026-11-02 | `DevCommand` | `dev.command` is required. 4.x took one without it, and ran nothing. | Guide: give it its command, or remove it. |
 
 ## Steps
