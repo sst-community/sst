@@ -1565,7 +1565,7 @@ async function handler(event) {
                 ]),
                 injections: [
                   ...(args.warm
-                    ? [useServerWarmingInjection(planServer.streaming)]
+                    ? [serverWarmingInjection(planServer.streaming)]
                     : []),
                   ...(planServer.injections || []),
                 ],
@@ -1679,26 +1679,6 @@ async function handler(event) {
           ),
         );
       });
-    }
-
-    function useServerWarmingInjection(streaming?: boolean) {
-      return [
-        `if (event.type === "warmer") {`,
-        `  const p = new Promise((resolve) => {`,
-        `    setTimeout(() => {`,
-        `      resolve({ serverId: "server-" + Math.random().toString(36).slice(2, 8) });`,
-        `    }, event.delay);`,
-        `  });`,
-        ...(streaming
-          ? [
-            `  const response = await p;`,
-            `  responseStream.write(JSON.stringify(response));`,
-            `  responseStream.end();`,
-            `  return;`,
-          ]
-          : [`  return p;`]),
-        `}`,
-      ].join("\n");
     }
 
     function uploadAssets() {
@@ -2201,4 +2181,31 @@ async function handler(event) {
       },
     };
   }
+}
+
+/**
+ * The code that answers a warmer ping inside the generated server wrapper, before the
+ * app's own handler is loaded. `context` is in scope in both wrappers. The ping must not
+ * wait for the event loop to drain: the sandbox keeps the app's sockets and timers from
+ * earlier requests open, and the ping would otherwise run until the function times out.
+ */
+export function serverWarmingInjection(streaming?: boolean) {
+  return [
+    `if (event.type === "warmer") {`,
+    `  context.callbackWaitsForEmptyEventLoop = false;`,
+    `  const p = new Promise((resolve) => {`,
+    `    setTimeout(() => {`,
+    `      resolve({ serverId: "server-" + Math.random().toString(36).slice(2, 8) });`,
+    `    }, event.delay);`,
+    `  });`,
+    ...(streaming
+      ? [
+          `  const response = await p;`,
+          `  responseStream.write(JSON.stringify(response));`,
+          `  responseStream.end();`,
+          `  return;`,
+        ]
+      : [`  return p;`]),
+    `}`,
+  ].join("\n");
 }
