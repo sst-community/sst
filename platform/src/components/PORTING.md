@@ -81,7 +81,9 @@ has no 4.x components.
   `Redis`, the `Postgres`, the `Mysql` and the `Aurora`, which report the pane `sst dev`
   shows for a local server (`helpers/local-server.ts`), where 4.x created a
   `DevCommand` for it. So is the `Dsql`, whose parts in the peer region are created
-  with a provider for that region (`useProvider()`).
+  with a provider for that region (`useProvider()`). So is the `ApiGatewayV2`, whose
+  domain is made with `domainOf()` (`helpers/domain.ts`), the 5.0 certificate and the
+  adapters, as the `Cdn`'s is.
   The ports before them reuse the original's, as below, until each is rebuilt and
   added to that list.
 - **What an app creates once is made once in each run** of the program. A resource
@@ -128,7 +130,7 @@ has no 4.x components.
 | A function from a handler, args, an ARN, a function or a `Workflow` | `functionPart()` in `helpers/function-part.ts` |
 | A function arg, built the 5.0 way: a handler or args as a plain value, or a function or its ARN, which can be an output | `FunctionInput`, and `plainFunction(definition, what)` before `functionPart()`, in `helpers/function-part.ts` |
 | Letting a service invoke that function | `invokePermissionArgs(fn, principal, sourceArn)` in `helpers/function-permission.ts` |
-| A custom domain (`name`, `dns`, `cert`) | `customDomain()` and `CustomDomainArgs` in `helpers/custom-domain.ts` |
+| A custom domain (`name`, `dns`, `cert`), built the 5.0 way: the 5.0 certificate (`aws/v5/dns-validated-certificate.ts`) as a part, and the records pointed at the service with the adapter's `alias()` | `DomainArgs` and `domainOf(domain, owner)` in `helpers/domain.ts`. The ports not rebuilt yet use SST 4's adapters through `customDomain()` in `helpers/custom-domain.ts`, which goes with the last of them |
 | Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
 | Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
 | A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |

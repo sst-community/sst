@@ -37,6 +37,7 @@ const rebuilt = [
   "mysql.ts",
   "aurora.ts",
   "dsql.ts",
+  "apigatewayv2.ts",
 ];
 
 describe("V5 components", () => {

@@ -7,34 +7,29 @@ import {
 } from "@pulumi/pulumi";
 import { apigatewayv2, cloudwatch, lambda } from "@pulumi/aws";
 import {
-  V5Args,
+  type ComponentArgs,
   component,
   deferred,
   many,
   optional,
 } from "../../parts-component";
+import type { Prettify } from "../../component";
 import { ifSet, plain } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import { toSeconds } from "../../duration";
+import { type Duration, type DurationHours, toSeconds } from "../../duration";
 import { physicalName } from "../../naming";
-import { DnsValidatedCertificate } from "../dns-validated-certificate";
-import type {
-  FunctionArgs as OriginalFunctionArgs,
-  FunctionArn,
-} from "../function";
-import { Function } from "./function";
-import { CustomDomainArgs, customDomain } from "../helpers/custom-domain";
-import { functionPart } from "../helpers/function-part";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import { Function, type FunctionArgs } from "./function";
+import { type DomainArgs, domainOf } from "../helpers/domain";
+import {
+  type FunctionInput,
+  functionPart,
+  plainFunction,
+} from "../helpers/function-part";
 import { invokePermissionArgs } from "../helpers/function-permission";
-import type { ApiGatewayV2DomainArgs as OriginalApiGatewayV2DomainArgs } from "../helpers/apigatewayv2-domain";
 import { RETENTION } from "../logging";
-import { type TakesVpc, isVpc } from "../helpers/vpc";
-import type {
-  ApiGatewayV2Args as OriginalApiGatewayV2Args,
-  ApiGatewayV2AuthorizerArgs as OriginalApiGatewayV2AuthorizerArgs,
-  ApiGatewayV2RouteArgs as OriginalApiGatewayV2RouteArgs,
-} from "../apigatewayv2";
+import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
 
 const parts = () => ({
   /**
@@ -97,21 +92,167 @@ const parts = () => ({
   authorizerPermission: many(lambda.Permission),
 });
 
-export interface ApiGatewayV2DomainArgs
-  extends Omit<OriginalApiGatewayV2DomainArgs, "nameId" | "dns">,
-    Pick<CustomDomainArgs, "dns"> {}
+export interface ApiGatewayV2CorsArgs {
+  /**
+   * Allow cookies or other credentials in requests to the HTTP API.
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   cors: {
+   *     allowCredentials: true
+   *   }
+   * }
+   * ```
+   */
+  allowCredentials?: Input<boolean>;
+  /**
+   * The HTTP headers that origins can include in requests to the HTTP API.
+   * @default `["*"]`
+   * @example
+   * ```js
+   * {
+   *   cors: {
+   *     allowHeaders: ["date", "keep-alive", "x-custom-header"]
+   *   }
+   * }
+   * ```
+   */
+  allowHeaders?: Input<Input<string>[]>;
+  /**
+   * The origins that can access the HTTP API.
+   * @default `["*"]`
+   * @example
+   * ```js
+   * {
+   *   cors: {
+   *     allowOrigins: ["https://www.example.com", "http://localhost:60905"]
+   *   }
+   * }
+   * ```
+   * Or the wildcard for all origins.
+   * ```js
+   * {
+   *   cors: {
+   *     allowOrigins: ["*"]
+   *   }
+   * }
+   * ```
+   */
+  allowOrigins?: Input<Input<string>[]>;
+  /**
+   * The HTTP methods that are allowed when calling the HTTP API.
+   * @default `["*"]`
+   * @example
+   * ```js
+   * {
+   *   cors: {
+   *     allowMethods: ["GET", "POST", "DELETE"]
+   *   }
+   * }
+   * ```
+   * Or the wildcard for all methods.
+   * ```js
+   * {
+   *   cors: {
+   *     allowMethods: ["*"]
+   *   }
+   * }
+   * ```
+   */
+  allowMethods?: Input<
+    Input<
+      "*" | "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT"
+    >[]
+  >;
+  /**
+   * The HTTP headers you want to expose in your function to an origin that calls the HTTP API.
+   * @default `[]`
+   * @example
+   * ```js
+   * {
+   *   cors: {
+   *     exposeHeaders: ["date", "keep-alive", "x-custom-header"]
+   *   }
+   * }
+   * ```
+   */
+  exposeHeaders?: Input<Input<string>[]>;
+  /**
+   * The maximum amount of time the browser can cache results of a preflight request. By
+   * default the browser doesn't cache the results. The maximum value is `86400 seconds` or `1 day`.
+   * @default `"0 seconds"`
+   * @example
+   * ```js
+   * {
+   *   cors: {
+   *     maxAge: "1 day"
+   *   }
+   * }
+   * ```
+   */
+  maxAge?: Input<Duration>;
+}
 
-export interface ApiGatewayV2Args
-  extends V5Args<
-    TakesVpc<Omit<OriginalApiGatewayV2Args, "domain">>,
-    typeof parts
-  > {
+export interface ApiGatewayV2DomainArgs extends DomainArgs {
+  /**
+   * The base mapping for the custom domain. This adds a suffix to the URL of the API.
+   *
+   * @example
+   *
+   * Given the following base path and domain name.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "api.example.com",
+   *     path: "v1"
+   *   }
+   * }
+   * ```
+   *
+   * The full URL of the API will be `https://api.example.com/v1/`.
+   *
+   * :::note
+   * There's an extra trailing slash when a base path is set.
+   * :::
+   *
+   * By default there is no base path, so if the `name` is `api.example.com`, the full URL will be `https://api.example.com`.
+   */
+  path?: Input<string>;
+}
+
+export interface ApiGatewayV2Args extends ComponentArgs<typeof parts> {
+  /**
+   * [Link resources](/docs/linking/) to all your API Gateway routes.
+   *
+   * Linked resources will be merged with the resources linked to each route.
+   *
+   * @example
+   *
+   * Takes a list of resources to link to all the routes.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: FunctionArgs["link"];
   /**
    * Set a custom domain for your HTTP API.
    *
-   * Automatically manages domains hosted on AWS Route 53, Cloudflare, and
-   * Vercel. For other providers, pass in a `cert` that validates domain
-   * ownership and add the DNS records yourself.
+   * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
+   * providers, you'll need to pass in a `cert` that validates domain ownership and add the
+   * DNS records.
+   *
+   * The domain has to be a plain value, and so do its `name` and `dns`: they decide the
+   * certificate and the DNS records.
+   *
+   * :::tip
+   * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
+   * providers.
+   * :::
    *
    * @example
    *
@@ -134,8 +275,8 @@ export interface ApiGatewayV2Args
    * }
    * ```
    *
-   * To put this API under a path of a domain name another API created, pass
-   * that domain name in `existing`.
+   * To put this API under a path of a domain name another API created, pass that domain
+   * name in `existing`, and leave out the `name`.
    *
    * ```js
    * {
@@ -144,11 +285,167 @@ export interface ApiGatewayV2Args
    * }
    * ```
    */
-  domain?: string | ApiGatewayV2DomainArgs;
+  domain?: string | Prettify<Partial<ApiGatewayV2DomainArgs>>;
+  /**
+   * Customize the CORS (Cross-origin resource sharing) settings for your HTTP API.
+   * @default `true`
+   * @example
+   * Disable CORS. This omits CORS configuration entirely (`CorsConfiguration` is
+   * unset). An empty config object is not the same — AWS treats that as CORS
+   * enabled with no allowed origins or headers.
+   * ```js
+   * {
+   *   cors: false
+   * }
+   * ```
+   * Only enable the `GET` and `POST` methods for `https://example.com`.
+   * ```js
+   * {
+   *   cors: {
+   *     allowMethods: ["GET", "POST"],
+   *     allowOrigins: ["https://example.com"]
+   *   }
+   * }
+   * ```
+   */
+  cors?: Input<boolean | Prettify<ApiGatewayV2CorsArgs>>;
+  /**
+   * Configure the [API Gateway logs](https://docs.aws.amazon.com/apigateway/latest/developerguide/view-cloudwatch-log-events-in-cloudwatch-console.html) in CloudWatch. By default, access logs are enabled and kept for 1 month.
+   * @default `{retention: "1 month"}`
+   * @example
+   * ```js
+   * {
+   *   accessLog: {
+   *     retention: "forever"
+   *   }
+   * }
+   * ```
+   */
+  accessLog?: Input<{
+    /**
+     * The duration the API Gateway logs are kept in CloudWatch.
+     * @default `1 month`
+     */
+    retention?: Input<keyof typeof RETENTION>;
+  }>;
+  /**
+   * Configure the API to connect to private resources in a virtual private cloud or VPC.
+   * This creates a VPC link for your HTTP API.
+   *
+   * @example
+   * Create a `Vpc` component.
+   *
+   * ```js title="sst.config.ts"
+   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
+   * ```
+   *
+   * Or reference an existing VPC.
+   *
+   * ```js title="sst.config.ts"
+   * const myVpc = sst.aws.v5.Vpc.get("MyVpc", "vpc-12345678901234567");
+   * ```
+   *
+   * And pass it in. The VPC link will be placed in the public subnets.
+   *
+   * ```js
+   * {
+   *   vpc: myVpc
+   * }
+   * ```
+   *
+   * The above is equivalent to:
+   *
+   * ```js
+   * {
+   *   vpc: {
+   *     securityGroups: myVpc.securityGroups,
+   *     subnets: myVpc.publicSubnets
+   *   }
+   * }
+   * ```
+   */
+  vpc?:
+    | AnyVpc
+    | Input<{
+        /**
+         * A list of VPC security group IDs.
+         */
+        securityGroups: Input<Input<string>[]>;
+        /**
+         * A list of VPC subnet IDs.
+         */
+        subnets: Input<Input<string>[]>;
+      }>;
 }
 
-export interface ApiGatewayV2RouteArgs
-  extends Omit<OriginalApiGatewayV2RouteArgs, "name" | "transform"> {
+export interface ApiGatewayV2RouteArgs {
+  /**
+   * Enable auth for your HTTP API. By default, auth is disabled.
+   *
+   * @default `false`
+   * @example
+   * ```js
+   * {
+   *   auth: {
+   *     iam: true
+   *   }
+   * }
+   * ```
+   */
+  auth?: Input<
+    | false
+    | {
+        /**
+         * Enable IAM authorization for a given API route. When IAM auth is enabled, clients
+         * need to use Signature Version 4 to sign their requests with their AWS credentials.
+         */
+        iam?: Input<boolean>;
+        /**
+         * Enable JWT or JSON Web Token authorization for a given API route. When JWT auth is enabled, clients need to include a valid JWT in their requests.
+         *
+         * @example
+         * You can configure JWT auth.
+         *
+         * ```js
+         * {
+         *   auth: {
+         *     jwt: {
+         *       authorizer: myAuthorizer.id,
+         *       scopes: ["read:profile", "write:profile"]
+         *     }
+         *   }
+         * }
+         * ```
+         *
+         * Where `myAuthorizer` is created by calling the `addAuthorizer` method.
+         */
+        jwt?: Input<{
+          /**
+           * Authorizer ID of the JWT authorizer.
+           */
+          authorizer: Input<string>;
+          /**
+           * Defines the permissions or access levels that the JWT grants. If the JWT does not have the required scope, the request is rejected. By default it does not require any scopes.
+           */
+          scopes?: Input<Input<string>[]>;
+        }>;
+        /**
+         * Enable custom Lambda authorization for a given API route. Pass in the authorizer ID.
+         *
+         * @example
+         * ```js
+         * {
+         *   auth: {
+         *     lambda: myAuthorizer.id
+         *   }
+         * }
+         * ```
+         *
+         * Where `myAuthorizer` is created by calling the `addAuthorizer` method.
+         */
+        lambda?: Input<string>;
+      }
+  >;
   /**
    * A name for the route. It's used in place of the route itself in the names
    * of the route's resources, and as the route's id in the API's `nodes` and
@@ -166,8 +463,158 @@ export interface ApiGatewayV2RouteArgs
   name?: string;
 }
 
-export interface ApiGatewayV2AuthorizerArgs
-  extends Omit<OriginalApiGatewayV2AuthorizerArgs, "transform"> {}
+export interface ApiGatewayV2AuthorizerArgs {
+  /**
+   * The name of the authorizer.
+   * @example
+   * ```js
+   * {
+   *   name: "myAuthorizer"
+   * }
+   * ```
+   */
+  name: string;
+  /**
+   * Create a JWT or JSON Web Token authorizer that can be used by the routes.
+   *
+   * @example
+   * Configure JWT auth.
+   *
+   * ```js
+   * {
+   *   jwt: {
+   *     issuer: "https://issuer.com/",
+   *     audiences: ["https://api.example.com"],
+   *     identitySource: "$request.header.AccessToken"
+   *   }
+   * }
+   * ```
+   *
+   * You can also use Cognito as the identity provider.
+   *
+   * ```js
+   * {
+   *   jwt: {
+   *     audiences: [userPoolClient.id],
+   *     issuer: $interpolate`https://cognito-idp.${aws.getArnOutput(userPool).region}.amazonaws.com/${userPool.id}`,
+   *   }
+   * }
+   * ```
+   *
+   * Where `userPool` and `userPoolClient` are:
+   *
+   * ```js
+   * const userPool = new aws.cognito.UserPool();
+   * const userPoolClient = new aws.cognito.UserPoolClient();
+   * ```
+   */
+  jwt?: Input<{
+    /**
+     * Base domain of the identity provider that issues JSON Web Tokens.
+     * @example
+     * ```js
+     * {
+     *   issuer: "https://issuer.com/"
+     * }
+     * ```
+     */
+    issuer: Input<string>;
+    /**
+     * List of the intended recipients of the JWT. A valid JWT must provide an `aud` that matches at least one entry in this list.
+     */
+    audiences: Input<Input<string>[]>;
+    /**
+     * Specifies where to extract the JWT from the request.
+     * @default `"$request.header.Authorization"`
+     */
+    identitySource?: Input<string>;
+  }>;
+  /**
+   * Create a Lambda authorizer that can be used by the routes. A plain value: it decides
+   * whether a function is created.
+   *
+   * @example
+   * Configure Lambda auth.
+   *
+   * ```js
+   * {
+   *   lambda: {
+   *     function: "src/authorizer.index"
+   *   }
+   * }
+   * ```
+   */
+  lambda?: {
+    /**
+     * The Lambda authorizer function. Takes the handler path or the function args, which
+     * are plain values, or a function you already have, or its ARN.
+     * @example
+     * Add a simple authorizer.
+     *
+     * ```js
+     * {
+     *   function: "src/authorizer.index"
+     * }
+     * ```
+     *
+     * Customize the authorizer handler.
+     *
+     * ```js
+     * {
+     *   function: {
+     *     handler: "src/authorizer.index",
+     *     memory: "2048 MB"
+     *   }
+     * }
+     * ```
+     */
+    function: FunctionInput;
+    /**
+     * The JWT payload version.
+     * @default `"2.0"`
+     * @example
+     * ```js
+     * {
+     *   payload: "2.0"
+     * }
+     * ```
+     */
+    payload?: Input<"1.0" | "2.0">;
+    /**
+     * The response type.
+     * @default `"simple"`
+     * @example
+     * ```js
+     * {
+     *   response: "iam"
+     * }
+     * ```
+     */
+    response?: Input<"simple" | "iam">;
+    /**
+     * The time to live (TTL) for the authorizer.
+     * @default Not cached
+     * @example
+     * ```js
+     * {
+     *   ttl: "300 seconds"
+     * }
+     * ```
+     */
+    ttl?: Input<DurationHours>;
+    /**
+     * Specifies where to extract the identity from.
+     * @default `["$request.header.Authorization"]`
+     * @example
+     * ```js
+     * {
+     *   identitySources: ["$request.header.RequestToken"]
+     * }
+     * ```
+     */
+    identitySources?: Input<Input<string>[]>;
+  };
+}
 
 /**
  * The `ApiGatewayV2` component lets you add an [Amazon API Gateway HTTP API](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html) to your app.
@@ -244,21 +691,37 @@ export interface ApiGatewayV2AuthorizerArgs
  * #### Switch from `sst.aws.ApiGatewayV2`
  *
  * Change `sst.aws.ApiGatewayV2` to `sst.aws.v5.ApiGatewayV2` and keep the name. The API,
- * its routes, their functions and its authorizers are kept. A few things are written
- * differently:
- *
- * - A route's own `transform`, and the API's `transform.route.handler`, become the API's
- *   `transform` for `handler`, `integration` and `route`.
- * - `domain.nameId` becomes `existing: { domainName }`.
- * - `domain` and `domain.dns` have to be plain values, not outputs.
+ * its domain, its routes, their functions and its authorizers are kept.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const api = new sst.aws.ApiGatewayV2("MyApi");
  * const api = new sst.aws.v5.ApiGatewayV2("MyApi");
  * ```
+ *
+ * A few things work differently:
+ *
+ * - `route`, `routeUrl` and `routePrivate` return the API, so calls chain. What a route
+ *   creates is in the API's `nodes`, by route: `api.nodes.handler["GET /"]`.
+ *   `addAuthorizer` returns the authorizer resource, so `authorizer.id` reads the same.
+ * - A route's own `transform`, an authorizer's own `transform`, and the API's
+ *   `transform.route.handler` become the API's `transform` for `handler`, `integration`,
+ *   `route` and `authorizer`. `transform.route.args` is gone: give each route its `auth`,
+ *   or set `authorizationType` in `transform.route`.
+ * - `domain.nameId` becomes `existing: { domainName }`.
+ * - `domain`, with its `name` and `dns`, has to be a plain value, not an output. So do a
+ *   route's handler and an authorizer's `lambda` with its `function`: they decide what's
+ *   created. A function you already have, or its ARN, can still be an output.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domain they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - `nodes` has every resource, the certificate and each route's included. Reading
+ *   `nodes.domainName` without a domain gives `undefined`, where it failed.
  */
 export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
-  private handlerLink: OriginalFunctionArgs["link"];
+  private handlerLink: FunctionArgs["link"];
 
   constructor(
     name: string,
@@ -274,15 +737,10 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
       ("handler" in routeTransform || "args" in routeTransform)
     )
       throw new VisibleError(
-        `In the "${name}" API, "transform.route" changes each route's API Gateway route, so it has no "handler" or "args". To change the routes' functions, use "transform.handler".`,
+        `In the "${name}" API, "transform.route" changes each route's API Gateway route, so it has no "handler" or "args". To change the routes' functions, use "transform.handler". To give the routes an auth, give it in each route's args, or set "authorizationType" in "transform.route".`,
       );
 
-    const vpc = isVpc(args.vpc)
-      ? {
-          subnets: args.vpc.publicSubnets,
-          securityGroups: args.vpc.securityGroups,
-        }
-      : args.vpc && output(args.vpc);
+    const vpc = vpcLinkNetwork(args.vpc, `the "${name}" API`);
     if (vpc)
       this.part("vpcLink", {
         securityGroupIds: vpc.securityGroups,
@@ -316,23 +774,25 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     });
 
     const existingDomainName = this.existingPart("domainName");
-    if (args.domain || existingDomainName) {
-      plain(args.domain, `The "domain" of the "${name}" API`);
-      const domain =
-        typeof args.domain === "string"
-          ? { name: args.domain }
-          : args.domain ?? {};
-      if (existingDomainName && domain.name)
+    const domain = plain(args.domain, `The "domain" of the "${name}" API`);
+    if (domain || existingDomainName) {
+      const given =
+        typeof domain === "string" ? { name: domain } : domain ?? {};
+      if ("nameId" in given)
+        throw new VisibleError(
+          `The "domain.nameId" of the "${name}" API is given in "existing" now: { domain: { path }, existing: { domainName: "..." } }.`,
+        );
+      if (existingDomainName && given.name)
         throw new VisibleError(
           `The "${name}" API is given an existing "domainName", so it doesn't create one. Remove "name" from its domain.`,
         );
 
-      const domainName = existingDomainName ?? this.createDomainName(domain);
+      const domainName = existingDomainName ?? this.createDomainName(given);
       this.part("domainMapping", {
         apiId: api.id,
         domainName: domainName.id,
         stage: stage.name,
-        apiMappingKey: domain.path,
+        apiMappingKey: given.path,
       });
     }
 
@@ -341,13 +801,13 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
 
   // The custom domain: its certificate, the domain name, and the DNS records
   // that point at it.
-  private createDomainName(args: ApiGatewayV2DomainArgs) {
+  private createDomainName(args: Partial<ApiGatewayV2DomainArgs>) {
     const name = this.componentName;
     if (!args.name)
       throw new VisibleError(
         `Domain "name" is required for the "${name}" API. To use a domain name you already have, pass it in "existing".`,
       );
-    const domain = customDomain(args, `the "${name}" API`);
+    const domain = domainOf(args, `the "${name}" API`);
 
     const certificateArn =
       domain.cert ??
@@ -361,7 +821,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
         securityPolicy: "TLS_1_2",
       },
     });
-    domain.dns?.createAlias(
+    domain.dns?.alias(
       name,
       {
         name: domain.name,
@@ -416,7 +876,8 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
    * :::
    *
    * @param rawRoute The path for the route.
-   * @param handler The function that'll be invoked.
+   * @param handler The function that'll be invoked: its handler or its args, which are
+   * plain values, or a function you already have, or its ARN.
    * @param args Configure the route.
    *
    * @example
@@ -471,15 +932,24 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
    */
   public route(
     rawRoute: string,
-    handler: Input<string | OriginalFunctionArgs | FunctionArn>,
+    handler: FunctionInput,
     args: ApiGatewayV2RouteArgs = {},
   ) {
     const { id, route } = this.newRoute(rawRoute, args);
 
-    const fn = functionPart(this, "handler", id, handler, {
-      description: `${this.componentName} route ${route}`,
-      link: this.handlerLink,
-    });
+    const fn = functionPart(
+      this,
+      "handler",
+      id,
+      plainFunction(
+        handler,
+        `The handler of the "${route}" route of the "${this.componentName}" API`,
+      ),
+      {
+        description: `${this.componentName} route ${route}`,
+        link: this.handlerLink,
+      },
+    );
     const permission = this.part(
       "permission",
       id,
@@ -700,12 +1170,13 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
       });
     }
 
-    const settings = output(args.lambda!);
+    const what = `the "${name}" authorizer of the "${this.componentName}" API`;
+    const settings = plain(args.lambda!, `The "lambda" of ${what}`);
     const fn = functionPart(
       this,
       "authorizerFunction",
       name,
-      settings.function,
+      plainFunction(settings.function, `The "lambda.function" of ${what}`),
       {
         description: `${this.componentName} authorizer`,
       },
@@ -713,18 +1184,18 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     const authorizer = this.part("authorizer", name, {
       apiId: api.id,
       authorizerType: "REQUEST",
-      identitySources: settings.apply(
-        (lambda) => lambda.identitySources ?? [IDENTITY_SOURCE],
+      identitySources: output(settings.identitySources).apply(
+        (sources) => sources ?? [IDENTITY_SOURCE],
       ),
       authorizerUri: fn.targetInvokeArn,
-      authorizerResultTtlInSeconds: settings.apply((lambda) =>
-        toSeconds(lambda.ttl ?? "0 seconds"),
+      authorizerResultTtlInSeconds: output(settings.ttl).apply((ttl) =>
+        toSeconds(ttl ?? "0 seconds"),
       ),
-      authorizerPayloadFormatVersion: settings.apply(
-        (lambda) => lambda.payload ?? "2.0",
+      authorizerPayloadFormatVersion: output(settings.payload).apply(
+        (payload) => payload ?? "2.0",
       ),
-      enableSimpleResponses: settings.apply(
-        (lambda) => (lambda.response ?? "simple") === "simple",
+      enableSimpleResponses: output(settings.response).apply(
+        (response) => (response ?? "simple") === "simple",
       ),
     });
     this.part(
@@ -783,7 +1254,7 @@ const ACCESS_LOG_FORMAT = JSON.stringify({
   //cognitoIdentityId:`"$context.identity.cognitoIdentityId"`, // not supported in us-west-2 region
 });
 
-type Cors = Exclude<Unwrap<OriginalApiGatewayV2Args["cors"]>, undefined>;
+type Cors = Exclude<Unwrap<ApiGatewayV2Args["cors"]>, undefined>;
 
 function corsConfiguration(cors: Cors | undefined) {
   // Left out, not `{}`. AWS keeps `{}` as a CORS config that allows nothing,
@@ -804,7 +1275,7 @@ function corsConfiguration(cors: Cors | undefined) {
       };
 }
 
-type Auth = Exclude<Unwrap<OriginalApiGatewayV2RouteArgs["auth"]>, undefined>;
+type Auth = Exclude<Unwrap<ApiGatewayV2RouteArgs["auth"]>, undefined>;
 
 // How a route is authorized, in the terms API Gateway takes
 function authorization(auth: Auth | undefined): {
@@ -842,4 +1313,21 @@ function parseRoute(rawRoute: string) {
     );
 
   return `${method} ${path}`;
+}
+
+// Where the VPC link is: a `Vpc`'s public subnets and its security groups, or
+// the ids it was given
+function vpcLinkNetwork(vpc: ApiGatewayV2Args["vpc"], what: string) {
+  if (!vpc) return;
+  if (isVpc(vpc)) {
+    // The two `Vpc`s type these differently
+    const securityGroups: Input<Input<string>[]> = vpc.securityGroups;
+    return {
+      subnets: subnetsOf(vpc, "public"),
+      securityGroups: output(securityGroups),
+    };
+  }
+  assertVpcIds(vpc, what);
+  const ids = output(vpc);
+  return { subnets: ids.subnets, securityGroups: ids.securityGroups };
 }

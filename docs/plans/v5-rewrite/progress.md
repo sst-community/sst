@@ -2,6 +2,20 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `ApiGatewayV2` built the 5.0 way, and one domain helper
+
+**Done, committed (not pushed):**
+
+- **One helper for a custom domain built the 5.0 way** (`helpers/domain.ts`): `DomainArgs`, with its docs, and `domainOf()`, which checks that the name and the DNS adapter are plain and that there's a `cert` without one. The `Cdn`'s domain builds on it, so the checks are in one place. The components that aren't rebuilt yet keep SST 4's adapters through `helpers/custom-domain.ts`, which goes with the last of them.
+- **The `ApiGatewayV2`'s own args and docs** (`aws/v5/apigatewayv2.ts`), with no 4.x component file reached, and on the clean break's list. Its domain uses the 5.0 certificate and the DNS adapters, as the `Cdn`'s does: the certificate's map gives its validation records their old names, and SST 4's lookups of the hosted zone leave the state.
+- **What creates a function is a plain value:** a route's handler, and an authorizer's `lambda` with its `function`. A function you already have, or its ARN, can be an output, as for the `Bucket` and the others.
+- **Its `vpc` is either kind of `Vpc` or the ids**, with the VPC link in a `Vpc`'s public subnets, as 4.x put it. Any other resource is refused.
+- **What 4.x took and 5.0 doesn't is refused with what to write:** `domain.nameId` (now `existing.domainName`) and `transform.route.args` (a route's `auth`, or `authorizationType` in `transform.route`), with a route's and an authorizer's own `transform`, which were already.
+
+**Checked:** `tsc`, the docs page, and all platform tests, with the API switched with its `Vpc`, the domain on Route 53, Cloudflare and Vercel taking over 4.x's, a V5 `Vpc`'s public subnets, a resource refused as the `vpc`, outputs refused for a handler and an authorizer, and a function's ARN taken as one.
+
+**Reviewed:** every part, route and authorizer resource matches 4.x's, and the 5.0 adapters name the alias and CAA records as SST 4's did, with the same parent. Fixed from it: the docs say Cloudflare's `ZoneLookup` leaves the state too, and tests for a `cert` with the default DNS, a domain's checks, and a `name` given as an output. Left: the load balancers' own `domainOf()` in `helpers/load-balancer-args.ts`, which goes when the `Alb` is rebuilt.
+
 ## 2026-11-02: step 4, the `Dsql` built the 5.0 way
 
 **Done, committed (not pushed):**

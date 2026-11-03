@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const pulumi = mockPulumi({
   // What the 4.x component wraps things in. They have nothing in AWS behind
@@ -22,19 +23,15 @@ const pulumi = mockPulumi({
             hostedZoneId: "Z1UJRXOUMOOFQ8",
           },
         };
-      case "aws:acm/certificate:Certificate":
-        return {
-          domainValidationOptions: [
-            {
-              resourceRecordType: "CNAME",
-              resourceRecordName: "_abc.api.example.com.",
-              resourceRecordValue: "_def.acm-validations.aws.",
-            },
-          ],
-        };
       default:
         return {};
     }
+  },
+  // The zones a `Vpc` puts its subnets in
+  call: (args) => {
+    if (args.token === "aws:index/getAvailabilityZones:getAvailabilityZones")
+      return { names: ["us-east-1a", "us-east-1b", "us-east-1c"] };
+    return undefined;
   },
 });
 
@@ -49,6 +46,8 @@ describe("ApiGatewayV2", () => {
   let ApiGatewayV2: typeof import("../../../src/components/aws/v5/apigatewayv2").ApiGatewayV2;
 
   let Linkable: typeof import("../../../src/components/linkable").Linkable;
+  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
   let cloudflare: typeof import("../../../src/components/cloudflare/dns");
   let vercel: typeof import("../../../src/components/vercel/dns");
 
@@ -64,6 +63,13 @@ describe("ApiGatewayV2", () => {
     ));
     await import("../../../src/components/aws/takeover/apigatewayv2");
     await import("../../../src/components/aws/takeover/function");
+    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    await import("../../../src/components/aws/takeover/vpc");
+    // What the V5 API creates for a domain takes over 4.x's by this
+    await import(
+      "../../../src/components/aws/takeover/dns-validated-certificate"
+    );
   });
 
   beforeEach(() => pulumi.reset());
@@ -155,6 +161,19 @@ describe("ApiGatewayV2", () => {
               .routeUrl("GET /search", "https://example.com")
               .routePrivate("ANY /internal/{proxy+}", LOAD_BALANCER_ARN),
           wrappers: 2,
+        },
+        // How an app moves: the VPC goes to its 5.0 form along with the API
+        "a VPC link in a Vpc switched with it": {
+          original: (opts) =>
+            new OriginalApiGatewayV2(
+              "MyApi",
+              { vpc: new OriginalVpc("MyVpc") },
+              opts,
+            ),
+          v5: (opts) =>
+            new ApiGatewayV2("MyApi", { vpc: new Vpc("MyVpc") }, opts),
+          // The 4.x Vpc's version marker, with nothing in AWS behind it
+          unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
         "authorizers and route auth": {
           create: (Api, opts) => authorized(new Api("MyApi", {}, opts)),
@@ -372,6 +391,83 @@ describe("ApiGatewayV2", () => {
     ).toThrow(/use "transform.handler"/);
   });
 
+  it("puts its VPC link in a Vpc's public subnets", async () => {
+    const vpc = new Vpc("MyVpc");
+    new ApiGatewayV2("MyApi", { vpc });
+    await pulumi.settle();
+
+    const link = pulumi.resources.find((r) => r.name === "MyApiVpcLink")!;
+    expect(link.inputs.subnetIds).toEqual(
+      await pulumi.resolve(vpc.publicSubnets),
+    );
+    expect(link.inputs.securityGroupIds).toEqual(
+      await pulumi.resolve(vpc.securityGroups),
+    );
+  });
+
+  it("refuses a vpc that isn't a Vpc or its ids", async () => {
+    const { ec2 } = await import("@pulumi/aws");
+    expect(
+      () =>
+        new ApiGatewayV2("MyApi", {
+          vpc: new ec2.Vpc("Other", { cidrBlock: "10.0.0.0/16" }) as any,
+        }),
+    ).toThrow(/The "vpc" of the "MyApi" API isn't a "Vpc" component/);
+  });
+
+  it("needs plain values for the functions it creates", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    const errors = await applyErrors(() => {
+      const api = new ApiGatewayV2("MyApi");
+      api.route("GET /", output("src/get.handler"));
+      api.addAuthorizer({
+        name: "later",
+        lambda: { function: output("src/auth.handler") },
+      });
+    }, pulumi.settle);
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    expect(errors).toContainEqual(
+      expect.stringContaining(
+        `The handler of the "GET /" route of the "MyApi" API is an output that isn't a function or the ARN of one.`,
+      ),
+    );
+    expect(errors).toContainEqual(
+      expect.stringContaining(
+        `The "lambda.function" of the "later" authorizer of the "MyApi" API is an output that isn't a function or the ARN of one.`,
+      ),
+    );
+    expect(() =>
+      new ApiGatewayV2("Other").addAuthorizer({
+        name: "later",
+        lambda: output({ function: FUNCTION_ARN }) as any,
+      }),
+    ).toThrow(
+      /The "lambda" of the "later" authorizer of the "Other" API has to be a plain value/,
+    );
+  });
+
+  it("takes a function's ARN as an output", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    new ApiGatewayV2("MyApi").route("GET /", output(FUNCTION_ARN));
+    await pulumi.settle();
+
+    const integration = pulumi.resources.find(
+      (r) => r.type === "aws:apigatewayv2/integration:Integration",
+    )!;
+    expect(integration.inputs.integrationUri).toBe(FUNCTION_ARN);
+  });
+
+  it("says where a default auth for every route goes", () => {
+    expect(
+      () =>
+        new ApiGatewayV2("MyApi", {
+          transform: { route: { args: { auth: { iam: true } } } } as any,
+        }),
+    ).toThrow(/set "authorizationType" in "transform.route"/);
+  });
+
   it("needs a VPC for a private route", () => {
     expect(() =>
       new ApiGatewayV2("MyApi").routePrivate("GET /", LOAD_BALANCER_ARN),
@@ -417,6 +513,60 @@ describe("ApiGatewayV2", () => {
     ]);
     expect(plain.nodes.domainName).toBeUndefined();
     expect(custom.nodes.certificate).toBeUndefined();
+  });
+
+  it("says where a domain name it doesn't create goes", () => {
+    expect(
+      () =>
+        new ApiGatewayV2("MyApi", {
+          domain: { nameId: "api.example.com", path: "v2" } as any,
+        }),
+    ).toThrow(
+      /The "domain.nameId" of the "MyApi" API is given in "existing" now/,
+    );
+  });
+
+  it("points the domain at itself with a certificate of your own", async () => {
+    new ApiGatewayV2("MyApi", {
+      domain: { name: "api.example.com", cert: CERT_ARN },
+    });
+    await pulumi.settle();
+
+    const created = pulumi.resources.map((r) => r.name);
+    expect(created).not.toContain("MyApiSsl");
+    expect(created).toEqual(
+      expect.arrayContaining([
+        "MyApiARecordApiexamplecom",
+        "MyApiAAAARecordApiexamplecom",
+      ]),
+    );
+    expect(
+      pulumi.resources.find((r) => r.name === "MyApiDomainName")!.inputs
+        .domainNameConfiguration.certificateArn,
+    ).toBe(CERT_ARN);
+  });
+
+  it("checks what its domain is given", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    expect(
+      () => new ApiGatewayV2("NoName", { domain: { path: "v2" } }),
+    ).toThrow(
+      /Domain "name" is required for the "NoName" API. To use a domain name you already have, pass it in "existing"/,
+    );
+    expect(
+      () =>
+        new ApiGatewayV2("Both", {
+          domain: { name: "api.example.com" },
+          existing: { domainName: "api.example.com" },
+        }),
+    ).toThrow(/is given an existing "domainName", so it doesn't create one/);
+    expect(
+      () =>
+        new ApiGatewayV2("Later", {
+          domain: { name: output("api.example.com") as any },
+        }),
+    ).toThrow(/The domain "name" of the "Later" API has to be a plain value/);
+    await pulumi.settle();
   });
 
   it("needs a certificate when DNS is off", () => {

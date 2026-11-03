@@ -19,10 +19,9 @@ import { logicalName } from "../../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { HttpsRedirect } from "./https-redirect";
 import { DistributionDeploymentWaiter } from "../providers/distribution-deployment-waiter";
-import { VisibleError } from "../../error";
 import type { DnsAdapter } from "../../dns-adapter";
-import { dns as awsDns } from "../dns";
 import { useProvider } from "../helpers/provider";
+import { domainOf } from "../helpers/domain";
 
 const parts = {
   /**
@@ -287,19 +286,10 @@ export function cdnDomain(
   owner: string,
 ) {
   if (!domain) return;
-  plain(domain, `The "domain" of ${owner}`);
+  const { name, dns, cert } = domainOf(domain, owner);
   const given: CdnDomainArgs =
     typeof domain === "string" ? { name: domain } : domain;
   const named = "Its DNS records are named after it.";
-  if (!given.name)
-    throw new VisibleError(`Domain "name" is required for ${owner}.`);
-  const name = plain(given.name, `The domain "name" of ${owner}`, named);
-  plain(given.dns, `The domain's "dns" in ${owner}`);
-  const dns = given.dns === false ? undefined : given.dns ?? awsDns();
-  if (!dns && !given.cert)
-    throw new VisibleError(
-      `Domain "cert" is required when "dns" is disabled for ${owner}.`,
-    );
   const plainList = (list: string[], what: string) => {
     plain(list, what);
     return list.map((item) => plain(item, what, named));
@@ -312,7 +302,7 @@ export function cdnDomain(
     given.redirects ?? [],
     `The domain "redirects" of ${owner}`,
   );
-  return { name, aliases, redirects, dns, cert: given.cert };
+  return { name, aliases, redirects, dns, cert };
 }
 
 /**
