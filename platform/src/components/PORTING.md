@@ -364,7 +364,12 @@ when the stage has none of it, so a new stage starts with all of them (`componen
 - A move switches all of a component at once: one that switches some and keeps others
   in SST 4's form is refused, since a later deploy could switch those back without a
   move.
-- One inside another of SST's components moves with that one, and isn't counted.
+- One inside another of SST's components moves with that one, and isn't counted. So
+  a move that keeps the app's own `Bucket` in SST 4's form doesn't list `Bucket`, even
+  when a 5.0 site has a 5.0 one inside it. Until a move switches the app's own, the
+  site's is taken as at version 0 on each run, and gets its first map's aliases
+  again: harmless while the map of a component that's nested only moves parts. One
+  that lists a part as `replaced` or `added` would let that through a later move too.
 
 `mock()` runs as a new stage's first deploy, so a package that still wraps SST 4's form
 of such a component finds out in its tests.

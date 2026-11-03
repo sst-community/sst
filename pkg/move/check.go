@@ -17,6 +17,9 @@
 //   - A file uploaded under a key that follows from what's in it, like a
 //     function's code, is replaced when the file changed, as any deploy
 //     replaces it.
+//   - A Lambda invocation keyed on the time of the deploy, or one of SST's
+//     components keys on what it runs, is replaced when that changed, as any
+//     deploy calls it again.
 //
 // Nothing that holds data is deleted, replaced or emptied, whatever the map
 // says.
@@ -234,6 +237,8 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: replaced[urn].Replaced})
 			case isNewUpload(steps):
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: "Its file changed, and its key follows from the file: any deploy uploads it again under the new key."})
+			case calledAgain(steps) != "":
+				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: calledAgain(steps)})
 			default:
 				problem(urn, step, "replace", "No component's state map says it's replaced."+changedBecause(fields))
 			}
@@ -418,6 +423,82 @@ func isLocalCommand(step apitype.StepEventMetadata) bool {
 	}
 	command, ok := step.Old.Inputs["delete"].(string)
 	return !ok || command == ""
+}
+
+// A time in milliseconds, as JavaScript's `Date.now()` gives it
+var millis = regexp.MustCompile(`^[0-9]{13}$`)
+
+// Why any deploy calls a replaced Lambda invocation again, so its replace
+// isn't the move's doing, or "" when it may be. It's replaced for nothing
+// but what it's keyed on, and either:
+//
+//   - that's the time of the deploy, its `triggers` or its `input`, as SST 4
+//     seeds a Next.js site's ISR data and warms a site's server, and an app
+//     runs its migrations; or
+//   - it's right under one of SST's components, keyed on one `version`, as
+//     the 5.0 sites key the same calls on what they run, which most builds
+//     change.
+func calledAgain(steps []apitype.StepEventMetadata) string {
+	keys := replaceKeys(steps)
+	if len(keys) != 1 || (keys[0] != "triggers" && keys[0] != "input") {
+		return ""
+	}
+	field := keys[0]
+	// What it's keyed on, as one value: the time or the version
+	keyedOn := func(state *apitype.StepEventStateMetadata) (string, bool) {
+		if field == "input" {
+			value, ok := state.Inputs["input"].(string)
+			return value, ok
+		}
+		triggers, ok := state.Inputs["triggers"].(map[string]any)
+		if !ok || len(triggers) != 1 {
+			return "", false
+		}
+		value, ok := triggers["version"].(string)
+		return value, ok
+	}
+	timed, sst := true, field == "triggers"
+	found := false
+	for _, step := range steps {
+		if step.Type != "aws:lambda/invocation:Invocation" {
+			return ""
+		}
+		if !underSst(step.URN) {
+			sst = false
+		}
+		if step.Old == nil || step.New == nil {
+			continue
+		}
+		before, ok := keyedOn(step.Old)
+		if !ok {
+			return ""
+		}
+		after, ok := keyedOn(step.New)
+		if !ok {
+			return ""
+		}
+		timed = timed && millis.MatchString(before) && millis.MatchString(after)
+		found = true
+	}
+	switch {
+	case !found:
+		return ""
+	case timed:
+		return "It's keyed on the time of the deploy, so any deploy calls it again."
+	case sst:
+		return "One of SST's components calls it again whenever what it's keyed on changes, as any deploy does."
+	}
+	return ""
+}
+
+// Whether a resource is right under one of SST's components
+func underSst(urn string) bool {
+	parts := strings.Split(urn, "::")
+	if len(parts) < 4 {
+		return false
+	}
+	chain := strings.Split(parts[2], "$")
+	return len(chain) >= 2 && strings.HasPrefix(chain[len(chain)-2], "sst:")
 }
 
 // The types of an object uploaded to a bucket

@@ -310,6 +310,81 @@ func TestNewUpload(t *testing.T) {
 	assert.Len(t, failed(upload(layer, "deps-"+before, "deps-"+after)), 1)
 }
 
+// What any deploy calls again: an invocation keyed on the time of the deploy,
+// as a 4.x Nextjs seeds its ISR data, a 4.x site with `warm` warms its server
+// and an app runs its migrations; and one a 5.0 site keys on what it runs.
+func TestCalledAgain(t *testing.T) {
+	const timed = "It's keyed on the time of the deploy, so any deploy calls it again."
+	const bySst = "One of SST's components calls it again whenever what it's keyed on changes, as any deploy does."
+	const hashA = "3f1c9a0e5b7d2c4f6a8e0b1d3c5f7a9e2b4d6f8a0c1e3b5d7f9a2c4e6b8d0f1a"
+	const hashB = "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+	const unknownValue = "04da6b54-80e4-46f7-96ec-b56ff0331ba9"
+	// Its replace, at the address it has now; the delete may be at another
+	invocation := func(address, oldAddress, field string, old, new any, replaceKeys ...string) []apitype.StepEventMetadata {
+		if len(replaceKeys) == 0 {
+			replaceKeys = []string{field}
+		}
+		values := inputs(map[string]any{field: old}, map[string]any{field: new})
+		deleted := step(apitype.OpDeleteReplaced, oldAddress)
+		deleted.New = nil
+		return []apitype.StepEventMetadata{
+			step(apitype.OpCreateReplacement, address, keys(replaceKeys...), values),
+			step(apitype.OpReplace, address, keys(replaceKeys...), values),
+			deleted,
+		}
+	}
+	version := func(v string) map[string]any { return map[string]any{"version": v} }
+	const inNext = "sst:aws:Nextjs$aws:lambda/invocation:Invocation"
+	seed := urn(inNext, "NextRevalidationSeed")
+	prewarm := urn("sst:aws:Astro$aws:lambda/invocation:Invocation", "AstroPrewarmUswest2")
+	migrate := urn("aws:lambda/invocation:Invocation", "DatabaseMigratorInvocation")
+
+	allowed := func(steps []apitype.StepEventMetadata, why string) {
+		t.Helper()
+		r := Check(steps, nil)
+		assert.Empty(t, problems(r))
+		if assert.Len(t, r.Replaced, 1) {
+			assert.Equal(t, why, r.Replaced[0].Why)
+		}
+	}
+	failed := func(steps []apitype.StepEventMetadata) {
+		t.Helper()
+		assert.Len(t, problems(Check(steps, nil)), 1)
+	}
+
+	// SST 4's, keyed on the time, whichever machine's clock was ahead
+	allowed(invocation(seed, seed, "triggers", version("1762100000000"), version("1762107000000")), timed)
+	allowed(invocation(prewarm, prewarm, "triggers", version("1762107000000"), version("1762100000000")), timed)
+	// A 5.0 site's, keyed on what it runs, known or not yet
+	allowed(invocation(seed, seed, "triggers", version(hashA), version(hashB)), bySst)
+	allowed(invocation(seed, seed, "triggers", version(hashA), version(unknownValue)), bySst)
+	// Where a map moved it
+	allowed(invocation(seed, urn(inNext, "NextOldSeed"), "triggers", version(hashA), version(hashB)), bySst)
+	// An app's own, keyed on the time: its triggers, or its input
+	allowed(invocation(migrate, migrate, "triggers", version("1762100000000"), version("1762107000000")), timed)
+	allowed(invocation(migrate, migrate, "input", "1762100000000", "1762107000000"), timed)
+
+	// What the map says comes first
+	r := Check(invocation(seed, seed, "triggers", version("1762100000000"), map[string]any{"seed": "abc"}), []Part{{URN: seed, Key: "revalidationSeed", Replaced: "Seeded once."}})
+	assert.Equal(t, "Seeded once.", r.Replaced[0].Why)
+
+	// An app's own keyed on anything but the time
+	failed(invocation(migrate, migrate, "triggers", version(hashA), version(hashB)))
+	failed(invocation(migrate, migrate, "input", `{"step":1}`, `{"step":2}`))
+	// SST's, keyed on more than one version, or on its input
+	failed(invocation(seed, seed, "triggers",
+		map[string]any{"version": hashA, "code": "a"},
+		map[string]any{"version": hashB, "code": "b"}))
+	failed(invocation(seed, seed, "input", hashA, hashB))
+	// Triggers that aren't known as a whole
+	failed(invocation(seed, seed, "triggers", version(hashA), unknownValue))
+	// A replace for more than what it's keyed on, like another function
+	failed(invocation(seed, seed, "triggers", version(hashA), version(hashB), "functionName", "triggers"))
+	// Anything but an invocation
+	permission := urn("sst:aws:Nextjs$aws:lambda/permission:Permission", "NextPermission")
+	failed(invocation(permission, permission, "triggers", version("1762100000000"), version("1762107000000")))
+}
+
 func TestDataIsNeverLost(t *testing.T) {
 	steps := []apitype.StepEventMetadata{
 		step(apitype.OpCreateReplacement, queue, keys("fifoQueue")),

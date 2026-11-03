@@ -187,6 +187,31 @@ describe("the marker of a stage on SST 5's components", () => {
       expect(() => new sst.aws.v5.Bucket("Files")).not.toThrow();
     });
 
+    it("is kept by a move at the top of the app, beside a 5.0 one inside one of SST's", () => {
+      // A 5.0 site's bucket moves with the site; the app's own stays SST 4's
+      stage({ move: true, types: [Bucket] });
+      const site = new Component("sst:aws:Site", "Web");
+      new sst.aws.v5.Bucket("WebAssets", {}, { parent: site });
+      new sst.aws.Bucket("Uploads");
+      expect(leaveMarker("after")?.has(Bucket)).toBe(false);
+      expect(recordVersions()?.has(Bucket)).toBe(false);
+      // So the next deploy runs it and leaves it unlisted, and refuses a 5.0
+      // one at the top
+      newRun();
+      stage({ moved: true, components: {}, types: [Bucket] });
+      expect(leaveMarker("before")?.has(Bucket)).toBe(false);
+      const docs = new Component("sst:aws:Site", "Docs");
+      new sst.aws.v5.Bucket("DocsAssets", {}, { parent: docs });
+      expect(() => new sst.aws.Bucket("Uploads")).not.toThrow();
+      expect(recordVersions()?.has(Bucket)).toBe(false);
+      expect(() => new sst.aws.v5.Bucket("Files")).toThrow(/still has SST 4's/);
+      // Until a move switches it, and lists it
+      newRun();
+      stage({ move: true, moved: true, components: {}, types: [Bucket] });
+      new sst.aws.v5.Bucket("Uploads");
+      expect(leaveMarker("after")?.get(Bucket)).toBe(1);
+    });
+
     it("counts inside an app's or a package's own component", () => {
       stage({ move: true, types: [Bucket] });
       const wrapper = new Component("acme:index:Wrapper", "Wrapper");

@@ -330,13 +330,20 @@ export function recordVersions() {
 // SST 4's form, and what else it created at its version, as an app's own
 // component, whose map may be registered as the program runs. One created
 // later, inside an \`apply\`, is listed so already. SST 4's form is version 0,
-// which is what a stage has of one when nothing's listed.
+// which is what a stage has of one when nothing's listed. One kept in SST 4's
+// form at the top of the app isn't listed even when one of SST's 5.0
+// components has the 5.0 form inside it, like a site's bucket: that one moves
+// with the site, and listing it would refuse the app's own. Until a move
+// switches the app's own, the one inside is taken as at version 0 on each
+// run, and given its first map's aliases again, which only match what's
+// already its own.
 function createdVersions() {
+  const { oldForms, created } = run();
   const versions = new Map(
-    [...versionedTypes()].filter(([type]) => !run().oldForms.has(type)),
+    [...versionedTypes()].filter(([type]) => !oldForms.has(type)),
   );
-  for (const [type, version] of run().created)
-    if (version >= 1) versions.set(type, version);
+  for (const [type, version] of created)
+    if (version >= 1 && !oldForms.has(type)) versions.set(type, version);
   return versions;
 }
 

@@ -2,6 +2,25 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the lab check of the `StaticSite`, and two fixes to the move it found
+
+**Checked in the lab** (a stage of its own, no VPC, with a CLI built from the branch). The lab app's sites group, with `Astro` and `SvelteKit` left out: the router with its two routes, `Nextjs` at its root, a `StaticSite` under `/static`, one with a distribution of its own that has an error page and a viewer response function, and a third one built into `dist` and served without edge routing, with an error page. Only the `StaticSite`s switched; the router, its bucket and `Nextjs` stayed SST 4's.
+
+- **Deployed with SST 4.** The first `sst migrate --check` failed, but not on the static sites: on the `Nextjs` the stage kept, whose ISR seed SST 4 calls again on every deploy (its trigger is the time of the deploy). Fixed (below); then it passed: 113 kept, 6 replaced (the `Nextjs`'s code and its seed, as any deploy of it does), 5 released (the static sites' files and key-value entries), 8 created.
+- **The move** kept every resource of the static sites by id: buckets, distributions, their functions and key-value store, the router's entry, and both origin access controls. Only SST's resources for their files and entries were written again by the binary's, and the built site's build command left the state.
+- **But the marker it left was wrong:** it listed `sst:aws:Bucket` as moved, from the 5.0 buckets inside the 5.0 static sites, so the next `sst diff` refused the router's own bucket, which the stage kept in SST 4's form. Fixed (below). The stage was put back with the copy `sst migrate` saved, as a move that went wrong is undone, and moved again with the fix: the marker lists `sst:aws:StaticSite` and not `Bucket`, `Router` or `Nextjs`.
+- **The same answers before and after**, on 14 paths: the routed site's pages and its fallback, the standalone site's pages with the response function's header and its 404 page, and the built site's pages, its error page for a missing file, and its 404s.
+- **`sst diff` after the move** shows no change to the static sites; only the SST 4 `Nextjs` building again, as it does on every run.
+- **`sst refresh`** built none of the static sites and kept all 127 resources in the state. The SST 4 `Nextjs` built, as SST 4's sites do for a refresh.
+- Removed, and cleaned up: the stage's 170 state versions and delete markers, its `migrate` copies among them, and its passphrase. It left no source maps, and nothing of it is left in CloudFront.
+
+**Fixed:**
+
+- **A move lets through a Lambda invocation any deploy calls again** (`calledAgain()` in `pkg/move/check.go`): one replaced for nothing but what it's keyed on, when that's the time of the deploy, in its `triggers` or its `input`, as SST 4 seeds a Next.js site's ISR data and warms a site's server and an app runs its migrations; or when it's right under one of SST's components and keyed on one `version`, as the 5.0 sites key the same calls on what they run. It extends the decision that what any deploy changes isn't the move's doing.
+- **A component kept in SST 4's form at the top of the app isn't listed as moved**, even when one of SST's 5.0 components has its 5.0 form inside it (`createdVersions()` in `move.ts`). That one moves with the component it's in, as the marker's rules say.
+
+**Reviewed** (both fixes). Fixed from it: the first form of the invocation rule took only SST 4's time-keyed calls, so a later move on a stage with a 5.0 `Nextjs`, whose seed most builds re-key, would have been refused; and it took an app's own invocation keyed on the time in its `triggers` but not in its `input`, as SST's migrations example writes it. The marker's test now covers the next plain deploy, which the old code also got wrong through the record of versions, and the move that switches the app's own bucket. Left, and written down in `move.ts` and `PORTING.md`: until that move, a 5.0 component inside one of SST's whose type the app keeps in SST 4's form gets its first map's aliases on each run. They only match what's already its own, so it's harmless while the maps of the components that are nested only move parts. The exact model, a nested component following its parent's version, is left for later, with a nested component's own version, which a plain deploy moves today.
+
 ## 2026-11-02: step 4, the `StaticSite` built the 5.0 way
 
 **Done, committed (not pushed):**
