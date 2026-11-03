@@ -1,18 +1,77 @@
+import fs from "fs";
+import path from "path";
 import type { Loader } from "esbuild";
-import type { Input } from "@pulumi/pulumi";
-import { cloudfront, cloudwatch, iam, lambda } from "@pulumi/aws";
-import { deferred, many, named, optional } from "../../parts-component";
+import {
+  Config,
+  type Input,
+  type Output,
+  all,
+  asset,
+  interpolate,
+  output,
+} from "@pulumi/pulumi";
+import {
+  Region,
+  cloudfront,
+  cloudwatch,
+  getRegionOutput,
+  iam,
+  lambda,
+} from "@pulumi/aws";
+import {
+  type PartsBuilder,
+  deferred,
+  many,
+  named,
+  optional,
+} from "../../parts-component";
 import type { Prettify } from "../../component";
-import type { DurationSeconds } from "../../duration";
-import type { Size } from "../../size";
+import { notAnOption, plain, plainDeep } from "../../args";
+import { context } from "../../contract";
+import { VisibleError } from "../../error";
+import { markUnknowns, unknown } from "../../check";
+import { physicalName } from "../../naming";
+import { type Size, toMBs } from "../../size";
+import { type DurationSeconds, toSeconds } from "../../duration";
 import type { BaseSiteFileOptions } from "../../base/base-site";
+import { parseLambdaEdgeArn } from "./arn";
+import { useProvider } from "./provider";
+import { type RouteArgs, routeOf } from "./router";
+import { buildSite } from "./site-build";
 import { BucketFiles } from "../resources/bucket-files";
 import { KvKeys } from "../resources/kv-keys";
 import { DistributionInvalidation } from "../providers/distribution-invalidation";
 import { KvRoutesUpdate } from "../providers/kv-routes-update";
+import {
+  CF_BLOCK_CLOUDFRONT_URL_INJECTION,
+  CF_ROUTER_INJECTION,
+  type ProtectionConfig,
+  isSigning,
+  kvNamespace,
+} from "../router-code";
+import {
+  type SitePlan,
+  regionsWithoutFunctionUrls,
+  serverWarmingInjection,
+  siteFiles,
+  siteInvalidation,
+  siteKvEntries,
+} from "../site-code";
 import { Bucket } from "../v5/bucket";
-import { Cdn } from "../v5/cdn";
-import { Function, type FunctionArgs, type FunctionArn } from "../v5/function";
+import { Cdn, type CdnDomainArgs, cdnDomain } from "../v5/cdn";
+import {
+  Function,
+  type FunctionArgs,
+  type FunctionArn,
+  type FunctionPermissionArgs,
+} from "../v5/function";
+
+// The placeholder URL of a site in `sst dev`, which isn't deployed
+export const URL_UNAVAILABLE = "http://url-unavailable-in-dev.mode";
+
+/** Why an arg the site's build reads has to be a plain value. */
+export const BUILD_READS_IT =
+  "The site is built with it, and a preview has to know what's built.";
 
 /**
  * What every site with a server is built from: its assets and their files,
@@ -815,4 +874,937 @@ export interface SsrSiteArgs {
      */
     purge?: Input<boolean>;
   }>;
+}
+
+type SsrSiteParts = ReturnType<typeof ssrSiteParts>;
+
+/**
+ * What each site takes in its own words: its docs name its framework. The
+ * base reads them as they're written there.
+ */
+export interface SiteOwnArgs {
+  dev?:
+    | false
+    | {
+        url?: Input<string>;
+        command?: Input<string>;
+        autostart?: Input<boolean>;
+        directory?: Input<string>;
+        title?: Input<string>;
+      };
+  path?: string;
+  link?: FunctionArgs["link"];
+  environment?: FunctionArgs["environment"];
+  permissions?: FunctionArgs["permissions"];
+  buildCommand?: string;
+  domain?: string | Prettify<CdnDomainArgs>;
+  router?: RouteArgs;
+}
+
+/** A site's build, as its framework reads it. */
+export interface SiteBuild {
+  /** The site's folder, from the app's folder. */
+  sitePath: string;
+  /** The same, on this machine. */
+  outputPath: string;
+  /** What the site serves from S3 and from its server. */
+  plan: SitePlan;
+  /** Whether the build has a server. A static Astro site doesn't. */
+  serves: boolean;
+}
+
+/** What a framework is told about the site, to create what it adds. */
+export interface SsrSiteContext {
+  /** The bucket the assets are in. */
+  bucket: Bucket;
+  /** Whether CloudFront signs its requests to the site's functions. */
+  signs: boolean;
+  /** The CloudFront distribution the site is served through. */
+  distributionArn: Output<string>;
+}
+
+/**
+ * The server's args a framework's build decides. The base adds the rest, and
+ * merges the site's own environment, permissions, links and layers in.
+ */
+export type ServerPlan = Pick<
+  FunctionArgs,
+  | "handler"
+  | "bundle"
+  | "description"
+  | "runtime"
+  | "architecture"
+  | "nodejs"
+  | "copyFiles"
+  | "injections"
+> & {
+  memory?: Size;
+  streaming?: boolean;
+  environment?: Record<string, Input<string>>;
+  permissions?: FunctionPermissionArgs[];
+  layers?: Input<string>[];
+  link?: any[];
+};
+
+/**
+ * What a framework gives the base: how its site is built and read, and what
+ * it creates beside the server.
+ */
+export interface SsrFramework<B extends SiteBuild> {
+  /** The component, in messages: `the "Web" Nextjs site`. */
+  label: string;
+  /** The command that builds the site, when the site isn't given one. */
+  buildCommand(sitePath: string, option: (arg: string) => string): string;
+  /** Reads the build, from the site's folder as it's built. */
+  load(builtPath: string): B;
+  /**
+   * Whether every build has a server, so `nodes.server` lists one in each
+   * region from the start.
+   */
+  alwaysServes: boolean;
+  /**
+   * Checks the framework's own args that decide what's created. It runs where
+   * the base checks its own, which `sst dev` skips.
+   */
+  check?(option: (arg: string) => string): void;
+  /** Creates what the server needs, and says how it's built. */
+  server(build: B, site: SsrSiteContext): ServerPlan;
+  /** Creates what's made after the servers, like an image optimizer. */
+  extras?(build: B, site: SsrSiteContext): { imageOptimizer?: Function };
+}
+
+// What a site created from its build
+interface Built {
+  plan: SitePlan;
+  outputPath: string;
+  servers: { region: string; server: Function }[];
+  imageOptimizer?: Function;
+}
+
+/**
+ * Build a site with a server: what every framework's site creates, from the
+ * plan its framework reads from the build. In `sst dev` the site runs on your
+ * machine instead.
+ *
+ * ```ts
+ * const parts = () => ({ ...ssrSiteParts(), revalidationQueue: ... });
+ * ...
+ * this.siteUrl = createSsrSite(this.builder(), name, args, framework).url;
+ * ```
+ */
+export function createSsrSite<B extends SiteBuild>(
+  builder: PartsBuilder<SsrSiteParts>,
+  name: string,
+  args: SsrSiteArgs & SiteOwnArgs,
+  framework: SsrFramework<B>,
+): { url: Output<string> } {
+  const self = builder.component;
+  const owner = `the "${name}" ${framework.label} site`;
+  const option = (arg: string) => `The "${arg}" of ${owner}`;
+  const isBuilt = BUILD_READS_IT;
+
+  rejectOld();
+  const sitePath = sitePathOf();
+
+  // In `sst dev` the site runs on your machine, in a pane of its own
+  if (context().dev && args.dev !== false) {
+    const dev = args.dev ?? {};
+    const devServer = builder.part("devServer", {
+      description: `${name} dev server`,
+      runtime: "nodejs24.x",
+      timeout: "20 seconds",
+      memory: "128 MB",
+      bundle: path.join(
+        context().paths.platform,
+        "functions",
+        "empty-function",
+      ),
+      handler: "index.handler",
+      environment: args.environment,
+      permissions: args.permissions,
+      link: args.link,
+      dev: false,
+    });
+    builder.runsLocally();
+    const url = output(dev.url ?? URL_UNAVAILABLE);
+    builder.report({
+      dev: {
+        title: dev.title,
+        command: output(dev.command).apply((c) => c ?? "npm run dev"),
+        autostart: dev.autostart,
+        directory: output(dev.directory).apply((d) => d ?? sitePath),
+        environment: args.environment,
+        link: args.link,
+        aws: { role: devServer.nodes.role.arn },
+      },
+    });
+    return { url };
+  }
+
+  // The args that decide which resources are created are read first
+  const regionsArg = regionsOf();
+  // The server's regions, when they're known before the build
+  const serverRegions = regionsArg ?? appRegion();
+  const warm = plain(args.warm, option("warm"));
+  const invalidation = plainDeep(args.invalidation, option("invalidation"));
+  framework.check?.(option);
+  const serverArgs = plain(args.server, option("server")) ?? {};
+  const runtime = plain(serverArgs.runtime, option("server.runtime"), isBuilt);
+  const architecture = plain(
+    serverArgs.architecture,
+    option("server.architecture"),
+    isBuilt,
+  );
+  const install = plainDeep(
+    serverArgs.install,
+    option("server.install"),
+    isBuilt,
+  );
+  const loader = plainDeep(serverArgs.loader, option("server.loader"), isBuilt);
+  const namespace = kvNamespace(name);
+  const routing = router();
+  const timeout = output(serverArgs.timeout).apply((t) => t ?? "20 seconds");
+  const purge = output(args.assets).apply((a) => a?.purge ?? false);
+
+  const bucket = builder.part(
+    "assets",
+    { access: "cloudfront" },
+    { retainOnDelete: false },
+  );
+
+  const build = buildSite({
+    name,
+    sitePath,
+    command:
+      plain(args.buildCommand, option("buildCommand"), isBuilt) ??
+      framework.buildCommand(sitePath, option),
+    environment: args.environment,
+    link: args.link,
+  }).then((builtPath) => {
+    const build = framework.load(builtPath);
+    return { ...build, plan: normalizedPlan(build.plan) };
+  });
+  const built = builder.after(build, createFromBuild);
+  const builtOutput = output(built);
+  if (framework.alwaysServes) promiseRegionalParts();
+
+  const assetFiles = builder.part("assetFiles", {
+    bucketName: bucket.name,
+    files: all([build, args.assets, routing.pathPrefix]).apply(
+      ([build, assets, pathPrefix]) =>
+        siteFiles({
+          plan: build.plan,
+          outputPath: build.outputPath,
+          assets: assets as Parameters<typeof siteFiles>[0]["assets"],
+          pathPrefix,
+          textEncoding: assets?.textEncoding ?? "UTF-8",
+        }),
+    ),
+    purge,
+    region: getRegionOutput({}, { parent: self }).region,
+  });
+
+  const kvKeys = builder.part("kvKeys", {
+    store: routing.kvStoreArn,
+    namespace,
+    entries: all([
+      builtOutput,
+      bucket.nodes.bucket.bucketRegionalDomainName,
+      timeout,
+      routing.protection,
+      routing.pathPrefix,
+    ]).apply(([built, bucketDomain, timeout, protection, pathPrefix]) =>
+      all([
+        built.servers.map(({ region, server }) => ({
+          region,
+          url: server.url,
+        })),
+        built.imageOptimizer?.url,
+      ]).apply(([servers, imageOptimizerUrl]) =>
+        siteKvEntries({
+          name,
+          plan: built.plan,
+          outputPath: built.outputPath,
+          bucketDomain,
+          timeout,
+          protection,
+          pathPrefix,
+          servers,
+          imageOptimizerUrl,
+        }),
+      ),
+    ),
+    purge,
+  });
+
+  const routesUpdate = routing.route
+    ? builder.part("routesUpdate", {
+        store: routing.route.routerKvStoreArn,
+        namespace: routing.route.routerKvNamespace,
+        key: "routes",
+        entry: routing.route.apply((route) =>
+          ["site", namespace, route.hostPattern, route.pathPrefix].join(","),
+        ),
+      })
+    : undefined;
+
+  createInvalidation();
+
+  builder.report({ hint: routing.url });
+
+  function rejectOld() {
+    notAnOption(
+      args,
+      "route",
+      `Serve the site through a Router with "router": { instance: router, path, domain }.`,
+    );
+    notAnOption(args, "cdn", `Serve the site through a Router with "router".`);
+    notAnOption(
+      args.server ?? {},
+      "edge",
+      `Set "edge" on the site itself, not on its "server".`,
+    );
+  }
+
+  function sitePathOf() {
+    const sitePath = plain(args.path, option("path"), isBuilt) ?? ".";
+    if (!fs.existsSync(path.resolve(context().paths.root, sitePath)))
+      throw new VisibleError(
+        `Site directory not found at "${path.resolve(
+          context().paths.root,
+          sitePath,
+        )}". Please check the path setting in your configuration.`,
+      );
+    return sitePath;
+  }
+
+  function regionsOf() {
+    const regions = plain(args.regions, option("regions"));
+    if (regions === undefined) return;
+    if (regions.length === 0)
+      throw new VisibleError(
+        "No deployment regions specified. Please specify at least one region in the 'regions' property.",
+      );
+    regions.forEach(checkRegion);
+    return regions;
+  }
+
+  // Without `regions`, the server is in the region of the site's AWS
+  // provider. When that's the app's, its region is in the app's config. One
+  // given to the site is read in the deploy.
+  function appRegion() {
+    if (self.getProvider("aws::")) return;
+    const region = new Config("aws").get("region");
+    if (!region) return;
+    checkRegion(region);
+    return [region];
+  }
+
+  // The parts made for each region are in `nodes` before they're created,
+  // when the regions are known
+  function promiseRegionalParts() {
+    if (!serverRegions) return;
+    builder.willCreate("server", serverRegions);
+    if (warm)
+      for (const key of [
+        "warmer",
+        "warmerRule",
+        "warmerTarget",
+        "warmerPermission",
+        "prewarm",
+      ] as const)
+        builder.willCreate(key, serverRegions);
+    if (routing.signs === false) builder.willCreate("urlAccess", serverRegions);
+    if (routing.signs === true)
+      for (const key of ["cloudFrontUrlAccess", "cloudFrontInvoke"] as const)
+        builder.willCreate(key, serverRegions);
+  }
+
+  function checkRegion(region: string) {
+    if (!Object.values(Region).includes(region as Region))
+      throw new VisibleError(
+        `Invalid AWS region: "${region}". Please specify a valid AWS region.`,
+      );
+    // `sst refresh` has to work on a stage an earlier deploy left in one of
+    // these regions
+    if (
+      context().command !== "refresh" &&
+      regionsWithoutFunctionUrls.includes(region)
+    )
+      throw new VisibleError(
+        `Region ${region} is not supported by this component, because Lambda function URLs aren't available there. Please select a different AWS region.`,
+      );
+  }
+
+  // How the site is served: through a router, or a distribution of its own
+  function router() {
+    const routerArgs = plain(args.router, option("router"));
+    if (!routerArgs) return standalone();
+
+    if (args.domain)
+      throw new VisibleError(
+        `Cannot provide both "domain" and "router". Use the "domain" prop on the "Router" component when serving your site through a Router.`,
+      );
+    if (args.edge)
+      throw new VisibleError(
+        `Cannot provide both "edge" and "router". Use the "edge" prop on the "Router" component when serving your site through a Router.`,
+      );
+    if (args.protection)
+      throw new VisibleError(
+        `Cannot set "protection" when routing through a Router. Set "protection" on the Router component instead.`,
+      );
+
+    const { route, signs, pathPrefix } = routeOf(routerArgs);
+    return {
+      route,
+      signs,
+      pathPrefix,
+      protection: route.routerProtection as Output<ProtectionConfig>,
+      kvStoreArn: route.routerKvStoreArn,
+      distributionId: route.routerDistributionId,
+      distributionArn: route.routerDistributionArn,
+      url: route.routerUrl,
+    };
+  }
+
+  function standalone() {
+    cdnDomain(args.domain, owner);
+    const protection = protectionOf();
+    const edge = edgeOf();
+
+    const kvStoreArn = output(
+      edge.viewerRequest?.kvStore ?? builder.part("kvStore", {}).arn,
+    );
+    const requestFunction = builder.part("requestFunction", {
+      runtime: "cloudfront-js-2.0",
+      keyValueStoreAssociations: [kvStoreArn],
+      code: interpolate`
+import cf from "cloudfront";
+async function handler(event) {
+  ${edge.viewerRequest?.injection ?? ""}
+  ${args.domain ? CF_BLOCK_CLOUDFRONT_URL_INJECTION : ""}
+  ${CF_ROUTER_INJECTION}
+
+  const kvNamespace = "${namespace}";
+
+  // Load metadata
+  let metadata;
+  try {
+    const v = await cf.kvs().get(kvNamespace + ":metadata");
+    metadata = JSON.parse(v);
+  } catch (e) {}
+
+  const response = await routeSite(kvNamespace, metadata);
+  return response || event.request;
+}`,
+    });
+    const responseFunction = edge.viewerResponse?.injection
+      ? builder.part("responseFunction", {
+          runtime: "cloudfront-js-2.0",
+          keyValueStoreAssociations: edge.viewerResponse.kvStore
+            ? [edge.viewerResponse.kvStore]
+            : [],
+          code: interpolate`
+import cf from "cloudfront";
+async function handler(event) {
+  ${edge.viewerResponse.injection}
+  return event.response;
+}`,
+        })
+      : undefined;
+    const edgeSigner = signerOf(protection);
+
+    const cdn = builder.part("cdn", {
+      comment: `${name} app`,
+      domain: args.domain,
+      origins: [
+        {
+          originId: "default",
+          domainName: "placeholder.sst.dev",
+          customOriginConfig: {
+            httpPort: 80,
+            httpsPort: 443,
+            originProtocolPolicy: "http-only",
+            originReadTimeout: 20,
+            originSslProtocols: ["TLSv1.2"],
+          },
+        },
+      ],
+      defaultCacheBehavior: {
+        targetOriginId: "default",
+        viewerProtocolPolicy: "redirect-to-https",
+        allowedMethods: [
+          "DELETE",
+          "GET",
+          "HEAD",
+          "OPTIONS",
+          "PATCH",
+          "POST",
+          "PUT",
+        ],
+        cachedMethods: ["GET", "HEAD"],
+        compress: true,
+        cachePolicyId: args.cachePolicy ?? cachePolicy().id,
+        // CloudFront's Managed-AllViewerExceptHostHeader policy
+        originRequestPolicyId: "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+        functionAssociations: [
+          { eventType: "viewer-request", functionArn: requestFunction.arn },
+          ...(responseFunction
+            ? [
+                {
+                  eventType: "viewer-response",
+                  functionArn: responseFunction.arn,
+                },
+              ]
+            : []),
+        ],
+        lambdaFunctionAssociations: edgeSigner
+          ? [
+              {
+                eventType: "origin-request",
+                lambdaArn: edgeSigner,
+                includeBody: true,
+              },
+            ]
+          : [],
+      },
+    });
+
+    return {
+      route: undefined,
+      signs: isSigning(protection.mode),
+      pathPrefix: output(undefined as string | undefined),
+      protection: output(protection as ProtectionConfig),
+      kvStoreArn,
+      distributionId: cdn.nodes.distribution.id,
+      distributionArn: cdn.nodes.distribution.arn,
+      url: all([cdn.domainUrl, cdn.url]).apply(
+        ([domainUrl, url]) => (domainUrl ?? url) as string,
+      ),
+    };
+  }
+
+  function protectionOf() {
+    const protection = plain(args.protection, option("protection"));
+    if (!protection) return { mode: "none" as const };
+    if (typeof protection === "string") return { mode: protection };
+    plain(protection.edgeFunction, option("protection.edgeFunction"));
+    const arn = protection.edgeFunction?.arn;
+    if (typeof arn === "string") parseLambdaEdgeArn(arn);
+    return protection;
+  }
+
+  function edgeOf() {
+    const edge = plain(args.edge, option("edge")) ?? {};
+    plain(edge.viewerRequest, option("edge.viewerRequest"));
+    plain(edge.viewerResponse, option("edge.viewerResponse"));
+    return edge;
+  }
+
+  function cachePolicy() {
+    return builder.part("cachePolicy", {
+      comment: "SST server response cache policy",
+      defaultTtl: 0,
+      maxTtl: 31536000, // 1 year
+      minTtl: 0,
+      parametersInCacheKeyAndForwardedToOrigin: {
+        cookiesConfig: {
+          cookieBehavior: "none",
+        },
+        headersConfig: {
+          headerBehavior: "whitelist",
+          headers: {
+            items: ["x-open-next-cache-key", "x-forwarded-host"],
+          },
+        },
+        queryStringsConfig: {
+          queryStringBehavior: "all",
+        },
+        enableAcceptEncodingBrotli: true,
+        enableAcceptEncodingGzip: true,
+      },
+    });
+  }
+
+  // The Lambda@Edge function that signs requests to function URLs: the
+  // user's, or one the site creates
+  function signerOf(protection: ReturnType<typeof protectionOf>) {
+    if (protection.mode !== "oac-with-edge-signing") return;
+    const settings =
+      "edgeFunction" in protection ? protection.edgeFunction : undefined;
+    if (settings?.arn) return settings.arn;
+
+    const role = builder.part(
+      "edgeRole",
+      {
+        name: physicalName(64, `${name}EdgeRole`),
+        assumeRolePolicy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Action: "sts:AssumeRole",
+              Effect: "Allow",
+              Principal: {
+                Service: ["lambda.amazonaws.com", "edgelambda.amazonaws.com"],
+              },
+            },
+          ],
+        }),
+        managedPolicyArns: [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+        ],
+      },
+      { ignoreChanges: ["name"] },
+    );
+    return builder.part(
+      "edgeFunction",
+      {
+        name: physicalName(64, `${name}EdgeFn`),
+        runtime: "nodejs24.x",
+        handler: "index.handler",
+        role: role.arn,
+        code: new asset.FileArchive(
+          path.join(context().paths.platform, "dist", "oac-edge-signer"),
+        ),
+        publish: true,
+        timeout: output(settings?.timeout).apply((timeout) =>
+          timeout ? toSeconds(timeout) : 5,
+        ),
+        memorySize: output(settings?.memory).apply((memory) =>
+          memory ? toMBs(memory) : 128,
+        ),
+        description: `${name} Lambda@Edge function for OAC request signing`,
+      },
+      { provider: useProvider("us-east-1"), ignoreChanges: ["name"] },
+    ).qualifiedArn;
+  }
+
+  // Creates what's made from the build: the servers, what the framework
+  // adds, the warmers and the permissions
+  async function createFromBuild(build: B): Promise<Built> {
+    const plan = build.plan;
+    // A site with no server, like a static Astro site, is files alone
+    if (!build.serves)
+      return {
+        plan: await checkedPlan(plan),
+        outputPath: build.outputPath,
+        servers: [],
+      };
+
+    const regions = serverRegions ?? [
+      await known(
+        getRegionOutput({}, { parent: self }).region,
+        "The region of the site's server",
+      ),
+    ];
+    if (!serverRegions) regions.forEach(checkRegion);
+    const signs = await signsOf();
+    const authorization = signs ? ("iam" as const) : ("none" as const);
+    await checkedPlan(plan);
+    const serverPlan = framework.server(build, siteOf(signs));
+
+    const servers = regions.map((region) => {
+      const provider = useProvider(region as Region);
+      const server = builder.part(
+        "server",
+        region,
+        {
+          ...serverPlan,
+          description: serverPlan.description ?? `${name} server`,
+          runtime: runtime ?? serverPlan.runtime ?? "nodejs24.x",
+          timeout,
+          memory: output(serverArgs.memory).apply(
+            (v) => v ?? serverPlan.memory ?? "1024 MB",
+          ),
+          architecture: architecture ?? serverPlan.architecture ?? "x86_64",
+          vpc: args.vpc,
+          nodejs: {
+            ...serverPlan.nodejs,
+            format: "esm" as const,
+            install: {
+              ...Object.fromEntries((install ?? []).map((pkg) => [pkg, "*"])),
+              ...installOf(serverPlan.nodejs?.install),
+            },
+            loader: loader ?? serverPlan.nodejs?.loader,
+          },
+          environment: output(args.environment).apply((environment) => ({
+            ...environment,
+            ...serverPlan.environment,
+          })),
+          permissions: output(args.permissions).apply((permissions) => [
+            {
+              actions: ["cloudfront:CreateInvalidation"],
+              resources: ["*"],
+            },
+            ...(permissions ?? []),
+            ...(serverPlan.permissions ?? []),
+          ]),
+          injections: [
+            ...(warm ? [serverWarmingInjection(serverPlan.streaming)] : []),
+            ...(serverPlan.injections ?? []),
+          ],
+          link: serverPlan.link
+            ? output(args.link).apply((link) => [
+                ...(serverPlan.link as any[]),
+                ...(link ?? []),
+              ])
+            : args.link,
+          layers: output(serverArgs.layers).apply((layers) => [
+            ...(serverPlan.layers ?? []),
+            ...(layers ?? []),
+          ]),
+          url: { authorization },
+          dev: false,
+          _skipHint: true,
+        },
+        { provider },
+      );
+      if (warm) createWarmer(region, server, plan);
+      return { region, server };
+    });
+
+    // Who may call the servers' URLs
+    for (const { region, server } of servers) {
+      const access = urlAccessArgs(server, routing.distributionArn);
+      const opts = {
+        provider: useProvider(region as Region),
+        dependsOn: server.nodes.url ? [server.nodes.url] : [],
+      };
+      if (!signs) {
+        builder.part("urlAccess", region, access.public, opts);
+        continue;
+      }
+      builder.part("cloudFrontUrlAccess", region, access.cloudFrontUrl, opts);
+      builder.part("cloudFrontInvoke", region, access.cloudFrontInvoke, opts);
+    }
+
+    const { imageOptimizer } = framework.extras?.(build, siteOf(signs)) ?? {};
+    return { plan, outputPath: build.outputPath, servers, imageOptimizer };
+  }
+
+  // What the framework is told about the site, to create what it adds
+  function siteOf(signs?: boolean): SsrSiteContext {
+    return {
+      bucket,
+      signs: signs ?? false,
+      distributionArn: routing.distributionArn,
+    };
+  }
+
+  async function signsOf() {
+    return typeof routing.signs === "boolean"
+      ? routing.signs
+      : await known(
+          routing.signs,
+          "Whether the router signs its requests to the site",
+        );
+  }
+
+  // The plan's base path, checked against the path the site is routed on
+  async function checkedPlan(plan: SitePlan) {
+    const pathPrefix = markUnknowns(
+      await (routing.pathPrefix as any).promise(true),
+    );
+    if (typeof pathPrefix === "string" && pathPrefix !== "/") {
+      if (!plan.base)
+        throw new VisibleError(
+          `No base path found for site. You must configure the base path to match the route path prefix "${pathPrefix}".`,
+        );
+      if (!plan.base.startsWith(pathPrefix))
+        throw new VisibleError(
+          `The site base path "${plan.base}" must start with the route path prefix "${pathPrefix}".`,
+        );
+    }
+    return plan;
+  }
+
+  function createWarmer(region: string, server: Function, plan: SitePlan) {
+    const provider = { provider: useProvider(region as Region) };
+    const warmer = builder.part(
+      "warmer",
+      region,
+      {
+        description: `${name} warmer`,
+        bundle: path.join(context().paths.platform, "dist", "ssr-warmer"),
+        runtime: "nodejs24.x",
+        handler: "index.handler",
+        timeout: "900 seconds",
+        memory: "128 MB",
+        dev: false,
+        environment: {
+          FUNCTION_NAME: server.nodes.function.name,
+          CONCURRENCY: String(warm),
+        },
+        link: [server],
+        _skipMetadata: true,
+      },
+      provider,
+    );
+    const rule = builder.part(
+      "warmerRule",
+      region,
+      {
+        scheduleExpression: "rate(5 minutes)",
+        state: "ENABLED",
+      },
+      provider,
+    );
+    builder.part(
+      "warmerPermission",
+      region,
+      {
+        action: "lambda:InvokeFunction",
+        function: warmer.arn,
+        qualifier: warmer.qualifier.apply((qualifier) => qualifier!),
+        principal: "events.amazonaws.com",
+        sourceArn: rule.arn,
+      },
+      provider,
+    );
+    builder.part(
+      "warmerTarget",
+      region,
+      {
+        arn: warmer.targetArn,
+        rule: rule.name,
+        input: JSON.stringify({}),
+        retryPolicy: {
+          maximumRetryAttempts: 0,
+          maximumEventAgeInSeconds: 60,
+        },
+      },
+      provider,
+    );
+    // Warms the server when it's built
+    builder.part(
+      "prewarm",
+      region,
+      {
+        functionName: warmer.nodes.function.name,
+        triggers: {
+          version: plan.buildId ?? server.nodes.function.codeSha256,
+        },
+        input: JSON.stringify({}),
+      },
+      provider,
+    );
+  }
+
+  function createInvalidation() {
+    if (invalidation === false) return;
+    if (Array.isArray(invalidation?.paths) && invalidation.paths.length === 0)
+      return;
+
+    const plan = builtOutput.apply((built) => {
+      const of = (
+        serverCodeHashes: string[],
+        imageOptimizerCodeHash?: string,
+      ) => {
+        const result = siteInvalidation({
+          invalidation,
+          plan: built.plan,
+          outputPath: built.outputPath,
+          serverCodeHashes,
+          imageOptimizerCodeHash,
+        });
+        if (!result)
+          throw new VisibleError(
+            `The "${name}" site has no cached files to invalidate.`,
+          );
+        return result;
+      };
+      // The build id is the version when there is one. Without one, the
+      // functions' code is part of it.
+      if (built.plan.buildId) return output(of([]));
+      return all([
+        all(
+          built.servers.map(({ server }) => server.nodes.function.codeSha256),
+        ),
+        built.imageOptimizer?.nodes.function.codeSha256,
+      ]).apply(([hashes, imageOptimizerHash]) =>
+        of(hashes, imageOptimizerHash),
+      );
+    });
+    builder.part(
+      "invalidation",
+      {
+        distributionId: routing.distributionId,
+        paths: plan.paths,
+        version: plan.version,
+        wait: plan.wait,
+      },
+      {
+        dependsOn: [
+          assetFiles,
+          kvKeys,
+          ...(routesUpdate ? [routesUpdate] : []),
+        ],
+      },
+    );
+  }
+
+  return { url: routing.url };
+}
+
+// The plan as the site reads it: its base path starting with a slash and not
+// ending with one, and where its files go in the bucket without a slash
+// around it, which would put them in a folder named "/"
+function normalizedPlan(plan: SitePlan): SitePlan {
+  const trim = (to: string) => to.replace(/^\/|\/$/g, "");
+  return {
+    ...plan,
+    ...(plan.base && {
+      base: (plan.base.startsWith("/") ? plan.base : `/${plan.base}`).replace(
+        /\/$/,
+        "",
+      ),
+    }),
+    assets: plan.assets.map((copy) => ({ ...copy, to: trim(copy.to) })),
+    ...(plan.isrCache && {
+      isrCache: { ...plan.isrCache, to: trim(plan.isrCache.to) },
+    }),
+  };
+}
+
+/**
+ * The args of the permissions that let callers reach a function's URL: anyone,
+ * or CloudFront when it signs its requests.
+ */
+export function urlAccessArgs(fn: Function, distributionArn: Input<string>) {
+  return {
+    public: {
+      action: "lambda:InvokeFunctionUrl",
+      function: fn.nodes.function.name,
+      principal: "*",
+      functionUrlAuthType: "NONE",
+    },
+    cloudFrontUrl: {
+      action: "lambda:InvokeFunctionUrl",
+      function: fn.nodes.function.name,
+      principal: "cloudfront.amazonaws.com",
+      sourceArn: distributionArn,
+    },
+    cloudFrontInvoke: {
+      action: "lambda:InvokeFunction",
+      function: fn.nodes.function.name,
+      principal: "cloudfront.amazonaws.com",
+      sourceArn: distributionArn,
+      invokedViaFunctionUrl: true,
+    },
+  };
+}
+
+// The packages a plan installs, as a record
+function installOf(install: unknown): Record<string, string> {
+  if (Array.isArray(install))
+    return Object.fromEntries(install.map((pkg: string) => [pkg, "*"]));
+  return (install as Record<string, string> | undefined) ?? {};
+}
+
+// A value, once it's known. What a preview knows is known.
+async function known<T>(value: Input<T>, what: string): Promise<T> {
+  const resolved = markUnknowns(await (output(value) as any).promise(true));
+  if (resolved === unknown)
+    throw new VisibleError(`${what} isn't known before the deploy.`);
+  return resolved as T;
 }

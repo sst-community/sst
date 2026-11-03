@@ -2,6 +2,24 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, one base for the sites with a server, out of `Nextjs`
+
+**Done, committed (not pushed):**
+
+- **What every site with a server creates is in `helpers/ssr-site.ts`**, as the databases' is in `helpers/rds-instance.ts`: the shared parts (`ssrSiteParts`), the shared args (`SsrSiteArgs`), and `createSsrSite(this.builder(), name, args, framework)`, which creates the site from its build: the bucket and its files, the server in each region with its warmer and the permissions to call it, the distribution or the route through a router, the key-value entries and the invalidation, and in `sst dev` the pane the site runs in.
+- **A framework says what's its own** (`SsrFramework`): the command that builds the site when it isn't given one, how its build is read (a `SiteBuild`, with the plan of what's served from S3 and from the server, and whether it has a server), how the server is built (a `ServerPlan`, which the site's own `environment`, `permissions`, `link`, `layers` and `server` args are merged into, as SST 4 merges them), and what it creates beside the server. `Nextjs`'s is OpenNext's build command, ISR's queue, table and seed, and the image optimizer. With a build id, the prewarm is keyed by it; without one, by the server's code.
+- **`Nextjs` is a call to it now**, and its file is about 780 lines shorter.
+- Committed first, on their own: the shared parts and args, `after()` and `willCreate()` on `PartsBuilder`, and the docs generator following a spread of shared parts.
+
+**Checked:** `tsc`, all platform tests, and the `Nextjs` docs page, the same before and after. A dump of every resource `Nextjs` registers, with its inputs, options, parent and what its functions are built from, is the same before and after in six setups: plain; two regions with `warm`, a domain and most args; behind a signing V5 `Router` under a path; signed by an edge function; ISR off; and `sst dev`.
+
+**Reviewed:** nothing `Nextjs` deploys or reports changes, and its args are read in the same order. The base merges a `ServerPlan` with the site's args as SST 4 does for `Astro` and `SvelteKit`. Fixed from it: where a plan puts its files in the bucket loses a slash around it, as SST 4 trims it. The plan is made ready once, as the build is read, without changing the framework's own. Left for `Astro` and `SvelteKit`, from the review:
+
+- A default build command when the site isn't given one, from the app's lockfile, as SST 4's sites pick `npm`, `yarn`, `pnpm` or `bun`.
+- `Astro`'s check of its adapter runs before every build in SST 4, a given `buildCommand` or not; a framework needs a hook for that, which `check` isn't: it runs before the build command is known, and isn't given the site's path.
+- A framework can't set its server's default timeout (SST 4's plan could); neither framework does.
+- With `warm`, their server is warmed again when its code changes, where SST 4 warmed it on every deploy: their switch docs say so.
+
 ## 2026-11-02: step 4, the lab check of the load balancers' domains, with the containers group
 
 **Checked in the lab** (a stage of its own, the only one with a VPC, with a CLI built from the branch). The lab app's containers group: a `Service` with a load balancer and a domain of its own, an `Alb` with a domain and a `Service` on it, a `Task` with a `CronV2`, an `Efs`, and a function in the VPC that mounts the file system, all switched at once with the `Vpc`.

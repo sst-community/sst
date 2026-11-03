@@ -2,78 +2,44 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { globSync } from "glob";
-import type { Loader } from "esbuild";
 import {
   ComponentResourceOptions,
-  Config,
   Input,
   Output,
-  all,
-  asset,
   interpolate,
-  output,
 } from "@pulumi/pulumi";
-import {
-  Region,
-  cloudfront,
-  cloudwatch,
-  dynamodb,
-  getRegionOutput,
-  iam,
-  lambda,
-} from "@pulumi/aws";
+import { dynamodb, getRegionOutput, lambda } from "@pulumi/aws";
 import {
   type ComponentArgs,
+  type PartsBuilder,
   component,
   deferred,
-  many,
   named,
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { notAnOption, plain, plainDeep } from "../../args";
+import { plain, plainDeep } from "../../args";
 import { context } from "../../contract";
 import { VisibleError } from "../../error";
-import { markUnknowns, unknown } from "../../check";
-import { physicalName } from "../../naming";
-import { type Size, toMBs } from "../../size";
-import { type DurationSeconds, toSeconds } from "../../duration";
+import type { Size } from "../../size";
 import { isALteB, isALtB } from "../../../util/compare-semver";
-import type { BaseSiteFileOptions } from "../../base/base-site";
-import { parseLambdaEdgeArn } from "../helpers/arn";
-import { useProvider } from "../helpers/provider";
-import { type RouteArgs, routeOf } from "../helpers/router";
-import { buildSite } from "../helpers/site-build";
-import { type SsrSiteArgs, ssrSiteParts } from "../helpers/ssr-site";
-import { BucketFiles } from "../resources/bucket-files";
-import { DistributionInvalidation } from "../providers/distribution-invalidation";
-import { KvKeys } from "../resources/kv-keys";
-import { KvRoutesUpdate } from "../providers/kv-routes-update";
+import type { RouteArgs } from "../helpers/router";
 import {
-  CF_BLOCK_CLOUDFRONT_URL_INJECTION,
-  CF_ROUTER_INJECTION,
-  type ProtectionConfig,
-  isSigning,
-  kvNamespace,
-} from "../router-code";
-import {
-  type SitePlan,
-  regionsWithoutFunctionUrls,
-  serverWarmingInjection,
-  siteFiles,
-  siteInvalidation,
-  siteKvEntries,
-} from "../site-code";
-import { Bucket } from "./bucket";
-import { Cdn, type CdnDomainArgs, cdnDomain } from "./cdn";
-import { Function, type FunctionArgs, type FunctionArn } from "./function";
+  BUILD_READS_IT,
+  type SiteBuild,
+  type SsrFramework,
+  type SsrSiteArgs,
+  createSsrSite,
+  ssrSiteParts,
+  urlAccessArgs,
+} from "../helpers/ssr-site";
+import type { SitePlan } from "../site-code";
+import type { CdnDomainArgs } from "./cdn";
+import { Function, type FunctionArgs } from "./function";
 import { Queue } from "./queue";
 
 const DEFAULT_OPEN_NEXT_VERSION = "3.9.14";
 const DEFAULT_OPEN_NEXT_VERSION_NEXT14 = "3.6.6";
-
-// The placeholder URL of a site in `sst dev`, which isn't deployed
-const URL_UNAVAILABLE = "http://url-unavailable-in-dev.mode";
 
 const parts = () => ({
   ...ssrSiteParts(),
@@ -578,26 +544,6 @@ const ASSETS: Pick<SitePlan, "assets" | "isrCache"> = {
   },
 };
 
-// The site's build: where it is, and what OpenNext made
-interface Build {
-  /** The site's folder, from the app's folder */
-  sitePath: string;
-  /** The same, on this machine */
-  outputPath: string;
-  openNext: OpenNextOutput;
-  buildId: string;
-  base?: string;
-  prerenderedRoutes: number;
-}
-
-// What the site created from its build
-interface Built {
-  plan: SitePlan;
-  outputPath: string;
-  servers: { region: string; server: Function }[];
-  imageOptimizer: Function;
-}
-
 /**
  * The `Nextjs` component lets you deploy [Next.js](https://nextjs.org) apps on AWS. It uses
  * [OpenNext](https://open-next.js.org) to build your Next.js app, and transforms the build
@@ -720,1120 +666,13 @@ export class Nextjs extends component("sst:aws:Nextjs", parts) {
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
-    const self = this;
-    const owner = `the "${name}" Nextjs site`;
-    const option = (arg: string) => `The "${arg}" of ${owner}`;
-    // What's built is read from these, and a preview has to know what's built
-    const isBuilt =
-      "The site is built with it, and a preview has to know what's built.";
-
-    rejectOld();
-    const sitePath = sitePathOf();
-
-    // In `sst dev` the site runs on your machine, in a pane of its own
-    if (context().dev && args.dev !== false) {
-      const dev = args.dev ?? {};
-      const devServer = this.part("devServer", {
-        description: `${name} dev server`,
-        runtime: "nodejs24.x",
-        timeout: "20 seconds",
-        memory: "128 MB",
-        bundle: path.join(
-          context().paths.platform,
-          "functions",
-          "empty-function",
-        ),
-        handler: "index.handler",
-        environment: args.environment,
-        permissions: args.permissions,
-        link: args.link,
-        dev: false,
-      });
-      this.runsLocally();
-      this.siteUrl = output(dev.url ?? URL_UNAVAILABLE);
-      this.report({
-        dev: {
-          title: dev.title,
-          command: output(dev.command).apply((c) => c ?? "npm run dev"),
-          autostart: dev.autostart,
-          directory: output(dev.directory).apply((d) => d ?? sitePath),
-          environment: args.environment,
-          link: args.link,
-          aws: { role: devServer.nodes.role.arn },
-        },
-      });
-      return;
-    }
-
-    // The args that decide which resources are created are read first
-    const regionsArg = regionsOf();
-    // The server's regions, when they're known before the build
-    const serverRegions = regionsArg ?? appRegion();
-    const warm = plain(args.warm, option("warm"));
-    const invalidation = plainDeep(args.invalidation, option("invalidation"));
-    const imageOptimization = plainDeep(
-      args.imageOptimization,
-      option("imageOptimization"),
-    );
-    const serverArgs = plain(args.server, option("server")) ?? {};
-    const runtime = plain(
-      serverArgs.runtime,
-      option("server.runtime"),
-      isBuilt,
-    );
-    const architecture = plain(
-      serverArgs.architecture,
-      option("server.architecture"),
-      isBuilt,
-    );
-    const install = plainDeep(
-      serverArgs.install,
-      option("server.install"),
-      isBuilt,
-    );
-    const loader = plainDeep(
-      serverArgs.loader,
-      option("server.loader"),
-      isBuilt,
-    );
-    const namespace = kvNamespace(name);
-    const routing = router();
-    const timeout = output(serverArgs.timeout).apply((t) => t ?? "20 seconds");
-    const purge = output(args.assets).apply((a) => a?.purge ?? false);
-
-    const bucket = this.part(
-      "assets",
-      { access: "cloudfront" },
-      { retainOnDelete: false },
-    );
-
-    const build = buildSite({
+    const builder = this.builder();
+    this.siteUrl = createSsrSite(
+      builder,
       name,
-      sitePath,
-      command: buildCommandOf(),
-      environment: args.environment,
-      link: args.link,
-    }).then(loadBuild);
-    const built = this.after(build, createFromBuild);
-    const builtOutput = output(built);
-    promiseRegionalParts();
-
-    const assetFiles = this.part("assetFiles", {
-      bucketName: bucket.name,
-      files: all([build, args.assets, routing.pathPrefix]).apply(
-        ([build, assets, pathPrefix]) =>
-          siteFiles({
-            plan: ASSETS,
-            outputPath: build.outputPath,
-            assets: assets as Parameters<typeof siteFiles>[0]["assets"],
-            pathPrefix,
-            textEncoding: assets?.textEncoding ?? "UTF-8",
-          }),
-      ),
-      purge,
-      region: getRegionOutput({}, { parent: this }).region,
-    });
-
-    const kvKeys = this.part("kvKeys", {
-      store: routing.kvStoreArn,
-      namespace,
-      entries: all([
-        builtOutput,
-        bucket.nodes.bucket.bucketRegionalDomainName,
-        timeout,
-        routing.protection,
-        routing.pathPrefix,
-      ]).apply(([built, bucketDomain, timeout, protection, pathPrefix]) =>
-        all([
-          built.servers.map(({ region, server }) => ({
-            region,
-            url: server.url,
-          })),
-          built.imageOptimizer.url,
-        ]).apply(([servers, imageOptimizerUrl]) =>
-          siteKvEntries({
-            name,
-            plan: built.plan,
-            outputPath: built.outputPath,
-            bucketDomain,
-            timeout,
-            protection,
-            pathPrefix,
-            servers,
-            imageOptimizerUrl,
-          }),
-        ),
-      ),
-      purge,
-    });
-
-    const routesUpdate = routing.route
-      ? this.part("routesUpdate", {
-          store: routing.route.routerKvStoreArn,
-          namespace: routing.route.routerKvNamespace,
-          key: "routes",
-          entry: routing.route.apply((route) =>
-            ["site", namespace, route.hostPattern, route.pathPrefix].join(","),
-          ),
-        })
-      : undefined;
-
-    createInvalidation();
-
-    this.siteUrl = routing.url;
-    this.report({ hint: this.siteUrl });
-
-    function rejectOld() {
-      notAnOption(
-        args,
-        "route",
-        `Serve the site through a Router with "router": { instance: router, path, domain }.`,
-      );
-      notAnOption(
-        args,
-        "cdn",
-        `sst.aws.Nextjs no longer took it either. Serve the site through a Router with "router".`,
-      );
-      notAnOption(
-        args.server ?? {},
-        "edge",
-        `Set "edge" on the site itself, not on its "server".`,
-      );
-    }
-
-    function sitePathOf() {
-      const sitePath = plain(args.path, option("path"), isBuilt) ?? ".";
-      if (!fs.existsSync(path.resolve(context().paths.root, sitePath)))
-        throw new VisibleError(
-          `Site directory not found at "${path.resolve(
-            context().paths.root,
-            sitePath,
-          )}". Please check the path setting in your configuration.`,
-        );
-      return sitePath;
-    }
-
-    function regionsOf() {
-      const regions = plain(args.regions, option("regions"));
-      if (regions === undefined) return;
-      if (regions.length === 0)
-        throw new VisibleError(
-          "No deployment regions specified. Please specify at least one region in the 'regions' property.",
-        );
-      regions.forEach(checkRegion);
-      return regions;
-    }
-
-    // Without `regions`, the server is in the region of the site's AWS
-    // provider. When that's the app's, its region is in the app's config. One
-    // given to the site is read in the deploy.
-    function appRegion() {
-      if (self.getProvider("aws::")) return;
-      const region = new Config("aws").get("region");
-      if (!region) return;
-      checkRegion(region);
-      return [region];
-    }
-
-    // The parts made for each region are in `nodes` before they're created,
-    // when the regions are known
-    function promiseRegionalParts() {
-      if (!serverRegions) return;
-      self.willCreate("server", serverRegions);
-      if (warm)
-        for (const key of [
-          "warmer",
-          "warmerRule",
-          "warmerTarget",
-          "warmerPermission",
-          "prewarm",
-        ] as const)
-          self.willCreate(key, serverRegions);
-      if (routing.signs === false) self.willCreate("urlAccess", serverRegions);
-      if (routing.signs === true)
-        for (const key of ["cloudFrontUrlAccess", "cloudFrontInvoke"] as const)
-          self.willCreate(key, serverRegions);
-    }
-
-    function checkRegion(region: string) {
-      if (!Object.values(Region).includes(region as Region))
-        throw new VisibleError(
-          `Invalid AWS region: "${region}". Please specify a valid AWS region.`,
-        );
-      // `sst refresh` has to work on a stage an earlier deploy left in one of
-      // these regions
-      if (
-        context().command !== "refresh" &&
-        regionsWithoutFunctionUrls.includes(region)
-      )
-        throw new VisibleError(
-          `Region ${region} is not supported by this component, because Lambda function URLs aren't available there. Please select a different AWS region.`,
-        );
-    }
-
-    function buildCommandOf() {
-      const command = plain(args.buildCommand, option("buildCommand"), isBuilt);
-      if (command) return command;
-      const version =
-        plain(args.openNextVersion, option("openNextVersion"), isBuilt) ??
-        defaultOpenNextVersion();
-      const packageName = isALteB(version, "3.1.3")
-        ? "open-next"
-        : "@opennextjs/aws";
-      return `npx --yes ${packageName}@${version} build`;
-    }
-
-    // OpenNext dropped Next.js 14 after 3.6.6
-    function defaultOpenNextVersion() {
-      try {
-        const pkg = JSON.parse(
-          fs.readFileSync(
-            path.resolve(context().paths.root, sitePath, "package.json"),
-            "utf-8",
-          ),
-        );
-        const nextVersion = pkg.dependencies?.next ?? pkg.devDependencies?.next;
-        if (nextVersion && isALtB(nextVersion, "15.0.0"))
-          return DEFAULT_OPEN_NEXT_VERSION_NEXT14;
-      } catch {
-        console.warn(
-          `Failed to detect Next.js version. Using OpenNext v${DEFAULT_OPEN_NEXT_VERSION} as default.`,
-        );
-      }
-      return DEFAULT_OPEN_NEXT_VERSION;
-    }
-
-    // How the site is served: through a router, or a distribution of its own
-    function router() {
-      const routerArgs = plain(args.router, option("router"));
-      if (!routerArgs) return standalone();
-
-      if (args.domain)
-        throw new VisibleError(
-          `Cannot provide both "domain" and "router". Use the "domain" prop on the "Router" component when serving your site through a Router.`,
-        );
-      if (args.edge)
-        throw new VisibleError(
-          `Cannot provide both "edge" and "router". Use the "edge" prop on the "Router" component when serving your site through a Router.`,
-        );
-      if (args.protection)
-        throw new VisibleError(
-          `Cannot set "protection" when routing through a Router. Set "protection" on the Router component instead.`,
-        );
-
-      const { route, signs, pathPrefix } = routeOf(routerArgs);
-      return {
-        route,
-        signs,
-        pathPrefix,
-        protection: route.routerProtection as Output<ProtectionConfig>,
-        kvStoreArn: route.routerKvStoreArn,
-        distributionId: route.routerDistributionId,
-        distributionArn: route.routerDistributionArn,
-        url: route.routerUrl,
-      };
-    }
-
-    function standalone() {
-      cdnDomain(args.domain, owner);
-      const protection = protectionOf();
-      const edge = edgeOf();
-
-      const kvStoreArn = output(
-        edge.viewerRequest?.kvStore ?? self.part("kvStore", {}).arn,
-      );
-      const requestFunction = self.part("requestFunction", {
-        runtime: "cloudfront-js-2.0",
-        keyValueStoreAssociations: [kvStoreArn],
-        code: interpolate`
-import cf from "cloudfront";
-async function handler(event) {
-  ${edge.viewerRequest?.injection ?? ""}
-  ${args.domain ? CF_BLOCK_CLOUDFRONT_URL_INJECTION : ""}
-  ${CF_ROUTER_INJECTION}
-
-  const kvNamespace = "${namespace}";
-
-  // Load metadata
-  let metadata;
-  try {
-    const v = await cf.kvs().get(kvNamespace + ":metadata");
-    metadata = JSON.parse(v);
-  } catch (e) {}
-
-  const response = await routeSite(kvNamespace, metadata);
-  return response || event.request;
-}`,
-      });
-      const responseFunction = edge.viewerResponse?.injection
-        ? self.part("responseFunction", {
-            runtime: "cloudfront-js-2.0",
-            keyValueStoreAssociations: edge.viewerResponse.kvStore
-              ? [edge.viewerResponse.kvStore]
-              : [],
-            code: interpolate`
-import cf from "cloudfront";
-async function handler(event) {
-  ${edge.viewerResponse.injection}
-  return event.response;
-}`,
-          })
-        : undefined;
-      const edgeSigner = signerOf(protection);
-
-      const cdn = self.part("cdn", {
-        comment: `${name} app`,
-        domain: args.domain,
-        origins: [
-          {
-            originId: "default",
-            domainName: "placeholder.sst.dev",
-            customOriginConfig: {
-              httpPort: 80,
-              httpsPort: 443,
-              originProtocolPolicy: "http-only",
-              originReadTimeout: 20,
-              originSslProtocols: ["TLSv1.2"],
-            },
-          },
-        ],
-        defaultCacheBehavior: {
-          targetOriginId: "default",
-          viewerProtocolPolicy: "redirect-to-https",
-          allowedMethods: [
-            "DELETE",
-            "GET",
-            "HEAD",
-            "OPTIONS",
-            "PATCH",
-            "POST",
-            "PUT",
-          ],
-          cachedMethods: ["GET", "HEAD"],
-          compress: true,
-          cachePolicyId: args.cachePolicy ?? cachePolicy().id,
-          // CloudFront's Managed-AllViewerExceptHostHeader policy
-          originRequestPolicyId: "b689b0a8-53d0-40ab-baf2-68738e2966ac",
-          functionAssociations: [
-            { eventType: "viewer-request", functionArn: requestFunction.arn },
-            ...(responseFunction
-              ? [
-                  {
-                    eventType: "viewer-response",
-                    functionArn: responseFunction.arn,
-                  },
-                ]
-              : []),
-          ],
-          lambdaFunctionAssociations: edgeSigner
-            ? [
-                {
-                  eventType: "origin-request",
-                  lambdaArn: edgeSigner,
-                  includeBody: true,
-                },
-              ]
-            : [],
-        },
-      });
-
-      return {
-        route: undefined,
-        signs: isSigning(protection.mode),
-        pathPrefix: output(undefined as string | undefined),
-        protection: output(protection as ProtectionConfig),
-        kvStoreArn,
-        distributionId: cdn.nodes.distribution.id,
-        distributionArn: cdn.nodes.distribution.arn,
-        url: all([cdn.domainUrl, cdn.url]).apply(
-          ([domainUrl, url]) => (domainUrl ?? url) as string,
-        ),
-      };
-    }
-
-    function protectionOf() {
-      const protection = plain(args.protection, option("protection"));
-      if (!protection) return { mode: "none" as const };
-      if (typeof protection === "string") return { mode: protection };
-      plain(protection.edgeFunction, option("protection.edgeFunction"));
-      const arn = protection.edgeFunction?.arn;
-      if (typeof arn === "string") parseLambdaEdgeArn(arn);
-      return protection;
-    }
-
-    function edgeOf() {
-      const edge = plain(args.edge, option("edge")) ?? {};
-      plain(edge.viewerRequest, option("edge.viewerRequest"));
-      plain(edge.viewerResponse, option("edge.viewerResponse"));
-      return edge;
-    }
-
-    function cachePolicy() {
-      return self.part("cachePolicy", {
-        comment: "SST server response cache policy",
-        defaultTtl: 0,
-        maxTtl: 31536000, // 1 year
-        minTtl: 0,
-        parametersInCacheKeyAndForwardedToOrigin: {
-          cookiesConfig: {
-            cookieBehavior: "none",
-          },
-          headersConfig: {
-            headerBehavior: "whitelist",
-            headers: {
-              items: ["x-open-next-cache-key", "x-forwarded-host"],
-            },
-          },
-          queryStringsConfig: {
-            queryStringBehavior: "all",
-          },
-          enableAcceptEncodingBrotli: true,
-          enableAcceptEncodingGzip: true,
-        },
-      });
-    }
-
-    // The Lambda@Edge function that signs requests to function URLs: the
-    // user's, or one the site creates
-    function signerOf(protection: ReturnType<typeof protectionOf>) {
-      if (protection.mode !== "oac-with-edge-signing") return;
-      const settings =
-        "edgeFunction" in protection ? protection.edgeFunction : undefined;
-      if (settings?.arn) return settings.arn;
-
-      const role = self.part(
-        "edgeRole",
-        {
-          name: physicalName(64, `${name}EdgeRole`),
-          assumeRolePolicy: JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Action: "sts:AssumeRole",
-                Effect: "Allow",
-                Principal: {
-                  Service: ["lambda.amazonaws.com", "edgelambda.amazonaws.com"],
-                },
-              },
-            ],
-          }),
-          managedPolicyArns: [
-            "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-          ],
-        },
-        { ignoreChanges: ["name"] },
-      );
-      return self.part(
-        "edgeFunction",
-        {
-          name: physicalName(64, `${name}EdgeFn`),
-          runtime: "nodejs24.x",
-          handler: "index.handler",
-          role: role.arn,
-          code: new asset.FileArchive(
-            path.join(context().paths.platform, "dist", "oac-edge-signer"),
-          ),
-          publish: true,
-          timeout: output(settings?.timeout).apply((timeout) =>
-            timeout ? toSeconds(timeout) : 5,
-          ),
-          memorySize: output(settings?.memory).apply((memory) =>
-            memory ? toMBs(memory) : 128,
-          ),
-          description: `${name} Lambda@Edge function for OAC request signing`,
-        },
-        { provider: useProvider("us-east-1"), ignoreChanges: ["name"] },
-      ).qualifiedArn;
-    }
-
-    // Reads what OpenNext built
-    function loadBuild(builtPath: string): Build {
-      const outputPath = path.resolve(context().paths.root, builtPath);
-      const openNextOutputPath = path.join(
-        outputPath,
-        ".open-next",
-        "open-next.output.json",
-      );
-      if (!fs.existsSync(openNextOutputPath))
-        throw new VisibleError(
-          `Could not load OpenNext output file at "${openNextOutputPath}". Make sure your Next.js app was built correctly with OpenNext.`,
-        );
-      const openNext = JSON.parse(
-        fs.readFileSync(openNextOutputPath).toString(),
-      ) as OpenNextOutput;
-      // open-next.output.json says the initialization function is at
-      // ".open-next/initialization-function", which isn't where it is
-      if (openNext.additionalProps?.initializationFunction)
-        openNext.additionalProps.initializationFunction = {
-          handler: "index.handler",
-          bundle: ".open-next/dynamodb-provider",
-        };
-      if (Object.entries(openNext.edgeFunctions).length)
-        throw new VisibleError(
-          `Lambda@Edge runtime is deprecated. Update your OpenNext configuration to use the standard Lambda runtime and deploy to multiple regions using the "regions" option in your Nextjs component.`,
-        );
-
-      let buildId: string;
-      try {
-        buildId = fs
-          .readFileSync(path.join(outputPath, ".next/BUILD_ID"))
-          .toString();
-      } catch (e) {
-        throw new VisibleError(
-          `Build ID not found in ".next/BUILD_ID" for site "${name}". Ensure your Next.js app was built successfully.`,
-        );
-      }
-
-      let base: string | undefined;
-      try {
-        const routes = JSON.parse(
-          fs.readFileSync(
-            path.join(outputPath, ".next", "routes-manifest.json"),
-            "utf-8",
-          ),
-        ) as { basePath: string };
-        base = routes.basePath === "" ? undefined : routes.basePath;
-      } catch (e) {
-        throw new VisibleError(
-          `Base path configuration not found in ".next/routes-manifest.json" for site "${name}". Check your Next.js configuration.`,
-        );
-      }
-
-      let prerenderedRoutes = 0;
-      try {
-        const manifest = JSON.parse(
-          fs
-            .readFileSync(
-              path.join(outputPath, ".next/prerender-manifest.json"),
-            )
-            .toString(),
-        ) as { routes?: Record<string, unknown> };
-        prerenderedRoutes = Object.keys(manifest.routes ?? {}).length;
-      } catch (e) {}
-
-      return {
-        sitePath: builtPath,
-        outputPath,
-        openNext,
-        buildId,
-        base,
-        prerenderedRoutes,
-      };
-    }
-
-    // Creates what's made from the build: the functions, ISR, the warmer and
-    // the permissions
-    async function createFromBuild(build: Build): Promise<Built> {
-      const regions = serverRegions ?? [
-        await known(
-          getRegionOutput({}, { parent: self }).region,
-          "The region of the site's server",
-        ),
-      ];
-      if (!serverRegions) regions.forEach(checkRegion);
-      const signs =
-        typeof routing.signs === "boolean"
-          ? routing.signs
-          : await known(
-              routing.signs,
-              "Whether the router signs its requests to the site",
-            );
-      const authorization = signs ? ("iam" as const) : ("none" as const);
-
-      const plan: SitePlan = {
-        ...ASSETS,
-        imageOptimizer: { prefix: "/_next/image" },
-        buildId: build.buildId,
-      };
-      if (build.base) {
-        // Starts with a slash, and doesn't end with one
-        plan.base = build.base.startsWith("/") ? build.base : `/${build.base}`;
-        plan.base = plan.base.replace(/\/$/, "");
-      }
-      const pathPrefix = markUnknowns(
-        await (routing.pathPrefix as any).promise(true),
-      );
-      if (typeof pathPrefix === "string" && pathPrefix !== "/") {
-        if (!plan.base)
-          throw new VisibleError(
-            `No base path found for site. You must configure the base path to match the route path prefix "${pathPrefix}".`,
-          );
-        if (!plan.base.startsWith(pathPrefix))
-          throw new VisibleError(
-            `The site base path "${plan.base}" must start with the route path prefix "${pathPrefix}".`,
-          );
-      }
-
-      const queue = createRevalidationQueue(build);
-      const table = createRevalidationTable(build);
-      createRevalidationSeeder(build, table);
-
-      const serverOrigin = build.openNext.origins["default"];
-      const servers = regions.map((region) => {
-        const provider = useProvider(region as Region);
-        const server = self.part(
-          "server",
-          region,
-          {
-            description: `${name} server`,
-            bundle: path.join(build.sitePath, serverOrigin.bundle),
-            handler: serverOrigin.handler,
-            streaming: serverOrigin.streaming,
-            runtime: runtime ?? "nodejs24.x",
-            timeout,
-            memory: output(serverArgs.memory).apply((v) => v ?? "1024 MB"),
-            architecture: architecture ?? "x86_64",
-            vpc: args.vpc,
-            nodejs: {
-              format: "esm" as const,
-              install: Object.fromEntries(
-                (install ?? []).map((pkg) => [pkg, "*"]),
-              ),
-              loader,
-            },
-            environment: output(args.environment).apply((environment) => ({
-              ...environment,
-              CACHE_BUCKET_NAME: bucket.name,
-              CACHE_BUCKET_KEY_PREFIX: "_cache",
-              CACHE_BUCKET_REGION: getRegionOutput({}, { parent: self }).region,
-              ...(queue && {
-                REVALIDATION_QUEUE_URL: queue.url,
-                REVALIDATION_QUEUE_REGION: getRegionOutput({}, { parent: self })
-                  .region,
-              }),
-              ...(table && {
-                CACHE_DYNAMO_TABLE: table.name,
-              }),
-            })),
-            permissions: output(args.permissions).apply((permissions) => [
-              {
-                actions: ["cloudfront:CreateInvalidation"],
-                resources: ["*"],
-              },
-              ...(permissions ?? []),
-              // access to the cache data
-              {
-                actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                resources: [interpolate`${bucket.arn}/*`],
-              },
-              {
-                actions: ["s3:ListBucket"],
-                resources: [bucket.arn],
-              },
-              ...(queue
-                ? [
-                    {
-                      actions: [
-                        "sqs:SendMessage",
-                        "sqs:GetQueueAttributes",
-                        "sqs:GetQueueUrl",
-                      ],
-                      resources: [queue.arn],
-                    },
-                  ]
-                : []),
-              ...(table
-                ? [
-                    {
-                      actions: [
-                        "dynamodb:BatchGetItem",
-                        "dynamodb:GetRecords",
-                        "dynamodb:GetShardIterator",
-                        "dynamodb:Query",
-                        "dynamodb:GetItem",
-                        "dynamodb:Scan",
-                        "dynamodb:ConditionCheckItem",
-                        "dynamodb:BatchWriteItem",
-                        "dynamodb:PutItem",
-                        "dynamodb:UpdateItem",
-                        "dynamodb:DeleteItem",
-                        "dynamodb:DescribeTable",
-                      ],
-                      resources: [table.arn, interpolate`${table.arn}/*`],
-                    },
-                  ]
-                : []),
-            ]),
-            injections: [
-              ...(warm ? [serverWarmingInjection(serverOrigin.streaming)] : []),
-              KEY_FILE_INJECTION,
-            ],
-            link: args.link,
-            layers: output(serverArgs.layers).apply((layers) => [
-              ...(layers ?? []),
-            ]),
-            url: { authorization },
-            dev: false,
-            _skipHint: true,
-          },
-          { provider },
-        );
-        if (warm) createWarmer(region, server, build);
-        return { region, server };
-      });
-
-      const imageOptimizerOrigin = build.openNext.origins["imageOptimizer"];
-      const imageOptimizer = self.part("imageOptimizer", {
-        timeout: "25 seconds",
-        logging: {
-          retention: "3 days",
-        },
-        permissions: [
-          {
-            actions: ["s3:GetObject"],
-            resources: [interpolate`${bucket.arn}/*`],
-          },
-        ],
-        description: `${name} image optimizer`,
-        handler: imageOptimizerOrigin.handler,
-        bundle: path.join(build.sitePath, imageOptimizerOrigin.bundle),
-        runtime: "nodejs24.x",
-        architecture: "arm64",
-        environment: {
-          BUCKET_NAME: bucket.name,
-          BUCKET_KEY_PREFIX: "_assets",
-          ...(imageOptimization?.staticEtag
-            ? { OPENNEXT_STATIC_ETAG: "true" }
-            : {}),
-        },
-        memory: imageOptimization?.memory ?? "1536 MB",
-        url: { authorization },
-        dev: false,
-        _skipMetadata: true,
-        _skipHint: true,
-      });
-
-      // Who may call the functions' URLs
-      for (const { region, server } of servers) {
-        const opts = {
-          provider: useProvider(region as Region),
-          dependsOn: server.nodes.url ? [server.nodes.url] : [],
-        };
-        if (!signs) {
-          self.part(
-            "urlAccess",
-            region,
-            {
-              action: "lambda:InvokeFunctionUrl",
-              function: server.nodes.function.name,
-              principal: "*",
-              functionUrlAuthType: "NONE",
-            },
-            opts,
-          );
-          continue;
-        }
-        self.part(
-          "cloudFrontUrlAccess",
-          region,
-          {
-            action: "lambda:InvokeFunctionUrl",
-            function: server.nodes.function.name,
-            principal: "cloudfront.amazonaws.com",
-            sourceArn: routing.distributionArn,
-          },
-          opts,
-        );
-        self.part(
-          "cloudFrontInvoke",
-          region,
-          {
-            action: "lambda:InvokeFunction",
-            function: server.nodes.function.name,
-            principal: "cloudfront.amazonaws.com",
-            sourceArn: routing.distributionArn,
-            invokedViaFunctionUrl: true,
-          },
-          opts,
-        );
-      }
-      const afterUrl = {
-        dependsOn: imageOptimizer.nodes.url ? [imageOptimizer.nodes.url] : [],
-      };
-      if (!signs)
-        self.part(
-          "imageOptimizerUrlAccess",
-          {
-            action: "lambda:InvokeFunctionUrl",
-            function: imageOptimizer.nodes.function.name,
-            principal: "*",
-            functionUrlAuthType: "NONE",
-          },
-          afterUrl,
-        );
-      else {
-        self.part(
-          "imageOptimizerCloudFrontUrlAccess",
-          {
-            action: "lambda:InvokeFunctionUrl",
-            function: imageOptimizer.nodes.function.name,
-            principal: "cloudfront.amazonaws.com",
-            sourceArn: routing.distributionArn,
-          },
-          afterUrl,
-        );
-        self.part(
-          "imageOptimizerCloudFrontInvoke",
-          {
-            action: "lambda:InvokeFunction",
-            function: imageOptimizer.nodes.function.name,
-            principal: "cloudfront.amazonaws.com",
-            sourceArn: routing.distributionArn,
-            invokedViaFunctionUrl: true,
-          },
-          afterUrl,
-        );
-      }
-
-      return { plan, outputPath: build.outputPath, servers, imageOptimizer };
-    }
-
-    function createRevalidationQueue(build: Build) {
-      const props = build.openNext.additionalProps;
-      if (props?.disableIncrementalCache) return;
-      const revalidationFunction = props?.revalidationFunction;
-      if (!revalidationFunction) return;
-
-      const queue = self.part("revalidationQueue", {
-        fifo: true,
-        transform: {
-          queue: {
-            receiveWaitTimeSeconds: 20,
-          },
-        },
-      });
-      queue.subscribe(
-        {
-          description: `${name} ISR revalidator`,
-          handler: revalidationFunction.handler,
-          bundle: path.join(build.sitePath, revalidationFunction.bundle),
-          runtime: "nodejs24.x",
-          timeout: "30 seconds",
-          permissions: [
-            {
-              actions: [
-                "sqs:ChangeMessageVisibility",
-                "sqs:DeleteMessage",
-                "sqs:GetQueueAttributes",
-                "sqs:GetQueueUrl",
-                "sqs:ReceiveMessage",
-              ],
-              resources: [queue.arn],
-            },
-          ],
-          dev: false,
-          _skipMetadata: true,
-        },
-        { batch: { size: 5 } },
-      );
-      return queue;
-    }
-
-    function createRevalidationTable(build: Build) {
-      if (build.openNext.additionalProps?.disableTagCache) return;
-      return self.part(
-        "revalidationTable",
-        {
-          attributes: [
-            { name: "tag", type: "S" },
-            { name: "path", type: "S" },
-            { name: "revalidatedAt", type: "N" },
-          ],
-          hashKey: "tag",
-          rangeKey: "path",
-          pointInTimeRecovery: {
-            enabled: true,
-          },
-          billingMode: "PAY_PER_REQUEST",
-          globalSecondaryIndexes: [
-            {
-              name: "revalidate",
-              hashKey: "path",
-              rangeKey: "revalidatedAt",
-              projectionType: "ALL",
-            },
-          ],
-        },
-        { retainOnDelete: false },
-      );
-    }
-
-    function createRevalidationSeeder(
-      build: Build,
-      table: dynamodb.Table | undefined,
-    ) {
-      const initializationFunction =
-        build.openNext.additionalProps?.initializationFunction;
-      if (!table || !initializationFunction) return;
-
-      // Provision 128MB of memory for every 4,000 prerendered routes,
-      // 1GB per 40,000, up to 10GB. This tends to use ~70% of the memory
-      // provisioned when testing.
-      const seeder = self.part("revalidationSeeder", {
-        description: `${name} ISR revalidation data seeder`,
-        handler: initializationFunction.handler,
-        bundle: path.join(build.sitePath, initializationFunction.bundle),
-        runtime: "nodejs24.x",
-        timeout: "900 seconds",
-        memory: `${Math.min(
-          10240,
-          Math.max(128, Math.ceil(build.prerenderedRoutes / 4000) * 128),
-        )} MB`,
-        permissions: [
-          {
-            actions: [
-              "dynamodb:BatchWriteItem",
-              "dynamodb:PutItem",
-              "dynamodb:DescribeTable",
-            ],
-            resources: [table.arn],
-          },
-        ],
-        environment: {
-          CACHE_DYNAMO_TABLE: table.name,
-        },
-        dev: false,
-        _skipMetadata: true,
-        _skipHint: true,
-      });
-      self.part("revalidationSeed", {
-        functionName: seeder.nodes.function.name,
-        // Seeded again when what it seeds changes
-        triggers: {
-          version: hashOf(
-            path.join(build.outputPath, initializationFunction.bundle),
-          ),
-        },
-        input: JSON.stringify({
-          RequestType: "Create",
-        }),
-      });
-    }
-
-    function createWarmer(region: string, server: Function, build: Build) {
-      const provider = { provider: useProvider(region as Region) };
-      const warmer = self.part(
-        "warmer",
-        region,
-        {
-          description: `${name} warmer`,
-          bundle: path.join(context().paths.platform, "dist", "ssr-warmer"),
-          runtime: "nodejs24.x",
-          handler: "index.handler",
-          timeout: "900 seconds",
-          memory: "128 MB",
-          dev: false,
-          environment: {
-            FUNCTION_NAME: server.nodes.function.name,
-            CONCURRENCY: String(warm),
-          },
-          link: [server],
-          _skipMetadata: true,
-        },
-        provider,
-      );
-      const rule = self.part(
-        "warmerRule",
-        region,
-        {
-          scheduleExpression: "rate(5 minutes)",
-          state: "ENABLED",
-        },
-        provider,
-      );
-      self.part(
-        "warmerPermission",
-        region,
-        {
-          action: "lambda:InvokeFunction",
-          function: warmer.arn,
-          qualifier: warmer.qualifier.apply((qualifier) => qualifier!),
-          principal: "events.amazonaws.com",
-          sourceArn: rule.arn,
-        },
-        provider,
-      );
-      self.part(
-        "warmerTarget",
-        region,
-        {
-          arn: warmer.targetArn,
-          rule: rule.name,
-          input: JSON.stringify({}),
-          retryPolicy: {
-            maximumRetryAttempts: 0,
-            maximumEventAgeInSeconds: 60,
-          },
-        },
-        provider,
-      );
-      // Warms the server when it's built
-      self.part(
-        "prewarm",
-        region,
-        {
-          functionName: warmer.nodes.function.name,
-          triggers: {
-            version: build.buildId,
-          },
-          input: JSON.stringify({}),
-        },
-        provider,
-      );
-    }
-
-    function createInvalidation() {
-      if (invalidation === false) return;
-      if (Array.isArray(invalidation?.paths) && invalidation.paths.length === 0)
-        return;
-
-      const plan = builtOutput.apply((built) => {
-        const of = (
-          serverCodeHashes: string[],
-          imageOptimizerCodeHash?: string,
-        ) => {
-          const result = siteInvalidation({
-            invalidation,
-            plan: built.plan,
-            outputPath: built.outputPath,
-            serverCodeHashes,
-            imageOptimizerCodeHash,
-          });
-          if (!result)
-            throw new VisibleError(
-              `The "${name}" site has no cached files to invalidate.`,
-            );
-          return result;
-        };
-        // The build id is the version when there is one. Without one, the
-        // functions' code is part of it.
-        if (built.plan.buildId) return output(of([]));
-        return all([
-          all(
-            built.servers.map(({ server }) => server.nodes.function.codeSha256),
-          ),
-          built.imageOptimizer.nodes.function.codeSha256,
-        ]).apply(([hashes, imageOptimizerHash]) =>
-          of(hashes, imageOptimizerHash),
-        );
-      });
-      self.part(
-        "invalidation",
-        {
-          distributionId: routing.distributionId,
-          paths: plan.paths,
-          version: plan.version,
-          wait: plan.wait,
-        },
-        {
-          dependsOn: [
-            assetFiles,
-            kvKeys,
-            ...(routesUpdate ? [routesUpdate] : []),
-          ],
-        },
-      );
-    }
+      args,
+      nextjsFramework(builder, name, args),
+    ).url;
   }
 
   /**
@@ -1852,6 +691,392 @@ async function handler(event) {
         url: this.url,
       },
     };
+  }
+}
+
+// A Next.js site's build, as OpenNext made it
+interface NextBuild extends SiteBuild {
+  openNext: OpenNextOutput;
+  buildId: string;
+  prerenderedRoutes: number;
+}
+
+// How a Next.js site is built, with OpenNext, and what it adds to what every
+// site creates: ISR's queue, table and seed, and the image optimizer
+function nextjsFramework(
+  builder: PartsBuilder<ReturnType<typeof parts>>,
+  name: string,
+  args: NextjsArgs,
+): SsrFramework<NextBuild> {
+  const self = builder.component;
+  let imageOptimization: NextjsArgs["imageOptimization"];
+
+  return {
+    label: "Nextjs",
+    alwaysServes: true,
+    check(option) {
+      imageOptimization = plainDeep(
+        args.imageOptimization,
+        option("imageOptimization"),
+      );
+    },
+    buildCommand(sitePath, option) {
+      const version =
+        plain(
+          args.openNextVersion,
+          option("openNextVersion"),
+          BUILD_READS_IT,
+        ) ?? defaultOpenNextVersion(sitePath);
+      const packageName = isALteB(version, "3.1.3")
+        ? "open-next"
+        : "@opennextjs/aws";
+      return `npx --yes ${packageName}@${version} build`;
+    },
+    load: loadBuild,
+    server(build, site) {
+      const queue = createRevalidationQueue(build);
+      const table = createRevalidationTable(build);
+      createRevalidationSeeder(build, table);
+
+      const origin = build.openNext.origins["default"];
+      const region = getRegionOutput({}, { parent: self }).region;
+      return {
+        bundle: path.join(build.sitePath, origin.bundle),
+        handler: origin.handler,
+        streaming: origin.streaming,
+        environment: {
+          CACHE_BUCKET_NAME: site.bucket.name,
+          CACHE_BUCKET_KEY_PREFIX: "_cache",
+          CACHE_BUCKET_REGION: region,
+          ...(queue && {
+            REVALIDATION_QUEUE_URL: queue.url,
+            REVALIDATION_QUEUE_REGION: region,
+          }),
+          ...(table && {
+            CACHE_DYNAMO_TABLE: table.name,
+          }),
+        },
+        permissions: [
+          // access to the cache data
+          {
+            actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            resources: [interpolate`${site.bucket.arn}/*`],
+          },
+          {
+            actions: ["s3:ListBucket"],
+            resources: [site.bucket.arn],
+          },
+          ...(queue
+            ? [
+                {
+                  actions: [
+                    "sqs:SendMessage",
+                    "sqs:GetQueueAttributes",
+                    "sqs:GetQueueUrl",
+                  ],
+                  resources: [queue.arn],
+                },
+              ]
+            : []),
+          ...(table
+            ? [
+                {
+                  actions: [
+                    "dynamodb:BatchGetItem",
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator",
+                    "dynamodb:Query",
+                    "dynamodb:GetItem",
+                    "dynamodb:Scan",
+                    "dynamodb:ConditionCheckItem",
+                    "dynamodb:BatchWriteItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:DescribeTable",
+                  ],
+                  resources: [table.arn, interpolate`${table.arn}/*`],
+                },
+              ]
+            : []),
+        ],
+        injections: [KEY_FILE_INJECTION],
+      };
+    },
+    extras(build, site) {
+      const origin = build.openNext.origins["imageOptimizer"];
+      const imageOptimizer = builder.part("imageOptimizer", {
+        timeout: "25 seconds",
+        logging: {
+          retention: "3 days",
+        },
+        permissions: [
+          {
+            actions: ["s3:GetObject"],
+            resources: [interpolate`${site.bucket.arn}/*`],
+          },
+        ],
+        description: `${name} image optimizer`,
+        handler: origin.handler,
+        bundle: path.join(build.sitePath, origin.bundle),
+        runtime: "nodejs24.x",
+        architecture: "arm64",
+        environment: {
+          BUCKET_NAME: site.bucket.name,
+          BUCKET_KEY_PREFIX: "_assets",
+          ...(imageOptimization?.staticEtag
+            ? { OPENNEXT_STATIC_ETAG: "true" }
+            : {}),
+        },
+        memory: imageOptimization?.memory ?? "1536 MB",
+        url: { authorization: site.signs ? "iam" : "none" },
+        dev: false,
+        _skipMetadata: true,
+        _skipHint: true,
+      });
+
+      // Who may call its URL
+      const access = urlAccessArgs(imageOptimizer, site.distributionArn);
+      const afterUrl = {
+        dependsOn: imageOptimizer.nodes.url ? [imageOptimizer.nodes.url] : [],
+      };
+      if (!site.signs)
+        builder.part("imageOptimizerUrlAccess", access.public, afterUrl);
+      else {
+        builder.part(
+          "imageOptimizerCloudFrontUrlAccess",
+          access.cloudFrontUrl,
+          afterUrl,
+        );
+        builder.part(
+          "imageOptimizerCloudFrontInvoke",
+          access.cloudFrontInvoke,
+          afterUrl,
+        );
+      }
+      return { imageOptimizer };
+    },
+  };
+
+  // OpenNext dropped Next.js 14 after 3.6.6
+  function defaultOpenNextVersion(sitePath: string) {
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(
+          path.resolve(context().paths.root, sitePath, "package.json"),
+          "utf-8",
+        ),
+      );
+      const nextVersion = pkg.dependencies?.next ?? pkg.devDependencies?.next;
+      if (nextVersion && isALtB(nextVersion, "15.0.0"))
+        return DEFAULT_OPEN_NEXT_VERSION_NEXT14;
+    } catch {
+      console.warn(
+        `Failed to detect Next.js version. Using OpenNext v${DEFAULT_OPEN_NEXT_VERSION} as default.`,
+      );
+    }
+    return DEFAULT_OPEN_NEXT_VERSION;
+  }
+
+  // Reads what OpenNext built
+  function loadBuild(builtPath: string): NextBuild {
+    const outputPath = path.resolve(context().paths.root, builtPath);
+    const openNextOutputPath = path.join(
+      outputPath,
+      ".open-next",
+      "open-next.output.json",
+    );
+    if (!fs.existsSync(openNextOutputPath))
+      throw new VisibleError(
+        `Could not load OpenNext output file at "${openNextOutputPath}". Make sure your Next.js app was built correctly with OpenNext.`,
+      );
+    const openNext = JSON.parse(
+      fs.readFileSync(openNextOutputPath).toString(),
+    ) as OpenNextOutput;
+    // open-next.output.json says the initialization function is at
+    // ".open-next/initialization-function", which isn't where it is
+    if (openNext.additionalProps?.initializationFunction)
+      openNext.additionalProps.initializationFunction = {
+        handler: "index.handler",
+        bundle: ".open-next/dynamodb-provider",
+      };
+    if (Object.entries(openNext.edgeFunctions).length)
+      throw new VisibleError(
+        `Lambda@Edge runtime is deprecated. Update your OpenNext configuration to use the standard Lambda runtime and deploy to multiple regions using the "regions" option in your Nextjs component.`,
+      );
+
+    let buildId: string;
+    try {
+      buildId = fs
+        .readFileSync(path.join(outputPath, ".next/BUILD_ID"))
+        .toString();
+    } catch (e) {
+      throw new VisibleError(
+        `Build ID not found in ".next/BUILD_ID" for site "${name}". Ensure your Next.js app was built successfully.`,
+      );
+    }
+
+    let base: string | undefined;
+    try {
+      const routes = JSON.parse(
+        fs.readFileSync(
+          path.join(outputPath, ".next", "routes-manifest.json"),
+          "utf-8",
+        ),
+      ) as { basePath: string };
+      base = routes.basePath === "" ? undefined : routes.basePath;
+    } catch (e) {
+      throw new VisibleError(
+        `Base path configuration not found in ".next/routes-manifest.json" for site "${name}". Check your Next.js configuration.`,
+      );
+    }
+
+    let prerenderedRoutes = 0;
+    try {
+      const manifest = JSON.parse(
+        fs
+          .readFileSync(path.join(outputPath, ".next/prerender-manifest.json"))
+          .toString(),
+      ) as { routes?: Record<string, unknown> };
+      prerenderedRoutes = Object.keys(manifest.routes ?? {}).length;
+    } catch (e) {}
+
+    return {
+      sitePath: builtPath,
+      outputPath,
+      openNext,
+      buildId,
+      prerenderedRoutes,
+      serves: true,
+      plan: {
+        ...ASSETS,
+        imageOptimizer: { prefix: "/_next/image" },
+        buildId,
+        ...(base !== undefined && { base }),
+      },
+    };
+  }
+
+  function createRevalidationQueue(build: NextBuild) {
+    const props = build.openNext.additionalProps;
+    if (props?.disableIncrementalCache) return;
+    const revalidationFunction = props?.revalidationFunction;
+    if (!revalidationFunction) return;
+
+    const queue = builder.part("revalidationQueue", {
+      fifo: true,
+      transform: {
+        queue: {
+          receiveWaitTimeSeconds: 20,
+        },
+      },
+    });
+    queue.subscribe(
+      {
+        description: `${name} ISR revalidator`,
+        handler: revalidationFunction.handler,
+        bundle: path.join(build.sitePath, revalidationFunction.bundle),
+        runtime: "nodejs24.x",
+        timeout: "30 seconds",
+        permissions: [
+          {
+            actions: [
+              "sqs:ChangeMessageVisibility",
+              "sqs:DeleteMessage",
+              "sqs:GetQueueAttributes",
+              "sqs:GetQueueUrl",
+              "sqs:ReceiveMessage",
+            ],
+            resources: [queue.arn],
+          },
+        ],
+        dev: false,
+        _skipMetadata: true,
+      },
+      { batch: { size: 5 } },
+    );
+    return queue;
+  }
+
+  function createRevalidationTable(build: NextBuild) {
+    if (build.openNext.additionalProps?.disableTagCache) return;
+    return builder.part(
+      "revalidationTable",
+      {
+        attributes: [
+          { name: "tag", type: "S" },
+          { name: "path", type: "S" },
+          { name: "revalidatedAt", type: "N" },
+        ],
+        hashKey: "tag",
+        rangeKey: "path",
+        pointInTimeRecovery: {
+          enabled: true,
+        },
+        billingMode: "PAY_PER_REQUEST",
+        globalSecondaryIndexes: [
+          {
+            name: "revalidate",
+            hashKey: "path",
+            rangeKey: "revalidatedAt",
+            projectionType: "ALL",
+          },
+        ],
+      },
+      { retainOnDelete: false },
+    );
+  }
+
+  function createRevalidationSeeder(
+    build: NextBuild,
+    table: dynamodb.Table | undefined,
+  ) {
+    const initializationFunction =
+      build.openNext.additionalProps?.initializationFunction;
+    if (!table || !initializationFunction) return;
+
+    // Provision 128MB of memory for every 4,000 prerendered routes,
+    // 1GB per 40,000, up to 10GB. This tends to use ~70% of the memory
+    // provisioned when testing.
+    const seeder = builder.part("revalidationSeeder", {
+      description: `${name} ISR revalidation data seeder`,
+      handler: initializationFunction.handler,
+      bundle: path.join(build.sitePath, initializationFunction.bundle),
+      runtime: "nodejs24.x",
+      timeout: "900 seconds",
+      memory: `${Math.min(
+        10240,
+        Math.max(128, Math.ceil(build.prerenderedRoutes / 4000) * 128),
+      )} MB`,
+      permissions: [
+        {
+          actions: [
+            "dynamodb:BatchWriteItem",
+            "dynamodb:PutItem",
+            "dynamodb:DescribeTable",
+          ],
+          resources: [table.arn],
+        },
+      ],
+      environment: {
+        CACHE_DYNAMO_TABLE: table.name,
+      },
+      dev: false,
+      _skipMetadata: true,
+      _skipHint: true,
+    });
+    builder.part("revalidationSeed", {
+      functionName: seeder.nodes.function.name,
+      // Seeded again when what it seeds changes
+      triggers: {
+        version: hashOf(
+          path.join(build.outputPath, initializationFunction.bundle),
+        ),
+      },
+      input: JSON.stringify({
+        RequestType: "Create",
+      }),
+    });
   }
 }
 
@@ -1874,14 +1099,6 @@ const KEY_FILE_INJECTION = [
   `  globalThis.SST_KEY_FILE_DATA = decryptedData;`,
   `}`,
 ].join("\n");
-
-// A value, once it's known. What a preview knows is known.
-async function known<T>(value: Input<T>, what: string): Promise<T> {
-  const resolved = markUnknowns(await (output(value) as any).promise(true));
-  if (resolved === unknown)
-    throw new VisibleError(`${what} isn't known before the deploy.`);
-  return resolved as T;
-}
 
 // A hash of the files in a folder, and their names
 function hashOf(dir: string) {
