@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the lab check of the sites with a server
+
+**Checked in the lab** (a stage of its own, no VPC, with a CLI built from the branch). The lab app's sites group: a V5 `Router` with a domain, `Nextjs` at its root, `Astro` and `SvelteKit` under `/astro` and `/svelte`, a `StaticSite` under `/static`, a route to a URL and one to a bucket, and a `StaticSite` with a CDN of its own. `Nextjs`, `Astro` and `SvelteKit` switched at once; both `StaticSite`s stayed 4.x.
+
+- **Deployed with SST 4.** `sst migrate --check` passed: 126 kept (16 at a new address, 8 updated in place: 6 functions for their code and the 2 invalidations), 8 replaced (6 functions' code and a source map, uploaded again under new keys, and the ISR seed run once more, as the maps say), 11 released (each site's files and key-value entries, the router's two route entries, and SST 4's three lookups of the hosted zone), 7 taken out of the state with nothing in the cloud behind them (the sites' build commands among them), and 11 created.
+- **The move** kept every resource by id but the code objects. The sites' files and entries, and the router's, are kept under new names.
+- **The same answers before and after**, on 15 paths through the router's domain: each site's pages, assets and 404, the static site, and the two routes. A body that differs is one each build makes again: Next.js's pages, SvelteKit's version file. The Next.js image optimizer answers 500 before and after, and the bucket route 403: both as SST 4 deployed them.
+- **`sst diff` after the move** shows what SST 4's own diff shows for these sites: their code, files and invalidations, made again by each build.
+- **`sst refresh` built no site** and kept all 145 resources in the state: Pulumi keeps what the program doesn't register when it refreshes, as the change for refresh needed. SST 4 builds its sites for a refresh, so the three sites' docs now say a refresh is one place they differ.
+- Removed, and cleaned up: the stage's 156 state versions and delete markers, its `migrate` copy among them, its passphrase, and two Astro source maps in the asset bucket. Nothing of it is left in CloudFront.
+
 ## 2026-11-02: step 4, the `Astro` and the `SvelteKit` built the 5.0 way, on the sites' base
 
 **Done, committed (not pushed):**
@@ -11,7 +22,7 @@ What's been done on [the plan](plan.md), newest first. Each entry says what was 
 - **The takeover map's shared part** (`ssrSiteTakeover()` in `takeover/ssr-site.ts`): the warmers moved out of their `Cron`s, the files and key-value entries released, and the prewarm made again once. The `Nextjs`'s map is that and its ISR seed.
 - **The 404 page is copied from a path from the app's folder.** SST 4 joined the site's path to it as given, which is the same path for a site's folder given from the app's, and broke for one given as an absolute path.
 - **The `SvelteKit`** (`aws/v5/svelte-kit.ts`) the same way: the adapter's manifest gives the base path, its `adapter.json` whether the server streams, and the server is the adapter's handler with the prerendered pages copied in. SST 4 gave `minify` in the server's `esbuild` options, which the CLI doesn't read there, so the server was never minified; it's given the same way, so the server is built from the same args, and still isn't.
-- **A site isn't built for `sst refresh`**, which runs the program but creates nothing, as SST 4's sites weren't: what's made from the build isn't registered, and stays as it is. A lab check of the sites runs a refresh to confirm Pulumi keeps what isn't registered.
+- **A site isn't built for `sst refresh`**, which runs the program but creates nothing: what's made from the build isn't registered, and stays as it is. (This entry first said SST 4's sites weren't built for it either. They are, since v4.1.4: their program can't run without the build.) A lab check of the sites runs a refresh to confirm Pulumi keeps what isn't registered.
 - **A site's build doesn't see what the CLI passes for SST's own calls to Cloudflare**, as SST 4's builds didn't. `buildSite()` passed them on, the `Nextjs`'s included.
 - **One suite for the sites** (`test/components/v5/ssr-site.suite.ts`): the takeover cases and the tests every site passes, out of the `Nextjs`'s, run by `nextjs.test.ts`, `astro.test.ts` and `svelte-kit.test.ts` with their own. The `Astro`'s own: a static site, kept warm or not, and under a router's path, a streaming server, its server's entry and files, the default build command, the adapter check, and an adapter too old. `buildSite()` and the default build command have tests of their own.
 

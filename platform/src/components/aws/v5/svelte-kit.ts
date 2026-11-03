@@ -474,8 +474,9 @@ export interface SvelteKitArgs
  *   has to allow for that. `sst.aws.SvelteKit` skipped its build in `sst diff` then.
  * - A deploy that previews first, on a stage with checks or with a policy pack, builds the
  *   site twice: in the preview, and in the deploy.
- * - `sst refresh` doesn't build the site, as `sst.aws.SvelteKit` didn't. What's made from
- *   the build, like the servers in `nodes.server`, isn't listed while it runs.
+ * - `sst refresh` doesn't build the site, where `sst.aws.SvelteKit` did. What's made from
+ *   the build, like the servers in `nodes.server`, stays as it is, and isn't listed while
+ *   it runs.
  * - `regions`, `warm`, `protection`, `edge`, `router`, `invalidation` and `server` have to
  *   be plain values, not outputs: they decide what's created. So do `path` and
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of

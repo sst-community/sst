@@ -1081,8 +1081,9 @@ export function createSsrSite<B extends SiteBuild>(
   );
 
   // `sst refresh` runs the program to read what's deployed, and creates
-  // nothing, so the site isn't built for it, as SST 4's wasn't. What's made
-  // from the build isn't registered, and stays as it is.
+  // nothing, so the site isn't built for it. SST 4 built its sites then, as
+  // its program couldn't run without their build. What's made from the build
+  // isn't registered, and stays as it is.
   if (context().command === "refresh") {
     builder.report({ hint: routing.url });
     return { url: routing.url };
