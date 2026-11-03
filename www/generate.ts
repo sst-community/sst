@@ -1977,10 +1977,13 @@ function parseParts(file: string, name = "parts"): Parts | undefined {
   // `const parts = () => ({ ... })`
   if (literal && ts.isArrowFunction(literal)) literal = literal.body as ts.Expression;
   while (literal && ts.isParenthesizedExpression(literal)) literal = literal.expression;
-  // `const parts = rdsInstanceParts`, the parts two components share, from
-  // the file it's imported from
-  if (literal && ts.isIdentifier(literal)) {
-    const local = literal.getText();
+  // Parts two components share, from the file they're imported from:
+  // `const parts = rdsInstanceParts`, or `...ssrSiteParts()` among a
+  // component's own
+  const shared = (expression: ts.Expression) => {
+    if (ts.isCallExpression(expression)) expression = expression.expression;
+    if (!ts.isIdentifier(expression)) return undefined;
+    const local = expression.getText();
     for (const statement of source.statements.filter(ts.isImportDeclaration)) {
       const bindings = statement.importClause?.namedBindings;
       if (!bindings || !ts.isNamedImports(bindings)) continue;
@@ -1990,13 +1993,37 @@ function parseParts(file: string, name = "parts"): Parts | undefined {
       const specifier = (statement.moduleSpecifier as ts.StringLiteral).text;
       // Only the repo's own files: `{ rdsInstanceParts as parts }` too
       if (!element || !specifier.startsWith(".")) continue;
-      return parseParts(
-        path.join(path.dirname(file), `${specifier.replace(/\.js$/, "")}.ts`),
+      const from = path.join(
+        path.dirname(file),
+        `${specifier.replace(/\.js$/, "")}.ts`
+      );
+      const found = parseParts(
+        from,
         (element.propertyName ?? element.name).getText()
       );
+      if (!found) return undefined;
+      // What that file imports, as this file would write it, since a part's
+      // class is found from the component's own folder
+      const imports = new Map<string, string>();
+      for (const [name, module] of found.imports) {
+        if (!module.startsWith(".")) {
+          imports.set(name, module);
+          continue;
+        }
+        const relative = path.relative(
+          path.dirname(file),
+          path.join(path.dirname(from), module)
+        );
+        imports.set(
+          name,
+          relative.startsWith(".") ? relative : `./${relative}`
+        );
+      }
+      return { parts: found.parts, imports };
     }
     return undefined;
-  }
+  };
+  if (literal && ts.isIdentifier(literal)) return shared(literal);
   if (!literal || !ts.isObjectLiteralExpression(literal)) return undefined;
 
   // What each imported name comes from, ie. `sqs` from "@pulumi/aws"
@@ -2011,30 +2038,45 @@ function parseParts(file: string, name = "parts"): Parts | undefined {
       );
   }
 
-  const parts = literal.properties.filter(ts.isPropertyAssignment).map((prop) => {
-    // `many(deferred(Function))`, `named(optional(SecurityGroup), "Firewall")`
-    const markers = new Set<string>();
-    let value = prop.initializer;
-    while (
-      ts.isCallExpression(value) &&
-      ["optional", "many", "deferred", "named"].includes(
-        value.expression.getText()
-      )
-    ) {
-      markers.add(value.expression.getText());
-      value = value.arguments[0];
+  const parts: Part[] = [];
+  for (const prop of literal.properties) {
+    if (ts.isSpreadAssignment(prop)) {
+      const spread = shared(prop.expression);
+      if (!spread) continue;
+      parts.push(...spread.parts);
+      // The component's own imports win, for a name both have
+      for (const [name, module] of spread.imports)
+        if (!imports.has(name)) imports.set(name, module);
+      continue;
     }
-    const doc = ts.getJSDocCommentsAndTags(prop).find(ts.isJSDoc);
-    return {
-      key: prop.name.getText(),
-      description: (ts.getTextOfJSDocComment(doc?.comment) ?? "").trim(),
-      cls: value.getText(),
-      optional: markers.has("optional"),
-      many: markers.has("many"),
-      deferred: markers.has("deferred"),
-    };
-  });
+    if (!ts.isPropertyAssignment(prop)) continue;
+    parts.push(partOf(prop));
+  }
   return { parts, imports };
+}
+
+function partOf(prop: ts.PropertyAssignment): Part {
+  // `many(deferred(Function))`, `named(optional(SecurityGroup), "Firewall")`
+  const markers = new Set<string>();
+  let value = prop.initializer;
+  while (
+    ts.isCallExpression(value) &&
+    ["optional", "many", "deferred", "named"].includes(
+      value.expression.getText()
+    )
+  ) {
+    markers.add(value.expression.getText());
+    value = value.arguments[0];
+  }
+  const doc = ts.getJSDocCommentsAndTags(prop).find(ts.isJSDoc);
+  return {
+    key: prop.name.getText(),
+    description: (ts.getTextOfJSDocComment(doc?.comment) ?? "").trim(),
+    cls: value.getText(),
+    optional: markers.has("optional"),
+    many: markers.has("many"),
+    deferred: markers.has("deferred"),
+  };
 }
 
 // A part's resource class, or its args, linked to where it's documented

@@ -103,6 +103,13 @@ export interface PartsBuilder<P extends Parts> {
   };
   runsLocally(): void;
   report(report: Report): void;
+  /** Create parts once something the program waits for is ready: `after()`. */
+  after<T, R>(
+    ready: Promise<T>,
+    create: (value: T) => R | Promise<R>,
+  ): Promise<R>;
+  /** The ids `after()` will create a deferred part with: `willCreate()`. */
+  willCreate(key: ManyKeys<P>, ids: string[]): void;
 }
 
 export type LinkInclude =
@@ -507,6 +514,8 @@ export class PartsComponent<P extends Parts> extends Component {
       existingPart: this.existingPart.bind(this),
       runsLocally: () => this.runsLocally(),
       report: (report) => this.report(report),
+      after: (ready, create) => this.after(ready, create),
+      willCreate: (key, ids) => this.willCreate(key, ids),
     };
   }
 
