@@ -6,6 +6,7 @@
 export * from "./alb";
 export * from "./apigatewayv2";
 export * from "./app-sync";
+export * from "./astro";
 export * from "./aurora";
 export * from "./bucket";
 export * from "./bus";
@@ -29,5 +30,6 @@ export * from "./redis";
 export * from "./router";
 export * from "./service";
 export * from "./sns-topic";
+export * from "./svelte-kit";
 export * from "./task";
 export * from "./vpc";

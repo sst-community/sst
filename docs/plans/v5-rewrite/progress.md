@@ -2,6 +2,23 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `Astro` and the `SvelteKit` built the 5.0 way, on the sites' base
+
+**Done, committed (not pushed):**
+
+- **The `Astro`** (`aws/v5/astro.ts`) is a call to `createSsrSite()` with Astro's build: what the "astro-sst" adapter says in `dist/sst.buildMeta.json` becomes the site's plan, and its server when it has one (the adapter's entry, `sharp` installed, streaming as the adapter says, and the 404 page copied in). A static site has no server, so its servers are listed once the build says there is one. Its own args and docs, and on the clean break's list.
+- **What the review of the base found, for it:** a site whose framework has no build command of its own builds with its `build` script, run by the package manager whose lockfile is in the site's folder or the app's (`defaultBuildCommand()` in `helpers/site-build.ts`), as SST 4 does. A framework's `beforeBuild` runs before every build, a command given or not: the `Astro`'s check that SST's adapter 3.x isn't building an Astro 6 app.
+- **The takeover map's shared part** (`ssrSiteTakeover()` in `takeover/ssr-site.ts`): the warmers moved out of their `Cron`s, the files and key-value entries released, and the prewarm made again once. The `Nextjs`'s map is that and its ISR seed.
+- **The 404 page is copied from a path from the app's folder.** SST 4 joined the site's path to it as given, which is the same path for a site's folder given from the app's, and broke for one given as an absolute path.
+- **The `SvelteKit`** (`aws/v5/svelte-kit.ts`) the same way: the adapter's manifest gives the base path, its `adapter.json` whether the server streams, and the server is the adapter's handler with the prerendered pages copied in. SST 4 gave `minify` in the server's `esbuild` options, which the CLI doesn't read there, so the server was never minified; it's given the same way, so the server is built from the same args, and still isn't.
+- **A site isn't built for `sst refresh`**, which runs the program but creates nothing, as SST 4's sites weren't: what's made from the build isn't registered, and stays as it is. A lab check of the sites runs a refresh to confirm Pulumi keeps what isn't registered.
+- **A site's build doesn't see what the CLI passes for SST's own calls to Cloudflare**, as SST 4's builds didn't. `buildSite()` passed them on, the `Nextjs`'s included.
+- **One suite for the sites** (`test/components/v5/ssr-site.suite.ts`): the takeover cases and the tests every site passes, out of the `Nextjs`'s, run by `nextjs.test.ts`, `astro.test.ts` and `svelte-kit.test.ts` with their own. The `Astro`'s own: a static site, kept warm or not, and under a router's path, a streaming server, its server's entry and files, the default build command, the adapter check, and an adapter too old. `buildSite()` and the default build command have tests of their own.
+
+**Checked:** `tsc`, all platform tests, and the two docs pages. The `Astro` takes over 4.x's in 21 setups and the `SvelteKit` in 18, each three ways. The recorded Astro site and SvelteKit app, behind the router under `/astro` and `/svelte`, are taken over with nothing changed: only the command that built each goes, and their servers are removed in the same order as the `Nextjs`'s.
+
+**Reviewed:** the `Astro`, and the base's hooks for it; then the `SvelteKit`, the refresh and the credentials. Fixed from them: the CLI's Cloudflare credentials, the refresh, and tests of a static site under a router's path and of SvelteKit 3's spelling of its manifest. The three sites' docs say a refresh doesn't build them. A site's folder given as an absolute path gives its server's files another path than SST 4 did, which joined it to the app's folder and couldn't deploy it. The `SvelteKit`'s tests run in the app's folder, with each site's folder given from there: SST 4 copies a server's files from the app's folder joined with it.
+
 ## 2026-11-02: step 4, one base for the sites with a server, out of `Nextjs`
 
 **Done, committed (not pushed):**

@@ -44,6 +44,8 @@ const rebuilt = [
   "email.ts",
   "alb.ts",
   "service.ts",
+  "astro.ts",
+  "svelte-kit.ts",
 ];
 
 describe("V5 components", () => {

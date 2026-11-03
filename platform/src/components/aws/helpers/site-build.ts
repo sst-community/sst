@@ -1,3 +1,4 @@
+import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import { Input, output } from "@pulumi/pulumi";
@@ -17,6 +18,14 @@ const siteBuilds = lazy(
 
 // The last lines of a failed build's output that its error shows
 const TAIL = 50;
+
+// What the CLI passes on for SST's own calls to Cloudflare's API, which a
+// site's build has no use for
+const CLI_CREDENTIALS = [
+  "SST_CLOUDFLARE_API_TOKEN",
+  "SST_CLOUDFLARE_API_KEY",
+  "SST_CLOUDFLARE_EMAIL",
+];
 
 /**
  * Build a site, once in a run of the program, in the program itself.
@@ -58,7 +67,11 @@ export async function buildSite(input: {
   try {
     await run(name, command, path.resolve(context().paths.root, sitePath), {
       SST: "1",
-      ...process.env,
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) => !CLI_CREDENTIALS.includes(key),
+        ),
+      ),
       ...environment,
       ...links,
     });
@@ -66,6 +79,36 @@ export async function buildSite(input: {
     limit.release();
   }
   return sitePath;
+}
+
+/**
+ * The command that builds a site whose framework has no command of its own:
+ * its `build` script, run by the package manager whose lockfile is in the
+ * site's folder or the app's, as SST 4's sites pick it.
+ *
+ * @param sitePath The site's folder, from the app's folder.
+ */
+export function defaultBuildCommand(sitePath: string) {
+  const root = context().paths.root;
+  const site = path.resolve(root, sitePath);
+  const packageJson = path.join(site, "package.json");
+  if (!fs.existsSync(packageJson))
+    throw new VisibleError(`No package.json found at "${sitePath}".`);
+  const pkg = JSON.parse(fs.readFileSync(packageJson, "utf-8"));
+  if (!pkg.scripts?.build)
+    throw new VisibleError(
+      `No "build" script found within package.json in "${sitePath}".`,
+    );
+  const has = (...lockfiles: string[]) =>
+    lockfiles.some(
+      (file) =>
+        fs.existsSync(path.join(site, file)) ||
+        fs.existsSync(path.join(root, file)),
+    );
+  if (has("yarn.lock")) return "yarn run build";
+  if (has("pnpm-lock.yaml")) return "pnpm run build";
+  if (has("bun.lockb", "bun.lock")) return "bun run build";
+  return "npm run build";
 }
 
 // `SST_RESOURCE_App`, and an `SST_RESOURCE_<name>` for each link with the

@@ -71,9 +71,10 @@ function replay(file: string, stage: string) {
         .readFileSync(path.join(states, file), "utf8")
         .replaceAll("/home/user/v5-lab", app),
     ),
-    // OpenNext bundles a site's functions itself, without source maps
+    // OpenNext bundles a site's functions itself, without source maps, and
+    // SvelteKit's server is built with them turned off
     sourcemaps: (functionID) =>
-      functionID.startsWith("Next") ? [] : [sourcemap],
+      /^(Next|SvelteServer)/.test(functionID) ? [] : [sourcemap],
     call: (args) => lookups[args.token]?.(args.inputs),
     // The lab account's bootstrap, where functions' code went
     cli: (method) =>
@@ -219,10 +220,10 @@ function needless(order: string) {
     // still removed before it.
     /^RedisSubnetGroup before NetSecurityGroup$/.test(order) ||
     // A 4.x site creates what it makes from its build inside an apply that
-    // waits for the router's outputs, as in the Nextjs suite. Nothing about
+    // waits for the router's outputs, as in the sites' suite. Nothing about
     // the site's server or its entries needs the router's distribution or
     // store removed after them.
-    /^Next(Server\w+Function|KvKeys\.sst\.aws\.KvKeys) before Router(KvStore|CdnDistribution)$/.test(
+    /^(Next|Astro|Svelte)(Server\w+Function|KvKeys\.sst\.aws\.KvKeys) before Router(KvStore|CdnDistribution)$/.test(
       order,
     ) ||
     // A 4.x route or authorizer function depends on the API, as in the
@@ -433,6 +434,199 @@ describe("the lab's Next.js site, as v4.23.1 deployed it", () => {
       ["NextRevalidationSeed", ["triggers"]],
       ["NextRevalidationEventsSubscriberDsnwmmCode", ["key"]],
     ]);
+    expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
+  });
+
+  it("keeps secret what was secret, but for what's made from a function's ARN", () =>
+    keepsSecrets(run.result, true));
+});
+
+// The lab's Astro site as the adapter built it for the recording: what the
+// adapter said about the build, and the files it uploaded, under the router's
+// path. Their contents aren't in the state, only their hashes.
+function writeAstroBuild(dir: string, files: string[]) {
+  const write = (file: string, content: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), content);
+  };
+  write("package.json", JSON.stringify({ name: "astro" }));
+  write(
+    "dist/sst.buildMeta.json",
+    JSON.stringify({
+      pluginVersion: "4.0.0",
+      base: "/astro",
+      responseMode: "buffer",
+      outputMode: "server",
+      clientBuildOutputDir: "dist/client",
+      clientBuildVersionedSubDir: "_astro",
+      routes: [
+        { route: "/_server-islands/[name]", prerender: false },
+        { route: "/_image", prerender: false },
+        { route: "/about", prerender: true },
+        { route: "/", prerender: false },
+        { route: "/404", prerender: false },
+      ],
+    }),
+  );
+  write("dist/server/entry.mjs", "export const handler = async () => ({});");
+  for (const key of files)
+    write(path.join("dist/client", key.replace(/^astro\//, "")), key);
+}
+
+describe("the lab's Astro site, as v4.23.1 deployed it", () => {
+  const site = path.join(app, "sites/astro");
+  let run: Run;
+  beforeAll(async () => {
+    const pulumi = replay("serverless-sites.json", "rec");
+    const recorded = JSON.parse(
+      fs.readFileSync(path.join(states, "serverless-sites.json"), "utf8"),
+    ).checkpoint.latest.resources.find((r: any) =>
+      r.urn.endsWith("::AstroAssetFiles.sst.aws.BucketFiles"),
+    );
+    writeAstroBuild(
+      site,
+      recorded.inputs.files.map((file: { key: string }) => file.key),
+    );
+    const aws = await import("../../../src/components/aws/index");
+    const lab = await import("../../recorded/v5-lab");
+    run = await pulumi.takesOverState(
+      () => lab.astro(aws as any, lab.router(aws as any), "true"),
+      () => lab.astro(aws.v5 as any, lab.router(aws.v5 as any), "true"),
+      // Everything but the router and the site: the serverless group, the
+      // other sites, and the link references
+      (r) =>
+        r.type === "sst:sst:LinkRef" ||
+        !/^(Router|Astro)/.test(
+          r.parent ? r.parent.split("::").at(-1)! : r.name,
+        ),
+    );
+  });
+  afterAll(() =>
+    fs.rmSync(path.join(app, "sites"), { recursive: true, force: true }),
+  );
+
+  const fields = (changed: Run["result"]["changed"]) =>
+    changed.map(({ name, fields }) => [name, fields]);
+
+  it("is what the 4.x Astro deploys, but for what a build changes", () => {
+    const { deployed } = run;
+    expect(deployed.unclaimed).toEqual([]);
+    expect(deployed.created).toEqual([]);
+    // A 4.x site changes on every deploy: it's built again, with new hashes
+    expect(fields(deployed.changed)).toEqual([
+      // The command that built it runs again, here the test's
+      ["AstroBuilder", ["create", "environment", "triggers", "update"]],
+      // The test's files aren't what was built, only where it was, so what
+      // they're invalidated with changes too
+      ["AstroAssetFiles.sst.aws.BucketFiles", ["files"]],
+      ["AstroInvalidation.sst.aws.DistributionInvalidation", ["version"]],
+    ]);
+    expect(deployed.unordered).toEqual([]);
+    expect(deployed.revealed).toEqual([]);
+  });
+
+  it("is taken over by the V5 Astro", () => {
+    const { result } = run;
+    // What has nothing in the cloud behind it: the command that built the
+    // site
+    expect(result.unclaimed).toEqual(["command:local:Command::AstroBuilder"]);
+    expect(result.created).toEqual([]);
+    expect(fields(result.changed)).toEqual([]);
+    expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
+  });
+
+  it("keeps secret what was secret, but for what's made from a function's ARN", () =>
+    keepsSecrets(run.result, true));
+});
+
+// The lab's SvelteKit app as the adapter built it for the recording: where
+// the manifest says its files are, and what it uploaded, under the router's
+// path: the client's files and a prerendered page.
+function writeSvelteBuild(dir: string, files: string[]) {
+  const write = (file: string, content: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), content);
+  };
+  const adapter = ".svelte-kit/svelte-kit-sst";
+  write("package.json", JSON.stringify({ name: "svelte" }));
+  write(
+    `${adapter}/server/manifest.js`,
+    'export const manifest = { appDir: "_app", appPath: "svelte/_app" };',
+  );
+  write(
+    `${adapter}/server/lambda-handler/index.mjs`,
+    "export const handler = async () => ({});",
+  );
+  for (const key of files) {
+    const file = key.replace(/^svelte\//, "");
+    write(
+      path.join(
+        adapter,
+        file.startsWith("_app/") ? "client" : "prerendered",
+        file,
+      ),
+      key,
+    );
+  }
+}
+
+describe("the lab's SvelteKit app, as v4.23.1 deployed it", () => {
+  const site = path.join(app, "sites/svelte");
+  let run: Run;
+  beforeAll(async () => {
+    const pulumi = replay("serverless-sites.json", "rec");
+    const recorded = JSON.parse(
+      fs.readFileSync(path.join(states, "serverless-sites.json"), "utf8"),
+    ).checkpoint.latest.resources.find((r: any) =>
+      r.urn.endsWith("::SvelteAssetFiles.sst.aws.BucketFiles"),
+    );
+    writeSvelteBuild(
+      site,
+      recorded.inputs.files.map((file: { key: string }) => file.key),
+    );
+    const aws = await import("../../../src/components/aws/index");
+    const lab = await import("../../recorded/v5-lab");
+    run = await pulumi.takesOverState(
+      () => lab.svelte(aws as any, lab.router(aws as any), "true"),
+      () => lab.svelte(aws.v5 as any, lab.router(aws.v5 as any), "true"),
+      // Everything but the router and the site: the serverless group, the
+      // other sites, and the link references
+      (r) =>
+        r.type === "sst:sst:LinkRef" ||
+        !/^(Router|Svelte)/.test(
+          r.parent ? r.parent.split("::").at(-1)! : r.name,
+        ),
+    );
+  });
+  afterAll(() =>
+    fs.rmSync(path.join(app, "sites"), { recursive: true, force: true }),
+  );
+
+  const fields = (changed: Run["result"]["changed"]) =>
+    changed.map(({ name, fields }) => [name, fields]);
+
+  it("is what the 4.x SvelteKit deploys, but for what a build changes", () => {
+    const { deployed } = run;
+    expect(deployed.unclaimed).toEqual([]);
+    expect(deployed.created).toEqual([]);
+    // A 4.x site changes on every deploy: it's built again, with new hashes
+    expect(fields(deployed.changed)).toEqual([
+      // The command that built it runs again, here the test's
+      ["SvelteBuilder", ["create", "environment", "triggers", "update"]],
+      // The test's files aren't what was built, only where it was
+      ["SvelteAssetFiles.sst.aws.BucketFiles", ["files"]],
+    ]);
+    expect(deployed.unordered).toEqual([]);
+    expect(deployed.revealed).toEqual([]);
+  });
+
+  it("is taken over by the V5 SvelteKit", () => {
+    const { result } = run;
+    // What has nothing in the cloud behind it: the command that built the
+    // site
+    expect(result.unclaimed).toEqual(["command:local:Command::SvelteBuilder"]);
+    expect(result.created).toEqual([]);
+    expect(fields(result.changed)).toEqual([]);
     expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
   });
 

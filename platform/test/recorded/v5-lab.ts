@@ -41,6 +41,40 @@ export function next(
   });
 }
 
+/**
+ * The sites group's Astro site, on the router's path `/astro`. The lab builds
+ * it with its build script; a test builds it with `buildCommand`, from files
+ * it makes.
+ */
+export function astro(
+  aws: Components,
+  instance: InstanceType<Components["Router"]>,
+  buildCommand?: string,
+) {
+  return new aws.Astro("Astro", {
+    path: "sites/astro",
+    router: { instance, path: "/astro" },
+    buildCommand,
+  });
+}
+
+/**
+ * The sites group's SvelteKit app, on the router's path `/svelte`. The lab
+ * builds it with its build script; a test builds it with `buildCommand`, from
+ * files it makes.
+ */
+export function svelte(
+  aws: Components,
+  instance: InstanceType<Components["Router"]>,
+  buildCommand?: string,
+) {
+  return new aws.SvelteKit("Svelte", {
+    path: "sites/svelte",
+    router: { instance, path: "/svelte" },
+    buildCommand,
+  });
+}
+
 export function serverless(aws: Components) {
   const uploads = new aws.Bucket("Uploads");
   uploads.notify({

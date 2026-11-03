@@ -9,6 +9,7 @@
 import "./alb";
 import "./apigatewayv2";
 import "./app-sync";
+import "./astro";
 import "./aurora";
 import "./bucket";
 import "./bus";
@@ -29,5 +30,6 @@ import "./redis";
 import "./router";
 import "./service";
 import "./sns-topic";
+import "./svelte-kit";
 import "./task";
 import "./vpc";

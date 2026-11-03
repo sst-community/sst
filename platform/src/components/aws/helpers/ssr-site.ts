@@ -37,7 +37,7 @@ import type { BaseSiteFileOptions } from "../../base/base-site";
 import { parseLambdaEdgeArn } from "./arn";
 import { useProvider } from "./provider";
 import { type RouteArgs, routeOf } from "./router";
-import { buildSite } from "./site-build";
+import { buildSite, defaultBuildCommand } from "./site-build";
 import { BucketFiles } from "../resources/bucket-files";
 import { KvKeys } from "../resources/kv-keys";
 import { DistributionInvalidation } from "../providers/distribution-invalidation";
@@ -85,8 +85,8 @@ export const BUILD_READS_IT =
  */
 export const ssrSiteParts = () => ({
   /**
-   * The Amazon S3 bucket that holds the site's assets, and what its server caches there,
-   * like the ISR cache of a Next.js site.
+   * The Amazon S3 bucket that holds the site's assets, and anything its server caches
+   * there.
    */
   assets: Bucket,
   /**
@@ -876,7 +876,7 @@ export interface SsrSiteArgs {
   }>;
 }
 
-type SsrSiteParts = ReturnType<typeof ssrSiteParts>;
+export type SsrSiteParts = ReturnType<typeof ssrSiteParts>;
 
 /**
  * What each site takes in its own words: its docs name its framework. The
@@ -953,8 +953,16 @@ export type ServerPlan = Pick<
 export interface SsrFramework<B extends SiteBuild> {
   /** The component, in messages: `the "Web" Nextjs site`. */
   label: string;
-  /** The command that builds the site, when the site isn't given one. */
-  buildCommand(sitePath: string, option: (arg: string) => string): string;
+  /**
+   * The command that builds the site, when the site isn't given one. Without
+   * it, the site's `build` script, run by its package manager.
+   */
+  buildCommand?(sitePath: string, option: (arg: string) => string): string;
+  /**
+   * Checks the app before every build, with a command given or not, like that
+   * its adapter can build it. `sst dev` doesn't build, and skips it.
+   */
+  beforeBuild?(sitePath: string): void;
   /** Reads the build, from the site's folder as it's built. */
   load(builtPath: string): B;
   /**
@@ -1072,12 +1080,22 @@ export function createSsrSite<B extends SiteBuild>(
     { retainOnDelete: false },
   );
 
+  // `sst refresh` runs the program to read what's deployed, and creates
+  // nothing, so the site isn't built for it, as SST 4's wasn't. What's made
+  // from the build isn't registered, and stays as it is.
+  if (context().command === "refresh") {
+    builder.report({ hint: routing.url });
+    return { url: routing.url };
+  }
+
+  framework.beforeBuild?.(sitePath);
   const build = buildSite({
     name,
     sitePath,
     command:
       plain(args.buildCommand, option("buildCommand"), isBuilt) ??
-      framework.buildCommand(sitePath, option),
+      framework.buildCommand?.(sitePath, option) ??
+      defaultBuildCommand(sitePath),
     environment: args.environment,
     link: args.link,
   }).then((builtPath) => {
