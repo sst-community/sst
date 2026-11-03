@@ -4,6 +4,7 @@
  * `sst.aws.Queue`.
  */
 export * from "./alb";
+export * from "./analog";
 export * from "./apigatewayv2";
 export * from "./app-sync";
 export * from "./astro";
@@ -24,13 +25,18 @@ export * from "./function";
 export * from "./https-redirect";
 export * from "./mysql";
 export * from "./nextjs";
+export * from "./nuxt";
 export * from "./postgres";
 export * from "./queue";
+export * from "./react";
 export * from "./redis";
+export * from "./remix";
 export * from "./router";
 export * from "./service";
 export * from "./sns-topic";
+export * from "./solid-start";
 export * from "./static-site";
 export * from "./svelte-kit";
+export * from "./tan-stack-start";
 export * from "./task";
 export * from "./vpc";

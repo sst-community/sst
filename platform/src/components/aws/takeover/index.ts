@@ -7,6 +7,7 @@
  * removed, this folder goes with them.
  */
 import "./alb";
+import "./analog";
 import "./apigatewayv2";
 import "./app-sync";
 import "./astro";
@@ -24,13 +25,18 @@ import "./function";
 import "./https-redirect";
 import "./mysql";
 import "./nextjs";
+import "./nuxt";
 import "./postgres";
 import "./queue";
+import "./react";
 import "./redis";
+import "./remix";
 import "./router";
 import "./service";
 import "./sns-topic";
+import "./solid-start";
 import "./static-site";
 import "./svelte-kit";
+import "./tan-stack-start";
 import "./task";
 import "./vpc";

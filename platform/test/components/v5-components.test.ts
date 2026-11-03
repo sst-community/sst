@@ -47,6 +47,12 @@ const rebuilt = [
   "astro.ts",
   "svelte-kit.ts",
   "static-site.ts",
+  "tan-stack-start.ts",
+  "nuxt.ts",
+  "solid-start.ts",
+  "analog.ts",
+  "remix.ts",
+  "react.ts",
 ];
 
 describe("V5 components", () => {
@@ -81,12 +87,15 @@ describe("V5 components", () => {
     // the two have the same type. The class is named the same, and so is the
     // file.
     it("has the name and type of the component it replaces", async () => {
-      // 4.x spelled the `Cdn`'s type in capitals, and named the certificate's
-      // type for what it is, and a deployed one keeps each
+      // 4.x spelled the `Cdn`'s type in capitals and TanStack Start's with a
+      // small "s", and named the certificate's type for what it is, and a
+      // deployed one keeps each
       const typeName =
-        { Cdn: "CDN", DnsValidatedCertificate: "Certificate" }[
-          component.name as string
-        ] ?? component.name;
+        {
+          Cdn: "CDN",
+          DnsValidatedCertificate: "Certificate",
+          TanStackStart: "TanstackStart",
+        }[component.name as string] ?? component.name;
       expect(component.__pulumiType).toBe(`sst:aws:${typeName}`);
       const original = await import(`../../src/components/aws/${name}.ts`);
       expect(

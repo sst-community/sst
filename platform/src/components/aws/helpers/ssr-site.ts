@@ -971,6 +971,13 @@ export interface SsrFramework<B extends SiteBuild> {
    */
   alwaysServes: boolean;
   /**
+   * Whether the build has versioned files: a folder whose files' names change
+   * with what's in them. Without them, `invalidation.paths: "versioned"` has
+   * nothing to invalidate, so there's no invalidation, as in SST 4.
+   * @default `true`
+   */
+  versionedFiles?: boolean;
+  /**
    * Checks the framework's own args that decide what's created. It runs where
    * the base checks its own, which `sst dev` skips.
    */
@@ -1698,6 +1705,11 @@ async function handler(event) {
   function createInvalidation() {
     if (invalidation === false) return;
     if (Array.isArray(invalidation?.paths) && invalidation.paths.length === 0)
+      return;
+    if (
+      invalidation?.paths === "versioned" &&
+      framework.versionedFiles === false
+    )
       return;
 
     const plan = builtOutput.apply((built) => {

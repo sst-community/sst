@@ -2,6 +2,64 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the six framework sites built the 5.0 way, and their lab check
+
+The maintainer decided that every component gets a 5.0 form, so these come first: the sites on the base the `Nextjs`, `Astro` and `SvelteKit` share.
+
+**Done, committed (not pushed):**
+
+- **`TanStackStart`, `Nuxt`, `SolidStart`, `Analog`, `Remix` and `React`** (`aws/v5/`), each `createSsrSite()` with its framework's reader of the build. The args and docs are SST 4's, with the examples on `sst.aws.v5`, a "Switch from" section, and takeover maps from `ssrSiteTakeover()`. All six are on the clean break's list. `TanStackStart` keeps SST 4's type, `sst:aws:TanstackStart`, with its small "s".
+- **Shared:**
+  - `readNitro()` in `helpers/nitro.ts` reads the four Nitro builds and refuses one without the `aws-lambda` preset, in either of Nitro's spellings.
+  - `configText()` in `helpers/site-build.ts` reads a config file in any extension.
+  - A framework whose build has no versioned folder says `versionedFiles: false`. Then `invalidation.paths: "versioned"` makes no invalidation, as in SST 4; the base had failed the deploy instead.
+  - `Remix` is made from its args, as `Nextjs` is, so `buildDirectory` is checked as a plain value.
+- **Better than SST 4,** each change listed in its component's "Switch from":
+  - TanStack Start's base path is read where builds with Nitro 3 put it, `.output/server/_ssr/ssr.mjs`, as well as where earlier builds did. SST 4 read only the earlier place, so a site under a router's `path` didn't deploy with a current TanStack Start.
+  - Config files are read in any extension. SST 4 failed without the `.ts` one.
+  - Nuxt and Analog refuse a build without Nitro's preset, which has no Lambda handler.
+  - Analog's server streams when Nitro says so.
+  - Remix doesn't load Vite after the build only to check its config.
+  - React's base-path errors are the kind the CLI shows plainly.
+  - TanStack Start's advice on the preset looks in the site's own folder.
+- **Kept as SST 4 had it:** Nuxt's `_nuxt` isn't marked as versioned. Its `builds/latest.json` isn't hashed, and a year's cache would break Nuxt's check for new builds.
+- **The mock** links the platform's `functions/` folder into its own platform folder (a junction on Windows), so a component that reads its files there, as `Remix` and `React` do, can be tested.
+
+**Checked:**
+
+- `tsc`, all 3,083 platform tests, and the six docs pages.
+- Each site takes over SST 4's in the shared suite's setups, each three ways, plus its own: streaming, React's SPA mode, and Remix's build directory. Nothing changes but Analog's URL with streaming, which its docs list.
+
+**Reviewed.** No state or path bug. Fixed from it:
+
+- the mock's symlink, which Windows makes only with admin rights;
+- Remix's `buildDirectory` doc, which had landed on `router`;
+- React's "Switch from", which said `regions` lists the server from the start;
+- two tests that passed without what they tested;
+- `configText()`, which now resolves against the app's folder;
+- three messages and docs slips;
+- three errors that weren't tested.
+
+**Checked in the lab** (a stage of its own, no VPC, with a CLI built from the branch). The six came from SST's examples. Each is linked to a bucket its page signs an upload URL for. Five sit at their root on subdomains of a 4.x router; React has a distribution of its own.
+
+- **Deployed with SST 4.**
+  - Three of the examples needed `--legacy-peer-deps`.
+  - Two needed a newer Vite than their ranges allow: TanStack Start 1.169 wants Vite 8, and Analog 1.22 calls Vite 6.
+  - Analog's example fails its own render (Angular's `NG0210`, `document is not defined`) with the Angular its ranges install. Its server answers through Nitro, so it was checked as it was.
+- **`sst migrate --check` passed:**
+  - 148 resources kept, 12 at a new address and 2 updated in place;
+  - only SST's file and key-value resources released;
+  - one replacement: Nuxt's server code, uploaded under a new key, as each Nuxt build has a new build id.
+- **The move** kept every resource by id but that code object, the six builder commands and SST's own resources, which came back under their new type. The other five servers' code was byte for byte the same, and so were all six servers' settings and key-value entries.
+- **The same answers before and after**, on 18 paths:
+  - each page, an asset and a missing page;
+  - status and size, within the length of a signed URL's session token;
+  - each server signing a URL for its link (Analog's aside).
+  - One difference isn't the move's: Solid's missing page answered 200 once before and 404 since, with the same body. Its server started once, before the move, so the same container gave both; that's SolidStart's first render after a cold start.
+- **`sst diff` after the move** shows only Nuxt's next build.
+- **`sst refresh`** built none of the six and kept all 164 resources.
+- **Removed, and cleaned up:** the stage's 109 state versions and markers, its `migrate` copy among them, its passphrase, and the two source maps of Remix's and React's servers. Nothing of it is left in CloudFront, ACM or Route 53.
+
 ## 2026-11-02: step 4, the lab check of the `StaticSite`, and two fixes to the move it found
 
 **Checked in the lab** (a stage of its own, no VPC, with a CLI built from the branch). The lab app's sites group, with `Astro` and `SvelteKit` left out: the router with its two routes, `Nextjs` at its root, a `StaticSite` under `/static`, one with a distribution of its own that has an error page and a viewer response function, and a third one built into `dist` and served without edge routing, with an error page. Only the `StaticSite`s switched; the router, its bucket and `Nextjs` stayed SST 4's.

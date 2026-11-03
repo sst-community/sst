@@ -2,6 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 import * as pulumi from "@pulumi/pulumi";
 import { rpc } from "../components/rpc/rpc";
 import { contractVersion } from "../components/contract";
@@ -186,6 +187,13 @@ export function mockPulumi(input?: MockInput) {
     fs.mkdirSync(path.join(platform, "dist", stub), { recursive: true });
     fs.writeFileSync(path.join(platform, "dist", stub, "bootstrap"), stub);
   }
+  // What a component reads from the platform's own files, like the Lambda
+  // handler a site wraps its server build in: those of the platform this
+  // file is in, when it has them. A junction, which Windows makes without
+  // admin rights; other systems make a symlink.
+  const functions = fileURLToPath(new URL("../../functions", import.meta.url));
+  if (fs.existsSync(functions))
+    fs.symlinkSync(functions, path.join(platform, "functions"), "junction");
   // What the CLI builds each function from, by the function's name. The
   // name, the app's key and the mode are left out: they aren't the
   // function's own.

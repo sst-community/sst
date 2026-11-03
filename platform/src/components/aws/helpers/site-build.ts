@@ -111,6 +111,21 @@ export function defaultBuildCommand(sitePath: string) {
   return "npm run build";
 }
 
+/**
+ * The text of a site's config file, in whichever of its extensions it has,
+ * like `nuxt.config.ts` or `nuxt.config.mjs`; or nothing, without one.
+ *
+ * @param sitePath The site's folder, from the app's folder or absolute.
+ * @param name The file's name without its extension: `nuxt.config`.
+ */
+export function configText(sitePath: string, name: string) {
+  const site = path.resolve(context().paths.root, sitePath);
+  for (const ext of [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"]) {
+    const file = path.join(site, name + ext);
+    if (fs.existsSync(file)) return fs.readFileSync(file, "utf-8");
+  }
+}
+
 // `SST_RESOURCE_App`, and an `SST_RESOURCE_<name>` for each link with the
 // properties that are known
 async function linkEnvironment(links?: Input<any[]>) {
