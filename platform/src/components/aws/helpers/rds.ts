@@ -265,7 +265,10 @@ export function localDatabase(
 
   const connection = {
     host: output(dev.host ?? "localhost"),
-    port: output(dev.port ?? defaults.port),
+    // One given as an output that's undefined is the engine's too
+    port: all([dev.port, defaults.port]).apply(
+      ([port, fallback]) => port ?? fallback,
+    ),
     // An empty one is as good as none, as in 4.x
     username: output(dev.username ? dev.username : defaults.username),
     password: output(dev.password ?? defaults.password ?? ""),

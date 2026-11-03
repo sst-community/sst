@@ -1980,23 +1980,22 @@ function parseParts(file: string, name = "parts"): Parts | undefined {
   // `const parts = rdsInstanceParts`, the parts two components share, from
   // the file it's imported from
   if (literal && ts.isIdentifier(literal)) {
-    const shared = literal.getText();
-    const from = source.statements
-      .filter(ts.isImportDeclaration)
-      .find((statement) => {
-        const bindings = statement.importClause?.namedBindings;
-        return (
-          bindings &&
-          ts.isNamedImports(bindings) &&
-          bindings.elements.some((element) => element.name.getText() === shared)
-        );
-      });
-    if (!from) return undefined;
-    const specifier = (from.moduleSpecifier as ts.StringLiteral).text;
-    return parseParts(
-      path.join(path.dirname(file), `${specifier.replace(/\.js$/, "")}.ts`),
-      shared
-    );
+    const local = literal.getText();
+    for (const statement of source.statements.filter(ts.isImportDeclaration)) {
+      const bindings = statement.importClause?.namedBindings;
+      if (!bindings || !ts.isNamedImports(bindings)) continue;
+      const element = bindings.elements.find(
+        (element) => element.name.getText() === local
+      );
+      const specifier = (statement.moduleSpecifier as ts.StringLiteral).text;
+      // Only the repo's own files: `{ rdsInstanceParts as parts }` too
+      if (!element || !specifier.startsWith(".")) continue;
+      return parseParts(
+        path.join(path.dirname(file), `${specifier.replace(/\.js$/, "")}.ts`),
+        (element.propertyName ?? element.name).getText()
+      );
+    }
+    return undefined;
   }
   if (!literal || !ts.isObjectLiteralExpression(literal)) return undefined;
 
