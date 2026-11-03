@@ -46,6 +46,7 @@ const rebuilt = [
   "service.ts",
   "astro.ts",
   "svelte-kit.ts",
+  "static-site.ts",
 ];
 
 describe("V5 components", () => {

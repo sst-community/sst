@@ -1297,25 +1297,11 @@ export function createSsrSite<B extends SiteBuild>(
     const requestFunction = builder.part("requestFunction", {
       runtime: "cloudfront-js-2.0",
       keyValueStoreAssociations: [kvStoreArn],
-      code: interpolate`
-import cf from "cloudfront";
-async function handler(event) {
-  ${edge.viewerRequest?.injection ?? ""}
-  ${args.domain ? CF_BLOCK_CLOUDFRONT_URL_INJECTION : ""}
-  ${CF_ROUTER_INJECTION}
-
-  const kvNamespace = "${namespace}";
-
-  // Load metadata
-  let metadata;
-  try {
-    const v = await cf.kvs().get(kvNamespace + ":metadata");
-    metadata = JSON.parse(v);
-  } catch (e) {}
-
-  const response = await routeSite(kvNamespace, metadata);
-  return response || event.request;
-}`,
+      code: siteRequestCode(
+        namespace,
+        edge.viewerRequest?.injection,
+        Boolean(args.domain),
+      ),
     });
     const responseFunction = edge.viewerResponse?.injection
       ? builder.part("responseFunction", {
@@ -1783,6 +1769,41 @@ function normalizedPlan(plan: SitePlan): SitePlan {
       isrCache: { ...plan.isrCache, to: trim(plan.isrCache.to) },
     }),
   };
+}
+
+/**
+ * The code of the viewer request function of a site with a distribution of
+ * its own: it routes each request with what the site keeps in the key-value
+ * store, under its namespace.
+ *
+ * @param injection The user's code, run first.
+ * @param blocksCloudFrontUrl Whether the site has a domain, so its CloudFront
+ * URL is refused.
+ */
+export function siteRequestCode(
+  namespace: string,
+  injection: Input<string> | undefined,
+  blocksCloudFrontUrl: boolean,
+) {
+  return interpolate`
+import cf from "cloudfront";
+async function handler(event) {
+  ${injection ?? ""}
+  ${blocksCloudFrontUrl ? CF_BLOCK_CLOUDFRONT_URL_INJECTION : ""}
+  ${CF_ROUTER_INJECTION}
+
+  const kvNamespace = "${namespace}";
+
+  // Load metadata
+  let metadata;
+  try {
+    const v = await cf.kvs().get(kvNamespace + ":metadata");
+    metadata = JSON.parse(v);
+  } catch (e) {}
+
+  const response = await routeSite(kvNamespace, metadata);
+  return response || event.request;
+}`;
 }
 
 /**

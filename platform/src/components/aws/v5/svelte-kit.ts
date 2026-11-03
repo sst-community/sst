@@ -472,8 +472,8 @@ export interface SvelteKitArgs
  *   out of that build, and a link none of whose properties are known is passed with only
  *   its `type`. A build that checks its environment, or reads a link while it prerenders,
  *   has to allow for that. `sst.aws.SvelteKit` skipped its build in `sst diff` then.
- * - A deploy that previews first, on a stage with checks or with a policy pack, builds the
- *   site twice: in the preview, and in the deploy.
+ * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
+ *   pack, build the site twice: in the preview, and in the deploy.
  * - `sst refresh` doesn't build the site, where `sst.aws.SvelteKit` did. What's made from
  *   the build, like the servers in `nodes.server`, stays as it is, and isn't listed while
  *   it runs.

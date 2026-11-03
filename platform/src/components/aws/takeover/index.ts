@@ -30,6 +30,7 @@ import "./redis";
 import "./router";
 import "./service";
 import "./sns-topic";
+import "./static-site";
 import "./svelte-kit";
 import "./task";
 import "./vpc";

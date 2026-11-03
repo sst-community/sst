@@ -75,6 +75,24 @@ export function svelte(
   });
 }
 
+/**
+ * The sites group's static sites: one on the router's path `/static`, and one
+ * with a distribution of its own. Neither is built: each folder is uploaded
+ * as it is.
+ */
+export function staticSites(
+  aws: Components,
+  instance: InstanceType<Components["Router"]>,
+) {
+  return {
+    files: new aws.StaticSite("Static", {
+      path: "sites/static",
+      router: { instance, path: "/static" },
+    }),
+    standalone: new aws.StaticSite("Standalone", { path: "sites/standalone" }),
+  };
+}
+
 export function serverless(aws: Components) {
   const uploads = new aws.Bucket("Uploads");
   uploads.notify({

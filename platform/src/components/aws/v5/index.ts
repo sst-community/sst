@@ -30,6 +30,7 @@ export * from "./redis";
 export * from "./router";
 export * from "./service";
 export * from "./sns-topic";
+export * from "./static-site";
 export * from "./svelte-kit";
 export * from "./task";
 export * from "./vpc";

@@ -151,6 +151,7 @@ has no 4.x components.
 | An RDS database: storage limit, replicas, the proxy, a stored password, and a local one in `sst dev` | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()`, `localDatabase()` in `helpers/rds.ts` |
 | A database on an RDS instance, whole: what the `Postgres` and the `Mysql` share | `rdsInstanceParts`, `RdsInstanceArgs`, and `createRdsInstance(this.builder(), name, args, engine)` with the engine's `RdsEngine`, in `helpers/rds-instance.ts`; the tests in `test/components/v5/rds-instance.suite.ts` |
 | A site with a server, whole: what the `Nextjs`, `Astro` and `SvelteKit` share | `ssrSiteParts`, `SsrSiteArgs`, and `createSsrSite(this.builder(), name, args, framework)` with the framework's `SsrFramework`, in `helpers/ssr-site.ts`. The framework gives its build command, reads its build into a `SiteBuild` with the site's plan, says how its server is built (`ServerPlan`, which the site's own args are merged into) and creates what it adds, like `Nextjs`'s image optimizer. A framework without a build command of its own builds with `defaultBuildCommand(sitePath)` in `helpers/site-build.ts`, the `build` script by the app's package manager. `urlAccessArgs(fn, distributionArn)` gives the permissions to call a function's URL. The takeover map's shared part is `ssrSiteTakeover(label, warmedWhen)` in `takeover/ssr-site.ts`, and the tests every site passes are in `test/components/v5/ssr-site.suite.ts` |
+| A site's viewer request function, which routes it with the key-value store | `siteRequestCode(namespace, injection, blocksCloudFrontUrl)` in `helpers/ssr-site.ts`, which the `StaticSite` shares. A site with no server isn't on `createSsrSite`: the `StaticSite` builds with `buildSite()` and uploads its folder as it is |
 | What two components share, as more than args: their parts, built by a helper | `this.builder()`, which gives the helper the component's `part()`, `existingPart()`, `runsLocally()` and `report()`. Declare the shared parts as `const parts = sharedParts`; the docs follow it |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
 | An arg that may be unset | `ifSet(value, convert?)` in `args.ts` |
@@ -244,9 +245,11 @@ takeover(ApiGatewayV2, {
   over, because a lookup takes no old address. It's dropped from state and looked up
   again, which changes nothing in AWS.
 - A resource 4.x looked up under the component for a value isn't a part: it's not the
-  component's to transform or replace. Look it up with `this.delegateOpts()` and the
-  name it had, and it stays where it was in the state. The V5 `Efs` does this for the
-  VPC whose CIDR block it reads.
+  component's to transform or replace. Look it up with a function instead, which a
+  preview runs too: the V5 `Efs` does this for the VPC whose CIDR block it reads
+  (`ec2.getVpcOutput`), and the V5 `StaticSite` for the bucket `assets.bucket` names. A
+  move takes 4.x's lookup out of the state, which changes nothing in AWS; the takeover
+  test lists it as unclaimed.
 - A part that gets a new name keeps its physical name: a generated name is never
   changed once it's deployed. A resource that's named with a `Name` tag is the
   exception (a security group, a VPC endpoint, a subnet): the tag is made from the

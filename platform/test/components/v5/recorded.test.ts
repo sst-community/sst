@@ -634,6 +634,80 @@ describe("the lab's SvelteKit app, as v4.23.1 deployed it", () => {
     keepsSecrets(run.result, true));
 });
 
+describe("the lab's static sites, as v4.23.1 deployed them", () => {
+  const sites = path.join(app, "sites");
+  let run: Run;
+  beforeAll(async () => {
+    const pulumi = replay("serverless-sites.json", "rec");
+    // The files each site uploaded, under the keys the state has them at:
+    // their contents aren't in the state, only their hashes
+    const resources = JSON.parse(
+      fs.readFileSync(path.join(states, "serverless-sites.json"), "utf8"),
+    ).checkpoint.latest.resources;
+    for (const [site, prefix] of [
+      ["Static", "static/"],
+      ["Standalone", ""],
+    ]) {
+      const recorded = resources.find((r: any) =>
+        r.urn.endsWith(`::${site}AssetFiles.sst.aws.BucketFiles`),
+      );
+      for (const { key } of recorded.inputs.files) {
+        const file = path.join(
+          sites,
+          site.toLowerCase(),
+          key.slice(prefix.length),
+        );
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, key);
+      }
+    }
+    const aws = await import("../../../src/components/aws/index");
+    const lab = await import("../../recorded/v5-lab");
+    run = await pulumi.takesOverState(
+      () => lab.staticSites(aws as any, lab.router(aws as any)),
+      () => lab.staticSites(aws.v5 as any, lab.router(aws.v5 as any)),
+      // Everything but the router and the sites: the serverless group, the
+      // other sites, and the link references
+      (r) =>
+        r.type === "sst:sst:LinkRef" ||
+        !/^(Router|Static|Standalone)/.test(
+          r.parent ? r.parent.split("::").at(-1)! : r.name,
+        ),
+    );
+  });
+  afterAll(() => fs.rmSync(sites, { recursive: true, force: true }));
+
+  const fields = (changed: Run["result"]["changed"]) =>
+    changed.map(({ name, fields }) => [name, fields]);
+
+  it("is what the 4.x StaticSite deploys, but for the files", () => {
+    const { deployed } = run;
+    expect(deployed.unclaimed).toEqual([]);
+    expect(deployed.created).toEqual([]);
+    // The test's files aren't the lab's, only where they were, so what
+    // they're invalidated with changes too
+    expect(fields(deployed.changed)).toEqual([
+      ["StandaloneAssetFiles.sst.aws.BucketFiles", ["files"]],
+      ["StandaloneInvalidation.sst.aws.DistributionInvalidation", ["version"]],
+      ["StaticAssetFiles.sst.aws.BucketFiles", ["files"]],
+      ["StaticInvalidation.sst.aws.DistributionInvalidation", ["version"]],
+    ]);
+    expect(deployed.unordered).toEqual([]);
+    expect(deployed.revealed).toEqual([]);
+  });
+
+  it("is taken over by the V5 StaticSite, with nothing changed", () => {
+    const { result } = run;
+    expect(result.unclaimed).toEqual([]);
+    expect(result.created).toEqual([]);
+    expect(fields(result.changed)).toEqual([]);
+    expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
+    // They have no function, whose ARN is the one secret a V5 site reveals
+    expect(result.revealed).toEqual([]);
+    expect(result.hidden).toEqual([]);
+  });
+});
+
 describe("the lab's serverless group, as v4.23.1 deployed it in sst dev", () => {
   let run: Run;
   beforeAll(async () => {
