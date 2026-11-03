@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mockPulumi, type TakeoverWay } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const pulumi = mockPulumi({
   // What the 4.x component wraps things in. They have nothing in AWS behind
@@ -24,16 +25,6 @@ const pulumi = mockPulumi({
         };
       case "aws:appsync/function:Function":
         return { functionId: `${args.name}_fid` };
-      case "aws:acm/certificate:Certificate":
-        return {
-          domainValidationOptions: [
-            {
-              resourceRecordType: "CNAME",
-              resourceRecordName: "_abc.api.example.com.",
-              resourceRecordValue: "_def.acm-validations.aws.",
-            },
-          ],
-        };
       default:
         return {};
     }
@@ -70,6 +61,10 @@ describe("AppSync", () => {
     ({ AppSync } = await import("../../../src/components/aws/v5/app-sync"));
     await import("../../../src/components/aws/takeover/app-sync");
     await import("../../../src/components/aws/takeover/function");
+    // What the V5 API creates for a domain takes over 4.x's by this
+    await import(
+      "../../../src/components/aws/takeover/dns-validated-certificate"
+    );
 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "app-sync-v5-"));
     schema = path.join(dir, "schema.graphql");
@@ -561,6 +556,38 @@ describe("AppSync", () => {
       /Invalid resolver/,
     );
     await pulumi.settle();
+  });
+
+  it("needs a plain value for the function it creates", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    const errors = await applyErrors(() => {
+      new AppSync("MyApi", { schema }).addDataSource({
+        name: "later",
+        lambda: output("src/lambda.handler"),
+      });
+    }, pulumi.settle);
+    expect(
+      pulumi.resources.filter((r) => r.type === "sst:aws:Function"),
+    ).toEqual([]);
+    expect(errors).toContainEqual(
+      expect.stringContaining(
+        `The "lambda" of the "later" data source of the "MyApi" API is an output that isn't a function or the ARN of one.`,
+      ),
+    );
+  });
+
+  it("takes a function's ARN as an output", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    new AppSync("MyApi", { schema }).addDataSource({
+      name: "fn",
+      lambda: output(FUNCTION_ARN),
+    });
+    await pulumi.settle();
+
+    const source = pulumi.resources.find(
+      (r) => r.type === "aws:appsync/dataSource:DataSource",
+    )!;
+    expect(source.inputs.lambdaConfig).toEqual({ functionArn: FUNCTION_ARN });
   });
 
   it("needs one source for a data source", async () => {

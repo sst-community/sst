@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the `AppSync` built the 5.0 way
+
+**Done, committed (not pushed):**
+
+- **Its own args and docs** (`aws/v5/app-sync.ts`): the API's, and a data source's, an AppSync function's and a resolver's, with no 4.x component file reached, and on the clean break's list. Two of 4.x's examples named the wrong field (`requestTemplate` for an AppSync function's `requestMappingTemplate`, and the same for the response); they're right now.
+- **Its domain on the 5.0 certificate**, in `us-east-1` as AppSync needs, and the DNS adapters, through `domainOf()`, as the `ApiGatewayV2`'s is. The certificate's map gives its validation records their old names.
+- **A Lambda data source's handler or function args are a plain value**; a function you already have, or its ARN, can be an output.
+
+**Checked:** `tsc`, the docs page, and all platform tests, with the domain on Route 53, Cloudflare and Vercel taking over 4.x's, an output refused for a data source's handler, and a function's ARN taken as one.
+
+**Reviewed:** every data source kind, role, AppSync function, resolver and the domain match 4.x's, with the map's names. Fixed from it: the docs and the plan said only a `provider` given to the API replaced anything on switch. 4.x created a data source's, function's and resolver's resources beside the API with only that `provider`, so an API that takes its provider from a parent or `providers` has those replaced too. The docs of the `ApiGatewayV2`, the `AppSync` and the `CognitoUserPool` now say a function's args are the 5.0 `Function`'s, as the `Queue`'s do.
+
 ## 2026-11-02: step 4, the `ApiGatewayV2` built the 5.0 way, and one domain helper
 
 **Done, committed (not pushed):**

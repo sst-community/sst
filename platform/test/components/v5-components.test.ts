@@ -38,6 +38,7 @@ const rebuilt = [
   "aurora.ts",
   "dsql.ts",
   "apigatewayv2.ts",
+  "app-sync.ts",
 ];
 
 describe("V5 components", () => {
