@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the rest of the review's fixes
+
+**Done, committed (not pushed).** The smaller fixes the [review](plan.md#decisions) asked for:
+
+- **The clean-break test follows imports through helpers.** A rebuilt component reaches 4.x's code only through a helper that takes either kind, which the test lists with the 4.x file each may import. It found one more: the `Task`'s container `health` and `dev` were typed by the 4.x `Service`'s args, and are its own now.
+- **The rebuilt components read `context()`**, the program contract, for the app, the stage, `sst dev` and the paths, as a package's components do, not `$app`, `$dev` or `$cli`.
+- **The README is the guide to writing a component**, about 270 lines, and the rules and checklist for porting SST's 4.x components are in `PORTING.md` beside it, which goes once 5.0 has none.
+- **`v5-community-packages` is merged in**: the template package, the components in tiers, and the template's job in the checks. Its tests pass against `sst` packed from this branch.
+- **The public API**: `sst.linkable`, deprecated in 4.x, is gone for `sst.Linkable.wrap`, and `V5Args`, which wraps 4.x args, isn't exported. `sst.Component` and `sst.x` stay until the swap.
+- **The swap** from `aws/v5/` to `aws/` is a step of its own in step 5, with the 4.x files kept frozen under `test/fixtures/v4/` for the takeover suites, and an exit test.
+
+**Reviewed**, the RDS base: no change to what either database deploys, every old test kept, and every generated page byte for byte the same. Fixed from it: a local Aurora's port given as an output that's undefined, and the docs generator's following of shared parts.
+
+Left from the review: a shared base for the sites, out of `Nextjs`, before `Astro`, `SvelteKit` and `StaticSite`; and, for the maintainer, what happens to each Kept, Community and Cloudflare component.
+
 ## 2026-11-02: step 4, one base for the databases on an RDS instance
 
 **Done, committed (not pushed).** The second fix from the [review](plan.md#decisions): the `Postgres` and the `Mysql` differed in 48 of their 873 lines, and their tests in 57 of 827, so a fix was made by hand in each, as several were the same day.
