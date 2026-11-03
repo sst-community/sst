@@ -2,6 +2,43 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, the `MicroVm` built the 5.0 way, the last of Kept, and its lab check
+
+**Done, committed (not pushed):**
+
+- **`MicroVm`** (`aws/v5/microvm.ts`). Every part has SST 4's name and place, so its map is empty: the image and its versions, the roles, the log group, the code's zip, the prune resource and the network connector are kept as they are, and the image isn't built again.
+  - In `sst dev` it reports its pane through the program contract, where SST 4 created a `DevCommand`. A move of a stage last deployed by `sst dev` takes that component out of the state; nothing in AWS is behind it. It runs locally through `this.runsLocally()`, so `nodes` says why a part isn't there.
+  - `vpc` takes either `Vpc`, with the NAT warning for both, and refuses another resource given as a VPC's ids.
+  - The prune resource, one of SST's dynamic resources, is a part, as the sites' invalidation is.
+- **Better than SST 4,** each change listed in "Switch from" where an app would notice:
+  - Images can share one network connector, given in `existing` in place of `vpc`. Each connector takes about 5 minutes to create.
+  - `existing` is refused where the component can't use what it's given: the log group (Lambda writes an image's build logs to the one named after it), the code, the image and the prune resource; `permissions` beside an existing execution role; an operator role with no connector to create. An existing build role, execution role or operator role is used.
+- **The docs generator:** a 5.0 page gets its SDK's functions. The generator matched the SDK by the module's third segment, `v5` for a 5.0 component, so the 5.0 `Task`, `Realtime` and `Workflow` pages had none; they have them now, as the `MicroVm`'s does. On a 5.0 page, a class the SDK's docs name in backticks gets its 5.0 name too, which changed one line, on the `Workflow`'s page.
+- **What earlier ports missed:**
+  - `Realtime`, `ApiGatewayWebSocket` and `ApiGatewayV2` create their subscribers, routes and authorizers with the component's provider, where SST 4 gave them only a `provider` passed to the component. So one that takes its provider from a parent replaces them on switch. Their "Switch from" sections now say so, as the `ApiGatewayV1`'s and the `Queue`'s do, with a test each.
+  - None of the ports since the `StaticSite` had added its rows to the plan's [breaking changes](plan.md#breaking-changes-so-far): the six framework sites, seven of Kept, the `ApiGatewayV1` and the `MicroVm` have 23 now.
+
+**Checked:** `tsc`, the platform tests (3,482), and the docs pages. The `MicroVm` has 52 tests: SST 4's, carried over, and the takeover in 9 cases, each three ways. The cases: an image from its context, with everything it's run with, linked, in a VPC by its ids, in a `Vpc`, with its resources transformed, in `sst dev`, in `sst dev` in a VPC and linked, and built in `sst dev`.
+
+**Reviewed.** Fixed from it:
+
+- The docs' example of a shared connector failed in `sst dev`, where the first image runs locally and has no connector. The example guards it with `$dev`, and a test runs it in `sst dev`.
+- What an object `transform` now merges into, the image's variables and the connector's configuration, is named in "Switch from", with a test.
+- An existing operator role that would have been ignored is refused.
+- An empty `permissions` beside an existing role is allowed, and the `link` docs say an existing role gets no permissions.
+- The pane's new name, which `SST_CHILD` takes, is in "Switch from".
+- Tests: `sst dev` with a link and a VPC, and existing build and operator roles.
+- The breaking changes and a real `sst dev` run, both done (above and below).
+
+**Checked in the lab** (a stage of its own, with a VPC with EC2 NATs, and a CLI built from the branch). An image in the VPC, with an environment variable and a link to a bucket, run by an SST 4 function that runs a MicroVM, calls it and terminates it.
+
+- **Deployed with SST 4, and called:** the MicroVM answered with the image's environment and the link's value, and its outbound traffic left through the VPC's NAT.
+- **`sst migrate --check` passed:** 59 resources kept, none at a new address or updated in place, and nothing replaced, released or taken out.
+- **The move** kept all 46 resources by id, none of them renamed. `sst diff` after it showed no changes, and the MicroVM answered the same.
+- **A second image sharing the first one's connector** created no connector or operator role of its own, and its MicroVM's traffic left through the same NAT.
+- **`sst dev`:** its deploy deleted the images, their code, the build roles, the connector and the operator role, and the execution roles trusted the account. The pane ran the app on this machine as the execution role, with the image's environment and the link, and the SST 4 function, run locally, reached it through the SDK.
+- **Removed, and cleaned up:** `sst remove` deleted 49 resources. Then the stage's 121 state versions and markers, its `migrate` copy among them, its passphrase, and the 2 source maps of the SST 4 function. Nothing of it is left: no MicroVM image or network connector in the account, and no instance, address, VPC, role or log group.
+
 ## 2026-11-03: step 4, the `ApiGatewayV1` built the 5.0 way, and its lab check
 
 **Done, committed (not pushed):**

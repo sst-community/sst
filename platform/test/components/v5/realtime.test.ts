@@ -157,6 +157,38 @@ describe("Realtime", () => {
     });
   });
 
+  // SST 4 gave the subscribers only a provider passed to the component itself, so
+  // one it took from a parent didn't reach them. The 5.0 ones have the
+  // component's, so a switch replaces them, as "Switch from" says.
+  it("replaces the subscribers of one that takes its provider from a parent", async () => {
+    const { ComponentResource } = await import("@pulumi/pulumi");
+    const { Provider } = await import("@pulumi/aws");
+    const inParent = (C: any) => {
+      const parent = new ComponentResource(
+        "test:index:Parent",
+        "Parent",
+        {},
+        {
+          providers: { aws: new Provider("East", { region: "us-east-1" }) },
+        },
+      );
+      new C(
+        "MyRealtime",
+        { authorizer: "src/auth.handler" },
+        { parent },
+      ).subscribe("src/a.handler", { filter: "chat/#" });
+    };
+    const result = await pulumi.takesOver(
+      () => inParent(Original),
+      () => inParent(Realtime),
+    );
+    const replaced = result.changed
+      .filter((c) => c.fields.includes("options.provider"))
+      .map((c) => c.name);
+    expect(replaced).toContain("MyRealtimeSubscriberHuueahRule");
+    expect(replaced).toContain("MyRealtimeSubscriberHuueahHandlerLogGroup");
+  });
+
   it("names each subscriber with SST 4's hash, inside the server", async () => {
     new Original("MyServer", {
       authorizer: "src/authorizer.handler",

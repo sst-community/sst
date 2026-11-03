@@ -326,6 +326,12 @@ export interface ApiGatewayWebSocketRouteArgs {
  *   route's `auth.jwt` is refused the same way.
  * - An authorizer's `lambda` and a route's handler have to be plain values: whether a
  *   function is created is decided from them.
+ * - The routes and authorizers are created with the provider the API has.
+ *   `sst.aws.ApiGatewayWebSocket` gave them only a `provider` passed to the API itself, so
+ *   if your API takes its provider from a parent component or from `providers`, its routes
+ *   and authorizers are replaced on switch, their functions' log groups with them, which
+ *   `sst migrate --check` refuses: remove them and deploy before you switch, then add
+ *   them back.
  */
 export class ApiGatewayWebSocket extends component(
   "sst:aws:ApiGatewayWebSocket",

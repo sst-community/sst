@@ -106,7 +106,9 @@ if (!cmd || cmd === "components") {
       await generateLinkableDoc(component);
     } else {
       const componentProvider = component.name.split("/")[1];
-      const sdkName = component.name.split("/")[2];
+      // The file's name: `components/aws/task`, or `components/aws/v5/task`
+      // for a V5 component, which has the same SDK
+      const sdkName = component.name.split("/").at(-1);
       const sdk = sdks.find(
         (s) =>
           // ie. vector
@@ -2811,8 +2813,9 @@ function useV5Names(prop: TypeDoc.Reflection, text: string) {
   const file = (prop as TypeDoc.DeclarationReflection).sources?.[0]?.fileName;
   if (!isV5Source(currentPage) || !file || isV5Source(file) || isHelperSource(file))
     return text;
-  // A component's constructor, and its static methods: `sst.aws.StepFunctions.pass(`
-  return text.replace(/\bsst\.aws\.(\w+)(?=\(|\.\w+\()/g, (match, name) =>
+  // A component's constructor, its static methods, and its name in code:
+  // `sst.aws.StepFunctions.pass(`, or `sst.aws.Workflow` in the SDK's docs
+  return text.replace(/\bsst\.aws\.(\w+)(?=\(|\.\w+\(|`)/g, (match, name) =>
     v5Classes.has(name) ? `sst.aws.v5.${name}` : match
   );
 }

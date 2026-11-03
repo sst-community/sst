@@ -63,6 +63,7 @@ const rebuilt = [
   "apigatewayv1.ts",
   "apigatewayv1-usage-plan.ts",
   "apigatewayv1-api-key.ts",
+  "microvm.ts",
 ];
 
 describe("V5 components", () => {

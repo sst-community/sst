@@ -288,6 +288,34 @@ describe("ApiGatewayV2", () => {
     });
   });
 
+  // SST 4 gave the routes only a provider passed to the component itself, so
+  // one it took from a parent didn't reach them. The 5.0 ones have the
+  // component's, so a switch replaces them, as "Switch from" says.
+  it("replaces the routes of one that takes its provider from a parent", async () => {
+    const { ComponentResource } = await import("@pulumi/pulumi");
+    const { Provider } = await import("@pulumi/aws");
+    const inParent = (C: any) => {
+      const parent = new ComponentResource(
+        "test:index:Parent",
+        "Parent",
+        {},
+        {
+          providers: { aws: new Provider("East", { region: "us-east-1" }) },
+        },
+      );
+      new C("MyApi", {}, { parent }).route("GET /", "src/h.handler");
+    };
+    const result = await pulumi.takesOver(
+      () => inParent(OriginalApiGatewayV2),
+      () => inParent(ApiGatewayV2),
+    );
+    const replaced = result.changed
+      .filter((c) => c.fields.includes("options.provider"))
+      .map((c) => c.name);
+    expect(replaced).toContain("MyApiRouteDnvusbRoute");
+    expect(replaced).toContain("MyApiRouteDnvusbHandlerLogGroup");
+  });
+
   it("keeps each route's resources under the route", async () => {
     const api = new ApiGatewayV2("MyApi")
       .route("GET /", FUNCTION_ARN)

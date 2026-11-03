@@ -725,6 +725,12 @@ export interface ApiGatewayV2AuthorizerArgs {
  *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
  * - `nodes` has every resource, the certificate and each route's included. Reading
  *   `nodes.domainName` without a domain gives `undefined`, where it failed.
+ * - The routes and authorizers are created with the provider the API has.
+ *   `sst.aws.ApiGatewayV2` gave them only a `provider` passed to the API itself, so if
+ *   your API takes its provider from a parent component or from `providers`, its routes
+ *   and authorizers are replaced on switch, their functions' log groups with them, which
+ *   `sst migrate --check` refuses: remove them and deploy before you switch, then add
+ *   them back.
  */
 export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   private handlerLink: FunctionArgs["link"];
