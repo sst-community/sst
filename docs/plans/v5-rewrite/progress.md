@@ -2,6 +2,15 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-02: step 4, the lab check of the serverless group with today's components
+
+**Checked in the lab** (a stage of its own, no VPC, with a CLI built from the branch). The lab app's serverless group: a `Bucket`, `Queue`s, an `SnsTopic`, a `Dynamo`, a `CognitoUserPool` with a trigger and a client, a `Function` with a URL, an `ApiGatewayV2` with a domain and a Lambda authorizer, an `AppSync` with a Lambda data source, a `CronV2`, a `Bus` and an `Email` whose sender is a domain, all switched at once.
+
+- **Deployed with SST 4**, with a CLI from before the refusal of SST 4's form on a new stage. `sst migrate --check` passed: 158 kept (99 at a new address, 11 functions updated in place for their code), 9 replaced (the functions' code, uploaded again under new keys), 7 released (SST 4's lookups of the hosted zone), 14 taken out of the state with nothing in the cloud behind them, and 3 created (SST's provider, the marker and the record of versions).
+- **The move** kept every resource by id but the functions' code. Each DNS record kept its id: the API's alias records and its certificate's validation record, the `Email`'s DMARC record, and its three DKIM records, now named after their place, each under the name made from its own token before. Then `sst diff` showed no changes.
+- **The same answers before and after:** the function's links, the API's routes through its domain with and without the authorizer's token, and the domain's DKIM still verified by SES.
+- Removed, and cleaned up: the stage's 116 state versions (with two delete markers an earlier cleanup left in the state bucket), its passphrase, and the 12 source maps 4.x's functions leave in the asset bucket. The SES identity and the domain's records are gone. What the tagging API still lists was checked directly, and is gone.
+
 ## 2026-11-02: step 4, the `Service` built the 5.0 way
 
 **Done, committed (not pushed):**
