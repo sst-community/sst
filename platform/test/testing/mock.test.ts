@@ -114,6 +114,22 @@ describe("mock()", () => {
     }
   });
 
+  // An email's DKIM records are made from what SES answers, so a package's
+  // test of a component with an `Email` needs no state of its own for it
+  it("gives an email's domain the DKIM tokens SES would", async () => {
+    new sst.aws.v5.Email("Mail", { sender: "example.com" });
+    await app.settle();
+    const dkim = app.resources
+      .filter((r) => r.inputs.type === "CNAME")
+      .map((r) => r.inputs.name)
+      .sort();
+    expect(dkim).toEqual([
+      "tokena._domainkey.example.com",
+      "tokenb._domainkey.example.com",
+      "tokenc._domainkey.example.com",
+    ]);
+  });
+
   // What's recorded can be saved, and a later version of the component
   // checked against it: what a deploy would remove, and what it would update
   describe("checks a change against what's deployed", () => {

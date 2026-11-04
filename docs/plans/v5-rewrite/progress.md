@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 4, `packages/aws-saas` moved to this branch's components
+
+The last package in the maintainer's order, built on the v5 alphas. It's on its own branch, `v5-saas`, which the maintainer chose to merge this branch into, with the package's move on top.
+
+**Done, committed and pushed:**
+
+- **`mock()` gives an email's domain the DKIM tokens SES would** (`platform/src/testing/mock.ts`), three, and none when it signs with a key of your own, as it gives a certificate its validation records. 5.0's `Email` makes a domain's DKIM records from them, so under `mock()` it threw in a package's test of a component with an `Email`, unless the test gave the identity's state itself. Found by the package's tests.
+- **The package passes against `sst` packed from this branch**: its 401 tests, DynamoDB Local's among them, and `tsc` with no `skipLibCheck`. What it needed: `v5.ApiGatewayHttp` for `ApiGatewayV2`, with the same type; a user pool given by id found with `existingPart()`, the workaround for a lookup fixed on `v5` gone; and no `google-protobuf` pin. Its own plan and README, in its folder, say the rest.
+
+**Checked:** a test that an `Email`'s DKIM records come from the tokens the mock gives, which fails without the fix, and all platform tests.
+
 ## 2026-11-04: step 4, the Floci package checked against this branch's components, and a target's container no longer stopped under a command
 
 The next package in the maintainer's order. They chose to check the Floci package's four components against this branch and stop there: the components its check allows are left for its own repo.

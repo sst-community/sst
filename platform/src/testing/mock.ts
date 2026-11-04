@@ -1124,6 +1124,19 @@ function given(args: pulumi.runtime.MockResourceArgs): Record<string, any> {
       }),
     };
   }
+  // The DKIM tokens SES gives a domain to put in DNS, which `Email` makes its
+  // records from: three, and none when it signs with a key of your own
+  if (args.type === "aws:sesv2/emailIdentity:EmailIdentity") {
+    const signing = args.inputs.dkimSigningAttributes;
+    return {
+      dkimSigningAttributes: {
+        ...signing,
+        tokens: signing?.domainSigningPrivateKey
+          ? []
+          : ["tokena", "tokenb", "tokenc"],
+      },
+    };
+  }
   return {};
 }
 
