@@ -1,7 +1,7 @@
 import { takeover } from "../../takeover";
 import { outputId } from "../../component";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { ApiGatewayV2 } from "../v5/apigatewayv2";
+import { ApiGatewayHttp } from "../v5/apigateway-http";
 import { childOf } from "./helpers";
 
 // The 4.x `ApiGatewayV2` keeps each route in a component of its own, next to
@@ -10,10 +10,16 @@ import { childOf } from "./helpers";
 // one keeps a route's resources inside the API, under the route's name or the
 // route itself.
 const LAMBDA = "sst:aws:ApiGatewayV2LambdaRoute";
-const ROUTES = [LAMBDA, "sst:aws:ApiGatewayV2UrlRoute", "sst:aws:ApiGatewayV2PrivateRoute"];
+const ROUTES = [
+  LAMBDA,
+  "sst:aws:ApiGatewayV2UrlRoute",
+  "sst:aws:ApiGatewayV2PrivateRoute",
+];
 const ROUTE = /^(\$default$|(ANY|DELETE|GET|HEAD|OPTIONS|PATCH|POST|PUT) \/)/;
 const route = (api: string, id = "") => {
-  const suffix = ROUTE.test(id) ? hashStringToPrettyString(outputId + id, 6) : id;
+  const suffix = ROUTE.test(id)
+    ? hashStringToPrettyString(outputId + id, 6)
+    : id;
   return `${api}Route${logicalName(suffix)}`;
 };
 
@@ -22,7 +28,7 @@ const AUTHORIZER = "sst:aws:ApiGatewayV2Authorizer";
 const authorizer = (api: string, id = "") =>
   `${api}Authorizer${logicalName(id)}`;
 
-takeover(ApiGatewayV2, {
+takeover(ApiGatewayHttp, {
   moved: {
     logGroup: "accessLog",
     certificate: "ssl",

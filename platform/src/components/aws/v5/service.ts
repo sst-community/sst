@@ -18,8 +18,10 @@ import {
   ifSet,
   notAnExistingPart,
   notAnOption,
+  onlyExisting,
   plain,
   plainDeep,
+  usedAsItIs,
   withDefault,
 } from "../../args";
 import { type DurationMinutes, toSeconds } from "../../duration";
@@ -40,6 +42,7 @@ import {
   createTaskDefinition,
   fargateTaskOf,
   fargateTaskParts,
+  givenTaskDefinition,
   type Network,
   taskRoleArgs,
 } from "../helpers/fargate";
@@ -56,6 +59,11 @@ import { URL_UNAVAILABLE } from "../linkable";
 
 const parts = () => ({
   ...fargateTaskParts,
+  /**
+   * The Amazon ECS Task Definition. Not created when an existing `service` is given: that
+   * one runs its own.
+   */
+  taskDefinition: optional(ecs.TaskDefinition),
   /**
    * The AWS Security Group of the load balancer. Only created when the service has a
    * load balancer of its own.
@@ -94,24 +102,30 @@ const parts = () => ({
    * The AWS Cloud Map service. Only created when the cluster's VPC has a Cloud Map
    * namespace, which a VPC you pass in by its ids may not. So it's an output, and
    * reading it fails when there is no namespace.
+   *
+   * Not created when an existing `service` is given: pass the one that service is
+   * registered in, in `existing`, for its host name.
    */
   cloudmapService: deferred(servicediscovery.Service),
   /**
-   * The Amazon ECS Service.
+   * The Amazon ECS Service. Given an existing one, the component creates nothing else: it
+   * runs its own task definition, behind its own load balancer, and scales its own way.
    */
   service: ecs.Service,
   /**
-   * The AWS Application Auto Scaling target.
+   * The AWS Application Auto Scaling target. Not created when an existing `service` is
+   * given.
    */
-  autoScalingTarget: appautoscaling.Target,
+  autoScalingTarget: optional(appautoscaling.Target),
   /**
    * The AWS Application Auto Scaling policy that tracks CPU utilization. Not created
-   * when `scaling.cpuUtilization` is `false`.
+   * when `scaling.cpuUtilization` is `false`, or when an existing `service` is given.
    */
   autoScalingCpuPolicy: optional(appautoscaling.Policy),
   /**
    * The AWS Application Auto Scaling policy that tracks memory utilization. Not
-   * created when `scaling.memoryUtilization` is `false`.
+   * created when `scaling.memoryUtilization` is `false`, or when an existing `service`
+   * is given.
    */
   autoScalingMemoryPolicy: optional(appautoscaling.Policy),
   /**
@@ -958,7 +972,7 @@ export interface ServiceArgs
    * Configure the CloudMap service registry for the service.
    *
    * This creates an `srv` record in the CloudMap service. This is needed if you want to connect
-   * an `ApiGatewayV2` VPC link to the service.
+   * an `ApiGatewayHttp` VPC link to the service.
    *
    * API Gateway will forward requests to the given port on the service.
    *
@@ -1258,7 +1272,7 @@ export interface ServiceArgs
  *   }
  * });
  *
- * const api = new sst.aws.v5.ApiGatewayV2("MyApi", {
+ * const api = new sst.aws.v5.ApiGatewayHttp("MyApi", {
  *   vpc,
  *   domain: "example.com"
  * });
@@ -1350,6 +1364,49 @@ export interface ServiceArgs
  * container's `dev.command` runs on your machine as the task role, so a task role you pass
  * has to trust your AWS account for it to.
  *
+ * #### Run a task definition you already have
+ *
+ * Pass the task definition, or its ARN, and the service runs it the way it is.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Service("MyService", {
+ *   cluster,
+ *   loadBalancer: {
+ *     rules: [{ listen: "80/http", forward: "8080/http", container: "app" }]
+ *   },
+ *   existing: {
+ *     taskDefinition: "arn:aws:ecs:us-east-1:123456789012:task-definition/my-app:3"
+ *   }
+ * });
+ * ```
+ *
+ * The service then creates no roles, images or log groups: the task definition has its
+ * containers, and what they run with. So the args that would make one, like `image`,
+ * `containers`, `health`, `cpu`, `link` and `permissions`, are refused, and so are roles,
+ * images and log groups in `existing`. A rule of the load balancer names the `container` it
+ * forwards to, one of the task definition's. In `sst dev`, a `dev.command` runs as the task
+ * definition's task role.
+ *
+ * #### Reference a service you already have
+ *
+ * Pass the ECS service, or its cluster's name and its own, and the component only
+ * references it.
+ *
+ * ```ts title="sst.config.ts"
+ * const service = new sst.aws.v5.Service("MyService", {
+ *   cluster,
+ *   existing: {
+ *     service: "my-cluster/my-service",
+ *     cloudmapService: "srv-0123456789abcdef"
+ *   }
+ * });
+ * ```
+ *
+ * It creates nothing, in `sst dev` too: the service runs its own task definition, behind
+ * its own load balancer, and scales its own way. So every arg but the `cluster` is refused,
+ * and `existing` takes only the Cloud Map service it's registered in, which gives it its
+ * `service` host name. It has no `url`.
+ *
  * #### Switch from `sst.aws.Service`
  *
  * Change `sst.aws.Service` to `sst.aws.v5.Service` and keep the name. The ECS service, its
@@ -1395,6 +1452,9 @@ export interface ServiceArgs
  *   policies.
  * - `nodes.loadBalancer` is the load balancer the service creates. For a service that's
  *   attached to an `Alb`, read it from the `Alb`.
+ * - `nodes.taskRole`, `nodes.executionRole`, `nodes.taskDefinition` and
+ *   `nodes.autoScalingTarget` may be `undefined`: they aren't created for an ECS service or
+ *   a task definition you pass in `existing`.
  * - A `transform` function for `service`, `taskDefinition`, `logGroup`, `target` or
  *   `listener` is given outputs where `sst.aws.Service` gave it plain values. For a part
  *   there are several of, it's also given which one.
@@ -1477,6 +1537,8 @@ export class Service extends component("sst:aws:Service", parts) {
     url?: Output<string>;
     // Its host name in the cluster's Cloud Map namespace, when there is one
     host: Output<string | undefined>;
+    // Why there's no host name, when there isn't
+    noHost: string;
   };
 
   constructor(
@@ -1487,9 +1549,33 @@ export class Service extends component("sst:aws:Service", parts) {
     super(name, args, opts);
 
     const owner = `the "${name}" service`;
+    const noNamespace = "the VPC of its cluster has no Cloud Map namespace";
+    // An ECS service that's already deployed is only referenced. It runs its
+    // own task definition, behind its own load balancer, and scales its own
+    // way, so what would configure them is refused. The Cloud Map service it's
+    // registered in is taken, for its host name.
+    const givenService = args.existing?.service !== undefined;
+    // A task definition that's already deployed is run the way it is
+    const givenDefinition = args.existing?.taskDefinition !== undefined;
+    if (givenService) {
+      onlyExisting(args.existing, ["service", "cloudmapService"], owner);
+      usedAsItIs(
+        args,
+        Object.keys(args).filter(
+          (key) =>
+            !["cluster", "transform", "existing"].includes(key) &&
+            !(key === "dev" && args.dev === false),
+        ),
+        "service",
+        owner,
+      );
+    } else if (givenDefinition) givenTaskDefinition(args, "service", owner);
+
     // In `sst dev` the service isn't deployed. Each container's command runs
-    // on the user's machine, as the task role.
+    // on the user's machine, as the task role. One that's given is the one
+    // that's deployed, in `sst dev` too.
     const dev =
+      !givenService &&
       plain(args.dev, `The "dev" of the "${name}" service`) !== false &&
       context().dev;
     const task = fargateTaskOf(this.builder(), "service", name, args);
@@ -1502,7 +1588,34 @@ export class Service extends component("sst:aws:Service", parts) {
 
     const { cluster, containers, region } = task;
     const vpc = task.network;
-    const balancer = loadBalancerOf(name, args.loadBalancer, containers);
+
+    if (givenService) {
+      // Looked up when it's given by its id, so it's in `nodes`
+      this.existingPart("service");
+      const registry =
+        args.existing?.cloudmapService !== undefined
+          ? this.createCloudmapService(vpc, undefined)
+          : undefined;
+      const noRegistry = `it's given an existing "service", and no "cloudmapService" with it`;
+      if (!registry)
+        this.partHandle("cloudmapService").defer(() => {
+          throw new VisibleError(
+            `The "${name}" service has no "nodes.cloudmapService": ${noRegistry}.`,
+          );
+        });
+      this.reach = {
+        host: registry ? hostOf(vpc, registry) : output(undefined),
+        noHost: registry ? noNamespace : noRegistry,
+      };
+      return;
+    }
+
+    // The containers of a task definition that's given are its own
+    const balancer = loadBalancerOf(
+      name,
+      args.loadBalancer,
+      givenDefinition ? undefined : containers,
+    );
     const scaling = scalingOf(name, args.scaling, balancer);
 
     // A part that isn't created for the args the service is given can't be
@@ -1550,7 +1663,17 @@ export class Service extends component("sst:aws:Service", parts) {
         `It's only created with "scaling.requestCount".`,
       );
 
-    const taskRole = this.part("taskRole", taskRoleArgs(args, this, dev));
+    // The containers run as the task role, and so does what `sst dev` runs in
+    // place of them. A task definition that's given has a role of its own.
+    const definition = givenDefinition
+      ? this.existingPart("taskDefinition")!
+      : undefined;
+    const taskRole = definition
+      ? undefined
+      : this.part("taskRole", taskRoleArgs(args, this, dev));
+    // `sst dev` runs a command with no role with the user's own credentials
+    const runsAs =
+      taskRole?.arn ?? definition!.taskRoleArn.apply((arn) => arn ?? "");
 
     // What `sst dev` runs in place of each container with a dev command, in a
     // pane of its own. `sst dev` runs nothing for one without.
@@ -1579,7 +1702,7 @@ export class Service extends component("sst:aws:Service", parts) {
           ...environment,
           AWS_REGION: region,
         })),
-        aws: { role: taskRole.arn },
+        aws: { role: runsAs },
       });
     }
     if (!devCommands)
@@ -1597,18 +1720,21 @@ export class Service extends component("sst:aws:Service", parts) {
         host: vpc.cloudmapNamespaceName.apply((namespace) =>
           namespace ? `dev.${namespace}` : undefined,
         ),
+        noHost: noNamespace,
       };
       return;
     }
 
-    const taskDefinition = createTaskDefinition(
-      this.builder(),
-      name,
-      task,
-      args.link,
-      containers,
-      taskRole,
-    );
+    const taskDefinition =
+      definition ??
+      createTaskDefinition(
+        this.builder(),
+        name,
+        task,
+        args.link,
+        containers,
+        taskRole!,
+      );
 
     const routing = !balancer
       ? undefined
@@ -1750,14 +1876,8 @@ export class Service extends component("sst:aws:Service", parts) {
 
     this.reach = {
       url: routing?.url,
-      host: all([vpc.cloudmapNamespaceName, cloudmapService]).apply(
-        ([namespace, registry]) =>
-          namespace && registry
-            ? registry.name.apply(
-                (service): string => `${service}.${namespace}`,
-              )
-            : output(undefined),
-      ),
+      host: hostOf(vpc, cloudmapService),
+      noHost: noNamespace,
     };
 
     this.report({ hint: this.reach.url });
@@ -2073,7 +2193,7 @@ export class Service extends component("sst:aws:Service", parts) {
     return this.reach.host.apply((host) => {
       if (!host)
         throw new VisibleError(
-          `The "${this.componentName}" service has no Cloud Map "service" name: the VPC of its cluster has no Cloud Map namespace.`,
+          `The "${this.componentName}" service has no Cloud Map "service" name: ${this.reach.noHost}.`,
         );
       return host;
     });
@@ -2093,7 +2213,22 @@ export class Service extends component("sst:aws:Service", parts) {
   }
 }
 
-/** Where a service runs. */
+/**
+ * The host name of a service in the cluster's Cloud Map namespace, when it's
+ * registered in one.
+ */
+function hostOf(
+  vpc: Network,
+  registry: Output<servicediscovery.Service | undefined>,
+): Output<string | undefined> {
+  return all([vpc.cloudmapNamespaceName, registry]).apply(
+    ([namespace, registry]) =>
+      namespace && registry
+        ? registry.name.apply((service): string => `${service}.${namespace}`)
+        : output(undefined),
+  );
+}
+
 /** A container port that traffic is sent to. */
 type Target = { group: lb.TargetGroup; container: string; port: number };
 
@@ -2115,7 +2250,7 @@ type SharedBalancer = ReturnType<typeof sharedBalancer>;
 function loadBalancerOf(
   name: string,
   given: ServiceArgs["loadBalancer"],
-  containers: Container[],
+  containers: Container[] | undefined,
 ) {
   const args = plain(given, `The "loadBalancer" of the "${name}" service`);
   if (!args) return undefined;
@@ -2127,7 +2262,7 @@ function loadBalancerOf(
 function ownBalancer(
   name: string,
   args: ServiceLoadBalancerArgs,
-  containers: Container[],
+  containers: Container[] | undefined,
 ) {
   const of = `the load balancer of the "${name}" service`;
   notAnOption(args, "ports", `It's "rules" now.`, of);
@@ -2201,7 +2336,11 @@ function ownBalancer(
 
 // A rule of the service's own load balancer: where it listens, and whether
 // it forwards to a container or redirects
-function ruleOf(rule: ServiceRuleArgs, what: string, containers: Container[]) {
+function ruleOf(
+  rule: ServiceRuleArgs,
+  what: string,
+  containers: Container[] | undefined,
+) {
   // A rule decides a listener, a target group and a listener rule, and the
   // listener rule is named after its conditions
   plainDeep(rule, what);
@@ -2257,12 +2396,21 @@ function ruleOf(rule: ServiceRuleArgs, what: string, containers: Container[]) {
   };
 }
 
-// The container a rule forwards to: the one it names, or the only one
+// The container a rule forwards to: the one it names, or the only one. The
+// containers of a task definition that's given aren't known: a rule names
+// one of them.
 function containerOf(
   rule: { container?: string },
   what: string,
-  containers: Container[],
+  containers: Container[] | undefined,
 ) {
+  if (!containers) {
+    if (!rule.container)
+      throw new VisibleError(
+        `${what} has to name the "container" it forwards to, one of the containers of the existing "taskDefinition" the service is given.`,
+      );
+    return rule.container;
+  }
   const names = containers.map((container) => container.name);
   if (!rule.container) {
     if (names.length > 1)
@@ -2285,7 +2433,7 @@ function containerOf(
 function sharedBalancer(
   name: string,
   args: ServiceAlbArgs,
-  containers: Container[],
+  containers: Container[] | undefined,
 ) {
   const of = `the load balancer of the "${name}" service`;
   if (!isAlb(args.instance))

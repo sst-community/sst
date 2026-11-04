@@ -235,7 +235,7 @@ the component reads its args.
   it is an error. Pulumi registers a component's outputs a moment after its
   constructor, so a report from a method can come too late once the config awaits. A
   component whose report waits on a method the app calls, like the V5
-  `ApiGatewayV1`'s hint on `deploy()`, overrides `registerOutputs()` to do nothing
+  `ApiGatewayRest`'s hint on `deploy()`, overrides `registerOutputs()` to do nothing
   until then, and the method reports and registers them. Don't name an output for the CLI. `context()` from `sst/components`
   gives the app, the stage, whether it's `sst dev`, the command and the paths. A
   component reads them there, not from `$app`, `$dev` or `$cli`, which are for an app's

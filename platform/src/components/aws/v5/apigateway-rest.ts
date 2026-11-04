@@ -24,7 +24,7 @@ import { VisibleError } from "../../error";
 import { hashStringToPrettyString, logicalName } from "../../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
-import { ApiGatewayV1UsagePlan } from "./apigatewayv1-usage-plan";
+import { ApiGatewayRestUsagePlan } from "./apigateway-rest-usage-plan";
 import {
   type ApiDomain,
   type ApiGatewayAccessLogArgs,
@@ -129,7 +129,7 @@ const parts = () => ({
   domainMapping: optional(apigateway.BasePathMapping),
 });
 
-export interface ApiGatewayV1Args
+export interface ApiGatewayRestArgs
   extends ComponentArgs<typeof parts>,
     ApiGatewayAccessLogArgs {
   /**
@@ -240,7 +240,7 @@ export interface ApiGatewayV1Args
   cors?: boolean;
 }
 
-export interface ApiGatewayV1AuthorizerArgs {
+export interface ApiGatewayRestAuthorizerArgs {
   /**
    * The name of the authorizer.
    * @example
@@ -314,7 +314,7 @@ export interface ApiGatewayV1AuthorizerArgs {
   identitySource?: Input<string>;
 }
 
-export interface ApiGatewayV1UsagePlanArgs {
+export interface ApiGatewayRestUsagePlanArgs {
   /**
    * Configure rate limits to protect your API from being overwhelmed by too many
    * requests at once.
@@ -380,7 +380,7 @@ export interface ApiGatewayV1UsagePlanArgs {
   }>;
 }
 
-export interface ApiGatewayV1ApiKeyArgs {
+export interface ApiGatewayRestApiKeyArgs {
   /**
    * The value of the API key. If not provided, it will be generated automatically.
    * @example
@@ -393,7 +393,7 @@ export interface ApiGatewayV1ApiKeyArgs {
   value?: Input<string>;
 }
 
-export interface ApiGatewayV1RouteArgs {
+export interface ApiGatewayRestRouteArgs {
   /**
    * Enable auth for your REST API. By default, auth is disabled.
    * @default `false`
@@ -508,7 +508,7 @@ export interface ApiGatewayV1RouteArgs {
   name?: string;
 }
 
-export interface ApiGatewayV1IntegrationArgs {
+export interface ApiGatewayRestIntegrationArgs {
   /**
    * The type of the API Gateway REST API integration.
    */
@@ -544,14 +544,14 @@ export interface ApiGatewayV1IntegrationArgs {
 }
 
 /**
- * The `ApiGatewayV1` component lets you add an [Amazon API Gateway REST API](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-rest-api.html) to your app.
+ * The `ApiGatewayRest` component lets you add an [Amazon API Gateway REST API](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-rest-api.html) to your app.
  *
  * @example
  *
  * #### Create the API
  *
  * ```ts title="sst.config.ts"
- * const api = new sst.aws.v5.ApiGatewayV1("MyApi");
+ * const api = new sst.aws.v5.ApiGatewayRest("MyApi");
  * ```
  *
  * #### Add routes
@@ -599,7 +599,7 @@ export interface ApiGatewayV1IntegrationArgs {
  * You can set it through the `transform`.
  *
  * ```ts title="sst.config.ts" {4}
- * const api = new sst.aws.v5.ApiGatewayV1("MyApi", {
+ * const api = new sst.aws.v5.ApiGatewayRest("MyApi", {
  *   transform: {
  *     handler: (args, opts) => {
  *       // Set the default if it's not set by the route
@@ -616,11 +616,23 @@ export interface ApiGatewayV1IntegrationArgs {
  *
  * #### Switch from `sst.aws.ApiGatewayV1`
  *
- * Change `sst.aws.ApiGatewayV1` to `sst.aws.v5.ApiGatewayV1` and keep the name. The API,
+ * Change `sst.aws.ApiGatewayV1` to `sst.aws.v5.ApiGatewayRest` and keep the name. The API,
  * its resources, routes, authorizers, stage, access log, domain and usage plans are kept.
  * The deployment is made again once, with the same routes, since it's made again whenever
- * what it's made of moves. A few things are written differently:
+ * what it's made of moves.
  *
+ * ```ts title="sst.config.ts" del={1} ins={2}
+ * const api = new sst.aws.ApiGatewayV1("MyApi");
+ * const api = new sst.aws.v5.ApiGatewayRest("MyApi");
+ * ```
+ *
+ * A few things are written differently:
+ *
+ * - It's named `ApiGatewayRest`, for the REST API it creates. `sst.aws.ApiGatewayV1` was
+ *   named after the version of API Gateway's API that creates one. It keeps its type,
+ *   `sst:aws:ApiGatewayV1`, which is what a deployed one has, so `sst-env.d.ts` still
+ *   lists a linked one as `sst.aws.ApiGatewayV1`. Its args' types are renamed the same
+ *   way: `ApiGatewayRestArgs`, `ApiGatewayRestRouteArgs` and the others.
  * - The routes and authorizers are inside the component, where `sst.aws.ApiGatewayV1`
  *   kept each in a component of its own. A route is kept by its name, or the route itself,
  *   like `GET /notes`. `route` and `routeIntegration` return the API, and `addAuthorizer`
@@ -675,7 +687,7 @@ export interface ApiGatewayV1IntegrationArgs {
  *   `sst migrate --check` refuses: remove them and deploy before you switch, then add
  *   them back.
  */
-export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
+export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
   private readonly endpointType: "EDGE" | "REGIONAL" | "PRIVATE";
   // The custom domain, checked: made by `deploy()`, with the stage
   private readonly domain?: ReturnType<typeof apiDomainOf>;
@@ -690,7 +702,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
 
   constructor(
     name: string,
-    args: ApiGatewayV1Args = {},
+    args: ApiGatewayRestArgs = {},
     opts?: ComponentResourceOptions,
   ) {
     // SST 4's transforms, before the component turns down a key it doesn't
@@ -857,7 +869,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
   public route(
     route: string,
     handler: FunctionInput,
-    args: ApiGatewayV1RouteArgs = {},
+    args: ApiGatewayRestRouteArgs = {},
   ) {
     const name = this.componentName;
     const { id, method, path, resourceId } = this.addRoute(
@@ -941,8 +953,8 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
    */
   public routeIntegration(
     route: string,
-    integration: ApiGatewayV1IntegrationArgs,
-    args: ApiGatewayV1RouteArgs = {},
+    integration: ApiGatewayRestIntegrationArgs,
+    args: ApiGatewayRestRouteArgs = {},
   ) {
     const { id, method, resourceId } = this.addRoute(
       route,
@@ -972,7 +984,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
   // resources of its path
   private addRoute(
     route: string,
-    args: ApiGatewayV1RouteArgs,
+    args: ApiGatewayRestRouteArgs,
     kind: Route["kind"],
   ) {
     const name = this.componentName;
@@ -1008,7 +1020,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
     id: string,
     method: string,
     resourceId: Output<string>,
-    args: ApiGatewayV1RouteArgs,
+    args: ApiGatewayRestRouteArgs,
   ) {
     const auth = output(args.auth).apply(
       (
@@ -1104,7 +1116,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
    * });
    * ```
    */
-  public addAuthorizer(args: ApiGatewayV1AuthorizerArgs) {
+  public addAuthorizer(args: ApiGatewayRestAuthorizerArgs) {
     const name = this.componentName;
     const id = args.name;
     const what = `the "${id}" authorizer of the "${name}" API`;
@@ -1170,7 +1182,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
    * then deploy the API.
    *
    * ```ts title="sst.config.ts" {4}
-   * const api = new sst.aws.v5.ApiGatewayV1("MyApi");
+   * const api = new sst.aws.v5.ApiGatewayRest("MyApi");
    *
    * api.route("GET /", "src/get.handler", {
    *   apiKey: true
@@ -1222,14 +1234,14 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
    * });
    * ```
    */
-  public addUsagePlan(name: string, args: ApiGatewayV1UsagePlanArgs) {
+  public addUsagePlan(name: string, args: ApiGatewayRestUsagePlanArgs) {
     const { api, stage } = this.nodes;
     if (!stage)
       throw new VisibleError(
         `The "${name}" usage plan is added to the "${this.componentName}" API before "deploy()", which makes the stage it's for. Call "deploy()" first.`,
       );
     // Next to the API, as SST 4 made it
-    return new ApiGatewayV1UsagePlan(
+    return new ApiGatewayRestUsagePlan(
       name,
       { ...args, apiId: api.id, apiStage: stage.stageName },
       { provider: this.componentOpts.provider },
@@ -1244,7 +1256,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
    * :::
    *
    * Your routes won't be added if this isn't called after you've added them. This
-   * is due to a quirk in the way API Gateway V1 is created internally.
+   * is due to a quirk in the way API Gateway creates REST APIs.
    */
   public deploy() {
     const name = this.componentName;

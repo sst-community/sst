@@ -1,15 +1,16 @@
 /**
- * The V5 components. Each one has the name of the component it replaces, so
- * they're exported together as `sst.aws.v5`: `sst.aws.v5.Queue` next to
- * `sst.aws.Queue`.
+ * The V5 components. Each one has the name of the component it replaces, or a
+ * clearer one the maintainer chose (`Cron` for `CronV2`, `ApiGatewayHttp` for
+ * `ApiGatewayV2`), so they're exported together as `sst.aws.v5`:
+ * `sst.aws.v5.Queue` next to `sst.aws.Queue`.
  */
 export * from "./alb";
 export * from "./analog";
+export * from "./apigateway-http";
+export * from "./apigateway-rest";
+export * from "./apigateway-rest-api-key";
+export * from "./apigateway-rest-usage-plan";
 export * from "./apigateway-websocket";
-export * from "./apigatewayv1";
-export * from "./apigatewayv1-api-key";
-export * from "./apigatewayv1-usage-plan";
-export * from "./apigatewayv2";
 export * from "./app-sync";
 export * from "./astro";
 export * from "./aurora";

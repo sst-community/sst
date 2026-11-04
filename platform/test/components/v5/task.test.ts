@@ -14,6 +14,23 @@ const ECR = "123456789012.dkr.ecr.us-east-1.amazonaws.com/sst-asset";
 const pulumi = mockPulumi({
   state: (args) => {
     if (args.type === IMAGE) return { digest: `sha256:${args.name}` };
+    // A task definition that's looked up has its containers and its roles.
+    // A "bare" one has no roles.
+    if (args.type === TASK_DEFINITION && args.id)
+      return {
+        arn: args.id,
+        containerDefinitions: JSON.stringify([
+          { name: "app" },
+          { name: "worker" },
+        ]),
+        ...(args.id.includes("bare")
+          ? {}
+          : {
+              executionRoleArn:
+                "arn:aws:iam::123456789012:role/their-execution-role",
+              taskRoleArn: "arn:aws:iam::123456789012:role/their-task-role",
+            }),
+      };
     // A role that's looked up has the ARN it has
     if (args.type === ROLE && args.id)
       return { arn: `arn:aws:iam::123456789012:role/${args.id}` };
@@ -995,6 +1012,120 @@ describe("Task", () => {
     const original = await target(OriginalTask);
     expect(original[0].ecsParameters.taskDefinitionArn).toMatch(/MyTaskTask$/);
     expect(await target(Task)).toEqual(original);
+  });
+
+  // It's run the way it is: nothing it would be made with is created
+  describe("with a task definition you already have", () => {
+    const ARN = "arn:aws:ecs:us-east-1:123456789012:task-definition/theirs:3";
+    const given = (args: object = {}, existing: object = {}) =>
+      new Task("MyTask", {
+        cluster: cluster(),
+        ...args,
+        existing: { taskDefinition: ARN, ...existing },
+      } as any);
+
+    it("creates no roles, images or log groups", async () => {
+      const task = given({ public: true });
+      await pulumi.settle();
+
+      expect(named("MyTask")).toEqual([
+        "MyTask",
+        "MyTaskPublicSecurityGroup",
+        "MyTaskTaskDefinition",
+      ]);
+      expect(resource("MyTaskTaskDefinition")).toMatchObject({
+        kind: "read",
+        options: { id: ARN },
+      });
+      expect(task.nodes.taskRole).toBeUndefined();
+      expect(task.nodes.executionRole).toBeUndefined();
+      expect(Object.keys(task.nodes.image)).toEqual([]);
+      expect(Object.keys(task.nodes.logGroup)).toEqual([]);
+      // There's no stub for `sst dev` to run it through
+      expect(pulumi.reportOf("MyTask")).toBeUndefined();
+    });
+
+    it("is run with its containers, and its roles are passed", async () => {
+      const task = given();
+      await pulumi.settle();
+
+      const link = (task as any).getSSTLink();
+      expect(
+        await pulumi.resolve({
+          taskDefinition: link.properties.taskDefinition,
+          containers: link.properties.containers,
+          passed: link.include[1],
+        }),
+      ).toEqual({
+        taskDefinition: ARN,
+        containers: ["app", "worker"],
+        passed: {
+          type: "aws.permission",
+          actions: ["iam:PassRole"],
+          resources: [
+            "arn:aws:iam::123456789012:role/their-execution-role",
+            "arn:aws:iam::123456789012:role/their-task-role",
+          ],
+        },
+      });
+    });
+
+    // IAM refuses a statement with no resources
+    it("passes nothing for one with no roles", async () => {
+      const bare = "arn:aws:ecs:us-east-1:123456789012:task-definition/bare:1";
+      const task = given({}, { taskDefinition: bare });
+      await pulumi.settle();
+
+      expect(
+        await pulumi.resolve((task as any).getSSTLink().include[1].resources),
+      ).toEqual([bare]);
+    });
+
+    it("is run in sst dev too, with no stub", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      given();
+      await pulumi.settle();
+
+      expect(named("MyTask")).toEqual(["MyTask", "MyTaskTaskDefinition"]);
+      expect(pulumi.reportOf("MyTask")).toBeUndefined();
+    });
+
+    it("refuses what would make one", async () => {
+      expect(() =>
+        given({ image: "nginx:latest", link: [], permissions: [] }),
+      ).toThrow(
+        `The "MyTask" task is given an existing "taskDefinition", which it uses the way it is. Remove "image", "link", "permissions" from its args.`,
+      );
+      expect(() =>
+        given({
+          containers: [{ name: "app", image: "nginx:latest" }],
+          cpu: "1 vCPU",
+          memory: "2 GB",
+        }),
+      ).toThrow(/Remove "containers", "cpu", "memory" from its args/);
+      // There's no stub to run it through
+      expect(() => given({ dev: { command: "node task.js" } })).toThrow(
+        /Remove "dev" from its args/,
+      );
+      // How it's run is the task's
+      expect(() =>
+        given({ dev: false, public: true, publicIp: true }),
+      ).not.toThrow();
+      await pulumi.settle();
+    });
+
+    it("refuses in existing what it would be made with", () => {
+      for (const [key, value] of Object.entries({
+        taskRole: "my-task-role",
+        executionRole: "my-execution-role",
+        image: { MyTask: "my-image" },
+        logGroup: { MyTask: "my-log-group" },
+      }))
+        expect(() => given({}, { [key]: value })).toThrow(
+          `"existing.${key}" isn't an option for the "MyTask" task. It's given an existing "taskDefinition", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+        );
+    });
   });
 
   describe("what it's given", () => {

@@ -33,6 +33,7 @@ import type { AnyBus } from "../helpers/bus";
 import type { AnyQueue } from "../helpers/queue";
 import type { AnySnsTopic } from "../helpers/sns-topic";
 import type { AnyTask } from "../helpers/task";
+import { rolesToPass } from "../helpers/fargate";
 
 const parts = () => ({
   /**
@@ -926,7 +927,7 @@ export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
         },
         {
           actions: ["iam:PassRole"],
-          resources: [task.nodes.executionRole.arn, task.nodes.taskRole.arn],
+          resources: rolesToPass(task.nodes.taskDefinition),
         },
       ],
     });

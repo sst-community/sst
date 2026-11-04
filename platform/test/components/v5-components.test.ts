@@ -13,6 +13,16 @@ const files = fs
   .readdirSync(dir)
   .filter((file) => file.endsWith(".ts") && file !== "index.ts");
 
+// The V5 components the maintainer gave a clearer name than SST 4's, by the
+// name of the SST 4 component each replaces. Each keeps that one's type.
+const RENAMED: Record<string, string> = {
+  Cron: "CronV2",
+  ApiGatewayRest: "ApiGatewayV1",
+  ApiGatewayRestApiKey: "ApiGatewayV1ApiKey",
+  ApiGatewayRestUsagePlan: "ApiGatewayV1UsagePlan",
+  ApiGatewayHttp: "ApiGatewayV2",
+};
+
 // The 5.0 rewrite makes a clean break from 4.x code. These are built the 5.0
 // way; the others still lean on 4.x until each is rebuilt.
 const rebuilt = [
@@ -37,7 +47,7 @@ const rebuilt = [
   "mysql.ts",
   "aurora.ts",
   "dsql.ts",
-  "apigatewayv2.ts",
+  "apigateway-http.ts",
   "app-sync.ts",
   "cognito-user-pool.ts",
   "cognito-user-pool-client.ts",
@@ -59,9 +69,9 @@ const rebuilt = [
   "realtime.ts",
   "workflow.ts",
   "apigateway-websocket.ts",
-  "apigatewayv1.ts",
-  "apigatewayv1-usage-plan.ts",
-  "apigatewayv1-api-key.ts",
+  "apigateway-rest.ts",
+  "apigateway-rest-usage-plan.ts",
+  "apigateway-rest-api-key.ts",
   "microvm.ts",
   "kinesis-stream.ts",
   "open-search.ts",
@@ -97,10 +107,10 @@ describe("V5 components", () => {
 
     // A deployed component becomes the V5 one when the name is kept, because
     // the two have the same type. The class is named the same, and so is the
-    // file. One that SST 4 named with a version, because it replaced a first
-    // one that has no 5.0 form, drops the version and keeps the type: `Cron`,
-    // in `cron.ts`, replaces `CronV2`, in `cron-v2.ts`, as `sst:aws:CronV2`.
+    // file, unless it's one of the names the maintainer chose to make clearer,
+    // which keep their type: `Cron` replaces `CronV2` as `sst:aws:CronV2`.
     it("has the name and type of the component it replaces", async () => {
+      const originalName = RENAMED[component.name] ?? component.name;
       // 4.x spelled the `Cdn`'s type in capitals and TanStack Start's with a
       // small "s", and named the certificate's type for what it is, and a
       // deployed one keeps each
@@ -109,22 +119,30 @@ describe("V5 components", () => {
           Cdn: "CDN",
           DnsValidatedCertificate: "Certificate",
           TanStackStart: "TanstackStart",
-        }[component.name as string] ?? component.name;
-      const version = (component.__pulumiType as string).match(
-        new RegExp(`^sst:aws:${typeName}V(\\d+)$`),
-      )?.[1];
-      expect(component.__pulumiType).toBe(
-        `sst:aws:${typeName}${version ? `V${version}` : ""}`,
-      );
-      const originalName = version
-        ? `${component.name}V${version}`
-        : component.name;
-      const originalFile = version ? `${name}-v${version}.ts` : file;
+        }[component.name as string] ?? originalName;
+      expect(component.__pulumiType).toBe(`sst:aws:${typeName}`);
+      // The 4.x file that declares the type: the one of the same name, when
+      // it does, as a `.v1` beside it may declare it too
+      const declaring = fs
+        .readdirSync(new URL("..", dir))
+        .filter((f) => f.endsWith(".ts"))
+        .filter((f) =>
+          new RegExp(`\\b(?:__)?pulumiType = "${component.__pulumiType}"`).test(
+            fs.readFileSync(new URL(`../${f}`, dir), "utf8"),
+          ),
+        );
+      const originalFile = declaring.includes(file) ? file : declaring[0];
+      expect(
+        originalFile,
+        `No 4.x file in aws/ declares ${component.__pulumiType}`,
+      ).toBeDefined();
       const original = await import(`../../src/components/aws/${originalFile}`);
       expect(
         original[originalName]?.__pulumiType,
         `aws/${originalFile} has to export the ${originalName} this one replaces`,
       ).toBe(component.__pulumiType);
+      if (originalName === component.name)
+        expect(originalFile, "The file is named as the original's").toBe(file);
     });
 
     // A part that has another name, or another place, than it had in the

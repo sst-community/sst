@@ -22,6 +22,16 @@ function cron(aws: Components): Components["Cron"] {
   return (aws as { CronV2?: Components["Cron"] }).CronV2 ?? aws.Cron;
 }
 
+/**
+ * SST 4's `ApiGatewayV2`, which is `ApiGatewayHttp` in 5.0, with the same type.
+ */
+function httpApi(aws: Components): Components["ApiGatewayHttp"] {
+  return (
+    (aws as { ApiGatewayV2?: Components["ApiGatewayHttp"] }).ApiGatewayV2 ??
+    aws.ApiGatewayHttp
+  );
+}
+
 /** The domain the lab account has a hosted zone for, as scrubbed. */
 export const zone = "lab.example.com";
 
@@ -141,7 +151,7 @@ export function serverless(aws: Components) {
     link: [uploads, jobs, events, items, users, web],
   });
 
-  const api = new aws.ApiGatewayV2("Api", { domain: `api.v5lab.${zone}` });
+  const api = new (httpApi(aws))("Api", { domain: `api.v5lab.${zone}` });
   // A route that links the API it's on
   api.route("GET /", { handler: "functions/hello.handler", link: [api] });
   api.route("GET /items/{id}", {

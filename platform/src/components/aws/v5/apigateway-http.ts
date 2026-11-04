@@ -99,7 +99,7 @@ const parts = () => ({
   authorizerPermission: many(lambda.Permission),
 });
 
-export interface ApiGatewayV2CorsArgs {
+export interface ApiGatewayHttpCorsArgs {
   /**
    * Allow cookies or other credentials in requests to the HTTP API.
    * @default `false`
@@ -201,7 +201,7 @@ export interface ApiGatewayV2CorsArgs {
   maxAge?: Input<Duration>;
 }
 
-export interface ApiGatewayV2Args
+export interface ApiGatewayHttpArgs
   extends ComponentArgs<typeof parts>,
     ApiGatewayAccessLogArgs {
   /**
@@ -289,7 +289,7 @@ export interface ApiGatewayV2Args
    * }
    * ```
    */
-  cors?: Input<boolean | Prettify<ApiGatewayV2CorsArgs>>;
+  cors?: Input<boolean | Prettify<ApiGatewayHttpCorsArgs>>;
   /**
    * Configure the API to connect to private resources in a virtual private cloud or VPC.
    * This creates a VPC link for your HTTP API. To use a VPC link you already have, pass it
@@ -341,7 +341,7 @@ export interface ApiGatewayV2Args
       }>;
 }
 
-export interface ApiGatewayV2RouteArgs {
+export interface ApiGatewayHttpRouteArgs {
   /**
    * Enable auth for your HTTP API. By default, auth is disabled.
    *
@@ -426,7 +426,7 @@ export interface ApiGatewayV2RouteArgs {
   name?: string;
 }
 
-export interface ApiGatewayV2AuthorizerArgs {
+export interface ApiGatewayHttpAuthorizerArgs {
   /**
    * The name of the authorizer.
    * @example
@@ -580,7 +580,7 @@ export interface ApiGatewayV2AuthorizerArgs {
 }
 
 /**
- * The `ApiGatewayV2` component lets you add an [Amazon API Gateway HTTP API](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html) to your app.
+ * The `ApiGatewayHttp` component lets you add an [Amazon API Gateway HTTP API](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html) to your app.
  *
  * It's built from parts, so every resource it creates can be transformed, is available in
  * `nodes`, and can be swapped for one you already have. That includes the resources of each
@@ -591,13 +591,13 @@ export interface ApiGatewayV2AuthorizerArgs {
  * #### Create the API
  *
  * ```ts title="sst.config.ts"
- * const api = new sst.aws.v5.ApiGatewayV2("MyApi");
+ * const api = new sst.aws.v5.ApiGatewayHttp("MyApi");
  * ```
  *
  * #### Add a custom domain
  *
  * ```js {2} title="sst.config.ts"
- * new sst.aws.v5.ApiGatewayV2("MyApi", {
+ * new sst.aws.v5.ApiGatewayHttp("MyApi", {
  *   domain: "api.example.com"
  * });
  * ```
@@ -632,7 +632,7 @@ export interface ApiGatewayV2AuthorizerArgs {
  * is merged into each one.
  *
  * ```ts title="sst.config.ts" {3}
- * const api = new sst.aws.v5.ApiGatewayV2("MyApi", {
+ * const api = new sst.aws.v5.ApiGatewayHttp("MyApi", {
  *   transform: {
  *     handler: { memory: "2048 MB" }
  *   }
@@ -642,7 +642,7 @@ export interface ApiGatewayV2AuthorizerArgs {
  * A function is also given the route, so it can change one of them.
  *
  * ```ts title="sst.config.ts"
- * const api = new sst.aws.v5.ApiGatewayV2("MyApi", {
+ * const api = new sst.aws.v5.ApiGatewayHttp("MyApi", {
  *   transform: {
  *     handler: (args, opts, name, route) => {
  *       if (route === "POST /upload") args.timeout = "60 seconds";
@@ -653,16 +653,22 @@ export interface ApiGatewayV2AuthorizerArgs {
  *
  * #### Switch from `sst.aws.ApiGatewayV2`
  *
- * Change `sst.aws.ApiGatewayV2` to `sst.aws.v5.ApiGatewayV2` and keep the name. The API,
+ * Change `sst.aws.ApiGatewayV2` to `sst.aws.v5.ApiGatewayHttp` and keep the name. The API,
  * its domain, its routes, their functions and its authorizers are kept.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const api = new sst.aws.ApiGatewayV2("MyApi");
- * const api = new sst.aws.v5.ApiGatewayV2("MyApi");
+ * const api = new sst.aws.v5.ApiGatewayHttp("MyApi");
  * ```
  *
  * A few things work differently:
  *
+ * - It's named `ApiGatewayHttp`, for the HTTP API it creates. `sst.aws.ApiGatewayV2` was
+ *   named after the version of API Gateway's API that creates one, which creates WebSocket
+ *   APIs too. It keeps its type, `sst:aws:ApiGatewayV2`, which is what a deployed one has,
+ *   so `sst-env.d.ts` still lists a linked one as `sst.aws.ApiGatewayV2`. Its args' types
+ *   are renamed the same way: `ApiGatewayHttpArgs`, `ApiGatewayHttpRouteArgs` and the
+ *   others.
  * - `route`, `routeUrl` and `routePrivate` return the API, so calls chain. What a route
  *   creates is in the API's `nodes`, by route: `api.nodes.handler["GET /"]`.
  *   `addAuthorizer` returns the authorizer resource, so `authorizer.id` reads the same.
@@ -697,12 +703,12 @@ export interface ApiGatewayV2AuthorizerArgs {
  *   `sst migrate --check` refuses: remove them and deploy before you switch, then add
  *   them back.
  */
-export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
+export class ApiGatewayHttp extends component("sst:aws:ApiGatewayV2", parts) {
   private handlerLink: FunctionArgs["link"];
 
   constructor(
     name: string,
-    args: ApiGatewayV2Args = {},
+    args: ApiGatewayHttpArgs = {},
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
@@ -855,7 +861,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   public route(
     rawRoute: string,
     handler: FunctionInput,
-    args: ApiGatewayV2RouteArgs = {},
+    args: ApiGatewayHttpRouteArgs = {},
   ) {
     const { id, route } = this.newRoute(rawRoute, args, [
       "handler",
@@ -923,7 +929,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   public routeUrl(
     rawRoute: string,
     url: Input<string>,
-    args: ApiGatewayV2RouteArgs = {},
+    args: ApiGatewayHttpRouteArgs = {},
   ) {
     const { id, route } = this.newRoute(rawRoute, args);
     return this.integrate(id, route, args, {
@@ -968,7 +974,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   public routePrivate(
     rawRoute: string,
     arn: Input<string>,
-    args: ApiGatewayV2RouteArgs = {},
+    args: ApiGatewayHttpRouteArgs = {},
   ) {
     const vpcLink = this.nodes.vpcLink;
     if (!vpcLink)
@@ -991,7 +997,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   // the route has.
   private newRoute(
     rawRoute: string,
-    args: ApiGatewayV2RouteArgs,
+    args: ApiGatewayHttpRouteArgs,
     transforms: ("handler" | "permission" | "integration" | "route")[] = [
       "integration",
       "route",
@@ -1014,7 +1020,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   private integrate(
     id: string,
     route: string,
-    args: ApiGatewayV2RouteArgs,
+    args: ApiGatewayHttpRouteArgs,
     integrationArgs: Omit<apigatewayv2.IntegrationArgs, "apiId">,
     opts?: ComponentResourceOptions,
   ) {
@@ -1080,7 +1086,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
    * });
    * ```
    */
-  public addAuthorizer(args: ApiGatewayV2AuthorizerArgs) {
+  public addAuthorizer(args: ApiGatewayHttpAuthorizerArgs) {
     const { name } = args;
     const what = `the "${name}" authorizer of the "${this.componentName}" API`;
     this.assertNew(
@@ -1184,7 +1190,7 @@ const ACCESS_LOG_FORMAT = JSON.stringify({
   //cognitoIdentityId:`"$context.identity.cognitoIdentityId"`, // not supported in us-west-2 region
 });
 
-type Cors = Exclude<Unwrap<ApiGatewayV2Args["cors"]>, undefined>;
+type Cors = Exclude<Unwrap<ApiGatewayHttpArgs["cors"]>, undefined>;
 
 function corsConfiguration(cors: Cors | undefined) {
   // Left out, not `{}`. AWS keeps `{}` as a CORS config that allows nothing,
@@ -1205,7 +1211,7 @@ function corsConfiguration(cors: Cors | undefined) {
       };
 }
 
-type Auth = Exclude<Unwrap<ApiGatewayV2RouteArgs["auth"]>, undefined>;
+type Auth = Exclude<Unwrap<ApiGatewayHttpRouteArgs["auth"]>, undefined>;
 
 // How a route is authorized, in the terms API Gateway takes
 function authorization(auth: Auth | undefined): {
@@ -1228,7 +1234,7 @@ function authorization(auth: Auth | undefined): {
 
 // Where the VPC link is: a `Vpc`'s public subnets and its security groups, or
 // the ids it was given
-function vpcLinkNetwork(vpc: ApiGatewayV2Args["vpc"], what: string) {
+function vpcLinkNetwork(vpc: ApiGatewayHttpArgs["vpc"], what: string) {
   if (!vpc) return;
   if (isVpc(vpc)) {
     // The two `Vpc`s type these differently

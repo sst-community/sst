@@ -52,10 +52,14 @@ const documentedSources = new Set<string>();
 // The helper files hold arg types that several V5 components share. They're
 // read so a page can show those types, and get no page of their own.
 const HELPERS = "platform/src/components/aws/helpers/";
-// The V5 components' class names, by the name of the component each replaces:
-// its own, or with the version it drops (`CronV2` for `Cron`). And the source
-// file of the page that's being written
+// The V5 components' class names, by the name of the component each replaces,
+// the SST 4 one of its Pulumi type: its own, or another (`CronV2` for `Cron`).
+// The SST 4 components' names by their type. And the source file of the page
+// that's being written
 const v5Classes = new Map<string, string>();
+const originals = new Map<string, string>();
+// What `pulumiTypeOf()` has read, by source file
+const pulumiTypes = new Map<string, string | undefined>();
 let currentPage = "";
 // The interfaces from helper files that each page shows
 const sharedInterfaces = new Map<
@@ -83,10 +87,15 @@ if (!cmd || cmd === "components") {
     const sourceFile = component.sources![0].fileName;
     if (isHelperSource(sourceFile)) continue;
     documentedSources.add(sourceFile);
-    if (isV5Source(sourceFile)) {
-      const name = useClassName(component);
-      v5Classes.set(name + versionDropped(sourceFile, name), name);
-    }
+    const type = pulumiTypeOf(sourceFile);
+    if (type && !isV5Source(sourceFile))
+      originals.set(type, useClassName(component));
+  }
+  for (const component of components) {
+    const sourceFile = component.sources![0].fileName;
+    if (!isV5Source(sourceFile)) continue;
+    const name = useClassName(component);
+    v5Classes.set(originals.get(pulumiTypeOf(sourceFile)!) ?? name, name);
   }
 
   for (const component of components) {
@@ -890,18 +899,11 @@ async function generateComponentDoc(
   const dir = path.dirname(outputFilePath);
   fs.mkdirSync(dir, { recursive: true });
 
-  // The component a V5 component replaces has its name, one folder up, with
-  // the version it drops: `cron.ts`'s `Cron` replaces `cron-v2.ts`'s `CronV2`
-  const dropped = versionDropped(sourceFile, className);
-  const original =
-    isV5Source(sourceFile) &&
-    documentedSources.has(
-      sourceFile
-        .replace("/v5/", "/")
-        .replace(/\.ts$/, dropped ? `-${dropped.toLowerCase()}.ts` : ".ts")
-    )
-      ? className + dropped
-      : undefined;
+  // The component a V5 component replaces is the SST 4 one of its Pulumi
+  // type, whatever it's named: `Cron` replaces `CronV2`
+  const original = isV5Source(sourceFile)
+    ? originals.get(pulumiTypeOf(sourceFile)!)
+    : undefined;
 
   fs.writeFileSync(
     outputFilePath,
@@ -919,7 +921,11 @@ async function generateComponentDoc(
         original,
         useModuleInterfaces(component)
           .find((c) => c.name === `${className}Args`)
-          ?.children?.some((c) => c.name === "transform") ?? false
+          ?.children?.some((c) => c.name === "transform") ?? false,
+        isV5Source(sourceFile) &&
+          fs
+            .readFileSync(path.join("..", sourceFile), "utf8")
+            .includes("createSsrSite(")
       ),
       renderConstructor(component)
         .join("\n")
@@ -1825,16 +1831,20 @@ function renderConstructor(module: TypeDoc.DeclarationReflection) {
 function isHelperSource(fileName: string) {
   return fileName.startsWith(HELPERS);
 }
-// A V5 component that drops the version SST 4 put in its name keeps the type,
-// which has it: `Cron` is `sst:aws:CronV2`. The version, as `V2`, or "".
-function versionDropped(sourceFile: string, className: string) {
-  if (!isV5Source(sourceFile)) return "";
-  const code = fs.readFileSync(path.join("..", sourceFile), "utf8");
-  return (
-    code.match(
-      new RegExp(`\\bcomponent\\(\\s*"sst:\\w+:${className}(V\\d+)"`)
-    )?.[1] ?? ""
-  );
+// A component's Pulumi type, as its file declares it: `component("sst:aws:X",`
+// in a V5 one, `const __pulumiType = "sst:aws:X"` (or `pulumiType`) in an SST 4 one
+function pulumiTypeOf(sourceFile: string) {
+  if (!pulumiTypes.has(sourceFile)) {
+    const code = fs.readFileSync(path.join("..", sourceFile), "utf8");
+    pulumiTypes.set(
+      sourceFile,
+      (isV5Source(sourceFile)
+        ? code.match(/\bcomponent\(\s*"(sst:[\w:]+)"/)
+        : code.match(/\b(?:__)?pulumiType = "(sst:[\w:]+)"/)
+      )?.[1]
+    );
+  }
+  return pulumiTypes.get(sourceFile);
 }
 function isV5Source(fileName: string) {
   return /^platform\/src\/components\/\w+\/v5\//.test(fileName);
@@ -1853,6 +1863,25 @@ function findSwitchSection(lines: string[]) {
   return { start, end: next === -1 ? lines.length : next };
 }
 
+// What every site built on the shared site base (`createSsrSite`) changes from
+// its SST 4 form, written once here. Each site's own "Switch from" has what's
+// its own, like what `nodes.server` holds for it.
+function siteSwitchNotes(originalName: string) {
+  const o = `\`${originalName}\``;
+  return [
+    `- The site is built in the deploy itself, once, with the values of what it's linked to. ${o} built it with a command it kept in the state, which goes.`,
+    `- \`sst diff\` builds the site too, to show what the build creates. Values that aren't known until the deploy, like those of what the same deploy creates on a new stage, are left out of that build, and a link none of whose properties are known is passed with only its \`type\`. A build that checks its environment, or reads a link while it prerenders, has to allow for that. ${o} skipped its build in \`sst diff\` then.`,
+    "- `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy pack, build the site twice: in the preview, and in the deploy.",
+    `- \`sst refresh\` doesn't build the site, where ${o} did. What's made from the build, like the servers in \`nodes.server\`, stays as it is, and isn't listed while it runs.`,
+    "- `regions`, `warm`, `protection`, `edge`, `router`, `invalidation` and `server` have to be plain values, not outputs: they decide what's created. So do `path` and `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of `domain`.",
+    "- `route` and `cdn` are gone. Serve the site through a Router with `router`.",
+    `- \`router\` takes \`instance\`, \`path\` and \`domain\`. \`rewrite\`, \`readTimeout\`, \`keepAliveTimeout\`, \`connectionTimeout\` and \`connectionAttempts\` in it are refused: ${o} ignored them.`,
+    `- In \`sst dev\`, the function the site runs as is \`transform.devServer\`, not \`transform.server\`. Reading what isn't created there in \`nodes\`, like \`nodes.server\`, says the site runs on your machine, where ${o} gave \`undefined\`.`,
+    `- \`assets.textEncoding\` sets the charset of text files. ${o} ignored it and wrote \`UTF-8\`.`,
+    "- With `warm`, the warmer's function, rule, target and permission move into the site.",
+  ];
+}
+
 // Two things are true of every V5 component, so they're written here and not
 // in each one: an object in `transform` is merged where the original replaced
 // a nested object, and a `$transform` for the original applies to it too.
@@ -1862,7 +1891,8 @@ function renderSwitchNotes(
   about: string[],
   fullClassName: string,
   original: string | undefined,
-  hasTransform: boolean
+  hasTransform: boolean,
+  isSite = false
 ) {
   if (!original) return about;
   const lines = about.join("\n").split("\n");
@@ -1870,7 +1900,21 @@ function renderSwitchNotes(
   if (!section) return about;
 
   const originalName = `${originalNamespace(fullClassName)}.${original}`;
+  // What every site on the shared base changes, ahead of its own changes
+  if (isSite) {
+    const first = lines.findIndex(
+      (line, i) => i > section.start && i < section.end && line.startsWith("- ")
+    );
+    if (first !== -1) {
+      const shared = siteSwitchNotes(originalName).slice(0, -1);
+      lines.splice(first, 0, ...shared);
+      section.end += shared.length;
+    }
+  }
   const notes = [
+    // The last of the sites' shared notes goes after a site's own, which say
+    // how `warm` warms its server
+    ...(isSite ? siteSwitchNotes(originalName).slice(-1) : []),
     // A component without parts has no `transform`
     ...(hasTransform
       ? [

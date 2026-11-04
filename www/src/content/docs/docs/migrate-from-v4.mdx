@@ -159,7 +159,7 @@ The links go to each component's page, where its "Switch from" section has the d
 | Component | What to change |
 | --- | --- |
 | [`Alb`](/docs/component/aws/v5/alb/) | Switch its services first. `nodes.listeners` is `nodes.listener`. |
-| [`ApiGatewayV2`](/docs/component/aws/v5/apigatewayv2/) | A route's `transform` moves to the API's. `domain.nameId` becomes `existing: { domainName }`. `domain` is plain. |
+| [`ApiGatewayV2`](/docs/component/aws/v5/apigateway-http/) | Becomes `sst.aws.v5.ApiGatewayHttp`, named for the HTTP API it creates. A route's `transform` moves to the API's. `domain.nameId` becomes `existing: { domainName }`. `domain` is plain. |
 | [`AppSync`](/docs/component/aws/v5/app-sync/) | The `transform` of a data source, function or resolver moves to the API's. `domain` is plain. With a `provider`, see [above](#what-a-switch-can-replace). |
 | [`Aurora`](/docs/component/aws/v5/aurora/) | `replicas`, `proxy` and its `credentials` are plain. The master user's secret is `nodes.secret`. `transform.replica` changes only the replicas. |
 | [`Bucket`](/docs/component/aws/v5/bucket/) | `public: true` becomes `access: "public"`. `subscribe`, `subscribeQueue` and `subscribeTopic` become `notify`. `versioning`, `cors` and `lifecycle` are plain. |

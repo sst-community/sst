@@ -4,8 +4,12 @@ import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const SERVICE = "aws:ecs/service:Service";
+const TASK_DEFINITION = "aws:ecs/taskDefinition:TaskDefinition";
+const CLOUDMAP_SERVICE = "aws:servicediscovery/service:Service";
+const LOG_GROUP = "aws:cloudwatch/logGroup:LogGroup";
 const IMAGE = "docker-build:index:Image";
 const ROLE = "aws:iam/role:Role";
 const LOAD_BALANCER = "aws:lb/loadBalancer:LoadBalancer";
@@ -18,6 +22,17 @@ const mockArn = (name: string) => `arn:aws:mock:us-east-1:123456789012:${name}`;
 const pulumi = mockPulumi({
   state: (args) => {
     if (args.type === IMAGE) return { digest: `sha256:${args.name}` };
+    // What's looked up: a task definition with the role its containers run
+    // as, an ECS service, and the Cloud Map service it's registered in
+    if (args.type === TASK_DEFINITION && args.id)
+      return {
+        arn: args.id,
+        taskRoleArn: "arn:aws:iam::123456789012:role/their-task-role",
+      };
+    if (args.type === SERVICE && args.id)
+      return { name: args.id.split("/").pop() };
+    if (args.type === CLOUDMAP_SERVICE && args.id)
+      return { name: "their-service" };
     // A role that's looked up has the ARN it has
     if (args.type === ROLE && args.id)
       return { arn: `arn:aws:iam::123456789012:role/${args.id}` };
@@ -1427,7 +1442,7 @@ describe("Service", () => {
           },
         ],
       });
-      expect(service.nodes.taskRole.urn).toBeDefined();
+      expect(service.nodes.taskRole!.urn).toBeDefined();
       expect(Object.keys(service.nodes.devCommand).sort()).toEqual([
         "admin-panel",
         "app",
@@ -1551,7 +1566,7 @@ describe("Service", () => {
 
     // The resources, and the Cloud Map service as an output of it
     expect(service.nodes.service.urn).toBeDefined();
-    expect(service.nodes.taskDefinition.urn).toBeDefined();
+    expect(service.nodes.taskDefinition!.urn).toBeDefined();
     expect(service.nodes.loadBalancer).toBe(undefined);
     expect(service.nodes.autoScalingRequestCountPolicy).toBe(undefined);
     expect(await pulumi.resolve(service.nodes.cloudmapService.arn)).toBe(
@@ -2004,6 +2019,194 @@ describe("Service", () => {
         "arn:aws:s3:::my-bucket/app.env",
         "arn:aws:s3:::my-bucket/worker.env",
       ],
+    });
+  });
+
+  // It's run the way it is: nothing it would be made with is created
+  describe("with a task definition you already have", () => {
+    const ARN = "arn:aws:ecs:us-east-1:123456789012:task-definition/theirs:3";
+    const given = (args: object = {}, existing: object = {}) =>
+      new Service("MyService", {
+        cluster: cluster(),
+        ...args,
+        existing: { taskDefinition: ARN, ...existing },
+      } as any);
+    const made = () =>
+      pulumi.resources
+        .filter(
+          (r) =>
+            r.name.startsWith("MyService") &&
+            [ROLE, IMAGE, LOG_GROUP, TASK_DEFINITION].includes(r.type),
+        )
+        .map((r) => [r.kind, r.name]);
+
+    it("creates no roles, images or log groups", async () => {
+      const service = given({
+        loadBalancer: {
+          rules: [
+            { listen: "80/http", forward: "8080/http", container: "app" },
+          ],
+        },
+      });
+      await pulumi.settle();
+
+      expect(made()).toEqual([["read", "MyServiceTaskDefinition"]]);
+      expect(resource("MyServiceService").inputs).toMatchObject({
+        taskDefinition: ARN,
+        loadBalancers: [
+          {
+            containerName: "app",
+            containerPort: 8080,
+            targetGroupArn: expect.stringContaining(
+              "MyServiceTargetAppHTTP8080",
+            ),
+          },
+        ],
+      });
+      expect(service.nodes.taskRole).toBeUndefined();
+      expect(service.nodes.executionRole).toBeUndefined();
+      expect(await pulumi.resolve(service.nodes.taskDefinition!.arn)).toBe(ARN);
+      expect(Object.keys(service.nodes.logGroup)).toEqual([]);
+    });
+
+    // Its containers aren't the service's to know
+    it("has a rule name the container it forwards to", () => {
+      expect(() =>
+        given({ loadBalancer: { rules: [{ listen: "80/http" }] } }),
+      ).toThrow(
+        `Rule 1 of the load balancer of the "MyService" service has to name the "container" it forwards to, one of the containers of the existing "taskDefinition" the service is given.`,
+      );
+    });
+
+    it("runs a dev command as its task role in sst dev", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      given({ dev: { command: "npm run dev" } });
+      await pulumi.settle();
+
+      expect(made()).toEqual([["read", "MyServiceTaskDefinition"]]);
+      expect(devCommands()).toMatchObject({
+        MyService: {
+          command: "npm run dev",
+          directory: ".",
+          aws: { role: "arn:aws:iam::123456789012:role/their-task-role" },
+        },
+      });
+    });
+
+    it("refuses what would make one", async () => {
+      expect(() =>
+        given({
+          image: "nginx:latest",
+          health: { command: ["CMD", "true"] },
+          link: [],
+        }),
+      ).toThrow(
+        `The "MyService" service is given an existing "taskDefinition", which it uses the way it is. Remove "image", "link", "health" from its args.`,
+      );
+      expect(() =>
+        given({ containers: [{ name: "app" }], permissions: [] }),
+      ).toThrow(/Remove "containers", "permissions" from its args/);
+      // How it's run is the service's
+      expect(() =>
+        given({
+          scaling: { max: 2 },
+          capacity: "spot",
+          wait: true,
+          dev: { command: "npm run dev" },
+        }),
+      ).not.toThrow();
+      for (const key of ["taskRole", "executionRole", "logGroup"])
+        expect(() => given({}, { [key]: "theirs" })).toThrow(
+          `"existing.${key}" isn't an option for the "MyService" service. It's given an existing "taskDefinition", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+        );
+      await pulumi.settle();
+    });
+  });
+
+  // An ECS service that's already deployed is only referenced
+  describe("with an ECS service you already have", () => {
+    const given = (args: object = {}, existing: object = {}) =>
+      new Service("MyService", {
+        cluster: cluster(),
+        ...args,
+        existing: { service: "my-cluster/their-service", ...existing },
+      } as any);
+
+    it("creates nothing", async () => {
+      const service = given();
+      await pulumi.settle();
+
+      expect(
+        pulumi.resources
+          .filter((r) => r.name.startsWith("MyService"))
+          .map((r) => [r.kind, r.name]),
+      ).toEqual([
+        ["register", "MyService"],
+        ["read", "MyServiceService"],
+      ]);
+      expect(await pulumi.resolve(service.nodes.service.name)).toBe(
+        "their-service",
+      );
+      expect(service.nodes.taskDefinition).toBeUndefined();
+      expect(service.nodes.taskRole).toBeUndefined();
+      expect(service.nodes.autoScalingTarget).toBeUndefined();
+      expect(() => service.nodes.cloudmapService).toThrow(
+        `The "MyService" service has no "nodes.cloudmapService": it's given an existing "service", and no "cloudmapService" with it.`,
+      );
+      expect(() => service.url).toThrow(/it has no "loadBalancer"/);
+      expect(
+        await pulumi.resolve((service as any).getSSTLink().properties),
+      ).toEqual({});
+      expect(pulumi.outputsOf("MyService")).toEqual({});
+    });
+
+    it("is reached by the Cloud Map service it's registered in", async () => {
+      const service = given({}, { cloudmapService: "srv-1" });
+      await pulumi.settle();
+
+      expect(resource("MyServiceCloudmapService")).toMatchObject({
+        kind: "read",
+        options: { id: "srv-1" },
+      });
+      expect(await pulumi.resolve(service.service)).toBe("their-service.sst");
+    });
+
+    it("is the same in sst dev", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const service = given();
+      await pulumi.settle();
+
+      expect(named("MyService")).toEqual(["MyService", "MyServiceService"]);
+      expect(service.nodes.service).toBeDefined();
+    });
+
+    it("refuses what would configure it", async () => {
+      expect(() =>
+        given({
+          image: "nginx:latest",
+          loadBalancer: { rules: [{ listen: "80/http" }] },
+          scaling: { max: 2 },
+          dev: { command: "npm run dev" },
+        }),
+      ).toThrow(
+        `The "MyService" service is given an existing "service", which it uses the way it is. Remove "image", "loadBalancer", "scaling", "dev" from its args.`,
+      );
+      expect(() => given({ dev: false })).not.toThrow();
+      for (const key of ["taskDefinition", "loadBalancer", "taskRole"])
+        expect(() => given({}, { [key]: "theirs" })).toThrow(
+          `"existing.${key}" isn't an option for the "MyService" service. It's given an existing "service", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+        );
+      await pulumi.settle();
+    });
+
+    // Made when it's read
+    it("says why it has no host name", async () => {
+      const errors = await applyErrors(() => given().service, pulumi.settle);
+      expect([...new Set(errors)]).toEqual([
+        `The "MyService" service has no Cloud Map "service" name: it's given an existing "service", and no "cloudmapService" with it.`,
+      ]);
     });
   });
 

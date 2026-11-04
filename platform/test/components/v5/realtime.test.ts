@@ -127,6 +127,31 @@ describe("Realtime", () => {
             expect(rules()).toHaveLength(3);
           },
         },
+        // A subscriber with a name is a new one, beside what's kept
+        "a subscriber kept beside a new one with a name": {
+          original: (opts) =>
+            new Original(
+              "MyServer",
+              { authorizer: "src/authorizer.handler" },
+              opts,
+            ).subscribe("src/a.handler", { filter: FILTER }),
+          v5: (opts) =>
+            new Realtime(
+              "MyServer",
+              { authorizer: "src/authorizer.handler" },
+              opts,
+            )
+              .subscribe("src/a.handler", { filter: FILTER })
+              .subscribe("src/a.handler", { filter: FILTER, name: "Chat" }),
+          unclaimed: [subscriber(FILTER, "src/a.handler")],
+          check: () =>
+            expect(rules()).toEqual(
+              [
+                `MyServerTopicRule${hashOf(FILTER, "src/a.handler")}`,
+                "MyServerTopicRuleChat",
+              ].sort(),
+            ),
+        },
         // 4.x took a subscriber's own transform. The V5 one takes the
         // component's, which every subscriber's rule goes through.
         "a subscriber's rule transformed": {
@@ -207,6 +232,103 @@ describe("Realtime", () => {
     expect(resource(`MyServerTopicRule${hash}`).inputs.sql).toBe(
       `SELECT * FROM '${FILTER}'`,
     );
+  });
+
+  it("names a subscriber given a name after it, beside one named with the hash", async () => {
+    const server = new Realtime("MyServer", {
+      authorizer: "src/authorizer.handler",
+      transform: {
+        topicRule: (args, _opts, _name, subscriber) => {
+          if (subscriber === "ChatLogger") args.description = "Logs the chat";
+        },
+      },
+    })
+      .subscribe("src/a.handler", { filter: FILTER, name: "ChatLogger" })
+      .subscribe("src/a.handler", { filter: FILTER });
+    await pulumi.settle();
+    const hash = hashOf(FILTER, "src/a.handler");
+    expect(Object.keys(server.nodes.topicRule).sort()).toEqual(
+      ["ChatLogger", hash].sort(),
+    );
+    expect(rules()).toEqual(
+      [`MyServerTopicRule${hash}`, "MyServerTopicRuleChatLogger"].sort(),
+    );
+    expect(names()).toEqual(
+      expect.arrayContaining([
+        "MyServerSubscriberChatLogger",
+        "MyServerSubscriberPermissionChatLogger",
+      ]),
+    );
+    expect(resource("MyServerTopicRuleChatLogger").inputs).toMatchObject({
+      sql: `SELECT * FROM '${FILTER}'`,
+      description: "Logs the chat",
+    });
+    expect(resource(`MyServerTopicRule${hash}`).inputs.description).toBe(
+      undefined,
+    );
+    expect(server.subscriberIsNamed("ChatLogger")).toBe(true);
+    expect(server.subscriberIsNamed(hash)).toBe(false);
+  });
+
+  it("subscribes a function you have, or its ARN as an output, given a name", async () => {
+    const logger = new Function("Logger", { handler: "src/logger.handler" });
+    const server = new Realtime("MyServer", {
+      authorizer: "src/authorizer.handler",
+    })
+      .subscribe(logger, { filter: FILTER, name: "Logger" })
+      .subscribe(output(FUNCTION_ARN), {
+        filter: output("app/test/chat/#"),
+        name: "Arn",
+      });
+    await pulumi.settle();
+    // The function is used as it is: no other is created for it
+    expect(names()).not.toContain("MyServerSubscriberLogger");
+    expect(
+      await pulumi.resolve(resource("MyServerTopicRuleLogger").inputs.lambdas),
+    ).toEqual([
+      { functionArn: await pulumi.resolve(logger.nodes.function.arn) },
+    ]);
+    expect(
+      await pulumi.resolve(resource("MyServerTopicRuleArn").inputs),
+    ).toMatchObject({
+      sql: "SELECT * FROM 'app/test/chat/#'",
+      lambdas: [{ functionArn: FUNCTION_ARN }],
+    });
+    expect(
+      await pulumi.resolve(
+        resource("MyServerSubscriberPermissionLogger").inputs.function,
+      ),
+    ).toBe(await pulumi.resolve(logger.nodes.function.arn));
+    expect(Object.keys(server.nodes.subscriber).sort()).toEqual([
+      "Arn",
+      "Logger",
+    ]);
+  });
+
+  it("turns down a function you have without a name, and a name that's taken", async () => {
+    const logger = new Function("Logger", { handler: "src/logger.handler" });
+    const server = new Realtime("MyServer", {
+      authorizer: "src/authorizer.handler",
+    });
+    expect(() => server.subscribe(logger, { filter: FILTER })).toThrow(
+      `A subscriber of the "MyServer" realtime server without a "name" is named after its handler, and a function you have has none to read. Give it a name: subscribe(fn, { filter: "${FILTER}", name: "MySubscriber" }).`,
+    );
+    expect(() =>
+      server.subscribe(output(FUNCTION_ARN), { filter: FILTER }),
+    ).toThrow(
+      /A subscriber of the "MyServer" realtime server has to be a plain value, not an output. It's named after its handler. Give it a "name"/,
+    );
+    server.subscribe("src/a.handler", { filter: FILTER, name: "Chat" });
+    expect(() =>
+      server.subscribe("src/b.handler", { filter: FILTER, name: "Chat" }),
+    ).toThrow(`"MyServer" already has a subscriber named "Chat".`);
+    expect(() =>
+      server.subscribe("src/b.handler", {
+        filter: FILTER,
+        name: output("Late") as any,
+      }),
+    ).toThrow(/The "name" of a subscriber of the "MyServer" realtime server/);
+    await pulumi.settle();
   });
 
   it("gives the authorizer what it may do on IoT, after the user's permissions", async () => {

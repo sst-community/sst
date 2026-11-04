@@ -14,9 +14,14 @@ import {
 } from "../../parts-component";
 import { plain } from "../../args";
 import { VisibleError } from "../../error";
+import type { Input } from "../../input";
 import { hashStringToPrettyString, logicalName } from "../../naming";
 import { permission } from "../permission";
-import { functionPart, plainFunction } from "../helpers/function-part";
+import {
+  type FunctionInput,
+  functionPart,
+  plainFunction,
+} from "../helpers/function-part";
 import { invokePermissionArgs } from "../helpers/function-permission";
 import { Function, type FunctionArgs } from "./function";
 
@@ -74,8 +79,8 @@ export interface RealtimeSubscriberArgs {
    * Learn more about [topic filters](https://docs.aws.amazon.com/iot/latest/developerguide/topics.html#topicfilters).
    * :::
    *
-   * The subscriber is named after its filter and its handler, so the filter has to be a
-   * plain value, not an output.
+   * A subscriber without a `name` is named after its filter and its handler, so its filter
+   * has to be a plain value, not an output.
    *
    * @example
    * Subscribe to a specific topic.
@@ -92,7 +97,25 @@ export interface RealtimeSubscriberArgs {
    * }
    * ```
    */
-  filter: string;
+  filter: Input<string>;
+  /**
+   * The name of the subscriber. Its function, permission and topic rule are named after
+   * it, and it's how the server's `transform` and `nodes` know it.
+   *
+   * Without one, a subscriber is named after a hash of its filter and its handler, so
+   * changing either replaces it. A subscriber that's a function you have, or an output,
+   * has no handler to be named after: give it a name.
+   *
+   * Must be unique across the server's subscribers. A plain value, not an output.
+   *
+   * @example
+   * ```js
+   * {
+   *   name: "ChatLogger"
+   * }
+   * ```
+   */
+  name?: string;
 }
 
 /**
@@ -192,13 +215,19 @@ export interface RealtimeSubscriberArgs {
  * - The subscribers are inside the component, where `sst.aws.Realtime` kept each in a
  *   component of its own at the top of the app. Each subscriber's function is
  *   `nodes.subscriber`, by its name, the hash `sst.aws.Realtime` named it with.
+ * - A subscriber can be given a `name`, which its resources are named after, and can be a
+ *   function you have, as well as a handler, the function's args or an ARN. A function
+ *   you have needs a name. A subscriber you've deployed keeps its place without one: given
+ *   a name, it's a new subscriber, and the deployed one is removed, its function's log
+ *   group with it.
  * - A subscriber's `transform.topicRule` is the component's `transform.topicRule`, which
  *   applies to every subscriber and is given the subscriber's name in a function. A
  *   subscriber's own `transform` is refused.
  * - `subscribe` returns the component, not the subscriber.
- * - The authorizer's handler or args, a subscriber's, and its `filter` have to be plain
- *   values, not outputs: the subscriber is named after them. A subscriber that was given as
- *   an output, like a function's `arn`, is kept when it's given its ARN as a string.
+ * - The authorizer's handler or args have to be plain values, not outputs. So do a
+ *   subscriber's, and its `filter`, when it has no `name`: it's named after them. A
+ *   subscriber that was given as an output, like a function's `arn`, is kept when it's
+ *   given its ARN as a string.
  * - A function's args are typed as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
@@ -215,6 +244,7 @@ export interface RealtimeSubscriberArgs {
  */
 export class Realtime extends component("sst:aws:Realtime", parts) {
   private readonly iotEndpoint: Output<string>;
+  private readonly namedSubscribers = new Set<string>();
 
   constructor(
     name: string,
@@ -279,7 +309,9 @@ export class Realtime extends component("sst:aws:Realtime", parts) {
   /**
    * Subscribe to this Realtime server.
    *
-   * @param subscriber The function that'll be notified.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function you have, or the ARN of one. Only a function you have, or its ARN,
+   * can be an output, and only for a subscriber with a `name`.
    * @param args Configure the subscription.
    *
    * @example
@@ -287,6 +319,29 @@ export class Realtime extends component("sst:aws:Realtime", parts) {
    * ```js title="sst.config.ts"
    * server.subscribe("src/subscriber.handler", {
    *   filter: `${$app.name}/${$app.stage}/chat/room1`
+   * });
+   * ```
+   *
+   * Give the subscriber a name. Its resources are named after it, and the server's
+   * `transform` and `nodes` know it by it.
+   *
+   * ```js title="sst.config.ts"
+   * server.subscribe("src/subscriber.handler", {
+   *   filter: `${$app.name}/${$app.stage}/chat/room1`,
+   *   name: "ChatLogger"
+   * });
+   * ```
+   *
+   * Subscribe a function you have. It needs a name.
+   *
+   * ```js title="sst.config.ts"
+   * const logger = new sst.aws.v5.Function("Logger", {
+   *   handler: "src/logger.handler"
+   * });
+   *
+   * server.subscribe(logger, {
+   *   filter: `${$app.name}/${$app.stage}/chat/#`,
+   *   name: "Logger"
    * });
    * ```
    *
@@ -312,41 +367,68 @@ export class Realtime extends component("sst:aws:Realtime", parts) {
    * });
    * ```
    */
-  public subscribe(
-    subscriber: string | FunctionArgs,
-    args: RealtimeSubscriberArgs,
-  ) {
+  public subscribe(subscriber: FunctionInput, args: RealtimeSubscriberArgs) {
     const name = this.componentName;
-    const what = `A subscriber of the "${name}" realtime server`;
-    const given = plain(subscriber, what, "It's named after its handler.");
-    const filter = plain(
-      args.filter,
-      `The "filter" of a subscriber of the "${name}" realtime server`,
+    const owner = `the "${name}" realtime server`;
+    const subscriberName = plain(
+      args.name,
+      `The "name" of a subscriber of ${owner}`,
       "The subscriber is named after it.",
     );
-    // Named after its filter and its handler, as SST 4 named it
-    const id = logicalName(
-      hashStringToPrettyString(
-        [filter, typeof given === "string" ? given : given.handler].join(""),
-        6,
-      ),
-    );
-    if (this.hasSubscriber(id))
-      throw new VisibleError(
-        `The "${name}" realtime server already has a subscriber with the filter "${filter}" and this handler. Subscribe each handler to a filter once.`,
+    let id: string;
+    if (subscriberName !== undefined) id = subscriberName;
+    else {
+      // Named after its filter and its handler, as SST 4 named it
+      const given = plain(
+        subscriber,
+        `A subscriber of ${owner}`,
+        `It's named after its handler. Give it a "name" to subscribe a function, or its ARN, given as an output.`,
       );
+      const filter = plain(
+        args.filter,
+        `The "filter" of a subscriber of ${owner}`,
+        `The subscriber is named after it. Give it a "name" to subscribe it to a filter that's an output.`,
+      );
+      // A function you have, rather than a handler or a function's args
+      if (typeof given !== "string" && !isArgs(given))
+        throw new VisibleError(
+          `A subscriber of ${owner} without a "name" is named after its handler, and a function you have has none to read. Give it a name: subscribe(fn, { filter: "${filter}", name: "MySubscriber" }).`,
+        );
+      id = logicalName(
+        hashStringToPrettyString(
+          [filter, typeof given === "string" ? given : given.handler].join(""),
+          6,
+        ),
+      );
+      if (this.hasSubscriber(id))
+        throw new VisibleError(
+          `The "${name}" realtime server already has a subscriber with the filter "${filter}" and this handler. Subscribe each handler to a filter once.`,
+        );
+    }
     this.assertNew("subscriber", "subscriber", id, args, [
       "subscriber",
       "subscriberPermission",
       "topicRule",
     ]);
+    if (subscriberName !== undefined) this.namedSubscribers.add(id);
 
+    const filter = args.filter;
     const fn = functionPart(
       this,
       "subscriber",
       id,
-      plainFunction(given, what),
-      { description: `Subscribed to ${name} on ${filter}` },
+      plainFunction(
+        subscriber,
+        subscriberName === undefined
+          ? `A subscriber of ${owner}`
+          : `The subscriber "${subscriberName}" of ${owner}`,
+      ),
+      {
+        description:
+          typeof filter === "string"
+            ? `Subscribed to ${name} on ${filter}`
+            : interpolate`Subscribed to ${name} on ${filter}`,
+      },
     );
     const rule = this.part("topicRule", id, {
       sqlVersion: "2016-03-23",
@@ -366,6 +448,15 @@ export class Realtime extends component("sst:aws:Realtime", parts) {
     return this.nodes.topicRule[id] !== undefined;
   }
 
+  /**
+   * Whether the subscriber kept under `id` was given a `name`, rather than
+   * kept under the hash of its filter and handler.
+   * @internal
+   */
+  public subscriberIsNamed(id: string) {
+    return this.namedSubscribers.has(id);
+  }
+
   link() {
     return {
       properties: {
@@ -380,4 +471,11 @@ export class Realtime extends component("sst:aws:Realtime", parts) {
       ],
     };
   }
+}
+
+// A function's args, as a plain object, rather than a function component
+function isArgs(value: unknown): value is FunctionArgs {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

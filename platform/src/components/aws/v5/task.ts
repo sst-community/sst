@@ -4,7 +4,7 @@ import {
   type Output,
   output,
 } from "@pulumi/pulumi";
-import { ec2 } from "@pulumi/aws";
+import { ec2, ecs } from "@pulumi/aws";
 import { type ComponentArgs, component, optional } from "../../parts-component";
 import { notAnExistingPart, plain } from "../../args";
 import { VisibleError } from "../../error";
@@ -16,6 +16,8 @@ import {
   createTaskDefinition,
   fargateTaskOf,
   fargateTaskParts,
+  givenTaskDefinition,
+  rolesToPass,
   taskRoleArgs,
 } from "../helpers/fargate";
 import { securityGroupArgs } from "../helpers/load-balancer-args";
@@ -24,6 +26,10 @@ import type { Input } from "../../input";
 
 const parts = {
   ...fargateTaskParts,
+  /**
+   * The Amazon ECS Task Definition.
+   */
+  taskDefinition: ecs.TaskDefinition,
   /**
    * The AWS Security Group for public tasks. Only created when `public` is `true`.
    */
@@ -317,6 +323,26 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
  * `permissions` next to it is refused: add them to the role itself. In `sst dev` neither is
  * what the stub needs: to reach your machine, and to let your AWS account assume the role.
  *
+ * #### Run a task definition you already have
+ *
+ * Pass the task definition, or its ARN, and the task runs it the way it is.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Task("MyTask", {
+ *   cluster,
+ *   existing: {
+ *     taskDefinition: "arn:aws:ecs:us-east-1:123456789012:task-definition/my-task:3"
+ *   }
+ * });
+ * ```
+ *
+ * The task then creates no roles, images or log groups: the task definition has its
+ * containers, and what they run with. So the args that would make one, like `image`,
+ * `containers`, `cpu`, `link` and `permissions`, are refused, and so are roles, images and
+ * log groups in `existing`. What the task is linked to runs the task definition's
+ * containers, and can pass its roles. In `sst dev` the task definition runs too, with no
+ * stub in its place, so `dev` is refused.
+ *
  * #### Switch from `sst.aws.Task`
  *
  * Change `sst.aws.Task` to `sst.aws.v5.Task` and keep the name. The task definition, its
@@ -350,6 +376,8 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
  *   updated in place when you switch.
  * - `permissions` next to a `taskRole` in `existing` are refused. `sst.aws.Task` left them
  *   out of the role it was given.
+ * - `nodes.taskRole` and `nodes.executionRole` may be `undefined`: they aren't created for
+ *   a task definition you pass in `existing`.
  * - `cluster` takes either `Cluster`, and refuses anything else. A `cpu`, `memory` or
  *   `storage` Fargate doesn't offer is refused as the config is read.
  *
@@ -375,7 +403,7 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
 export class Task extends component("sst:aws:Task", parts) {
   private readonly run: {
     cluster: TaskArgs["cluster"];
-    containers: string[];
+    containers: Output<string[]>;
     subnets: Output<string[]>;
     securityGroups: Output<string[]>;
     publicIp: boolean;
@@ -387,6 +415,19 @@ export class Task extends component("sst:aws:Task", parts) {
     opts: ComponentResourceOptions = {},
   ) {
     super(name, args, opts);
+
+    const owner = `the "${name}" task`;
+    // A task definition that's already deployed is run the way it is, in
+    // `sst dev` too. What would make one is refused, and nothing it would be
+    // made with is created.
+    const given = args.existing?.taskDefinition !== undefined;
+    if (given)
+      givenTaskDefinition(
+        args,
+        "task",
+        owner,
+        args.dev === false ? [] : ["dev"],
+      );
 
     const task = fargateTaskOf(this.builder(), "task", name, args);
     const { cluster, containers } = task;
@@ -401,12 +442,13 @@ export class Task extends component("sst:aws:Task", parts) {
       notAnExistingPart(
         args.existing,
         "publicSecurityGroup",
-        `the "${name}" task`,
+        owner,
         `It's only created when "public" is true.`,
       );
     // In `sst dev` a stub is deployed in place of the task. It hands what
     // the task is run with to the process on the user's machine.
     const dev =
+      !given &&
       plain(args.dev, `The "dev" of the "${name}" task`) !== false &&
       context().dev;
     // A task in a `Vpc` is in a public subnet, and needs a public IP to
@@ -417,30 +459,42 @@ export class Task extends component("sst:aws:Task", parts) {
       ? this.part("publicSecurityGroup", securityGroupArgs(vpc.id))
       : undefined;
 
-    const taskRole = this.part(
-      "taskRole",
-      taskRoleArgs(
-        args,
-        this,
-        dev,
-        // The stub reaches the user's machine through the stage's transport
-        dev ? output(devStub()).apply((stub) => stub.permissions) : [],
-      ),
-    );
+    let taskDefinition: ecs.TaskDefinition;
+    if (given) taskDefinition = this.existingPart("taskDefinition")!;
+    else {
+      const taskRole = this.part(
+        "taskRole",
+        taskRoleArgs(
+          args,
+          this,
+          dev,
+          // The stub reaches the user's machine through the stage's transport
+          dev ? output(devStub()).apply((stub) => stub.permissions) : [],
+        ),
+      );
 
-    // The containers that are deployed. In `sst dev` that's the stub alone.
-    createTaskDefinition(
-      this.builder(),
-      name,
-      task,
-      args.link,
-      dev ? [stub(containers[0])] : containers,
-      taskRole,
-    );
+      // The containers that are deployed. In `sst dev` that's the stub alone.
+      taskDefinition = createTaskDefinition(
+        this.builder(),
+        name,
+        task,
+        args.link,
+        dev ? [stub(containers[0])] : containers,
+        taskRole,
+      );
+    }
 
     this.run = {
       cluster,
-      containers: containers.map((container) => container.name),
+      // What the task is run with names each container. A task definition
+      // that's given has containers of its own.
+      containers: given
+        ? taskDefinition.containerDefinitions.apply((definitions) =>
+            (JSON.parse(definitions ?? "[]") as { name: string }[]).map(
+              (container) => container.name,
+            ),
+          )
+        : output(containers.map((container) => container.name)),
       subnets: isPublic
         ? vpc.publicSubnets.apply((subnets) => {
             if (!subnets.length)
@@ -458,13 +512,15 @@ export class Task extends component("sst:aws:Task", parts) {
       publicIp: hasPublicIp,
     };
 
-    // What `sst dev` runs on the user's machine when the task is started
-    this.report({
-      task: all([args.dev, containers[0].image]).apply(([dev, image]) => ({
-        directory: typeof image === "string" ? "" : image?.context ?? ".",
-        ...dev,
-      })),
-    });
+    // What `sst dev` runs on the user's machine when the stub is started.
+    // There's no stub for a task definition that's given.
+    if (!given)
+      this.report({
+        task: all([args.dev, containers[0].image]).apply(([dev, image]) => ({
+          directory: typeof image === "string" ? "" : image?.context ?? ".",
+          ...dev,
+        })),
+      });
 
     function stub(container: Container): Container {
       return {
@@ -498,7 +554,7 @@ export class Task extends component("sst:aws:Task", parts) {
    * @internal
    */
   public get containers(): Output<string[]> {
-    return output(this.run.containers);
+    return this.run.containers;
   }
 
   /**
@@ -560,7 +616,7 @@ export class Task extends component("sst:aws:Task", parts) {
         }),
         permission({
           actions: ["iam:PassRole"],
-          resources: [this.nodes.executionRole.arn, this.nodes.taskRole.arn],
+          resources: rolesToPass(this.nodes.taskDefinition),
         }),
       ],
     };

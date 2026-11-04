@@ -41,9 +41,9 @@ const LOAD_BALANCER_ARN =
   "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/lb/1";
 const vpc = { securityGroups: ["sg-1"], subnets: ["subnet-1", "subnet-2"] };
 
-describe("ApiGatewayV2", () => {
+describe("ApiGatewayHttp", () => {
   let OriginalApiGatewayV2: typeof import("../../../src/components/aws/apigatewayv2").ApiGatewayV2;
-  let ApiGatewayV2: typeof import("../../../src/components/aws/v5/apigatewayv2").ApiGatewayV2;
+  let ApiGatewayHttp: typeof import("../../../src/components/aws/v5/apigateway-http").ApiGatewayHttp;
 
   let Linkable: typeof import("../../../src/components/linkable").Linkable;
   let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
@@ -58,10 +58,10 @@ describe("ApiGatewayV2", () => {
     ({ ApiGatewayV2: OriginalApiGatewayV2 } = await import(
       "../../../src/components/aws/apigatewayv2"
     ));
-    ({ ApiGatewayV2 } = await import(
-      "../../../src/components/aws/v5/apigatewayv2"
+    ({ ApiGatewayHttp } = await import(
+      "../../../src/components/aws/v5/apigateway-http"
     ));
-    await import("../../../src/components/aws/takeover/apigatewayv2");
+    await import("../../../src/components/aws/takeover/apigateway-http");
     await import("../../../src/components/aws/takeover/function");
     OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
     Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
@@ -100,7 +100,7 @@ describe("ApiGatewayV2", () => {
 
     pulumi.takeoverCases({
       original: () => OriginalApiGatewayV2,
-      v5: () => ApiGatewayV2,
+      v5: () => ApiGatewayHttp,
       // The 4.x API's route and authorizer functions depend on the API.
       // Nothing needs that: what joins a function to the API, its integration
       // and its permission, depends on both and is removed before either.
@@ -136,7 +136,7 @@ describe("ApiGatewayV2", () => {
             api.route("GET /users/{id}", FUNCTION_ARN, { name: "GetUser" });
           },
           v5: (opts) =>
-            new ApiGatewayV2("MyApi", {}, opts)
+            new ApiGatewayHttp("MyApi", {}, opts)
               .route("GET /", "src/get.handler")
               .route("post /notes/{id}", { handler: "src/post.handler" })
               .route("$default", FUNCTION_ARN)
@@ -157,7 +157,7 @@ describe("ApiGatewayV2", () => {
             api.routePrivate("ANY /internal/{proxy+}", LOAD_BALANCER_ARN);
           },
           v5: (opts) =>
-            new ApiGatewayV2("MyApi", { vpc }, opts)
+            new ApiGatewayHttp("MyApi", { vpc }, opts)
               .routeUrl("GET /search", "https://example.com")
               .routePrivate("ANY /internal/{proxy+}", LOAD_BALANCER_ARN),
           wrappers: 2,
@@ -171,7 +171,7 @@ describe("ApiGatewayV2", () => {
               opts,
             ),
           v5: (opts) =>
-            new ApiGatewayV2("MyApi", { vpc: new Vpc("MyVpc") }, opts),
+            new ApiGatewayHttp("MyApi", { vpc: new Vpc("MyVpc") }, opts),
           // The 4.x Vpc's version marker, with nothing in AWS behind it
           unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
@@ -197,7 +197,7 @@ describe("ApiGatewayV2", () => {
               },
             ),
           v5: (opts) =>
-            new ApiGatewayV2(
+            new ApiGatewayHttp(
               "MyApi",
               { transform: routeTransform },
               opts,
@@ -275,7 +275,7 @@ describe("ApiGatewayV2", () => {
               opts,
             ),
           v5: (opts) =>
-            new ApiGatewayV2(
+            new ApiGatewayHttp(
               "MyApi",
               {
                 domain: { path: "v2" },
@@ -307,7 +307,7 @@ describe("ApiGatewayV2", () => {
     };
     const result = await pulumi.takesOver(
       () => inParent(OriginalApiGatewayV2),
-      () => inParent(ApiGatewayV2),
+      () => inParent(ApiGatewayHttp),
     );
     const replaced = result.changed
       .filter((c) => c.fields.includes("options.provider"))
@@ -317,7 +317,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("keeps each route's resources under the route", async () => {
-    const api = new ApiGatewayV2("MyApi")
+    const api = new ApiGatewayHttp("MyApi")
       .route("GET /", FUNCTION_ARN)
       .route("GET /users/{id}", "src/user.handler", { name: "GetUser" })
       .routeUrl("GET /search", "https://example.com");
@@ -338,7 +338,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("names routes that differ only in punctuation apart", async () => {
-    new ApiGatewayV2("MyApi")
+    new ApiGatewayHttp("MyApi")
       .route("GET /a-b", FUNCTION_ARN)
       .route("GET /ab", FUNCTION_ARN);
     await pulumi.settle();
@@ -352,7 +352,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("tells a transform which route it is given", async () => {
-    new ApiGatewayV2("MyApi", {
+    new ApiGatewayHttp("MyApi", {
       transform: {
         route: (args, _opts, _name, route) => {
           if (route === "POST /") args.operationName = "Create";
@@ -373,7 +373,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("rejects a route that was already added", () => {
-    const api = new ApiGatewayV2("MyApi").route("GET /", FUNCTION_ARN);
+    const api = new ApiGatewayHttp("MyApi").route("GET /", FUNCTION_ARN);
     expect(() => api.route("get /", FUNCTION_ARN)).toThrow(
       /already has a route named "GET \/"/,
     );
@@ -389,7 +389,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("accepts a route name that every object has as a property", async () => {
-    const api = new ApiGatewayV2("MyApi")
+    const api = new ApiGatewayHttp("MyApi")
       .route("GET /a", FUNCTION_ARN, { name: "constructor" })
       .route("GET /b", FUNCTION_ARN, { name: "toString" });
     expect(() =>
@@ -404,7 +404,7 @@ describe("ApiGatewayV2", () => {
     const { output } = await import("@pulumi/pulumi");
     expect(
       () =>
-        new ApiGatewayV2("MyApi", {
+        new ApiGatewayHttp("MyApi", {
           domain: output("api.example.com") as any,
         }),
     ).toThrow(/"domain" of the "MyApi" API has to be a plain value/);
@@ -412,7 +412,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("says where a route's transform goes", () => {
-    const api = new ApiGatewayV2("MyApi");
+    const api = new ApiGatewayHttp("MyApi");
     expect(() =>
       api.route("GET /", FUNCTION_ARN, { transform: { route: {} } } as any),
     ).toThrow(
@@ -420,7 +420,7 @@ describe("ApiGatewayV2", () => {
     );
     expect(
       () =>
-        new ApiGatewayV2("Other", {
+        new ApiGatewayHttp("Other", {
           transform: { route: { handler: { memory: "1024 MB" } } } as any,
         }),
     ).toThrow(
@@ -436,7 +436,7 @@ describe("ApiGatewayV2", () => {
 
   it("puts its VPC link in a Vpc's public subnets", async () => {
     const vpc = new Vpc("MyVpc");
-    new ApiGatewayV2("MyApi", { vpc });
+    new ApiGatewayHttp("MyApi", { vpc });
     await pulumi.settle();
 
     const link = pulumi.resources.find((r) => r.name === "MyApiVpcLink")!;
@@ -452,7 +452,7 @@ describe("ApiGatewayV2", () => {
     const { ec2 } = await import("@pulumi/aws");
     expect(
       () =>
-        new ApiGatewayV2("MyApi", {
+        new ApiGatewayHttp("MyApi", {
           vpc: new ec2.Vpc("Other", { cidrBlock: "10.0.0.0/16" }) as any,
         }),
     ).toThrow(/The "vpc" of the "MyApi" API isn't a "Vpc" component/);
@@ -461,7 +461,7 @@ describe("ApiGatewayV2", () => {
   it("needs plain values for the functions it creates", async () => {
     const { output } = await import("@pulumi/pulumi");
     const errors = await applyErrors(() => {
-      const api = new ApiGatewayV2("MyApi");
+      const api = new ApiGatewayHttp("MyApi");
       api.route("GET /", output("src/get.handler"));
       api.addAuthorizer({
         name: "later",
@@ -482,7 +482,7 @@ describe("ApiGatewayV2", () => {
       ),
     );
     expect(() =>
-      new ApiGatewayV2("Other").addAuthorizer({
+      new ApiGatewayHttp("Other").addAuthorizer({
         name: "later",
         lambda: output({ function: FUNCTION_ARN }) as any,
       }),
@@ -493,7 +493,7 @@ describe("ApiGatewayV2", () => {
 
   it("takes a function's ARN as an output", async () => {
     const { output } = await import("@pulumi/pulumi");
-    new ApiGatewayV2("MyApi").route("GET /", output(FUNCTION_ARN));
+    new ApiGatewayHttp("MyApi").route("GET /", output(FUNCTION_ARN));
     await pulumi.settle();
 
     const integration = pulumi.resources.find(
@@ -505,7 +505,7 @@ describe("ApiGatewayV2", () => {
   it("says where a default auth for every route goes", () => {
     expect(
       () =>
-        new ApiGatewayV2("MyApi", {
+        new ApiGatewayHttp("MyApi", {
           transform: { route: { args: { auth: { iam: true } } } } as any,
         }),
     ).toThrow(/set "authorizationType" in "transform.route"/);
@@ -513,14 +513,14 @@ describe("ApiGatewayV2", () => {
 
   it("needs a VPC for a private route", () => {
     expect(() =>
-      new ApiGatewayV2("MyApi").routePrivate("GET /", LOAD_BALANCER_ARN),
+      new ApiGatewayHttp("MyApi").routePrivate("GET /", LOAD_BALANCER_ARN),
     ).toThrow(
       /The "MyApi" API has no VPC link for the "GET \/" route. Give the API a "vpc", which creates one, or a VPC link in "existing.vpcLink"/,
     );
   });
 
   it("needs one kind of authorizer", () => {
-    const api = new ApiGatewayV2("MyApi");
+    const api = new ApiGatewayHttp("MyApi");
     expect(() => api.addAuthorizer({ name: "none" })).toThrow(
       /The "none" authorizer of the "MyApi" API is given neither of "lambda" and "jwt". Give it one of them/,
     );
@@ -534,7 +534,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("returns the authorizer, for use in route auth", async () => {
-    const api = new ApiGatewayV2("MyApi");
+    const api = new ApiGatewayHttp("MyApi");
     const authorizer = api.addAuthorizer({
       name: "tokens",
       jwt: { issuer: "https://issuer.com/", audiences: ["api"] },
@@ -548,11 +548,11 @@ describe("ApiGatewayV2", () => {
   });
 
   it("uses the custom domain in its URL", async () => {
-    const plain = new ApiGatewayV2("Plain");
-    const custom = new ApiGatewayV2("Custom", {
+    const plain = new ApiGatewayHttp("Plain");
+    const custom = new ApiGatewayHttp("Custom", {
       domain: { name: "api.example.com", dns: false, cert: CERT_ARN },
     });
-    const mapped = new ApiGatewayV2("Mapped", {
+    const mapped = new ApiGatewayHttp("Mapped", {
       domain: { path: "v2" },
       existing: { domainName: "api.example.com" },
     });
@@ -570,7 +570,7 @@ describe("ApiGatewayV2", () => {
   it("says where a domain name it doesn't create goes", () => {
     expect(
       () =>
-        new ApiGatewayV2("MyApi", {
+        new ApiGatewayHttp("MyApi", {
           domain: { nameId: "api.example.com", path: "v2" } as any,
         }),
     ).toThrow(
@@ -579,7 +579,7 @@ describe("ApiGatewayV2", () => {
   });
 
   it("points the domain at itself with a certificate of your own", async () => {
-    new ApiGatewayV2("MyApi", {
+    new ApiGatewayHttp("MyApi", {
       domain: { name: "api.example.com", cert: CERT_ARN },
     });
     await pulumi.settle();
@@ -601,20 +601,20 @@ describe("ApiGatewayV2", () => {
   it("checks what its domain is given", async () => {
     const { output } = await import("@pulumi/pulumi");
     expect(
-      () => new ApiGatewayV2("NoName", { domain: { path: "v2" } }),
+      () => new ApiGatewayHttp("NoName", { domain: { path: "v2" } }),
     ).toThrow(
       /Domain "name" is required for the "NoName" API. To use a domain name you already have, pass it in "existing.domainName"/,
     );
     expect(
       () =>
-        new ApiGatewayV2("Both", {
+        new ApiGatewayHttp("Both", {
           domain: { name: "api.example.com" },
           existing: { domainName: "api.example.com" },
         }),
     ).toThrow(/is given an existing "domainName", so it doesn't create one/);
     expect(
       () =>
-        new ApiGatewayV2("Later", {
+        new ApiGatewayHttp("Later", {
           domain: { name: output("api.example.com") as any },
         }),
     ).toThrow(/The domain "name" of the "Later" API has to be a plain value/);
@@ -671,13 +671,13 @@ describe("ApiGatewayV2", () => {
         /is given an existing "logGroup", which it uses the way it is. Remove "accessLog"/,
       ],
     ] as const)
-      expect(() => new ApiGatewayV2("MyApi", args as any)).toThrow(message);
+      expect(() => new ApiGatewayHttp("MyApi", args as any)).toThrow(message);
     await pulumi.settle();
   });
 
   it("routes privately through an existing VPC link, without a vpc", async () => {
     pulumi.reset();
-    const api = new ApiGatewayV2("MyApi", {
+    const api = new ApiGatewayHttp("MyApi", {
       existing: { vpcLink: "vpclink-1" },
     }).routePrivate("GET /", LOAD_BALANCER_ARN);
     await pulumi.settle();
@@ -696,14 +696,14 @@ describe("ApiGatewayV2", () => {
   it("needs a certificate when DNS is off", () => {
     expect(
       () =>
-        new ApiGatewayV2("MyApi", {
+        new ApiGatewayHttp("MyApi", {
           domain: { name: "api.example.com", dns: false },
         }),
     ).toThrow(/"cert" is required when "dns" is disabled/);
   });
 
   it("links with its URL", async () => {
-    const api = new ApiGatewayV2("MyApi");
+    const api = new ApiGatewayHttp("MyApi");
     await pulumi.settle();
 
     expect(Object.keys((api as any).getSSTLink().properties)).toEqual(["url"]);

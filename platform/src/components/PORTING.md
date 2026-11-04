@@ -15,10 +15,11 @@ has no 4.x components.
 - **The V5 component has the original's name, in the `v5` folder.** `Queue` in
   `aws/queue.ts` is ported as `Queue` in `aws/v5/queue.ts`, with the same type,
   `sst:aws:Queue`. An app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`.
-  One SST 4 named with a version, because it replaced a first one that has no 5.0
-  form, drops the version from its name and its file, and keeps its type: `CronV2` in
-  `aws/cron-v2.ts` is ported as `Cron` in `aws/v5/cron.ts`, as `sst:aws:CronV2`. The
-  tests and the docs generator find the original from the version in the type.
+  A few have a clearer name than SST 4's, which the maintainer chose: `CronV2` is
+  ported as `Cron` in `aws/v5/cron.ts`, `ApiGatewayV1` as `ApiGatewayRest` in
+  `aws/v5/apigateway-rest.ts`, `ApiGatewayV2` as `ApiGatewayHttp` in `aws/v5/apigateway-http.ts`. Each keeps its original's type (`sst:aws:CronV2`), which
+  a deployed one has, and is listed in `RENAMED` in `test/components/v5-components.test.ts`.
+  The tests and the docs generator find the original by its type.
 - **The same type is what makes it the same component.** A deployed `sst:aws:Queue`
   named `MyQueue` is the one `new sst.aws.v5.Queue("MyQueue")` creates, so it's kept, and
   so is each resource in it that has the name it had. A stage doesn't go back to the
@@ -86,9 +87,10 @@ has no 4.x components.
   `Redis`, the `Postgres`, the `Mysql` and the `Aurora`, which report the pane `sst dev`
   shows for a local server (`helpers/local-server.ts`), where 4.x created a
   `DevCommand` for it. So is the `Dsql`, whose parts in the peer region are created
-  with a provider for that region (`useProvider()`). So is the `ApiGatewayV2`, whose
-  domain is made with `domainOf()` (`helpers/domain.ts`), the 5.0 certificate and the
-  adapters, as the `Cdn`'s is, and so are the `AppSync` and the `CognitoUserPool`. So is
+  with a provider for that region (`useProvider()`). So is the `ApiGatewayHttp` (SST
+  4's `ApiGatewayV2`), whose domain is made with `domainOf()` (`helpers/domain.ts`), the
+  5.0 certificate and the adapters, as the `Cdn`'s is, and so are the `AppSync` and the
+  `CognitoUserPool`. So is
   the `Email`, whose DKIM records, named in DNS after tokens SES gives once the identity
   is created, are created directly with a `key` and given their old names by a
   `delegated` map, as the certificate's validation records are. So are the `Alb` and the
@@ -146,7 +148,7 @@ has no 4.x components.
 | Event source mappings, and a named subscriber with its function and mapping | `filterCriteria()`, `batchSettings()`, `assertNamedSubscriber()`, `eventSourceSubscriber()` in `helpers/event-source.ts` |
 | Letting a service send to a queue | `sendPolicy(queueArn)` in `helpers/queue-policy.ts`, the args and options of the queue's one policy, kept on delete |
 | An EventBridge rule's state, and a rule that calls a function | `enabledState()`, `ruleFunctionTarget()` in `helpers/eventbridge.ts` |
-| A Fargate task: its containers, roles, images, log groups and task definition | `fargateTaskParts`, `fargateTaskOf()` and `createTaskDefinition(builder, ...)`, which the `Task` and the `Service` share, and `containersOf()`, `sizeOf()`, `taskRoleArgs(args, parent, dev, additional)`, `executionRoleArgs(containers, parent)`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
+| A Fargate task: its containers, roles, images, log groups and task definition | `fargateTaskParts` (each component declares its own `taskDefinition`), `fargateTaskOf()` and `createTaskDefinition(builder, ...)`, which the `Task` and the `Service` share, `givenTaskDefinition()` for one given in `existing`, `rolesToPass(taskDefinition)` for what runs a task, and `containersOf()`, `sizeOf()`, `taskRoleArgs(args, parent, dev, additional)`, `executionRoleArgs(containers, parent)`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
 | A `cluster` arg: either kind of `Cluster` | `AnyCluster`, `isCluster(value)` in `helpers/cluster.ts` |
 | A role's inline policy from permissions, and refusing `permissions` next to a role you have | `inlinePolicies()`, `noPermissionsFor()` in `helpers/iam.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
@@ -224,8 +226,8 @@ switch deletes and recreates whatever moved, while every test under the mock pas
 are in.
 
 ```ts
-// The V5 one, from "../v5/apigatewayv2"
-takeover(ApiGatewayV2, {
+// The V5 one, from "../v5/apigateway-http"
+takeover(ApiGatewayHttp, {
   moved: {
     // A part whose key changed: it was `<Api>AccessLog`
     logGroup: "accessLog",
@@ -295,8 +297,7 @@ takeover(ApiGatewayV2, {
   V5 component.
 - The docs generator writes those two as the last notes of every "Switch from" section:
   that an object in `transform` is merged, and that a `$transform` for the original
-  applies. The original is the component of the same name, one folder up, or with
-  the version its type has. Don't write
+  applies. The original is the SST 4 component of the same Pulumi type. Don't write
   them in the class doc.
 - Something 4.x created outside the component with nothing in AWS behind it needs no
   old address. The 4.x `Service` creates a `DevCommand` at the top of the app for each
@@ -481,7 +482,7 @@ describe("takes over a deployed Queue", () => {
   Where the two components aren't written the same way, give `original` and `v5` in
   place of `create`.
 - Wrappers whose names aren't worth writing out can be counted: give the mock a
-  `wrappers` pattern and the case a `wrappers` number (see `v5/apigatewayv2.test.ts`).
+  `wrappers` pattern and the case a `wrappers` number (see `v5/apigateway-http.test.ts`).
 - For a one-off, `pulumi.takesOver(original, v5)` returns `{ unclaimed, changed,
   unordered, revealed }`.
 - **What was secret stays secret.** A value the original kept secret that's in plain text
@@ -535,7 +536,7 @@ describe("takes over a deployed Queue", () => {
   next one.
 - A 4.x component that's passed in can be the real one: a `Vpc`, `Cluster` and `Task`
   all deploy under the mock (see `v5/cron.test.ts`).
-- Give the mock extra `state` for outputs the code reads (see `v5/apigatewayv2.test.ts`).
+- Give the mock extra `state` for outputs the code reads (see `v5/apigateway-http.test.ts`).
   A resource that's looked up comes back with no name or ARN unless `state` gives it
   one. The region, partition, account and IAM policy lookups have defaults.
 - Assert on what's created, too. A takeover test passes when both sides create nothing,
@@ -580,8 +581,8 @@ For a component with function parts, test a function that links the component.
 
 1. Read the original and every wrapper component it creates. Note each resource's
    logical name, parent and options.
-2. Write `aws/v5/<name>.ts`, with the original's file name and class name, less a
-   version SST 4 put in them (see the top of this file): parts, args,
+2. Write `aws/v5/<name>.ts`, with the original's file name and class name, or the
+   clearer one the maintainer chose (see the top of this file): parts, args,
    constructor, methods, `link()`, `static get`.
    Give it the original's type. What the original registers for the CLI, as `_hint`,
    `_dev`, `_task`, `_tunnel` or `_metadata`, the V5 one reports with `this.report()`.
@@ -612,7 +613,7 @@ For a component with function parts, test a function that links the component.
 
 The existing ports are the reference, all in `aws/v5/`: `alb.ts` for a custom domain
 with aliases, and a method that looks a part up when it's asked for (`getListener`);
-`apigatewayv2.ts` for routes, authorizers and a custom domain; `sns-topic.ts` for named subscribers; `bucket.ts` for
+`apigateway-http.ts` for routes, authorizers and a custom domain; `sns-topic.ts` for named subscribers; `bucket.ts` for
 one resource built from many notifications; `cognito-user-pool.ts` for triggers and a
 linkable client; `redis.ts` for a component that runs locally in `sst dev` and reports a pane for it,
 and `get`; `postgres.ts` and `mysql.ts` for the same, built by one helper

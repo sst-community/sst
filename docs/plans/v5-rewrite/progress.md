@@ -2,6 +2,19 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, the maintainer's calls on what the review left
+
+**Done, not committed:**
+
+- **`ApiGatewayRest` and `ApiGatewayHttp`.** The maintainer asked "Can we change the names of the api gateways to be more clear what they are instead of v1 and v2?", and chose these: the REST API (SST 4's `ApiGatewayV1`, with its `ApiGatewayRestApiKey` and `ApiGatewayRestUsagePlan`) and the HTTP API (`ApiGatewayV2`), in `aws/v5/apigateway-rest.ts` and `apigateway-http.ts`. Each keeps its type, so a switch keeps what's deployed. The components test lists the renamed ones in `RENAMED` and finds each original by its type, as the docs generator now does too, which replaces the rule that read a dropped version from the type.
+- **`Realtime`'s subscribers take an optional name,** which keys them in `nodes` and `transform`, and a function or its ARN with one. Without a name they're keyed by SST 4's hash, so a switch keeps them.
+- **The WebSocket API's `addAuthorizer` takes one object,** `{ name, lambda }`, as the other two APIs' do; the old call is refused with the call to write.
+- **A `Task` or `Service` given an existing task definition creates nothing it wouldn't use,** and refuses what would only go into one; a `Service` given an existing ECS service only references it. What runs a task, the `Cron` and `StepFunctions`, passes the roles the task definition has (`rolesToPass()`).
+- **The docs generator writes the "Switch from" notes the nine sites share,** in place of ten copies in each.
+- **`Auth.v1` is left out of 5.0,** and Cloudflare's components are next, with the mock first.
+
+**Checked:** `tsc`, the platform tests (3,691), Prettier on what was clean before, and the docs generator: the renamed pages, the sites' notes in order. Not in AWS yet: the lab check of the three API Gateway components is next.
+
 ## 2026-11-03: step 4, a review of the 5.0 components as a set, and its fixes
 
 **Done, not committed:** the maintainer asked for "a review of all the components and make sure they are right. There's not a lot of duplications and they follow the right pattern and consistent". Six reviewers read the 5.0 components, each family against the rulebook and one pattern across all of them; about 75 findings, each checked against the code. Five agents then fixed them, a family each, on files of their own, and the rest was done across them. 119 files, with 7 new helpers.

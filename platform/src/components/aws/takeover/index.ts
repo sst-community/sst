@@ -8,9 +8,9 @@
  */
 import "./alb";
 import "./analog";
+import "./apigateway-http";
+import "./apigateway-rest";
 import "./apigateway-websocket";
-import "./apigatewayv1";
-import "./apigatewayv2";
 import "./app-sync";
 import "./astro";
 import "./aurora";

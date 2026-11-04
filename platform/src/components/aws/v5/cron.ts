@@ -16,6 +16,7 @@ import {
 } from "../helpers/function-part";
 import type { AnyTask } from "../helpers/task";
 import { enabledState } from "../helpers/eventbridge";
+import { rolesToPass } from "../helpers/fargate";
 
 const parts = () => ({
   /**
@@ -371,10 +372,7 @@ export class Cron extends component("sst:aws:CronV2", parts) {
           },
           {
             actions: ["iam:PassRole"],
-            resources: [
-              task!.nodes.executionRole.arn,
-              task!.nodes.taskRole.arn,
-            ],
+            resources: rolesToPass(task!.nodes.taskDefinition),
           },
         ];
     const role = this.part("role", {

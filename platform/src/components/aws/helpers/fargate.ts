@@ -19,7 +19,13 @@ import {
   iam,
 } from "@pulumi/aws";
 import { Image, type ImageArgs, Platform } from "@pulumi/docker-build";
-import { notAnExistingPart, notAnOption, plain, withDefault } from "../../args";
+import {
+  notAnExistingPart,
+  notAnOption,
+  plain,
+  usedAsItIs,
+  withDefault,
+} from "../../args";
 import { context } from "../../contract";
 import { toNumber } from "../../cpu";
 import { toSeconds } from "../../duration";
@@ -34,6 +40,7 @@ import {
   type PartsBuilder,
   type PartsComponent,
   many,
+  optional,
 } from "../../parts-component";
 import { toGBs, toMBs } from "../../size";
 import { transformPart } from "../../transform";
@@ -152,20 +159,26 @@ export const supportedMemories = {
 };
 
 /**
- * The parts of a task definition and what it runs with: what a task and a
- * service share.
+ * What a task definition is made with: what a task and a service share. Each
+ * declares its `taskDefinition` itself, which only a service may not create.
  */
 export const fargateTaskParts = {
   /**
    * The Amazon ECS Execution Role. ECS starts the containers with it: it pulls their
    * images, and reads their secrets and environment files.
+   *
+   * Created with the task definition: not when the task definition is one you pass in
+   * `existing`.
    */
-  executionRole: iam.Role,
+  executionRole: optional(iam.Role),
   /**
    * The Amazon ECS Task Role, which the containers run as. In `sst dev`, what runs on your
    * machine in place of them runs as it too.
+   *
+   * Created with the task definition: not when the task definition is one you pass in
+   * `existing`.
    */
-  taskRole: iam.Role,
+  taskRole: optional(iam.Role),
   /**
    * The images built for the containers, by the container's name. There's one for each
    * container that's built from a Dockerfile. It's added once the container's image
@@ -176,11 +189,88 @@ export const fargateTaskParts = {
    * The CloudWatch log groups of the containers, by the container's name.
    */
   logGroup: many(cloudwatch.LogGroup),
-  /**
-   * The Amazon ECS Task Definition.
-   */
-  taskDefinition: ecs.TaskDefinition,
 };
+
+/** The task definition, for what builds one. */
+type TaskDefinitionPart = { taskDefinition: typeof ecs.TaskDefinition };
+
+/**
+ * The args of a task or a service that only make its task definition: the
+ * containers, what they run with, and the roles. Next to a task definition
+ * that's given in `existing` they're refused.
+ */
+const TASK_DEFINITION_ARGS = [
+  "containers",
+  "image",
+  "command",
+  "entrypoint",
+  "environment",
+  "environmentFiles",
+  "ssm",
+  "logging",
+  "volumes",
+  "architecture",
+  "cpu",
+  "memory",
+  "storage",
+  "link",
+  "permissions",
+] as const;
+
+/**
+ * Refuse what would make a task definition, for a task or a service that's
+ * given one in `existing`. It's run the way it is, so the roles, images and
+ * log groups it would be made with aren't created either.
+ *
+ * @param kind What the component is: a service also has the containers'
+ * `health`.
+ * @param owner The component, for the errors: `the "MyTask" task`.
+ * @param also More args the component would make the task definition with.
+ */
+export function givenTaskDefinition(
+  args: FargateTaskArgs,
+  kind: "task" | "service",
+  owner: string,
+  also: string[] = [],
+) {
+  for (const key of ["taskRole", "executionRole", "image", "logGroup"])
+    notAnExistingPart(
+      args.existing,
+      key,
+      owner,
+      `It's given an existing "taskDefinition", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+    );
+  usedAsItIs(
+    args,
+    [
+      ...TASK_DEFINITION_ARGS,
+      ...(kind === "service" ? ["health"] : []),
+      ...also,
+    ],
+    "taskDefinition",
+    owner,
+  );
+}
+
+/**
+ * The roles that running a task definition passes to ECS, for the
+ * `iam:PassRole` it takes: its execution role and its task role, the ones it
+ * has. A task definition given in `existing` may have neither, and IAM
+ * refuses a statement with no resources, so it's then the task definition's
+ * own ARN, which grants nothing.
+ */
+export function rolesToPass(
+  taskDefinition: ecs.TaskDefinition | Output<ecs.TaskDefinition>,
+): Output<string[]> {
+  return all([
+    taskDefinition.executionRoleArn,
+    taskDefinition.taskRoleArn,
+    taskDefinition.arn,
+  ]).apply(([execution, task, arn]) => {
+    const roles = [execution, task].filter((role): role is string => !!role);
+    return roles.length ? roles : [arn];
+  });
+}
 
 /** Where a task or service runs: the VPC of its cluster. */
 export type Network = {
@@ -1514,12 +1604,12 @@ export function taskDefinitionArgs(task: {
  */
 type FargateTaskBuilder = {
   component: PartsComponent<any>;
-  part: PartsBuilder<typeof fargateTaskParts>["part"];
+  part: PartsBuilder<typeof fargateTaskParts & TaskDefinitionPart>["part"];
 };
 
 /** The args of a task or a service that what's here reads. */
 type FargateTaskArgs = FargateBaseArgs &
-  ComponentArgs<typeof fargateTaskParts> &
+  ComponentArgs<typeof fargateTaskParts & TaskDefinitionPart> &
   Pick<ContainersArgs, "containers" | "health" | "dev">;
 
 /**
@@ -1593,7 +1683,7 @@ export function createTaskDefinition(
   link: FargateBaseArgs["link"],
   containers: Container[],
   taskRole: iam.Role,
-) {
+): ecs.TaskDefinition {
   const { part, component } = builder;
   const executionRole = part(
     "executionRole",

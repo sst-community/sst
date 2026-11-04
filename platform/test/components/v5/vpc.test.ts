@@ -725,11 +725,11 @@ describe("Vpc", () => {
     });
 
     it("and an API's VPC link is in the public subnets", async () => {
-      const { ApiGatewayV2 } = await import(
-        "../../../src/components/aws/v5/apigatewayv2"
+      const { ApiGatewayHttp } = await import(
+        "../../../src/components/aws/v5/apigateway-http"
       );
       const vpc = new Vpc("MyVpc");
-      new ApiGatewayV2("MyApi", { vpc });
+      new ApiGatewayHttp("MyApi", { vpc });
       await pulumi.settle();
       expect(resource("MyApiVpcLink").inputs).toMatchObject({
         subnetIds: await read(vpc.publicSubnets),

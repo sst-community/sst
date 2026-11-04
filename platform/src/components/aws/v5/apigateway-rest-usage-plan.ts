@@ -3,10 +3,10 @@ import { apigateway } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../../parts-component";
 import type { Input } from "../../input";
 import type {
-  ApiGatewayV1ApiKeyArgs,
-  ApiGatewayV1UsagePlanArgs,
-} from "./apigatewayv1";
-import { ApiGatewayV1ApiKey } from "./apigatewayv1-api-key";
+  ApiGatewayRestApiKeyArgs,
+  ApiGatewayRestUsagePlanArgs,
+} from "./apigateway-rest";
+import { ApiGatewayRestApiKey } from "./apigateway-rest-api-key";
 
 const parts = () => ({
   /**
@@ -16,7 +16,7 @@ const parts = () => ({
 });
 
 export interface UsagePlanArgs
-  extends ApiGatewayV1UsagePlanArgs,
+  extends ApiGatewayRestUsagePlanArgs,
     ComponentArgs<typeof parts> {
   /**
    * The API Gateway REST API to use for the usage plan.
@@ -29,21 +29,22 @@ export interface UsagePlanArgs
 }
 
 /**
- * The `ApiGatewayV1UsagePlan` component is internally used by the `ApiGatewayV1` component
+ * The `ApiGatewayRestUsagePlan` component is internally used by the `ApiGatewayRest` component
  * to add usage plans to [Amazon API Gateway REST API](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-rest-api.html).
  *
  * :::note
  * This component is not intended to be created directly.
  * :::
  *
- * You'll find this component returned by the `addUsagePlan` method of the `ApiGatewayV1` component.
+ * You'll find this component returned by the `addUsagePlan` method of the `ApiGatewayRest` component.
  *
  * #### Switch from `sst.aws.ApiGatewayV1UsagePlan`
  *
- * Nothing changes: switching the API to `sst.aws.v5.ApiGatewayV1` switches its usage plans
- * and their keys, and keeps them.
+ * Switching the API to `sst.aws.v5.ApiGatewayRest` switches its usage plans and their keys,
+ * and keeps them. It's named `ApiGatewayRestUsagePlan`, as the API is `ApiGatewayRest`,
+ * and keeps its type, `sst:aws:ApiGatewayV1UsagePlan`.
  */
-export class ApiGatewayV1UsagePlan extends component(
+export class ApiGatewayRestUsagePlan extends component(
   "sst:aws:ApiGatewayV1UsagePlan",
   parts,
 ) {
@@ -83,9 +84,9 @@ export class ApiGatewayV1UsagePlan extends component(
    * });
    * ```
    */
-  public addApiKey(name: string, args?: ApiGatewayV1ApiKeyArgs) {
+  public addApiKey(name: string, args?: ApiGatewayRestApiKeyArgs) {
     // Next to the plan, as SST 4 made it
-    return new ApiGatewayV1ApiKey(
+    return new ApiGatewayRestApiKey(
       name,
       { ...args, usagePlanId: this.nodes.usagePlan.id },
       { provider: this.componentOpts.provider },

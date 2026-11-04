@@ -2,7 +2,7 @@ import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { apigateway } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../../parts-component";
 import type { Input } from "../../input";
-import type { ApiGatewayV1ApiKeyArgs } from "./apigatewayv1";
+import type { ApiGatewayRestApiKeyArgs } from "./apigateway-rest";
 
 const parts = () => ({
   /**
@@ -16,7 +16,7 @@ const parts = () => ({
 });
 
 export interface ApiKeyArgs
-  extends ApiGatewayV1ApiKeyArgs,
+  extends ApiGatewayRestApiKeyArgs,
     ComponentArgs<typeof parts> {
   /**
    * The API Gateway Usage Plan to use for the API key.
@@ -25,21 +25,23 @@ export interface ApiKeyArgs
 }
 
 /**
- * The `ApiGatewayV1ApiKey` component is internally used by the `ApiGatewayV1UsagePlan` component
+ * The `ApiGatewayRestApiKey` component is internally used by the `ApiGatewayRestUsagePlan` component
  * to add API keys to [Amazon API Gateway REST API](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-rest-api.html).
  *
  * :::note
  * This component is not intended to be created directly.
  * :::
  *
- * You'll find this component returned by the `addApiKey` method of the `ApiGatewayV1UsagePlan` component.
+ * You'll find this component returned by the `addApiKey` method of the `ApiGatewayRestUsagePlan` component.
  *
  * #### Switch from `sst.aws.ApiGatewayV1ApiKey`
  *
- * Nothing changes: switching the API to `sst.aws.v5.ApiGatewayV1` switches its keys, and
- * keeps them. A function linked to a key reads its `value` as before.
+ * Switching the API to `sst.aws.v5.ApiGatewayRest` switches its keys, and keeps them. A
+ * function linked to a key reads its `value` as before. It's named `ApiGatewayRestApiKey`,
+ * as the API is `ApiGatewayRest`, and keeps its type, `sst:aws:ApiGatewayV1ApiKey`, so
+ * `sst-env.d.ts` still lists a linked key as `sst.aws.ApiGatewayV1ApiKey`.
  */
-export class ApiGatewayV1ApiKey extends component(
+export class ApiGatewayRestApiKey extends component(
   "sst:aws:ApiGatewayV1ApiKey",
   parts,
 ) {

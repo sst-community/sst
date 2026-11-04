@@ -38,7 +38,7 @@ import { permission } from "../permission";
 
 const parts = () => ({
   /**
-   * The Amazon API Gateway V2 API.
+   * The Amazon API Gateway WebSocket API.
    */
   api: apigatewayv2.Api,
   /**
@@ -135,6 +135,20 @@ export interface ApiGatewayWebSocketArgs
 }
 
 export interface ApiGatewayWebSocketAuthorizerArgs {
+  /**
+   * The name of the authorizer. Its resources are named after it, and it's how the API's
+   * `transform` and `nodes` know it.
+   *
+   * Must be unique across all authorizers.
+   *
+   * @example
+   * ```js
+   * {
+   *   name: "MyAuthorizer"
+   * }
+   * ```
+   */
+  name: string;
   /**
    * Create a Lambda authorizer that can be used by the `$connect` route.
    *
@@ -298,6 +312,15 @@ export interface ApiGatewayWebSocketRouteArgs {
  *   `sst.aws.ApiGatewayWebSocket` kept each in a component of its own. A route is kept by
  *   its name, or the route itself, like `sendMessage`; `route` and `addAuthorizer` return
  *   the API and the authorizer, not those components.
+ * - `addAuthorizer` takes one object, with the authorizer's name in it, as
+ *   [`sst.aws.v5.ApiGatewayHttp`](/docs/component/aws/v5/apigateway-http)'s does. The
+ *   authorizer is kept by that name. The call with the name first is refused with what to
+ *   write.
+ *
+ *   ```ts title="sst.config.ts" del={1} ins={2}
+ *   api.addAuthorizer("MyAuthorizer", { lambda: { function: "src/authorizer.handler" } });
+ *   api.addAuthorizer({ name: "MyAuthorizer", lambda: { function: "src/authorizer.handler" } });
+ *   ```
  * - A route's and an authorizer's own `transform`, and `transform.route.handler`, become
  *   the API's `transform` for `handler`, `integration`, `route` and `authorizer`, which
  *   apply to every route or authorizer and are given its name in a function.
@@ -570,14 +593,14 @@ export class ApiGatewayWebSocket extends component(
   /**
    * Add an authorizer to the API Gateway WebSocket API.
    *
-   * @param name The name of the authorizer.
-   * @param args Configure the authorizer.
+   * @param args Configure the authorizer, with its name.
    *
    * @example
    * Add a Lambda authorizer.
    *
    * ```js title="sst.config.ts"
-   * const authorizer = api.addAuthorizer("MyAuthorizer", {
+   * const authorizer = api.addAuthorizer({
+   *   name: "MyAuthorizer",
    *   lambda: {
    *     function: "src/authorizer.handler"
    *   }
@@ -602,7 +625,8 @@ export class ApiGatewayWebSocket extends component(
    * const pool = new sst.aws.v5.CognitoUserPool("MyUserPool");
    * const client = pool.addClient("Web");
    *
-   * const authorizer = api.addAuthorizer("MyAuthorizer", {
+   * const authorizer = api.addAuthorizer({
+   *   name: "MyAuthorizer",
    *   lambda: {
    *     function: {
    *       handler: "src/authorizer.handler",
@@ -661,7 +685,13 @@ export class ApiGatewayWebSocket extends component(
    * another issuer, `aws-jwt-verify`'s `JwtVerifier` or the `jose` package can check the
    * token against the issuer's keys.
    */
-  public addAuthorizer(name: string, args: ApiGatewayWebSocketAuthorizerArgs) {
+  public addAuthorizer(args: ApiGatewayWebSocketAuthorizerArgs) {
+    // SST 4's form, with the name first
+    if (typeof args === "string")
+      throw new VisibleError(
+        `An authorizer of the "${this.componentName}" API is given its name in its args, like the HTTP and REST APIs' authorizers: api.addAuthorizer({ name: "${args}", lambda: { function: "src/authorizer.handler" } }).`,
+      );
+    const { name } = args;
     const what = `the "${name}" authorizer of the "${this.componentName}" API`;
     this.assertNew("authorizer", "authorizer", name, args, [
       "authorizer",

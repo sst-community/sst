@@ -2,9 +2,9 @@ import { interpolate } from "@pulumi/pulumi";
 import { takeover } from "../../takeover";
 import { outputId } from "../../component";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { ApiGatewayV1 } from "../v5/apigatewayv1";
-import { ApiGatewayV1UsagePlan } from "../v5/apigatewayv1-usage-plan";
-import { ApiGatewayV1ApiKey } from "../v5/apigatewayv1-api-key";
+import { ApiGatewayRest } from "../v5/apigateway-rest";
+import { ApiGatewayRestUsagePlan } from "../v5/apigateway-rest-usage-plan";
+import { ApiGatewayRestApiKey } from "../v5/apigateway-rest-api-key";
 import { childOf } from "./helpers";
 
 // The 4.x `ApiGatewayV1` keeps each route in a component of its own, at the
@@ -15,7 +15,7 @@ import { childOf } from "./helpers";
 const LAMBDA_ROUTE = "sst:aws:ApiGatewayV1LambdaRoute";
 const INTEGRATION_ROUTE = "sst:aws:ApiGatewayV1IntegrationRoute";
 const route = (
-  api: ApiGatewayV1,
+  api: ApiGatewayRest,
   name: string,
   id: string | undefined,
   child: string,
@@ -43,7 +43,7 @@ const authorizer = (name: string, id: string | undefined, child: string) =>
 // What CORS added to a path was named after the id of the path's resource in
 // AWS, which a move keeps
 const cors = (
-  api: ApiGatewayV1,
+  api: ApiGatewayRest,
   name: string,
   id: string | undefined,
   kind: string,
@@ -52,7 +52,7 @@ const cors = (
   return resourceId && { name: interpolate`${name}${kind}${resourceId}` };
 };
 
-takeover(ApiGatewayV1, {
+takeover(ApiGatewayRest, {
   moved: {
     logGroup: "accessLog",
     certificate: "ssl",
@@ -84,5 +84,5 @@ takeover(ApiGatewayV1, {
 // app, as in 4.x. Nothing moved. The maps say the 4.x forms have these 5.0
 // forms, so a stage switches them with `sst migrate`, and a new stage refuses
 // the 4.x ones.
-takeover(ApiGatewayV1UsagePlan, {});
-takeover(ApiGatewayV1ApiKey, {});
+takeover(ApiGatewayRestUsagePlan, {});
+takeover(ApiGatewayRestApiKey, {});

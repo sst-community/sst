@@ -63,18 +63,19 @@ const redeployed: [string, string[]][] = [["MyApiDeployment", ["triggers"]]];
 
 type ApiClass =
   | typeof import("../../../src/components/aws/apigatewayv1").ApiGatewayV1
-  | typeof import("../../../src/components/aws/v5/apigatewayv1").ApiGatewayV1;
+  | typeof import("../../../src/components/aws/v5/apigateway-rest").ApiGatewayRest;
 
-describe("ApiGatewayV1", () => {
+describe("ApiGatewayRest", () => {
   let Original: typeof import("../../../src/components/aws/apigatewayv1").ApiGatewayV1;
-  let ApiGatewayV1: typeof import("../../../src/components/aws/v5/apigatewayv1").ApiGatewayV1;
+  let ApiGatewayRest: typeof import("../../../src/components/aws/v5/apigateway-rest").ApiGatewayRest;
   let Function: typeof import("../../../src/components/aws/v5/function").Function;
 
   beforeAll(async () => {
     Original = (await import("../../../src/components/aws/apigatewayv1"))
       .ApiGatewayV1;
-    ApiGatewayV1 = (await import("../../../src/components/aws/v5/apigatewayv1"))
-      .ApiGatewayV1;
+    ApiGatewayRest = (
+      await import("../../../src/components/aws/v5/apigateway-rest")
+    ).ApiGatewayRest;
     Function = (await import("../../../src/components/aws/v5/function"))
       .Function;
     await import("../../../src/components/aws/takeover/index");
@@ -93,7 +94,7 @@ describe("ApiGatewayV1", () => {
   describe("takes over a deployed ApiGatewayV1", () => {
     pulumi.takeoverCases<ApiClass, ApiClass>({
       original: () => Original,
-      v5: () => ApiGatewayV1,
+      v5: () => ApiGatewayRest,
       // A 4.x route's function depends on the API. Nothing needs that: what
       // joins a function to the API, its integration and its permission,
       // depends on both and is removed before either. And a 4.x route took
@@ -168,7 +169,7 @@ describe("ApiGatewayV1", () => {
             api.deploy();
           },
           v5: (opts) => {
-            const api = new ApiGatewayV1("MyApi", { cors: false }, opts);
+            const api = new ApiGatewayRest("MyApi", { cors: false }, opts);
             api.route("GET /stream", {
               handler: "src/stream.handler",
               streaming: true,
@@ -304,7 +305,7 @@ describe("ApiGatewayV1", () => {
               opts,
             ).deploy(),
           v5: (opts) =>
-            new ApiGatewayV1(
+            new ApiGatewayRest(
               "MyApi",
               {
                 domain: { path: "v1" },
@@ -343,7 +344,7 @@ describe("ApiGatewayV1", () => {
             return api;
           },
           v5: (opts) =>
-            new ApiGatewayV1(
+            new ApiGatewayRest(
               "MyApi",
               {
                 transform: {
@@ -369,7 +370,7 @@ describe("ApiGatewayV1", () => {
   });
 
   it("serves at its stage once deployed, and at its domain's path", async () => {
-    const api = new ApiGatewayV1("MyApi");
+    const api = new ApiGatewayRest("MyApi");
     expect(api.nodes.stage).toBeUndefined();
     api.deploy();
     await pulumi.settle();
@@ -379,7 +380,7 @@ describe("ApiGatewayV1", () => {
     expect(api.nodes.domainName).toBeUndefined();
 
     pulumi.reset();
-    const withDomain = new ApiGatewayV1("MyApi", {
+    const withDomain = new ApiGatewayRest("MyApi", {
       domain: { name: "api.example.com", path: "v1" },
     }).deploy();
     await pulumi.settle();
@@ -389,7 +390,7 @@ describe("ApiGatewayV1", () => {
   });
 
   it("keeps each route inside the API, by its name or the route, and each path's resource by SST 4's hash", async () => {
-    const api = new ApiGatewayV1("MyApi");
+    const api = new ApiGatewayRest("MyApi");
     api.route("get /notes/{id}", "src/get.handler");
     api.route("POST /notes", "src/post.handler", { name: "Create" });
     api.routeIntegration("GET /mock", { type: "mock" });
@@ -421,14 +422,14 @@ describe("ApiGatewayV1", () => {
   });
 
   it("makes an edge API's certificate in us-east-1, with its own provider elsewhere", async () => {
-    new ApiGatewayV1("MyApi", { domain: "api.example.com" }).deploy();
+    new ApiGatewayRest("MyApi", { domain: "api.example.com" }).deploy();
     await pulumi.settle();
     const providerOf = (name: string) => JSON.stringify(resource(name).options);
     expect(providerOf("MyApiCertificate")).not.toContain("AwsProvider.sst");
 
     pulumi.reset();
     const { Provider } = await import("@pulumi/aws");
-    new ApiGatewayV1(
+    new ApiGatewayRest(
       "MyApi",
       { domain: "api.example.com" },
       { provider: new Provider("West", { region: "us-west-2" }) },
@@ -440,7 +441,7 @@ describe("ApiGatewayV1", () => {
 
     // An API with a provider of its own in us-east-1 makes it with that one
     pulumi.reset();
-    new ApiGatewayV1(
+    new ApiGatewayRest(
       "MyApi",
       { domain: "api.example.com" },
       { provider: new Provider("East", { region: "us-east-1" }) },
@@ -450,7 +451,7 @@ describe("ApiGatewayV1", () => {
   });
 
   it("turns down a route after deploy(), a second deploy(), and a usage plan before it", () => {
-    const api = new ApiGatewayV1("MyApi");
+    const api = new ApiGatewayRest("MyApi");
     expect(() => api.addUsagePlan("Plan", {})).toThrow(
       /The "Plan" usage plan is added to the "MyApi" API before "deploy\(\)"/,
     );
@@ -468,7 +469,7 @@ describe("ApiGatewayV1", () => {
   it("turns down SST 4's transforms, with what to write", () => {
     expect(
       () =>
-        new ApiGatewayV1("A", {
+        new ApiGatewayRest("A", {
           // @ts-expect-error
           transform: { route: { handler: { memory: "1 GB" } } },
         }),
@@ -478,11 +479,11 @@ describe("ApiGatewayV1", () => {
     expect(
       () =>
         // @ts-expect-error
-        new ApiGatewayV1("B", { transform: { accessLog: {} } }),
+        new ApiGatewayRest("B", { transform: { accessLog: {} } }),
     ).toThrow(
       /"transform.accessLog" isn't an option for the "B" API. Transform the access log in "transform.logGroup"/,
     );
-    const api = new ApiGatewayV1("C");
+    const api = new ApiGatewayRest("C");
     expect(() =>
       api.route("GET /", "src/get.handler", {
         // @ts-expect-error
@@ -500,7 +501,7 @@ describe("ApiGatewayV1", () => {
   });
 
   it("turns down a route's own streaming: its function streams", async () => {
-    const api = new ApiGatewayV1("MyApi");
+    const api = new ApiGatewayRest("MyApi");
     expect(() =>
       api.route("GET /", "src/get.handler", { streaming: true } as any),
     ).toThrow(
@@ -527,7 +528,7 @@ describe("ApiGatewayV1", () => {
   });
 
   it("reports its URL when deploy() is called after the config waits for something", async () => {
-    const api = new ApiGatewayV1("MyApi");
+    const api = new ApiGatewayRest("MyApi");
     api.route("GET /", "src/get.handler");
     await new Promise((resolve) => setTimeout(resolve, 50));
     api.deploy();
@@ -538,7 +539,7 @@ describe("ApiGatewayV1", () => {
 
     // One that's never deployed reports nothing, as SST 4's
     pulumi.reset();
-    new ApiGatewayV1("Idle");
+    new ApiGatewayRest("Idle");
     await pulumi.settle();
     expect(pulumi.reportOf("Idle")).toBeUndefined();
   });
@@ -551,7 +552,7 @@ describe("ApiGatewayV1", () => {
         super("test:Parent", name, {}, { providers: [west] });
       }
     }
-    new ApiGatewayV1("NoRoleApi", {}, { parent: new Parent("Parent") });
+    new ApiGatewayRest("NoRoleApi", {}, { parent: new Parent("Parent") });
     await pulumi.settle();
     const accounts = pulumi.resources.filter(
       (r) => r.type === "aws:apigateway/account:Account",
@@ -573,7 +574,7 @@ describe("ApiGatewayV1", () => {
 
     // With a role, nothing is set up
     pulumi.reset();
-    new ApiGatewayV1("MyApi");
+    new ApiGatewayRest("MyApi");
     await pulumi.settle();
     expect(names()).not.toContain("MyApiAPIGatewayAccountSetup");
   });
@@ -581,7 +582,7 @@ describe("ApiGatewayV1", () => {
   it("turns down an existing resource it wouldn't use", async () => {
     expect(
       () =>
-        new ApiGatewayV1("Logs", {
+        new ApiGatewayRest("Logs", {
           accessLog: { retention: "1 week" },
           existing: { logGroup: "/aws/vendedlogs/apis/mine" },
         }),
@@ -590,7 +591,7 @@ describe("ApiGatewayV1", () => {
     );
     expect(
       () =>
-        new ApiGatewayV1("Certificate", {
+        new ApiGatewayRest("Certificate", {
           existing: { certificate: {} as any },
         }),
     ).toThrow(
@@ -598,7 +599,7 @@ describe("ApiGatewayV1", () => {
     );
     expect(
       () =>
-        new ApiGatewayV1("Named", {
+        new ApiGatewayRest("Named", {
           domain: { name: "api.example.com" },
           existing: { domainName: "api.example.com" },
         }),
@@ -613,16 +614,16 @@ describe("ApiGatewayV1", () => {
       ["cors", output(false)],
     ] as const)
       expect(
-        () => new ApiGatewayV1(`Api${arg}`, { [arg]: value } as any),
+        () => new ApiGatewayRest(`Api${arg}`, { [arg]: value } as any),
         arg,
       ).toThrow(new RegExp(`"${arg}"`));
     expect(
-      () => new ApiGatewayV1("Private", { endpoint: { type: "private" } }),
+      () => new ApiGatewayRest("Private", { endpoint: { type: "private" } }),
     ).toThrow(/needs the IDs of its VPC endpoints/);
   });
 
   it("turns down an authorizer with none of its kinds, or two", () => {
-    const api = new ApiGatewayV1("MyApi");
+    const api = new ApiGatewayRest("MyApi");
     expect(() => api.addAuthorizer({ name: "None" })).toThrow(
       /The "None" authorizer of the "MyApi" API is given none of "requestFunction", "tokenFunction" and "userPools"/,
     );
@@ -636,7 +637,7 @@ describe("ApiGatewayV1", () => {
   });
 
   it("can be linked by a function, as can an API key", async () => {
-    const api = new ApiGatewayV1("MyApi");
+    const api = new ApiGatewayRest("MyApi");
     api.route("GET /", "src/get.handler", { apiKey: true });
     api.deploy();
     const key = api.addUsagePlan("MyPlan", {}).addApiKey("MyKey", {

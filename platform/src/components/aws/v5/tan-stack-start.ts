@@ -367,39 +367,12 @@ export interface TanStackStartArgs
  * ones out of the state without deleting what they wrote. A few things are written
  * differently:
  *
- * - The site is built in the deploy itself, once, with the values of what it's linked to.
- *   `sst.aws.TanStackStart` built it with a command it kept in the state, which goes.
- * - `sst diff` builds the site too, to show what the build creates. Values that aren't
- *   known until the deploy, like those of what the same deploy creates on a new stage, are
- *   left out of that build, and a link none of whose properties are known is passed with
- *   only its `type`. A build that checks its environment, or reads a link while it
- *   prerenders, has to allow for that. `sst.aws.TanStackStart` skipped its build in
- *   `sst diff` then.
- * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a
- *   policy pack, build the site twice: in the preview, and in the deploy.
- * - `sst refresh` doesn't build the site, where `sst.aws.TanStackStart` did. What's made
- *   from the build, like the servers in `nodes.server`, stays as it is, and isn't listed
- *   while it runs.
- * - `regions`, `warm`, `protection`, `edge`, `router`, `invalidation` and `server` have to
- *   be plain values, not outputs: they decide what's created. So do `path` and
- *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
- *   `domain`.
- * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
- * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
- *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
- *   `sst.aws.TanStackStart` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
- * - In `sst dev`, the function the site runs as is `transform.devServer`, not
- *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
- *   says the site runs on your machine, where `sst.aws.TanStackStart` gave `undefined`.
- * - `assets.textEncoding` sets the charset of text files. `sst.aws.TanStackStart` ignored
- *   it and wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.TanStackStart`
  *   warmed it on every deploy. The switch warms it once.
- * - With `warm`, the warmer's function, rule, target and permission move into the site.
  * - The base path is read from the server's code where TanStack Start's builds with Nitro 3
  *   put it, `.output/server/_ssr/ssr.mjs`, as well as where earlier ones did.
  *   `sst.aws.TanStackStart` read only the earlier place, so a site under a router's `path`

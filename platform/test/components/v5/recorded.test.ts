@@ -227,7 +227,7 @@ function needless(order: string) {
       order,
     ) ||
     // A 4.x route or authorizer function depends on the API, as in the
-    // ApiGatewayV2 suite
+    // ApiGatewayHttp suite
     /Function before ApiApi$/.test(order) ||
     // A 4.x route depends on all of its API, so it's removed before the
     // API's domain, stage and log group. Its integration and permission
