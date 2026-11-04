@@ -531,11 +531,15 @@ export function siteInvalidation(input: {
 
 /**
  * The code a server function runs first when it's kept warm: it answers the
- * warmer's calls itself.
+ * warmer's calls itself, before the app's own handler is loaded. `context` is
+ * in scope in both wrappers. The ping doesn't wait for the event loop to
+ * drain: the sandbox keeps the app's sockets and timers from earlier requests
+ * open, and the ping would otherwise run until the function times out.
  */
 export function serverWarmingInjection(streaming?: boolean) {
   return [
     `if (event.type === "warmer") {`,
+    `  context.callbackWaitsForEmptyEventLoop = false;`,
     `  const p = new Promise((resolve) => {`,
     `    setTimeout(() => {`,
     `      resolve({ serverId: "server-" + Math.random().toString(36).slice(2, 8) });`,
