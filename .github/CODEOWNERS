@@ -7,8 +7,10 @@
 # from its owner. They decide what gets built, released to npm, and run on a
 # user's machine at install.
 
-# Workflows, their scripts, the automatic review's rules, and this file.
+# Workflows, their scripts, the rules of the automatic review and of
+# CodeRabbit, and this file.
 /.github/ @the-human-mustachio
+/.coderabbit.yaml @the-human-mustachio
 
 # The release build and the container image it pushes.
 /.goreleaser.yml @the-human-mustachio

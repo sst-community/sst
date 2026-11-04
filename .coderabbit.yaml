@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit reviews each pull request to main beside the automatic review
+# (.github/workflows/review.yml). It comments on the code and nothing else:
+# the automatic review sets the labels and the `review` status and runs the
+# checks on the title, generated docs, versions and testing note, so those are
+# off here. It doesn't approve or request changes; a committer approves every
+# pull request (.github/CODEOWNERS). The app has write access to the repo, so
+# nothing here lets it commit: its finishing touches are off, and only members
+# of the org can chat with it. A change to this file needs the code owner's
+# review.
+
+language: en-US
+tone_instructions: "Plain and direct. Say what to change and why, in a sentence or two. No praise, no emoji."
+
+reviews:
+  profile: chill
+  # Only pull requests to the default branch, main, are reviewed.
+  auto_review:
+    enabled: true
+    drafts: false
+
+  # The summary goes in CodeRabbit's own comment. Writing it into the
+  # description would edit it, and an edit runs the automatic review again.
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+
+  # The automatic review sets the labels.
+  auto_apply_labels: false
+  auto_approvals:
+    enabled: false
+
+  poem: false
+  in_progress_fortune: false
+  sequence_diagrams: false
+
+  pre_merge_checks:
+    title:
+      mode: "off"
+    description:
+      mode: "off"
+    docstrings:
+      mode: "off"
+    issue_assessment:
+      mode: "off"
+
+  # Each of these commits to a branch of this repo.
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+
+  path_instructions:
+    - path: "platform/src/components/**"
+      instructions: >-
+        The doc comments here generate the component reference pages on the
+        docs site. When an arg, a default or a behavior changes, its doc comment
+        (including @default and examples) must change with it. Components
+        create real resources in users' accounts: flag anything that would
+        replace or delete an existing resource on update, such as a changed
+        resource name, a changed Pulumi type, or a removed alias, and ask how it
+        was tested. Files the fork added import relative paths without `.js`;
+        files that came from SST keep their `.js`. Follow the style of the file
+        being changed.
+    - path: "platform/src/{auto,shim,runtime,util,ast}/**"
+      instructions: >-
+        Every app runs this code, on every deploy. Ask for a test or a
+        description of what was run, and flag any change in behavior for
+        existing apps.
+    - path: "{cmd,pkg,internal}/**/*.go"
+      instructions: >-
+        The Go CLI. When behavior changes, ask for a test; `go test ./...` runs
+        in CI. Flag changes to state handling, to what `sst dev` does, and to
+        anything that deletes resources. Flag new telemetry or network calls,
+        and anything that listens on a port or runs a command.
+    - path: "platform/functions/**"
+      instructions: >-
+        The bridge and the runtimes that run inside users' AWS accounts and in
+        `sst dev`. Flag anything that changes what's sent over the network or
+        what permissions it needs.
+    - path: "packages/**"
+      instructions: >-
+        The framework adapters, published to npm. Each has its own
+        package-lock.json and is tested with `npm test` in its folder, not with
+        Bun. Flag a change that would break an app on a supported framework
+        version.
+    - path: ".github/**"
+      instructions: >-
+        Workflows and repo automation. Check: `permissions` blocks are as narrow
+        as the job needs; no `pull_request_target` that checks out or runs the
+        pull request's code; secrets aren't exposed to code from a pull request;
+        third-party actions come from a known publisher; the release job keeps
+        `environment: release`. These files need the code owner's review.
+    - path: "www/src/content/docs/**"
+      instructions: >-
+        Hand-written docs pages. Check that links work with the site's /sst
+        base, that commands install the fork (`@sst-community/sst`, or `sst`
+        aliased to it) rather than SST's `sst` package, and that SST's own
+        services aren't presented as this project's.
+
+chat:
+  allow_non_org_members: false
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CONTRIBUTING.md"
+      - "MAINTAINING.md"
+      - "**/CLAUDE.md"

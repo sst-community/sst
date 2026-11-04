@@ -31,11 +31,11 @@ fi
 jq -r '.[].filename' <<<"$files" >"$OUT/files"
 
 # Risk, from the paths: low for docs, medium for components and tests, high for
-# the CLI, shared platform code, release and install files, dependencies and
-# workflows. A pull request gets the highest of its files.
+# the CLI, shared platform code, release and install files, dependencies,
+# workflows and CodeRabbit's rules. A pull request gets the highest of its files.
 risk_of() {
   case "$1" in
-    .github/*) echo high ;;
+    .github/* | .coderabbit.yaml) echo high ;;
     examples/*) echo low ;;
     *package.json | *go.mod | *go.sum | *bun.lock | *bun.lockb | *package-lock.json | *pnpm-lock.yaml | *yarn.lock) echo high ;;
     *_test.go | *.test.ts | platform/test/*) echo medium ;;
