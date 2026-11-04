@@ -9,7 +9,9 @@ name: review
 # for pull requests from forks too. That's safe only because nothing from the
 # pull request runs: main is checked out, the diff is fetched as text, and
 # opencode can read files and write text but has no edits, no web access and
-# no usable shell (.github/review/opencode.json), and no token. The shell tool
+# no usable shell (.github/review/opencode.json), and no GitHub token. The only
+# secret is OPENCODE_API_KEY, which review-run.sh passes to opencode alone and
+# keeps out of the comment. The shell tool
 # stays listed, with every command denied but `true`, because opencode's free
 # models refuse requests that come without it. Keep it that way: never
 # check out the pull request's ref here.
@@ -61,18 +63,18 @@ jobs:
         timeout-minutes: 5
         run: npx -y "$OPENCODE" models opencode --refresh >/dev/null
 
-      # No token here. A failure, such as the free model being unavailable,
-      # still posts the checks.
+      # review-run.sh tries the free models with OPENCODE_API_KEY, then without
+      # a key, gives each review 5 minutes at most, and moves on within seconds
+      # when a model doesn't answer.
+      # A failure still posts the checks.
       - name: Review with opencode
         id: opencode
         continue-on-error: true
-        timeout-minutes: 15
-        run: |
-          npx -y "$OPENCODE" run --pure --agent review --model "$MODEL" \
-            -f "$OUT/pr.md" -f "$OUT/pr.diff" -- "$(cat .github/review/prompt.md)" \
-            </dev/null >"$OUT/review.raw"
+        timeout-minutes: 20
+        run: .github/scripts/review-run.sh
         env:
           OPENCODE_CONFIG: .github/review/opencode.json
+          REVIEW_OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
 
       - name: Post the review
         run: .github/scripts/review-post.sh
