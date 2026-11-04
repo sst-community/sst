@@ -399,7 +399,9 @@ export class PartsComponent<P extends Parts> extends Component {
   /**
    * Look up the resource of a part by its id, in place of creating it. This
    * is for a component that references something already deployed and works
-   * out the ids of its other parts itself: from a tag, or a data source.
+   * out the ids of its other parts itself: from a tag, or a data source. A
+   * resource the user passed in `existing` for the part is used instead; for
+   * an id passed there, use `existingPart(key) ?? lookupPart(...)`.
    *
    * @example
    * ```ts
@@ -425,6 +427,14 @@ export class PartsComponent<P extends Parts> extends Component {
     const [id, resourceId, opts] = isMany(this.partClasses[key])
       ? rest
       : [undefined, ...rest];
+    // A resource the user passed in `existing` is used in place of the
+    // lookup. An id there is the component's to read: it looks up by what it
+    // works out from it, like a role's name from its ARN.
+    if (
+      at(this.partExisting, key, id) instanceof
+      partClass(this.partClasses[key])
+    )
+      return this.existingOf(key, id, opts);
     return this.lookUp(key, id, resourceId, opts);
   }
 

@@ -16,10 +16,13 @@ const USER_POOL =
 
 const pulumi = mockPulumi({
   state: (args) => {
-    // The account already has API Gateway's role for writing logs
+    // The account already has API Gateway's role for writing logs, but
+    // where an API named NoRole reads it
     if (args.type === "aws:apigateway/account:Account")
       return {
-        cloudwatchRoleArn: "arn:aws:iam::123456789012:role/apigw-logs",
+        cloudwatchRoleArn: args.name.startsWith("NoRole")
+          ? ""
+          : "arn:aws:iam::123456789012:role/apigw-logs",
       };
     if (args.type === API)
       return {
@@ -152,14 +155,28 @@ describe("ApiGatewayV1", () => {
           },
           unclaimed: [lambdaRoute("MyApi", hashed("GET", "/"))],
         },
+        // 4.x also took a route's own `streaming`, which the V5 one
+        // refuses: the function streams
         "with a streaming route, without CORS": {
-          create: (Api, opts) => {
-            const api = new Api("MyApi", { cors: false }, opts);
+          original: (opts) => {
+            const api = new Original("MyApi", { cors: false }, opts);
             api.route("GET /stream", {
               handler: "src/stream.handler",
               streaming: true,
             });
             api.route("GET /told", "src/told.handler", { streaming: true });
+            api.deploy();
+          },
+          v5: (opts) => {
+            const api = new ApiGatewayV1("MyApi", { cors: false }, opts);
+            api.route("GET /stream", {
+              handler: "src/stream.handler",
+              streaming: true,
+            });
+            api.route("GET /told", {
+              handler: "src/told.handler",
+              streaming: true,
+            });
             api.deploy();
           },
           unclaimed: [
@@ -434,7 +451,9 @@ describe("ApiGatewayV1", () => {
 
   it("turns down a route after deploy(), a second deploy(), and a usage plan before it", () => {
     const api = new ApiGatewayV1("MyApi");
-    expect(() => api.addUsagePlan("Plan", {})).toThrow(/before it's deployed/);
+    expect(() => api.addUsagePlan("Plan", {})).toThrow(
+      /The "Plan" usage plan is added to the "MyApi" API before "deploy\(\)"/,
+    );
     api.route("GET /", "src/get.handler");
     expect(() => api.route("GET /", "src/other.handler")).toThrow(
       /already has a route/,
@@ -453,12 +472,16 @@ describe("ApiGatewayV1", () => {
           // @ts-expect-error
           transform: { route: { handler: { memory: "1 GB" } } },
         }),
-    ).toThrow(/"transform.handler".*"transform.method"/);
+    ).toThrow(
+      /"transform.route" isn't an option for the "A" API. To change the routes' functions, use "transform.handler".*"transform.method"/,
+    );
     expect(
       () =>
         // @ts-expect-error
         new ApiGatewayV1("B", { transform: { accessLog: {} } }),
-    ).toThrow(/"transform.logGroup"/);
+    ).toThrow(
+      /"transform.accessLog" isn't an option for the "B" API. Transform the access log in "transform.logGroup"/,
+    );
     const api = new ApiGatewayV1("C");
     expect(() =>
       api.route("GET /", "src/get.handler", {
@@ -476,6 +499,113 @@ describe("ApiGatewayV1", () => {
     ).toThrow(/"transform"/);
   });
 
+  it("turns down a route's own streaming: its function streams", async () => {
+    const api = new ApiGatewayV1("MyApi");
+    expect(() =>
+      api.route("GET /", "src/get.handler", { streaming: true } as any),
+    ).toThrow(
+      /"streaming" isn't an option for the "GET \/" route of the "MyApi" API. Set "streaming: true" on the route's function/,
+    );
+    expect(() =>
+      api.routeIntegration("GET /mock", { type: "mock" }, {
+        streaming: true,
+      } as any),
+    ).toThrow(/Only a route to a function streams/);
+    api.route("GET /stream", {
+      handler: "src/stream.handler",
+      streaming: true,
+    });
+    api.route("GET /buffered", "src/buffered.handler");
+    api.deploy();
+    await pulumi.settle();
+    expect(
+      await pulumi.resolve([
+        api.nodes.integration["GET /stream"].responseTransferMode,
+        api.nodes.integration["GET /buffered"].responseTransferMode,
+      ]),
+    ).toEqual(["STREAM", "BUFFERED"]);
+  });
+
+  it("reports its URL when deploy() is called after the config waits for something", async () => {
+    const api = new ApiGatewayV1("MyApi");
+    api.route("GET /", "src/get.handler");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    api.deploy();
+    await pulumi.settle();
+    expect(await pulumi.resolve(pulumi.reportOf("MyApi")?.hint)).toBe(
+      "https://MyApiApi_id.execute-api.us-east-1.amazonaws.com/test/",
+    );
+
+    // One that's never deployed reports nothing, as SST 4's
+    pulumi.reset();
+    new ApiGatewayV1("Idle");
+    await pulumi.settle();
+    expect(pulumi.reportOf("Idle")).toBeUndefined();
+  });
+
+  it("sets up API Gateway's account with the API's provider, when it has no role", async () => {
+    const { Provider } = await import("@pulumi/aws");
+    const west = new Provider("West", { region: "us-west-2" });
+    class Parent extends (await import("@pulumi/pulumi")).ComponentResource {
+      constructor(name: string) {
+        super("test:Parent", name, {}, { providers: [west] });
+      }
+    }
+    new ApiGatewayV1("NoRoleApi", {}, { parent: new Parent("Parent") });
+    await pulumi.settle();
+    const accounts = pulumi.resources.filter(
+      (r) => r.type === "aws:apigateway/account:Account",
+    );
+    expect(accounts.map((r) => [r.name, r.kind])).toEqual([
+      ["NoRoleApiAPIGatewayAccount", "read"],
+      ["NoRoleApiAPIGatewayAccountSetup", "register"],
+    ]);
+    for (const account of accounts)
+      expect(JSON.stringify(account.options)).toContain("::West::");
+    expect(resource("NoRoleApiAPIGatewayAccountSetup").options).toMatchObject({
+      retainOnDelete: true,
+    });
+    expect(resource("APIGatewayPushToCloudWatchLogsRole")).toBeDefined();
+    // The API waits for it
+    expect(
+      pulumi.dependsOn("NoRoleApiApi", "NoRoleApiAPIGatewayAccountSetup"),
+    ).toBe(true);
+
+    // With a role, nothing is set up
+    pulumi.reset();
+    new ApiGatewayV1("MyApi");
+    await pulumi.settle();
+    expect(names()).not.toContain("MyApiAPIGatewayAccountSetup");
+  });
+
+  it("turns down an existing resource it wouldn't use", async () => {
+    expect(
+      () =>
+        new ApiGatewayV1("Logs", {
+          accessLog: { retention: "1 week" },
+          existing: { logGroup: "/aws/vendedlogs/apis/mine" },
+        }),
+    ).toThrow(
+      /The "Logs" API is given an existing "logGroup", which it uses the way it is. Remove "accessLog"/,
+    );
+    expect(
+      () =>
+        new ApiGatewayV1("Certificate", {
+          existing: { certificate: {} as any },
+        }),
+    ).toThrow(
+      /"existing.certificate" isn't an option for the "Certificate" API/,
+    );
+    expect(
+      () =>
+        new ApiGatewayV1("Named", {
+          domain: { name: "api.example.com" },
+          existing: { domainName: "api.example.com" },
+        }),
+    ).toThrow(/is given an existing "domainName", so it doesn't create one/);
+    await pulumi.settle();
+  });
+
   it("turns down what decides what's created given as an output", () => {
     for (const [arg, value] of [
       ["domain", output("api.example.com")],
@@ -488,13 +618,13 @@ describe("ApiGatewayV1", () => {
       ).toThrow(new RegExp(`"${arg}"`));
     expect(
       () => new ApiGatewayV1("Private", { endpoint: { type: "private" } }),
-    ).toThrow(/VPC endpoint IDs/);
+    ).toThrow(/needs the IDs of its VPC endpoints/);
   });
 
   it("turns down an authorizer with none of its kinds, or two", () => {
     const api = new ApiGatewayV1("MyApi");
     expect(() => api.addAuthorizer({ name: "None" })).toThrow(
-      /one of "requestFunction", "tokenFunction", or "userPools"/,
+      /The "None" authorizer of the "MyApi" API is given none of "requestFunction", "tokenFunction" and "userPools"/,
     );
     expect(() =>
       api.addAuthorizer({
@@ -502,7 +632,7 @@ describe("ApiGatewayV1", () => {
         tokenFunction: "src/a.handler",
         userPools: [USER_POOL],
       }),
-    ).toThrow(/only one of/);
+    ).toThrow(/is given more than one of/);
   });
 
   it("can be linked by a function, as can an API key", async () => {

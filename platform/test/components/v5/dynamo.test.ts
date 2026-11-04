@@ -328,8 +328,9 @@ describe("Dynamo", () => {
       expect(
         await pulumi.takesOver(
           () => OriginalDynamo.subscribe("Indexer", streamArn("orders"), FUNCTION_ARN),
+          // `get` takes the stream ARN the static `subscribe` was given
           () =>
-            Dynamo.get("ExternalOrders", "orders").subscribe(
+            Dynamo.get("ExternalOrders", streamArn("orders")).subscribe(
               "Indexer",
               FUNCTION_ARN,
             ),
@@ -501,11 +502,57 @@ describe("Dynamo", () => {
     await pulumi.settle();
     pulumi.reset();
 
-    const table = new Dynamo("MyTable", { ...keys, existing: { table: mine } });
+    const table = new Dynamo("MyTable", {
+      existing: { table: mine },
+    } as DynamoArgs);
     await pulumi.settle();
 
     expect(table.nodes.table).toBe(mine);
     expect(pulumi.resources.map((r) => r.type)).toEqual(["sst:aws:Dynamo"]);
+  });
+
+  // It's used the way it is: what would configure it would be dropped
+  it("refuses settings for a table it's given, but not what a $transform gives one from get", async () => {
+    expect(
+      () =>
+        new Dynamo("MyTable", {
+          ...keys,
+          stream: "new-image",
+          existing: { table: "orders" },
+        }),
+    ).toThrow(
+      'The "MyTable" table is given an existing "table", which it uses the way it is. Remove "fields", "primaryIndex", "stream" from its args.',
+    );
+    const { $transform } = await import("../../../src/components/component");
+    $transform(Dynamo, (args, _opts, name) => {
+      if (name === "Shared") args.deletionProtection = true;
+    });
+    Dynamo.get("Shared", "orders");
+    await pulumi.settle();
+  });
+
+  it("references a table by its ARN, or its stream's", async () => {
+    const byArn = Dynamo.get(
+      "ByArn",
+      "arn:aws:dynamodb:us-east-1:123456789012:table/orders",
+    );
+    Dynamo.get("ByStream", streamArn("orders"));
+    await pulumi.settle();
+    expect(resource("ByArnTable").options.id).toBe("orders");
+    expect(resource("ByStreamTable").options.id).toBe("orders");
+    expect(await pulumi.resolve(byArn.name)).toBe("orders");
+  });
+
+  it("says to use get in place of the static subscribe", () => {
+    expect(() =>
+      (Dynamo as any).subscribe(
+        "Indexer",
+        streamArn("orders"),
+        "src/indexer.handler",
+      ),
+    ).toThrow(
+      /reference the table with "get" and subscribe to that: sst\.aws\.v5\.Dynamo\.get\("MyTable", streamArn\)/,
+    );
   });
 
   it("links with its name and permission to use the table", async () => {

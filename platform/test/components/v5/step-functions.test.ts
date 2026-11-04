@@ -358,6 +358,30 @@ describe("StepFunctions", () => {
     ).toThrow(/"logging"/);
   });
 
+  it("refuses an existing log group without logging, or with a retention", () => {
+    const existing = { logGroup: "/aws/states/mine" };
+    expect(
+      () =>
+        new StepFunctions("Quiet", {
+          definition: simple(StepFunctions),
+          logging: false,
+          existing,
+        }),
+    ).toThrow(
+      /"existing.logGroup" isn't an option for the "Quiet" state machine. Its logs go to a log group only with "logging"/,
+    );
+    expect(
+      () =>
+        new StepFunctions("Kept", {
+          definition: simple(StepFunctions),
+          logging: { retention: "1 week" },
+          existing,
+        }),
+    ).toThrow(
+      /is given an existing "logGroup", which it uses the way it is. Remove "retention" from its "logging"/,
+    );
+  });
+
   it("has no log group without logging, and its role and log group in nodes", async () => {
     const quiet = new StepFunctions("Quiet", {
       definition: simple(StepFunctions),

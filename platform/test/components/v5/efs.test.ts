@@ -563,7 +563,7 @@ describe("Efs", () => {
 
       expect([...new Set(errors)]).toContainEqual(
         expect.stringContaining(
-          'Two of the subnets of the "MyEfs" EFS component are in "us-east-1a": "subnet-one-a" and "subnet-two-a".',
+          'Two of the subnets of the "MyEfs" file system are in "us-east-1a": "subnet-one-a" and "subnet-two-a".',
         ),
       );
       expect(names()).not.toContain("MyEfsMountTargetUsEast1a");
@@ -610,7 +610,7 @@ describe("Efs", () => {
       );
 
       expect([...new Set(errors)]).toContainEqual(
-        'Missing "vpc.subnets" for the "MyEfs" EFS component. The mount targets are created in them.',
+        'The "vpc" of the "MyEfs" file system has no "subnets". Its mount targets are created in them.',
       );
     });
 
@@ -618,7 +618,7 @@ describe("Efs", () => {
       expect(
         () => new Efs("InAnEc2Vpc", { vpc: new aws.ec2.Vpc("Raw", {}) as any }),
       ).toThrow(
-        'The "vpc" of the "InAnEc2Vpc" EFS component isn\'t a "Vpc" component. Pass a "Vpc", or the ids of a VPC.',
+        'The "vpc" of the "InAnEc2Vpc" file system isn\'t a "Vpc" component. Pass a "Vpc", or the ids of a VPC.',
       );
     });
   });
@@ -664,6 +664,43 @@ describe("Efs", () => {
       expect(lookups).toEqual([]);
       expect(resource("MyEfsAccessPoint").options.id).toBe("fsap-mine");
       expect(await pulumi.resolve(efs.accessPoint)).toBe("fsap-mine");
+    });
+
+    // It's used the way it is: what would configure it, or make its mount
+    // targets, would be dropped
+    it("refuses what would configure it", async () => {
+      expect(
+        () =>
+          new Efs("MyEfs", {
+            vpc: customVpc,
+            throughput: "bursting",
+            existing: { fileSystem: "fs-123" },
+          }),
+      ).toThrow(
+        'The "MyEfs" file system is given an existing "fileSystem", which it uses the way it is. Remove "throughput", "vpc" from its args.',
+      );
+      for (const key of ["securityGroup", "mountTarget"])
+        expect(
+          () =>
+            new Efs("MyEfs", {
+              existing: { fileSystem: "fs-123", [key]: "theirs" },
+            } as any),
+        ).toThrow(
+          `"existing.${key}" isn't an option for the "MyEfs" file system. The "fileSystem" it's given has its mount targets already.`,
+        );
+      await pulumi.settle();
+    });
+
+    // What a $transform sets for every file system isn't meant for one from
+    // get
+    it("takes what a $transform gives one from get", async () => {
+      const { $transform } = await import("../../../src/components/component");
+      $transform(Efs, (args, _opts, name) => {
+        if (name === "Shared") args!.throughput = "bursting";
+      });
+      const efs = Efs.get("Shared", "fs-123");
+      await pulumi.settle();
+      expect(await pulumi.resolve(efs.id)).toBe("fs-123");
     });
   });
 

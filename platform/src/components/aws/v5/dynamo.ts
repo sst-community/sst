@@ -1,6 +1,5 @@
 import {
   ComponentResourceOptions,
-  Output,
   all,
   interpolate,
   output,
@@ -12,16 +11,17 @@ import {
   deferred,
   many,
 } from "../../parts-component";
-import { ifSet } from "../../args";
+import { ifSet, usedAsItIs, getArgs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { Function } from "./function";
-import { filterCriteria } from "../helpers/event-source";
+import { parseDynamoArn } from "../helpers/arn";
 import {
-  type FunctionInput,
-  functionPart,
-  plainFunction,
-} from "../helpers/function-part";
+  assertNamedSubscriber,
+  eventSourceSubscriber,
+  filterCriteria,
+} from "../helpers/event-source";
+import type { FunctionInput } from "../helpers/function-part";
 import { permission } from "../permission";
 
 const parts = () => ({
@@ -451,6 +451,16 @@ type IndexKey = string | string[];
  * }));
  * ```
  *
+ * #### Use a table you already have
+ *
+ * Reference it by its name or ARN. The table is used the way it is: the component doesn't
+ * configure it, and refuses `fields`, `primaryIndex` and the other settings of a table
+ * next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * const table = sst.aws.v5.Dynamo.get("MyTable", "app-dev-mytable");
+ * ```
+ *
  * #### Switch from `sst.aws.Dynamo`
  *
  * Change `sst.aws.Dynamo` to `sst.aws.v5.Dynamo` and keep the name. The table and the
@@ -470,27 +480,31 @@ type IndexKey = string | string[];
  *   table's `transform`.
  * - Every subscriber has a name. One that was added without a name isn't kept: remove it
  *   and deploy before you switch, then add it back with a name.
- * - `subscribe` no longer takes a handler or a function's args in an output: whether a
- *   function is created is decided from them, and a preview has to know. Only a function
- *   you have, or its ARN, can be an output. The args are typed as
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
- *   type-check.
- * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
+ * - A subscriber's function is described after the component, `Subscribed to MyTable`,
+ *   where `sst.aws.Dynamo` named the component it kept the subscriber in: an update in
+ *   place.
  * - A subscriber is created with the provider the table has. `sst.aws.Dynamo` gave it only
  *   a `provider` passed to the table itself, so if your table takes its provider from a
  *   parent component or from `providers`, its subscribers are replaced on switch, their
  *   log groups with them, which `sst migrate --check` refuses: remove them and deploy
  *   before you switch, then add them back.
  * - To subscribe to the stream of a table that isn't in your app, reference the table with
- *   `get` and subscribe to that, in place of the static `subscribe`.
+ *   `get`, by its name or the stream ARN you gave the static `subscribe`, and subscribe
+ *   to that. The static `subscribe` is refused with what to write.
  *
  *   ```ts title="sst.config.ts" del={1} ins={2-4}
  *   sst.aws.Dynamo.subscribe("MySubscriber", streamArn, "src/subscriber.handler");
  *   sst.aws.v5.Dynamo
- *     .get("Orders", "orders-table")
+ *     .get("Orders", streamArn)
  *     .subscribe("MySubscriber", "src/subscriber.handler");
  *   ```
  * - `get` gives its options to the component, so a `provider` or `parent` you pass it
@@ -500,14 +514,6 @@ type IndexKey = string | string[];
  *   it and deploy before you switch, then add it back.
  * - A `transform` function for the table is given the table's keys, indexes, attributes
  *   and stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
- *
- * #### Use a table you already have
- *
- * Reference it by its name.
- *
- * ```ts title="sst.config.ts"
- * const table = sst.aws.v5.Dynamo.get("MyTable", "app-dev-mytable");
- * ```
  */
 export class Dynamo extends component("sst:aws:Dynamo", parts) {
   constructor(
@@ -518,7 +524,23 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
     super(name, args, opts);
 
     // A table that's already deployed has its fields and indexes
-    if (this.existingPart("table")) return;
+    if (this.existingPart("table")) {
+      usedAsItIs(
+        args,
+        [
+          "fields",
+          "primaryIndex",
+          "globalIndexes",
+          "localIndexes",
+          "stream",
+          "ttl",
+          "deletionProtection",
+        ],
+        "table",
+        `the "${name}" table`,
+      );
+      return;
+    }
 
     const primaryIndex = output(args.primaryIndex);
     const stream = output(args.stream);
@@ -661,68 +683,59 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
     subscriber: FunctionInput,
     args: DynamoSubscriberArgs = {},
   ) {
-    // `sst.aws.Dynamo` also took a subscriber without a name, which shifts
-    // the arguments: the subscriber is where the name goes
-    const shifted =
-      typeof subscriber === "object" &&
-      subscriber !== null &&
-      !Output.isInstance(subscriber) &&
-      Object.getPrototypeOf(subscriber) === Object.prototype &&
-      !("handler" in subscriber);
-    if (typeof name !== "string" || subscriber === undefined || shifted)
-      throw new VisibleError(
-        `A subscriber of the "${this.componentName}" table needs a name: subscribe("MySubscriber", "src/subscriber.handler").`,
-      );
+    assertNamedSubscriber(
+      `the "${this.componentName}" table`,
+      "subscribe",
+      name,
+      subscriber,
+    );
     this.assertNew("subscriber", "eventSourceMapping", name, args, [
       "subscriber",
       "eventSourceMapping",
     ]);
 
-    const streamArn = this.streamArn;
-    const fn = functionPart(
-      this,
-      "subscriber",
-      name,
-      plainFunction(
-        subscriber,
-        `The subscriber "${name}" of the "${this.componentName}" table`,
-      ),
-      {
-        description: `Subscribed to ${this.componentName}`,
-        permissions: [
-          {
-            actions: [
-              "dynamodb:DescribeStream",
-              "dynamodb:GetRecords",
-              "dynamodb:GetShardIterator",
-              "dynamodb:ListStreams",
-            ],
-            resources: [streamArn],
-          },
-        ],
+    eventSourceSubscriber(this.builder(), name, subscriber, {
+      component: this.componentName,
+      kind: "table",
+      source: this.streamArn,
+      actions: [
+        "dynamodb:DescribeStream",
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator",
+        "dynamodb:ListStreams",
+      ],
+      mapping: {
+        filterCriteria: filterCriteria(args.filters),
+        startingPosition: "LATEST",
       },
-    );
-    this.part("eventSourceMapping", name, {
-      eventSourceArn: streamArn,
-      functionName: fn.targetArn,
-      filterCriteria: filterCriteria(args.filters),
-      startingPosition: "LATEST",
     });
 
     return this;
   }
 
   /**
-   * Reference an existing DynamoDB Table with the given table name. This is useful when you
-   * create a table in one stage and want to share it in another stage, or to subscribe to
-   * the stream of a table that isn't in your app.
+   * `sst.aws.Dynamo.subscribe` subscribed to a table's stream by its ARN. Reference the
+   * table with `get` and subscribe to that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to the stream of a table that isn't in your app, reference the table with "get" and subscribe to that: sst.aws.v5.Dynamo.get("MyTable", streamArn).subscribe("MySubscriber", "src/subscriber.handler").`,
+    );
+  }
+
+  /**
+   * Reference an existing DynamoDB Table with the given table name, its ARN, or the ARN of
+   * its stream. This is useful when you create a table in one stage and want to share it
+   * in another stage, or to subscribe to the stream of a table that isn't in your app.
    *
    * :::tip
    * You can use the `static get` method to share a table across stages.
    * :::
    *
    * @param name The name of the component.
-   * @param tableName The name of the DynamoDB Table.
+   * @param table The name of the DynamoDB Table, its ARN, or the ARN of its stream.
    * @param opts Component resource options.
    *
    * @example
@@ -757,14 +770,15 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
    */
   public static get(
     name: string,
-    tableName: Input<string>,
+    table: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Dynamo(
-      name,
-      { existing: { table: tableName } } as DynamoArgs,
-      opts,
+    // A table is looked up by its name
+    const tableName = output(table).apply((id) =>
+      id.startsWith("arn:") ? parseDynamoArn(id).tableName : id,
     );
+    const args: Partial<DynamoArgs> = { existing: { table: tableName } };
+    return new Dynamo(name, getArgs(args) as DynamoArgs, opts);
   }
 
   /**

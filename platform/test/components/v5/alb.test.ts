@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import type { AlbArgs } from "../../../src/components/aws/v5/alb";
 
 const LOAD_BALANCER = "aws:lb/loadBalancer:LoadBalancer";
 const LISTENER = "aws:lb/listener:Listener";
@@ -515,9 +516,78 @@ describe("Alb", () => {
       expect(resource("MyAlbSecurityGroup").options.id).toBe("sg-other");
       expect(await pulumi.resolve(alb.securityGroupId)).toBe("sg-other");
     });
+
+    it("uses a listener it's given, in place of looking it up", async () => {
+      const alb = new Alb("MyAlb", {
+        existing: {
+          loadBalancer: ALB_ARN,
+          listener: { HTTPS443: "listener-mine" },
+        },
+      } as any);
+      const listener = alb.getListener("https", 443);
+      await pulumi.settle();
+
+      expect(alb.nodes.listener.HTTPS443).toBe(listener);
+      expect(resource("MyAlbListenerHTTPS443").options.id).toBe(
+        "listener-mine",
+      );
+    });
+
+    // It's used the way it is: what would configure it would be dropped
+    it("refuses what would configure it", async () => {
+      expect(
+        () =>
+          new Alb("MyAlb", {
+            vpc: customVpc,
+            listeners: http,
+            existing: { loadBalancer: ALB_ARN },
+          }),
+      ).toThrow(
+        'The "MyAlb" load balancer is given an existing "loadBalancer", which it uses the way it is. Remove "vpc", "listeners" from its args.',
+      );
+      expect(
+        () =>
+          new Alb("MyAlb", {
+            existing: { loadBalancer: ALB_ARN, certificate: "theirs" },
+          } as any),
+      ).toThrow(
+        `"existing.certificate" isn't an option for the "MyAlb" load balancer. The "loadBalancer" it's given has its certificates on its listeners already.`,
+      );
+      await pulumi.settle();
+    });
+
+    // What a $transform sets for every load balancer isn't meant for one
+    // from get
+    it("takes what a $transform gives one from get", async () => {
+      const { $transform } = await import("../../../src/components/component");
+      $transform(Alb, (args, _opts, name) => {
+        if (name === "Shared") args!.public = false;
+      });
+      const alb = Alb.get("Shared", ALB_ARN);
+      await pulumi.settle();
+      expect(await pulumi.resolve(alb.arn)).toBe(ALB_ARN);
+    });
   });
 
   describe("what it's given", () => {
+    // It's only created for a domain without a cert
+    it("refuses a certificate it wouldn't create", () => {
+      const create = (domain?: AlbArgs["domain"]) => () =>
+        new Alb("MyAlb", {
+          vpc: customVpc,
+          listeners: http,
+          domain,
+          existing: { certificate: "theirs" as any },
+        });
+
+      expect(create()).toThrow(
+        `"existing.certificate" isn't an option for the "MyAlb" load balancer. It's only created for a "domain".`,
+      );
+      expect(create({ name: "example.com", cert: "arn:aws:acm:cert" })).toThrow(
+        `"existing.certificate" isn't an option for the "MyAlb" load balancer. It uses the "cert" of its "domain".`,
+      );
+    });
+
     it("needs the listeners and the domain as plain values", () => {
       expect(
         () =>

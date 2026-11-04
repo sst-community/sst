@@ -14,14 +14,13 @@ import {
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { plain } from "../../args";
+import { plain, usedAsItIs, getArgs } from "../../args";
 import { logicalName } from "../../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { HttpsRedirect } from "./https-redirect";
 import { DistributionDeploymentWaiter } from "../providers/distribution-deployment-waiter";
-import type { DnsAdapter } from "../../dns-adapter";
 import { useProvider } from "../helpers/provider";
-import { domainOf } from "../helpers/domain";
+import { type DomainArgs, domainOf } from "../helpers/domain";
 
 const parts = {
   /**
@@ -29,8 +28,9 @@ const parts = {
    */
   distribution: cloudfront.Distribution,
   /**
-   * What waits for the distribution to be deployed, when `wait` is on. Not created for
-   * a distribution that's passed in `existing`.
+   * What waits for the distribution to be deployed: when it's created, and with
+   * `wait: true` after each change too. With `wait: false` it doesn't wait. Not created
+   * for a distribution that's passed in `existing`.
    */
   waiter: optional(DistributionDeploymentWaiter),
   /**
@@ -45,68 +45,10 @@ const parts = {
   redirect: optional(HttpsRedirect),
 };
 
-export interface CdnDomainArgs {
-  /**
-   * The custom domain you want to use. A plain value: the DNS records are named after it.
-   *
-   * @example
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com"
-   *   }
-   * }
-   * ```
-   *
-   * Can also include subdomains based on the current stage.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: `${$app.stage}.example.com`
-   *   }
-   * }
-   * ```
-   */
-  name: string;
-  /**
-   * The DNS provider to use for the domain: an adapter that creates the DNS records, like
-   * `sst.aws.dns()`, `sst.cloudflare.dns()` or `sst.vercel.dns()`.
-   *
-   * For other providers, set `dns` to `false` and pass in a `cert`.
-   *
-   * @default `sst.aws.dns`
-   *
-   * @example
-   *
-   * Specify the hosted zone ID for the Route 53 domain.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com",
-   *     dns: sst.aws.dns({
-   *       zone: "Z2FDTNDATAQYW2"
-   *     })
-   *   }
-   * }
-   * ```
-   *
-   * Use a domain hosted on Cloudflare, needs the Cloudflare provider.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com",
-   *     dns: sst.cloudflare.dns()
-   *   }
-   * }
-   * ```
-   */
-  dns?: false | DnsAdapter;
+export interface CdnDomainArgs extends DomainArgs {
   /**
    * Alternate domains to be used. Visitors to the alternate domains will be redirected to the
-   * main `name`.
+   * main `name`. A plain list: each one has DNS records of its own.
    *
    * :::note
    * Unlike the `aliases` option, this will redirect visitors back to the main `name`.
@@ -126,7 +68,8 @@ export interface CdnDomainArgs {
   redirects?: string[];
   /**
    * Alias domains that should be used. Unlike the `redirect` option, this keeps your visitors
-   * on this alias domain.
+   * on this alias domain. A plain list: each one has DNS records of its own, and is on the
+   * certificate.
    *
    * @example
    * So if your users visit `app2.domain.com`, they will stay on `app2.domain.com` in their
@@ -145,8 +88,8 @@ export interface CdnDomainArgs {
    * The ARN of an ACM (AWS Certificate Manager) certificate that proves ownership of the
    * domain. By default, a certificate is created and validated automatically.
    *
-   * The certificate will be created in the `us-east-1` region as required by AWS CloudFront.
-   * If you are creating your own certificate, you must also create it in `us-east-1`.
+   * CloudFront takes its certificate from the `us-east-1` region. The one that's created
+   * for you is created there, and one you pass in has to be there too.
    *
    * :::tip
    * You need to pass in a `cert` for domains that are not hosted on supported `dns` providers.
@@ -317,7 +260,7 @@ export function cdnDomain(
  * You'll find this component exposed in the `transform` of other components. And you can customize the args listed here. For example:
  *
  * ```ts title="sst.config.ts"
- * new sst.aws.Router("MyRouter", {
+ * new sst.aws.v5.Router("MyRouter", {
  *   transform: {
  *     cdn: (args) => {
  *       args.wait = false;
@@ -359,6 +302,25 @@ export class Cdn extends component("sst:aws:CDN", parts) {
 
     const existing = this.existingPart("distribution");
     if (existing) {
+      // A distribution that's deployed is used the way it is
+      usedAsItIs(
+        args,
+        [
+          "comment",
+          "origins",
+          "originGroups",
+          "defaultCacheBehavior",
+          "orderedCacheBehaviors",
+          "defaultRootObject",
+          "customErrorResponses",
+          "domain",
+          "wait",
+          "tags",
+          "webAclArn",
+        ],
+        "distribution",
+        `the "${name}" CDN`,
+      );
       this.deployed = output(true);
       this._domainUrl = existing.aliases.apply((aliases) =>
         aliases?.length ? `https://${aliases[0]}` : undefined,
@@ -485,13 +447,10 @@ export class Cdn extends component("sst:aws:CDN", parts) {
   }
 
   /**
-   * Reference an existing CDN with the given distribution ID. This is useful when
-   * you create a Router in one stage and want to share it in another. It avoids having to
-   * create a new Router in the other stage.
-   *
-   * :::tip
-   * You can use the `static get` method to share Routers across stages.
-   * :::
+   * Reference an existing CDN with the given distribution ID: one that's deployed, like
+   * one another stage created. Its distribution is used as it is. A `Router` that's
+   * referenced with its own `get` is served through one, which is how a router is
+   * shared across stages.
    *
    * @param name The name of the component.
    * @param distributionID The id of the existing CDN distribution.
@@ -504,7 +463,7 @@ export class Cdn extends component("sst:aws:CDN", parts) {
   ) {
     return new Cdn(
       name,
-      { existing: { distribution: distributionID } } as CdnArgs,
+      getArgs({ existing: { distribution: distributionID } }) as CdnArgs,
       opts,
     );
   }

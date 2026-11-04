@@ -551,9 +551,11 @@ describe("AppSync", () => {
     expect(() => api.addResolver(" Query   user ", { dataSource: "ds" })).toThrow(
       /already has a resolver named "Query user"/,
     );
-    expect(() => api.addResolver("Query", {})).toThrow(/Invalid resolver Query/);
+    expect(() => api.addResolver("Query", {})).toThrow(
+      /The "Query" resolver of the "MyApi" API isn't a type and a field/,
+    );
     expect(() => api.addResolver("Query user name", {})).toThrow(
-      /Invalid resolver/,
+      /The "Query user name" resolver of the "MyApi" API isn't a type and a field/,
     );
     await pulumi.settle();
   });
@@ -677,6 +679,32 @@ describe("AppSync", () => {
           existing: { domainName: "graphql.example.com" },
         }),
     ).toThrow(/is given an existing "domainName"/);
+    await pulumi.settle();
+  });
+
+  it("turns down an existing certificate or association it wouldn't use", async () => {
+    const certificate = { certificate: {} as any };
+    for (const [args, message] of [
+      [{ existing: certificate }, /"existing.certificate" isn't an option/],
+      [
+        {
+          domain: { name: "api.example.com", dns: false, cert: CERT_ARN },
+          existing: certificate,
+        },
+        /give "domain" a "name" and no "cert"/,
+      ],
+      [
+        { existing: { domainName: "graphql.example.com", ...certificate } },
+        /"existing.certificate" isn't an option/,
+      ],
+      [
+        { existing: { domainAssociation: "graphql.example.com" } },
+        /"existing.domainAssociation" isn't an option for the "MyApi" API/,
+      ],
+    ] as const)
+      expect(
+        () => new AppSync("MyApi", { schema, ...(args as any) }),
+      ).toThrow(message);
     await pulumi.settle();
   });
 

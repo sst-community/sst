@@ -5,6 +5,7 @@ import {
   secret,
 } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const CLUSTER = "aws:rds/cluster:Cluster";
 const INSTANCE = "aws:rds/clusterInstance:ClusterInstance";
@@ -27,19 +28,27 @@ const pulumi = mockPulumi({
         ...endpoints,
         masterUsername: "postgres",
         databaseName: "shared",
-        tagsAll: {
-          "sst:ref:password": "shared-secret",
-          ...(args.id.includes("proxied") ? { "sst:ref:proxy": "shared-proxy" } : {}),
-        },
+        tagsAll: args.id.includes("untagged")
+          ? {}
+          : {
+              "sst:ref:password": "shared-secret",
+              ...(args.id.includes("proxied")
+                ? { "sst:ref:proxy": "shared-proxy" }
+                : {}),
+            },
       };
     return endpoints;
   },
   call: (args) => {
+    // The password in the secret a cluster is tagged with, or in another
     if (args.token === "aws:secretsmanager/getSecretVersion:getSecretVersion")
       return {
         secretString: JSON.stringify({
           username: "postgres",
-          password: "stored-password",
+          password:
+            args.inputs.secretId === "shared-secret"
+              ? "stored-password"
+              : `the password in ${args.inputs.secretId}`,
         }),
       };
     if (args.token === "aws:rds/getInstances:getInstances")
@@ -572,7 +581,7 @@ describe("Aurora", () => {
       expect(
         () => new Aurora("MyDatabase", { engine: "postgres", vpc, dev: {} }),
       ).toThrow(
-        /You must provide the password to connect to your locally running database/,
+        `The "MyDatabase" Aurora database needs the password of your local server to connect to it in sst dev. Set "dev.password", or "password".`,
       );
     });
 
@@ -584,7 +593,9 @@ describe("Aurora", () => {
             vpc,
             dev: output({}) as any,
           }),
-      ).toThrow(/The "dev" of the "MyDatabase" database has to be a plain value/);
+      ).toThrow(
+        /The "dev" of the "MyDatabase" Aurora database has to be a plain value/,
+      );
     });
 
     it("explains why nodes are missing", async () => {
@@ -678,7 +689,7 @@ describe("Aurora", () => {
         () =>
           new Aurora("MyDatabase", { engine: "postgres", vpc: net as any }),
       ).toThrow(
-        /The "vpc" of the "MyDatabase" Aurora component isn't a "Vpc" component/,
+        /The "vpc" of the "MyDatabase" Aurora database isn't a "Vpc" component/,
       );
       await pulumi.settle();
     });
@@ -836,8 +847,8 @@ describe("Aurora", () => {
     await pulumi.settle();
 
     expect(Object.keys(database.nodes)).toEqual([
-      "password",
       "secret",
+      "password",
       "secretVersion",
       "subnetGroup",
       "instanceParameterGroup",
@@ -948,6 +959,53 @@ describe("Aurora", () => {
       );
     });
 
+    it("reads its password from the secret it's given", async () => {
+      const database = new Aurora("MyDatabase", {
+        engine: "postgres",
+        vpc,
+        existing: { cluster: "app-dev-mydatabase", secret: "my-secret" },
+      });
+      await pulumi.settle();
+
+      expect(resource("MyDatabaseSecret")).toMatchObject({
+        kind: "read",
+        options: { id: "my-secret" },
+      });
+      expect(await pulumi.resolve(database.password)).toBe(
+        "the password in my-secret",
+      );
+    });
+
+    it("turns down what it would create next to it", () => {
+      for (const part of [
+        "subnetGroup",
+        "instanceParameterGroup",
+        "clusterParameterGroup",
+        "secretVersion",
+        "proxyRole",
+      ])
+        expect(
+          () =>
+            new Aurora(`Database${part}`, {
+              engine: "postgres",
+              vpc,
+              existing: { cluster: "app-dev-mydatabase", [part]: "x" },
+            }),
+        ).toThrow(
+          `"existing.${part}" isn't an option for the "Database${part}" Aurora database. It's given an existing "cluster", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+        );
+    });
+
+    it("says what it can't find without the tag that names its secret", async () => {
+      const errors = await applyErrors(
+        () => Aurora.get("MyDatabase", "app-dev-untagged"),
+        pulumi.settle,
+      );
+      expect(errors).toContain(
+        `The "MyDatabase" Aurora database can't find its secret: its cluster has no "sst:ref:password" tag, which names the secret that holds its password. Pass the secret in "existing.secret".`,
+      );
+    });
+
     it("can be passed as resources, with its password", async () => {
       const { rds, secretsmanager } = await import("@pulumi/aws");
       const cluster = new rds.Cluster("Mine", {
@@ -1037,18 +1095,20 @@ describe("Aurora", () => {
       new Aurora(name, { engine: "postgres", vpc, ...args } as any);
 
     expect(create("First", { proxy: output(true) })).toThrow(
-      /The "proxy" of the "First" database has to be a plain value/,
+      /The "proxy" of the "First" Aurora database has to be a plain value/,
     );
     expect(create("Second", { replicas: output(2) })).toThrow(
-      /The "replicas" of the "Second" database has to be a plain value/,
+      /The "replicas" of the "Second" Aurora database has to be a plain value/,
     );
     expect(
       create("Third", {
         proxy: { credentials: [{ username: output("metabase"), password: "x" }] },
       }),
-    ).toThrow(/The "username" in the "proxy.credentials" of the "Third" database/);
+    ).toThrow(
+      /The "username" in the "proxy.credentials" of the "Third" Aurora database/,
+    );
     expect(create("Fourth", { replicas: 16 })).toThrow(
-      /Cannot create more than 15 read-only replicas for the "Fourth" Aurora database/,
+      `The "replicas" of the "Fourth" Aurora database is 16. It can have 15 read-only replicas at most.`,
     );
   });
 });

@@ -377,8 +377,15 @@ describe("ApiGatewayV2", () => {
     expect(() => api.route("get /", FUNCTION_ARN)).toThrow(
       /already has a route named "GET \/"/,
     );
-    expect(() => api.route("GET", FUNCTION_ARN)).toThrow(/Invalid route GET/);
-    expect(() => api.route("FETCH /", FUNCTION_ARN)).toThrow(/Invalid method/);
+    expect(() => api.route("GET", FUNCTION_ARN)).toThrow(
+      /The "GET" route of the "MyApi" API isn't a route. Write it as "METHOD \/path"/,
+    );
+    expect(() => api.route("FETCH /", FUNCTION_ARN)).toThrow(
+      /The "FETCH \/" route of the "MyApi" API has the method "FETCH"/,
+    );
+    expect(() => api.route("GET notes", FUNCTION_ARN)).toThrow(
+      /The path of the "GET notes" route of the "MyApi" API doesn't start with "\/"/,
+    );
   });
 
   it("accepts a route name that every object has as a property", async () => {
@@ -409,14 +416,22 @@ describe("ApiGatewayV2", () => {
     expect(() =>
       api.route("GET /", FUNCTION_ARN, { transform: { route: {} } } as any),
     ).toThrow(
-      /"transform" isn't an option here. Use the "transform" of "MyApi": its "handler", "integration" and "route" apply to every route/,
+      /"transform" isn't an option here. Use the "transform" of "MyApi": its "handler", "permission", "integration" and "route" apply to every route/,
     );
     expect(
       () =>
         new ApiGatewayV2("Other", {
           transform: { route: { handler: { memory: "1024 MB" } } } as any,
         }),
-    ).toThrow(/use "transform.handler"/);
+    ).toThrow(
+      /"transform.route.handler" isn't an option for the "Other" API. "transform.route" changes each route's API Gateway route. To change the routes' functions, use "transform.handler"/,
+    );
+    // A URL route has no function
+    expect(() =>
+      api.routeUrl("GET /url", "https://example.com", {
+        transform: {},
+      } as any),
+    ).toThrow(/its "integration" and "route" apply to every route/);
   });
 
   it("puts its VPC link in a Vpc's public subnets", async () => {
@@ -499,14 +514,23 @@ describe("ApiGatewayV2", () => {
   it("needs a VPC for a private route", () => {
     expect(() =>
       new ApiGatewayV2("MyApi").routePrivate("GET /", LOAD_BALANCER_ARN),
-    ).toThrow(/Configure "vpc" for the "MyApi" API/);
+    ).toThrow(
+      /The "MyApi" API has no VPC link for the "GET \/" route. Give the API a "vpc", which creates one, or a VPC link in "existing.vpcLink"/,
+    );
   });
 
   it("needs one kind of authorizer", () => {
     const api = new ApiGatewayV2("MyApi");
     expect(() => api.addAuthorizer({ name: "none" })).toThrow(
-      /one of "lambda" or "jwt"/,
+      /The "none" authorizer of the "MyApi" API is given neither of "lambda" and "jwt". Give it one of them/,
     );
+    expect(() =>
+      api.addAuthorizer({
+        name: "both",
+        lambda: { function: FUNCTION_ARN },
+        jwt: { issuer: "https://issuer.com/", audiences: ["api"] },
+      }),
+    ).toThrow(/The "both" authorizer of the "MyApi" API is given both/);
   });
 
   it("returns the authorizer, for use in route auth", async () => {
@@ -579,7 +603,7 @@ describe("ApiGatewayV2", () => {
     expect(
       () => new ApiGatewayV2("NoName", { domain: { path: "v2" } }),
     ).toThrow(
-      /Domain "name" is required for the "NoName" API. To use a domain name you already have, pass it in "existing"/,
+      /Domain "name" is required for the "NoName" API. To use a domain name you already have, pass it in "existing.domainName"/,
     );
     expect(
       () =>
@@ -595,6 +619,78 @@ describe("ApiGatewayV2", () => {
         }),
     ).toThrow(/The domain "name" of the "Later" API has to be a plain value/);
     await pulumi.settle();
+  });
+
+  it("refuses an existing resource it wouldn't use", async () => {
+    const certificate = { certificate: {} as any };
+    for (const [args, message] of [
+      // Without a domain
+      [{ existing: certificate }, /"existing.certificate" isn't an option/],
+      [
+        { existing: { domainMapping: "abc" } },
+        /"existing.domainMapping" isn't an option/,
+      ],
+      // Next to what it would take the place of
+      [
+        {
+          domain: { name: "api.example.com", cert: CERT_ARN },
+          existing: certificate,
+        },
+        /Give the certificate one way/,
+      ],
+      [
+        {
+          domain: { path: "v2" },
+          existing: { domainName: "api.example.com", ...certificate },
+        },
+        /"existing.certificate" isn't an option for the "MyApi" API/,
+      ],
+      [
+        {
+          domain: { path: "v2", dns: false },
+          existing: { domainName: "api.example.com" },
+        },
+        /is given an existing "domainName", so it doesn't create one. Remove "dns" from its domain/,
+      ],
+      [
+        {
+          domain: { name: "api.example.com", path: "v2" },
+          existing: { domainMapping: "abc" },
+        },
+        /is given an existing "domainMapping", which it uses the way it is. Remove "path"/,
+      ],
+      [
+        { vpc, existing: { vpcLink: "vpclink-1" } },
+        /is given an existing "vpcLink", which it uses the way it is. Remove "vpc"/,
+      ],
+      [
+        {
+          accessLog: { retention: "1 week" },
+          existing: { logGroup: "/aws/vendedlogs/apis/mine" },
+        },
+        /is given an existing "logGroup", which it uses the way it is. Remove "accessLog"/,
+      ],
+    ] as const)
+      expect(() => new ApiGatewayV2("MyApi", args as any)).toThrow(message);
+    await pulumi.settle();
+  });
+
+  it("routes privately through an existing VPC link, without a vpc", async () => {
+    pulumi.reset();
+    const api = new ApiGatewayV2("MyApi", {
+      existing: { vpcLink: "vpclink-1" },
+    }).routePrivate("GET /", LOAD_BALANCER_ARN);
+    await pulumi.settle();
+    expect(api.nodes.vpcLink).toBeDefined();
+    expect(
+      pulumi.resources.filter(
+        (r) =>
+          r.type === "aws:apigatewayv2/vpcLink:VpcLink" && r.kind !== "read",
+      ),
+    ).toEqual([]);
+    expect(
+      await pulumi.resolve(api.nodes.integration["GET /"].connectionId as any),
+    ).toBe(await pulumi.resolve(api.nodes.vpcLink!.id));
   });
 
   it("needs a certificate when DNS is off", () => {

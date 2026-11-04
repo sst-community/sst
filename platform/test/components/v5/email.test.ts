@@ -278,7 +278,9 @@ describe("Email", () => {
     expect(
       () =>
         new Email("Address", { sender: "spongebob@example.com", dkim: false }),
-    ).toThrow(`The "dkim" property is only valid when "sender" is a domain.`);
+    ).toThrow(
+      `"dkim" is only an option for the "Address" email when its "sender" is a domain, and it's the address "spongebob@example.com".`,
+    );
   });
 
   it("names the configuration set as 4.x did", async () => {
@@ -304,6 +306,39 @@ describe("Email", () => {
         .sort(),
     ).toEqual(["MyEmailConfig", "MyEmailIdentity"]);
     expect(email.nodes.identity).toBeDefined();
+  });
+
+  it("uses the configuration set it's given next to an identity", async () => {
+    const email = new Email("MyEmail", {
+      existing: {
+        identity: "spongebob@example.com",
+        configurationSet: "my-config",
+      },
+    } as any);
+    await pulumi.settle();
+
+    expect(
+      pulumi.resources
+        .filter((r) => r.kind === "read")
+        .map((r) => [r.name, r.options.id])
+        .sort(),
+    ).toEqual([
+      ["MyEmailConfig", "my-config"],
+      ["MyEmailIdentity", "spongebob@example.com"],
+    ]);
+    expect(email.nodes.configurationSet).toBeDefined();
+  });
+
+  it("turns down what it would create next to an identity it's given", () => {
+    for (const part of ["mailFromAttributes", "verification"])
+      expect(
+        () =>
+          new Email("MyEmail", {
+            existing: { identity: "spongebob@example.com", [part]: "x" },
+          } as any),
+      ).toThrow(
+        `"existing.${part}" isn't an option for the "MyEmail" email. It's given an existing "identity", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+      );
   });
 
   it("links the sender and configuration set, with permission to send", async () => {
@@ -332,10 +367,12 @@ describe("Email", () => {
     expect(
       () =>
         new Email("B", { sender: address, dns: { provider: "aws" } as any }),
-    ).toThrow(`The "dns" property is only valid when "sender" is a domain.`);
+    ).toThrow(
+      `"dns" is only an option for the "B" email when its "sender" is a domain, and it's the address "spongebob@example.com".`,
+    );
     expect(
       () => new Email("C", { sender: address, dmarc: "v=DMARC1; p=none;" }),
-    ).toThrow(`The "dmarc" property is only valid when "sender" is a domain.`);
+    ).toThrow(`"dmarc" is only an option for the "C" email when its "sender"`);
     expect(
       () =>
         new Email("D", {
@@ -343,7 +380,7 @@ describe("Email", () => {
           mailFrom: { domain: "mail.example.com" },
         }),
     ).toThrow(
-      `The "mailFrom" property is only valid when "sender" is a domain.`,
+      `"mailFrom" is only an option for the "D" email when its "sender"`,
     );
     expect(
       () =>
@@ -351,7 +388,9 @@ describe("Email", () => {
           sender: "example.com",
           mailFrom: { domain: "mail.other.com" },
         }),
-    ).toThrow(`must be a subdomain of the "sender" domain "example.com"`);
+    ).toThrow(
+      `The "mailFrom.domain" of the "E" email is "mail.other.com". It has to be a subdomain of its "sender", "example.com".`,
+    );
   });
 
   it("needs plain values for what decides what's created", () => {

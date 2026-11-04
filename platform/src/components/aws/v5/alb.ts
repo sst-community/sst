@@ -12,18 +12,25 @@ import {
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { plainDeep, withDefault } from "../../args";
+import {
+  notAnExistingPart,
+  plainDeep,
+  usedAsItIs,
+  withDefault,
+  getArgs,
+} from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { listenerKey } from "../helpers/load-balancer";
 import {
+  certificateOf,
   forbidden,
+  type LoadBalancerDomainArgs,
   loadBalancerDomain,
   pointDomainAt,
   securityGroupArgs,
 } from "../helpers/load-balancer-args";
-import { type DomainArgs } from "../helpers/domain";
 import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
 
 const parts = () => ({
@@ -72,23 +79,7 @@ export interface AlbListenerArgs {
   protocol: "http" | "https";
 }
 
-export interface AlbDomainArgs extends DomainArgs {
-  /**
-   * Alias domains that should also point to this load balancer. A plain list: each alias
-   * gets DNS records of its own, and is on the certificate.
-   *
-   * @example
-   * ```js
-   * {
-   *   domain: {
-   *     name: "app1.example.com",
-   *     aliases: ["app2.example.com"]
-   *   }
-   * }
-   * ```
-   */
-  aliases?: string[];
-}
+export interface AlbDomainArgs extends LoadBalancerDomainArgs {}
 
 export interface AlbArgs extends ComponentArgs<typeof parts> {
   /**
@@ -271,16 +262,30 @@ export class Alb extends component("sst:aws:Alb", parts) {
   constructor(name: string, args: AlbArgs, opts?: ComponentResourceOptions) {
     super(name, args, opts);
 
+    const of = `the "${name}" load balancer`;
+
     // A load balancer that's already deployed, with the security group it has
     const existing = this.existingPart("loadBalancer");
     if (existing) {
+      usedAsItIs(
+        args,
+        ["vpc", "public", "domain", "listeners"],
+        "loadBalancer",
+        of,
+      );
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        of,
+        `The "loadBalancer" it's given has its certificates on its listeners already.`,
+      );
       if (!this.existingPart("securityGroup"))
         this.lookupPart(
           "securityGroup",
           existing.securityGroups.apply((groups) => {
             if (!groups?.length)
               throw new VisibleError(
-                `No security groups found on the referenced ALB "${name}".`,
+                `The "loadBalancer" the "${name}" load balancer is given has no security group. Pass the one it should have in "existing.securityGroup".`,
               );
             return groups[0];
           }),
@@ -293,7 +298,6 @@ export class Alb extends component("sst:aws:Alb", parts) {
       return;
     }
 
-    const of = `the "${name}" load balancer`;
     const listeners = plainDeep(args.listeners, `The "listeners" of ${of}`);
     const domain = loadBalancerDomain(args.domain, of);
     // An https listener needs the domain's certificate
@@ -318,15 +322,17 @@ export class Alb extends component("sst:aws:Alb", parts) {
 
     const securityGroup = this.part("securityGroup", securityGroupArgs(vpcId));
 
+    if (!domain || domain.cert)
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        of,
+        domain
+          ? `It uses the "cert" of its "domain".`
+          : `It's only created for a "domain".`,
+      );
     const certificate =
-      domain && !domain.cert
-        ? this.part("certificate", {
-            domainName: domain.name,
-            alternativeNames: domain.aliases,
-            dns: domain.dns!,
-          })
-        : undefined;
-    const certificateArn = domain && (domain.cert ?? certificate!.arn);
+      domain && certificateOf(domain, (args) => this.part("certificate", args));
 
     const loadBalancer = this.part(
       "loadBalancer",
@@ -339,7 +345,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
       },
       // The load balancer is what holds on to the certificate, so it's
       // removed first. Its listeners are given the certificate, but it isn't.
-      { dependsOn: certificate },
+      { dependsOn: certificate?.created },
     );
 
     // Each listener refuses what none of its rules match. The services on the
@@ -350,7 +356,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
         loadBalancerArn: loadBalancer.arn,
         port: listener.port,
         protocol,
-        certificateArn: protocol === "HTTPS" ? certificateArn : undefined,
+        certificateArn: protocol === "HTTPS" ? certificate?.arn : undefined,
         defaultActions: forbidden(),
       });
     }
@@ -420,13 +426,16 @@ export class Alb extends component("sst:aws:Alb", parts) {
     const key = listenerKey(protocol, port);
     if (key in this.nodes.listener) return this.nodes.listener[key];
 
-    return this.lookupPart(
-      "listener",
-      key,
-      lb.getListenerOutput(
-        { loadBalancerArn: this.nodes.loadBalancer.arn, port },
-        { parent: this },
-      ).arn,
+    return (
+      this.existingPart("listener", key) ??
+      this.lookupPart(
+        "listener",
+        key,
+        lb.getListenerOutput(
+          { loadBalancerArn: this.nodes.loadBalancer.arn, port },
+          { parent: this },
+        ).arn,
+      )
     );
   }
 
@@ -460,7 +469,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
   ) {
     return new Alb(
       name,
-      { existing: { loadBalancer: loadBalancerArn } } as AlbArgs,
+      getArgs({ existing: { loadBalancer: loadBalancerArn } }) as AlbArgs,
       opts,
     );
   }

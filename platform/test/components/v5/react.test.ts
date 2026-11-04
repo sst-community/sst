@@ -139,10 +139,22 @@ ssrSiteSuite(
 
       it("refuses a base path set in one config and not the other, or with the wrong slash", async () => {
         for (const [dir, message] of [
-          ["no-slash", /must end with a trailing slash/],
-          ["no-basename", /missing "basename" in react-router\.config/],
-          ["slashed-basename", /must not end with a trailing slash/],
-          ["no-base", /missing "base" in the Vite config/],
+          [
+            "no-slash",
+            /The "base" in the Vite config of the "Web" React site is "\/docs"\. End it with a "\/": "\/docs\/"\./,
+          ],
+          [
+            "no-basename",
+            /The "Web" React site sets "base" in its Vite config and no "basename" in its react-router\.config\. Set "basename" to "\/docs" too\./,
+          ],
+          [
+            "slashed-basename",
+            /The "basename" in the react-router\.config of the "Web" React site is "\/docs\/"\. Leave out the "\/" at its end: "\/docs"\./,
+          ],
+          [
+            "no-base",
+            /The "Web" React site sets "basename" in its react-router\.config and no "base" in its Vite config\. Set "base" to "\/docs\/" too\./,
+          ],
         ] as const) {
           const failures = await rejectionsOf(async () => {
             new (Site())("Web", { path: dir, buildCommand: "true" });

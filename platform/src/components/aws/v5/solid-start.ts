@@ -1,15 +1,10 @@
-import fs from "fs";
-import path from "path";
 import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
 import { type ComponentArgs, component } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { context } from "../../contract";
-import { readNitro } from "../helpers/nitro";
-import { configText } from "../helpers/site-build";
-import type { RouteArgs } from "../helpers/router";
+import { nitroSite } from "../helpers/nitro";
+import { configValue } from "../helpers/site-build";
+import type { SiteRouteArgs } from "../helpers/router";
 import {
-  type ServerPlan,
-  type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
   createSsrSite,
@@ -330,7 +325,7 @@ export interface SolidStartArgs
    *
    * Also, make sure to set the baseURL in your `app.config.ts`, like above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -432,18 +427,24 @@ export interface SolidStartArgs
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.SolidStart` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
- *   `regions` to have it from the start. In `sst dev`, the function the site runs as is
- *   `transform.devServer`, not `transform.server`.
+ *   `regions` to have it from the start.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.SolidStart` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.SolidStart` ignored it
  *   and wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.SolidStart`
  *   warmed it on every deploy. The switch warms it once.
  * - With `warm`, the warmer's function, rule, target and permission move into the site.
- * - The base path is read from `app.config` with any extension, like `.js` or `.mjs`.
- *   `sst.aws.SolidStart` read only `app.config.ts`, and failed without it.
+ * - The base path is read from `app.config` with any extension, like `.js` or `.mjs`, and
+ *   it's what's in the quotes after `baseURL`. `sst.aws.SolidStart` read only
+ *   `app.config.ts`, and failed without it, and read on to the last quote of the line.
  */
 export class SolidStart extends component("sst:aws:SolidStart", parts) {
   private readonly siteUrl: Output<string>;
@@ -476,66 +477,31 @@ export class SolidStart extends component("sst:aws:SolidStart", parts) {
   }
 }
 
-// A SolidStart app's build, and its server
-interface SolidStartBuild extends SiteBuild {
-  server: ServerPlan;
-}
-
 // How a SolidStart app is built, with its package manager and Nitro's
 // "aws-lambda" preset, and what its server is
-const solidStart: SsrFramework<SolidStartBuild> = {
+const solidStart: SsrFramework = {
   label: "SolidStart",
   alwaysServes: true,
   // Nitro's client files aren't in a versioned folder
   versionedFiles: false,
-  load: loadBuild,
-  server: (build) => build.server,
-};
-
-// Reads what Nitro built
-function loadBuild(builtPath: string): SolidStartBuild {
-  const outputPath = path.resolve(context().paths.root, builtPath);
-  const nitro = readNitro(path.join(outputPath, ".output"), "SolidStart", [
-    "Set it in your `app.config.ts`:",
-    "  // app.config.ts",
-    "  export default defineConfig({",
-    "    server: {",
-    '      preset: "aws-lambda",',
-    "      awsLambda: { streaming: true }, // optional",
-    "    },",
-    "  });",
-  ]);
-
-  // Requests to `_server` go to the server. Its folder in the client's files
-  // would route them to S3 instead.
-  fs.rmSync(path.join(outputPath, ".output", "public", "_server"), {
-    recursive: true,
-    force: true,
-  });
-
-  return {
-    sitePath: builtPath,
-    outputPath,
-    serves: true,
-    plan: {
-      // From `baseURL` in the app's config
-      base: configText(outputPath, "app.config")?.match(
-        /baseURL: ['"](.*)['"]/,
-      )?.[1],
-      assets: [
-        {
-          from: path.join(".output", "public"),
-          to: "",
-          cached: true,
-        },
+  load: (builtPath) =>
+    nitroSite(builtPath, {
+      framework: "SolidStart",
+      howToSet: [
+        "Set it in your `app.config.ts`:",
+        "  // app.config.ts",
+        "  export default defineConfig({",
+        "    server: {",
+        '      preset: "aws-lambda",',
+        "      awsLambda: { streaming: true }, // optional",
+        "    },",
+        "  });",
       ],
-      hasStaticRoutes: true,
-    },
-    server: {
       description: "Server handler for Solid",
-      handler: "index.handler",
-      bundle: path.join(builtPath, ".output", "server"),
-      streaming: nitro.streaming,
-    },
-  };
-}
+      // From `baseURL` in the app's config
+      base: (outputPath) => configValue(outputPath, "app.config", "baseURL"),
+      // Requests to `_server` go to the server
+      serverPaths: ["_server"],
+      hasStaticRoutes: true,
+    }),
+};

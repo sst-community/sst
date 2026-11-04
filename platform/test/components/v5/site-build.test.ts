@@ -97,4 +97,38 @@ describe("Building a site", () => {
       );
     });
   });
+
+  describe("reading a value from a config", () => {
+    const write = (file: string, text: string) =>
+      fs.writeFileSync(path.join(site, file), text);
+    afterAll(() => {
+      for (const file of ["vite.config.ts", "nuxt.config.mjs"])
+        fs.rmSync(path.join(site, file), { force: true });
+    });
+
+    it("reads what's in the quotes after the key, in any extension", () => {
+      write(
+        "vite.config.ts",
+        `export default { base: "/docs/", plugins: [], other: "x" };`,
+      );
+      expect(helpers.configValue("web", "vite.config", "base")).toBe("/docs/");
+      write("nuxt.config.mjs", `export default { app: { baseURL: '/docs' } };`);
+      expect(helpers.configValue("web", "nuxt.config", "baseURL")).toBe(
+        "/docs",
+      );
+    });
+
+    it("takes the key in quotes, and not inside another key", () => {
+      write("vite.config.ts", `export default { "base": '/docs/' };`);
+      expect(helpers.configValue("web", "vite.config", "base")).toBe("/docs/");
+      write(
+        "vite.config.ts",
+        `export default { database: "/x", basename: "/y" };`,
+      );
+      expect(helpers.configValue("web", "vite.config", "base")).toBeUndefined();
+      expect(helpers.configValue("web", "missing.config", "base")).toBe(
+        undefined,
+      );
+    });
+  });
 });

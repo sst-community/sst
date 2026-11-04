@@ -325,4 +325,32 @@ describe("Cdn", () => {
     );
     expect(await valueOf(cdn.domainUrl)).toBe("https://shared.example.com");
   });
+
+  it("uses a distribution it's given the way it is", async () => {
+    expect(
+      () =>
+        new Cdn("MyCdn", {
+          existing: { distribution: "E2IDLMESRN6V62" },
+          origins: [],
+          defaultCacheBehavior: {} as any,
+          wait: false,
+        }),
+    ).toThrow(
+      /The "MyCdn" CDN is given an existing "distribution", which it uses the way it is\. Remove "origins", "defaultCacheBehavior", "wait" from its args\./,
+    );
+  });
+
+  // A `$transform` for every CDN runs on one from `get` too, and isn't meant
+  // for it
+  it("leaves what a $transform sets on one from get", async () => {
+    const { $transform } = await import("../../../src/components/component");
+    $transform(Cdn, (args, _opts, name) => {
+      if (name === "Shared") args!.wait = false;
+    });
+    Cdn.get("Shared", "E2IDLMESRN6V62");
+    await pulumi.settle();
+    expect(
+      pulumi.resources.find((r) => r.name === "SharedDistribution")?.kind,
+    ).toBe("read");
+  });
 });

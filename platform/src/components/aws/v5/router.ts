@@ -1,10 +1,8 @@
-import path from "path";
 import {
   ComponentResourceOptions,
   Input,
   Output,
   all,
-  asset,
   interpolate,
   output,
 } from "@pulumi/pulumi";
@@ -17,16 +15,21 @@ import {
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { notAnOption, plain } from "../../args";
-import { context } from "../../contract";
+import { notAnOption, plain, usedAsItIs, getArgs } from "../../args";
 import { VisibleError } from "../../error";
 import { DurationSeconds, toSeconds } from "../../duration";
-import { Size, toMBs } from "../../size";
+import { Size } from "../../size";
 import { physicalName } from "../../naming";
 import { RETENTION } from "../logging";
-import { parseLambdaEdgeArn } from "../helpers/arn";
 import { useProvider } from "../helpers/provider";
 import type { AnyBucket } from "../helpers/bucket";
+import {
+  type Protection,
+  createServerDistribution,
+  edgeOf,
+  protectionOf,
+  routingStore,
+} from "../helpers/distribution";
 import { KvKeys } from "../resources/kv-keys";
 import { KvRoutesUpdate } from "../providers/kv-routes-update";
 import {
@@ -52,13 +55,17 @@ const parts = {
    */
   kvStore: optional(cloudfront.KeyValueStore),
   /**
-   * The cache policy of the distribution's behavior.
+   * The cache policy of the distribution's behavior. Not created by `get`.
    */
-  cachePolicy: named(cloudfront.CachePolicy, "ServerCachePolicy"),
+  cachePolicy: named(optional(cloudfront.CachePolicy), "ServerCachePolicy"),
   /**
    * The CloudFront function that runs on each request and sends it on to its route.
+   * Not created by `get`.
    */
-  requestFunction: named(cloudfront.Function, "CloudfrontFunctionRequest"),
+  requestFunction: named(
+    optional(cloudfront.Function),
+    "CloudfrontFunctionRequest",
+  ),
   /**
    * The CloudFront function that runs on each response, created with
    * `edge.viewerResponse`.
@@ -69,7 +76,8 @@ const parts = {
   ),
   /**
    * The role of the Lambda@Edge function that signs requests. Created with
-   * `protection: "oac-with-edge-signing"`, unless `protection.edgeFunction.arn` is set.
+   * `protection: "oac-with-edge-signing"`, unless `protection.edgeFunction.arn` is set
+   * or the function is given in `existing`.
    */
   edgeRole: named(optional(iam.Role), "EdgeFunctionRole"),
   /**
@@ -793,16 +801,6 @@ export interface RouterArgs extends ComponentArgs<typeof parts> {
   _skipHint?: boolean;
 }
 
-// The router's `protection`, as an object
-type Protection = {
-  mode: ProtectionConfig["mode"];
-  edgeFunction?: {
-    arn?: Input<string>;
-    memory?: Input<Size>;
-    timeout?: Input<DurationSeconds>;
-  };
-};
-
 // Where the router keeps its routes, and whether it signs its requests: what
 // a route, a function or a site served through it reads. A router that's
 // referenced with `get` reads them from its distribution's tags.
@@ -900,7 +898,7 @@ interface Routing {
  * ```ts title="sst.config.ts" {4-6}
  * const router = new sst.aws.v5.Router("MyRouter");
  *
- * const mySite = new sst.aws.Nextjs("MyWeb", {
+ * const mySite = new sst.aws.v5.Nextjs("MyWeb", {
  *   router: {
  *     instance: router
  *   }
@@ -915,7 +913,7 @@ interface Routing {
  * ```ts title="sst.config.ts" {4-7}
  * const router = new sst.aws.v5.Router("MyRouter");
  *
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   router: {
  *     instance: router,
  *     path: "/docs"
@@ -924,7 +922,7 @@ interface Routing {
  * ```
  *
  * If you are routing to a path, you'll need to configure the base path in your
- * frontend app as well. [Learn more](/docs/component/aws/nextjs/#router).
+ * frontend app as well. [Learn more](/docs/component/aws/v5/nextjs/#router).
  *
  * #### Route to a frontend on a subdomain
  *
@@ -936,7 +934,7 @@ interface Routing {
  *   }
  * });
  *
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.v5.Nextjs("MyWeb", {
  *   router: {
  *     instance: router,
  *     domain: "docs.example.com"
@@ -1020,37 +1018,53 @@ export class Router extends component("sst:aws:Router", parts) {
     super(name, args, opts);
 
     const cdn = this.existingPart("cdn");
+    // A router that's deployed is used the way it is
+    if (cdn)
+      usedAsItIs(
+        args,
+        ["domain", "edge", "protection", "waf"],
+        "cdn",
+        `the "${name}" router`,
+      );
     this.routing = cdn ? this.reference(name, cdn) : this.create(name, args);
     if (!args._skipHint) this.report({ hint: this.url });
   }
 
   private create(name: string, args: RouterArgs): Routing {
     const self = this;
-    const owner = `the "${name}" Router`;
+    const owner = `the "${name}" router`;
+    const option = (arg: string) => `The "${arg}" of ${owner}`;
 
-    if ((args as { routes?: unknown }).routes !== undefined)
-      throw new VisibleError(
-        `"routes" isn't an option of ${owner}. Add each route with "route(pattern, url)" or "routeBucket(pattern, bucket)". A Router that's deployed with "routes" switches to those on sst.aws.Router first, then to sst.aws.v5.Router.`,
-      );
+    notAnOption(
+      args,
+      "routes",
+      `Add each route with "route(pattern, url)" or "routeBucket(pattern, bucket)". A Router that's deployed with "routes" switches to those on sst.aws.Router first, then to sst.aws.v5.Router.`,
+      owner,
+    );
     notAnOption(
       args,
       "invalidation",
       `sst.aws.Router never used it. A site served through ${owner} invalidates its own files, with its own "invalidation".`,
+      owner,
     );
 
     cdnDomain(args.domain, owner);
-    const protection = protectionOf();
-    const edge = edgeOf();
+    const protection = protectionOf(args.protection, option);
+    const edge = edgeOf(args.edge, option, owner);
     const namespace = kvNamespace(name);
     const waf = createWaf();
+    const builder = this.builder();
 
-    const kvStoreArn = output(
-      edge.viewerRequest?.kvStore ?? this.part("kvStore", {}).arn,
-    );
-    const requestFunction = this.part("requestFunction", {
-      runtime: "cloudfront-js-2.0",
-      keyValueStoreAssociations: [kvStoreArn],
-      code: interpolate`
+    const kvStoreArn = routingStore(builder, edge, args.existing, owner);
+    createServerDistribution(builder, {
+      name,
+      owner,
+      existing: args.existing,
+      domain: args.domain,
+      protection,
+      edge,
+      kvStoreArn,
+      requestCode: interpolate`
 import cf from "cloudfront";
 async function handler(event) {
   ${edge.viewerRequest?.injection ?? ""}
@@ -1058,99 +1072,6 @@ async function handler(event) {
   ${CF_ROUTER_INJECTION}
   ${routerLookupCode(namespace)}
 }`,
-    });
-    const responseFunction = edge.viewerResponse?.injection
-      ? this.part("responseFunction", {
-          runtime: "cloudfront-js-2.0",
-          keyValueStoreAssociations: edge.viewerResponse.kvStore
-            ? [edge.viewerResponse.kvStore]
-            : [],
-          code: interpolate`
-import cf from "cloudfront";
-async function handler(event) {
-  ${edge.viewerResponse.injection}
-  return event.response;
-}`,
-        })
-      : undefined;
-    const cachePolicy = this.part("cachePolicy", {
-      comment: "SST server response cache policy",
-      defaultTtl: 0,
-      maxTtl: 31536000, // 1 year
-      minTtl: 0,
-      parametersInCacheKeyAndForwardedToOrigin: {
-        cookiesConfig: {
-          cookieBehavior: "none",
-        },
-        headersConfig: {
-          headerBehavior: "whitelist",
-          headers: {
-            items: ["x-open-next-cache-key", "x-forwarded-host"],
-          },
-        },
-        queryStringsConfig: {
-          queryStringBehavior: "all",
-        },
-        enableAcceptEncodingBrotli: true,
-        enableAcceptEncodingGzip: true,
-      },
-    });
-    const edgeSigner = signerOf();
-
-    this.part("cdn", {
-      comment: `${name} app`,
-      domain: args.domain,
-      origins: [
-        {
-          originId: "default",
-          domainName: "placeholder.sst.dev",
-          customOriginConfig: {
-            httpPort: 80,
-            httpsPort: 443,
-            originProtocolPolicy: "http-only",
-            originReadTimeout: 20,
-            originSslProtocols: ["TLSv1.2"],
-          },
-        },
-      ],
-      defaultCacheBehavior: {
-        targetOriginId: "default",
-        viewerProtocolPolicy: "redirect-to-https",
-        allowedMethods: [
-          "DELETE",
-          "GET",
-          "HEAD",
-          "OPTIONS",
-          "PATCH",
-          "POST",
-          "PUT",
-        ],
-        cachedMethods: ["GET", "HEAD"],
-        compress: true,
-        cachePolicyId: cachePolicy.id,
-        // CloudFront's Managed-AllViewerExceptHostHeader policy
-        originRequestPolicyId: "b689b0a8-53d0-40ab-baf2-68738e2966ac",
-        functionAssociations: [
-          { eventType: "viewer-request", functionArn: requestFunction.arn },
-          ...(responseFunction
-            ? [
-                {
-                  eventType: "viewer-response",
-                  functionArn: responseFunction.arn,
-                },
-              ]
-            : []),
-        ],
-        lambdaFunctionAssociations: edgeSigner
-          ? [
-              {
-                eventType: "origin-request",
-                lambdaArn: edgeSigner,
-                includeBody: true,
-              },
-            ]
-          : [],
-      },
       // What a stage that references this router with `get` reads
       tags: {
         "sst:ref:kv": kvStoreArn,
@@ -1169,80 +1090,8 @@ async function handler(event) {
       hasInlineRoutes: false,
     };
 
-    function protectionOf(): Protection {
-      const protection = plain(args.protection, `The "protection" of ${owner}`);
-      if (!protection) return { mode: "none" };
-      if (typeof protection === "string") return { mode: protection };
-      plain(
-        protection.edgeFunction,
-        `The "protection.edgeFunction" of ${owner}`,
-      );
-      const arn = protection.edgeFunction?.arn;
-      if (typeof arn === "string") parseLambdaEdgeArn(arn);
-      return protection;
-    }
-
-    function edgeOf() {
-      const edge = plain(args.edge, `The "edge" of ${owner}`) ?? {};
-      plain(edge.viewerRequest, `The "edge.viewerRequest" of ${owner}`);
-      plain(edge.viewerResponse, `The "edge.viewerResponse" of ${owner}`);
-      return edge;
-    }
-
-    // The Lambda@Edge function that signs requests to function URLs: the
-    // user's, or one the router creates
-    function signerOf() {
-      if (protection.mode !== "oac-with-edge-signing") return;
-      const settings = protection.edgeFunction;
-      if (settings?.arn) return settings.arn;
-
-      const role = self.part(
-        "edgeRole",
-        {
-          name: physicalName(64, `${name}EdgeRole`),
-          assumeRolePolicy: JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [
-              {
-                Action: "sts:AssumeRole",
-                Effect: "Allow",
-                Principal: {
-                  Service: ["lambda.amazonaws.com", "edgelambda.amazonaws.com"],
-                },
-              },
-            ],
-          }),
-          managedPolicyArns: [
-            "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-          ],
-        },
-        { ignoreChanges: ["name"] },
-      );
-      return self.part(
-        "edgeFunction",
-        {
-          name: physicalName(64, `${name}EdgeFn`),
-          runtime: "nodejs24.x",
-          handler: "index.handler",
-          role: role.arn,
-          code: new asset.FileArchive(
-            path.join(context().paths.platform, "dist", "oac-edge-signer"),
-          ),
-          publish: true,
-          timeout: output(settings?.timeout).apply((timeout) =>
-            timeout ? toSeconds(timeout) : 5,
-          ),
-          memorySize: output(settings?.memory).apply((memory) =>
-            memory ? toMBs(memory) : 128,
-          ),
-          description: `${name} Lambda@Edge function for OAC request signing`,
-        },
-        { provider: useProvider("us-east-1"), ignoreChanges: ["name"] },
-      ).qualifiedArn;
-    }
-
     function createWaf() {
-      const settings = plain(args.waf, `The "waf" of ${owner}`);
+      const settings = plain(args.waf, option("waf"));
       if (!settings) return;
       const config: WafArgs = settings === true ? {} : settings;
 
@@ -1354,7 +1203,7 @@ async function handler(event) {
         us,
       );
 
-      const logging = plain(config.logging, `The "waf.logging" of ${owner}`);
+      const logging = plain(config.logging, option("waf.logging"));
       if (!logging) return waf;
       const settingsOf = output(logging === true ? {} : logging);
 
@@ -1420,10 +1269,7 @@ async function handler(event) {
     const tags = cdn.nodes.distribution.tagsAll.apply((tags) => {
       if (tags?.["sst:ref:version"] !== "2")
         throw new VisibleError(
-          [
-            `There have been some minor changes to the "Router" component that's being referenced by "${name}".\n`,
-            `To update, you'll need to redeploy the stage where the Router was created. And then redeploy this stage.`,
-          ].join("\n"),
+          `The router the "${name}" router references was deployed with an earlier version of SST. Deploy the stage that created it again, then deploy this one.`,
         );
       return {
         kvStoreArn: tags["sst:ref:kv"],
@@ -1692,13 +1538,13 @@ async function handler(event) {
   /**
    * Add a route to a frontend or static site.
    *
-   * @deprecated The `routeSite` function has been deprecated. Set the `route` on the
-   * site components to route the site through this Router.
+   * @deprecated A site is served through a router with its own `router` arg:
+   * `router: { instance: router, path, domain }`.
    * @internal
    */
   public routeSite(_pattern: Input<string>, _site: any): never {
     throw new VisibleError(
-      `The "routeSite" function has been deprecated. Configure the new "route" prop on the site component to route the site through this Router.`,
+      `"routeSite" isn't a method of the "${this.componentName}" router. Serve the site through the router with the site's "router": { instance: router, path, domain }.`,
     );
   }
 
@@ -1707,7 +1553,7 @@ async function handler(event) {
   private newRoute(pattern: string, args: unknown) {
     plain(
       pattern,
-      `The pattern of a route of the "${this.componentName}" Router`,
+      `The pattern of a route of the "${this.componentName}" router`,
       "The route is named after it.",
     );
     this.assertNew(
@@ -1754,16 +1600,16 @@ async function handler(event) {
   /**
    * Reference an existing Router with the given Router distribution ID.
    *
-   * @param name The name of the component.
-   * @param distributionID The ID of the existing Router distribution.
-   * @param opts Resource options.
-   *
    * This is useful when you create a Router in one stage and want to share it in
    * another. It avoids having to create a new Router in the other stage.
    *
    * :::tip
    * You can use the `static get` method to share a Router across stages.
    * :::
+   *
+   * @param name The name of the component.
+   * @param distributionID The ID of the existing Router distribution.
+   * @param opts Resource options.
    *
    * @example
    * Let's say you create a Router in the `dev` stage. And in your personal stage
@@ -1794,7 +1640,7 @@ async function handler(event) {
   ) {
     return new Router(
       name,
-      { existing: { cdn: distributionID } } as RouterArgs,
+      getArgs({ existing: { cdn: distributionID } }) as RouterArgs,
       opts,
     );
   }

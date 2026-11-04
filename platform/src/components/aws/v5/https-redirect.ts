@@ -99,7 +99,7 @@ export class HttpsRedirect extends component("sst:aws:HttpsRedirect", parts) {
     const dns = plain(args.dns, `The "dns" ${of}`, why);
     if (!dns && !args.cert)
       throw new VisibleError(
-        `Need to provide a validated certificate via "cert" when DNS is disabled`,
+        `The "${name}" redirect has "dns" set to false, so it can't validate a certificate of its own. Pass a validated one in "cert".`,
       );
 
     const certificateArn =

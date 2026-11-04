@@ -2,6 +2,40 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, a review of the 5.0 components as a set, and its fixes
+
+**Done, not committed:** the maintainer asked for "a review of all the components and make sure they are right. There's not a lot of duplications and they follow the right pattern and consistent". Six reviewers read the 5.0 components, each family against the rulebook and one pattern across all of them; about 75 findings, each checked against the code. Five agents then fixed them, a family each, on files of their own, and the rest was done across them. 119 files, with 7 new helpers.
+
+- **The rules, in the framework and the rulebook.**
+  - Every error names its component the same way, `the "Web" Astro site`; `notAnOption` takes the owner.
+  - An `existing` entry a component has no use for is refused (`notAnExistingPart`, `onlyExisting`), and so are settings next to a resource given in `existing` (`usedAsItIs`), where most components dropped them without a word. A `get` marks its args with `getArgs()`, so what a `$transform` adds to them isn't refused.
+  - `lookupPart` uses a resource passed in `existing`.
+  - The README has the exceptions the code had: the `Service`'s dev panes as parts, and the `ApiGatewayV1` reporting from `deploy()`.
+- **Bugs fixed.**
+  - A function part given a name or a handler in `existing` built a function from it.
+  - Parts `get` doesn't create were typed as always there (`Postgres.get(...).nodes.secret`).
+  - `Task` and `Service` read the region from the default provider, so with `providers` their logs went elsewhere.
+  - `ApiGatewayV1.deploy()` after an `await` failed to report its hint.
+  - The WebSocket API's refusal of `transform.accessLog` came too late to run.
+  - The API Gateway account setup was created inside an `apply`, with the default provider.
+  - `Router.routeSite` told users to set `route`, which the sites refuse.
+  - A Redis given an existing serverless cache still created a password it doesn't use.
+  - `dev`, `retries` and `serverless.password` decided what's created without being plain.
+  - A server given as an output got the wrong error.
+  - The base path of four sites was read past its quote.
+  - A container's own `environmentFiles` weren't granted to the execution role: an update in place on switch, in "Switch from".
+- **Duplication taken out.**
+  - The databases share credentials and the proxy with `Aurora` (`helpers/rds.ts`), and the password in a tagged secret (`helpers/secret.ts`) and the local server (`helpers/local-server.ts`).
+  - `Task` and `Service` build their task definitions one way (`helpers/fargate.ts`), with `isCluster()` and shared IAM (`helpers/iam.ts`) and VPC helpers that `Function` and `MicroVm` use too.
+  - The three API Gateway components share their domain, access log, routes and permissions (`helpers/apigateway.ts`).
+  - The `Router`, the server sites and the `StaticSite` share their distribution (`helpers/distribution.ts`) and site plumbing (`helpers/site.ts`); the four Nitro frameworks load with `nitroSite()`.
+  - The subscribers share an event-source helper and one name check, the EventBridge rules one helper (`helpers/eventbridge.ts`), and the queues and topics one ARN helper each.
+- **Consistency.** SST 4's removed methods are refused with the call to write. `Bus.get` and `Dynamo.get` take the ARN `Queue.get` and `KinesisStream.get` take. `KinesisStream`'s subscribers are described after their component, as `Dynamo`'s, `SnsTopic`'s and `Queue`'s are; the `Bus`'s keep SST 4's, after the bus's name in AWS, which would otherwise be updated on switch. The recurring "Switch from" bullets are worded the same everywhere, the nine sites' identical, and each page's sections are in the same order. The breaking changes have a row each in the plan.
+
+**Checked:** `tsc`, the platform tests (3,669, from 3,526 before), Prettier on what was clean before, and the docs generator, which checks no page names its original outside "Switch from". Every takeover case passes as it was, except the two updates in place above, which are on purpose. Each family's agent read its diffs against what they replaced. Not checked in AWS yet: the `ApiGatewayV1`'s outputs, now registered by `deploy()`, and the API Gateway account set up with `after()`, which change how they meet the engine.
+
+**Left for the maintainer:** names for `Realtime`'s subscribers, the WebSocket API's `addAuthorizer(name, args)`, generating the sites' shared "Switch from" bullets, and whether a `Task` or `Service` given an existing task definition or service still creates the roles and images it doesn't use.
+
 ## 2026-11-03: step 4, `CronV2` is `Cron` in 5.0
 
 **Done, not committed:** the maintainer decided that a 5.0 component drops the version SST 4 put in its name, where it can ([decision](plan.md#decisions)). With SST 4's first `Cron` left out of 5.0, `CronV2` is `sst.aws.v5.Cron`.

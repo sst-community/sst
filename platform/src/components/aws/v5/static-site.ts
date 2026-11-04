@@ -21,17 +21,29 @@ import type { Prettify } from "../../component";
 import { notAnOption, plain, plainDeep } from "../../args";
 import { context } from "../../contract";
 import { VisibleError } from "../../error";
-import { markUnknowns, unknown } from "../../check";
+import { unknown } from "../../check";
 import { physicalName } from "../../naming";
 import { toPosix } from "../../path";
 import { type BaseSiteFileOptions, getContentType } from "../../base/base-site";
-import { type RouteArgs, routeOf } from "../helpers/router";
-import { buildSite } from "../helpers/site-build";
+import {
+  edgeOf,
+  routingStore,
+  viewerResponseFunction,
+} from "../helpers/distribution";
+import type { SiteRouteArgs } from "../helpers/router";
 import {
   BUILD_READS_IT,
   URL_UNAVAILABLE,
-  siteRequestCode,
-} from "../helpers/ssr-site";
+  capitalized,
+  refreshing,
+  rejectSst4SiteArgs,
+  siteDev,
+  siteRouteOf,
+  siteRoutesUpdateArgs,
+  sitePathOf,
+} from "../helpers/site";
+import { buildSite, resolveWithUnknowns } from "../helpers/site-build";
+import { siteRequestCode } from "../helpers/ssr-site";
 import { type BucketFile, BucketFiles } from "../resources/bucket-files";
 import { KvKeys } from "../resources/kv-keys";
 import { DistributionInvalidation } from "../providers/distribution-invalidation";
@@ -73,7 +85,8 @@ const parts = () => ({
   invalidation: optional(DistributionInvalidation),
   /**
    * The Amazon CloudFront CDN that serves the site, when it isn't served
-   * through a `Router`.
+   * through a `Router`. It can't be given in `existing`: to serve the site
+   * through a distribution that's deployed, serve it through a `Router`.
    */
   cdn: optional(Cdn),
   /**
@@ -799,7 +812,7 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
    * Also, make sure to set the base path in your static site generator
    * configuration, like above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
   /**
    * Configure how the CloudFront cache invalidations are handled. This is run after your static site has been deployed.
    * :::tip
@@ -1083,6 +1096,9 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
  *   what's created, or what's built. So do the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route`, `base` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.StaticSite` ignored them.
  * - `edge.viewerRequest.kvStores` and `edge.viewerResponse.kvStores` are gone, and refused.
  *   Use `kvStore`. `sst.aws.StaticSite` gave the viewer response function the first of
  *   `kvStores`.
@@ -1123,13 +1139,19 @@ export class StaticSite extends component("sst:aws:StaticSite", parts) {
     const option = (arg: string) => `The "${arg}" of ${owner}`;
     const root = context().paths.root;
 
-    rejectOld();
-    const sitePath = sitePathOf();
+    rejectSst4SiteArgs(args, owner);
+    notAnOption(
+      args,
+      "base",
+      `Set the path it's served under with "router": { instance: router, path }.`,
+      owner,
+    );
+    const sitePath = sitePathOf(args.path, owner);
     const vite = plainDeep(args.vite, option("vite"), BUILD_READS_IT);
 
     // In `sst dev` the site runs on your machine, in a pane of its own
-    if (context().dev && args.dev !== false) {
-      const dev = args.dev ?? {};
+    const dev = plain(args.dev, option("dev"));
+    if (context().dev && dev !== false) {
       this.runsLocally();
       // The environment, once Vite's types for it are written
       const environment = output(
@@ -1137,16 +1159,8 @@ export class StaticSite extends component("sst:aws:StaticSite", parts) {
           () => args.environment ?? {},
         ),
       );
-      this.report({
-        dev: {
-          title: dev.title,
-          command: output(dev.command).apply((c) => c ?? "npm run dev"),
-          autostart: dev.autostart,
-          directory: output(dev.directory).apply((d) => d ?? sitePath),
-          environment,
-        },
-      });
-      return output(dev.url ?? URL_UNAVAILABLE);
+      this.report({ dev: { ...siteDev(dev, sitePath), environment } });
+      return output(dev?.url ?? URL_UNAVAILABLE);
     }
 
     // The args that decide which resources are created are read first
@@ -1180,10 +1194,7 @@ export class StaticSite extends component("sst:aws:StaticSite", parts) {
 
     const routing = router();
 
-    // `sst refresh` runs the program to read what's deployed, and creates
-    // nothing, so the site isn't built for it. What's made from the build
-    // isn't registered, and stays as it is.
-    if (context().command === "refresh") {
+    if (refreshing()) {
       this.report({ hint: routing.url });
       return routing.url;
     }
@@ -1203,7 +1214,10 @@ export class StaticSite extends component("sst:aws:StaticSite", parts) {
             const outputPath = path.join(sitePath, build.output);
             if (!fs.existsSync(path.resolve(root, outputPath)))
               throw new VisibleError(
-                `No build output found at "${path.resolve(root, outputPath)}".`,
+                `${capitalized(owner)} has no build output at "${path.resolve(
+                  root,
+                  outputPath,
+                )}". Set "build.output" to the folder its build writes.`,
               );
             return outputPath;
           })
@@ -1261,14 +1275,10 @@ export class StaticSite extends component("sst:aws:StaticSite", parts) {
       : undefined;
 
     const routesUpdate = routing.route
-      ? this.part("routesUpdate", {
-          store: routing.route.routerKvStoreArn,
-          namespace: routing.route.routerKvNamespace,
-          key: "routes",
-          entry: routing.route.apply((route) =>
-            ["site", namespace, route.hostPattern, route.pathPrefix].join(","),
-          ),
-        })
+      ? this.part(
+          "routesUpdate",
+          siteRoutesUpdateArgs(routing.route, namespace),
+        )
       : undefined;
 
     createInvalidation();
@@ -1276,52 +1286,26 @@ export class StaticSite extends component("sst:aws:StaticSite", parts) {
     this.report({ hint: routing.url });
     return routing.url;
 
-    function rejectOld() {
-      notAnOption(
-        args,
-        "route",
-        `Serve the site through a Router with "router": { instance: router, path, domain }.`,
-      );
-      notAnOption(
-        args,
-        "base",
-        `Set the path it's served under with "router": { instance: router, path }.`,
-      );
-      notAnOption(
-        args,
-        "cdn",
-        `Serve the site through a Router with "router".`,
-      );
-    }
-
-    function sitePathOf() {
-      const sitePath = plain(args.path, option("path"), BUILD_READS_IT) || ".";
-      if (!fs.existsSync(path.resolve(root, sitePath)))
-        throw new VisibleError(
-          `No site found at "${path.resolve(root, sitePath)}".`,
-        );
-      return sitePath;
-    }
-
     // How the site is served: through a router, or a distribution of its own
     function router() {
-      const routerArgs = plain(args.router, option("router"));
-      if (!routerArgs) return standalone();
+      if (args.router !== undefined && !edgeRouting)
+        throw new VisibleError(
+          `${capitalized(
+            owner,
+          )} can't have both "edgeRouting: false" and "router". A Router finds and serves its sites through its key-value store, so a site behind one needs edge routing. Remove "router" to serve the site from its own distribution without edge routing.`,
+        );
+      const routed = siteRouteOf(
+        {
+          router: args.router,
+          existing: args.existing,
+          routerHas: { domain: args.domain, edge: args.edge },
+        },
+        owner,
+        ["kvStore", "requestFunction", "responseFunction", "accessControl"],
+      );
+      if (!routed) return standalone();
 
-      if (!edgeRouting)
-        throw new VisibleError(
-          `Cannot provide both "edgeRouting: false" and "router". An SST "Router" finds and serves its sites through its KeyValueStore, so a site behind one needs edge routing. Remove "router" to serve the site from its own distribution without edge routing.`,
-        );
-      if (args.domain)
-        throw new VisibleError(
-          `Cannot provide both "domain" and "router". Use the "domain" prop on the "Router" component when serving your site through a Router.`,
-        );
-      if (args.edge)
-        throw new VisibleError(
-          `Cannot provide both "edge" and "router". Use the "edge" prop on the "Router" component when serving your site through a Router.`,
-        );
-
-      const { route, pathPrefix } = routeOf(routerArgs);
+      const { route, pathPrefix } = routed;
       return {
         route,
         pathPrefix,
@@ -1333,40 +1317,16 @@ export class StaticSite extends component("sst:aws:StaticSite", parts) {
 
     function standalone() {
       cdnDomain(args.domain, owner);
-      const edge = plain(args.edge, option("edge")) ?? {};
-      const viewerRequest = plain(
-        edge.viewerRequest,
-        option("edge.viewerRequest"),
-      );
-      const viewerResponse = plain(
-        edge.viewerResponse,
-        option("edge.viewerResponse"),
-      );
-      for (const viewer of [viewerRequest, viewerResponse])
-        notAnOption(
-          viewer ?? {},
-          "kvStores",
-          `Use "kvStore": a CloudFront function takes one key-value store.`,
-        );
-
+      const edge = edgeOf(args.edge, option, owner);
+      const builder = self.builder();
       const kvStoreArn = edgeRouting
-        ? output(viewerRequest?.kvStore ?? self.part("kvStore", {}).arn)
+        ? routingStore(builder, edge, args.existing, owner)
         : undefined;
-      const requestFunction = requestFunctionOf(kvStoreArn, viewerRequest);
-      const responseFunction = viewerResponse?.injection
-        ? self.part("responseFunction", {
-            runtime: "cloudfront-js-2.0",
-            keyValueStoreAssociations: viewerResponse.kvStore
-              ? [viewerResponse.kvStore]
-              : [],
-            code: interpolate`
-import cf from "cloudfront";
-async function handler(event) {
-  ${viewerResponse.injection}
-  return event.response;
-}`,
-          })
-        : undefined;
+      const requestFunction = requestFunctionOf(kvStoreArn, edge.viewerRequest);
+      const responseFunction = viewerResponseFunction(
+        builder,
+        edge.viewerResponse,
+      );
 
       const cdn = self.part("cdn", {
         comment: `${name} site`,
@@ -1736,9 +1696,7 @@ async function writeViteTypes(
       : undefined);
   if (!typesPath) return;
 
-  const resolved = markUnknowns(
-    await (output(environment ?? {}) as any).promise(true),
-  );
+  const resolved = await resolveWithUnknowns(environment ?? {});
   if (resolved === unknown) return;
   const keys = Object.keys(resolved as Record<string, unknown>);
 

@@ -24,7 +24,7 @@ import {
   named,
   optional,
 } from "../../parts-component";
-import { plain } from "../../args";
+import { notAnExistingPart, plain, usedAsItIs, getArgs } from "../../args";
 import { context } from "../../contract";
 import { VisibleError } from "../../error";
 
@@ -524,17 +524,60 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
 
     const existing = this.existingPart("vpc");
     this.network = existing
-      ? this.reference(name, existing)
+      ? this.reference(name, existing, args)
       : this.create(name, args);
   }
 
   private create(name: string, args: VpcArgs): Network {
     const self = this;
+    const of = `the "${name}" VPC`;
     const zones = zonesOf();
     const nat = natOf();
     const bastion = bastionOf();
     const ids = zones.map((_, i) => `${i + 1}`);
     const { app } = context();
+
+    // A part the VPC doesn't create, for the args it's given, can't be in
+    // `existing`: it wouldn't be used
+    const notCreated = (keys: string[], instead: string) => {
+      for (const key of keys)
+        notAnExistingPart(args.existing, key, of, instead);
+    };
+    if (!nat) notCreated(["elasticIp"], `It's only created with "nat".`);
+    if (nat?.type !== "managed")
+      notCreated(["natGateway"], `It's only created when "nat" is "managed".`);
+    if (nat?.type !== "ec2")
+      notCreated(
+        [
+          "natSecurityGroup",
+          "natInstanceRole",
+          "natInstanceProfile",
+          "natInstance",
+          "natInstanceEipAssociation",
+        ],
+        `It's only created when "nat" is "ec2".`,
+      );
+    const bastionParts = [
+      "bastionSecurityGroup",
+      "bastionRole",
+      "bastionProfile",
+      "bastionInstance",
+    ];
+    if (!bastion)
+      notCreated(
+        [...bastionParts, "tlsPrivateKey", "privateKeyValue", "keyPair"],
+        `It's only created with "bastion".`,
+      );
+    else if (nat?.type === "ec2")
+      notCreated(
+        bastionParts,
+        `When "nat" is "ec2", the first NAT instance is the bastion.`,
+      );
+    else if (bastion.instanceProfile !== undefined)
+      notCreated(
+        ["bastionRole"],
+        `The bastion runs with "bastion.instanceProfile".`,
+      );
 
     const vpc = this.part("vpc", {
       cidrBlock: "10.0.0.0/16",
@@ -584,7 +627,8 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
     const elasticIps = nat
       ? ids.map((id, i) =>
           nat.ip
-            ? this.lookupPart("elasticIp", id, nat.ip[i])
+            ? this.existingPart("elasticIp", id) ??
+              this.lookupPart("elasticIp", id, nat.ip[i])
             : this.part("elasticIp", id, { domain: "vpc" }),
         )
       : [];
@@ -694,15 +738,15 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
       const ec2 = plain(nat.ec2, `The "nat.ec2" of the "${name}" VPC`);
       if (ec2 && nat.type === "managed")
         throw new VisibleError(
-          `The "nat.type" cannot be "managed" when "nat.ec2" is specified.`,
+          `The "nat" of ${of} has "ec2" settings, so its "type" can't be "managed". Make it "ec2", or leave it out.`,
         );
       if (!nat.type && !ec2)
         throw new VisibleError(
-          `Missing "nat.type" for the "${name}" VPC. It is required when "nat.ec2" is not specified.`,
+          `The "nat" of ${of} has no "type". Set it to "managed" or "ec2".`,
         );
       if (ip && ip.length !== zones.length)
         throw new VisibleError(
-          `The number of Elastic IP allocation IDs must match the number of AZs.`,
+          `The "nat.ip" of ${of} has ${ip.length} Elastic IPs, for ${zones.length} AZs. Give one for each AZ.`,
         );
 
       return ec2 || nat.type === "ec2"
@@ -763,7 +807,8 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
       // Whether it's given decides, so it can be an output
       const role =
         settings.role !== undefined
-          ? self.lookupPart("natInstanceRole", settings.role)
+          ? self.existingPart("natInstanceRole") ??
+            self.lookupPart("natInstanceRole", settings.role)
           : self.part("natInstanceRole", ec2RoleArgs());
       const profile = self.part("natInstanceProfile", { role: role.name });
 
@@ -827,12 +872,13 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
       // Whether it's given decides, so it can be an output
       const profile =
         bastion.instanceProfile !== undefined
-          ? self.lookupPart(
+          ? self.existingPart("bastionProfile") ??
+            self.lookupPart(
               "bastionProfile",
               output(bastion.instanceProfile).apply((profile) => {
                 if (profile.startsWith("arn:"))
                   throw new VisibleError(
-                    "Bastion instance profile must be a name, not an ARN.",
+                    `The "bastion.instanceProfile" of ${of} is an ARN. Give the instance profile's name.`,
                   );
                 return profile;
               }),
@@ -886,60 +932,83 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
   // A VPC SST created, in another stage. Its subnets and bastion are found
   // with lookups that aren't resources: how many there are is only known once
   // they've been looked up.
-  private reference(name: string, vpc: ec2.Vpc): Network {
+  private reference(name: string, vpc: ec2.Vpc, args: VpcArgs): Network {
     const self = this;
+    const of = `the "${name}" VPC`;
+
+    // It's used the way it is, and what's in it is found with lookups
+    usedAsItIs(args, ["az", "nat", "bastion"], "vpc", of);
+    const found = [
+      "vpc",
+      "internetGateway",
+      "securityGroup",
+      "cloudmapNamespace",
+    ];
+    for (const key of Object.keys(args.existing ?? {}))
+      if (!found.includes(key))
+        notAnExistingPart(
+          args.existing,
+          key,
+          of,
+          `It creates nothing in the "vpc" it's given, and finds its subnets and its bastion with lookups.`,
+        );
+
     const vpcId = all([vpc.id, vpc.tagsAll]).apply(([id, tags]) => {
       if (tags?.["sst:ref-version"] !== "2")
         throw new VisibleError(
-          [
-            `There have been some minor changes to the "Vpc" component that's being referenced by "${name}".\n`,
-            `To update, you'll need to redeploy the stage where the VPC was created. And then redeploy this stage.`,
-          ].join("\n"),
+          `The "vpc" ${of} is given was created by an older version of SST's "Vpc". Deploy the stage that created it again, then this one.`,
         );
       return id;
     });
     const byVpc = { name: "vpc-id", values: [vpcId] };
 
-    this.lookupPart(
-      "internetGateway",
-      ec2.getInternetGatewayOutput(
-        { filters: [{ name: "attachment.vpc-id", values: [vpcId] }] },
-        { parent: this },
-      ).internetGatewayId,
-    );
-
-    const securityGroup = this.lookupPart(
-      "securityGroup",
-      all([
-        ec2.getSecurityGroupsOutput(
-          { filters: [{ name: "group-name", values: ["default"] }, byVpc] },
+    if (!this.existingPart("internetGateway"))
+      this.lookupPart(
+        "internetGateway",
+        ec2.getInternetGatewayOutput(
+          { filters: [{ name: "attachment.vpc-id", values: [vpcId] }] },
           { parent: this },
-        ).ids,
-        vpcId,
-      ]).apply(([ids, vpcId]) => {
-        if (!ids.length)
-          throw new VisibleError(`Security group not found in VPC ${vpcId}`);
-        return ids[0];
-      }),
-    );
+        ).internetGatewayId,
+      );
+
+    const securityGroup =
+      this.existingPart("securityGroup") ??
+      this.lookupPart(
+        "securityGroup",
+        all([
+          ec2.getSecurityGroupsOutput(
+            { filters: [{ name: "group-name", values: ["default"] }, byVpc] },
+            { parent: this },
+          ).ids,
+          vpcId,
+        ]).apply(([ids, vpcId]) => {
+          if (!ids.length)
+            throw new VisibleError(
+              `The VPC "${vpcId}" ${of} is given has no default security group.`,
+            );
+          return ids[0];
+        }),
+      );
 
     // The zone the namespace made. Cloud Map has no lookup of a namespace by
     // its VPC, and a lookup by name finds every VPC's `sst`.
-    const namespaceId = all([
-      route53.getZoneOutput(
-        { name: "sst", privateZone: true, vpcId },
-        { parent: this },
-      ).linkedServiceDescription,
-      vpcId,
-    ]).apply(([description, vpcId]) => {
-      const id = description.match(/:namespace\/(ns-[a-z0-9]+)/)?.[1];
-      if (!id)
-        throw new VisibleError(
-          `Cloud Map namespace not found for VPC ${vpcId}`,
-        );
-      return id;
-    });
-    this.lookupPart("cloudmapNamespace", namespaceId);
+    if (!this.existingPart("cloudmapNamespace")) {
+      const namespaceId = all([
+        route53.getZoneOutput(
+          { name: "sst", privateZone: true, vpcId },
+          { parent: this },
+        ).linkedServiceDescription,
+        vpcId,
+      ]).apply(([description, vpcId]) => {
+        const id = description.match(/:namespace\/(ns-[a-z0-9]+)/)?.[1];
+        if (!id)
+          throw new VisibleError(
+            `The VPC "${vpcId}" ${of} is given has no "sst" Cloud Map namespace.`,
+          );
+        return id;
+      });
+      this.lookupPart("cloudmapNamespace", namespaceId);
+    }
 
     const subnets = (kind: string) =>
       ec2.getSubnetsOutput(
@@ -1025,7 +1094,7 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
     return this.network.bastion.apply((id) => {
       if (!id)
         throw new VisibleError(
-          `VPC bastion is not enabled. Enable it with "bastion: true" or "bastion: { instanceProfile: \"name\" }".`,
+          `The "${this.componentName}" VPC has no bastion. Set its "bastion".`,
         );
       return id;
     });
@@ -1086,7 +1155,7 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
     vpcId: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Vpc(name, { existing: { vpc: vpcId } }, opts);
+    return new Vpc(name, getArgs({ existing: { vpc: vpcId } }), opts);
   }
 
   public link() {

@@ -13,6 +13,8 @@ const pulumi = mockPulumi({
         return {
           cloudfrontDistribution: "d111111abcdef8.cloudfront.net",
           cloudfrontDistributionZoneId: "Z2FDTNDATAQYW2",
+          // One that's looked up is looked up by its domain
+          ...(args.id ? { domain: args.id } : {}),
         };
       case "aws:cognito/userPoolClient:UserPoolClient":
         return { clientSecret: "shh" };
@@ -380,6 +382,17 @@ describe("CognitoUserPool", () => {
     expect(client.nodes.client.constructor.name).toBe("UserPoolClient");
     const props = await pulumi.resolve(Link.getProperties([client]));
     expect(props.Web).toMatchObject({ id: "WebClient_id", secret: "shh" });
+
+    // One that's already deployed keeps its settings
+    expect(() =>
+      pool.addClient("Mine", {
+        existing: { client: "abc123" },
+        callbackUrls: ["https://example.com/callback"],
+      }),
+    ).toThrow(
+      /The "Mine" user pool client is given an existing "client", which it uses the way it is. Remove "callbackUrls" from its args/,
+    );
+    await pulumi.settle();
   });
 
   it("rejects an identity provider that was already added", async () => {
@@ -534,13 +547,17 @@ describe("CognitoUserPool", () => {
           aliases: ["email"],
           usernames: ["email"],
         }),
-    ).toThrow(/cannot set both "aliases" and "usernames"/);
+    ).toThrow(
+      /The "MyUserPool" user pool is given both "aliases" and "usernames"/,
+    );
     expect(
       () =>
         new CognitoUserPool("Senders", {
           triggers: { customEmailSender: FUNCTION_ARN },
         }),
-    ).toThrow(/must provide a KMS key via "kmsKey"/);
+    ).toThrow(
+      /The "triggers" of the "Senders" user pool have "customEmailSender" or "customSmsSender", which need a KMS key. Give it in "triggers.kmsKey"/,
+    );
     expect(
       () =>
         new CognitoUserPool("Domain", {
@@ -594,8 +611,76 @@ describe("CognitoUserPool", () => {
           triggers: { preSignUp: FUNCTION_ARN },
         }),
     ).toThrow(
-      /given an existing "userPool", so it doesn't create one and can't change its settings. Remove "mfa", "triggers"/,
+      /The "Changed" user pool is given an existing "userPool", which it uses the way it is. Remove "mfa", "triggers" from its args/,
     );
+    // What a $transform gives every user pool isn't refused for one from get
+    const { $transform } = await import("../../../src/components/component");
+    $transform(CognitoUserPool, (args, _opts, name) => {
+      if (name === "TransformedPool") args!.mfa = "on";
+    });
+    CognitoUserPool.get("TransformedPool", "us-east-1_abc");
+    await pulumi.settle();
+  });
+
+  it("uses a domain it has already, and its URL, without creating one", async () => {
+    const prefix = new CognitoUserPool("Prefix", {
+      existing: { domain: "my-app-dev" },
+    });
+    const custom = new CognitoUserPool("Custom", {
+      existing: {
+        domain: new (await import("@pulumi/aws")).cognito.UserPoolDomain(
+          "Mine",
+          {
+            userPoolId: "us-east-1_abc",
+            domain: "auth.example.com",
+            certificateArn: CERT_ARN,
+          },
+        ),
+      },
+    });
+    await pulumi.settle();
+
+    expect(await pulumi.resolve([prefix.domainUrl, custom.domainUrl])).toEqual([
+      "https://my-app-dev.auth.us-east-1.amazoncognito.com",
+      "https://auth.example.com",
+    ]);
+    expect(
+      registered("aws:cognito/userPoolDomain:UserPoolDomain").map((r) => [
+        r.name,
+        r.kind,
+      ]),
+    ).toEqual([
+      ["PrefixDomain", "read"],
+      ["Mine", "register"],
+    ]);
+    expect(pulumi.resources.map((r) => r.name)).not.toContain(
+      "CustomCertificate",
+    );
+  });
+
+  it("turns down an existing domain or certificate it wouldn't use", async () => {
+    const certificate = { certificate: {} as any };
+    for (const [args, message] of [
+      [
+        { domain: "auth.example.com", existing: { domain: "auth.example.com" } },
+        /is given an existing "domain", which it uses the way it is. Remove "domain" from its args/,
+      ],
+      [{ existing: certificate }, /"existing.certificate" isn't an option/],
+      [
+        { domain: { prefix: "my-app-dev" }, existing: certificate },
+        /"existing.certificate" isn't an option/,
+      ],
+      [
+        {
+          domain: { name: "auth.example.com", dns: false, cert: CERT_ARN },
+          existing: certificate,
+        },
+        /give "domain" a "name" and no "cert"/,
+      ],
+    ] as const)
+      expect(() => new CognitoUserPool("MyUserPool", args as any)).toThrow(
+        message,
+      );
     await pulumi.settle();
   });
 

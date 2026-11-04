@@ -199,6 +199,12 @@ export interface RealtimeSubscriberArgs {
  * - The authorizer's handler or args, a subscriber's, and its `filter` have to be plain
  *   values, not outputs: the subscriber is named after them. A subscriber that was given as
  *   an output, like a function's `arn`, is kept when it's given its ARN as a string.
+ * - A function's args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
  * - `nodes.authHandler` is an output, as it was, and `nodes` has the authorizer's
  *   permission too.
  * - A subscriber is created with the provider the server has. `sst.aws.Realtime` gave it
@@ -327,7 +333,7 @@ export class Realtime extends component("sst:aws:Realtime", parts) {
     );
     if (this.hasSubscriber(id))
       throw new VisibleError(
-        `"${name}" already has a subscriber with the filter "${filter}" and this handler. Subscribe each handler to a filter once.`,
+        `The "${name}" realtime server already has a subscriber with the filter "${filter}" and this handler. Subscribe each handler to a filter once.`,
       );
     this.assertNew("subscriber", "subscriber", id, args, [
       "subscriber",

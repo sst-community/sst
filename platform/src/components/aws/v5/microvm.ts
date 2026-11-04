@@ -28,9 +28,10 @@ import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { physicalName } from "../../naming";
 import { DurationHours, toSeconds } from "../../duration";
-import { warnOnce } from "../../../util/warn";
+import { notAnExistingPart, plain, usedAsItIs } from "../../args";
 import { bootstrap } from "../helpers/bootstrap";
-import { type AnyVpc, assertVpcIds, hasNat, isVpc } from "../helpers/vpc";
+import { inlinePolicies, noPermissionsFor } from "../helpers/iam";
+import { type AnyVpc, privateNetworkOf } from "../helpers/vpc";
 import { RETENTION } from "../logging";
 import { Permission, permission } from "../permission";
 import { MicrovmImagePrune } from "../providers/microvm-image-prune";
@@ -304,7 +305,8 @@ export interface MicroVmArgs extends ComponentArgs<typeof parts> {
    * as `Service`'s and `Task`'s roles do. Any IAM user or role in the account whose
    * policies allow `sts:AssumeRole` on it can then assume it too.
    *
-   * To build the image and run real MicroVMs in `sst dev`, pass in `false`.
+   * To build the image and run real MicroVMs in `sst dev`, pass in `false`. It has to be a
+   * plain value: it decides whether the image is built.
    */
   dev?:
     | false
@@ -443,6 +445,7 @@ export interface MicroVmArgs extends ComponentArgs<typeof parts> {
  *   V5 one tells `sst dev` itself, so a deploy in `sst dev` drops that component. It has
  *   nothing in AWS behind it. The pane is named after the MicroVm, `Sandbox` where it
  *   was `SandboxDev`, and that's the name `SST_CHILD` takes.
+ * - `dev` is a plain value, not an output: it decides whether the image is built.
  * - `vpc` takes either `Vpc`. A VPC with no NAT gets the warning with a V5 `Vpc` too. A
  *   `vpc` that's another resource, like an `aws.ec2.Vpc`, is refused: pass its subnets
  *   and security groups.
@@ -480,45 +483,54 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
     super(name, args, opts);
 
     const self = this;
+    const owner = `the "${name}" MicroVm`;
     const existing = args.existing ?? {};
     // The image is built from `image`, and pruned as it's built. Lambda
     // writes an image's build logs to the log group named after it.
-    if (existing.logGroup !== undefined)
-      throw new VisibleError(
-        `"existing.logGroup" isn't an option for the "${name}" MicroVm. Lambda writes an image's build logs to a log group named after it, so the MicroVm creates its own. Change it in "transform.logGroup".`,
-      );
+    notAnExistingPart(
+      existing,
+      "logGroup",
+      owner,
+      `Lambda writes an image's build logs to a log group named after it, so the MicroVm creates its own. Change it in "transform.logGroup".`,
+    );
     for (const key of ["code", "image", "imagePrune"] as const)
-      if (existing[key] !== undefined)
+      notAnExistingPart(
+        existing,
+        key,
+        owner,
+        `It builds its image from "image", and creates the ${key} with it.`,
+      );
+    noPermissionsFor(
+      existing.executionRole,
+      args.permissions,
+      "executionRole",
+      owner,
+    );
+    // A connector is in a VPC already, and the operator role is only for
+    // creating one
+    if (existing.networkConnector) {
+      usedAsItIs(args, ["vpc"], "networkConnector", owner);
+      notAnExistingPart(
+        existing,
+        "operatorRole",
+        owner,
+        `It's given an existing "networkConnector", so it creates no connector to use it for.`,
+      );
+      if (args.transform?.operatorRole)
         throw new VisibleError(
-          `"existing.${key}" isn't an option for the "${name}" MicroVm. It builds its image from "image", and creates the ${key} with it.`,
+          `The "${name}" MicroVm is given an existing "networkConnector", so it creates no connector and no "operatorRole". Remove "operatorRole" from its "transform".`,
         );
-    const permissions = args.permissions;
-    if (
-      existing.executionRole &&
-      permissions !== undefined &&
-      !(Array.isArray(permissions) && permissions.length === 0)
-    )
-      throw new VisibleError(
-        `The "${name}" MicroVm is given an existing "executionRole", which it doesn't change. Add the "permissions" to the role itself.`,
-      );
-    if (existing.networkConnector && args.vpc)
-      throw new VisibleError(
-        `The "${name}" MicroVm is given an existing "networkConnector", which is already in a VPC. Remove "vpc".`,
-      );
-    // The operator role is only for creating a connector
-    if (
-      existing.networkConnector &&
-      (existing.operatorRole || args.transform?.operatorRole)
-    )
-      throw new VisibleError(
-        `The "${name}" MicroVm is given an existing "networkConnector", so it creates no connector and no "operatorRole". Remove "operatorRole" from its "existing" and "transform".`,
-      );
-    if (existing.operatorRole && !args.vpc)
-      throw new VisibleError(
-        `The "${name}" MicroVm is given an existing "operatorRole", which is only used to create a network connector for "vpc". Set "vpc", or remove it.`,
+    } else if (!args.vpc)
+      notAnExistingPart(
+        existing,
+        "operatorRole",
+        owner,
+        `It's only used to create a network connector for "vpc". Set "vpc", or remove it.`,
       );
 
-    const dev = context().dev && args.dev !== false;
+    const dev =
+      plain(args.dev, `The "dev" of the "${name}" MicroVm`) !== false &&
+      context().dev;
     const partition = getPartitionOutput({}, { parent: this }).partition;
     const region = getRegionOutput({}, { parent: this }).region;
     const image = normalizeImage();
@@ -669,31 +681,6 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
     }
 
     function executionRoleArgs(): iam.RoleArgs {
-      const policy = all([
-        args.permissions ?? [],
-        Link.getInclude<Permission>("aws.permission", args.link),
-      ]).apply(([argsPermissions, linkPermissions]) =>
-        iam.getPolicyDocumentOutput({
-          statements: [
-            ...argsPermissions,
-            ...linkPermissions,
-            {
-              effect: "allow" as const,
-              actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
-              resources: [interpolate`${logGroup.arn}:*`],
-            },
-          ].map((item) => ({
-            effect: (() => {
-              const effect = item.effect ?? "allow";
-              return effect.charAt(0).toUpperCase() + effect.slice(1);
-            })(),
-            actions: item.actions,
-            resources: item.resources,
-            conditions: "conditions" in item ? item.conditions : undefined,
-          })),
-        }),
-      );
-
       return {
         assumeRolePolicy: iam.getPolicyDocumentOutput({
           statements: [
@@ -722,9 +709,17 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
               : []),
           ],
         }).json,
-        inlinePolicies: policy.apply(({ statements }) =>
-          statements ? [{ name: "inline", policy: policy.json }] : [],
-        ),
+        inlinePolicies: inlinePolicies([
+          args.permissions,
+          Link.getInclude<Permission>("aws.permission", args.link),
+          [
+            {
+              effect: "allow",
+              actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+              resources: [interpolate`${logGroup.arn}:*`],
+            },
+          ],
+        ]),
       };
     }
 
@@ -838,32 +833,16 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
       };
     }
 
-    // The subnets and security groups the connector puts the MicroVMs'
-    // traffic through
-    function normalizeVpc() {
-      const vpc = args.vpc;
-      if (!vpc) return;
-
-      if (isVpc(vpc)) {
-        // The two `Vpc`s type these differently
-        const privateSubnets: Input<Input<string>[]> = vpc.privateSubnets;
-        const securityGroups: Input<Input<string>[]> = vpc.securityGroups;
-        return all([vpc.id, hasNat(vpc)]).apply(([id, nat]) => {
-          if (nat === false)
-            warnOnce(
-              `\nWarning: The "${name}" MicroVm is in the "${id}" VPC, which does not have a NAT gateway. Its MicroVMs can't reach the internet. To let them, set the "nat" prop on the "Vpc" component.\n`,
-            );
-          return { privateSubnets, securityGroups };
-        });
-      }
-
-      assertVpcIds(vpc, `the "${name}" MicroVm`);
-      return output(vpc);
-    }
-
     function createNetworkConnector() {
-      const vpc = normalizeVpc();
-      if (!vpc) return;
+      if (!args.vpc) return;
+      // The subnets and security groups the connector puts the MicroVMs'
+      // traffic through
+      const vpc = privateNetworkOf(
+        args.vpc,
+        owner,
+        (id) =>
+          `\nWarning: The "${name}" MicroVm is in the "${id}" VPC, which does not have a NAT gateway. Its MicroVMs can't reach the internet. To let them, set the "nat" prop on the "Vpc" component.\n`,
+      );
 
       const operatorRole = self.part("operatorRole", {
         assumeRolePolicy: iam.assumeRolePolicyForPrincipal({

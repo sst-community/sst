@@ -375,14 +375,46 @@ describe("SnsTopic", () => {
   it("refuses a subscriber without a name, and says what to write", () => {
     const topic = new SnsTopic("MyTopic") as any;
     expect(() => topic.subscribe("src/email.handler")).toThrow(
-      `"subscribe" on the "MyTopic" topic takes the subscriber's name first, like subscribe("MySubscriber", ...).`,
+      `A subscriber of the "MyTopic" topic needs a name, given first: subscribe("MySubscriber", ...).`,
     );
     expect(() => topic.subscribe(FUNCTION_ARN, { filter: {} })).toThrow(
-      /takes the subscriber's name first/,
+      /needs a name, given first/,
     );
     expect(() => topic.subscribeQueue(QUEUE_ARN)).toThrow(
-      /like subscribeQueue\("MySubscriber", \.\.\.\)/,
+      /given first: subscribeQueue\("MySubscriber", \.\.\.\)/,
     );
+  });
+
+  it("says to use get in place of the static subscribe and subscribeQueue", () => {
+    const Static = SnsTopic as any;
+    expect(() =>
+      Static.subscribe("Emailer", FUNCTION_ARN, "src/email.handler"),
+    ).toThrow(
+      /sst\.aws\.v5\.SnsTopic\.get\("MyTopic", topicArn\)\.subscribe\(/,
+    );
+    expect(() =>
+      Static.subscribeQueue("Orders", FUNCTION_ARN, QUEUE_ARN),
+    ).toThrow(
+      /sst\.aws\.v5\.SnsTopic\.get\("MyTopic", topicArn\)\.subscribeQueue\(/,
+    );
+  });
+
+  it("refuses settings for a topic it's given, but not what a $transform gives one from get", async () => {
+    expect(
+      () =>
+        new SnsTopic("MyTopic", {
+          existing: { topic: TOPIC_ARN },
+          fifo: true,
+        }),
+    ).toThrow(
+      'The "MyTopic" topic is given an existing "topic", which it uses the way it is. Remove "fifo" from its args.',
+    );
+    const { $transform } = await import("../../../src/components/component");
+    $transform(SnsTopic, (args, _opts, name) => {
+      if (name === "Shared") args!.fifo = true;
+    });
+    SnsTopic.get("Shared", "arn:aws:sns:us-east-1:123456789012:shared");
+    await pulumi.settle();
   });
 
   it("says where a subscriber's transform goes", () => {

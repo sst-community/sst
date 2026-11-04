@@ -1,15 +1,10 @@
-import fs from "fs";
-import path from "path";
 import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
 import { type ComponentArgs, component } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { context } from "../../contract";
-import { readNitro } from "../helpers/nitro";
-import { configText } from "../helpers/site-build";
-import type { RouteArgs } from "../helpers/router";
+import { nitroSite } from "../helpers/nitro";
+import { configValue } from "../helpers/site-build";
+import type { SiteRouteArgs } from "../helpers/router";
 import {
-  type ServerPlan,
-  type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
   createSsrSite,
@@ -335,7 +330,7 @@ export interface NuxtArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
    * Also, make sure to set this as the `basePath` in your `nuxt.config.ts`, like
    * above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -436,11 +431,16 @@ export interface NuxtArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.Nuxt` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
- *   `regions` to have it from the start. In `sst dev`, the function the site runs as is
- *   `transform.devServer`, not `transform.server`.
+ *   `regions` to have it from the start.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.Nuxt` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.Nuxt` ignored it and
  *   wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.Nuxt` warmed it
@@ -448,8 +448,9 @@ export interface NuxtArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  * - With `warm`, the warmer's function, rule, target and permission move into the site.
  * - The build has to use Nitro's `aws-lambda` preset. `sst.aws.Nuxt` deployed any build,
  *   and one with another preset had no handler for its server.
- * - The base path is read from `nuxt.config` with any extension, like `.js` or `.mjs`.
- *   `sst.aws.Nuxt` read only `nuxt.config.ts`, and failed without it.
+ * - The base path is read from `nuxt.config` with any extension, like `.js` or `.mjs`, and
+ *   it's what's in the quotes after `baseURL`. `sst.aws.Nuxt` read only `nuxt.config.ts`,
+ *   and failed without it, and read on to the last quote of the line.
  */
 export class Nuxt extends component("sst:aws:Nuxt", parts) {
   private readonly siteUrl: Output<string>;
@@ -482,58 +483,28 @@ export class Nuxt extends component("sst:aws:Nuxt", parts) {
   }
 }
 
-// A Nuxt app's build, and its server
-interface NuxtBuild extends SiteBuild {
-  server: ServerPlan;
-}
-
 // How a Nuxt app is built, with its package manager and Nitro's
 // "aws-lambda" preset, and what its server is
-const nuxt: SsrFramework<NuxtBuild> = {
+const nuxt: SsrFramework = {
   label: "Nuxt",
   alwaysServes: true,
   // `_nuxt` has files whose names don't change, like `builds/latest.json`
   versionedFiles: false,
-  load: loadBuild,
-  server: (build) => build.server,
-};
-
-// Reads what Nitro built
-function loadBuild(builtPath: string): NuxtBuild {
-  const outputPath = path.resolve(context().paths.root, builtPath);
-  const nitro = readNitro(path.join(outputPath, ".output"), "Nuxt", [
-    "Set it in your `nuxt.config.ts`:",
-    "  // nuxt.config.ts",
-    "  export default defineNuxtConfig({",
-    "    nitro: {",
-    '      preset: "aws-lambda",',
-    "      awsLambda: { streaming: true }, // optional",
-    "    },",
-    "  });",
-  ]);
-
-  return {
-    sitePath: builtPath,
-    outputPath,
-    serves: true,
-    plan: {
-      // From `app.baseURL` in the Nuxt config
-      base: configText(outputPath, "nuxt.config")?.match(
-        /baseURL: ['"](.*)['"]/,
-      )?.[1],
-      assets: [
-        {
-          from: path.join(".output", "public"),
-          to: "",
-          cached: true,
-        },
+  load: (builtPath) =>
+    nitroSite(builtPath, {
+      framework: "Nuxt",
+      howToSet: [
+        "Set it in your `nuxt.config.ts`:",
+        "  // nuxt.config.ts",
+        "  export default defineNuxtConfig({",
+        "    nitro: {",
+        '      preset: "aws-lambda",',
+        "      awsLambda: { streaming: true }, // optional",
+        "    },",
+        "  });",
       ],
-    },
-    server: {
       description: "Server handler for Nuxt",
-      handler: "index.handler",
-      bundle: path.join(builtPath, ".output", "server"),
-      streaming: nitro.streaming,
-    },
-  };
-}
+      // From `app.baseURL` in the Nuxt config
+      base: (outputPath) => configValue(outputPath, "nuxt.config", "baseURL"),
+    }),
+};

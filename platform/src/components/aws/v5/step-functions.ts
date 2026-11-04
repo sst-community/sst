@@ -7,8 +7,9 @@ import {
 } from "@pulumi/pulumi";
 import { cloudwatch, iam, sfn } from "@pulumi/aws";
 import { type ComponentArgs, component, optional } from "../../parts-component";
-import { plain } from "../../args";
+import { notAnExistingPart, plain } from "../../args";
 import type { Input } from "../../input";
+import { VisibleError } from "../../error";
 import { physicalName } from "../../naming";
 import { permission } from "../permission";
 import { RETENTION } from "../logging";
@@ -36,7 +37,8 @@ import type { AnyTask } from "../helpers/task";
 const parts = () => ({
   /**
    * The CloudWatch log group the state machine writes its execution logs to, unless
-   * `logging` is `false`.
+   * `logging` is `false`. One you pass in `existing` is used the way it is, so `logging`
+   * doesn't set its `retention`.
    */
   logGroup: optional(cloudwatch.LogGroup),
   /**
@@ -529,11 +531,22 @@ export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
     });
 
     function loggingOf() {
-      const logging = plain(
-        args.logging,
-        `The "logging" of the "${name}" state machine`,
-      );
-      if (logging === false) return;
+      const owner = `the "${name}" state machine`;
+      const logging = plain(args.logging, `The "logging" of ${owner}`);
+      if (logging === false) {
+        notAnExistingPart(
+          args.existing,
+          "logGroup",
+          owner,
+          `Its logs go to a log group only with "logging": remove "logging: false".`,
+        );
+        return;
+      }
+      // A log group that's there already keeps its retention
+      if (args.existing?.logGroup !== undefined && logging?.retention)
+        throw new VisibleError(
+          `The "${name}" state machine is given an existing "logGroup", which it uses the way it is. Remove "retention" from its "logging".`,
+        );
       return {
         retention: logging?.retention ?? "1 month",
         level: logging?.level ?? "error",

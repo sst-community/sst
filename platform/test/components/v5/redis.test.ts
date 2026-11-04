@@ -21,8 +21,16 @@ const pulumi = mockPulumi({
         : {},
   call: (args) => {
     switch (args.token) {
+      // The token in the secret a cluster is tagged with, or in another
       case "aws:secretsmanager/getSecretVersion:getSecretVersion":
-        return { secretString: JSON.stringify({ authToken: "stored-token" }) };
+        return {
+          secretString: JSON.stringify({
+            authToken:
+              args.inputs.secretId === "secret-id"
+                ? "stored-token"
+                : `the token in ${args.inputs.secretId}`,
+          }),
+        };
       // For a `Vpc`
       case "aws:index/getAvailabilityZones:getAvailabilityZones":
         return { names: ["us-east-1a", "us-east-1b"] };
@@ -278,11 +286,33 @@ describe("Redis", () => {
       expect(await pulumi.resolve(redis.password)).toBe("");
     });
 
+    // An output that resolves to nothing is as good as leaving it out
+    it("falls back for dev values that are outputs of nothing", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      // @ts-ignore
+      global.$dev = true;
+      const redis = new Redis("MyRedis", {
+        vpc,
+        dev: {
+          host: output(undefined as unknown as string),
+          port: output(undefined as unknown as number),
+        },
+      });
+      await pulumi.settle();
+
+      expect(await pulumi.resolve([redis.host, redis.port])).toEqual([
+        "localhost",
+        6379,
+      ]);
+    });
+
     it("needs dev as a plain value", () => {
       const { output } = require("@pulumi/pulumi");
       expect(
         () => new Redis("MyRedis", { vpc, dev: output({}) as any }),
-      ).toThrow(/The "dev" of the "MyRedis" Redis has to be a plain value/);
+      ).toThrow(
+        /The "dev" of the "MyRedis" Redis cluster has to be a plain value/,
+      );
     });
 
     it("explains why nodes are missing", async () => {
@@ -327,7 +357,7 @@ describe("Redis", () => {
   describe("turns down the number of nodes given as nodes", () => {
     it("with what to write in its place", () => {
       expect(() => new Redis("MyRedis", { vpc, nodes: 2 } as any)).toThrow(
-        /The "nodes" arg of the "MyRedis" Redis component is now "cluster.nodes"/,
+        `The "nodes" of the "MyRedis" Redis cluster is "cluster.nodes" now. Pass the same number as "cluster: { nodes }"; nothing in AWS changes.`,
       );
     });
 
@@ -342,7 +372,9 @@ describe("Redis", () => {
     ])("to be removed, with %s", (_, given) => {
       expect(
         () => new Redis("MyRedis", { vpc, nodes: 3, ...given } as any),
-      ).toThrow(/is gone, and `sst.aws.Redis` ignored it here. Remove it/);
+      ).toThrow(
+        `The "nodes" of the "MyRedis" Redis cluster is gone, and sst.aws.Redis ignored it here. Remove it; nothing in AWS changes.`,
+      );
     });
   });
 
@@ -375,7 +407,7 @@ describe("Redis", () => {
       const aws = await import("@pulumi/aws");
       const net = new aws.ec2.Vpc("Net", { cidrBlock: "10.0.0.0/16" });
       expect(() => new Redis("MyRedis", { vpc: net as any })).toThrow(
-        /The "vpc" of the "MyRedis" Redis component isn't a "Vpc" component/,
+        /The "vpc" of the "MyRedis" Redis cluster isn't a "Vpc" component/,
       );
       await pulumi.settle();
     });
@@ -419,6 +451,34 @@ describe("Redis", () => {
     expect(
       await pulumi.resolve([redis.host, redis.port, redis.username, redis.password]),
     ).toEqual(["primary.cache.example.com", 6379, "default", "stored-token"]);
+  });
+
+  it("reads the auth token from the secret it's given", async () => {
+    const redis = new Redis("MyRedis", {
+      vpc,
+      existing: { cluster: "app-dev-myredis", secret: "my-secret" },
+    });
+    await pulumi.settle();
+
+    expect(
+      pulumi.resources.find((r) => r.name === "MyRedisSecret"),
+    ).toMatchObject({ kind: "read", options: { id: "my-secret" } });
+    expect(await pulumi.resolve(redis.password)).toBe(
+      "the token in my-secret",
+    );
+  });
+
+  it("turns down what it would create next to a cluster it's given", () => {
+    for (const part of ["subnetGroup", "parameterGroup", "secretVersion"])
+      expect(
+        () =>
+          new Redis("MyRedis", {
+            vpc,
+            existing: { cluster: "app-dev-myredis", [part]: "x" },
+          }),
+      ).toThrow(
+        `"existing.${part}" isn't an option for the "MyRedis" Redis cluster. It's given an existing "cluster", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+      );
   });
 
   it("links with the connection details", async () => {
@@ -502,7 +562,44 @@ describe("Redis", () => {
       const { output } = require("@pulumi/pulumi");
       expect(
         () => new Redis("MyRedis", { vpc, serverless: output(true) as any }),
-      ).toThrow(/The "serverless" of the "MyRedis" Redis has to be a plain value/);
+      ).toThrow(
+        /The "serverless" of the "MyRedis" Redis cluster has to be a plain value/,
+      );
+      expect(
+        () =>
+          new Redis("MyRedis", {
+            vpc,
+            serverless: { password: output(false) as any },
+          }),
+      ).toThrow(
+        /The "serverless.password" of the "MyRedis" Redis cluster has to be a plain value/,
+      );
+    });
+
+    // Its password is set through the user and user group SST creates, and
+    // it can't be read from one SST didn't
+    it("turns down a cache, a user or a user group that's already there", () => {
+      expect(
+        () =>
+          new Redis("MyRedis", {
+            vpc,
+            serverless: true,
+            existing: { serverlessCache: "my-cache" },
+          }),
+      ).toThrow(
+        `"existing.serverlessCache" isn't an option for the "MyRedis" Redis cluster. SST can't find the password of a serverless cache it didn't create. Link it with an "sst.Linkable" that has its endpoint and password.`,
+      );
+      for (const part of ["user", "userGroup"])
+        expect(
+          () =>
+            new Redis("MyRedis", {
+              vpc,
+              serverless: true,
+              existing: { [part]: "mine" },
+            }),
+        ).toThrow(
+          `"existing.${part}" isn't an option for the "MyRedis" Redis cluster. A serverless cache's password is set through the "user" and the "userGroup" it creates. To set up its users yourself, set "serverless.password" to false and change the cache in "transform.serverlessCache".`,
+        );
     });
   });
 });

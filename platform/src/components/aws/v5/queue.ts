@@ -10,7 +10,13 @@ import {
   deferred,
   optional,
 } from "../../parts-component";
-import { ifSet, notAnOption, withDefault } from "../../args";
+import {
+  ifSet,
+  notAnOption,
+  usedAsItIs,
+  withDefault,
+  getArgs,
+} from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import {
@@ -20,12 +26,12 @@ import {
 } from "../../duration";
 import { Function } from "./function";
 import { parseQueueArn } from "../helpers/arn";
-import { batchSettings, filterCriteria } from "../helpers/event-source";
 import {
-  type FunctionInput,
-  functionPart,
-  plainFunction,
-} from "../helpers/function-part";
+  batchSettings,
+  eventSourceSubscriber,
+  filterCriteria,
+} from "../helpers/event-source";
+import type { FunctionInput } from "../helpers/function-part";
 import { permission } from "../permission";
 
 const parts = () => ({
@@ -352,6 +358,19 @@ export interface QueueSubscriberArgs {
  * }));
  * ```
  *
+ * #### Use a queue you already have
+ *
+ * Pass the queue, or its URL. The queue is used the way it is: the component doesn't
+ * configure it, and refuses `fifo`, `delay`, `visibilityTimeout` and `dlq` next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Queue("MyQueue", {
+ *   existing: {
+ *     queue: "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
+ *   }
+ * });
+ * ```
+ *
  * #### Switch from `sst.aws.Queue`
  *
  * Change `sst.aws.Queue` to `sst.aws.v5.Queue` and keep the name. The queue and subscriber
@@ -364,15 +383,18 @@ export interface QueueSubscriberArgs {
  *
  * A few things are written differently:
  *
- * - `subscribe` no longer takes a handler or a function's args in an output: whether a
- *   function is created is decided from them, and a preview has to know. Only a function
- *   you have, or its ARN, can be an output. The args are typed as
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
- *   type-check.
- * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
+ * - A subscriber's function is described after the component, `Subscribed to MyQueue`,
+ *   where `sst.aws.Queue` named the component it kept the subscriber in: an update in
+ *   place.
  * - The subscriber is created with the provider the queue has. `sst.aws.Queue` gave it only
  *   a `provider` passed to the queue itself, so if your queue takes its provider from a
  *   parent component or from `providers`, its subscriber is replaced on switch, its log
@@ -382,27 +404,15 @@ export interface QueueSubscriberArgs {
  *   `queue.nodes.subscriber`, and its event source mapping
  *   `queue.nodes.eventSourceMapping`.
  * - The `transform` of `subscribe` becomes the queue's `transform.subscriber` and
- *   `transform.eventSourceMapping`, and `subscribe` takes no `opts`: what it creates is
- *   the queue's, with the queue's options. For a queue that isn't in your app, write
- *   `new sst.aws.v5.Queue(name, { existing: { queue: queueUrl }, transform })`, which is
- *   what `get` does, with your `transform`.
+ *   `transform.eventSourceMapping`, and `subscribe` takes no `opts`, which is refused:
+ *   what it creates is the queue's, with the queue's options. For a queue that isn't in
+ *   your app, write `new sst.aws.v5.Queue(name, { existing: { queue: queueUrl }, transform })`,
+ *   which is what `get` does, with your `transform`.
  * - `sst.aws.Queue.subscribe(queueArn, subscriber)` becomes
- *   `sst.aws.v5.Queue.get(name, queueArn).subscribe(subscriber)`. What it created is
- *   kept. It's created with the options you give `get`: if you gave
- *   `sst.aws.Queue.subscribe` a `parent` or a `provider`, give `get` the same, or the
- *   switch doesn't keep it.
- *
- * #### Use a queue you already have
- *
- * Pass the queue, or its URL.
- *
- * ```ts title="sst.config.ts"
- * new sst.aws.v5.Queue("MyQueue", {
- *   existing: {
- *     queue: "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
- *   }
- * });
- * ```
+ *   `sst.aws.v5.Queue.get(name, queueArn).subscribe(subscriber)`, and is refused with what
+ *   to write. What it created is kept. It's created with the options you give `get`: if
+ *   you gave `sst.aws.Queue.subscribe` a `parent` or a `provider`, give `get` the same, or
+ *   the switch doesn't keep it.
  */
 export class Queue extends component("sst:aws:Queue", parts) {
   constructor(
@@ -411,6 +421,15 @@ export class Queue extends component("sst:aws:Queue", parts) {
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
+
+    // A queue that's already there is used the way it is
+    if (this.existingPart("queue"))
+      usedAsItIs(
+        args,
+        ["fifo", "delay", "visibilityTimeout", "dlq"],
+        "queue",
+        `the "${name}" queue`,
+      );
 
     const fifo = output(args.fifo).apply((v) => (v === true ? {} : v));
     const dlq = output(args.dlq).apply((v) =>
@@ -503,43 +522,46 @@ export class Queue extends component("sst:aws:Queue", parts) {
       "transform",
       `Use the "transform" of the "${this.componentName}" queue: its "subscriber" and "eventSourceMapping".`,
     );
+    // `sst.aws.Queue` took the subscriber's resource options third
+    if (arguments[2] !== undefined)
+      throw new VisibleError(
+        `"subscribe" on the "${this.componentName}" queue takes no options: what it creates is the queue's, with the queue's options. Give them to the queue, or to "get" for a queue that isn't in your app.`,
+      );
     if (this.nodes.eventSourceMapping)
       throw new VisibleError(
         `Cannot subscribe to the "${this.componentName}" queue multiple times. An SQS Queue can only have one subscriber.`,
       );
 
-    const fn = functionPart(
-      this,
-      "subscriber",
-      plainFunction(
-        subscriber,
-        `The subscriber of the "${this.componentName}" queue`,
-      ),
-      {
-        description: `Subscribed to ${this.componentName}`,
-        permissions: [
-          {
-            actions: [
-              "sqs:ChangeMessageVisibility",
-              "sqs:DeleteMessage",
-              "sqs:GetQueueAttributes",
-              "sqs:GetQueueUrl",
-              "sqs:ReceiveMessage",
-            ],
-            resources: [this.arn],
-          },
-        ],
+    eventSourceSubscriber(this.builder(), undefined, subscriber, {
+      component: this.componentName,
+      kind: "queue",
+      source: this.arn,
+      actions: [
+        "sqs:ChangeMessageVisibility",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ReceiveMessage",
+      ],
+      mapping: {
+        filterCriteria: filterCriteria(args.filters),
+        ...batchSettings(args.batch),
       },
-    );
-
-    this.part("eventSourceMapping", {
-      eventSourceArn: this.arn,
-      functionName: fn.targetArn,
-      filterCriteria: filterCriteria(args.filters),
-      ...batchSettings(args.batch),
     });
 
     return this;
+  }
+
+  /**
+   * `sst.aws.Queue.subscribe` subscribed to a queue by its ARN. Reference the queue with
+   * `get` and subscribe to that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to a queue that isn't in your app, reference it with "get" and subscribe to that: sst.aws.v5.Queue.get("MyQueue", queueArn).subscribe("src/subscriber.handler").`,
+    );
   }
 
   /**
@@ -574,7 +596,7 @@ export class Queue extends component("sst:aws:Queue", parts) {
     const url = output(queue).apply((v) =>
       v.startsWith("arn:") ? parseQueueArn(v).queueUrl : v,
     );
-    return new Queue(name, { existing: { queue: url } }, opts);
+    return new Queue(name, getArgs({ existing: { queue: url } }), opts);
   }
 
   /**

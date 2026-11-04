@@ -1,12 +1,5 @@
-import {
-  all,
-  ComponentResourceOptions,
-  jsonStringify,
-  Output,
-  output,
-} from "@pulumi/pulumi";
-import { RandomPassword } from "@pulumi/random";
-import { iam, rds, secretsmanager } from "@pulumi/aws";
+import { all, ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
+import { rds, secretsmanager } from "@pulumi/aws";
 import {
   type ComponentArgs,
   type LinkInclude,
@@ -14,50 +7,51 @@ import {
   many,
   optional,
 } from "../../parts-component";
-import { plain, withDefault } from "../../args";
+import {
+  knownValue,
+  plain,
+  withDefault,
+  onlyExisting,
+  getArgs,
+} from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type DurationHours, toSeconds } from "../../duration";
 import { transformPart } from "../../transform";
 import { context } from "../../contract";
 import {
-  credentialsSecretOf,
-  proxyArgs,
-  type ProxyArgs,
-  proxyCredentials,
-  proxyRoleArgs,
-  storedPassword,
+  createCredentials,
+  createRdsProxy,
+  createRdsProxyTarget,
   localDatabase,
+  type ProxyArgs,
+  rdsCredentialParts,
+  rdsProxyParts,
 } from "../helpers/rds";
+import { secretField, tagOf } from "../helpers/secret";
 import { permission } from "../permission";
-import { RdsRoleLookup } from "../providers/rds-role-lookup";
 import { type AnyVpc, subnetsAndSecurityGroupsOf } from "../helpers/vpc";
 
 const parts = {
   /**
-   * The random password of the master user. It's created when you don't set a `password`.
-   */
-  password: optional(RandomPassword),
-  /**
-   * The Secrets Manager secret that stores the master user's username and password.
+   * The Secrets Manager secret that stores the master user's username and password. Next
+   * to an existing `cluster`, it's the one given here, or the one the cluster is tagged
+   * with.
    */
   secret: secretsmanager.Secret,
+  ...rdsCredentialParts,
   /**
-   * The version of the secret holding the current username and password.
+   * The RDS subnet group. Not created by `get`.
    */
-  secretVersion: secretsmanager.SecretVersion,
+  subnetGroup: optional(rds.SubnetGroup),
   /**
-   * The RDS subnet group.
+   * The RDS instance parameter group. Not created by `get`.
    */
-  subnetGroup: rds.SubnetGroup,
+  instanceParameterGroup: optional(rds.ParameterGroup),
   /**
-   * The RDS instance parameter group.
+   * The RDS cluster parameter group. Not created by `get`.
    */
-  instanceParameterGroup: rds.ParameterGroup,
-  /**
-   * The RDS cluster parameter group.
-   */
-  clusterParameterGroup: rds.ClusterParameterGroup,
+  clusterParameterGroup: optional(rds.ClusterParameterGroup),
   /**
    * The RDS Cluster.
    */
@@ -70,35 +64,7 @@ const parts = {
    * The read-only replicas in the RDS Cluster, by number, from `0`.
    */
   replica: many(rds.ClusterInstance),
-  /**
-   * The secrets that store the additional credentials the proxy can use, by username.
-   */
-  proxySecret: many(secretsmanager.Secret),
-  /**
-   * The versions of the secrets holding the additional credentials, by username.
-   */
-  proxySecretVersion: many(secretsmanager.SecretVersion),
-  /**
-   * The IAM role that lets the proxy read the secrets.
-   */
-  proxyRole: optional(iam.Role),
-  /**
-   * Waits for the service-linked role RDS needs before the proxy is created.
-   */
-  proxyRoleLookup: optional(RdsRoleLookup),
-  /**
-   * The RDS Proxy. For a cluster referenced with `get`, it's added once the
-   * cluster's tags are read.
-   */
-  proxy: optional(rds.Proxy),
-  /**
-   * The proxy's default target group.
-   */
-  proxyTargetGroup: optional(rds.ProxyDefaultTargetGroup),
-  /**
-   * The proxy's target: the cluster.
-   */
-  proxyTarget: optional(rds.ProxyTarget),
+  ...rdsProxyParts,
 };
 
 type ACU = `${number} ACU`;
@@ -185,6 +151,9 @@ export interface AuroraArgs extends ComponentArgs<typeof parts> {
    *   password: new sst.Secret("MyDBPassword").value
    * }
    * ```
+   *
+   * Whether it's set decides whether a password is generated, so it has to be set or left
+   * out, not given as an output that may be `undefined`.
    */
   password?: Input<string>;
   /**
@@ -648,7 +617,8 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  *   plain values, not outputs. They decide which resources are created.
  * - With `dev` set, `sst.aws.Aurora` created a component for the pane `sst dev` shows, in
  *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
- *   has nothing in AWS behind it.
+ *   has nothing in AWS behind it. An empty local password is shown as "[no password]" in
+ *   the pane.
  * - `nodes` has every resource, not only the cluster and the instance. The secret that
  *   stores the master user's credentials is `nodes.secret`. In `sst dev` with `dev` set,
  *   reading one of them fails and says why it's missing, where `sst.aws.Aurora` gave
@@ -714,10 +684,21 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       context().app.name.replaceAll("-", "_"),
     );
 
+    const owner = `the "${name}" Aurora database`;
+
+    // Given a cluster that's already deployed, it uses its instance, secret
+    // and proxy, and creates nothing else
+    if (args.existing?.cluster !== undefined)
+      onlyExisting(
+        args.existing,
+        ["cluster", "instance", "secret", "proxy"],
+        owner,
+      );
+
     // In `sst dev`, a database on the user's machine stands in for the
     // cluster, one that's already deployed too. This is the only place the
     // component handles dev mode.
-    const dev = plain(args.dev, `The "dev" of the "${name}" database`);
+    const dev = plain(args.dev, `The "dev" of ${owner}`);
     if (dev && context().dev) {
       this.runsLocally();
       this.connection = runLocally(dev);
@@ -731,12 +712,11 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       return;
     }
 
-    const proxy = plain(args.proxy, `The "proxy" of the "${name}" database`);
-    const replicas =
-      plain(args.replicas, `The "replicas" of the "${name}" database`) ?? 0;
+    const proxy = plain(args.proxy, `The "proxy" of ${owner}`);
+    const replicas = plain(args.replicas, `The "replicas" of ${owner}`) ?? 0;
     if (replicas > 15)
       throw new VisibleError(
-        `Cannot create more than 15 read-only replicas for the "${name}" Aurora database.`,
+        `The "replicas" of ${owner} is ${replicas}. It can have 15 read-only replicas at most.`,
       );
 
     const version = all([args.version, engine]).apply(
@@ -755,7 +735,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       const pauses = acus(min) === 0;
       if (scaling?.pauseAfter && !pauses)
         throw new VisibleError(
-          `Cannot configure "pauseAfter" when the minimum ACU is not 0 for the "${name}" Aurora database.`,
+          `The "scaling.pauseAfter" of ${owner} is only for a cluster that scales down to 0 ACU, and its "scaling.min" is ${min}. Remove "pauseAfter", or set "min" to "0 ACU".`,
         );
       return {
         max,
@@ -763,10 +743,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
         pauseAfter: pauses ? scaling?.pauseAfter ?? "5 minutes" : undefined,
       };
     });
-    const vpc = subnetsAndSecurityGroupsOf(
-      args.vpc,
-      `the "${name}" Aurora component`,
-    );
+    const vpc = subnetsAndSecurityGroupsOf(args.vpc, owner);
     // An engine version the user didn't choose isn't moved once it's deployed
     const pinned = (field: string) => (args.version ? [] : [field]);
     const parameterGroupOpts = {
@@ -776,15 +753,12 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       deleteBeforeReplace: false,
     };
 
-    const password = args.password
-      ? output(args.password)
-      : this.part("password", { length: 32, special: false }).result;
-
-    const secret = this.part("secret", { recoveryWindowInDays: 0 });
-    this.part("secretVersion", {
-      secretId: secret.id,
-      secretString: jsonStringify({ username, password }),
-    });
+    const builder = this.builder();
+    const { password, secret } = createCredentials(
+      builder,
+      username,
+      args.password,
+    );
 
     const subnetGroup = this.part("subnetGroup", { subnetIds: vpc.subnets });
 
@@ -801,7 +775,14 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
 
     // The cluster is tagged with its proxy, so the proxy comes first
     const rdsProxy = proxy
-      ? createProxy(proxy === true ? {} : proxy)
+      ? createRdsProxy(builder, proxy === true ? {} : proxy, {
+          master: secret,
+          engineFamily: engine.apply((engine) =>
+            engine === "postgres" ? "POSTGRESQL" : "MYSQL",
+          ),
+          subnets: vpc.subnets,
+          owner,
+        })
       : undefined;
 
     const cluster = this.part(
@@ -870,16 +851,10 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       this.part("replica", `${i}`, replicaArgs, replicaOpts);
     }
 
-    if (rdsProxy) {
-      const targetGroup = this.part("proxyTargetGroup", {
-        dbProxyName: rdsProxy.name,
-      });
-      this.part("proxyTarget", {
-        dbProxyName: rdsProxy.name,
-        targetGroupName: targetGroup.name,
+    if (rdsProxy)
+      createRdsProxyTarget(builder, rdsProxy, {
         dbClusterIdentifier: cluster.clusterIdentifier,
       });
-    }
 
     this.connection = connectTo(
       cluster,
@@ -888,41 +863,6 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       password,
       output(rdsProxy),
     );
-
-    function createProxy(proxy: ProxyArgs) {
-      // A secret for each additional user the proxy can connect as
-      const secrets = proxyCredentials(proxy.credentials, name).map(
-        ({ username, password }) => {
-          const secret = self.part("proxySecret", username, {
-            recoveryWindowInDays: 0,
-          });
-          self.part("proxySecretVersion", username, {
-            secretId: secret.id,
-            secretString: jsonStringify({ username, password }),
-          });
-          return secret;
-        },
-      );
-      // The proxy can connect as the master user and as each of those
-      const logins = [secret, ...secrets];
-
-      const role = self.part("proxyRole", proxyRoleArgs(logins));
-      const lookup = self.part("proxyRoleLookup", {
-        name: "AWSServiceRoleForRDS",
-      });
-      return self.part(
-        "proxy",
-        proxyArgs(
-          engine.apply((engine) =>
-            engine === "postgres" ? "POSTGRESQL" : "MYSQL",
-          ),
-          logins,
-          role,
-          vpc.subnets,
-        ),
-        { dependsOn: [lookup] },
-      );
-    }
 
     // A cluster created by this component, or by the 4.x one, is tagged with
     // the secret that holds its credentials, and with its proxy when it has
@@ -941,7 +881,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
           ]).apply(([id, instances]) => {
             if (!instances.length)
               throw new VisibleError(
-                `Database instance not found in cluster ${id}`,
+                `The "${name}" Aurora database can't find an instance in its cluster, "${id}".`,
               );
             return instances[0];
           }),
@@ -951,27 +891,32 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
         self.existingPart("secret") ??
         self.lookupPart(
           "secret",
-          credentialsSecretOf(
+          tagOf(
             cluster,
             "sst:ref:password",
-            `Failed to get password for Aurora ${name}.`,
+            `The "${name}" Aurora database can't find its secret: its cluster has no "sst:ref:password" tag, which names the secret that holds its password. Pass the secret in "existing.secret".`,
           ),
         );
 
-      const proxy = self.existingPart("proxy");
+      // The proxy the cluster is tagged with is looked up once a preview
+      // knows the tags, not inside an `apply`: until then it isn't in
+      // `nodes`, and `host` waits for it.
+      const proxy =
+        self.existingPart("proxy") ??
+        self.after(knownValue(cluster.tagsAll), (tags) =>
+          tags?.["sst:ref:proxy"]
+            ? self.lookupPart("proxy", tags["sst:ref:proxy"])
+            : undefined,
+        );
 
       return connectTo(
         cluster,
         instance,
         secret,
-        args.password ? output(args.password) : storedPassword(secret.id, self),
-        proxy
-          ? output(proxy)
-          : cluster.tagsAll.apply((tags) =>
-              tags?.["sst:ref:proxy"]
-                ? self.lookupPart("proxy", tags["sst:ref:proxy"])
-                : undefined,
-            ),
+        args.password
+          ? output(args.password)
+          : secretField(secret.id, "password", self),
+        output(proxy),
       );
     }
 
@@ -1031,7 +976,8 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
             (engine) => ({ postgres: 5432, mysql: 3306 })[engine],
           ),
         },
-        { database: "database", server: "database" },
+        owner,
+        "database",
       );
       self.report({ dev: local.pane });
       return {
@@ -1106,7 +1052,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
     return all([reader, proxy]).apply(([reader, proxy]) => {
       if (proxy)
         throw new VisibleError(
-          "Reader endpoint is not currently supported for RDS Proxy. Please contact us on Discord or open a GitHub issue.",
+          `The "${this.componentName}" Aurora database connects through its proxy, which has no reader endpoint. Connect to its "host".`,
         );
       return reader;
     });
@@ -1148,6 +1094,10 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
    * You can use the `static get` method to share Aurora clusters across stages.
    * :::
    *
+   * Its instance, the secret with its password, and its proxy when it has one are found
+   * from the cluster. The proxy is looked up once the cluster's tags are read, so it's in
+   * `nodes` only after that.
+   *
    * @param name The name of the component.
    * @param id The ID of the existing Aurora cluster.
    * @param opts Resource options.
@@ -1174,6 +1124,10 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
     id: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Aurora(name, { existing: { cluster: id } } as AuroraArgs, opts);
+    return new Aurora(
+      name,
+      getArgs({ existing: { cluster: id } }) as AuroraArgs,
+      opts,
+    );
   }
 }

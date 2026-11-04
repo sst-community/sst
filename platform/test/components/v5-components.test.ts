@@ -196,8 +196,8 @@ const eitherKind: Record<string, string[]> = {
   "aws/helpers/router.ts": ["aws/router.ts"],
   // A load balancer a service shares
   "aws/helpers/alb.ts": ["aws/alb.ts"],
-  // A task's or a service's cluster, and a file system it mounts
-  "aws/helpers/fargate.ts": ["aws/cluster.ts", "aws/efs.ts"],
+  // A task's or a service's cluster
+  "aws/helpers/cluster.ts": ["aws/cluster.ts"],
   // A function given as either \`Function\`, or either \`Workflow\`
   "aws/helpers/function-part.ts": ["aws/function.ts", "aws/workflow.ts"],
   // The states the 4.x and V5 \`StepFunctions\` share. They take the 4.x

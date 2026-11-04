@@ -4,9 +4,8 @@ import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
 import { type ComponentArgs, component } from "../../parts-component";
 import type { Prettify } from "../../component";
 import { context } from "../../contract";
-import type { RouteArgs } from "../helpers/router";
+import type { SiteRouteArgs } from "../helpers/router";
 import {
-  type ServerPlan,
   type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
@@ -351,7 +350,7 @@ export interface SvelteKitArgs
    *
    * Also, make sure to set the base path in your SvelteKit config, like above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -459,21 +458,22 @@ export interface SvelteKitArgs
  *
  * #### Switch from `sst.aws.SvelteKit`
  *
- * Change `sst.aws.SvelteKit` to `sst.aws.v5.SvelteKit` and keep the name. The site's bucket,
- * its server functions, and its CloudFront distribution or its entry in the router are kept.
- * Its files and its entries in the key-value store are written again by resources of a new
- * type, which the `sst` binary serves, and `sst migrate` takes the old ones out of the state
- * without deleting what they wrote. A few things are written differently:
+ * Change `sst.aws.SvelteKit` to `sst.aws.v5.SvelteKit` and keep the name. The site's
+ * bucket, its server functions, and its CloudFront distribution or its entry in the router
+ * are kept. Its files and its entries in the key-value store are written again by resources
+ * of a new type, which the `sst` binary serves, and `sst migrate` takes the old ones out of
+ * the state without deleting what they wrote. A few things are written differently:
  *
  * - The site is built in the deploy itself, once, with the values of what it's linked to.
  *   `sst.aws.SvelteKit` built it with a command it kept in the state, which goes.
- * - `sst diff` builds the site too, to show what the build creates. Values that aren't known
- *   until the deploy, like those of what the same deploy creates on a new stage, are left
- *   out of that build, and a link none of whose properties are known is passed with only
- *   its `type`. A build that checks its environment, or reads a link while it prerenders,
- *   has to allow for that. `sst.aws.SvelteKit` skipped its build in `sst diff` then.
- * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
- *   pack, build the site twice: in the preview, and in the deploy.
+ * - `sst diff` builds the site too, to show what the build creates. Values that aren't
+ *   known until the deploy, like those of what the same deploy creates on a new stage, are
+ *   left out of that build, and a link none of whose properties are known is passed with
+ *   only its `type`. A build that checks its environment, or reads a link while it
+ *   prerenders, has to allow for that. `sst.aws.SvelteKit` skipped its build in `sst diff`
+ *   then.
+ * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a
+ *   policy pack, build the site twice: in the preview, and in the deploy.
  * - `sst refresh` doesn't build the site, where `sst.aws.SvelteKit` did. What's made from
  *   the build, like the servers in `nodes.server`, stays as it is, and isn't listed while
  *   it runs.
@@ -482,11 +482,16 @@ export interface SvelteKitArgs
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.SvelteKit` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
- *   `regions` to have it from the start. In `sst dev`, the function the site runs as is
- *   `transform.devServer`, not `transform.server`.
+ *   `regions` to have it from the start.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.SvelteKit` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.SvelteKit` ignored it
  *   and wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.SvelteKit`
@@ -524,22 +529,16 @@ export class SvelteKit extends component("sst:aws:SvelteKit", parts) {
   }
 }
 
-// A SvelteKit app's build, and its server
-interface SvelteKitBuild extends SiteBuild {
-  server: ServerPlan;
-}
-
 // How a SvelteKit app is built, with its package manager and the
 // "svelte-kit-sst" adapter, and what its server is
-const svelteKit: SsrFramework<SvelteKitBuild> = {
+const svelteKit: SsrFramework = {
   label: "SvelteKit",
   alwaysServes: true,
   load: loadBuild,
-  server: (build) => build.server,
 };
 
 // Reads what the adapter built
-function loadBuild(builtPath: string): SvelteKitBuild {
+function loadBuild(builtPath: string): SiteBuild {
   const outputPath = path.resolve(context().paths.root, builtPath);
   const adapterPath = path.join(".svelte-kit", "svelte-kit-sst");
   // The server's files, from the site's folder as it was given

@@ -9,6 +9,7 @@ import {
 } from "@pulumi/pulumi";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 const ROLE = "aws:iam/role:Role";
 const LAMBDA = "aws:lambda/function:Function";
@@ -790,6 +791,34 @@ describe("Function", () => {
         "MineFunction",
       );
     });
+
+    it("uses the ARN of a function passed in existing", async () => {
+      const arn = "arn:aws:lambda:us-east-1:123456789012:function:mine";
+      new Queue("MyQueue", { existing: { subscriber: arn } }).subscribe(
+        "src/unused.handler",
+      );
+      await pulumi.settle();
+
+      expect(pulumi.resources.some((r) => r.name === "MyQueueSubscriber")).toBe(
+        false,
+      );
+      expect(inputs("MyQueueEventSourceMapping").functionName).toBe(arn);
+    });
+
+    // `existing` is for a function you have. A name or a handler there
+    // would have created a function from it.
+    it("refuses what isn't a function or its ARN in existing", async () => {
+      for (const given of ["mine", "src/mine.handler", { handler }])
+        expect(() =>
+          new Queue(`MyQueue${Math.random()}`.replace(".", ""), {
+            existing: { subscriber: given as any },
+          }).subscribe("src/unused.handler"),
+        ).toThrow(
+          /The "existing\.subscriber" of "MyQueue\d+Subscriber" isn't a function or the ARN of one/,
+        );
+      // What the queues registered, before the next test
+      await pulumi.settle();
+    });
   });
 
   // The 4.x Function takes a few options another way: `live`, `role`,
@@ -921,8 +950,40 @@ describe("Function", () => {
         { python: { container: output(true) } },
         { concurrency: output({}) },
         { concurrency: { provisioned: output(1) } },
+        { retries: output(0) },
       ])
         expect(create(args)).toThrow(/has to be a plain value, not an output/);
+    });
+
+    it("for args next to a function it's given", async () => {
+      expect(create({ url: true, existing: { function: "existing" } })).toThrow(
+        'The "MyFunction" function is given an existing "function", which it uses the way it is. Remove "handler", "url" from its args.',
+      );
+      // What a `$transform` for every function sets isn't meant for one from
+      // `get`
+      const { $transform } = await import("../../../src/components/component");
+      $transform(Function, (args, _opts, name) => {
+        if (name === "Shared") args.runtime = "nodejs22.x";
+      });
+      Function.get("Shared", "app-dev-existing");
+      await pulumi.settle();
+    });
+
+    // Another resource would be read as the ids of a VPC
+    it("for a vpc that isn't a Vpc, or one given as SST 4 did", async () => {
+      const vpc = new aws.ec2.Vpc("Mine", { cidrBlock: "10.0.0.0/16" });
+      expect(create({ vpc })).toThrow(
+        'The "vpc" of the "MyFunction" function isn\'t a "Vpc" component.',
+      );
+      const errors = await applyErrors(
+        create({ vpc: { subnets: ["subnet-1"], securityGroups: ["sg-1"] } }),
+        pulumi.settle,
+      );
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          '"vpc.subnets" isn\'t an option for the "MyFunction" function. It\'s "vpc.privateSubnets" now.',
+        ),
+      );
     });
 
     it("for a retention on a log group the user has", () => {

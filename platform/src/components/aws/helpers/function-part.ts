@@ -66,6 +66,27 @@ export type FunctionInput =
   | Input<OriginalWorkflow>;
 
 /**
+ * What `existing` gives a function part: a function you have, a workflow, or
+ * the ARN of one, which an output can resolve to. A handler or a function's
+ * args would create a function, which isn't what `existing` is for.
+ */
+function existingFunction(given: unknown, what: string): FunctionDefinition {
+  if (Output.isInstance(given) || typeof (given as any)?.then === "function")
+    return plainFunction(given as FunctionInput, what);
+  if (
+    given instanceof Function ||
+    given instanceof OriginalFunction ||
+    given instanceof Workflow ||
+    given instanceof OriginalWorkflow ||
+    (typeof given === "string" && given.startsWith("arn:"))
+  )
+    return given as FunctionDefinition;
+  throw new VisibleError(
+    `${what} isn't a function or the ARN of one. Pass the function you have, or its ARN. A handler or the function's args create a function: pass them where the component takes its function, not in "existing".`,
+  );
+}
+
+/**
  * A function a component takes the 5.0 way, checked: what's created is
  * decided from what was passed, and a preview has to know it, so only a
  * function that's already there, or its ARN, can be an output. Pass what it
@@ -166,7 +187,13 @@ export function functionPart(
 
   const part = component.partHandle(key, id);
   // A function passed in `existing`, or its ARN, is used as it is
-  const given = (part.existing as FunctionDefinition | undefined) ?? definition;
+  const given =
+    part.existing === undefined
+      ? definition
+      : existingFunction(
+          part.existing,
+          `The "existing.${key}"${id === undefined ? "" : ` named "${id}"`} of "${part.name}"`,
+        );
   // What was passed decides what to do, not the values inside it. Waiting on
   // those too would leave the function out of a preview whenever an arg isn't
   // known until the deploy, and `sst diff` would show it as deleted.
@@ -189,7 +216,7 @@ export function functionPart(
     )
       return use(definition.getFunction());
     if (typeof definition === "string" && definition.startsWith("arn:"))
-      return useArn(definition);
+      return useArn(definition, part.name);
 
     const args: Record<string, any> =
       typeof definition === "string"
@@ -197,7 +224,7 @@ export function functionPart(
         : (definition as object);
     if (!args?.handler)
       throw new VisibleError(
-        `Invalid function definition for "${part.name}". Pass a handler, the function's args, or the ARN of a function.`,
+        `The "${part.name}" function has no handler. Pass a handler, the function's args with a "handler", a function, or the ARN of one.`,
       );
 
     return use(
@@ -267,7 +294,7 @@ function use(fn: Function | OriginalFunction) {
   };
 }
 
-function useArn(arn: string) {
+function useArn(arn: string, name: string) {
   const { unqualifiedArn, qualifier } = splitQualifiedFunctionArn(arn);
   const [, partition, , region] = arn.split(":");
   const invoke = (api: string, path: string) =>
@@ -275,7 +302,7 @@ function useArn(arn: string) {
   return {
     getFunction: (): Function => {
       throw new VisibleError(
-        "Cannot access the created function because it is referenced as an ARN.",
+        `The "${name}" function is given by its ARN, so there's no function component for it in "nodes".`,
       );
     },
     arn: output(unqualifiedArn),

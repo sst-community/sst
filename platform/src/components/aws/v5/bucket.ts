@@ -25,7 +25,7 @@ import {
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { notAnOption, plain, withDefault } from "../../args";
+import { notAnOption, plain, usedAsItIs, withDefault, getArgs } from "../../args";
 import type { Plain } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
@@ -37,9 +37,10 @@ import {
   plainFunction,
 } from "../helpers/function-part";
 import { invokePermissionArgs } from "../helpers/function-permission";
-import { sendPolicyArgs } from "../helpers/queue-policy";
-import type { AnyQueue } from "../helpers/queue";
-import type { AnySnsTopic } from "../helpers/sns-topic";
+import { enabledState, ruleFunctionTarget } from "../helpers/eventbridge";
+import { sendPolicy } from "../helpers/queue-policy";
+import { type AnyQueue, queueArnOf } from "../helpers/queue";
+import { type AnySnsTopic, topicArnOf } from "../helpers/sns-topic";
 import { permission } from "../permission";
 
 const parts = () => ({
@@ -979,6 +980,20 @@ export interface BucketEventBridgeSubscriberArgs {
  * await getSignedUrl(new S3Client({}), command);
  * ```
  *
+ * #### Use a bucket you already have
+ *
+ * Pass the bucket, or its name. The bucket is used the way it is: the component doesn't
+ * configure it, and refuses `access`, `cors`, `versioning` and the other settings of a
+ * bucket next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Bucket("MyBucket", {
+ *   existing: {
+ *     bucket: "app-dev-mybucket-12345678"
+ *   }
+ * });
+ * ```
+ *
  * #### Switch from `sst.aws.Bucket`
  *
  * Change `sst.aws.Bucket` to `sst.aws.v5.Bucket` and keep the name. The bucket, what
@@ -996,45 +1011,39 @@ export interface BucketEventBridgeSubscriberArgs {
  *   outputs.
  * - So are the list of `notifications` that `notify` takes, each notification in it, and
  *   its `name`. A notification's `function`, and the function `subscribeEventBridge`
- *   takes, can't be a handler or a function's args in an output: whether a function is
- *   created is decided from them. Only a function you have, or its ARN, can be one.
- * - A function's args there are typed as [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s.
- *   Args written the way `sst.aws.Function` takes them, like `role` or `live`, still
- *   work, but don't type-check.
- * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   takes, can't be a handler or a function's args in an output: they decide what's
+ *   created. A function you already have, or its ARN, can still be an output.
+ * - A function's args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
  * - A `transform` function for `cors` or `lifecycle` is given outputs where
  *   `sst.aws.Bucket` gave it plain values, like `corsRules[0].allowedOrigins` and
  *   `rules`. Change them with `apply`, or set them with an object.
+ * - A notification's function is described after the component, `Notified by MyBucket on
+ *   ...`, where `sst.aws.Bucket` named the component it kept the notifications in: an
+ *   update in place.
  * - `transform: { publicAccessBlock: false }` becomes `publicAccessBlock: false`.
  * - `public: true` becomes `access: "public"`.
  * - The `transform` of `notify` becomes the bucket's `transform.notification`.
- * - `subscribe`, `subscribeQueue` and `subscribeTopic` are gone. Use `notify`, which keeps
- *   the subscriber you had.
+ * - `subscribe`, `subscribeQueue` and `subscribeTopic` are gone, and are refused with what
+ *   to write. Use `notify`, which keeps the subscriber you had.
+ * - The static `sst.aws.Bucket.subscribe`, `subscribeQueue` and `subscribeTopic`, which
+ *   took a bucket's ARN, are gone too: call `notify` on `get`. They're refused with what
+ *   to write. What they created isn't kept: remove it and deploy before you switch, then
+ *   add it back with `notify`.
  * - `sst.aws.Bucket.subscribeEventBridge(name, bucketName, ...)` is `subscribeEventBridge`
- *   on the bucket, or on `get` for a bucket that isn't in your app. What it created is
- *   kept. It's created with the bucket's `provider`, where `sst.aws.Bucket` used your app's:
- *   if your bucket has a `provider`, its rule, target and permission are replaced on
- *   switch.
+ *   on the bucket, or on `get` for a bucket that isn't in your app, and the static one is
+ *   refused with what to write. What it created is kept. It's created with the bucket's
+ *   `provider`, where `sst.aws.Bucket` used your app's: if your bucket has a `provider`,
+ *   its rule, target and permission are replaced on switch.
  * - `get` gives its options to the component, so a `provider` or `parent` you pass it
  *   applies to the bucket's notifications too. `sst.aws.Bucket.get` gave them to the bucket it
  *   looked up and to nothing else. If you pass `get` a `provider` and call `notify` on that
  *   bucket, its notifications are replaced on switch, to be created with that provider:
  *   remove them and deploy before you switch, then add them back.
- *
- * #### Use a bucket you already have
- *
- * Pass the bucket, or its name. The bucket is used the way it is: the component doesn't
- * configure it.
- *
- * ```ts title="sst.config.ts"
- * new sst.aws.v5.Bucket("MyBucket", {
- *   existing: {
- *     bucket: "app-dev-mybucket-12345678"
- *   }
- * });
- * ```
  */
 export class Bucket extends component("sst:aws:Bucket", parts) {
   constructor(
@@ -1044,7 +1053,12 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
   ) {
     super(name, args, opts);
 
-    notAnOption(args, "public", `Use "access" instead: access: "public".`);
+    notAnOption(
+      args,
+      "public",
+      `Use "access" instead: access: "public".`,
+      `the "${name}" bucket`,
+    );
     const noBlock: unknown = args.transform?.publicAccessBlock;
     if (noBlock === false)
       throw new VisibleError(
@@ -1055,11 +1069,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
 
     // A bucket that's already there is used the way it is
     if (this.existingPart("bucket")) {
-      const set = CONFIGURES.filter((arg) => args[arg] !== undefined);
-      if (set.length > 0)
-        throw new VisibleError(
-          `The "${name}" bucket is given an existing "bucket", which it uses the way it is. Remove ${set.map((arg) => `"${arg}"`).join(", ")} from its args.`,
-        );
+      usedAsItIs(args, CONFIGURES, "bucket", `the "${name}" bucket`);
       return;
     }
 
@@ -1270,12 +1280,12 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
     );
     if (this.nodes.notification)
       throw new VisibleError(
-        `Cannot call "notify" on the "${name}" bucket multiple times. Calling it again will override previous notifications.`,
+        `"notify" was already called on the "${name}" bucket. A bucket has one notification configuration: pass all of its notifications in one call.`,
       );
 
     if (!args.eventBridge && !args.notifications)
       throw new VisibleError(
-        `Cannot call "notify" on the "${name}" bucket without notifications or EventBridge enabled.`,
+        `"notify" on the "${name}" bucket needs "notifications", or "eventBridge" set to true.`,
       );
     const notifications = plain(
       args.notifications ?? [],
@@ -1300,14 +1310,12 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
       const targets = [n.function, n.queue, n.topic].filter(
         (target) => target !== undefined,
       ).length;
-      if (targets === 0)
+      if (targets !== 1) {
+        const has = targets === 0 ? "has none" : "has more than one";
         throw new VisibleError(
-          `At least one of function, queue, or topic is required for the "${n.name}" bucket notification.`,
+          `The "${n.name}" notification of the "${name}" bucket ${has} of "function", "queue" and "topic". Give it one.`,
         );
-      if (targets > 1)
-        throw new VisibleError(
-          `Only one of function, queue, or topic is allowed for the "${n.name}" bucket notification.`,
-        );
+      }
 
       const events = withDefault(n.events, EVENTS);
       const config = {
@@ -1343,17 +1351,13 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
         );
         lambdaFunctions.push({ ...config, lambdaFunctionArn: fn.targetArn });
       } else if (n.queue !== undefined) {
-        const queueArn = arnOf(n.queue);
+        const queueArn = queueArnOf(n.queue);
         dependsOn.push(
-          // A queue has one policy. Whatever replaces this one sets its own,
-          // so deleting this one would remove the replacement.
-          this.part("queuePolicy", n.name, sendPolicyArgs(queueArn), {
-            retainOnDelete: true,
-          }),
+          this.part("queuePolicy", n.name, ...sendPolicy(queueArn)),
         );
         queues.push({ ...config, queueArn });
       } else {
-        const topicArn = arnOf(n.topic!);
+        const topicArn = topicArnOf(n.topic!);
         dependsOn.push(
           this.part("topicPolicy", n.name, {
             arn: topicArn,
@@ -1435,9 +1439,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
     const bus = "default";
     const rule = this.part("eventBridgeRule", name, {
       eventBusName: bus,
-      state: output(args.enabled ?? true).apply((enabled) =>
-        enabled ? "ENABLED" : "DISABLED",
-      ),
+      state: enabledState(args.enabled),
       // This bucket's events, and of those the ones the pattern matches
       eventPattern: all([this.name, args.pattern ?? {}]).apply(
         ([bucketName, pattern]) => {
@@ -1453,28 +1455,94 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
         },
       ),
     });
-    const fn = functionPart(
-      this,
-      "eventBridgeSubscriber",
+    ruleFunctionTarget(
+      this.builder(),
+      {
+        subscriber: "eventBridgeSubscriber",
+        permission: "eventBridgePermission",
+        target: "eventBridgeTarget",
+      },
       name,
-      plainFunction(
-        subscriber,
-        `The EventBridge subscriber "${name}" of the "${this.componentName}" bucket`,
-      ),
-      { description: `Subscribed to ${bus}` },
-    );
-    const permission = this.part(
-      "eventBridgePermission",
-      name,
-      invokePermissionArgs(fn, "events.amazonaws.com", rule.arn),
-    );
-    this.part(
-      "eventBridgeTarget",
-      name,
-      { arn: fn.targetArn, rule: rule.name, eventBusName: bus },
-      { dependsOn: [permission] },
+      rule,
+      {
+        bus,
+        subscriber: plainFunction(
+          subscriber,
+          `The EventBridge subscriber "${name}" of the "${this.componentName}" bucket`,
+        ),
+        description: `Subscribed to ${bus}`,
+      },
     );
     return this;
+  }
+
+  /** @internal */
+  public subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribe" isn't a method of the "${this.componentName}" bucket. Notify the function with "notify": bucket.notify({ notifications: [{ name: "MySubscriber", function: "src/subscriber.handler" }] }).`,
+    );
+  }
+
+  /** @internal */
+  public subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribeQueue" isn't a method of the "${this.componentName}" bucket. Notify the queue with "notify": bucket.notify({ notifications: [{ name: "MyQueue", queue }] }).`,
+    );
+  }
+
+  /** @internal */
+  public subscribeTopic(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribeTopic" isn't a method of the "${this.componentName}" bucket. Notify the topic with "notify": bucket.notify({ notifications: [{ name: "MyTopic", topic }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribe` subscribed to a bucket by its ARN. Reference the bucket
+   * with `get` and call `notify` on that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To be notified of the events of a bucket that isn't in your app, reference it with "get" and call "notify" on that: sst.aws.v5.Bucket.get("MyBucket", bucketName).notify({ notifications: [{ name: "MySubscriber", function: "src/subscriber.handler" }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribeQueue` subscribed a queue to a bucket by its ARN. Reference
+   * the bucket with `get` and call `notify` on that.
+   *
+   * @internal
+   */
+  public static subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To notify a queue of the events of a bucket that isn't in your app, reference the bucket with "get" and call "notify" on that: sst.aws.v5.Bucket.get("MyBucket", bucketName).notify({ notifications: [{ name: "MyQueue", queue }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribeTopic` subscribed a topic to a bucket by its ARN. Reference
+   * the bucket with `get` and call `notify` on that.
+   *
+   * @internal
+   */
+  public static subscribeTopic(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To notify a topic of the events of a bucket that isn't in your app, reference the bucket with "get" and call "notify" on that: sst.aws.v5.Bucket.get("MyBucket", bucketName).notify({ notifications: [{ name: "MyTopic", topic }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribeEventBridge` subscribed to a bucket's events by its name.
+   * It's a method of the bucket now.
+   *
+   * @internal
+   */
+  public static subscribeEventBridge(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribeEventBridge" is a method of the bucket: call it on the bucket, or on "get" for a bucket that isn't in your app: sst.aws.v5.Bucket.get("MyBucket", bucketName).subscribeEventBridge("MySubscriber", "src/subscriber.handler").`,
+    );
   }
 
   /**
@@ -1499,7 +1567,11 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
     bucketName: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Bucket(name, { existing: { bucket: bucketName } }, opts);
+    return new Bucket(
+      name,
+      getArgs({ existing: { bucket: bucketName } }),
+      opts,
+    );
   }
 
   /**
@@ -1552,13 +1624,6 @@ const PRINCIPALS = {
   federated: "Federated",
   canonical: "Canonical",
 };
-
-/** The ARN of a queue or topic that's given as a component or as its ARN. */
-function arnOf(target: Input<string | AnyQueue | AnySnsTopic>) {
-  return output(target).apply((target) =>
-    typeof target === "string" ? output(target) : target.arn,
-  );
-}
 
 /**
  * The bucket policy: read access for the public or for CloudFront, the
@@ -1650,18 +1715,19 @@ function lifecycleIds(name: string, rules: { id?: string }[]) {
   const seen = new Map<string, number>();
   return rules.map((rule, index) => {
     const id = (rule.id ?? `${name}LifecycleRule${index}`).trim();
+    const what = `Lifecycle rule ${index} of the "${name}" bucket`;
     if (id.length === 0)
       throw new VisibleError(
-        `Lifecycle rule at index ${index} has an empty or whitespace-only "id". Please provide a valid id or omit it to use the auto-generated id.`,
+        `${what} has an empty "id". Give it one, or leave "id" out for one made from the bucket's name.`,
       );
     if (id.length > 255)
       throw new VisibleError(
-        `Lifecycle rule at index ${index} has an "id" that is ${id.length} characters long. AWS S3 lifecycle rule IDs cannot exceed 255 characters.`,
+        `${what} has an "id" that's ${id.length} characters long. S3 takes at most 255.`,
       );
     const other = seen.get(id);
     if (other !== undefined)
       throw new VisibleError(
-        `Lifecycle rule "id" values must be unique. The id "${id}" is used by rules at indexes ${other} and ${index}.`,
+        `Lifecycle rules ${other} and ${index} of the "${name}" bucket have the same "id", "${id}". Give each its own.`,
       );
     seen.set(id, index);
     return id;

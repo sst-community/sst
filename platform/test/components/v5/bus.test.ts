@@ -176,12 +176,12 @@ describe("Bus", () => {
     });
 
     // 4.x's documented example: its function is kept, under the bus's
-    // component now
+    // component now. `get` takes the ARN the static `subscribe` was given.
     it("a subscriber added with the static subscribe from a handler", async () => {
       const result = await pulumi.takesOver(
         () => OriginalBus.subscribe("Emailer", BUS_ARN, "src/email.handler"),
         () =>
-          Bus.get("SharedBus", "shared").subscribe(
+          Bus.get("SharedBus", BUS_ARN).subscribe(
             "Emailer",
             "src/email.handler",
           ),
@@ -293,6 +293,44 @@ describe("Bus", () => {
       bus.subscribe("Other", FUNCTION_ARN, { transform: {} } as any),
     ).toThrow(/Use the "transform" of "MyBus": its "rule" and "target" apply/);
     expect(() => bus.subscribeQueue("Emailer", QUEUE_ARN)).toThrow();
+  });
+
+  it("says to use get in place of the static subscribe and subscribeQueue", () => {
+    const Static = Bus as any;
+    expect(() =>
+      Static.subscribe("Emailer", BUS_ARN, "src/email.handler"),
+    ).toThrow(/sst\.aws\.v5\.Bus\.get\("MyBus", busArn\)\.subscribe\(/);
+    expect(() => Static.subscribeQueue("Orders", BUS_ARN, QUEUE_ARN)).toThrow(
+      /sst\.aws\.v5\.Bus\.get\("MyBus", busArn\)\.subscribeQueue\(/,
+    );
+  });
+
+  it("references a bus by its ARN", async () => {
+    const bus = Bus.get("SharedBus", BUS_ARN);
+    await pulumi.settle();
+    expect(resource("SharedBusBus")).toMatchObject({
+      kind: "read",
+      options: { id: "shared" },
+    });
+    expect(await pulumi.resolve(bus.name)).toBe("shared");
+  });
+
+  it("refuses settings for a bus it's given, but not what a $transform gives one from get", async () => {
+    expect(
+      () =>
+        new Bus("MyBus", {
+          existing: { bus: "shared" },
+          logging: { level: "info" },
+        }),
+    ).toThrow(
+      'The "MyBus" bus is given an existing "bus", which it uses the way it is. Remove "logging" from its args.',
+    );
+    const { $transform } = await import("../../../src/components/component");
+    $transform(Bus, (args, _opts, name) => {
+      if (name === "Shared") args!.logging = { level: "error" };
+    });
+    Bus.get("Shared", "shared");
+    await pulumi.settle();
   });
 
   it("links its name and arn, with permission to use it", async () => {

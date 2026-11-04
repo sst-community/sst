@@ -14,7 +14,7 @@ import {
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { ifSet, plain, withDefault } from "../../args";
+import { ifSet, notAnExistingPart, plain, usedAsItIs, withDefault, getArgs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
@@ -55,7 +55,8 @@ const parts = () => ({
    */
   certificate: optional(DnsValidatedCertificate),
   /**
-   * The domain of the hosted UI, when `domain` is set.
+   * The domain of the hosted UI, when `domain` is set. One you pass in `existing` is used
+   * without `domain`, and `domainUrl` is its URL.
    */
   domain: optional(cognito.UserPoolDomain),
   /**
@@ -386,7 +387,8 @@ export interface CognitoUserPoolArgs extends ComponentArgs<typeof parts> {
    *
    * You can use either a Cognito-provided prefix domain or your own custom domain. The
    * domain has to be a plain value, and so do a custom domain's `name` and `dns`: they
-   * decide the certificate and the DNS records.
+   * decide the certificate and the DNS records. To use a domain the user pool already has,
+   * pass it in `existing.domain` and leave this out.
    *
    * @example
    *
@@ -611,17 +613,16 @@ export class CognitoUserPool extends component(
   ) {
     super(name, args, opts);
 
+    const owner = `the "${name}" user pool`;
     // A user pool that's already deployed keeps the settings it has
-    if (this.existingPart("userPool")) {
-      const settings = SETTINGS.filter((key) => args[key] !== undefined);
-      if (settings.length > 0)
-        throw new VisibleError(
-          `The "${name}" user pool is given an existing "userPool", so it doesn't create one and can't change its settings. Remove ${settings.map((key) => `"${key}"`).join(", ")}.`,
-        );
-    }
+    if (this.existingPart("userPool"))
+      usedAsItIs(args, SETTINGS, "userPool", owner);
+    // A domain the user pool has already is used the way it is
+    if (args.existing?.domain !== undefined)
+      usedAsItIs(args, ["domain"], "domain", owner);
     if (args.aliases && args.usernames)
       throw new VisibleError(
-        `You cannot set both "aliases" and "usernames" for the "${name}" user pool. Learn more about customizing sign-in attributes at https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases`,
+        `The "${name}" user pool is given both "aliases" and "usernames". Give it one of them. Learn more about customizing sign-in attributes at https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases`,
       );
 
     const triggers = this.createTriggers(args.triggers);
@@ -685,11 +686,23 @@ export class CognitoUserPool extends component(
         invokePermissionArgs(fn, "cognito-idp.amazonaws.com", userPool.arn),
       );
 
-    if (args.domain)
-      this.hostedUiUrl = this.createDomain(
-        plain(args.domain, `The "domain" of the "${name}" user pool`),
-        userPool,
+    const domain = plain(args.domain, `The "domain" of ${owner}`);
+    // The certificate is a custom domain's, when it's given no `cert`
+    if (
+      !domain ||
+      (typeof domain !== "string" && ("prefix" in domain || domain.cert))
+    )
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        owner,
+        `It's the certificate of a custom domain the user pool creates: give "domain" a "name" and no "cert".`,
       );
+    if (domain) this.hostedUiUrl = this.createDomain(domain, userPool);
+    else {
+      const existing = this.existingPart("domain");
+      if (existing) this.hostedUiUrl = urlOfDomain(existing, this);
+    }
   }
 
   // The function behind each trigger, and what the user pool is told about
@@ -703,7 +716,7 @@ export class CognitoUserPool extends component(
       !triggers.kmsKey
     )
       throw new VisibleError(
-        `You must provide a KMS key via "kmsKey" when configuring "customEmailSender" or "customSmsSender" for the "${name}" user pool.`,
+        `The "triggers" of the "${name}" user pool have "customEmailSender" or "customSmsSender", which need a KMS key. Give it in "triggers.kmsKey".`,
       );
 
     const functions: Partial<Record<Trigger, FunctionPart>> = {};
@@ -811,7 +824,8 @@ export class CognitoUserPool extends component(
   }
 
   /**
-   * If a `domain` is configured, this is the full URL of the hosted UI.
+   * If a `domain` is configured, or one is given in `existing.domain`, this is the full
+   * URL of the hosted UI.
    */
   public get domainUrl() {
     return this.hostedUiUrl;
@@ -895,7 +909,7 @@ export class CognitoUserPool extends component(
       providerType: output(args.type).apply((type) => {
         if (!(type in PROVIDER_TYPES))
           throw new VisibleError(
-            `Invalid provider type "${type}" for the "${name}" identity provider. Use one of: ${Object.keys(PROVIDER_TYPES).join(", ")}.`,
+            `The "${name}" identity provider of the "${this.componentName}" user pool has the type "${type}". Use one of ${Object.keys(PROVIDER_TYPES).join(", ")}.`,
           );
         return PROVIDER_TYPES[type];
       }),
@@ -956,13 +970,25 @@ export class CognitoUserPool extends component(
   ) {
     return new CognitoUserPool(
       name,
-      { existing: { userPool: userPoolID } },
+      getArgs({ existing: { userPool: userPoolID } }),
       opts,
     );
   }
 }
 
 // The args that are settings of the user pool itself
+// The URL of a user pool's domain: a custom domain, which has a certificate,
+// or a Cognito prefix domain in the user pool's region
+function urlOfDomain(domain: cognito.UserPoolDomain, parent: CognitoUserPool) {
+  const region = getRegionOutput(undefined, { parent }).region;
+  return all([domain.domain, domain.certificateArn, region]).apply(
+    ([name, cert, region]) =>
+      cert
+        ? `https://${name}`
+        : `https://${name}.auth.${region}.amazoncognito.com`,
+  );
+}
+
 const SETTINGS = [
   "aliases",
   "usernames",

@@ -1,17 +1,23 @@
 import {
   all,
   interpolate,
+  jsonStringify,
   type Output,
   output,
-  type Resource,
 } from "@pulumi/pulumi";
+import { RandomPassword, type RandomPasswordArgs } from "@pulumi/random";
 import { iam, rds, secretsmanager } from "@pulumi/aws";
+import { many, optional } from "../../parts-component";
 import { plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type SizeGbTb, toGBs } from "../../size";
 import type { DevReport } from "../../contract";
-import { localServerPane, shownPassword } from "./local-server";
+import { RdsRoleLookup } from "../providers/rds-role-lookup";
+import { devValue, localPassword, localServerPane } from "./local-server";
+
+// What the databases on RDS share: the `Aurora`, and the `Postgres` and the
+// `Mysql` on an RDS instance (`rds-instance.ts`).
 
 /**
  * An RDS Proxy in front of the database.
@@ -69,24 +75,207 @@ export interface ProxyArgs {
 export type ProxyCredential = NonNullable<ProxyArgs["credentials"]>[number];
 
 /**
+ * The parts that hold the master user's password, next to the secret it's
+ * stored in, which each database declares itself.
+ */
+export const rdsCredentialParts = {
+  /**
+   * The random password of the master user. It's created when you don't set a `password`.
+   */
+  password: optional(RandomPassword),
+  /**
+   * The version of the secret holding the current username and password. Not created by
+   * `get`.
+   */
+  secretVersion: optional(secretsmanager.SecretVersion),
+};
+
+/**
+ * The parts of an RDS Proxy in front of a database.
+ */
+export const rdsProxyParts = {
+  /**
+   * The secrets that store the additional credentials the proxy can use, by username.
+   */
+  proxySecret: many(secretsmanager.Secret),
+  /**
+   * The versions of the secrets holding the additional credentials, by username.
+   */
+  proxySecretVersion: many(secretsmanager.SecretVersion),
+  /**
+   * The IAM role that lets the proxy read the secrets.
+   */
+  proxyRole: optional(iam.Role),
+  /**
+   * Waits for the service-linked role RDS needs before the proxy is created.
+   */
+  proxyRoleLookup: optional(RdsRoleLookup),
+  /**
+   * The RDS Proxy. One that's looked up for `get` may only be added once the database's
+   * tags are read.
+   */
+  proxy: optional(rds.Proxy),
+  /**
+   * The proxy's default target group.
+   */
+  proxyTargetGroup: optional(rds.ProxyDefaultTargetGroup),
+  /**
+   * The proxy's target: the database.
+   */
+  proxyTarget: optional(rds.ProxyTarget),
+};
+
+/**
+ * What creating the master user's credentials needs from a database: its
+ * own `part()`, as `this.builder()` gives it.
+ */
+export interface RdsCredentialsBuilder {
+  part(key: "password", args: RandomPasswordArgs): RandomPassword;
+  part(key: "secret", args: secretsmanager.SecretArgs): secretsmanager.Secret;
+  part(
+    key: "secretVersion",
+    args: secretsmanager.SecretVersionArgs,
+  ): secretsmanager.SecretVersion;
+}
+
+/**
+ * What creating a proxy needs from a database: its own `part()`, as
+ * `this.builder()` gives it.
+ */
+export interface RdsProxyBuilder {
+  part(
+    key: "proxySecret",
+    id: string,
+    args: secretsmanager.SecretArgs,
+  ): secretsmanager.Secret;
+  part(
+    key: "proxySecretVersion",
+    id: string,
+    args: secretsmanager.SecretVersionArgs,
+  ): secretsmanager.SecretVersion;
+  part(key: "proxyRole", args: iam.RoleArgs): iam.Role;
+  part(key: "proxyRoleLookup", args: { name: Input<string> }): RdsRoleLookup;
+  part(
+    key: "proxy",
+    args: rds.ProxyArgs,
+    opts?: { dependsOn: RdsRoleLookup[] },
+  ): rds.Proxy;
+  part(
+    key: "proxyTargetGroup",
+    args: rds.ProxyDefaultTargetGroupArgs,
+  ): rds.ProxyDefaultTargetGroup;
+  part(key: "proxyTarget", args: rds.ProxyTargetArgs): rds.ProxyTarget;
+}
+
+/**
+ * Create the master user's password, unless one is given, and the secret
+ * that stores it with the username.
+ */
+export function createCredentials(
+  builder: RdsCredentialsBuilder,
+  username: Input<string>,
+  password: Input<string> | undefined,
+) {
+  const value = password
+    ? output(password)
+    : builder.part("password", { length: 32, special: false }).result;
+  const secret = builder.part("secret", { recoveryWindowInDays: 0 });
+  builder.part("secretVersion", {
+    secretId: secret.id,
+    secretString: jsonStringify({ username, password: value }),
+  });
+  return { password: value, secret };
+}
+
+/**
+ * Create a proxy in front of a database, with a secret for each additional
+ * user it can connect as. Its target is created with `createRdsProxyTarget()`,
+ * once the database is.
+ *
+ * @param master The secret that stores the master user's credentials.
+ * @param owner The database, for the error messages: `the "MyDatabase"
+ * Postgres database`.
+ */
+export function createRdsProxy(
+  builder: RdsProxyBuilder,
+  proxy: ProxyArgs,
+  {
+    master,
+    engineFamily,
+    subnets,
+    owner,
+  }: {
+    master: secretsmanager.Secret;
+    engineFamily: Input<"POSTGRESQL" | "MYSQL">;
+    subnets: Input<Input<string>[]>;
+    owner: string;
+  },
+): rds.Proxy {
+  // A secret for each additional user the proxy can connect as
+  const secrets = proxyCredentials(proxy.credentials, owner).map(
+    ({ username, password }) => {
+      const secret = builder.part("proxySecret", username, {
+        recoveryWindowInDays: 0,
+      });
+      builder.part("proxySecretVersion", username, {
+        secretId: secret.id,
+        secretString: jsonStringify({ username, password }),
+      });
+      return secret;
+    },
+  );
+  // The proxy can connect as the master user and as each of those
+  const logins = [master, ...secrets];
+
+  const role = builder.part("proxyRole", proxyRoleArgs(logins));
+  const lookup = builder.part("proxyRoleLookup", {
+    name: "AWSServiceRoleForRDS",
+  });
+  return builder.part("proxy", proxyArgs(engineFamily, logins, role, subnets), {
+    dependsOn: [lookup],
+  });
+}
+
+/**
+ * Point a proxy at its database: an instance, or an Aurora cluster.
+ */
+export function createRdsProxyTarget(
+  builder: RdsProxyBuilder,
+  proxy: rds.Proxy,
+  target:
+    | { dbInstanceIdentifier: Input<string> }
+    | { dbClusterIdentifier: Input<string> },
+) {
+  const targetGroup = builder.part("proxyTargetGroup", {
+    dbProxyName: proxy.name,
+  });
+  builder.part("proxyTarget", {
+    dbProxyName: proxy.name,
+    targetGroupName: targetGroup.name,
+    ...target,
+  });
+}
+
+/**
  * How far a database's storage can grow, in GB, from its `storage` arg.
  *
- * @param database The database, for the error messages: "MyDatabase Postgres".
+ * @param owner The database, for the error messages: `the "MyDatabase"
+ * Postgres database`.
  */
 export function maxStorage(
   storage: Input<SizeGbTb | undefined> | undefined,
   blueGreen: Input<boolean>,
-  database: string,
+  owner: string,
 ) {
   const limit = withDefault<SizeGbTb, number>(storage, "20 GB", (v) => {
     const size = toGBs(v);
     if (size < 20)
       throw new VisibleError(
-        `Storage must be at least 20 GB for the ${database} database.`,
+        `The "storage" of ${owner} is ${v}. It has to be at least 20 GB.`,
       );
     if (size > 65536)
       throw new VisibleError(
-        `Storage cannot be greater than 65536 GB (64 TB) for the ${database} database.`,
+        `The "storage" of ${owner} is ${v}. It can't be more than 65536 GB (64 TB).`,
       );
     return size;
   });
@@ -122,31 +311,25 @@ export function replicaArgs(
   };
 }
 
-/**
- * The additional users a proxy can connect as, from its `credentials`. The
- * list and each username decide which secrets are created, so they have to
- * be plain values.
- *
- * @param name The database's name, for the error messages.
- */
-export function proxyCredentials(
+// The additional users a proxy can connect as, from its `credentials`. The
+// list and each username decide which secrets are created, so they have to
+// be plain values.
+function proxyCredentials(
   credentials: ProxyCredential[] | undefined,
-  name: string,
+  owner: string,
 ): ProxyCredential[] {
-  const list =
-    plain(credentials, `The "proxy.credentials" of the "${name}" database`) ??
-    [];
+  const list = plain(credentials, `The "proxy.credentials" of ${owner}`) ?? [];
   return list.map((credential) => ({
     username: plain(
       credential.username,
-      `The "username" in the "proxy.credentials" of the "${name}" database`,
+      `The "username" in the "proxy.credentials" of ${owner}`,
     ),
     password: credential.password,
   }));
 }
 
-/** The args of the role that lets a proxy read the secrets it connects with. */
-export function proxyRoleArgs(secrets: secretsmanager.Secret[]): iam.RoleArgs {
+// The args of the role that lets a proxy read the secrets it connects with
+function proxyRoleArgs(secrets: secretsmanager.Secret[]): iam.RoleArgs {
   return {
     assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
       Service: "rds.amazonaws.com",
@@ -167,11 +350,8 @@ export function proxyRoleArgs(secrets: secretsmanager.Secret[]): iam.RoleArgs {
   };
 }
 
-/**
- * The args of a proxy that connects with the credentials in the given
- * secrets.
- */
-export function proxyArgs(
+// The args of a proxy that connects with the credentials in the given secrets
+function proxyArgs(
   engineFamily: Input<"POSTGRESQL" | "MYSQL">,
   secrets: secretsmanager.Secret[],
   role: iam.Role,
@@ -187,36 +367,6 @@ export function proxyArgs(
     roleArn: role.arn,
     vpcSubnetIds: subnets,
   };
-}
-
-/**
- * The id of the secret that holds the master user's credentials of a
- * database SST created. One of the database's tags names it.
- *
- * @param tag The tag that holds the secret's id.
- * @param notFound The error for a database that doesn't have the tag.
- */
-export function credentialsSecretOf(
-  database: { tagsAll: Output<Record<string, string>> },
-  tag: string,
-  notFound: string,
-) {
-  return database.tagsAll.apply((tags) => {
-    if (!tags?.[tag]) throw new VisibleError(notFound);
-    return tags[tag];
-  });
-}
-
-/**
- * The master user's password, read from the secret that holds the database's
- * credentials.
- *
- * @param parent The component that's reading it.
- */
-export function storedPassword(secretId: Input<string>, parent: Resource) {
-  return secretsmanager
-    .getSecretVersionOutput({ secretId }, { parent })
-    .secretString.apply((v) => JSON.parse(v).password as string);
 }
 
 /** A database on the user's machine, which `sst dev` connects to. */
@@ -236,8 +386,10 @@ export interface LocalDatabaseArgs {
  * @param dev The component's `dev`.
  * @param defaults The component's password, username and database, and the
  * engine's port.
- * @param what What the messages call the database, as in "your locally
- * running MySQL database", and the server, as in "your local MySQL server".
+ * @param owner The database, for the error messages: `the "MyDatabase"
+ * Postgres database`.
+ * @param server What the pane calls the server, as in "your local MySQL
+ * server".
  */
 export function localDatabase(
   dev: LocalDatabaseArgs,
@@ -247,7 +399,8 @@ export function localDatabase(
     database: Input<string>;
     port: Input<number>;
   },
-  what: { database: string; server: string },
+  owner: string,
+  server: string,
 ): {
   connection: {
     host: Output<string>;
@@ -258,32 +411,21 @@ export function localDatabase(
   };
   pane: DevReport;
 } {
-  if (dev.password === undefined && defaults.password === undefined)
-    throw new VisibleError(
-      `You must provide the password to connect to your locally running ${what.database} either by setting the "dev.password" or by setting the top-level "password" property.`,
-    );
-
   const connection = {
-    host: output(dev.host ?? "localhost"),
-    // One given as an output that's undefined is the engine's too
-    port: all([dev.port, defaults.port]).apply(
-      ([port, fallback]) => port ?? fallback,
-    ),
+    host: devValue(dev.host, "localhost"),
+    port: devValue(dev.port, defaults.port),
     // An empty one is as good as none, as in 4.x
-    username: output(dev.username ? dev.username : defaults.username),
-    password: output(dev.password ?? defaults.password ?? ""),
-    database: output(dev.database ? dev.database : defaults.database),
+    username: devValue(dev.username, defaults.username, true),
+    password: localPassword(dev.password, defaults.password, owner),
+    database: devValue(dev.database, defaults.database, true),
   };
+  const { username, password, database, host, port } = connection;
   return {
     connection,
     pane: localServerPane(
-      interpolate`Make sure your local ${what.server} is using:
-
-  username: "${connection.username}"
-  password: "${shownPassword(connection.password)}"
-  database: "${connection.database}"
-
-Listening on "${connection.host}:${connection.port}"...`,
+      server,
+      { username, password, database },
+      interpolate`${host}:${port}`,
     ),
   };
 }

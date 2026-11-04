@@ -49,6 +49,11 @@ describe("KinesisStream", () => {
   // The ARN of the stream the app created
   const createdArn = () => streamArn(resource("MyStreamStream").inputs.name);
   const filters = { filters: [{ data: { order: { type: ["buy"] } } }] };
+  // A subscriber's function is kept. Its description is updated: it names the
+  // stream now, where it named the subscriber component.
+  const described: [string, string[]][] = [
+    ["MyStreamSubscriberIndexerFunction", ["description"]],
+  ];
 
   // Each case deploys the 4.x KinesisStream, then the same thing as the V5
   // one. Everything the 4.x one created has to be kept by the V5 one, with the
@@ -123,6 +128,7 @@ describe("KinesisStream", () => {
             );
           },
           unclaimed: [`${WRAPPER}::MyStreamSubscriberIndexer`],
+          changed: described,
           check: () =>
             expect(
               resource("MyStreamEventSourceMappingIndexer").parent,
@@ -137,6 +143,7 @@ describe("KinesisStream", () => {
             });
           },
           unclaimed: [`${WRAPPER}::MyStreamSubscriberIndexer`],
+          changed: described,
           check: () =>
             expect(
               resource("MyStreamSubscriberIndexerFunction").inputs.timeout,
@@ -151,6 +158,7 @@ describe("KinesisStream", () => {
             });
           },
           unclaimed: [`${WRAPPER}::MyStreamSubscriberIndexer`],
+          changed: described,
         },
         // SST 4 takes a function's ARN, not the function component
         "a subscriber that's a function's ARN, in an output": {
@@ -175,6 +183,7 @@ describe("KinesisStream", () => {
             );
           },
           unclaimed: [`${WRAPPER}::MyStreamSubscriberIndexer`],
+          changed: described,
         },
       },
     });
@@ -205,9 +214,10 @@ describe("KinesisStream", () => {
       ).toBe(streamArn("orders"));
     });
 
-    // From a handler, the function is described after the stream's own name,
-    // as the static `subscribe` named its component. `get` takes the ARN the
-    // static `subscribe` was given.
+    // From a handler, the function was described after the stream's own name,
+    // as the static `subscribe` named its component. It's described after the
+    // component `get` created now. `get` takes the ARN the static `subscribe`
+    // was given.
     it("a function subscribed with the static subscribe", async () => {
       const result = await pulumi.takesOver(
         () =>
@@ -222,11 +232,13 @@ describe("KinesisStream", () => {
             "src/indexer.handler",
           ),
       );
-      expect(result.changed).toEqual([]);
+      expect(result.changed.map((c) => [c.name, c.fields])).toEqual([
+        ["OrdersSubscriberIndexerFunction", ["description"]],
+      ]);
       expect(result.unclaimed).toEqual([`${WRAPPER}::OrdersSubscriberIndexer`]);
       expect(
         resource("ExternalOrdersSubscriberIndexerFunction").inputs.description,
-      ).toBe("Subscribed to OrdersSubscriberIndexer");
+      ).toBe("Subscribed to ExternalOrders");
       expect(resource("ExternalOrdersStream").options.id).toBe("orders");
     });
 
@@ -335,7 +347,7 @@ describe("KinesisStream", () => {
     expect(policy).toContain(createdArn());
     expect(
       resource("MyStreamSubscriberIndexerFunction").inputs.description,
-    ).toBe("Subscribed to MyStreamSubscriberIndexer");
+    ).toBe("Subscribed to MyStream");
   });
 
   it("turns down a subscriber without a name, twice, with its own transform or in an output", async () => {

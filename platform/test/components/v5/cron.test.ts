@@ -609,14 +609,16 @@ describe("Cron", () => {
             job: "src/cron.handler",
             schedule: "rate(1 minute)",
           } as any),
-      ).toThrow(/"job" isn't an option here. Use "function" in the "MyCronJob" cron job/);
+      ).toThrow(
+        /"job" isn't an option for the "MyCronJob" cron job. Use "function"/,
+      );
     });
 
     it("needs a function or a task", () => {
       expect(
         () => new Cron("MyCronJob", { schedule: "rate(1 minute)" }),
       ).toThrow(
-        /You must provide either a function or a task in the "MyCronJob" Cron component/,
+        'The "MyCronJob" cron job needs a "function" or a "task" to run.',
       );
     });
 
@@ -629,8 +631,43 @@ describe("Cron", () => {
             schedule: "rate(1 minute)",
           }),
       ).toThrow(
-        /You cannot provide both a function and a task in the "MyCronJob" Cron component/,
+        'The "MyCronJob" cron job is given both a "function" and a "task". A cron job runs one or the other.',
       );
+    });
+
+    // A function you have can be given in `existing`, in place of `function`
+    it("runs an existing function, and refuses a function or a task next to it", async () => {
+      const fn = "arn:aws:lambda:us-east-1:123456789012:function:my-cron";
+      new Cron("MyCronJob", {
+        existing: { function: fn },
+        schedule: "rate(1 minute)",
+      });
+      await pulumi.settle();
+      expect(
+        pulumi.resources.find((r) => r.name === "MyCronJobSchedule")!.inputs
+          .target.arn,
+      ).toBe(fn);
+      expect(
+        () =>
+          new Cron("Other", {
+            existing: { function: fn },
+            function: "src/cron.handler",
+            schedule: "rate(1 minute)",
+          }),
+      ).toThrow(
+        'The "Other" cron job is given an existing "function", which it uses the way it is. Remove "function" from its args.',
+      );
+      expect(
+        () =>
+          new Cron("Third", {
+            existing: { function: fn },
+            task: task(),
+            schedule: "rate(1 minute)",
+          }),
+      ).toThrow(
+        'The "Third" cron job is given an existing "function" and a "task". A cron job runs one or the other.',
+      );
+      await pulumi.settle();
     });
 
     it("rejects a task given as an output", () => {

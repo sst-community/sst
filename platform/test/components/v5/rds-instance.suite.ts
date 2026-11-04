@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output, secret } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
+import { applyErrors } from "../../helpers/apply-errors";
 
 // The tests every database on an RDS instance passes, the `Postgres` and the
 // `Mysql` (`helpers/rds-instance.ts`), run by each engine's test file with
@@ -84,11 +85,15 @@ export function rdsInstanceSuite(
       };
     },
     call: (args) => {
+      // The password in the secret a database is tagged with, or in another
       if (args.token === "aws:secretsmanager/getSecretVersion:getSecretVersion")
         return {
           secretString: JSON.stringify({
             username: e.username,
-            password: "stored-password",
+            password:
+              args.inputs.secretId === "secret-id"
+                ? "stored-password"
+                : `the password in ${args.inputs.secretId}`,
           }),
         };
       if (args.token === "aws:index/getAvailabilityZones:getAvailabilityZones")
@@ -498,17 +503,43 @@ export function rdsInstanceSuite(
 
       it("needs a password to connect with", () => {
         expect(() => new Postgres("MyDatabase", { vpc, dev: {} })).toThrow(
-          new RegExp(
-            `You must provide the password to connect to your locally running ${e.label}`,
-          ),
+          `The "MyDatabase" ${e.label} database needs the password of your local server to connect to it in sst dev. Set "dev.password", or "password".`,
         );
+      });
+
+      // An output that resolves to nothing is as good as leaving it out
+      it("falls back for dev values that are outputs of nothing", async () => {
+        const database = new Postgres("MyDatabase", {
+          vpc,
+          password: "top-level",
+          dev: {
+            host: output(undefined as unknown as string),
+            port: output(undefined as unknown as number),
+            username: output(""),
+            password: output(undefined as unknown as string),
+          },
+        });
+        await pulumi.settle();
+
+        expect(
+          await pulumi.resolve([
+            database.host,
+            database.port,
+            database.username,
+            database.password,
+          ]),
+        ).toEqual(["localhost", e.port, e.username, "top-level"]);
+        expect(
+          pulumi.reportOf("MyDatabase")?.dev.environment
+            .SST_DEV_COMMAND_MESSAGE,
+        ).toContain(`Listening on "localhost:${e.port}"`);
       });
 
       it("needs dev as a plain value", () => {
         expect(
           () => new Postgres("MyDatabase", { vpc, dev: output({}) as any }),
         ).toThrow(
-          /The "dev" of the "MyDatabase" database has to be a plain value/,
+          `The "dev" of the "MyDatabase" ${e.label} database has to be a plain value`,
         );
       });
 
@@ -654,8 +685,8 @@ export function rdsInstanceSuite(
       await pulumi.settle();
 
       expect(Object.keys(database.nodes)).toEqual([
-        "password",
         "secret",
+        "password",
         "secretVersion",
         "subnetGroup",
         "parameterGroup",
@@ -714,7 +745,7 @@ export function rdsInstanceSuite(
 
       expect(database.nodes.proxy).toBeUndefined();
       expect(() => database.proxyId).toThrow(
-        /Proxy is not enabled. Enable it with "proxy: true"/,
+        `The "MyDatabase" ${e.label} database has no proxy, so it has no "proxyId". Enable one with "proxy: true", or give "get" the "proxyId" of the one it has.`,
       );
     });
 
@@ -774,7 +805,7 @@ export function rdsInstanceSuite(
           "stored-password",
           "shared",
         ]);
-        expect(() => database.proxyId).toThrow(/Proxy is not enabled/);
+        expect(() => database.proxyId).toThrow(/has no proxy/);
       });
 
       it("is connected to through its proxy", async () => {
@@ -823,6 +854,74 @@ export function rdsInstanceSuite(
           ]),
         ).toEqual(["Mine.db.example.com", "owner", "known", "mine"]);
       });
+
+      it("reads its password from the secret it's given", async () => {
+        const { rds } = await import("@pulumi/aws");
+        const mine = new rds.Instance("Mine", {
+          instanceClass: "db.t4g.micro",
+          username: "owner",
+          dbName: "mine",
+        });
+        await pulumi.settle();
+        pulumi.reset();
+
+        const database = new Postgres("MyDatabase", {
+          vpc,
+          existing: { instance: mine, secret: "my-secret" },
+        });
+        await pulumi.settle();
+
+        expect(resource("MyDatabaseSecret")).toMatchObject({
+          kind: "read",
+          options: { id: "my-secret" },
+        });
+        expect(database.nodes.secret).toBeDefined();
+        expect(await pulumi.resolve(database.password)).toBe(
+          "the password in my-secret",
+        );
+      });
+
+      it("says what it can't find without the tag that names its secret", async () => {
+        const { rds } = await import("@pulumi/aws");
+        const mine = new rds.Instance("Mine", {
+          instanceClass: "db.t4g.micro",
+          username: "owner",
+        });
+        await pulumi.settle();
+        pulumi.reset();
+
+        const errors = await applyErrors(
+          () =>
+            new Postgres("MyDatabase", { vpc, existing: { instance: mine } }),
+          pulumi.settle,
+        );
+        expect(errors).toContain(
+          `The "MyDatabase" ${e.label} database can't find its password: its instance has no "${e.tags.password}" tag, which names the secret that holds it. Pass the secret in "existing.secret", or set "password".`,
+        );
+      });
+
+      it("turns down what it would create next to it", () => {
+        for (const part of ["subnetGroup", "parameterGroup", "secretVersion"])
+          expect(
+            () =>
+              new Postgres(`Database${part}`, {
+                vpc,
+                existing: { instance: "app-dev-mydatabase", [part]: "x" },
+              }),
+          ).toThrow(
+            `"existing.${part}" isn't an option for the "Database${part}" ${e.label} database. It's given an existing "instance", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+          );
+        expect(
+          () =>
+            new Postgres("Replicas", {
+              vpc,
+              existing: {
+                instance: "app-dev-mydatabase",
+                replica: { "0": "x" },
+              },
+            }),
+        ).toThrow(/"existing.replica" isn't an option/);
+      });
     });
 
     it("links with the connection details", async () => {
@@ -844,7 +943,7 @@ export function rdsInstanceSuite(
       expect(
         () => new Postgres("MyDatabase", { vpc, proxy: output(true) as any }),
       ).toThrow(
-        /The "proxy" of the "MyDatabase" database has to be a plain value/,
+        `The "proxy" of the "MyDatabase" ${e.label} database has to be a plain value`,
       );
       expect(
         () =>
@@ -853,7 +952,7 @@ export function rdsInstanceSuite(
             proxy: { credentials: output([]) as any },
           }),
       ).toThrow(
-        /The "proxy.credentials" of the "Second" database has to be a plain value/,
+        `The "proxy.credentials" of the "Second" ${e.label} database has to be a plain value`,
       );
       expect(
         () =>
@@ -866,7 +965,7 @@ export function rdsInstanceSuite(
             },
           }),
       ).toThrow(
-        /The "username" in the "proxy.credentials" of the "Third" database has to be a plain value/,
+        `The "username" in the "proxy.credentials" of the "Third" ${e.label} database has to be a plain value`,
       );
     });
 
@@ -900,7 +999,7 @@ export function rdsInstanceSuite(
           expect(
             () => new Postgres(`Database${i}`, { vpc: net as any }),
           ).toThrow(
-            `The "vpc" of the "Database${i}" ${e.label} component isn't a "Vpc" component`,
+            `The "vpc" of the "Database${i}" ${e.label} database isn't a "Vpc" component`,
           );
         await pulumi.settle();
       });

@@ -5,14 +5,13 @@ import { type ComponentArgs, component } from "../../parts-component";
 import type { Prettify } from "../../component";
 import { context } from "../../contract";
 import { plain } from "../../args";
-import { configText } from "../helpers/site-build";
-import type { RouteArgs } from "../helpers/router";
+import { configText, configValue } from "../helpers/site-build";
+import type { SiteRouteArgs } from "../helpers/router";
+import { BUILD_READS_IT } from "../helpers/site";
 import {
-  type ServerPlan,
   type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
-  BUILD_READS_IT,
   createSsrSite,
   ssrSiteParts,
 } from "../helpers/ssr-site";
@@ -329,7 +328,7 @@ export interface RemixArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
    * Also, make sure to set this as the `base` in your `vite.config.ts`, like
    * above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
   /**
    * The directory where the build output is located. This should match the value of
    * `buildDirectory` in the Remix plugin section of your Vite config.
@@ -433,11 +432,16 @@ export interface RemixArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.Remix` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
- *   `regions` to have it from the start. In `sst dev`, the function the site runs as is
- *   `transform.devServer`, not `transform.server`.
+ *   `regions` to have it from the start.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.Remix` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.Remix` ignored it and
  *   wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.Remix` warmed
@@ -446,7 +450,8 @@ export interface RemixArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  * - `buildDirectory` has to be a plain value, not an output: what's deployed is read from
  *   it.
  * - The base path is read from the Vite config in any of its extensions, like
- *   `vite.config.js`. `sst.aws.Remix` read only `vite.config.ts`, and failed without it.
+ *   `vite.config.js`, and it's what's in the quotes after `base`. `sst.aws.Remix` read only
+ *   `vite.config.ts`, and failed without it, and read on to the last quote of the line.
  * - The Vite config isn't loaded to check it. `sst.aws.Remix` loaded it with Vite after the
  *   build, and failed when that Vite wasn't found from the app.
  */
@@ -486,14 +491,9 @@ export class Remix extends component("sst:aws:Remix", parts) {
   }
 }
 
-// A Remix app's build, and its server
-interface RemixBuild extends SiteBuild {
-  server: ServerPlan;
-}
-
 // How a Remix app is built, with its package manager, and its server: the
 // Remix server build wrapped in a Lambda handler
-function remixFramework(args: RemixArgs): SsrFramework<RemixBuild> {
+function remixFramework(args: RemixArgs): SsrFramework<SiteBuild> {
   let buildDirectory: string | undefined;
   return {
     label: "Remix",
@@ -506,12 +506,11 @@ function remixFramework(args: RemixArgs): SsrFramework<RemixBuild> {
       );
     },
     load: (builtPath) => loadBuild(builtPath, buildDirectory ?? "build"),
-    server: (build) => build.server,
   };
 }
 
 // Reads what Remix built, with Vite or with Remix's own compiler
-function loadBuild(builtPath: string, buildDirectory: string): RemixBuild {
+function loadBuild(builtPath: string, buildDirectory: string): SiteBuild {
   const outputPath = path.resolve(context().paths.root, builtPath);
   const viteConfig = configText(outputPath, "vite.config");
   // With Vite, the server build is `<buildDirectory>/server/index.js` and the
@@ -551,7 +550,7 @@ function loadBuild(builtPath: string, buildDirectory: string): RemixBuild {
     serves: true,
     plan: {
       // From `base` in the Vite config
-      base: viteConfig?.match(/base: ['"](.*)['"]/)?.[1],
+      base: configValue(outputPath, "vite.config", "base"),
       assets: [
         viteConfig !== undefined
           ? {

@@ -1,7 +1,7 @@
 import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { cognito } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../../parts-component";
-import { withDefault } from "../../args";
+import { usedAsItIs, withDefault } from "../../args";
 import type { Input } from "../../input";
 
 const parts = {
@@ -80,6 +80,12 @@ export interface CognitoUserPoolClientArgs extends ComponentArgs<typeof parts> {
  *
  * The client's ID and secret are then available as `Resource.Web.id` and
  * `Resource.Web.secret`.
+ *
+ * #### Switch from `sst.aws.CognitoUserPoolClient`
+ *
+ * Nothing changes: switching the user pool to `sst.aws.v5.CognitoUserPool` switches its
+ * clients, and keeps them. A function linked to a client reads its `id` and `secret` as
+ * before.
  */
 export class CognitoUserPoolClient extends component(
   "sst:aws:CognitoUserPoolClient",
@@ -91,6 +97,14 @@ export class CognitoUserPoolClient extends component(
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
+    // A client that's already deployed keeps the settings it has
+    if (this.existingPart("client"))
+      usedAsItIs(
+        args,
+        ["providers", "callbackUrls"],
+        "client",
+        `the "${name}" user pool client`,
+      );
 
     this.part("client", {
       name,

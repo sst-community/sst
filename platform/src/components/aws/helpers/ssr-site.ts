@@ -1,12 +1,10 @@
-import fs from "fs";
 import path from "path";
 import type { Loader } from "esbuild";
 import {
   Config,
   type Input,
-  type Output,
+  Output,
   all,
-  asset,
   interpolate,
   output,
 } from "@pulumi/pulumi";
@@ -29,15 +27,35 @@ import type { Prettify } from "../../component";
 import { notAnOption, plain, plainDeep } from "../../args";
 import { context } from "../../contract";
 import { VisibleError } from "../../error";
-import { markUnknowns, unknown } from "../../check";
-import { physicalName } from "../../naming";
-import { type Size, toMBs } from "../../size";
-import { type DurationSeconds, toSeconds } from "../../duration";
+import { unknown } from "../../check";
+import type { Size } from "../../size";
+import type { DurationSeconds } from "../../duration";
 import type { BaseSiteFileOptions } from "../../base/base-site";
-import { parseLambdaEdgeArn } from "./arn";
+import {
+  createServerDistribution,
+  edgeOf,
+  protectionOf,
+  routingStore,
+} from "./distribution";
 import { useProvider } from "./provider";
-import { type RouteArgs, routeOf } from "./router";
-import { buildSite, defaultBuildCommand } from "./site-build";
+import type { SiteRouteArgs } from "./router";
+import {
+  BUILD_READS_IT,
+  type SiteDevArgs,
+  URL_UNAVAILABLE,
+  capitalized,
+  refreshing,
+  rejectSst4SiteArgs,
+  siteDev,
+  siteRouteOf,
+  siteRoutesUpdateArgs,
+  sitePathOf,
+} from "./site";
+import {
+  buildSite,
+  defaultBuildCommand,
+  resolveWithUnknowns,
+} from "./site-build";
 import { BucketFiles } from "../resources/bucket-files";
 import { KvKeys } from "../resources/kv-keys";
 import { DistributionInvalidation } from "../providers/distribution-invalidation";
@@ -65,13 +83,6 @@ import {
   type FunctionArn,
   type FunctionPermissionArgs,
 } from "../v5/function";
-
-// The placeholder URL of a site in `sst dev`, which isn't deployed
-export const URL_UNAVAILABLE = "http://url-unavailable-in-dev.mode";
-
-/** Why an arg the site's build reads has to be a plain value. */
-export const BUILD_READS_IT =
-  "The site is built with it, and a preview has to know what's built.";
 
 /**
  * What every site with a server is built from: its assets and their files,
@@ -166,7 +177,8 @@ export const ssrSiteParts = () => ({
   invalidation: optional(DistributionInvalidation),
   /**
    * The Amazon CloudFront CDN that serves the site, when it isn't served
-   * through a `Router`.
+   * through a `Router`. It can't be given in `existing`: to serve the site
+   * through a distribution that's deployed, serve it through a `Router`.
    */
   cdn: optional(Cdn),
   /**
@@ -196,7 +208,8 @@ export const ssrSiteParts = () => ({
   ),
   /**
    * The IAM role of the Lambda@Edge function that signs requests to the
-   * server, with `protection: "oac-with-edge-signing"`.
+   * server, with `protection: "oac-with-edge-signing"`. Not created for a
+   * function given in `protection.edgeFunction.arn` or in `existing`.
    */
   edgeRole: named(optional(iam.Role), "EdgeFunctionRole"),
   /**
@@ -742,37 +755,6 @@ export interface SsrSiteArgs {
    *   }
    * }
    * ```
-   *
-   * #### Limits
-   *
-   * CloudFront distributions have a **limit of 25 cache behaviors** per distribution.
-   * Each top-level file or directory in your app's public asset directory creates a cache
-   * behavior. If you have too many, you'll hit the `TooManyCacheBehaviors` error. This is
-   * most common with `SvelteKit`, `SolidStart`, `Nuxt`, and `Analog` apps.
-   *
-   * For example, in the case of SvelteKit, the static assets are in the `static/`
-   * directory. If you have a file and a directory in it, it'll create 2 cache behaviors.
-   *
-   * ```bash frame="none"
-   * static/
-   * ├── icons/       # Cache behavior for /icons/*
-   * └── logo.png     # Cache behavior for /logo.png
-   * ```
-   *
-   * So if you have many of these at the top-level, you'll hit the limit. You can request a
-   * limit increase through AWS Support.
-   *
-   * Alternatively, you can move some of these into subdirectories. For example, moving them
-   * to an `images/` directory, will only create 1 cache behavior.
-   *
-   * ```bash frame="none"
-   * static/
-   * └── images/      # Cache behavior for /images/*
-   *     ├── icons/
-   *     └── logo.png
-   * ```
-   *
-   * Learn more about these [CloudFront limits](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-limits.html#limits-web-distributions).
    */
   assets?: Input<{
     /**
@@ -878,27 +860,30 @@ export interface SsrSiteArgs {
 
 export type SsrSiteParts = ReturnType<typeof ssrSiteParts>;
 
+// The parts a site creates for a distribution of its own, which it doesn't
+// have behind a router
+const DISTRIBUTION_PARTS = [
+  "kvStore",
+  "cachePolicy",
+  "requestFunction",
+  "responseFunction",
+  "edgeRole",
+  "edgeFunction",
+] as const;
+
 /**
  * What each site takes in its own words: its docs name its framework. The
  * base reads them as they're written there.
  */
 export interface SiteOwnArgs {
-  dev?:
-    | false
-    | {
-        url?: Input<string>;
-        command?: Input<string>;
-        autostart?: Input<boolean>;
-        directory?: Input<string>;
-        title?: Input<string>;
-      };
+  dev?: false | SiteDevArgs;
   path?: string;
   link?: FunctionArgs["link"];
   environment?: FunctionArgs["environment"];
   permissions?: FunctionArgs["permissions"];
   buildCommand?: string;
   domain?: string | Prettify<CdnDomainArgs>;
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /** A site's build, as its framework reads it. */
@@ -911,6 +896,11 @@ export interface SiteBuild {
   plan: SitePlan;
   /** Whether the build has a server. A static Astro site doesn't. */
   serves: boolean;
+  /**
+   * How its server is built, when it has one and its framework doesn't
+   * create what the server needs in `server()`.
+   */
+  server?: ServerPlan;
 }
 
 /** What a framework is told about the site, to create what it adds. */
@@ -950,7 +940,7 @@ export type ServerPlan = Pick<
  * What a framework gives the base: how its site is built and read, and what
  * it creates beside the server.
  */
-export interface SsrFramework<B extends SiteBuild> {
+export interface SsrFramework<B extends SiteBuild = SiteBuild> {
   /** The component, in messages: `the "Web" Nextjs site`. */
   label: string;
   /**
@@ -963,8 +953,12 @@ export interface SsrFramework<B extends SiteBuild> {
    * its adapter can build it. `sst dev` doesn't build, and skips it.
    */
   beforeBuild?(sitePath: string): void;
-  /** Reads the build, from the site's folder as it's built. */
-  load(builtPath: string): B;
+  /**
+   * Reads the build, from the site's folder as it's built.
+   *
+   * @param owner The site, in messages: `the "Web" React site`.
+   */
+  load(builtPath: string, owner: string): B;
   /**
    * Whether every build has a server, so `nodes.server` lists one in each
    * region from the start.
@@ -982,8 +976,11 @@ export interface SsrFramework<B extends SiteBuild> {
    * the base checks its own, which `sst dev` skips.
    */
   check?(option: (arg: string) => string): void;
-  /** Creates what the server needs, and says how it's built. */
-  server(build: B, site: SsrSiteContext): ServerPlan;
+  /**
+   * Creates what the server needs, and says how it's built. Without it, the
+   * server is the build's `server`.
+   */
+  server?(build: B, site: SsrSiteContext): ServerPlan;
   /** Creates what's made after the servers, like an image optimizer. */
   extras?(build: B, site: SsrSiteContext): { imageOptimizer?: Function };
 }
@@ -1007,23 +1004,26 @@ interface Built {
  * this.siteUrl = createSsrSite(this.builder(), name, args, framework).url;
  * ```
  */
-export function createSsrSite<B extends SiteBuild>(
-  builder: PartsBuilder<SsrSiteParts>,
+export function createSsrSite<P extends SsrSiteParts, B extends SiteBuild>(
+  siteBuilder: PartsBuilder<P>,
   name: string,
-  args: SsrSiteArgs & SiteOwnArgs,
+  args: SsrSiteArgs & SiteOwnArgs & { existing?: object },
   framework: SsrFramework<B>,
 ): { url: Output<string> } {
+  // The site's parts are these and its own, like a Next.js site's
+  // revalidation. Here it creates these.
+  const builder = siteBuilder as unknown as PartsBuilder<SsrSiteParts>;
   const self = builder.component;
   const owner = `the "${name}" ${framework.label} site`;
   const option = (arg: string) => `The "${arg}" of ${owner}`;
   const isBuilt = BUILD_READS_IT;
 
   rejectOld();
-  const sitePath = sitePathOf();
+  const sitePath = sitePathOf(args.path, owner);
 
   // In `sst dev` the site runs on your machine, in a pane of its own
-  if (context().dev && args.dev !== false) {
-    const dev = args.dev ?? {};
+  const dev = plain(args.dev, option("dev"));
+  if (context().dev && dev !== false) {
     const devServer = builder.part("devServer", {
       description: `${name} dev server`,
       runtime: "nodejs24.x",
@@ -1041,19 +1041,15 @@ export function createSsrSite<B extends SiteBuild>(
       dev: false,
     });
     builder.runsLocally();
-    const url = output(dev.url ?? URL_UNAVAILABLE);
     builder.report({
       dev: {
-        title: dev.title,
-        command: output(dev.command).apply((c) => c ?? "npm run dev"),
-        autostart: dev.autostart,
-        directory: output(dev.directory).apply((d) => d ?? sitePath),
+        ...siteDev(dev, sitePath),
         environment: args.environment,
         link: args.link,
         aws: { role: devServer.nodes.role.arn },
       },
     });
-    return { url };
+    return { url: output(dev?.url ?? URL_UNAVAILABLE) };
   }
 
   // The args that decide which resources are created are read first
@@ -1087,11 +1083,7 @@ export function createSsrSite<B extends SiteBuild>(
     { retainOnDelete: false },
   );
 
-  // `sst refresh` runs the program to read what's deployed, and creates
-  // nothing, so the site isn't built for it. SST 4 built its sites then, as
-  // its program couldn't run without their build. What's made from the build
-  // isn't registered, and stays as it is.
-  if (context().command === "refresh") {
+  if (refreshing()) {
     builder.report({ hint: routing.url });
     return { url: routing.url };
   }
@@ -1107,7 +1099,7 @@ export function createSsrSite<B extends SiteBuild>(
     environment: args.environment,
     link: args.link,
   }).then((builtPath) => {
-    const build = framework.load(builtPath);
+    const build = framework.load(builtPath, owner);
     return { ...build, plan: normalizedPlan(build.plan) };
   });
   const built = builder.after(build, createFromBuild);
@@ -1164,14 +1156,10 @@ export function createSsrSite<B extends SiteBuild>(
   });
 
   const routesUpdate = routing.route
-    ? builder.part("routesUpdate", {
-        store: routing.route.routerKvStoreArn,
-        namespace: routing.route.routerKvNamespace,
-        key: "routes",
-        entry: routing.route.apply((route) =>
-          ["site", namespace, route.hostPattern, route.pathPrefix].join(","),
-        ),
-      })
+    ? builder.part(
+        "routesUpdate",
+        siteRoutesUpdateArgs(routing.route, namespace),
+      )
     : undefined;
 
   createInvalidation();
@@ -1179,29 +1167,15 @@ export function createSsrSite<B extends SiteBuild>(
   builder.report({ hint: routing.url });
 
   function rejectOld() {
-    notAnOption(
-      args,
-      "route",
-      `Serve the site through a Router with "router": { instance: router, path, domain }.`,
-    );
-    notAnOption(args, "cdn", `Serve the site through a Router with "router".`);
-    notAnOption(
-      args.server ?? {},
-      "edge",
-      `Set "edge" on the site itself, not on its "server".`,
-    );
-  }
-
-  function sitePathOf() {
-    const sitePath = plain(args.path, option("path"), isBuilt) ?? ".";
-    if (!fs.existsSync(path.resolve(context().paths.root, sitePath)))
-      throw new VisibleError(
-        `Site directory not found at "${path.resolve(
-          context().paths.root,
-          sitePath,
-        )}". Please check the path setting in your configuration.`,
+    rejectSst4SiteArgs(args, owner);
+    // A `server` given as an output is refused where it's read
+    if (!Output.isInstance(args.server))
+      notAnOption(
+        args.server ?? {},
+        "edge",
+        `Set "edge" on the site itself, not on its "server".`,
+        owner,
       );
-    return sitePath;
   }
 
   function regionsOf() {
@@ -1209,7 +1183,7 @@ export function createSsrSite<B extends SiteBuild>(
     if (regions === undefined) return;
     if (regions.length === 0)
       throw new VisibleError(
-        "No deployment regions specified. Please specify at least one region in the 'regions' property.",
+        `The "regions" of ${owner} are empty. List at least one, or leave "regions" out to deploy the server in the app's region.`,
       );
     regions.forEach(checkRegion);
     return regions;
@@ -1249,38 +1223,36 @@ export function createSsrSite<B extends SiteBuild>(
   function checkRegion(region: string) {
     if (!Object.values(Region).includes(region as Region))
       throw new VisibleError(
-        `Invalid AWS region: "${region}". Please specify a valid AWS region.`,
+        `"${region}", a region of ${owner}, isn't an AWS region.`,
       );
     // `sst refresh` has to work on a stage an earlier deploy left in one of
     // these regions
-    if (
-      context().command !== "refresh" &&
-      regionsWithoutFunctionUrls.includes(region)
-    )
+    if (!refreshing() && regionsWithoutFunctionUrls.includes(region))
       throw new VisibleError(
-        `Region ${region} is not supported by this component, because Lambda function URLs aren't available there. Please select a different AWS region.`,
+        `${capitalized(
+          owner,
+        )} can't be deployed to ${region}: Lambda function URLs aren't available there. Pick another region.`,
       );
   }
 
   // How the site is served: through a router, or a distribution of its own
   function router() {
-    const routerArgs = plain(args.router, option("router"));
-    if (!routerArgs) return standalone();
+    const routed = siteRouteOf(
+      {
+        router: args.router,
+        existing: args.existing,
+        routerHas: {
+          domain: args.domain,
+          edge: args.edge,
+          protection: args.protection,
+        },
+      },
+      owner,
+      DISTRIBUTION_PARTS,
+    );
+    if (!routed) return standalone();
 
-    if (args.domain)
-      throw new VisibleError(
-        `Cannot provide both "domain" and "router". Use the "domain" prop on the "Router" component when serving your site through a Router.`,
-      );
-    if (args.edge)
-      throw new VisibleError(
-        `Cannot provide both "edge" and "router". Use the "edge" prop on the "Router" component when serving your site through a Router.`,
-      );
-    if (args.protection)
-      throw new VisibleError(
-        `Cannot set "protection" when routing through a Router. Set "protection" on the Router component instead.`,
-      );
-
-    const { route, signs, pathPrefix } = routeOf(routerArgs);
+    const { route, signs, pathPrefix } = routed;
     return {
       route,
       signs,
@@ -1295,91 +1267,23 @@ export function createSsrSite<B extends SiteBuild>(
 
   function standalone() {
     cdnDomain(args.domain, owner);
-    const protection = protectionOf();
-    const edge = edgeOf();
-
-    const kvStoreArn = output(
-      edge.viewerRequest?.kvStore ?? builder.part("kvStore", {}).arn,
-    );
-    const requestFunction = builder.part("requestFunction", {
-      runtime: "cloudfront-js-2.0",
-      keyValueStoreAssociations: [kvStoreArn],
-      code: siteRequestCode(
+    const protection = protectionOf(args.protection, option);
+    const edge = edgeOf(args.edge, option, owner);
+    const kvStoreArn = routingStore(builder, edge, args.existing, owner);
+    const cdn = createServerDistribution(builder, {
+      name,
+      owner,
+      existing: args.existing,
+      domain: args.domain,
+      protection,
+      edge,
+      kvStoreArn,
+      requestCode: siteRequestCode(
         namespace,
         edge.viewerRequest?.injection,
         Boolean(args.domain),
       ),
-    });
-    const responseFunction = edge.viewerResponse?.injection
-      ? builder.part("responseFunction", {
-          runtime: "cloudfront-js-2.0",
-          keyValueStoreAssociations: edge.viewerResponse.kvStore
-            ? [edge.viewerResponse.kvStore]
-            : [],
-          code: interpolate`
-import cf from "cloudfront";
-async function handler(event) {
-  ${edge.viewerResponse.injection}
-  return event.response;
-}`,
-        })
-      : undefined;
-    const edgeSigner = signerOf(protection);
-
-    const cdn = builder.part("cdn", {
-      comment: `${name} app`,
-      domain: args.domain,
-      origins: [
-        {
-          originId: "default",
-          domainName: "placeholder.sst.dev",
-          customOriginConfig: {
-            httpPort: 80,
-            httpsPort: 443,
-            originProtocolPolicy: "http-only",
-            originReadTimeout: 20,
-            originSslProtocols: ["TLSv1.2"],
-          },
-        },
-      ],
-      defaultCacheBehavior: {
-        targetOriginId: "default",
-        viewerProtocolPolicy: "redirect-to-https",
-        allowedMethods: [
-          "DELETE",
-          "GET",
-          "HEAD",
-          "OPTIONS",
-          "PATCH",
-          "POST",
-          "PUT",
-        ],
-        cachedMethods: ["GET", "HEAD"],
-        compress: true,
-        cachePolicyId: args.cachePolicy ?? cachePolicy().id,
-        // CloudFront's Managed-AllViewerExceptHostHeader policy
-        originRequestPolicyId: "b689b0a8-53d0-40ab-baf2-68738e2966ac",
-        functionAssociations: [
-          { eventType: "viewer-request", functionArn: requestFunction.arn },
-          ...(responseFunction
-            ? [
-                {
-                  eventType: "viewer-response",
-                  functionArn: responseFunction.arn,
-                },
-              ]
-            : []),
-        ],
-        lambdaFunctionAssociations: edgeSigner
-          ? [
-              {
-                eventType: "origin-request",
-                lambdaArn: edgeSigner,
-                includeBody: true,
-              },
-            ]
-          : [],
-      },
+      cachePolicy: args.cachePolicy,
     });
 
     return {
@@ -1394,101 +1298,6 @@ async function handler(event) {
         ([domainUrl, url]) => (domainUrl ?? url) as string,
       ),
     };
-  }
-
-  function protectionOf() {
-    const protection = plain(args.protection, option("protection"));
-    if (!protection) return { mode: "none" as const };
-    if (typeof protection === "string") return { mode: protection };
-    plain(protection.edgeFunction, option("protection.edgeFunction"));
-    const arn = protection.edgeFunction?.arn;
-    if (typeof arn === "string") parseLambdaEdgeArn(arn);
-    return protection;
-  }
-
-  function edgeOf() {
-    const edge = plain(args.edge, option("edge")) ?? {};
-    plain(edge.viewerRequest, option("edge.viewerRequest"));
-    plain(edge.viewerResponse, option("edge.viewerResponse"));
-    return edge;
-  }
-
-  function cachePolicy() {
-    return builder.part("cachePolicy", {
-      comment: "SST server response cache policy",
-      defaultTtl: 0,
-      maxTtl: 31536000, // 1 year
-      minTtl: 0,
-      parametersInCacheKeyAndForwardedToOrigin: {
-        cookiesConfig: {
-          cookieBehavior: "none",
-        },
-        headersConfig: {
-          headerBehavior: "whitelist",
-          headers: {
-            items: ["x-open-next-cache-key", "x-forwarded-host"],
-          },
-        },
-        queryStringsConfig: {
-          queryStringBehavior: "all",
-        },
-        enableAcceptEncodingBrotli: true,
-        enableAcceptEncodingGzip: true,
-      },
-    });
-  }
-
-  // The Lambda@Edge function that signs requests to function URLs: the
-  // user's, or one the site creates
-  function signerOf(protection: ReturnType<typeof protectionOf>) {
-    if (protection.mode !== "oac-with-edge-signing") return;
-    const settings =
-      "edgeFunction" in protection ? protection.edgeFunction : undefined;
-    if (settings?.arn) return settings.arn;
-
-    const role = builder.part(
-      "edgeRole",
-      {
-        name: physicalName(64, `${name}EdgeRole`),
-        assumeRolePolicy: JSON.stringify({
-          Version: "2012-10-17",
-          Statement: [
-            {
-              Action: "sts:AssumeRole",
-              Effect: "Allow",
-              Principal: {
-                Service: ["lambda.amazonaws.com", "edgelambda.amazonaws.com"],
-              },
-            },
-          ],
-        }),
-        managedPolicyArns: [
-          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-        ],
-      },
-      { ignoreChanges: ["name"] },
-    );
-    return builder.part(
-      "edgeFunction",
-      {
-        name: physicalName(64, `${name}EdgeFn`),
-        runtime: "nodejs24.x",
-        handler: "index.handler",
-        role: role.arn,
-        code: new asset.FileArchive(
-          path.join(context().paths.platform, "dist", "oac-edge-signer"),
-        ),
-        publish: true,
-        timeout: output(settings?.timeout).apply((timeout) =>
-          timeout ? toSeconds(timeout) : 5,
-        ),
-        memorySize: output(settings?.memory).apply((memory) =>
-          memory ? toMBs(memory) : 128,
-        ),
-        description: `${name} Lambda@Edge function for OAC request signing`,
-      },
-      { provider: useProvider("us-east-1"), ignoreChanges: ["name"] },
-    ).qualifiedArn;
   }
 
   // Creates what's made from the build: the servers, what the framework
@@ -1513,7 +1322,11 @@ async function handler(event) {
     const signs = await signsOf();
     const authorization = signs ? ("iam" as const) : ("none" as const);
     await checkedPlan(plan);
-    const serverPlan = framework.server(build, siteOf(signs));
+    const serverPlan = framework.server?.(build, siteOf(signs)) ?? build.server;
+    if (!serverPlan)
+      throw new VisibleError(
+        `The build of ${owner} has a server, and its framework doesn't say how it's built.`,
+      );
 
     const servers = regions.map((region) => {
       const provider = useProvider(region as Region);
@@ -1614,17 +1427,21 @@ async function handler(event) {
 
   // The plan's base path, checked against the path the site is routed on
   async function checkedPlan(plan: SitePlan) {
-    const pathPrefix = markUnknowns(
-      await (routing.pathPrefix as any).promise(true),
-    );
+    const pathPrefix = await resolveWithUnknowns(routing.pathPrefix);
     if (typeof pathPrefix === "string" && pathPrefix !== "/") {
       if (!plan.base)
         throw new VisibleError(
-          `No base path found for site. You must configure the base path to match the route path prefix "${pathPrefix}".`,
+          `${capitalized(
+            owner,
+          )} is served under "${pathPrefix}", and its build has no base path. Set the app's base path to "${pathPrefix}".`,
         );
       if (!plan.base.startsWith(pathPrefix))
         throw new VisibleError(
-          `The site base path "${plan.base}" must start with the route path prefix "${pathPrefix}".`,
+          `${capitalized(
+            owner,
+          )} is served under "${pathPrefix}", and its build's base path is "${
+            plan.base
+          }". Set the app's base path to start with "${pathPrefix}".`,
         );
     }
     return plan;
@@ -1855,7 +1672,7 @@ function installOf(install: unknown): Record<string, string> {
 
 // A value, once it's known. What a preview knows is known.
 async function known<T>(value: Input<T>, what: string): Promise<T> {
-  const resolved = markUnknowns(await (output(value) as any).promise(true));
+  const resolved = await resolveWithUnknowns(value);
   if (resolved === unknown)
     throw new VisibleError(`${what} isn't known before the deploy.`);
   return resolved as T;

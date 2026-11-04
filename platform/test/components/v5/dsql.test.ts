@@ -472,7 +472,7 @@ describe("Dsql", () => {
     await pulumi.settle();
 
     expect(() => cluster.peer).toThrow(
-      /Cannot access "peer" on "MyCluster" because it is a single-region cluster/,
+      `The "MyCluster" DSQL cluster is in one region, so it has no "peer". Set "regions.peer" to give it one.`,
     );
   });
 
@@ -575,7 +575,9 @@ describe("Dsql", () => {
   it("can't have VPC endpoints for a multi-region cluster", () => {
     expect(
       () => new Dsql("MyCluster", { regions, vpc: new Vpc("MyVpc") }),
-    ).toThrow(/Cannot use "vpc" with multi-region "regions"/);
+    ).toThrow(
+      `"vpc" isn't an option for the "MyCluster" DSQL cluster, which has a peer in "regions". VPC endpoints are only for a cluster in one region.`,
+    );
   });
 
   it("backs up daily and keeps a week by default", async () => {
@@ -720,7 +722,7 @@ describe("Dsql", () => {
       expect(
         await pulumi.resolve([cluster.id, cluster.region, cluster.endpoint]),
       ).toEqual(["abc123", "us-east-1", "abc123.dsql.us-east-1.on.aws"]);
-      expect(() => cluster.peer).toThrow(/single-region cluster/);
+      expect(() => cluster.peer).toThrow(/is in one region, so it has no "peer"/);
     });
 
     it("is referenced with its peer", async () => {

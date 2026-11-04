@@ -1,6 +1,6 @@
 import { ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { type ComponentArgs, component, named } from "../../parts-component";
-import { plain } from "../../args";
+import { plain, usedAsItIs } from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
 import type { Duration, DurationDays, DurationMinutes } from "../../duration";
@@ -268,6 +268,25 @@ export interface WorkflowArgs
  *
  * [Check out the full example](/docs/examples/#aws-workflow-bus).
  *
+ * #### Switch from `sst.aws.Workflow`
+ *
+ * Change `sst.aws.Workflow` to `sst.aws.v5.Workflow` and keep the name. Its function,
+ * `<name>Handler`, becomes a V5 `Function` under the same name, as the `Function`'s own
+ * "Switch from" says. A few things are written differently:
+ *
+ * - `transform.function` transforms the function's args, as the `transform` of any part
+ *   does. What `sst.aws.Workflow` took there, the function's own `transform`, goes in
+ *   `transform.function.transform`.
+ * - What the function is built from, like `handler`, `runtime` or `bundle`, has to be a
+ *   plain value, not an output, as [`sst.aws.v5.Function`](/docs/component/aws/v5/function)
+ *   takes it. So does `logging`, since whether there are logs decides whether a log group
+ *   is created. What's in `logging` can be an output.
+ * - A workflow can be given to the V5 `Cron`, `Bus` and the other V5 components that take
+ *   a function, as `sst.aws.Workflow` could be to theirs. SST 4's components don't take the
+ *   V5 one: switch a component the workflow is given to with it.
+ * - `role` isn't one of its args, as it isn't the V5 `Function`'s. To give the function a
+ *   role you have, write `transform: { function: { existing: { role } } }`.
+ *
  * ---
  *
  * ### Limitations
@@ -308,26 +327,6 @@ export interface WorkflowArgs
  * These are rough _us-east-1_ estimates. Check out the
  * [AWS Lambda pricing](https://aws.amazon.com/lambda/pricing/#Lambda_Durable_Functions_Pricing)
  * for more details.
- *
- * ---
- *
- * #### Switch from `sst.aws.Workflow`
- *
- * Change `sst.aws.Workflow` to `sst.aws.v5.Workflow` and keep the name. Its function,
- * `<name>Handler`, becomes a V5 `Function` under the same name, as the `Function`'s own
- * "Switch from" says. A few things are written differently:
- *
- * - `transform.function` transforms the function's args, as the `transform` of any part
- *   does. What `sst.aws.Workflow` took there, the function's own `transform`, goes in
- *   `transform.function.transform`.
- * - `runtime` and `logging` have to be plain values, not outputs: the function is built
- *   with the runtime, and whether there are logs decides whether a log group is created.
- *   What's in `logging` can be an output.
- * - A workflow can be given to the V5 `Cron`, `Bus` and the other V5 components that take
- *   a function, as `sst.aws.Workflow` could be to theirs. SST 4's components don't take the
- *   V5 one: switch a component the workflow is given to with it.
- * - `role` isn't one of its args, as it isn't the V5 `Function`'s. To give the function a
- *   role you have, write `transform: { function: { existing: { role } } }`.
  */
 export class Workflow extends component("sst:aws:Workflow", parts) {
   constructor(
@@ -360,6 +359,17 @@ export class Workflow extends component("sst:aws:Workflow", parts) {
       logging: givenLogging,
       ...functionArgs
     } = args;
+    // A function that's already there is used the way it is: whatever would
+    // configure it is refused
+    if (this.existingPart("function"))
+      usedAsItIs(
+        args,
+        Object.keys(args).filter(
+          (key) => key !== "transform" && key !== "existing",
+        ),
+        "function",
+        `the "${name}" workflow`,
+      );
     const timeouts = output(timeout);
     const logging = plain(
       givenLogging,
@@ -426,7 +436,11 @@ export class Workflow extends component("sst:aws:Workflow", parts) {
     return this.nodes.function.qualifier;
   }
 
-  link() {
+  /**
+   * Linking a workflow gives the linked resource the name of its function and the version
+   * it runs, and lets it start the workflow and manage its executions.
+   */
+  public link() {
     const link = this.nodes.function.link();
     return {
       properties: {

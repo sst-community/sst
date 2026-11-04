@@ -13,12 +13,17 @@ import {
   named,
   optional,
 } from "../../parts-component";
-import { plain } from "../../args";
+import { plain, onlyExisting, getArgs } from "../../args";
 import { context } from "../../contract";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type SizeGbTb, toGBs } from "../../size";
-import { localServerPane, shownPassword } from "../helpers/local-server";
+import {
+  devValue,
+  localPassword,
+  localServerPane,
+} from "../helpers/local-server";
+import { secretField, tagOf } from "../helpers/secret";
 import { parseOpenSearch } from "../helpers/arn";
 
 const parts = {
@@ -28,7 +33,8 @@ const parts = {
   password: optional(RandomPassword),
   /**
    * The Secrets Manager secret the master user's username and password are kept in. Not
-   * created by `get`, which reads the one the domain is tagged with.
+   * created by `get`, which reads the password from the one the domain is tagged with, or
+   * from the one given here.
    */
   secret: optional(secretsmanager.Secret),
   /**
@@ -180,6 +186,9 @@ export interface OpenSearchArgs extends ComponentArgs<typeof parts> {
  * The `OpenSearch` component lets you add a deployed instance of OpenSearch, or an
  * OpenSearch _domain_ to your app using [Amazon OpenSearch Service](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html).
  *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
+ *
  * @example
  *
  * #### Create the instance
@@ -322,16 +331,18 @@ export class OpenSearch extends component("sst:aws:OpenSearch", parts) {
     super(name, args, opts);
     const self = this;
 
+    const owner = `the "${name}" OpenSearch domain`;
     const username = output(args.username).apply((v) => v ?? "admin");
+
+    // Given a domain that's already deployed, it uses the secret with its
+    // password, and creates nothing else
+    if (args.existing?.domain !== undefined)
+      onlyExisting(args.existing, ["domain", "secret"], owner);
 
     // In `sst dev`, an OpenSearch on the user's machine stands in for the
     // domain. This is the only place the component handles dev mode.
-    const dev = plain(args.dev, `The "dev" of the "${name}" OpenSearch`);
+    const dev = plain(args.dev, `The "dev" of ${owner}`);
     if (dev && context().dev) {
-      if (dev.password === undefined && args.password === undefined)
-        throw new VisibleError(
-          `You must provide the password to connect to your locally running OpenSearch domain either by setting the "dev.password" or by setting the top-level "password" property.`,
-        );
       this.runsLocally();
       this.connection = runLocally(dev);
       return;
@@ -426,7 +437,7 @@ export class OpenSearch extends component("sst:aws:OpenSearch", parts) {
         const size = toGBs(v);
         if (size < 10) {
           throw new VisibleError(
-            `Storage must be at least 10 GB for the ${name} OpenSearch domain.`,
+            `The "storage" of ${owner} is ${v}. It has to be at least 10 GB.`,
           );
         }
         return size;
@@ -434,32 +445,32 @@ export class OpenSearch extends component("sst:aws:OpenSearch", parts) {
     }
 
     // A domain created by this component, or by `sst.aws.OpenSearch`, is
-    // tagged with its username and the secret that holds its password
+    // tagged with its username and the secret that holds its password. Given
+    // its own, or the secret, it uses those.
     function reference(domain: opensearch.Domain) {
-      const ref = domain.tagsAll.apply((tags) => {
-        if (!tags?.["sst:ref:username"])
-          throw new VisibleError(
-            `Failed to get username for OpenSearch ${name}.`,
-          );
-        if (!tags?.["sst:ref:password"])
-          throw new VisibleError(
-            `Failed to get password for OpenSearch ${name}.`,
-          );
-        return {
-          username: tags["sst:ref:username"],
-          secret: tags["sst:ref:password"],
-        };
-      });
-      const secret = secretsmanager.getSecretVersionOutput(
-        { secretId: ref.secret },
-        { parent: self },
-      );
+      const secret = self.existingPart("secret");
       return {
         id: domain.id,
-        username: ref.username,
-        password: secret.secretString.apply(
-          (v) => JSON.parse(v).password as string,
-        ),
+        username: args.username
+          ? output(args.username)
+          : tagOf(
+              domain,
+              "sst:ref:username",
+              `The "${name}" OpenSearch domain can't find its username: its domain has no "sst:ref:username" tag. Set "username".`,
+            ),
+        password: args.password
+          ? output(args.password)
+          : secretField(
+              secret
+                ? secret.id
+                : tagOf(
+                    domain,
+                    "sst:ref:password",
+                    `The "${name}" OpenSearch domain can't find its password: its domain has no "sst:ref:password" tag, which names the secret that holds it. Pass the secret in "existing.secret", or set "password".`,
+                  ),
+              "password",
+              self,
+            ),
         url: interpolate`https://${domain.endpoint}`,
       };
     }
@@ -469,19 +480,16 @@ export class OpenSearch extends component("sst:aws:OpenSearch", parts) {
     function runLocally(dev: NonNullable<OpenSearchArgs["dev"]>) {
       const local = {
         id: output("placeholder"),
-        url: output(dev.url ?? "http://localhost:9200"),
-        username: dev.username ? output(dev.username) : username,
-        password: output(dev.password ?? args.password ?? ""),
+        url: devValue(dev.url, "http://localhost:9200"),
+        username: devValue(dev.username, username, true),
+        password: localPassword(dev.password, args.password, owner),
       };
 
       self.report({
         dev: localServerPane(
-          interpolate`Make sure your local OpenSearch server is using:
-
-  username: "${local.username}"
-  password: "${shownPassword(local.password)}"
-
-Listening on "${local.url}"...`,
+          "OpenSearch server",
+          { username: local.username, password: local.password },
+          local.url,
         ),
       });
 
@@ -569,11 +577,11 @@ Listening on "${local.url}"...`,
     // A domain is looked up by its name. Its `id` is its ARN, which ends in
     // the name.
     const domain = output(id).apply((id) =>
-      id.startsWith("arn:") ? parseOpenSearch(id).tableName : id,
+      id.startsWith("arn:") ? parseOpenSearch(id).domainName : id,
     );
     return new OpenSearch(
       name,
-      { existing: { domain } } as OpenSearchArgs,
+      getArgs({ existing: { domain } }) as OpenSearchArgs,
       opts,
     );
   }

@@ -2,11 +2,11 @@ import fs from "fs";
 import path from "path";
 import {
   all,
-  type ComponentResourceOptions,
   interpolate,
   jsonStringify,
-  type Output,
+  Output,
   output,
+  type Resource,
   secret,
 } from "@pulumi/pulumi";
 import {
@@ -15,29 +15,37 @@ import {
   ecs,
   getCallerIdentityOutput,
   getPartitionOutput,
+  getRegionOutput,
   iam,
 } from "@pulumi/aws";
-import { type Image, type ImageArgs, Platform } from "@pulumi/docker-build";
-import { plain } from "../../args";
+import { Image, type ImageArgs, Platform } from "@pulumi/docker-build";
+import { notAnExistingPart, notAnOption, plain, withDefault } from "../../args";
+import { context } from "../../contract";
 import { toNumber } from "../../cpu";
 import { toSeconds } from "../../duration";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
 import { Link } from "../../link";
 import { physicalName } from "../../naming";
-import type { ManyPart, Parts, PartsComponent } from "../../parts-component";
+import {
+  type ComponentArgs,
+  type ManyPart,
+  type Parts,
+  type PartsBuilder,
+  type PartsComponent,
+  many,
+} from "../../parts-component";
 import { toGBs, toMBs } from "../../size";
 import { transformPart } from "../../transform";
-import type { Cluster as OriginalCluster } from "../cluster";
-import { Efs as OriginalEfs } from "../efs";
 import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
-import type { Cluster } from "../v5/cluster";
-import { Efs } from "../v5/efs";
 import type { FunctionPermissionArgs } from "../v5/function";
 import type { DurationMinutes } from "../../duration";
 import { bootstrap } from "./bootstrap";
+import { type AnyCluster, isCluster } from "./cluster";
 import { imageBuilder } from "./container-builder";
+import { type AnyEfs, isEfs } from "./efs";
+import { inlinePolicies, noPermissionsFor } from "./iam";
 import { isVpc } from "./vpc";
 
 // The CPU a task can have, in CPU units, and the memory it can have with each,
@@ -143,6 +151,37 @@ export const supportedMemories = {
   },
 };
 
+/**
+ * The parts of a task definition and what it runs with: what a task and a
+ * service share.
+ */
+export const fargateTaskParts = {
+  /**
+   * The Amazon ECS Execution Role. ECS starts the containers with it: it pulls their
+   * images, and reads their secrets and environment files.
+   */
+  executionRole: iam.Role,
+  /**
+   * The Amazon ECS Task Role, which the containers run as. In `sst dev`, what runs on your
+   * machine in place of them runs as it too.
+   */
+  taskRole: iam.Role,
+  /**
+   * The images built for the containers, by the container's name. There's one for each
+   * container that's built from a Dockerfile. It's added once the container's image
+   * settings are known.
+   */
+  image: many(Image),
+  /**
+   * The CloudWatch log groups of the containers, by the container's name.
+   */
+  logGroup: many(cloudwatch.LogGroup),
+  /**
+   * The Amazon ECS Task Definition.
+   */
+  taskDefinition: ecs.TaskDefinition,
+};
+
 /** Where a task or service runs: the VPC of its cluster. */
 export type Network = {
   /** A `Vpc`, as opposed to a VPC given by its ids. */
@@ -161,7 +200,7 @@ export type Network = {
  * The VPC of a cluster, read the same way whether the cluster was given a
  * `Vpc` or the ids of one.
  */
-export function networkOf(cluster: OriginalCluster | Cluster): Network {
+export function networkOf(cluster: AnyCluster): Network {
   const ids = (list: Input<Input<string>[]> | undefined) =>
     output(list ?? []) as Output<string[]>;
 
@@ -217,7 +256,7 @@ export interface FargateArgs {
    * }
    * ```
    */
-  cluster: OriginalCluster | Cluster;
+  cluster: AnyCluster;
   /**
    * Mount Amazon EFS file systems into the container.
    *
@@ -263,8 +302,7 @@ export interface FargateArgs {
      * The Amazon EFS file system to mount.
      */
     efs: Input<
-      | OriginalEfs
-      | Efs
+      | AnyEfs
       | {
           /**
            * The ID of the EFS file system.
@@ -978,21 +1016,30 @@ export function containersOf(
     args.containers,
     `The "containers" of the "${name}" ${type}`,
   );
-  if (
-    containers &&
-    (args.image ||
-      args.logging ||
-      args.environment ||
-      args.environmentFiles ||
-      args.volumes ||
-      args.health ||
-      args.ssm)
-  )
-    throw new VisibleError(
-      type === "service"
-        ? `You cannot provide both "containers" and "image", "logging", "environment", "environmentFiles", "volumes", "health" or "ssm".`
-        : `You cannot provide both "containers" and "image", "logging", "environment", "environmentFiles", "volumes" or "ssm".`,
-    );
+  // What each container takes is set on each one. At the top level it would
+  // be dropped.
+  if (containers) {
+    const owner = `the "${name}" ${type}, which has "containers"`;
+    for (const key of [
+      "image",
+      "command",
+      "entrypoint",
+      "logging",
+      "environment",
+      "environmentFiles",
+      "volumes",
+      "ssm",
+      ...(type === "service" ? ["health"] : []),
+    ])
+      notAnOption(args, key, `Set it on each container.`, owner);
+    // `dev: false` is the service's, and so is the URL it has in `sst dev`
+    const dev = args.dev || {};
+    for (const key of ["command", "autostart", "directory"] as const)
+      if (type === "service" && dev[key] !== undefined)
+        throw new VisibleError(
+          `"dev.${key}" isn't an option for ${owner}. Set it in the "dev" of each container.`,
+        );
+  }
 
   if (!containers)
     return [
@@ -1019,72 +1066,92 @@ export function containersOf(
   });
 }
 
-/** The CPU of a task, checked against what Fargate offers. */
-export function cpuOf(args: Pick<FargateBaseArgs, "cpu">) {
-  return output(args.cpu ?? "0.25 vCPU").apply((v) => {
-    if (!supportedCpus[v])
-      throw new Error(
-        `Unsupported CPU: ${v}. The supported values for CPU are ${Object.keys(
-          supportedCpus,
-        ).join(", ")}`,
-      );
-    return v;
-  });
-}
-
-/** The memory of a task, checked against what Fargate offers for its CPU. */
-export function memoryOf(
-  cpu: ReturnType<typeof cpuOf>,
-  args: Pick<FargateBaseArgs, "memory">,
+/**
+ * The size of a task: its CPU, its memory and its ephemeral storage, checked
+ * against what Fargate offers. Each is checked as it's given, so a size
+ * Fargate doesn't offer fails before anything is created, and an output once
+ * it's known.
+ *
+ * @param owner The component, for the errors: `the "MyTask" task`.
+ */
+export function sizeOf(
+  args: Pick<FargateBaseArgs, "cpu" | "memory" | "storage">,
+  owner: string,
 ) {
-  return all([cpu, args.memory ?? "0.5 GB"]).apply(([cpu, v]) => {
-    if (!(v in supportedMemories[cpu]))
-      throw new Error(
-        `Unsupported memory: ${v}. The supported values for memory for a ${cpu} CPU are ${Object.keys(
+  type Cpu = keyof typeof supportedCpus;
+  const cpuOf = (cpu: Cpu) => {
+    if (!supportedCpus[cpu])
+      throw new VisibleError(
+        `The "cpu" of ${owner} is "${cpu}". Fargate offers ${Object.keys(
+          supportedCpus,
+        ).join(", ")}.`,
+      );
+    return cpu;
+  };
+  const memoryOf = ([cpu, memory]: [Cpu, `${number} GB`]) => {
+    if (!(memory in supportedMemories[cpu]))
+      throw new VisibleError(
+        `The "memory" of ${owner} is "${memory}". With ${cpu}, Fargate offers ${Object.keys(
           supportedMemories[cpu],
-        ).join(", ")}`,
+        ).join(", ")}.`,
       );
-    return v;
-  });
-}
+    return memory;
+  };
+  const storageOf = (storage: `${number} GB`) => {
+    const size = toGBs(storage);
+    if (size < 20 || size > 200)
+      throw new VisibleError(
+        `The "storage" of ${owner} is "${storage}". It has to be between "20 GB" and "200 GB".`,
+      );
+    return storage;
+  };
 
-/** The ephemeral storage of a task, checked against what Fargate offers. */
-export function storageOf(args: Pick<FargateBaseArgs, "storage">) {
-  return output(args.storage ?? "20 GB").apply((v) => {
-    const storage = toGBs(v);
-    if (storage < 20 || storage > 200)
-      throw new Error(
-        `Unsupported storage: ${v}. The supported value for storage is between "20 GB" and "200 GB"`,
-      );
-    return v;
-  });
+  const cpu = args.cpu ?? "0.25 vCPU";
+  const memory = args.memory ?? "0.5 GB";
+  const storage = args.storage ?? "20 GB";
+  const known = (value: unknown) =>
+    !Output.isInstance(value) && !(value instanceof Promise);
+  if (known(cpu)) {
+    cpuOf(cpu);
+    if (known(memory)) memoryOf([cpu, memory]);
+  }
+  if (known(storage)) storageOf(storage);
+
+  const checkedCpu = output(cpu).apply(cpuOf);
+  return {
+    cpu: checkedCpu,
+    memory: all([checkedCpu, memory]).apply(memoryOf),
+    storage: output(storage).apply(storageOf),
+  };
 }
 
 /**
  * The args of the role a task's containers run as: what the component is
  * linked to and given permission for, and what ECS Exec needs.
  *
- * @param opts The component's options, for the provider to look the account up with.
+ * @param parent The component, whose provider the account is looked up with.
  * @param dev Whether the stub that runs in `sst dev` is deployed. The account
  * can then assume the role, which is how the local process gets its permissions.
  * @param additional Permissions the component adds.
  */
 export function taskRoleArgs(
   args: Pick<FargateBaseArgs, "permissions" | "link">,
-  opts: ComponentResourceOptions,
+  parent: Resource,
   dev: boolean,
   additional: FargateBaseArgs["permissions"] = [],
 ): iam.RoleArgs {
-  const policy = all([
-    args.permissions ?? [],
-    Link.getInclude<Permission>("aws.permission", args.link),
-    additional ?? [],
-  ]).apply(([argsPermissions, linkPermissions, additionalPermissions]) =>
-    iam.getPolicyDocumentOutput({
-      statements: [
-        ...argsPermissions,
-        ...linkPermissions,
-        ...additionalPermissions,
+  return {
+    assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
+      Service: "ecs-tasks.amazonaws.com",
+      ...(dev
+        ? { AWS: getCallerIdentityOutput({}, { parent }).accountId }
+        : {}),
+    }),
+    inlinePolicies: inlinePolicies([
+      args.permissions,
+      Link.getInclude<Permission>("aws.permission", args.link),
+      additional,
+      [
         {
           actions: [
             "ssmmessages:CreateControlChannel",
@@ -1094,26 +1161,8 @@ export function taskRoleArgs(
           ],
           resources: ["*"],
         },
-      ].map((item) => ({
-        effect: (() => {
-          const effect = item.effect ?? "allow";
-          return effect.charAt(0).toUpperCase() + effect.slice(1);
-        })(),
-        actions: item.actions,
-        resources: item.resources,
-        conditions: "conditions" in item ? item.conditions : undefined,
-      })),
-    }),
-  );
-
-  return {
-    assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
-      Service: "ecs-tasks.amazonaws.com",
-      ...(dev ? { AWS: getCallerIdentityOutput({}, opts).accountId } : {}),
-    }),
-    inlinePolicies: policy.apply(({ statements }) =>
-      statements ? [{ name: "inline", policy: policy.json }] : [],
-    ),
+      ],
+    ]),
   };
 }
 
@@ -1121,19 +1170,23 @@ export function taskRoleArgs(
  * The args of the role ECS starts a task with: it pulls the images and reads
  * the secrets and environment files the containers are given.
  *
- * @param opts The component's options, for the provider to look the partition up with.
+ * @param containers The containers the task runs.
+ * @param parent The component, whose provider the partition is looked up with.
  */
 export function executionRoleArgs(
-  args: Pick<FargateBaseArgs, "environmentFiles">,
-  opts: ComponentResourceOptions,
+  containers: Container[],
+  parent: Resource,
 ): iam.RoleArgs {
+  const withFiles = containers.filter(
+    (container) => container.environmentFiles,
+  );
   return {
     assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
       Service: "ecs-tasks.amazonaws.com",
     }),
     managedPolicyArns: [
       interpolate`arn:${
-        getPartitionOutput({}, opts).partition
+        getPartitionOutput({}, { parent }).partition
       }:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy`,
     ],
     inlinePolicies: [
@@ -1151,12 +1204,17 @@ export function executionRoleArgs(
               ],
               resources: ["*"],
             },
-            ...(args.environmentFiles
+            // Every container's, as each loads its own
+            ...(withFiles.length
               ? [
                   {
                     sid: "ReadEnvironmentFiles",
                     actions: ["s3:GetObject"],
-                    resources: args.environmentFiles,
+                    resources: all(
+                      withFiles.map((container) =>
+                        output(container.environmentFiles!),
+                      ),
+                    ).apply((files) => files.flat()),
                   },
                 ]
               : []),
@@ -1174,7 +1232,7 @@ export function executionRoleArgs(
  */
 export function logGroupArgs(
   container: Container,
-  cluster: OriginalCluster | Cluster,
+  cluster: AnyCluster,
   name: string,
 ): cloudwatch.LogGroupArgs {
   const logging = all([container.logging, cluster.nodes.cluster.name]).apply(
@@ -1225,7 +1283,10 @@ export function containerImage<P extends Parts>(
     ([image, architecture]) => {
       if (typeof image === "string") return output(image);
 
-      const contextPath = path.join($cli.paths.root, image?.context ?? ".");
+      const contextPath = path.join(
+        context().paths.root,
+        image?.context ?? ".",
+      );
       const dockerfile = image?.dockerfile ?? "Dockerfile";
       ignoreSstDirectory(contextPath, dockerfile);
 
@@ -1319,7 +1380,7 @@ function ignoreSstDirectory(contextPath: string, dockerfile: string) {
 export function taskDefinitionArgs(task: {
   /** The component's name. */
   name: string;
-  cluster: OriginalCluster | Cluster;
+  cluster: AnyCluster;
   region: Output<string>;
   link: FargateBaseArgs["link"];
   /** Each container, with the image it runs and the log group it writes to. */
@@ -1329,9 +1390,7 @@ export function taskDefinitionArgs(task: {
     logGroup: cloudwatch.LogGroup;
   }[];
   architecture: Input<"x86_64" | "arm64">;
-  cpu: ReturnType<typeof cpuOf>;
-  memory: ReturnType<typeof memoryOf>;
-  storage: ReturnType<typeof storageOf>;
+  size: ReturnType<typeof sizeOf>;
   taskRole: iam.Role;
   executionRole: iam.Role;
 }): ecs.TaskDefinitionArgs {
@@ -1341,13 +1400,9 @@ export function taskDefinitionArgs(task: {
     output(container.volumes).apply((volumes) =>
       volumes?.map((volume) => ({
         path: volume.path,
-        efs:
-          volume.efs instanceof OriginalEfs || volume.efs instanceof Efs
-            ? {
-                fileSystem: volume.efs.id,
-                accessPoint: volume.efs.accessPoint,
-              }
-            : volume.efs,
+        efs: isEfs(volume.efs)
+          ? { fileSystem: volume.efs.id, accessPoint: volume.efs.accessPoint }
+          : volume.efs,
       })),
     ),
   );
@@ -1412,11 +1467,11 @@ export function taskDefinitionArgs(task: {
   return {
     family: interpolate`${task.cluster.nodes.cluster.name}-${task.name}`,
     trackLatest: true,
-    cpu: task.cpu.apply((v) => toNumber(v).toString()),
-    memory: task.memory.apply((v) => toMBs(v).toString()),
+    cpu: task.size.cpu.apply((v) => toNumber(v).toString()),
+    memory: task.size.memory.apply((v) => toMBs(v).toString()),
     networkMode: "awsvpc",
     // Fargate includes 20 GB, which isn't something to ask for
-    ephemeralStorage: task.storage.apply((storage) => {
+    ephemeralStorage: task.size.storage.apply((storage) => {
       const sizeInGib = toGBs(storage);
       return sizeInGib === 20 ? undefined : { sizeInGib };
     }) as ecs.TaskDefinitionArgs["ephemeralStorage"],
@@ -1451,6 +1506,127 @@ export function taskDefinitionArgs(task: {
     }),
     containerDefinitions: jsonStringify(containerDefinitions),
   };
+}
+
+/**
+ * What a task's parts are built with: the `builder()` of a component whose
+ * parts include `fargateTaskParts`.
+ */
+type FargateTaskBuilder = {
+  component: PartsComponent<any>;
+  part: PartsBuilder<typeof fargateTaskParts>["part"];
+};
+
+/** The args of a task or a service that what's here reads. */
+type FargateTaskArgs = FargateBaseArgs &
+  ComponentArgs<typeof fargateTaskParts> &
+  Pick<ContainersArgs, "containers" | "health" | "dev">;
+
+/**
+ * What a task or a service runs, checked: its cluster, the size of its task
+ * and its containers, with the region its logs are sent to.
+ *
+ * @param builder The component's, from `this.builder()`.
+ * @param kind What the component is, for the errors.
+ * @param name The component's name.
+ */
+export function fargateTaskOf(
+  builder: FargateTaskBuilder,
+  kind: "task" | "service",
+  name: string,
+  args: FargateTaskArgs,
+) {
+  const owner = `the "${name}" ${kind}`;
+  for (const role of ["taskRole", "executionRole"])
+    notAnOption(
+      args,
+      role,
+      `Pass the role, or its name, as "existing: { ${role} }".`,
+      owner,
+    );
+  // An image that's built is a part. One that exists already is just the
+  // image a container is given.
+  notAnExistingPart(
+    args.existing,
+    "image",
+    owner,
+    `Set the "image" of the container to the image's reference.`,
+  );
+  // A role that's given is used the way it is
+  noPermissionsFor(
+    args.existing?.taskRole,
+    args.permissions,
+    "taskRole",
+    owner,
+  );
+  if (!isCluster(args.cluster))
+    throw new VisibleError(
+      `The "cluster" of ${owner} isn't a "Cluster" component. Pass a "Cluster".`,
+    );
+
+  return {
+    cluster: args.cluster,
+    network: networkOf(args.cluster),
+    // The component's provider's, and so its logs' and its containers'
+    region: getRegionOutput({}, { parent: builder.component }).region,
+    architecture: withDefault(args.architecture, "x86_64" as const),
+    size: sizeOf(args, owner),
+    containers: containersOf(kind, args, name),
+  };
+}
+
+/**
+ * Create the execution role of a task or a service, the image and the log
+ * group of each container, and the task definition that runs them.
+ *
+ * @param builder The component's, from `this.builder()`.
+ * @param name The component's name.
+ * @param task What the task runs, from `fargateTaskOf()`.
+ * @param containers The containers that are deployed: in `sst dev`, a task
+ * deploys a stub in place of its own.
+ * @param taskRole The role the containers run as.
+ */
+export function createTaskDefinition(
+  builder: FargateTaskBuilder,
+  name: string,
+  task: ReturnType<typeof fargateTaskOf>,
+  link: FargateBaseArgs["link"],
+  containers: Container[],
+  taskRole: iam.Role,
+) {
+  const { part, component } = builder;
+  const executionRole = part(
+    "executionRole",
+    executionRoleArgs(containers, component),
+  );
+  const deployed = containers.map((container) => ({
+    container,
+    image: containerImage(component, "image", container, {
+      architecture: task.architecture,
+      link,
+      region: task.region,
+    }),
+    logGroup: part(
+      "logGroup",
+      container.name,
+      logGroupArgs(container, task.cluster, name),
+      { ignoreChanges: ["name"] },
+    ),
+  }));
+  return part(
+    "taskDefinition",
+    taskDefinitionArgs({
+      name,
+      cluster: task.cluster,
+      region: task.region,
+      link,
+      containers: deployed,
+      architecture: task.architecture,
+      size: task.size,
+      taskRole,
+      executionRole,
+    }),
+  );
 }
 
 type ImageKeys<P extends Parts> = {

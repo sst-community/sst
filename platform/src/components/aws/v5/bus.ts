@@ -10,16 +10,15 @@ import {
   deferred,
   many,
 } from "../../parts-component";
+import { usedAsItIs, getArgs } from "../../args";
 import type { Input } from "../../input";
+import { VisibleError } from "../../error";
 import { Function } from "./function";
-import {
-  type FunctionInput,
-  functionPart,
-  plainFunction,
-} from "../helpers/function-part";
-import { invokePermissionArgs } from "../helpers/function-permission";
-import { sendPolicyArgs } from "../helpers/queue-policy";
-import type { AnyQueue } from "../helpers/queue";
+import { parseEventBusArn } from "../helpers/arn";
+import { enabledState, ruleFunctionTarget } from "../helpers/eventbridge";
+import { type FunctionInput, plainFunction } from "../helpers/function-part";
+import { sendPolicy } from "../helpers/queue-policy";
+import { type AnyQueue, queueArnOf } from "../helpers/queue";
 import { permission } from "../permission";
 
 const parts = () => ({
@@ -205,56 +204,11 @@ export interface BusSubscriberArgs {
  *
  * #### Subscribe to a bus that isn't in your app
  *
- * Reference it with `get`, by its name, then subscribe to it.
+ * Reference it with `get`, by its name or ARN, then subscribe to it.
  *
  * ```ts title="sst.config.ts"
  * sst.aws.v5.Bus.get("Shared", "my-shared-bus").subscribe("MySubscriber", "src/subscriber.handler");
  * ```
- *
- * #### Switch from `sst.aws.Bus`
- *
- * Change `sst.aws.Bus` to `sst.aws.v5.Bus` and keep the name. The bus and the subscribers
- * you've deployed are kept.
- *
- * ```ts title="sst.config.ts" del={1} ins={2}
- * const bus = new sst.aws.Bus("MyBus");
- * const bus = new sst.aws.v5.Bus("MyBus");
- * ```
- *
- * A few things work differently:
- *
- * - `sst.aws.Bus.subscribe` and `sst.aws.Bus.subscribeQueue`, which took the ARN of a bus
- *   that isn't in your app, are `get` followed by `subscribe` or `subscribeQueue`. `get`
- *   takes the bus's name. What they created is kept, as long as `get` isn't given a
- *   provider, directly, through its `parent`, or in `providers`: `sst.aws.Bus` created it
- *   with your app's, and another one replaces it, a function's log group included.
- *
- *   ```ts title="sst.config.ts" del={1} ins={2}
- *   sst.aws.Bus.subscribe("MySubscriber", busArn, "src/subscriber.handler");
- *   sst.aws.v5.Bus.get("Shared", "my-shared-bus").subscribe("MySubscriber", "src/subscriber.handler");
- *   ```
- *
- * - `subscribe` no longer takes a handler or a function's args in an output: whether a
- *   function is created is decided from them, and a preview has to know. Only a function
- *   you have, or its ARN, can be an output. The args are typed as
- *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
- *   type-check.
- * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
- *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
- * - `subscribe` and `subscribeQueue` return the bus, where they returned the subscriber:
- *   what each one created is in the bus's `nodes`, by the subscriber's name, like
- *   `bus.nodes.rule.MySubscriber`.
- * - A subscriber's `transform` is the bus's: its `rule` and `target` apply to every
- *   subscriber, and a function there is given the subscriber's name.
- * - A subscriber is created with the provider the bus has. `sst.aws.Bus` gave a function
- *   subscriber only a `provider` passed to the bus itself, and a queue subscriber your
- *   app's provider, whatever the bus had. So if your bus has a `provider` and a queue
- *   subscribed to it, or takes its provider from a parent component or from `providers`,
- *   those subscribers are replaced on switch, a function's log group with it, which
- *   `sst migrate --check` refuses: remove them and deploy before you switch, then add them
- *   back.
  *
  * #### Link the bus to a resource
  *
@@ -284,6 +238,65 @@ export interface BusSubscriberArgs {
  *   ]
  * }));
  * ```
+ *
+ * #### Use a bus you already have
+ *
+ * Pass the bus, or its name. The bus is used the way it is: the component doesn't
+ * configure it, and refuses `logging` next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.Bus("MyBus", {
+ *   existing: {
+ *     bus: "my-shared-bus"
+ *   }
+ * });
+ * ```
+ *
+ * #### Switch from `sst.aws.Bus`
+ *
+ * Change `sst.aws.Bus` to `sst.aws.v5.Bus` and keep the name. The bus and the subscribers
+ * you've deployed are kept.
+ *
+ * ```ts title="sst.config.ts" del={1} ins={2}
+ * const bus = new sst.aws.Bus("MyBus");
+ * const bus = new sst.aws.v5.Bus("MyBus");
+ * ```
+ *
+ * A few things work differently:
+ *
+ * - `sst.aws.Bus.subscribe` and `sst.aws.Bus.subscribeQueue`, which took the ARN of a bus
+ *   that isn't in your app, are `get` followed by `subscribe` or `subscribeQueue`, and are
+ *   refused with what to write. `get` takes the bus's ARN, or its name. What they created
+ *   is kept, as long as `get` isn't given a provider, directly, through its `parent`, or
+ *   in `providers`: `sst.aws.Bus` created it with your app's, and another one replaces
+ *   it, a function's log group included.
+ *
+ *   ```ts title="sst.config.ts" del={1} ins={2}
+ *   sst.aws.Bus.subscribe("MySubscriber", busArn, "src/subscriber.handler");
+ *   sst.aws.v5.Bus.get("Shared", busArn).subscribe("MySubscriber", "src/subscriber.handler");
+ *   ```
+ *
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
+ * - `subscribe` and `subscribeQueue` return the bus, where they returned the subscriber:
+ *   what each one created is in the bus's `nodes`, by the subscriber's name, like
+ *   `bus.nodes.rule.MySubscriber`.
+ * - A subscriber's `transform` is the bus's: its `rule` and `target` apply to every
+ *   subscriber, and a function there is given the subscriber's name.
+ * - A subscriber is created with the provider the bus has. `sst.aws.Bus` gave a function
+ *   subscriber only a `provider` passed to the bus itself, and a queue subscriber your
+ *   app's provider, whatever the bus had. So if your bus has a `provider` and a queue
+ *   subscribed to it, or takes its provider from a parent component or from `providers`,
+ *   those subscribers are replaced on switch, a function's log group with it, which
+ *   `sst migrate --check` refuses: remove them and deploy before you switch, then add them
+ *   back.
  */
 export class Bus extends component("sst:aws:Bus", parts) {
   constructor(
@@ -292,6 +305,10 @@ export class Bus extends component("sst:aws:Bus", parts) {
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
+
+    // A bus that's already there is used the way it is
+    if (this.existingPart("bus"))
+      usedAsItIs(args, ["logging"], "bus", `the "${name}" bus`);
 
     this.part("bus", {
       logConfig:
@@ -349,26 +366,19 @@ export class Bus extends component("sst:aws:Bus", parts) {
   ) {
     this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);
     const rule = this.subscriberRule(name, args);
-    const fn = functionPart(
-      this,
-      "subscriber",
+    ruleFunctionTarget(
+      this.builder(),
+      { subscriber: "subscriber", permission: "permission", target: "target" },
       name,
-      plainFunction(
-        subscriber,
-        `The subscriber "${name}" of the "${this.componentName}" bus`,
-      ),
-      { description: interpolate`Subscribed to ${this.name}` },
-    );
-    const permission = this.part(
-      "permission",
-      name,
-      invokePermissionArgs(fn, "events.amazonaws.com", rule.arn),
-    );
-    this.part(
-      "target",
-      name,
-      { arn: fn.targetArn, rule: rule.name, eventBusName: this.name },
-      { dependsOn: [permission] },
+      rule,
+      {
+        bus: this.name,
+        subscriber: plainFunction(
+          subscriber,
+          `The subscriber "${name}" of the "${this.componentName}" bus`,
+        ),
+        description: interpolate`Subscribed to ${this.name}`,
+      },
     );
     return this;
   }
@@ -394,12 +404,8 @@ export class Bus extends component("sst:aws:Bus", parts) {
     args: BusSubscriberArgs = {},
   ) {
     this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);
-    const queueArn = output(queue).apply((queue) =>
-      typeof queue === "string" ? output(queue) : queue.arn,
-    );
-    this.part("queuePolicy", name, sendPolicyArgs(queueArn), {
-      retainOnDelete: true,
-    });
+    const queueArn = queueArnOf(queue);
+    this.part("queuePolicy", name, ...sendPolicy(queueArn));
     const rule = this.subscriberRule(name, args);
     this.part("target", name, {
       arn: queueArn,
@@ -414,9 +420,7 @@ export class Bus extends component("sst:aws:Bus", parts) {
   private subscriberRule(name: string, args: BusSubscriberArgs) {
     return this.part("rule", name, {
       eventBusName: this.name,
-      state: output(args.enabled ?? true).apply((enabled) =>
-        enabled ? "ENABLED" : "DISABLED",
-      ),
+      state: enabledState(args.enabled),
       eventPattern: args.pattern
         ? output(args.pattern).apply((pattern) =>
             JSON.stringify({
@@ -430,12 +434,36 @@ export class Bus extends component("sst:aws:Bus", parts) {
   }
 
   /**
-   * Reference an existing EventBus with its name. This is useful when you create a bus in
-   * one stage and want to share it in another, or to subscribe to a bus that isn't in your
-   * app. The bus is used the way it is: it isn't configured here.
+   * `sst.aws.Bus.subscribe` subscribed to a bus by its ARN. Reference the bus with `get`
+   * and subscribe to that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to a bus that isn't in your app, reference it with "get" and subscribe to that: sst.aws.v5.Bus.get("MyBus", busArn).subscribe("MySubscriber", "src/subscriber.handler").`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bus.subscribeQueue` subscribed a queue to a bus by its ARN. Reference the
+   * bus with `get` and subscribe the queue to that.
+   *
+   * @internal
+   */
+  public static subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe a queue to a bus that isn't in your app, reference the bus with "get" and subscribe the queue to that: sst.aws.v5.Bus.get("MyBus", busArn).subscribeQueue("MySubscriber", queue).`,
+    );
+  }
+
+  /**
+   * Reference an existing EventBus with its name or ARN. This is useful when you create a
+   * bus in one stage and want to share it in another, or to subscribe to a bus that isn't
+   * in your app. The bus is used the way it is: it isn't configured here.
    *
    * @param name The name of the component.
-   * @param busName The name of the existing EventBus.
+   * @param bus The name of the existing EventBus, or its ARN.
    * @param opts Component resource options.
    *
    * @example
@@ -448,10 +476,14 @@ export class Bus extends component("sst:aws:Bus", parts) {
    */
   public static get(
     name: string,
-    busName: Input<string>,
+    bus: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Bus(name, { existing: { bus: busName } }, opts);
+    // A bus is looked up by its name
+    const busName = output(bus).apply((id) =>
+      id.startsWith("arn:") ? parseEventBusArn(id).busName : id,
+    );
+    return new Bus(name, getArgs({ existing: { bus: busName } }), opts);
   }
 
   /**

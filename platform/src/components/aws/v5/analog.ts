@@ -1,15 +1,11 @@
-import fs from "fs";
 import path from "path";
 import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
 import { type ComponentArgs, component } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { context } from "../../contract";
-import { readNitro } from "../helpers/nitro";
-import { configText } from "../helpers/site-build";
-import type { RouteArgs } from "../helpers/router";
+import { nitroSite } from "../helpers/nitro";
+import { configValue } from "../helpers/site-build";
+import type { SiteRouteArgs } from "../helpers/router";
 import {
-  type ServerPlan,
-  type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
   createSsrSite,
@@ -105,7 +101,7 @@ export interface AnalogArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
    * Set [environment variables](https://analogjs.org/docs/guides/migrating#using-environment-variables) in your Analog app. These are made available:
    *
    * 1. In `ng build`, they are loaded into `process.env`.
-   * 2. Locally while running `sst dev ng serve`.
+   * 2. Locally while running `ng serve` through `sst dev`.
    *
    * :::tip
    * You can also `link` resources to your Analog app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
@@ -337,7 +333,7 @@ export interface AnalogArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
    * Also, make sure to set the base path and API prefix in your `vite.config.ts`,
    * like above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -439,11 +435,16 @@ export interface AnalogArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.Analog` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
- *   `regions` to have it from the start. In `sst dev`, the function the site runs as is
- *   `transform.devServer`, not `transform.server`.
+ *   `regions` to have it from the start.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.Analog` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.Analog` ignored it and
  *   wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.Analog` warmed
@@ -451,8 +452,9 @@ export interface AnalogArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  * - With `warm`, the warmer's function, rule, target and permission move into the site.
  * - With `awsLambda: { streaming: true }` in Nitro's config, the server's URL streams its
  *   responses. `sst.aws.Analog` ignored it and buffered them.
- * - The base path is read from `vite.config` with any extension, like `.js` or `.mts`.
- *   `sst.aws.Analog` read only `vite.config.ts`, and failed without it.
+ * - The base path is read from `vite.config` with any extension, like `.js` or `.mts`, and
+ *   it's what's in the quotes after `base`. `sst.aws.Analog` read only `vite.config.ts`,
+ *   and failed without it, and read on to the last quote of the line.
  */
 export class Analog extends component("sst:aws:Analog", parts) {
   private readonly siteUrl: Output<string>;
@@ -485,63 +487,33 @@ export class Analog extends component("sst:aws:Analog", parts) {
   }
 }
 
-// An Analog app's build, and its server
-interface AnalogBuild extends SiteBuild {
-  server: ServerPlan;
-}
-
 // How an Analog app is built, with its package manager and Nitro's
 // "aws-lambda" preset, and what its server is
-const analog: SsrFramework<AnalogBuild> = {
+const analog: SsrFramework = {
   label: "Analog",
   alwaysServes: true,
   // Nitro's client files aren't in a versioned folder
   versionedFiles: false,
-  load: loadBuild,
-  server: (build) => build.server,
-};
-
-// Reads what Nitro built
-function loadBuild(builtPath: string): AnalogBuild {
-  const outputPath = path.resolve(context().paths.root, builtPath);
-  const output = path.join("dist", "analog");
-  const nitro = readNitro(path.join(outputPath, output), "Analog", [
-    "Set it in your `vite.config.ts`:",
-    "  // vite.config.ts",
-    "  export default defineConfig({",
-    "    plugins: [",
-    "      analog({",
-    "        nitro: {",
-    '          preset: "aws-lambda",',
-    "          awsLambda: { streaming: true }, // optional",
-    "        },",
-    "      }),",
-    "    ],",
-    "  });",
-  ]);
-
-  return {
-    sitePath: builtPath,
-    outputPath,
-    serves: true,
-    plan: {
-      // From `base` in the Vite config
-      base: configText(outputPath, "vite.config")?.match(
-        /base: ['"](.*)['"]/,
-      )?.[1],
-      assets: [
-        {
-          from: path.join(output, "public"),
-          to: "",
-          cached: true,
-        },
+  load: (builtPath) =>
+    nitroSite(builtPath, {
+      framework: "Analog",
+      output: path.join("dist", "analog"),
+      howToSet: [
+        "Set it in your `vite.config.ts`:",
+        "  // vite.config.ts",
+        "  export default defineConfig({",
+        "    plugins: [",
+        "      analog({",
+        "        nitro: {",
+        '          preset: "aws-lambda",',
+        "          awsLambda: { streaming: true }, // optional",
+        "        },",
+        "      }),",
+        "    ],",
+        "  });",
       ],
-    },
-    server: {
       description: "Server handler for Analog",
-      handler: "index.handler",
-      bundle: path.join(builtPath, output, "server"),
-      streaming: nitro.streaming,
-    },
-  };
-}
+      // From `base` in the Vite config
+      base: (outputPath) => configValue(outputPath, "vite.config", "base"),
+    }),
+};

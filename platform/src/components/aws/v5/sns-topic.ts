@@ -1,9 +1,4 @@
-import {
-  ComponentResourceOptions,
-  Output,
-  jsonStringify,
-  output,
-} from "@pulumi/pulumi";
+import { ComponentResourceOptions, jsonStringify } from "@pulumi/pulumi";
 import { lambda, sns, sqs } from "@pulumi/aws";
 import {
   type ComponentArgs,
@@ -11,7 +6,7 @@ import {
   deferred,
   many,
 } from "../../parts-component";
-import { withDefault } from "../../args";
+import { usedAsItIs, withDefault, getArgs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { Function } from "./function";
@@ -21,8 +16,9 @@ import {
   plainFunction,
 } from "../helpers/function-part";
 import { invokePermissionArgs } from "../helpers/function-permission";
-import { sendPolicyArgs } from "../helpers/queue-policy";
-import type { AnyQueue } from "../helpers/queue";
+import { assertNamedSubscriber } from "../helpers/event-source";
+import { sendPolicy } from "../helpers/queue-policy";
+import { type AnyQueue, queueArnOf } from "../helpers/queue";
 import { permission } from "../permission";
 
 const parts = () => ({
@@ -170,6 +166,19 @@ export interface SnsTopicSubscriberArgs {
  * }));
  * ```
  *
+ * #### Use a topic you already have
+ *
+ * Pass the topic, or its ARN. The topic is used the way it is: the component doesn't
+ * configure it, and refuses `fifo` next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.v5.SnsTopic("MyTopic", {
+ *   existing: {
+ *     topic: "arn:aws:sns:us-east-1:123456789012:my-topic"
+ *   }
+ * });
+ * ```
+ *
  * #### Switch from `sst.aws.SnsTopic`
  *
  * Change `sst.aws.SnsTopic` to `sst.aws.v5.SnsTopic` and keep the name. The topic and the
@@ -186,15 +195,18 @@ export interface SnsTopicSubscriberArgs {
  *   `sst.aws.SnsTopic` named such a subscriber after what it subscribed and its filter,
  *   so a switch can't find it. Remove the subscriber and deploy before you switch, then add it back
  *   with a name.
- * - `subscribe` no longer takes a handler or a function's args in an output: whether a
- *   function is created is decided from them, and a preview has to know. Only a function
- *   you have, or its ARN, can be an output. The args are typed as
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
- *   type-check.
- * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
+ * - A subscriber's function is described after the component, `Subscribed to MyTopic`,
+ *   where `sst.aws.SnsTopic` named the component it kept the subscriber in: an update in
+ *   place.
  * - `subscribe` and `subscribeQueue` return the topic, where they returned the
  *   subscriber: what each one created is in the topic's `nodes`, by the subscriber's
  *   name, like `topic.nodes.subscription.Emailer`.
@@ -202,7 +214,8 @@ export interface SnsTopicSubscriberArgs {
  *   whose function form is given the subscriber's name.
  * - `sst.aws.SnsTopic.subscribe(name, topicArn, subscriber)` becomes
  *   `sst.aws.v5.SnsTopic.get("SharedEvents", topicArn).subscribe(name, subscriber)`, and
- *   the same for `subscribeQueue`. What those created is kept, as long as `get` isn't
+ *   the same for `subscribeQueue`. Each is refused with what to write. What those created
+ *   is kept, as long as `get` isn't
  *   given a provider, directly, through its `parent`, or in `providers`:
  *   `sst.aws.SnsTopic` created them with your app's, and another one replaces them, a
  *   function's log group included.
@@ -213,18 +226,6 @@ export interface SnsTopicSubscriberArgs {
  *   or from `providers`, those subscribers are replaced on switch, a function's log group
  *   with it, which `sst migrate --check` refuses: remove them and deploy before you
  *   switch, then add them back.
- *
- * #### Use a topic you already have
- *
- * Pass the topic, or its ARN.
- *
- * ```ts title="sst.config.ts"
- * new sst.aws.v5.SnsTopic("MyTopic", {
- *   existing: {
- *     topic: "arn:aws:sns:us-east-1:123456789012:my-topic"
- *   }
- * });
- * ```
  */
 export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
   constructor(
@@ -233,6 +234,10 @@ export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
+
+    // A topic that's already there is used the way it is
+    if (this.existingPart("topic"))
+      usedAsItIs(args, ["fifo"], "topic", `the "${name}" topic`);
 
     this.part("topic", { fifoTopic: withDefault(args.fifo, false) });
   }
@@ -309,7 +314,12 @@ export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
     subscriber: FunctionInput,
     args: SnsTopicSubscriberArgs = {},
   ) {
-    assertNamed(this.componentName, "subscribe", name, subscriber);
+    assertNamedSubscriber(
+      `the "${this.componentName}" topic`,
+      "subscribe",
+      name,
+      subscriber,
+    );
     this.assertNew("subscriber", "subscription", name, args);
 
     const fn = functionPart(
@@ -372,15 +382,16 @@ export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
     queue: Input<string | AnyQueue>,
     args: SnsTopicSubscriberArgs = {},
   ) {
-    assertNamed(this.componentName, "subscribeQueue", name, queue);
+    assertNamedSubscriber(
+      `the "${this.componentName}" topic`,
+      "subscribeQueue",
+      name,
+      queue,
+    );
     this.assertNew("subscriber", "subscription", name, args);
 
-    const queueArn = output(queue).apply((queue) =>
-      typeof queue === "string" ? output(queue) : queue.arn,
-    );
-    this.part("queuePolicy", name, sendPolicyArgs(queueArn), {
-      retainOnDelete: true,
-    });
+    const queueArn = queueArnOf(queue);
+    this.part("queuePolicy", name, ...sendPolicy(queueArn));
     this.part("subscription", name, {
       topic: this.arn,
       protocol: "sqs",
@@ -413,7 +424,31 @@ export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
     topicArn: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new SnsTopic(name, { existing: { topic: topicArn } }, opts);
+    return new SnsTopic(name, getArgs({ existing: { topic: topicArn } }), opts);
+  }
+
+  /**
+   * `sst.aws.SnsTopic.subscribe` subscribed to a topic by its ARN. Reference the topic
+   * with `get` and subscribe to that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to a topic that isn't in your app, reference it with "get" and subscribe to that: sst.aws.v5.SnsTopic.get("MyTopic", topicArn).subscribe("MySubscriber", "src/subscriber.handler").`,
+    );
+  }
+
+  /**
+   * `sst.aws.SnsTopic.subscribeQueue` subscribed a queue to a topic by its ARN. Reference
+   * the topic with `get` and subscribe the queue to that.
+   *
+   * @internal
+   */
+  public static subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe a queue to a topic that isn't in your app, reference the topic with "get" and subscribe the queue to that: sst.aws.v5.SnsTopic.get("MyTopic", topicArn).subscribeQueue("MySubscriber", queue).`,
+    );
   }
 
   /**
@@ -426,27 +461,4 @@ export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
       include: [permission({ actions: ["sns:*"], resources: [this.arn] })],
     };
   }
-}
-
-/**
- * `sst.aws.SnsTopic` also took a subscriber without a name, which it named
- * after the subscriber and its filter. Called that way, the arguments are
- * shifted: the subscriber is where the name goes.
- */
-function assertNamed(
-  topic: string,
-  method: string,
-  name: unknown,
-  target: unknown,
-) {
-  const isArgs =
-    typeof target === "object" &&
-    target !== null &&
-    !Output.isInstance(target) &&
-    Object.getPrototypeOf(target) === Object.prototype &&
-    !("handler" in target);
-  if (typeof name === "string" && target !== undefined && !isArgs) return;
-  throw new VisibleError(
-    `"${method}" on the "${topic}" topic takes the subscriber's name first, like ${method}("MySubscriber", ...). A subscriber without a name isn't taken.`,
-  );
 }

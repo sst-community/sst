@@ -6,17 +6,7 @@ import {
   output,
   type Unwrap,
 } from "@pulumi/pulumi";
-import {
-  appautoscaling,
-  cloudwatch,
-  ec2,
-  ecs,
-  getRegionOutput,
-  iam,
-  lb,
-  servicediscovery,
-} from "@pulumi/aws";
-import { Image } from "@pulumi/docker-build";
+import { appautoscaling, ec2, ecs, lb, servicediscovery } from "@pulumi/aws";
 import {
   type ComponentArgs,
   component,
@@ -24,7 +14,14 @@ import {
   many,
   optional,
 } from "../../parts-component";
-import { ifSet, notAnOption, plain, plainDeep, withDefault } from "../../args";
+import {
+  ifSet,
+  notAnExistingPart,
+  notAnOption,
+  plain,
+  plainDeep,
+  withDefault,
+} from "../../args";
 import { type DurationMinutes, toSeconds } from "../../duration";
 import { VisibleError } from "../../error";
 import { DevCommand } from "../../experimental/v5/dev-command";
@@ -34,58 +31,31 @@ import { transformPart } from "../../transform";
 import { context } from "../../contract";
 import { type AnyAlb, isAlb } from "../helpers/alb";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import type { DomainArgs } from "../helpers/domain";
 import {
   type Container,
   type ContainerArgs,
   type FargateBaseArgs,
   type ServiceDev,
   type ServiceHealth,
-  containerImage,
-  containersOf,
-  cpuOf,
-  executionRoleArgs,
-  logGroupArgs,
-  memoryOf,
+  createTaskDefinition,
+  fargateTaskOf,
+  fargateTaskParts,
   type Network,
-  networkOf,
-  storageOf,
-  taskDefinitionArgs,
   taskRoleArgs,
 } from "../helpers/fargate";
 import { listenerKey, targetKey } from "../helpers/load-balancer";
 import {
-  loadBalancerDomain,
+  certificateOf,
   forbidden,
+  type LoadBalancerDomainArgs,
+  loadBalancerDomain,
   pointDomainAt,
   securityGroupArgs,
 } from "../helpers/load-balancer-args";
 import { URL_UNAVAILABLE } from "../linkable";
 
 const parts = () => ({
-  /**
-   * The Amazon ECS Execution Role.
-   */
-  executionRole: iam.Role,
-  /**
-   * The Amazon ECS Task Role. In `sst dev` it's the role each container's
-   * command runs as on your machine.
-   */
-  taskRole: iam.Role,
-  /**
-   * The images built for the service's containers, by the container's name. There's
-   * one for each container that's built from a Dockerfile. It's added once the
-   * container's image settings are known.
-   */
-  image: many(Image),
-  /**
-   * The CloudWatch log groups of the service's containers, by the container's name.
-   */
-  logGroup: many(cloudwatch.LogGroup),
-  /**
-   * The Amazon ECS Task Definition.
-   */
-  taskDefinition: ecs.TaskDefinition,
+  ...fargateTaskParts,
   /**
    * The AWS Security Group of the load balancer. Only created when the service has a
    * load balancer of its own.
@@ -188,58 +158,7 @@ export interface ServiceContainerArgs extends ContainerArgs {
   };
 }
 
-export interface ServiceDomainArgs extends DomainArgs {
-  /**
-   * The custom domain you want to use.
-   *
-   * @example
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com"
-   *   }
-   * }
-   * ```
-   *
-   * Can also include subdomains based on the current stage.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: `${$app.stage}.example.com`
-   *   }
-   * }
-   * ```
-   *
-   * Wildcard domains are supported.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "*.example.com"
-   *   }
-   * }
-   * ```
-   *
-   * A plain value: the DNS records are named after it.
-   */
-  name: string;
-  /**
-   * Alias domains that should be used. A plain list: each alias gets DNS records of
-   * its own.
-   *
-   * @example
-   * ```js {4}
-   * {
-   *   domain: {
-   *     name: "app1.example.com",
-   *     aliases: ["app2.example.com"]
-   *   }
-   * }
-   * ```
-   */
-  aliases?: string[];
-}
+export interface ServiceDomainArgs extends LoadBalancerDomainArgs {}
 
 export interface ServiceRuleArgs {
   /**
@@ -1025,8 +944,14 @@ export interface ServiceArgs
    * `dev.command` and it'll be started locally in a separate tab in the
    * `sst dev` multiplexer. Read more about [`sst dev`](/docs/reference/cli/#dev).
    *
+   * The command runs as the task role. So that the CLI can assume it, the task role trusts
+   * your AWS account in `sst dev`. Any IAM user or role in the account whose policies allow
+   * `sts:AssumeRole` on it can then assume it too.
+   *
    * This makes it so that the container doesn't have to be redeployed on every change. To
    * disable this and deploy your service in `sst dev`, pass in `false`.
+   *
+   * It has to be a plain value: it decides whether the service is deployed.
    */
   dev?: ServiceDev;
   /**
@@ -1420,6 +1345,11 @@ export interface ServiceArgs
  * });
  * ```
  *
+ * A role you pass is used as it is. What `link` grants isn't added to the task role, and
+ * `permissions` next to it is refused: add them to the role itself. In `sst dev`, each
+ * container's `dev.command` runs on your machine as the task role, so a task role you pass
+ * has to trust your AWS account for it to.
+ *
  * #### Switch from `sst.aws.Service`
  *
  * Change `sst.aws.Service` to `sst.aws.v5.Service` and keep the name. The ECS service, its
@@ -1438,9 +1368,23 @@ export interface ServiceArgs
  * - `public`, which `sst.aws.Service` deprecated, is `loadBalancer`. Its `ports` are
  *   `rules`, and a rule's `path` is `conditions.path`.
  * - `loadBalancer`, its `domain`, its `rules` and each rule are plain values, not outputs.
- *   So are `scaling` and its `cpuUtilization`, `memoryUtilization` and `requestCount`, and
- *   the list of `containers`, each container and its `name`. They decide which resources
- *   are created.
+ *   So are `scaling` and its `cpuUtilization`, `memoryUtilization` and `requestCount`, the
+ *   list of `containers`, each container and its `name`, and `dev`. They decide which
+ *   resources are created. A rule on an `Alb` can have outputs in its `conditions`.
+ * - A domain with `dns: false` and no `cert` is refused. There's nothing to validate a
+ *   certificate with.
+ * - With `containers`, the top-level `image`, `command`, `entrypoint`, `logging`,
+ *   `environment`, `environmentFiles`, `volumes`, `ssm` and `health`, and `dev.command`,
+ *   `dev.autostart` and `dev.directory`, are refused: set them on each container.
+ *   `sst.aws.Service` refused some of them and dropped the others.
+ * - A container's own `environmentFiles` are granted to the execution role, which
+ *   `sst.aws.Service` left out. A service whose containers have them gets its execution
+ *   role updated in place when you switch.
+ * - `permissions` next to a `taskRole` in `existing` are refused. `sst.aws.Service` left
+ *   them out of the role it was given.
+ * - A `loadBalancer.health` check on an `Alb` for a port no rule forwards to is refused.
+ *   `sst.aws.Service` dropped it.
+ * - A `cpu`, `memory` or `storage` Fargate doesn't offer is refused as the config is read.
  * - A domain's `dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
  *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work. The DNS records that validate its certificate are named after the
@@ -1456,7 +1400,8 @@ export interface ServiceArgs
  *   there are several of, it's also given which one.
  * - `transform.listenerRule` applies to the rules of the service's own load balancer too,
  *   not only to the rules on an `Alb`.
- * - `loadBalancer.instance` takes either `Alb`, and refuses anything else.
+ * - `loadBalancer.instance` takes either `Alb`, and `cluster` either `Cluster`. Each
+ *   refuses anything else.
  * - If you set part of the ECS service's `networkConfiguration` or
  *   `deploymentCircuitBreaker`, of a target group's `healthCheck`, or of the task
  *   definition's `runtimePlatform`, with an object in `transform`, the rest of it is kept.
@@ -1541,45 +1486,75 @@ export class Service extends component("sst:aws:Service", parts) {
   ) {
     super(name, args, opts);
 
-    for (const role of ["taskRole", "executionRole"])
-      notAnOption(
-        args,
-        role,
-        `Pass the role, or its name, as "existing: { ${role} }" in the "${name}" service.`,
-      );
-    // An image that's built is a part. One that exists already is just the
-    // image a container is given.
-    notAnOption(
-      args.existing ?? {},
-      "image",
-      `Set the "image" of the container to the image's reference in the "${name}" service.`,
-    );
-    notAnOption(
-      args,
-      "public",
-      `It's "loadBalancer" now, with the same settings, in the "${name}" service.`,
-    );
-
-    const cluster = args.cluster;
+    const owner = `the "${name}" service`;
     // In `sst dev` the service isn't deployed. Each container's command runs
     // on the user's machine, as the task role.
     const dev =
       plain(args.dev, `The "dev" of the "${name}" service`) !== false &&
       context().dev;
-    const region = getRegionOutput({}, opts).region;
-    const architecture = withDefault(args.architecture, "x86_64" as const);
-    const cpu = cpuOf(args);
-    const memory = memoryOf(cpu, args);
-    const storage = storageOf(args);
-    const containers = containersOf("service", args, name);
+    const task = fargateTaskOf(this.builder(), "service", name, args);
+    notAnOption(
+      args,
+      "public",
+      `It's "loadBalancer" now, with the same settings.`,
+      owner,
+    );
+
+    const { cluster, containers, region } = task;
+    const vpc = task.network;
     const balancer = loadBalancerOf(name, args.loadBalancer, containers);
     const scaling = scalingOf(name, args.scaling, balancer);
-    const vpc = networkOf(cluster);
 
-    const taskRole = this.part("taskRole", taskRoleArgs(args, opts, dev));
+    // A part that isn't created for the args the service is given can't be
+    // in `existing`: it wouldn't be used
+    const notCreated = (keys: string[], instead: string) => {
+      for (const key of keys)
+        notAnExistingPart(args.existing, key, owner, instead);
+    };
+    const ownBalancerParts = [
+      "loadBalancerSecurityGroup",
+      "loadBalancer",
+      "certificate",
+      "listener",
+    ];
+    if (!balancer)
+      notCreated(
+        [...ownBalancerParts, "target", "listenerRule"],
+        `It's only created with "loadBalancer".`,
+      );
+    else if ("alb" in balancer)
+      notCreated(
+        ownBalancerParts,
+        `The service is attached to an "Alb", which has its own.`,
+      );
+    else if (!balancer.domain || balancer.domain.cert)
+      notCreated(
+        ["certificate"],
+        balancer.domain
+          ? `It uses the "cert" of the load balancer's "domain".`
+          : `It's only created for the load balancer's "domain".`,
+      );
+    if (scaling.cpuUtilization === false)
+      notCreated(
+        ["autoScalingCpuPolicy"],
+        `It's only created when "scaling.cpuUtilization" isn't false.`,
+      );
+    if (scaling.memoryUtilization === false)
+      notCreated(
+        ["autoScalingMemoryPolicy"],
+        `It's only created when "scaling.memoryUtilization" isn't false.`,
+      );
+    if (scaling.requestCount === false)
+      notCreated(
+        ["autoScalingRequestCountPolicy"],
+        `It's only created with "scaling.requestCount".`,
+      );
+
+    const taskRole = this.part("taskRole", taskRoleArgs(args, this, dev));
 
     // What `sst dev` runs in place of each container with a dev command, in a
     // pane of its own. `sst dev` runs nothing for one without.
+    let devCommands = 0;
     for (const container of containers) {
       const settings = plain(
         container.dev,
@@ -1587,6 +1562,7 @@ export class Service extends component("sst:aws:Service", parts) {
       );
       // An empty command too, as `sst dev` skipped it
       if (!settings || !settings.command) continue;
+      devCommands++;
       this.part("devCommand", container.name, {
         link: args.link,
         dev: {
@@ -1606,6 +1582,11 @@ export class Service extends component("sst:aws:Service", parts) {
         aws: { role: taskRole.arn },
       });
     }
+    if (!devCommands)
+      notCreated(
+        ["devCommand"],
+        `It's only created for a container with a "dev.command".`,
+      );
 
     if (dev) {
       this.runsLocally();
@@ -1620,39 +1601,13 @@ export class Service extends component("sst:aws:Service", parts) {
       return;
     }
 
-    const executionRole = this.part(
-      "executionRole",
-      executionRoleArgs(args, opts),
-    );
-    const taskDefinition = this.part(
-      "taskDefinition",
-      taskDefinitionArgs({
-        name,
-        cluster,
-        region,
-        link: args.link,
-        // Each container, with the image it runs and the log group it writes to
-        containers: containers.map((container) => ({
-          container,
-          image: containerImage(this, "image", container, {
-            architecture,
-            link: args.link,
-            region,
-          }),
-          logGroup: this.part(
-            "logGroup",
-            container.name,
-            logGroupArgs(container, cluster, name),
-            { ignoreChanges: ["name"] },
-          ),
-        })),
-        architecture,
-        cpu,
-        memory,
-        storage,
-        taskRole,
-        executionRole,
-      }),
+    const taskDefinition = createTaskDefinition(
+      this.builder(),
+      name,
+      task,
+      args.link,
+      containers,
+      taskRole,
     );
 
     const routing = !balancer
@@ -1820,14 +1775,7 @@ export class Service extends component("sst:aws:Service", parts) {
       securityGroupArgs(vpc.id),
     );
     const certificate =
-      domain && !domain.cert
-        ? this.part("certificate", {
-            domainName: domain.name,
-            alternativeNames: domain.aliases,
-            dns: domain.dns!,
-          })
-        : undefined;
-    const certificateArn = domain && (domain.cert ?? certificate!.arn);
+      domain && certificateOf(domain, (args) => this.part("certificate", args));
     const loadBalancer = this.part(
       "loadBalancer",
       {
@@ -1839,7 +1787,7 @@ export class Service extends component("sst:aws:Service", parts) {
       },
       // The load balancer is what holds on to the certificate, so it's
       // removed first. Its listeners are given the certificate, but it isn't.
-      { dependsOn: certificate },
+      { dependsOn: certificate?.created },
     );
 
     const targets = new Map<string, Target>();
@@ -1905,7 +1853,7 @@ export class Service extends component("sst:aws:Service", parts) {
         port: rules[0].listenPort,
         protocol,
         certificateArn: ["HTTPS", "TLS"].includes(protocol)
-          ? certificateArn
+          ? certificate?.arn
           : undefined,
         // What a request that matches no conditions gets
         defaultActions: actions(rules.find((rule) => !rule.conditions)),
@@ -1968,7 +1916,7 @@ export class Service extends component("sst:aws:Service", parts) {
     const vpcId = all([alb._vpc, vpc.id]).apply(([albVpcId, clusterVpcId]) => {
       if (albVpcId !== clusterVpcId)
         throw new VisibleError(
-          `The ALB VPC "${albVpcId}" does not match the cluster VPC "${clusterVpcId}" in Service "${name}". The ALB and cluster must be in the same VPC.`,
+          `The "Alb" of the "${name}" service is in the VPC "${albVpcId}", and its cluster is in "${clusterVpcId}". Put them in the same VPC.`,
         );
       return albVpcId;
     });
@@ -2095,7 +2043,7 @@ export class Service extends component("sst:aws:Service", parts) {
       service.apply((service) => {
         if (!service)
           throw new VisibleError(
-            `Cannot access "nodes.cloudmapService" for the "${name}" Service. Cloud Map is not configured for the cluster.`,
+            `The "${name}" service has no "nodes.cloudmapService": the VPC of its cluster has no Cloud Map namespace.`,
           );
         return service;
       }),
@@ -2112,7 +2060,7 @@ export class Service extends component("sst:aws:Service", parts) {
   public get url() {
     if (!this.reach.url)
       throw new VisibleError(
-        "Cannot access the URL because no public ports are exposed.",
+        `The "${this.componentName}" service has no "url": it has no "loadBalancer".`,
       );
     return this.reach.url;
   }
@@ -2125,7 +2073,7 @@ export class Service extends component("sst:aws:Service", parts) {
     return this.reach.host.apply((host) => {
       if (!host)
         throw new VisibleError(
-          `Cannot access the AWS Cloud Map service name for the "${this.componentName}" Service. Cloud Map is not configured for the cluster.`,
+          `The "${this.componentName}" service has no Cloud Map "service" name: the VPC of its cluster has no Cloud Map namespace.`,
         );
       return host;
     });
@@ -2182,28 +2130,28 @@ function ownBalancer(
   containers: Container[],
 ) {
   const of = `the load balancer of the "${name}" service`;
-  notAnOption(args, "ports", `It's "rules" now, in ${of}.`);
+  notAnOption(args, "ports", `It's "rules" now.`, of);
   const given = plain(args.rules, `The "rules" of ${of}`);
   if (!given?.length)
     throw new VisibleError(
-      `You must provide the ports to expose via "loadBalancer.rules".`,
+      `The load balancer of the "${name}" service has no "rules". Give it at least one.`,
     );
   const rules = given.map((rule, i) =>
     ruleOf(rule, `Rule ${i + 1} of ${of}`, containers),
   );
 
-  // validate protocols are consistent
+  // One load balancer is either an application or a network one
   const type = protocolType(rules[0].listenProtocol);
   if (rules.some((rule) => protocolType(rule.listenProtocol) !== type))
     throw new VisibleError(
-      `Protocols must be either all http/https, or all tcp/udp/tcp_udp/tls.`,
+      `The "rules" of ${of} listen on http or https and on tcp, udp, tcp_udp or tls. Use one kind or the other.`,
     );
 
-  // validate certificate exists for https/tls protocol
+  // An https or tls listener needs the domain's certificate
   for (const rule of rules)
     if (["https", "tls"].includes(rule.listenProtocol) && !args.domain)
       throw new VisibleError(
-        `You must provide a custom domain for ${rule.listenProtocol.toUpperCase()} protocol.`,
+        `A rule of ${of} listens on ${rule.listenProtocol}, which needs a certificate. Set the "domain" of the load balancer.`,
       );
 
   const domain = loadBalancerDomain(args.domain, of);
@@ -2219,7 +2167,7 @@ function ownBalancer(
           )
         )
           throw new VisibleError(
-            `Cannot configure health check for "${port}". Make sure it is defined in "loadBalancer.rules".`,
+            `The "health" of ${of} has "${port}", which no rule forwards to. Forward to it in "rules", or remove it.`,
           );
         const http = protocolType(portOf(port)[1]) === "application";
         return [
@@ -2257,7 +2205,12 @@ function ruleOf(rule: ServiceRuleArgs, what: string, containers: Container[]) {
   // A rule decides a listener, a target group and a listener rule, and the
   // listener rule is named after its conditions
   plainDeep(rule, what);
-  notAnOption(rule, "path", `It's "conditions: { path }" now.`);
+  notAnOption(
+    rule,
+    "path",
+    `It's "conditions: { path }" now.`,
+    `${what[0].toLowerCase()}${what.slice(1)}`,
+  );
   const [listenPort, listenProtocol] = portOf(rule.listen);
   const listen = {
     listenPort,
@@ -2272,14 +2225,14 @@ function ruleOf(rule: ServiceRuleArgs, what: string, containers: Container[]) {
   };
   if (protocolType(listenProtocol) === "network" && listen.conditions)
     throw new VisibleError(
-      `Invalid rule conditions for listen protocol "${rule.listen}". Only "http" protocols support conditions.`,
+      `${what} listens on "${rule.listen}" and has "conditions". Only a rule that listens on http or https takes them.`,
     );
 
   if (rule.redirect) {
     const [redirectPort, redirectProtocol] = portOf(rule.redirect);
     if (protocolType(listenProtocol) !== protocolType(redirectProtocol))
       throw new VisibleError(
-        `The listen protocol "${rule.listen}" must match the redirect protocol "${rule.redirect}".`,
+        `${what} listens on "${rule.listen}" and redirects to "${rule.redirect}". Both have to be http or https, or both tcp, udp, tcp_udp or tls.`,
       );
     return {
       type: "redirect" as const,
@@ -2293,7 +2246,7 @@ function ruleOf(rule: ServiceRuleArgs, what: string, containers: Container[]) {
   const [forwardPort, forwardProtocol] = portOf(rule.forward ?? rule.listen);
   if (protocolType(listenProtocol) !== protocolType(forwardProtocol))
     throw new VisibleError(
-      `The listen protocol "${rule.listen}" must match the forward protocol "${rule.forward}".`,
+      `${what} listens on "${rule.listen}" and forwards to "${rule.forward}". Both have to be http or https, or both tcp, udp, tcp_udp or tls.`,
     );
   return {
     type: "forward" as const,
@@ -2334,32 +2287,46 @@ function sharedBalancer(
   args: ServiceAlbArgs,
   containers: Container[],
 ) {
+  const of = `the load balancer of the "${name}" service`;
   if (!isAlb(args.instance))
     throw new VisibleError(
       `The "loadBalancer.instance" of the "${name}" service has to be an "Alb".`,
     );
-  const rules = plain(
-    args.rules,
-    `The "rules" of the load balancer of the "${name}" service`,
-  );
+  const rules = plain(args.rules, `The "rules" of ${of}`);
   if (!rules?.length)
     throw new VisibleError(
-      `You must provide at least one rule in "loadBalancer.rules" when using an external ALB in Service "${name}".`,
+      `The load balancer of the "${name}" service has no "rules". Give it at least one.`,
     );
 
-  const of = `the load balancer of the "${name}" service`;
   const priorities = new Map<string, Set<number>>();
-  const forwards = rules.map((rule, i) => {
-    const container = containerOf(rule, `Rule ${i + 1} of ${of}`, containers);
+  const forwards = rules.map((given, i) => {
+    const what = `Rule ${i + 1} of ${of}`;
+    // A rule decides a target group and a listener rule, named after where
+    // it listens, its priority, and where it forwards to. Its conditions can
+    // be outputs.
+    const rule = plain(given, what);
+    plainDeep(
+      {
+        listen: rule.listen,
+        forward: rule.forward,
+        container: rule.container,
+        priority: rule.priority,
+      },
+      what,
+    );
+    plain(rule.conditions, `The "conditions" of ${what}`);
+    const container = containerOf(rule, what, containers);
 
     if (!(rule.priority >= 1 && rule.priority <= 50000))
       throw new VisibleError(
-        `Priority ${rule.priority} must be between 1 and 50000 in Service "${name}". When sharing an ALB, ensure non-overlapping priority ranges across services.`,
+        `The "priority" of rule ${i + 1} of ${of} is ${
+          rule.priority
+        }. It has to be between 1 and 50000, and the services on an "Alb" each need their own range.`,
       );
     const taken = priorities.get(rule.listen) ?? new Set();
     if (taken.has(rule.priority))
       throw new VisibleError(
-        `Duplicate priority ${rule.priority} on listener "${rule.listen}" in Service "${name}".`,
+        `${what} has the priority ${rule.priority} on "${rule.listen}", which another of its rules has. Give each its own.`,
       );
     priorities.set(rule.listen, taken.add(rule.priority));
 
@@ -2369,22 +2336,30 @@ function sharedBalancer(
       !rule.conditions?.header
     )
       throw new VisibleError(
-        `At least one condition (path, query, or header) must be set for rules on an external ALB in Service "${name}".`,
+        `${what} has no "conditions". A rule on an "Alb" needs a path, a query or a header: the "Alb" answers what no rule matches.`,
       );
     // A rule that doesn't name its container has a target group named
     // after the service
     return { ...rule, container, key: rule.container ?? name };
   });
 
+  // A health check is for a port a rule forwards to
+  const health = (plain(args.health, `The "health" of ${of}`) ?? {}) as Record<
+    string,
+    Input<ServiceHealthCheckArgs> | undefined
+  >;
+  for (const port of Object.keys(health))
+    if (!forwards.some((rule) => rule.forward === port))
+      throw new VisibleError(
+        `The "health" of ${of} has "${port}", which no rule forwards to. Forward to it in "rules", or remove it.`,
+      );
+
   return {
     // An `Alb` is an application load balancer
     type: "application" as const,
     alb: args.instance,
     rules: forwards,
-    health: (plain(args.health, `The "health" of ${of}`) ?? {}) as Record<
-      string,
-      Input<ServiceHealthCheckArgs> | undefined
-    >,
+    health,
   };
 }
 
@@ -2404,7 +2379,7 @@ function scalingOf(
   const requestCount = target("requestCount") ?? false;
   if (requestCount && balancer?.type !== "application")
     throw new VisibleError(
-      `Request count scaling is only supported for http/https protocols.`,
+      `The "scaling.requestCount" of the "${name}" service needs a load balancer with http or https rules.`,
     );
 
   return {

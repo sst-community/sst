@@ -31,13 +31,7 @@ import {
   many,
   optional,
 } from "../../parts-component";
-import {
-  ifSet,
-  plain,
-  plainDeep,
-  withDefault,
-  withoutDependencies,
-} from "../../args";
+import { ifSet, plain, plainDeep, usedAsItIs, withDefault, withoutDependencies, getArgs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { Link } from "../../link";
@@ -55,8 +49,8 @@ import type { EsbuildOptions } from "../../esbuild";
 import { rpc } from "../../rpc/rpc";
 import { devStub, context } from "../../contract";
 import { type Runtime, commandsOf, isRuntime } from "../../runtime";
-import { warnOnce } from "../../../util/warn";
-import { type AnyVpc, hasNat, isVpc } from "../helpers/vpc";
+import { type AnyVpc, privateNetworkOf } from "../helpers/vpc";
+import { inlinePolicies } from "../helpers/iam";
 import { type AnyEfs, isEfs } from "../helpers/efs";
 import { type AnyRouter, type RouteArgs, routeOf } from "../helpers/router";
 import { RETENTION } from "../logging";
@@ -666,6 +660,9 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    *
    * Valid values are between 0 and 2.
    *
+   * Whether it's set decides whether the settings for asynchronous invocations are
+   * created, so it has to be a plain value.
+   *
    * @default `2`
    * @example
    * ```js
@@ -674,7 +671,7 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    * }
    * ```
    */
-  retries?: Input<number>;
+  retries?: number;
   /**
    * The name for the function.
    *
@@ -1715,8 +1712,8 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  * - `handler`, `bundle`, `runtime`, `architecture`, `nodejs` and `copyFiles` have to be
  *   plain values, not outputs: the function is built from them, and a preview has to
  *   know what's built. So do `dev`, `logging`, `url`, `url.authorization`, `url.router`,
- *   `python`, `python.container`, `concurrency` and `concurrency.provisioned`, which
- *   decide what's created.
+ *   `python`, `python.container`, `concurrency`, `concurrency.provisioned` and
+ *   `retries`, which decide what's created.
  * - `role: roleArn` becomes `existing: { role: roleArn }`. It can also be the role or
  *   its name, which is looked up on every deploy.
  * - `logging: { logGroup: name }` becomes `existing: { logGroup }`, with the log group
@@ -1730,6 +1727,8 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  *   replaced on switch, and the URL with it.
  * - `transform: { function: { environment: { variables: { A: "1" } } } }` adds a
  *   variable where it used to replace them all.
+ * - A `vpc` that's another resource, like an `aws.ec2.Vpc`, is refused: pass a `Vpc`, or
+ *   the ids of its subnets and security groups.
  *
  * The V5 components create their functions, like a queue's subscriber, as
  * `sst.aws.v5.Function` too. There you can keep writing the function the way
@@ -1756,9 +1755,18 @@ export class Function extends component("sst:aws:Function", parts) {
     const self = this;
     const durable = (this.durable = Boolean(args.durable));
 
-    // A function that's already deployed is only referenced
+    // A function that's already deployed is only referenced: whatever would
+    // configure it is refused
     const existing = this.existingPart("function");
     if (existing) {
+      usedAsItIs(
+        args,
+        Object.keys(args).filter(
+          (key) => key !== "transform" && key !== "existing",
+        ),
+        "function",
+        `the "${name}" function`,
+      );
       this.fn = existing;
       this.urlEndpoint = output(undefined);
       return;
@@ -1797,6 +1805,7 @@ export class Function extends component("sst:aws:Function", parts) {
       concurrency?.provisioned,
       option("concurrency.provisioned"),
     );
+    const retries = plain(args.retries, option("retries"));
 
     const partition = getPartitionOutput({}, opts).partition;
     const region = getRegionOutput({}, opts).region;
@@ -2082,17 +2091,17 @@ export class Function extends component("sst:aws:Function", parts) {
         qualifier: fn.publish.apply((publish) => {
           if (publish !== true)
             throw new VisibleError(
-              `Provisioned concurrency requires function versioning. Set "versioning: true" to enable function versioning.`,
+              `The "${name}" function has provisioned concurrency, which needs versions of the function: set "versioning" to true.`,
             );
           return fn.version;
         }),
         provisionedConcurrentExecutions: provisioned,
       });
 
-    if (args.retries !== undefined)
+    if (retries !== undefined)
       this.part("eventInvokeConfig", {
         functionName: fn.name,
-        maximumRetryAttempts: args.retries,
+        maximumRetryAttempts: retries,
       });
 
     this.report({
@@ -2146,7 +2155,7 @@ export class Function extends component("sst:aws:Function", parts) {
         format: output(logging?.format).apply((format) => {
           if (durable && format && format !== "json")
             throw new VisibleError(
-              `Durable functions require "logging.format" to be set to "json"`,
+              `The "${name}" function is durable, so its "logging.format" has to be "json".`,
             );
           return (format ?? (durable ? "json" : "text")) === "json"
             ? "JSON"
@@ -2195,8 +2204,7 @@ export class Function extends component("sst:aws:Function", parts) {
 
     function routeOfRouter(router: RouteArgs) {
       plain(router, option("url.router"));
-      plain(router.instance, option("url.router.instance"));
-      return routeOf(router);
+      return routeOf(router, option("url.router.instance"));
     }
 
     function normalizeCopyFiles() {
@@ -2207,7 +2215,7 @@ export class Function extends component("sst:aws:Function", parts) {
             const to = entry.to || entry.from;
             if (path.isAbsolute(to))
               throw new VisibleError(
-                `Copy destination path "${to}" must be relative`,
+                `The "copyFiles" of the "${name}" function copy a file to "${to}", which has to be a relative path.`,
               );
 
             const stats = await fs.promises.stat(from);
@@ -2232,31 +2240,12 @@ export class Function extends component("sst:aws:Function", parts) {
 
     function normalizeVpc() {
       if (!args.vpc) return;
-
-      if (isVpc(args.vpc)) {
-        const result = {
-          privateSubnets: args.vpc.privateSubnets,
-          securityGroups: args.vpc.securityGroups,
-        };
-        return all([args.vpc.id, hasNat(args.vpc)]).apply(([id, nat]) => {
-          if (nat === false) {
-            warnOnce(
-              `\nWarning: One or more functions are deployed in the "${id}" VPC, which does not have a NAT gateway. As a result, these functions cannot access the internet. If your functions need internet access, enable it by setting the "nat" prop on the "Vpc" component.\n`,
-            );
-          }
-          return result;
-        });
-      }
-
-      return output(args.vpc).apply((vpc) => {
-        // 4.x took the subnets as `vpc.subnets`
-        if ((vpc as { subnets?: unknown }).subnets) {
-          throw new VisibleError(
-            `The "vpc.subnets" property has been renamed to "vpc.privateSubnets". Update your code to use "vpc.privateSubnets" instead.`,
-          );
-        }
-        return vpc;
-      });
+      return privateNetworkOf(
+        args.vpc,
+        `the "${name}" function`,
+        (id) =>
+          `\nWarning: One or more functions are deployed in the "${id}" VPC, which does not have a NAT gateway. As a result, these functions cannot access the internet. If your functions need internet access, enable it by setting the "nat" prop on the "Vpc" component.\n`,
+      );
     }
 
     function normalizeVolume() {
@@ -2336,11 +2325,11 @@ export class Function extends component("sst:aws:Function", parts) {
       const devPermissions = dev
         ? output(devStub()).apply((stub) => [
             ...stub.permissions.map((permission) => ({
-              effect: "allow",
+              effect: "allow" as const,
               ...permission,
             })),
             {
-              effect: "allow",
+              effect: "allow" as const,
               actions: ["s3:*"],
               resources: [
                 interpolate`arn:${partition}:s3:::${assetBucket}`,
@@ -2349,28 +2338,6 @@ export class Function extends component("sst:aws:Function", parts) {
             },
           ])
         : [];
-      const policy = all([
-        args.permissions || [],
-        linkPermissions,
-        devPermissions,
-      ]).apply(
-        ([argsPermissions, linkPermissions, devPermissions]) =>
-          iam.getPolicyDocumentOutput({
-            statements: [
-              ...argsPermissions,
-              ...linkPermissions,
-              ...devPermissions,
-            ].map((item) => ({
-              effect: (() => {
-                const effect = item.effect ?? "allow";
-                return effect.charAt(0).toUpperCase() + effect.slice(1);
-              })(),
-              actions: item.actions,
-              resources: item.resources,
-              conditions: "conditions" in item ? item.conditions : undefined,
-            })),
-          }),
-      );
 
       const managed = (policy: string) =>
         interpolate`arn:${partition}:iam::aws:policy/service-role/${policy}`;
@@ -2404,11 +2371,11 @@ export class Function extends component("sst:aws:Function", parts) {
             },
           ],
         }).json,
-        // if there are no statements, do not add an inline policy.
-        // adding an inline policy with no statements will cause an error.
-        inlinePolicies: policy.apply(({ statements }) =>
-          statements ? [{ name: "inline", policy: policy.json }] : [],
-        ),
+        inlinePolicies: inlinePolicies([
+          args.permissions,
+          linkPermissions,
+          devPermissions,
+        ]),
         managedPolicyArns: output(args.policies ?? []).apply((policies) => [
           ...policies,
           ...(logging ? [managed("AWSLambdaBasicExecutionRole")] : []),
@@ -2716,7 +2683,7 @@ export class Function extends component("sst:aws:Function", parts) {
     return this.urlEndpoint.apply((url) => {
       if (!url) {
         throw new VisibleError(
-          `Function URL is not enabled. Enable it with "url: true".`,
+          `The "${this.componentName}" function has no URL. Enable it with "url: true".`,
         );
       }
       return url;
@@ -2852,7 +2819,8 @@ export class Function extends component("sst:aws:Function", parts) {
   /**
    * Reference an existing function with the given function name. This is useful when you
    * create a function in one stage and want to share it in another. Linking it gives the
-   * linked resource its name and lets it invoke the function.
+   * linked resource its name and lets it invoke the function. The function is used the
+   * way it is: it isn't configured here.
    *
    * @param name The name of the component.
    * @param functionName The name of the existing Lambda function.
@@ -2871,10 +2839,9 @@ export class Function extends component("sst:aws:Function", parts) {
     functionName: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Function(
-      name,
-      { existing: { function: functionName } } as FunctionArgs,
-      opts,
-    );
+    const args: Partial<FunctionArgs> = {
+      existing: { function: functionName },
+    };
+    return new Function(name, getArgs(args) as FunctionArgs, opts);
   }
 }

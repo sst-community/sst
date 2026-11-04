@@ -1,6 +1,7 @@
 import { ComponentResourceOptions, interpolate, output } from "@pulumi/pulumi";
 import { cognito, getRegionOutput, iam } from "@pulumi/aws";
 import { type ComponentArgs, component, named } from "../../parts-component";
+import { usedAsItIs, getArgs } from "../../args";
 import type { Input } from "../../input";
 import { permission } from "../permission";
 import { parseRoleArn } from "../helpers/arn";
@@ -137,6 +138,8 @@ export interface CognitoIdentityPoolArgs extends ComponentArgs<typeof parts> {
  *   read creates nothing, so the switch only drops the old ones from the state. The
  *   options given to `get`, like a `parent`, are the component's now: `sst.aws.CognitoIdentityPool.get`
  *   gave them to the pool it read and put the component at the top of the app.
+ * - An identity pool given in `existing`, as `get` gives it, is used the way it is:
+ *   `userPools` and `permissions` next to it are refused, where they were dropped.
  */
 export class CognitoIdentityPool extends component(
   "sst:aws:CognitoIdentityPool",
@@ -149,23 +152,28 @@ export class CognitoIdentityPool extends component(
   ) {
     super(name, args, opts);
 
-    // An identity pool that's already deployed: its roles are the ones
-    // attached to it
+    // An identity pool that's already deployed keeps the settings it has, and
+    // its roles are the ones attached to it, unless they're given too
     const existing = this.existingPart("identityPool");
     if (existing) {
-      const attachment = this.lookupPart("roleAttachment", existing.id);
-      this.lookupPart(
-        "authenticatedRole",
-        attachment.roles.authenticated.apply(
-          (arn) => parseRoleArn(arn).roleName,
-        ),
+      usedAsItIs(
+        args,
+        ["userPools", "permissions"],
+        "identityPool",
+        `the "${name}" identity pool`,
       );
-      this.lookupPart(
-        "unauthenticatedRole",
-        attachment.roles.unauthenticated.apply(
-          (arn) => parseRoleArn(arn).roleName,
-        ),
-      );
+      const attachment =
+        this.existingPart("roleAttachment") ??
+        this.lookupPart("roleAttachment", existing.id);
+      for (const [key, role] of [
+        ["authenticatedRole", attachment.roles.authenticated],
+        ["unauthenticatedRole", attachment.roles.unauthenticated],
+      ] as const)
+        if (!this.existingPart(key))
+          this.lookupPart(
+            key,
+            role.apply((arn) => parseRoleArn(arn).roleName),
+          );
       return;
     }
 
@@ -330,7 +338,7 @@ export class CognitoIdentityPool extends component(
   ) {
     return new CognitoIdentityPool(
       name,
-      { existing: { identityPool: identityPoolID } },
+      getArgs({ existing: { identityPool: identityPoolID } }),
       opts,
     );
   }

@@ -3,13 +3,10 @@ import path from "path";
 import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
 import { type ComponentArgs, component } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { context } from "../../contract";
-import { readNitro } from "../helpers/nitro";
+import { nitroSite } from "../helpers/nitro";
 import { configText } from "../helpers/site-build";
-import type { RouteArgs } from "../helpers/router";
+import type { SiteRouteArgs } from "../helpers/router";
 import {
-  type ServerPlan,
-  type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
   createSsrSite,
@@ -286,7 +283,7 @@ export interface TanStackStartArgs
    * TanStack router. The site reads the base path from the router's `basepath` in the
    * build, and fails the deploy when it's missing or doesn't start with the `path`.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -376,8 +373,8 @@ export interface TanStackStartArgs
  *   known until the deploy, like those of what the same deploy creates on a new stage, are
  *   left out of that build, and a link none of whose properties are known is passed with
  *   only its `type`. A build that checks its environment, or reads a link while it
- *   prerenders, has to allow for that. `sst.aws.TanStackStart` skipped its build in `sst
- *   diff` then.
+ *   prerenders, has to allow for that. `sst.aws.TanStackStart` skipped its build in
+ *   `sst diff` then.
  * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a
  *   policy pack, build the site twice: in the preview, and in the deploy.
  * - `sst refresh` doesn't build the site, where `sst.aws.TanStackStart` did. What's made
@@ -388,11 +385,16 @@ export interface TanStackStartArgs
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.TanStackStart` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
- *   `regions` to have it from the start. In `sst dev`, the function the site runs as is
- *   `transform.devServer`, not `transform.server`.
+ *   `regions` to have it from the start.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.TanStackStart` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.TanStackStart` ignored
  *   it and wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.TanStackStart`
@@ -402,9 +404,9 @@ export interface TanStackStartArgs
  *   put it, `.output/server/_ssr/ssr.mjs`, as well as where earlier ones did.
  *   `sst.aws.TanStackStart` read only the earlier place, so a site under a router's `path`
  *   failed to deploy with a current TanStack Start.
- * - A build whose Nitro preset isn't found is refused with where to set it for the site's own
- *   setup: `vite.config.ts` in the site's folder, or `app.config.ts`. `sst.aws.TanStackStart`
- *   looked for `vite.config.ts` in the folder above the site's.
+ * - A build whose Nitro preset isn't found is refused with where to set it for the site's
+ *   own setup: `vite.config.ts` in the site's folder, or `app.config.ts`.
+ *   `sst.aws.TanStackStart` looked for `vite.config.ts` in the folder above the site's.
  */
 export class TanStackStart extends component("sst:aws:TanstackStart", parts) {
   private readonly siteUrl: Output<string>;
@@ -437,76 +439,49 @@ export class TanStackStart extends component("sst:aws:TanstackStart", parts) {
   }
 }
 
-// A TanStack Start app's build, and its server
-interface TanStackStartBuild extends SiteBuild {
-  server: ServerPlan;
-}
-
 // How a TanStack Start app is built, with its package manager and Nitro's
 // "aws-lambda" preset, and what its server is
-const tanStackStart: SsrFramework<TanStackStartBuild> = {
+const tanStackStart: SsrFramework = {
   label: "TanStackStart",
   alwaysServes: true,
   // Nitro's client files aren't in a versioned folder
   versionedFiles: false,
-  load: loadBuild,
-  server: (build) => build.server,
+  load(builtPath) {
+    const build = nitroSite(builtPath, {
+      framework: "TanStack Start",
+      howToSet: howToSetPreset,
+      description: "Server handler for TanStack",
+      base: baseOf,
+      // Requests to `_server` and `api` go to the server
+      serverPaths: ["_server", "api"],
+    });
+    // The server's folder on this machine, as SST 4 gave it, so the server
+    // is built from the same args
+    return {
+      ...build,
+      server: {
+        ...build.server!,
+        bundle: path.join(build.outputPath, ".output", "server"),
+      },
+    };
+  },
 };
 
-// Reads what Nitro built
-function loadBuild(builtPath: string): TanStackStartBuild {
-  const outputPath = path.resolve(context().paths.root, builtPath);
-  const nitro = readNitro(
-    path.join(outputPath, ".output"),
-    "TanStack Start",
-    howToSetPreset(outputPath),
-  );
+// The server's code sets the router's base path, `ROUTER_BASEPATH =
+// "/docs"`: in `_ssr/ssr.mjs`, or before Nitro 3 in `chunks/_/server.mjs`
+function baseOf(outputPath: string) {
   const serverPath = path.join(outputPath, ".output", "server");
-
-  // The server's code sets the router's base path, `ROUTER_BASEPATH =
-  // "/docs"`: in `_ssr/ssr.mjs`, or before Nitro 3 in `chunks/_/server.mjs`
-  let base: string | undefined;
   for (const file of [
     path.join("chunks", "_", "server.mjs"),
     path.join("_ssr", "ssr.mjs"),
   ]) {
     try {
-      base = fs
+      const base = fs
         .readFileSync(path.join(serverPath, file), "utf-8")
         .match(/ROUTER_BASEPATH = "(.*)"/)?.[1];
+      if (base !== undefined) return base;
     } catch (e) {}
-    if (base !== undefined) break;
   }
-
-  // Requests to `_server` and `api` go to the server. Their folders in the
-  // client's files would route them to S3 instead.
-  for (const dir of ["_server", "api"])
-    fs.rmSync(path.join(outputPath, ".output", "public", dir), {
-      recursive: true,
-      force: true,
-    });
-
-  return {
-    sitePath: builtPath,
-    outputPath,
-    serves: true,
-    plan: {
-      base,
-      assets: [
-        {
-          from: path.join(".output", "public"),
-          to: "",
-          cached: true,
-        },
-      ],
-    },
-    server: {
-      description: "Server handler for TanStack",
-      handler: "index.handler",
-      bundle: serverPath,
-      streaming: nitro.streaming,
-    },
-  };
 }
 
 // Where the "aws-lambda" preset is set: in `vite.config.ts`, or with Vinxi,

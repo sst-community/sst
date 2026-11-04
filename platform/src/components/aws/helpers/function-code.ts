@@ -6,6 +6,7 @@ import { glob } from "glob";
 import { VisibleError } from "../../error";
 import { toPosix } from "../../path";
 import { rpc } from "../../rpc/rpc";
+import { context } from "../../contract";
 
 /** What building a function gives: where its code is, and how it's called. */
 export interface FunctionBundle {
@@ -58,11 +59,11 @@ export function devBridgeBundle(durable: boolean): FunctionBundle {
   return durable
     ? {
         handler: "index.handler",
-        bundle: path.join($cli.paths.platform, "dist", "nodejs-bridge"),
+        bundle: path.join(context().paths.platform, "dist", "nodejs-bridge"),
       }
     : {
         handler: "bootstrap",
-        bundle: path.join($cli.paths.platform, "dist", "bridge"),
+        bundle: path.join(context().paths.platform, "dist", "bridge"),
       };
 }
 
@@ -95,7 +96,7 @@ export function injectHandler(
   );
   if (!ext)
     throw new VisibleError(
-      `Could not find handler file "${handler}" for function "${name}"`,
+      `Could not find the handler file "${handler}" of the "${name}" function.`,
     );
 
   // An injection that starts with "outer:" goes outside of the handler

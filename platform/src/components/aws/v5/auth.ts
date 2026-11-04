@@ -10,14 +10,10 @@ import {
   named,
   optional,
 } from "../../parts-component";
-import { notAnOption, plain } from "../../args";
+import { notAnExistingPart, notAnOption, plain } from "../../args";
 import { VisibleError } from "../../error";
 import type { Prettify } from "../../component";
-import {
-  type FunctionDefinition,
-  functionPart,
-  plainFunction,
-} from "../helpers/function-part";
+import { functionPart } from "../helpers/function-part";
 import type { CdnDomainArgs } from "./cdn";
 import { Dynamo } from "./dynamo";
 import { Function, type FunctionArgs } from "./function";
@@ -34,7 +30,8 @@ const parts = () => ({
    */
   issuer: deferred(Function),
   /**
-   * With `domain`, the `Router` that serves the issuer at the domain.
+   * With `domain`, the `Router` that serves the issuer at the domain. It's the auth
+   * server's own: one you have isn't taken in `existing`.
    */
   router: optional(Router),
 });
@@ -245,6 +242,12 @@ export interface AuthArgs extends ComponentArgs<typeof parts> {
  *   args can be an output.
  * - `transform.router` transforms the V5 `Router`, whose own `transform` is shaped by its
  *   parts.
+ * - A function's args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
  * - `sst.aws.Auth.v1`, the auth server before OpenAuth, has no 5.0 form.
  */
 export class Auth extends component("sst:aws:Auth", parts) {
@@ -252,23 +255,29 @@ export class Auth extends component("sst:aws:Auth", parts) {
 
   constructor(name: string, args: AuthArgs, opts?: ComponentResourceOptions) {
     super(name, args, opts);
-    notAnOption(
-      args,
-      "authorizer",
-      `Use "issuer" in the "${name}" auth server.`,
-    );
+    const owner = `the "${name}" auth server`;
+    notAnOption(args, "authorizer", `Use "issuer".`, owner);
     notAnOption(
       args,
       "forceUpgrade",
       `Remove it: the 5.0 "Auth" is the one OpenAuth runs on.`,
+      owner,
     );
 
     // The issuer is a function the auth server creates, with its table linked
     // and a URL it's reached through
-    notAnOption(
-      args.existing ?? {},
+    notAnExistingPart(
+      args.existing,
       "issuer",
-      `Pass the handler or the function's args in "issuer": the "${name}" auth server creates its function, links its table and gives it a URL.`,
+      owner,
+      `Pass the handler or the function's args in "issuer": the auth server creates its function, links its table and gives it a URL.`,
+    );
+    // The router serves the issuer at the auth server's domain
+    notAnExistingPart(
+      args.existing,
+      "router",
+      owner,
+      `Its router serves the issuer at its "domain". To serve the issuer through a router you have, route that router to the issuer's URL: router.route("/", auth.url).`,
     );
     const domain = plain(
       args.domain,

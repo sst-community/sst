@@ -31,3 +31,17 @@ export function sendPolicyArgs(queueArn: Input<string>) {
     }).json,
   };
 }
+
+/**
+ * The queue policy that lets AWS services send messages to a queue, as a
+ * part's args and options. A queue has one policy: whatever replaces this one
+ * sets its own, so deleting this one would remove the replacement, and it's
+ * kept when it's deleted.
+ *
+ * ```ts
+ * this.part("queuePolicy", name, ...sendPolicy(queueArn));
+ * ```
+ */
+export function sendPolicy(queueArn: Input<string>) {
+  return [sendPolicyArgs(queueArn), { retainOnDelete: true }] as const;
+}

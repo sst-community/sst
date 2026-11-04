@@ -2,6 +2,7 @@ import {
   all,
   ComponentResourceOptions,
   Config,
+  type Inputs,
   interpolate,
   Output,
   output,
@@ -20,24 +21,28 @@ import { knownValue, notAnOption, plain } from "../../args";
 import { context } from "../../contract";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
-import {
-  hashStringToPrettyString,
-  logicalName,
-  physicalName,
-} from "../../naming";
+import { hashStringToPrettyString, logicalName } from "../../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
 import { ApiGatewayV1UsagePlan } from "./apigatewayv1-usage-plan";
-import { type DomainArgs, domainOf } from "../helpers/domain";
+import {
+  type ApiDomain,
+  type ApiGatewayAccessLogArgs,
+  type ApiGatewayDomainArgs,
+  accessLogGroup,
+  apiDomainOf,
+  authorizerPermissionArgs,
+  notAnOldTransform,
+  parseRoute,
+  routePermissionArgs,
+} from "../helpers/apigateway";
 import {
   type FunctionInput,
   functionPart,
   plainFunction,
 } from "../helpers/function-part";
-import { invokePermissionArgs } from "../helpers/function-permission";
-import { setupApiGatewayAccount } from "../helpers/apigateway-account";
+import { apiGatewayAccount } from "../helpers/apigateway-account";
 import { useProvider } from "../helpers/provider";
-import { RETENTION } from "../logging";
 
 const parts = () => ({
   /**
@@ -124,35 +129,9 @@ const parts = () => ({
   domainMapping: optional(apigateway.BasePathMapping),
 });
 
-export interface ApiGatewayV1DomainArgs extends DomainArgs {
-  /**
-   * The base mapping for the custom domain. This adds a suffix to the URL of the API.
-   *
-   * @example
-   *
-   * Given the following base path and domain name.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "api.example.com",
-   *     path: "v1"
-   *   }
-   * }
-   * ```
-   *
-   * The full URL of the API will be `https://api.example.com/v1/`.
-   *
-   * :::note
-   * There's an extra trailing slash when a base path is set.
-   * :::
-   *
-   * By default there is no base path, so if the `name` is `api.example.com`, the full URL will be `https://api.example.com`.
-   */
-  path?: Input<string>;
-}
-
-export interface ApiGatewayV1Args extends ComponentArgs<typeof parts> {
+export interface ApiGatewayV1Args
+  extends ComponentArgs<typeof parts>,
+    ApiGatewayAccessLogArgs {
   /**
    * Set a custom domain for your REST API.
    *
@@ -193,7 +172,7 @@ export interface ApiGatewayV1Args extends ComponentArgs<typeof parts> {
    * }
    * ```
    */
-  domain?: string | Prettify<Partial<ApiGatewayV1DomainArgs>>;
+  domain?: string | Prettify<Partial<ApiGatewayDomainArgs>>;
   /**
    * Configure the type of API Gateway REST API endpoint.
    *
@@ -259,25 +238,6 @@ export interface ApiGatewayV1Args extends ComponentArgs<typeof parts> {
    * ```
    */
   cors?: boolean;
-  /**
-   * Configure the [API Gateway logs](https://docs.aws.amazon.com/apigateway/latest/developerguide/view-cloudwatch-log-events-in-cloudwatch-console.html) in CloudWatch. By default, access logs are enabled and retained for 1 month.
-   * @default `{retention: "1 month"}`
-   * @example
-   * ```js
-   * {
-   *   accessLog: {
-   *     retention: "forever"
-   *   }
-   * }
-   * ```
-   */
-  accessLog?: Input<{
-    /**
-     * The duration the API Gateway logs are retained in CloudWatch.
-     * @default `1 month`
-     */
-    retention?: Input<keyof typeof RETENTION>;
-  }>;
 }
 
 export interface ApiGatewayV1AuthorizerArgs {
@@ -530,10 +490,6 @@ export interface ApiGatewayV1RouteArgs {
    */
   apiKey?: Input<boolean>;
   /**
-   * @deprecated Set `streaming: true` on the function definition passed to `api.route()` instead.
-   */
-  streaming?: Input<boolean>;
-  /**
    * The name of the route.
    *
    * By default, a route is known by the route itself, like `GET /users/{id}`, and its
@@ -677,6 +633,15 @@ export interface ApiGatewayV1IntegrationArgs {
  *   certificate is `nodes.certificate`, an output.
  * - `domain`, `endpoint` and `cors` have to be plain values, not outputs. `domain.nameId` is
  *   `existing.domainName`.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domain they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - A route's `streaming` is refused. Set `streaming: true` on the route's function
+ *   instead: `api.route("GET /", { handler: "src/get.handler", streaming: true })`. A route
+ *   to a function you have, or to its ARN, doesn't stream.
  * - A route added after `deploy()`, or a second `deploy()`, is refused.
  *   `sst.aws.ApiGatewayV1` deployed such a route, but without CORS for its path. If your
  *   app adds one, move it above `deploy()` and deploy with SST 4 first, which adds CORS
@@ -690,18 +655,32 @@ export interface ApiGatewayV1IntegrationArgs {
  * - A route's handler and an authorizer's function have to be plain values: whether a
  *   function is created is decided from them. A function you have, or its ARN, can be an
  *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
+ * - Next to `existing.domainName`, a domain's `name`, `dns` and `cert` are refused: the
+ *   domain name is used the way it is.
+ * - API Gateway's account settings, which give the API a role to write its access log
+ *   with, are read and set up with the provider the API has. `sst.aws.ApiGatewayV1` used
+ *   only a `provider` passed to the API itself, so an API that takes its provider from a
+ *   parent component or from `providers` has the account of that provider's region set
+ *   up, where it had the default region's. The setup is kept when the API is removed.
  * - The routes and authorizers are created with the provider the API has.
  *   `sst.aws.ApiGatewayV1` gave them only a `provider` passed to the API itself. So if your
  *   API takes its provider from a parent component or from `providers`, its routes and
  *   authorizers are replaced on switch, their functions' log groups with them, which
- *   `sst migrate --check` refuses.
+ *   `sst migrate --check` refuses: remove them and deploy before you switch, then add
+ *   them back.
  */
 export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
   private readonly endpointType: "EDGE" | "REGIONAL" | "PRIVATE";
-  private readonly domain?: string | Prettify<Partial<ApiGatewayV1DomainArgs>>;
+  // The custom domain, checked: made by `deploy()`, with the stage
+  private readonly domain?: ReturnType<typeof apiDomainOf>;
   private readonly cors: boolean;
-  private readonly accessLog: ApiGatewayV1Args["accessLog"];
-  private readonly provider?: ComponentResourceOptions["provider"];
+  private readonly logGroupArgs: ReturnType<typeof accessLogGroup>;
   private readonly region: Output<string>;
   // The id of each path's resource, from the root's on
   private readonly resources: Map<string, Output<string>>;
@@ -716,28 +695,17 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
   ) {
     // SST 4's transforms, before the component turns down a key it doesn't
     // have, with what to write instead
-    const transform = args.transform ?? {};
-    notAnOption(
-      transform,
-      "accessLog",
-      `Transform the access log in "transform.logGroup".`,
-    );
-    notAnOption(
-      transform,
-      "route",
-      `To change the routes' functions, use "transform.handler", and their methods and integrations, "transform.method" and "transform.integration", which are given each route's name. To give every route an auth or an API key, give it in each route's args.`,
-    );
+    const owner = `the "${name}" API`;
+    notAnOldTransform(args.transform, "accessLog", owner);
+    notAnOldTransform(args.transform, "route", owner);
     super(name, args, opts);
     this.resources = new Map();
     this.routes = new Map();
     this.deployed = false;
-    const endpoint = plain(
-      args.endpoint,
-      `The "endpoint" of the "${name}" API`,
-    );
+    const endpoint = plain(args.endpoint, `The "endpoint" of ${owner}`);
     if (endpoint?.type === "private" && !endpoint.vpcEndpointIds)
       throw new VisibleError(
-        `Please provide the VPC endpoint IDs for the private endpoint of the "${name}" API.`,
+        `The private endpoint of ${owner} needs the IDs of its VPC endpoints. Give them in "endpoint.vpcEndpointIds".`,
       );
     this.endpointType =
       endpoint?.type === "regional"
@@ -745,15 +713,14 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
         : endpoint?.type === "private"
           ? "PRIVATE"
           : "EDGE";
-    this.domain = plain(args.domain, `The "domain" of the "${name}" API`);
-    this.cors = plain(args.cors, `The "cors" of the "${name}" API`) !== false;
-    this.accessLog = args.accessLog;
-    this.provider = opts?.provider;
+    this.domain = apiDomainOf(args.domain, args.existing, owner);
+    this.cors = plain(args.cors, `The "cors" of ${owner}`) !== false;
+    this.logGroupArgs = accessLogGroup(name, args, owner);
     this.region = getRegionOutput(undefined, { parent: this }).region;
 
     // The account's role for API Gateway to write logs with, made once for
     // the account when it has none
-    const account = setupApiGatewayAccount(name, opts ?? {});
+    const account = apiGatewayAccount(this.builder(), name);
     const api = this.part(
       "api",
       {
@@ -765,6 +732,16 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
       { dependsOn: account },
     );
     this.resources.set("/", api.rootResourceId);
+  }
+
+  // Pulumi registers a component's outputs once its constructor is done.
+  // This API's are registered by `deploy()`, with the URL it reports, since a
+  // config may wait for something between the two. One that's never deployed
+  // has none, as in SST 4.
+  protected registerOutputs(
+    outputs?: Inputs | Promise<Inputs> | Output<Inputs>,
+  ) {
+    if (this.deployed) super.registerOutputs(outputs);
   }
 
   /**
@@ -893,16 +870,12 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
       handler,
       `The handler of the "${route}" route of the "${name}" API`,
     );
-    // The route streams when it says so, or else when its function does
-    const fnStreaming: Output<boolean | undefined> = output(
-      definition as any,
-    ).apply((fn: unknown) =>
-      fn && typeof fn === "object" && "streaming" in fn
-        ? (fn.streaming as boolean | undefined)
-        : undefined,
-    );
-    const streaming = all([args.streaming, fnStreaming]).apply(
-      ([streaming, fnStreaming]) => streaming ?? fnStreaming ?? false,
+    // The route streams when its function does
+    const streaming: Output<boolean> = output(definition as any).apply(
+      (fn: unknown) =>
+        fn && typeof fn === "object" && "streaming" in fn
+          ? (fn.streaming as boolean | undefined) ?? false
+          : false,
     );
     const fn = functionPart(this, "handler", id, definition, {
       description: `${name} route ${method} ${path}`,
@@ -911,11 +884,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
     const permission = this.part(
       "permission",
       id,
-      invokePermissionArgs(
-        fn,
-        "apigateway.amazonaws.com",
-        interpolate`${api.executionArn}/*`,
-      ),
+      routePermissionArgs(fn, api.executionArn),
     );
     const httpMethod = this.createMethod(id, method, resourceId, args);
     this.part(
@@ -1007,7 +976,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
     kind: Route["kind"],
   ) {
     const name = this.componentName;
-    const { method, path } = parseRoute(route);
+    const { method, path } = parseRoute(route, `the "${name}" API`);
     const id = args.name ?? `${method} ${path}`;
     this.assertNew(
       "route",
@@ -1017,6 +986,14 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
       kind === "lambda"
         ? ["handler", "permission", "method", "integration"]
         : ["method", "integration"],
+    );
+    notAnOption(
+      args,
+      "streaming",
+      kind === "lambda"
+        ? `Set "streaming: true" on the route's function: api.route("${route}", { handler: "src/stream.handler", streaming: true }).`
+        : `Only a route to a function streams: set "streaming: true" on its function.`,
+      `the "${route}" route of the "${name}" API`,
     );
     if (this.deployed)
       throw new VisibleError(
@@ -1141,13 +1118,11 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
       args.tokenFunction,
       args.userPools,
     ].filter((v) => v);
-    if (given.length === 0)
+    if (given.length !== 1)
       throw new VisibleError(
-        `Please provide one of "requestFunction", "tokenFunction", or "userPools" for ${what}.`,
-      );
-    if (given.length > 1)
-      throw new VisibleError(
-        `Please provide only one of "requestFunction", "tokenFunction", or "userPools" for ${what}.`,
+        `${what[0].toUpperCase()}${what.slice(1)} is given ${
+          given.length ? "more than one" : "none"
+        } of "requestFunction", "tokenFunction" and "userPools". Give it one of them.`,
       );
 
     const { api } = this.nodes;
@@ -1179,11 +1154,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
       this.part(
         "authorizerPermission",
         id,
-        invokePermissionArgs(
-          fn,
-          "apigateway.amazonaws.com",
-          interpolate`${api.executionArn}/authorizers/${authorizer.id}`,
-        ),
+        authorizerPermissionArgs(fn, api.executionArn, authorizer.id),
       );
     return authorizer;
   }
@@ -1255,13 +1226,13 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
     const { api, stage } = this.nodes;
     if (!stage)
       throw new VisibleError(
-        `Cannot add a usage plan to the "${this.componentName}" API before it's deployed. Make sure to call deploy() to deploy the API first.`,
+        `The "${name}" usage plan is added to the "${this.componentName}" API before "deploy()", which makes the stage it's for. Call "deploy()" first.`,
       );
     // Next to the API, as SST 4 made it
     return new ApiGatewayV1UsagePlan(
       name,
       { ...args, apiId: api.id, apiStage: stage.stageName },
-      { provider: this.provider },
+      { provider: this.componentOpts.provider },
     );
   }
 
@@ -1353,16 +1324,7 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
       restApi: api.id,
       triggers: triggersOf(this.deployedResources()),
     });
-    const logGroup = this.part(
-      "logGroup",
-      {
-        name: `/aws/vendedlogs/apis/${physicalName(64, name)}`,
-        retentionInDays: output(this.accessLog).apply(
-          (accessLog) => RETENTION[accessLog?.retention ?? "1 month"],
-        ),
-      },
-      { ignoreChanges: ["name"] },
-    );
+    const logGroup = this.part("logGroup", ...this.logGroupArgs);
     const stage = this.part("stage", {
       restApi: api.id,
       stageName: context().app.stage,
@@ -1373,29 +1335,21 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
       },
     });
 
-    const existingDomainName = this.existingPart("domainName");
     const domain = this.domain;
-    if (domain || existingDomainName) {
-      const given =
-        typeof domain === "string" ? { name: domain } : domain ?? {};
-      if ("nameId" in given)
-        throw new VisibleError(
-          `The "domain.nameId" of the "${name}" API is given in "existing" now: { domain: { path }, existing: { domainName: "..." } }.`,
-        );
-      if (existingDomainName && given.name)
-        throw new VisibleError(
-          `The "${name}" API is given an existing "domainName", so it doesn't create one. Remove "name" from its domain.`,
-        );
-      const domainName = existingDomainName ?? this.createDomainName(given);
+    if (domain) {
+      const domainName =
+        this.existingPart("domainName") ??
+        this.createDomainName(domain.create!);
       this.part("domainMapping", {
         restApi: api.id,
         domainName: domainName.id,
         stageName: stage.stageName,
-        basePath: given.path,
+        basePath: domain.path,
       });
     }
 
     this.report({ hint: this.url });
+    super.registerOutputs();
     return this;
   }
 
@@ -1421,13 +1375,8 @@ export class ApiGatewayV1 extends component("sst:aws:ApiGatewayV1", parts) {
 
   // The custom domain: its certificate, the domain name, and the DNS records
   // that point at it
-  private createDomainName(args: Partial<ApiGatewayV1DomainArgs>) {
+  private createDomainName(domain: ApiDomain) {
     const name = this.componentName;
-    if (!args.name)
-      throw new VisibleError(
-        `Domain "name" is required for the "${name}" API. To use a domain name you already have, pass it in "existing".`,
-      );
-    const domain = domainOf(args, `the "${name}" API`);
     const edge = this.endpointType === "EDGE";
     // An edge API's certificate is in us-east-1: made with the API's own
     // provider when that's in us-east-1, as SST 4 made it, and with one of
@@ -1504,35 +1453,6 @@ interface Route {
   named: boolean;
   method: string;
   path: string;
-}
-
-function parseRoute(route: string) {
-  const parts = route.split(" ");
-  if (parts.length !== 2) {
-    throw new VisibleError(
-      `Invalid route ${route}. A route must be in the format "METHOD /path".`,
-    );
-  }
-  const [methodRaw, path] = parts;
-  const method = methodRaw.toUpperCase();
-  if (
-    ![
-      "ANY",
-      "DELETE",
-      "GET",
-      "HEAD",
-      "OPTIONS",
-      "PATCH",
-      "POST",
-      "PUT",
-    ].includes(method)
-  )
-    throw new VisibleError(`Invalid method ${methodRaw} in route ${route}`);
-  if (!path.startsWith("/"))
-    throw new VisibleError(
-      `Invalid path ${path} in route ${route}. Path must start with "/".`,
-    );
-  return { method, path };
 }
 
 // The key of a path's resource: the hash SST 4 named it with. That was a hash

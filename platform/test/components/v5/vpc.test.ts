@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output, type Output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
 import { SECRET, SIG } from "../../../src/testing/state";
+import type { VpcArgs } from "../../../src/components/aws/v5/vpc";
 
 const INSTANCE = "aws:ec2/instance:Instance";
 const NAT_GATEWAY = "aws:ec2/natGateway:NatGateway";
@@ -498,16 +499,63 @@ describe("Vpc", () => {
     expect(
       () => new Vpc("MyVpc", { nat: { type: "managed", ec2: {} } }),
     ).toThrow(
-      `The "nat.type" cannot be "managed" when "nat.ec2" is specified.`,
+      `The "nat" of the "MyVpc" VPC has "ec2" settings, so its "type" can't be "managed". Make it "ec2", or leave it out.`,
     );
     expect(() => new Vpc("MyVpc", { nat: {} })).toThrow(
-      `Missing "nat.type" for the "MyVpc" VPC.`,
+      `The "nat" of the "MyVpc" VPC has no "type". Set it to "managed" or "ec2".`,
     );
     expect(
       () => new Vpc("MyVpc", { nat: { type: "managed", ip: ["one"] } }),
     ).toThrow(
-      "The number of Elastic IP allocation IDs must match the number of AZs.",
+      `The "nat.ip" of the "MyVpc" VPC has 1 Elastic IPs, for 2 AZs. Give one for each AZ.`,
     );
+  });
+
+  // A part it doesn't create for its args wouldn't be used
+  it("refuses in existing what it doesn't create", async () => {
+    const refused = (args: VpcArgs, key: string, instead: string) =>
+      expect(
+        () =>
+          new Vpc("MyVpc", {
+            ...args,
+            existing: { [key]: "theirs" },
+          }),
+      ).toThrow(
+        `"existing.${key}" isn't an option for the "MyVpc" VPC. ${instead}`,
+      );
+
+    refused({}, "elasticIp", `It's only created with "nat".`);
+    refused(
+      { nat: "ec2" },
+      "natGateway",
+      `It's only created when "nat" is "managed".`,
+    );
+    refused(
+      { nat: "managed" },
+      "natInstance",
+      `It's only created when "nat" is "ec2".`,
+    );
+    refused({}, "keyPair", `It's only created with "bastion".`);
+    refused(
+      { nat: "ec2", bastion: true },
+      "bastionInstance",
+      `When "nat" is "ec2", the first NAT instance is the bastion.`,
+    );
+    refused(
+      { bastion: { instanceProfile: "theirs" } },
+      "bastionRole",
+      `The bastion runs with "bastion.instanceProfile".`,
+    );
+    await pulumi.settle();
+  });
+
+  it("uses what it's given in existing in place of what it looks up", async () => {
+    new Vpc("MyVpc", {
+      nat: { ec2: { role: "nat-role" } },
+      existing: { natInstanceRole: "my-role" },
+    });
+    await pulumi.settle();
+    expect(resource("MyVpcNatInstanceRole").options.id).toBe("my-role");
   });
 
   it("links the bastion", async () => {
@@ -577,6 +625,57 @@ describe("Vpc", () => {
     } finally {
       amazonDefault = AL2023;
     }
+  });
+
+  describe("given an existing VPC", () => {
+    // It's used the way it is
+    it("refuses what would configure it", async () => {
+      expect(
+        () =>
+          new Vpc("MyVpc", {
+            nat: "managed",
+            existing: { vpc: SHARED },
+          }),
+      ).toThrow(
+        'The "MyVpc" VPC is given an existing "vpc", which it uses the way it is. Remove "nat" from its args.',
+      );
+      expect(
+        () =>
+          new Vpc("MyVpc", {
+            existing: { vpc: SHARED, privateSubnet: { "1": "subnet-1" } },
+          }),
+      ).toThrow(
+        `"existing.privateSubnet" isn't an option for the "MyVpc" VPC. It creates nothing in the "vpc" it's given, and finds its subnets and its bastion with lookups.`,
+      );
+      await pulumi.settle();
+    });
+
+    // What a $transform sets for every VPC isn't meant for one from get
+    it("takes what a $transform gives one from get", async () => {
+      const { $transform } = await import("../../../src/components/component");
+      $transform(Vpc, (args, _opts, name) => {
+        if (name === "Shared") args!.nat = "managed";
+      });
+      Vpc.get("Shared", SHARED);
+      await pulumi.settle();
+      expect(resource("SharedVpc").options.id).toBe(SHARED);
+    });
+
+    it("uses what it's given in place of what it looks up", async () => {
+      const vpc = new Vpc("MyVpc", {
+        existing: {
+          vpc: SHARED,
+          internetGateway: "igw-mine",
+          securityGroup: "sg-mine",
+          cloudmapNamespace: "ns-mine",
+        },
+      });
+      await pulumi.settle();
+      expect(resource("MyVpcInternetGateway").options.id).toBe("igw-mine");
+      expect(resource("MyVpcSecurityGroup").options.id).toBe("sg-mine");
+      expect(resource("MyVpcCloudmapNamespace").options.id).toBe("ns-mine");
+      expect(await read(vpc.securityGroups)).toEqual(["sg-mine"]);
+    });
   });
 
   it("reads a namespace id with a 0 in it", async () => {

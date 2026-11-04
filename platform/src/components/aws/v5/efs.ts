@@ -11,7 +11,12 @@ import {
   deferred,
   many,
 } from "../../parts-component";
-import { withDefault } from "../../args";
+import {
+  notAnExistingPart,
+  usedAsItIs,
+  withDefault,
+  getArgs,
+} from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
 import {
@@ -237,10 +242,19 @@ export class Efs extends component("sst:aws:Efs", parts) {
     super(name, args, opts);
 
     const self = this;
+    const of = `the "${name}" file system`;
 
     // A file system that's already deployed, with the access point it has
     const existing = this.existingPart("fileSystem");
     if (existing) {
+      usedAsItIs(args, ["throughput", "performance", "vpc"], "fileSystem", of);
+      for (const key of ["securityGroup", "mountTarget"])
+        notAnExistingPart(
+          args.existing,
+          key,
+          of,
+          `The "fileSystem" it's given has its mount targets already.`,
+        );
       const accessPoint =
         this.existingPart("accessPoint") ??
         this.lookupPart("accessPoint", firstAccessPointOf(existing));
@@ -327,30 +341,26 @@ export class Efs extends component("sst:aws:Efs", parts) {
         return {
           id: args.vpc.id,
           cidrBlock: args.vpc.nodes.vpc.cidrBlock,
-          subnets: privateSubnetsOf(
-            args.vpc,
-            self,
-            `the "${name}" EFS component`,
-          ),
+          subnets: privateSubnetsOf(args.vpc, self, of),
         };
 
-      assertVpcIds(args.vpc, `the "${name}" EFS component`);
+      assertVpcIds(args.vpc, of);
       const vpc = output(args.vpc).apply((vpc) => {
         // `vpc.id` wasn't always required, so a config can be without it
         if (!vpc.id)
           throw new VisibleError(
-            `Missing "vpc.id" for the "${name}" EFS component. The VPC id is required to create the security group for the EFS mount targets.`,
+            `The "vpc" of ${of} has no "id". Its mount targets' security group is created in it.`,
           );
         if (!vpc.subnets)
           throw new VisibleError(
-            `Missing "vpc.subnets" for the "${name}" EFS component. The mount targets are created in them.`,
+            `The "vpc" of ${of} has no "subnets". Its mount targets are created in them.`,
           );
         return vpc;
       });
       return {
         id: vpc.id,
         cidrBlock: ec2.getVpcOutput({ id: vpc.id }, { parent: self }).cidrBlock,
-        subnets: subnetsByAz(vpc.subnets, self, `the "${name}" EFS component`),
+        subnets: subnetsByAz(vpc.subnets, self, of),
       };
     }
 
@@ -363,7 +373,7 @@ export class Efs extends component("sst:aws:Efs", parts) {
         .apply((found) => {
           if (!found.ids.length)
             throw new VisibleError(
-              `The file system of the "${name}" EFS component has no access point. Create one, and pass it in "existing.accessPoint".`,
+              `The "fileSystem" ${of} is given has no access point. Create one, and pass it in "existing.accessPoint".`,
             );
           return found.ids[0];
         });
@@ -432,7 +442,7 @@ export class Efs extends component("sst:aws:Efs", parts) {
   ) {
     return new Efs(
       name,
-      { existing: { fileSystem: fileSystemID } } as EfsArgs,
+      getArgs({ existing: { fileSystem: fileSystemID } }) as EfsArgs,
       opts,
     );
   }

@@ -32,6 +32,12 @@ const pulumi = mockPulumi({
           hostedZoneId: "Z1UJRXOUMOOFQ8",
         },
       };
+    // What API Gateway invokes a function at, as AWS gives it: the path of
+    // the function's ARN, which 4.x wrote out by hand
+    if (args.type === "aws:lambda/function:Function")
+      return {
+        invokeArn: `arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:mock:us-east-1:123456789012:${args.name}/invocations`,
+      };
     return {};
   },
 });
@@ -327,7 +333,9 @@ describe("ApiGatewayWebSocket", () => {
         jwt: { issuer: "https://issuer", audiences: ["a"] },
         lambda: { function: "src/authorizer.handler" },
       }),
-    ).toThrow(/"jwt" isn't an option/);
+    ).toThrow(
+      /"jwt" isn't an option for the "Jwt" authorizer of the "MyApi" API/,
+    );
     expect(() =>
       api.addAuthorizer("Payload", {
         lambda: {
@@ -336,20 +344,58 @@ describe("ApiGatewayWebSocket", () => {
           payload: "2.0",
         },
       }),
-    ).toThrow(/"payload" isn't an option/);
+    ).toThrow(
+      /"payload" isn't an option for the "lambda" of the "Payload" authorizer of the "MyApi" API/,
+    );
+    expect(() =>
+      // @ts-expect-error
+      api.addAuthorizer("None", {}),
+    ).toThrow(
+      /The "None" authorizer of the "MyApi" API has no "lambda". A WebSocket API's authorizer is a Lambda authorizer/,
+    );
     expect(() =>
       api.route("$connect", "src/connect.handler", {
         // @ts-expect-error
         auth: { jwt: { authorizer: "abc" } },
       }),
-    ).toThrow(/only supports JWT auth on HTTP APIs/);
+    ).toThrow(
+      /The "\$connect" route of the "MyApi" API uses "auth.jwt", but API Gateway only supports JWT auth on HTTP APIs/,
+    );
     expect(
       () =>
         new ApiGatewayWebSocket("Other", {
           // @ts-expect-error
           transform: { route: { handler: { memory: "1 GB" } } },
         }),
-    ).toThrow(/"transform.route" changes each route's API Gateway route/);
+    ).toThrow(
+      /"transform.route.handler" isn't an option for the "Other" API. "transform.route" changes each route's API Gateway route/,
+    );
+    // SST 4's transform of the access log, refused before the component
+    // turns it down as a part it doesn't have
+    expect(
+      () =>
+        new ApiGatewayWebSocket("Logs", {
+          // @ts-expect-error
+          transform: { accessLog: { retentionInDays: 3 } },
+        }),
+    ).toThrow(
+      /"transform.accessLog" isn't an option for the "Logs" API. Transform the access log in "transform.logGroup"/,
+    );
+    expect(
+      () =>
+        new ApiGatewayWebSocket("Existing", {
+          accessLog: { retention: "1 week" },
+          existing: { logGroup: "/aws/vendedlogs/apis/mine" },
+        }),
+    ).toThrow(/is given an existing "logGroup", which it uses the way it is/);
+    expect(
+      () =>
+        new ApiGatewayWebSocket("Certificate", {
+          existing: { certificate: {} as any },
+        }),
+    ).toThrow(
+      /"existing.certificate" isn't an option for the "Certificate" API/,
+    );
     expect(
       () =>
         new ApiGatewayWebSocket("Third", {
@@ -357,6 +403,19 @@ describe("ApiGatewayWebSocket", () => {
           domain: output("ws.example.com"),
         }),
     ).toThrow(/"domain"/);
+  });
+
+  it("invokes a route's function at its invoke ARN, and maps its domain to its stage", async () => {
+    const api = new ApiGatewayWebSocket("MyApi", {
+      domain: "ws.example.com",
+    }).route("sendMessage", FUNCTION_ARN);
+    await pulumi.settle();
+    expect(
+      await pulumi.resolve(api.nodes.integration.sendMessage.integrationUri),
+    ).toBe(
+      `arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${FUNCTION_ARN}/invocations`,
+    );
+    expect(pulumi.dependsOn("MyApiDomainMapping", "MyApiStage")).toBe(true);
   });
 
   it("can be linked by a function, which may manage connections", async () => {

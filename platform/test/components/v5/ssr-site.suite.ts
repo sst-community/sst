@@ -626,12 +626,12 @@ export function ssrSiteSuite(
             // @ts-expect-error
             route: { router: {} },
           }),
-      ).toThrow(/"route" isn't an option/);
+      ).toThrow(/"route" isn't an option for the "\w+" \w+ site\./);
       expect(
         () =>
           // @ts-expect-error
           new Site(S, { path: site, cdn: false }),
-      ).toThrow(/"cdn" isn't an option/);
+      ).toThrow(/"cdn" isn't an option for the "\w+" \w+ site\./);
       expect(
         () =>
           new Site(S, {
@@ -639,7 +639,7 @@ export function ssrSiteSuite(
             // @ts-expect-error
             server: { edge: {} },
           }),
-      ).toThrow(/"edge" isn't an option/);
+      ).toThrow(/"edge" isn't an option for the "\w+" \w+ site\./);
       expect(
         () =>
           new Site(S, {
@@ -649,8 +649,142 @@ export function ssrSiteSuite(
           }),
       ).toThrow(/"regions"/);
       expect(() => new Site(S, { path: path.join(app, "missing") })).toThrow(
-        /Site directory not found/,
+        /There's no folder at ".*missing", the "path" of the "\w+" \w+ site\./,
       );
+    });
+
+    it("refuses a server given as an output where it's read, not as its edge", () => {
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            server: output({ memory: "2048 MB" }) as any,
+          }),
+      ).toThrow(/"server" of the "\w+" \w+ site has to be a plain value/);
+    });
+
+    it("takes dev as a plain value", () => {
+      // @ts-ignore
+      global.$dev = true;
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            dev: output(false) as any,
+          }),
+      ).toThrow(/"dev" of the "\w+" \w+ site has to be a plain value/);
+    });
+
+    it("takes only a router, a path and a domain in its route", () => {
+      const router = new Router("Router");
+      for (const [key, value] of Object.entries({
+        rewrite: { regex: "^/a", to: "/" },
+        readTimeout: "30 seconds",
+        keepAliveTimeout: "10 seconds",
+        connectionTimeout: "3 seconds",
+        connectionAttempts: 1,
+      }))
+        expect(
+          () =>
+            new Site(S, {
+              path: site,
+              router: { instance: router as any, [key]: value } as any,
+            }),
+        ).toThrow(
+          new RegExp(
+            `"router\\.${key}" isn't an option for the "\\w+" \\w+ site\\. A route to a site takes "instance", "path" and "domain"`,
+          ),
+        );
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            router: { instance: output(router) as any },
+          }),
+      ).toThrow(
+        /"router\.instance" of the "\w+" \w+ site has to be a plain value/,
+      );
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            protection: "oac",
+            router: { instance: router as any },
+          }),
+      ).toThrow(
+        /The "\w+" \w+ site can't have both "protection" and "router"\. Set "protection" on the Router/,
+      );
+    });
+
+    it("refuses an existing distribution, or one of its parts behind a router", () => {
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            existing: { cdn: "E2IDLMESRN6V62" },
+          }),
+      ).toThrow(
+        /"existing\.cdn" isn't an option for the "\w+" \w+ site\. A site creates its own distribution/,
+      );
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            router: { instance: new Router("Router") as any },
+            existing: { cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6" },
+          }),
+      ).toThrow(
+        /"existing\.cachePolicy" isn't an option for the "\w+" \w+ site\. It's served through "router"/,
+      );
+    });
+
+    it("refuses an existing part next to the arg that gives it", () => {
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            existing: { cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6" },
+          }),
+      ).toThrow(
+        /"existing\.cachePolicy" isn't an option for the "\w+" \w+ site\. It uses the policy "cachePolicy" names/,
+      );
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            edge: { viewerRequest: { injection: "", kvStore: STORE_ARN } },
+            existing: { kvStore: STORE_ARN },
+          }),
+      ).toThrow(/"existing\.kvStore" isn't an option for the "\w+" \w+ site\./);
+      expect(
+        () =>
+          new Site(S, {
+            path: site,
+            protection: {
+              mode: "oac-with-edge-signing",
+              edgeFunction: { arn: EDGE_ARN },
+            },
+            existing: { edgeFunction: "signer" },
+          }),
+      ).toThrow(
+        /"existing\.edgeFunction" isn't an option for the "\w+" \w+ site\. It signs with the function "protection\.edgeFunction\.arn" names/,
+      );
+    });
+
+    it("signs with an existing edge function, without a role for it", async () => {
+      new Site(S, {
+        path: site,
+        buildCommand: "true",
+        protection: "oac-with-edge-signing",
+        existing: { edgeFunction: "signer" },
+      });
+      await pulumi.settle();
+      expect(names()).not.toContain(`${S}EdgeFunctionRole`);
+      const distribution = resource(`${S}CdnDistribution`);
+      expect(
+        distribution.inputs.defaultCacheBehavior.lambdaFunctionAssociations,
+      ).toHaveLength(1);
     });
 
     it("creates what 4.x created", async () => {

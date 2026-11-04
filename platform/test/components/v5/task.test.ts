@@ -22,6 +22,12 @@ const pulumi = mockPulumi({
   call: (args) => {
     if (args.token === "aws:index/getAvailabilityZones:getAvailabilityZones")
       return { names: ["us-east-1a", "us-east-1b"] };
+    // The region is the provider's, as AWS answers
+    if (
+      args.token === "aws:index/getRegion:getRegion" &&
+      String(args.provider ?? "").includes("::West::")
+    )
+      return { name: "us-west-2", region: "us-west-2", id: "us-west-2" };
     if (args.token === "aws:ecr/getAuthorizationToken:getAuthorizationToken")
       return {
         proxyEndpoint: "https://123456789012.dkr.ecr.us-east-1.amazonaws.com",
@@ -297,35 +303,52 @@ describe("Task", () => {
             opts,
           );
         },
-        "settings on each container": (Task, opts) => {
-          new Task(
-            "MyTask",
-            {
-              cluster: cluster(),
-              containers: [
-                {
-                  name: "app",
-                  image: "nginx:latest",
-                  cpu: "0.125 vCPU",
-                  command: ["node", "index.js"],
-                  entrypoint: ["/usr/bin/tini", "--"],
-                  environment: { ROLE: "app" },
-                  environmentFiles: ["arn:aws:s3:::my-bucket/app.env"],
-                  ssm: {
-                    API_KEY: "arn:aws:ssm:us-east-1:123456789012:parameter/key",
+        // The 4.x Task let the containers' own environment files go
+        // unread: only the top-level ones were granted. The execution role
+        // is updated in place to read them.
+        "settings on each container": {
+          create: (Task, opts) => {
+            new Task(
+              "MyTask",
+              {
+                cluster: cluster(),
+                containers: [
+                  {
+                    name: "app",
+                    image: "nginx:latest",
+                    cpu: "0.125 vCPU",
+                    command: ["node", "index.js"],
+                    entrypoint: ["/usr/bin/tini", "--"],
+                    environment: { ROLE: "app" },
+                    environmentFiles: ["arn:aws:s3:::my-bucket/app.env"],
+                    ssm: {
+                      API_KEY:
+                        "arn:aws:ssm:us-east-1:123456789012:parameter/key",
+                    },
+                    logging: { name: "/custom/app", retention: "2 weeks" },
                   },
-                  logging: { name: "/custom/app", retention: "2 weeks" },
-                },
-                {
-                  name: "worker",
-                  image: output("nginx:latest"),
-                  environment: output({ ROLE: "worker" }),
-                  logging: output({ retention: "forever" as const }),
-                },
-              ],
-            },
-            opts,
-          );
+                  {
+                    name: "worker",
+                    image: output("nginx:latest"),
+                    environment: output({ ROLE: "worker" }),
+                    logging: output({ retention: "forever" as const }),
+                  },
+                ],
+              },
+              opts,
+            );
+          },
+          changed: [["MyTaskExecutionRole", ["inlinePolicies"]]],
+          check: () =>
+            expect(
+              JSON.parse(
+                resource("MyTaskExecutionRole").inputs.inlinePolicies[0].policy,
+              ).statements,
+            ).toContainEqual({
+              sid: "ReadEnvironmentFiles",
+              actions: ["s3:GetObject"],
+              resources: ["arn:aws:s3:::my-bucket/app.env"],
+            }),
         },
         "a public task": (Task, opts) => {
           new Task(
@@ -983,7 +1006,7 @@ describe("Task", () => {
             taskRole: "my-task-role",
           } as any),
       ).toThrow(
-        /"taskRole" isn't an option here. Pass the role, or its name, as "existing: { taskRole }" in the "MyTask" task/,
+        `"taskRole" isn't an option for the "MyTask" task. Pass the role, or its name, as "existing: { taskRole }".`,
       );
     });
 
@@ -994,7 +1017,9 @@ describe("Task", () => {
             cluster: cluster(),
             executionRole: "my-execution-role",
           } as any),
-      ).toThrow(/as "existing: { executionRole }" in the "MyTask" task/);
+      ).toThrow(
+        `"executionRole" isn't an option for the "MyTask" task. Pass the role, or its name, as "existing: { executionRole }".`,
+      );
     });
 
     // 4.x refused the two together, and marked "publicIp" deprecated. It's
@@ -1039,7 +1064,7 @@ describe("Task", () => {
       );
 
       expect([...new Set(errors)]).toEqual([
-        'Set "vpc.publicSubnets" on the Cluster to use "public" on the "MyTask" Task.',
+        'The "MyTask" task is "public", and the "vpc" of its cluster has no "publicSubnets". Set them on the cluster.',
       ]);
     });
 
@@ -1051,7 +1076,20 @@ describe("Task", () => {
             image: "nginx:latest",
             containers: [{ name: "app", image: "nginx:latest" }],
           }),
-      ).toThrow(/You cannot provide both "containers" and "image"/);
+      ).toThrow(
+        `"image" isn't an option for the "MyTask" task, which has "containers". Set it on each container.`,
+      );
+      // It would be dropped
+      expect(
+        () =>
+          new Task("MyTask", {
+            cluster: cluster(),
+            command: ["node", "index.js"],
+            containers: [{ name: "app", image: "nginx:latest" }],
+          }),
+      ).toThrow(
+        `"command" isn't an option for the "MyTask" task, which has "containers". Set it on each container.`,
+      );
     });
 
     it("rejects containers given as an output", () => {
@@ -1082,8 +1120,95 @@ describe("Task", () => {
             existing: { image: { MyTask: "my-image" } } as any,
           }),
       ).toThrow(
-        /"image" isn't an option here. Set the "image" of the container to the image's reference in the "MyTask" task/,
+        `"existing.image" isn't an option for the "MyTask" task. Set the "image" of the container to the image's reference.`,
       );
+    });
+
+    it("refuses a public security group when it isn't public", () => {
+      expect(
+        () =>
+          new Task("MyTask", {
+            cluster: cluster(),
+            image: "nginx:latest",
+            existing: { publicSecurityGroup: "sg-mine" },
+          }),
+      ).toThrow(
+        `"existing.publicSecurityGroup" isn't an option for the "MyTask" task. It's only created when "public" is true.`,
+      );
+    });
+
+    // The role is used the way it is
+    it("refuses permissions for a task role it's given", () => {
+      expect(
+        () =>
+          new Task("MyTask", {
+            cluster: cluster(),
+            image: "nginx:latest",
+            permissions: [{ actions: ["s3:*"], resources: ["*"] }],
+            existing: { taskRole: "my-task-role" },
+          }),
+      ).toThrow(
+        `The "MyTask" task is given an existing "taskRole", which it doesn't change. Add the "permissions" to the role itself.`,
+      );
+    });
+
+    it("takes dev as a plain value", () => {
+      expect(
+        () =>
+          new Task("MyTask", {
+            cluster: cluster(),
+            image: "nginx:latest",
+            dev: output(false) as any,
+          }),
+      ).toThrow(/The "dev" of the "MyTask" task has to be a plain value/);
+    });
+
+    it("refuses what isn't a cluster", async () => {
+      const { Cluster: ClusterV1 } = await import(
+        "../../../src/components/aws/cluster-v1"
+      );
+      expect(
+        () =>
+          new Task("MyTask", {
+            cluster: new ClusterV1("Old", { vpc: customVpc as any }) as any,
+            image: "nginx:latest",
+          }),
+      ).toThrow(
+        `The "cluster" of the "MyTask" task isn't a "Cluster" component. Pass a "Cluster".`,
+      );
+      await pulumi.settle();
+    });
+
+    it("refuses a size Fargate doesn't offer, as it's given", () => {
+      const create = (args: object) => () =>
+        new Task("MyTask", {
+          cluster: cluster(),
+          image: "nginx:latest",
+          ...args,
+        });
+      expect(create({ cpu: "3 vCPU" })).toThrow(
+        /^The "cpu" of the "MyTask" task is "3 vCPU". Fargate offers 0.25 vCPU, /,
+      );
+      expect(create({ cpu: "1 vCPU", memory: "1 GB" })).toThrow(
+        /^The "memory" of the "MyTask" task is "1 GB". With 1 vCPU, Fargate offers 2 GB, /,
+      );
+      expect(create({ storage: "10 GB" })).toThrow(
+        `The "storage" of the "MyTask" task is "10 GB". It has to be between "20 GB" and "200 GB".`,
+      );
+    });
+
+    it("is in the region of the provider it's given", async () => {
+      const { Provider } = await import("@pulumi/aws");
+      new Task(
+        "MyTask",
+        { cluster: cluster(), image: "nginx:latest" },
+        { providers: [new Provider("West", { region: "us-west-2" })] },
+      );
+      await pulumi.settle();
+
+      expect(definitions()[0].logConfiguration.options).toMatchObject({
+        "awslogs-region": "us-west-2",
+      });
     });
 
     it("rejects a container name given as an output", () => {

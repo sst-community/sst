@@ -159,7 +159,9 @@ describe("Auth", () => {
       () =>
         // @ts-expect-error
         new Auth("MyAuth", { authorizer: "src/auth.handler" }),
-    ).toThrow(/"authorizer" isn't an option/);
+    ).toThrow(
+      /"authorizer" isn't an option for the "MyAuth" auth server. Use "issuer"/,
+    );
     expect(
       () =>
         new Auth("MyAuth", {
@@ -167,7 +169,7 @@ describe("Auth", () => {
           // @ts-expect-error
           forceUpgrade: "v2",
         }),
-    ).toThrow(/"forceUpgrade" isn't an option/);
+    ).toThrow(/"forceUpgrade" isn't an option for the "MyAuth" auth server/);
     expect(
       () =>
         new Auth("MyAuth", {
@@ -201,14 +203,27 @@ describe("Auth", () => {
     expect(names().some((n) => n.startsWith("MyAuthRouterWaf"))).toBe(true);
   });
 
-  it("refuses an existing issuer, which it couldn't give a URL", () => {
+  it("refuses an existing issuer, which it couldn't give a URL, and an existing router", () => {
     expect(
       () =>
         new Auth("MyAuth", {
           issuer: "src/auth.handler",
           existing: { issuer: "arn:aws:lambda:us-east-1:1:function:x" as any },
         }),
-    ).toThrow(/"issuer" isn't an option/);
+    ).toThrow(
+      /"existing.issuer" isn't an option for the "MyAuth" auth server. Pass the handler or the function's args in "issuer"/,
+    );
+    for (const domain of [undefined, "auth.example.com"])
+      expect(
+        () =>
+          new Auth("MyAuth", {
+            issuer: "src/auth.handler",
+            domain,
+            existing: { router: "E2IDLMESRN6V62" },
+          }),
+      ).toThrow(
+        /"existing.router" isn't an option for the "MyAuth" auth server. Its router serves the issuer at its "domain"/,
+      );
   });
 
   it("refuses an issuer given as an output", async () => {

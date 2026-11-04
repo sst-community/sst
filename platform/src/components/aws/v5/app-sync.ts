@@ -9,7 +9,7 @@ import {
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { plain, withDefault } from "../../args";
+import { notAnExistingPart, plain, withDefault } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
@@ -539,11 +539,28 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
       authenticationType: "API_KEY",
     });
 
+    const owner = `the "${name}" API`;
     const existingDomainName = this.existingPart("domainName");
-    const domain = plain(args.domain, `The "domain" of the "${name}" API`);
+    const domain = plain(args.domain, `The "domain" of ${owner}`);
     if (existingDomainName && domain)
       throw new VisibleError(
         `The "${name}" API is given an existing "domainName", so it doesn't create one. Remove its "domain".`,
+      );
+    // What's only used with a custom domain: its certificate, when the API
+    // creates the domain name without a `cert`, and its association
+    if (!domain || (typeof domain !== "string" && domain.cert))
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        owner,
+        `It's the certificate of a custom domain the API creates: give "domain" a "name" and no "cert".`,
+      );
+    if (!domain && !existingDomainName)
+      notAnExistingPart(
+        args.existing,
+        "domainAssociation",
+        owner,
+        `It associates the API with a custom domain: give the API a "domain", or a domain name in "existing.domainName".`,
       );
 
     const domainName =
@@ -831,7 +848,7 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
     const [type, field, ...rest] = operation.trim().split(/\s+/);
     if (!type || !field || rest.length > 0)
       throw new VisibleError(
-        `Invalid resolver ${operation}. A resolver is added for a type and a field, like "Query user".`,
+        `The "${operation}" resolver of the "${this.componentName}" API isn't a type and a field. Write it like "Query user".`,
       );
     const id = `${type} ${field}`;
     this.assertNew("resolver", "resolver", id, args);
@@ -841,11 +858,11 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
       kind: withDefault(args.kind, "unit", (kind) => {
         if (kind === "unit" && args.functions)
           throw new VisibleError(
-            "The `functions` property is not supported for `unit` resolvers.",
+            `The "${id}" resolver of the "${this.componentName}" API is a "unit" resolver, which takes no "functions". Give it a "dataSource", or make it a "pipeline" resolver.`,
           );
         if (kind === "pipeline" && args.dataSource)
           throw new VisibleError(
-            "The `dataSource` property is not supported for `pipeline` resolvers.",
+            `The "${id}" resolver of the "${this.componentName}" API is a "pipeline" resolver, which takes no "dataSource". Give its "functions" their data sources.`,
           );
         return kind.toUpperCase();
       }),

@@ -449,22 +449,107 @@ describe("Router", () => {
         new Router("MyRouter", {
           routes: { "/*": "https://example.com" },
         } as any),
-    ).toThrow(/"routes" isn't an option of the "MyRouter" Router\. Add each/);
+    ).toThrow(/"routes" isn't an option for the "MyRouter" router\. Add each/);
     expect(() => new Router("MyRouter", { invalidation: true } as any)).toThrow(
-      /"invalidation" isn't an option here\. sst\.aws\.Router never/,
+      /"invalidation" isn't an option for the "MyRouter" router\. sst\.aws\.Router never/,
+    );
+  });
+
+  it("refuses kvStores, which a CloudFront function takes one of", () => {
+    for (const viewer of ["viewerRequest", "viewerResponse"])
+      expect(
+        () =>
+          new Router("MyRouter", {
+            edge: {
+              [viewer]: { injection: "", kvStores: [STORE_ARN] },
+            } as any,
+          }),
+      ).toThrow(
+        new RegExp(
+          `"edge\\.${viewer}\\.kvStores" isn't an option for the "MyRouter" router\\. Use "kvStore"`,
+        ),
+      );
+  });
+
+  it("refuses an existing part next to the arg that gives it", () => {
+    expect(
+      () =>
+        new Router("MyRouter", {
+          edge: { viewerRequest: { injection: "", kvStore: STORE_ARN } },
+          existing: { kvStore: STORE_ARN },
+        }),
+    ).toThrow(
+      /"existing\.kvStore" isn't an option for the "MyRouter" router\. It routes with the store "edge\.viewerRequest\.kvStore" names/,
+    );
+    expect(
+      () =>
+        new Router("MyRouter", {
+          protection: {
+            mode: "oac-with-edge-signing",
+            edgeFunction: { arn: EDGE_ARN },
+          },
+          existing: { edgeFunction: "signer" },
+        }),
+    ).toThrow(
+      /"existing\.edgeFunction" isn't an option for the "MyRouter" router\. It signs with the function/,
+    );
+  });
+
+  it("signs with an existing edge function, without a role for it", async () => {
+    new Router("MyRouter", {
+      protection: "oac-with-edge-signing",
+      existing: { edgeFunction: "signer" },
+    });
+    await pulumi.settle();
+    expect(names()).not.toContain("MyRouterEdgeFunctionRole");
+    expect(
+      resource("MyRouterCdnDistribution").inputs.defaultCacheBehavior
+        .lambdaFunctionAssociations,
+    ).toHaveLength(1);
+  });
+
+  it("uses a router that's deployed the way it is", async () => {
+    expect(
+      () =>
+        new Router("MyRouter", {
+          existing: { cdn: "E2IDLMESRN6V62" },
+          domain: "example.com",
+          protection: "oac",
+        }),
+    ).toThrow(
+      /The "MyRouter" router is given an existing "cdn", which it uses the way it is\. Remove "domain", "protection" from its args\./,
+    );
+    await pulumi.settle();
+  });
+
+  // A `$transform` for every router runs on one from `get` too, and isn't
+  // meant for it
+  it("leaves what a $transform sets on one from get", async () => {
+    const { $transform } = await import("../../../src/components/component");
+    $transform(Router, (args, _opts, name) => {
+      if (name === "Shared") args!.protection = "oac";
+    });
+    const router = Router.get("Shared", "E2IDLMESRN6V62");
+    await pulumi.settle();
+    expect(await valueOf(router._kvNamespace)).toBe("abcd");
+  });
+
+  it("says a site is served with its own router arg", () => {
+    expect(() => new Router("MyRouter").routeSite("/", {})).toThrow(
+      /"routeSite" isn't a method of the "MyRouter" router\. Serve the site through the router with the site's "router"/,
     );
   });
 
   it("says what has to be a plain value", () => {
     expect(
       () => new Router("MyRouter", { protection: output("oac") as any }),
-    ).toThrow(/"protection" of the "MyRouter" Router has to be a plain value/);
+    ).toThrow(/"protection" of the "MyRouter" router has to be a plain value/);
     expect(() => new Router("MyRouter", { waf: output(true) as any })).toThrow(
-      /"waf" of the "MyRouter" Router has to be a plain value/,
+      /"waf" of the "MyRouter" router has to be a plain value/,
     );
     expect(() =>
       new Router("MyRouter").route(output("/api") as any, "https://a.b"),
-    ).toThrow(/pattern of a route of the "MyRouter" Router .* named after it/);
+    ).toThrow(/pattern of a route of the "MyRouter" router .* named after it/);
   });
 
   it("refuses a second route with the same pattern", () => {

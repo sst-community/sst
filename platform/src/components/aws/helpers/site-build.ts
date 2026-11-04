@@ -58,7 +58,7 @@ export async function buildSite(input: {
 }): Promise<string> {
   const { name, sitePath, command } = input;
   const environment = withoutUnknowns(
-    await resolve(input.environment ?? {}),
+    await resolveWithUnknowns(input.environment ?? {}),
   ) as Record<string, string>;
   const links = await linkEnvironment(input.link);
 
@@ -126,16 +126,40 @@ export function configText(sitePath: string, name: string) {
   }
 }
 
+/**
+ * A value set in a site's config file, like `base: "/docs/"` in
+ * `vite.config.ts`: what's in the quotes after the key, in whichever of the
+ * file's extensions it has. Nothing, without the file or the key.
+ *
+ * It's read from the text, so a value that's worked out, like one from a
+ * variable, isn't found.
+ *
+ * @param sitePath The site's folder, from the app's folder or absolute.
+ * @param name The file's name without its extension: `vite.config`.
+ * @param key The key, like `base`. It can be in quotes too.
+ */
+export function configValue(sitePath: string, name: string, key: string) {
+  return configText(sitePath, name)?.match(
+    new RegExp(`["']?\\b${key}["']?\\s*:\\s*(["'])(.*?)\\1`),
+  )?.[2];
+}
+
+/**
+ * What's given, resolved, with each value that isn't known yet as `unknown`:
+ * in a preview, what a deploy creates.
+ */
+export async function resolveWithUnknowns(value: unknown) {
+  return markUnknowns(await (output(value) as any).promise(true));
+}
+
 // `SST_RESOURCE_App`, and an `SST_RESOURCE_<name>` for each link with the
 // properties that are known
 async function linkEnvironment(links?: Input<any[]>) {
+  const { name, stage } = context().app;
   const env: Record<string, string> = {
-    SST_RESOURCE_App: JSON.stringify({
-      name: $app.name,
-      stage: $app.stage,
-    }),
+    SST_RESOURCE_App: JSON.stringify({ name, stage }),
   };
-  const given = await resolve(links ?? []);
+  const given = await resolveWithUnknowns(links ?? []);
   if (given === unknown) return env;
   for (const link of given as unknown[]) {
     if (!link)
@@ -144,7 +168,7 @@ async function linkEnvironment(links?: Input<any[]>) {
       );
     if (!Link.isLinkable(link)) continue;
     // Resolved as it is, so that what isn't known is marked where it is
-    const resolved = (await resolve({
+    const resolved = (await resolveWithUnknowns({
       urn: link.urn,
       definition: link.getSSTLink(),
     })) as {
@@ -166,11 +190,6 @@ async function linkEnvironment(links?: Input<any[]>) {
 // The type a link has in `Resource`, as `Link.build` writes it
 function linkType(type: string) {
   return type.replaceAll(":", ".");
-}
-
-// What's given, resolved, with each value that isn't known yet as `unknown`
-async function resolve(value: unknown) {
-  return markUnknowns(await (output(value) as any).promise(true));
 }
 
 // A value with what isn't known left out: a field, or an item of a list

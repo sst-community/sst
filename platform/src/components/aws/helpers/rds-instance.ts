@@ -1,35 +1,29 @@
-import {
-  interpolate,
-  jsonStringify,
-  type Output,
-  output,
-} from "@pulumi/pulumi";
-import { RandomPassword } from "@pulumi/random";
-import { iam, rds, secretsmanager } from "@pulumi/aws";
+import { interpolate, type Output, output } from "@pulumi/pulumi";
+import { rds, secretsmanager } from "@pulumi/aws";
 import {
   type ComponentArgs,
   type PartsBuilder,
   many,
   optional,
 } from "../../parts-component";
-import { plain, withDefault } from "../../args";
+import { plain, withDefault, onlyExisting } from "../../args";
 import type { Input } from "../../input";
 import type { SizeGbTb } from "../../size";
 import { context } from "../../contract";
 import {
-  credentialsSecretOf,
+  createCredentials,
+  createRdsProxy,
+  createRdsProxyTarget,
   type LocalDatabaseArgs,
   localDatabase,
   maxStorage,
-  proxyArgs,
   type ProxyArgs,
-  proxyCredentials,
-  proxyRoleArgs,
+  rdsCredentialParts,
+  rdsProxyParts,
   replicaArgs,
-  storedPassword,
 } from "./rds";
-import { RdsRoleLookup } from "../providers/rds-role-lookup";
-import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "./vpc";
+import { secretField, tagOf } from "./secret";
+import { type AnyVpc, subnetsAndSecurityGroupsOf } from "./vpc";
 
 // What the `Postgres` and the `Mysql` share: a database on an RDS instance,
 // with its secret, its parameter group, read replicas and a proxy. Each
@@ -41,25 +35,20 @@ import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "./vpc";
  */
 export const rdsInstanceParts = {
   /**
-   * The random password of the master user. It's created when you don't set a `password`.
+   * The Secrets Manager secret that stores the master user's username and password. Not
+   * created by `get`. Next to an existing `instance`, the password is read from the one
+   * given here, or from the one the instance is tagged with.
    */
-  password: optional(RandomPassword),
+  secret: optional(secretsmanager.Secret),
+  ...rdsCredentialParts,
   /**
-   * The Secrets Manager secret that stores the master user's username and password.
+   * The RDS subnet group. Not created by `get`.
    */
-  secret: secretsmanager.Secret,
+  subnetGroup: optional(rds.SubnetGroup),
   /**
-   * The version of the secret holding the current username and password.
+   * The RDS parameter group. Not created by `get`.
    */
-  secretVersion: secretsmanager.SecretVersion,
-  /**
-   * The RDS subnet group.
-   */
-  subnetGroup: rds.SubnetGroup,
-  /**
-   * The RDS parameter group.
-   */
-  parameterGroup: rds.ParameterGroup,
+  parameterGroup: optional(rds.ParameterGroup),
   /**
    * The RDS database instance.
    */
@@ -68,34 +57,7 @@ export const rdsInstanceParts = {
    * The read replicas of the database instance, by number, from `0`.
    */
   replica: many(rds.Instance),
-  /**
-   * The secrets that store the additional credentials the proxy can use, by username.
-   */
-  proxySecret: many(secretsmanager.Secret),
-  /**
-   * The versions of the secrets holding the additional credentials, by username.
-   */
-  proxySecretVersion: many(secretsmanager.SecretVersion),
-  /**
-   * The IAM role that lets the proxy read the secrets.
-   */
-  proxyRole: optional(iam.Role),
-  /**
-   * Waits for the service-linked role RDS needs before the proxy is created.
-   */
-  proxyRoleLookup: optional(RdsRoleLookup),
-  /**
-   * The RDS Proxy.
-   */
-  proxy: optional(rds.Proxy),
-  /**
-   * The proxy's default target group.
-   */
-  proxyTargetGroup: optional(rds.ProxyDefaultTargetGroup),
-  /**
-   * The proxy's target: the database instance.
-   */
-  proxyTarget: optional(rds.ProxyTarget),
+  ...rdsProxyParts,
 };
 
 /**
@@ -121,6 +83,9 @@ export interface RdsInstanceArgs
    *   password: new sst.Secret("MyDBPassword").value
    * }
    * ```
+   *
+   * Whether it's set decides whether a password is generated, so it has to be set or left
+   * out, not given as an output that may be `undefined`.
    */
   password?: Input<string>;
   /**
@@ -295,7 +260,9 @@ export interface RdsInstanceGetArgs {
    */
   id: Input<string>;
   /**
-   * The ID of the proxy.
+   * The ID of the proxy. Leave it out for a database without one. Given as an output, it
+   * has to resolve to the proxy's ID: whether it's set decides whether a proxy is looked
+   * up.
    */
   proxyId?: Input<string>;
 }
@@ -350,6 +317,7 @@ export function createRdsInstance(
 ): RdsConnection {
   const { part, existingPart } = builder;
   const self = builder.component;
+  const owner = `the "${name}" ${engine.label} database`;
 
   const username = withDefault(args.username, engine.defaults.username);
   const dbName = withDefault(
@@ -357,10 +325,15 @@ export function createRdsInstance(
     context().app.name.replaceAll("-", "_"),
   );
 
+  // Given a database that's already deployed, it uses its secret and its
+  // proxy, and creates nothing else
+  if (args.existing?.instance !== undefined)
+    onlyExisting(args.existing, ["instance", "secret", "proxy"], owner);
+
   // In `sst dev`, a server on the user's machine stands in for the
   // database, one that's already deployed too. This is the only place the
   // component handles dev mode.
-  const dev = plain(args.dev, `The "dev" of the "${name}" database`);
+  const dev = plain(args.dev, `The "dev" of ${owner}`);
   if (dev && context().dev) {
     builder.runsLocally();
     const local = localDatabase(
@@ -371,7 +344,8 @@ export function createRdsInstance(
         database: dbName,
         port: engine.defaults.port,
       },
-      { database: `${engine.label} database`, server: engine.server },
+      owner,
+      engine.server,
     );
     builder.report({ dev: local.pane });
     return {
@@ -390,25 +364,25 @@ export function createRdsInstance(
       existingPart("proxy"),
     );
 
-  const proxy = plain(args.proxy, `The "proxy" of the "${name}" database`);
-  const replicas =
-    plain(args.replicas, `The "replicas" of the "${name}" database`) ?? 0;
+  const proxy = plain(args.proxy, `The "proxy" of ${owner}`);
+  const replicas = plain(args.replicas, `The "replicas" of ${owner}`) ?? 0;
   const engineVersion = withDefault(args.version, engine.defaults.version);
   const instanceType = withDefault(args.instance, "t4g.micro");
   const blueGreen = withDefault(args.blueGreen, false);
-  const subnets = subnetsFor(args.vpc);
+  // A `Vpc`'s private subnets, or those given. The database takes no
+  // security groups.
+  const subnets = subnetsAndSecurityGroupsOf(
+    args.vpc as Parameters<typeof subnetsAndSecurityGroupsOf>[0],
+    owner,
+  ).subnets;
   // An engine version the user didn't choose isn't moved once it's deployed
   const pinned = (field: string) => (args.version ? [] : [field]);
 
-  const password = args.password
-    ? output(args.password)
-    : part("password", { length: 32, special: false }).result;
-
-  const secret = part("secret", { recoveryWindowInDays: 0 });
-  part("secretVersion", {
-    secretId: secret.id,
-    secretString: jsonStringify({ username, password }),
-  });
+  const { password, secret } = createCredentials(
+    builder,
+    username,
+    args.password,
+  );
 
   const subnetGroup = part("subnetGroup", { subnetIds: subnets });
 
@@ -441,11 +415,7 @@ export function createRdsInstance(
       storageEncrypted: true,
       storageType: "gp3",
       allocatedStorage: 20,
-      maxAllocatedStorage: maxStorage(
-        args.storage,
-        blueGreen,
-        `${name} ${engine.label}`,
-      ),
+      maxAllocatedStorage: maxStorage(args.storage, blueGreen, owner),
       multiAz: withDefault(args.multiAz, false),
       backupRetentionPeriod: 7,
       performanceInsightsEnabled: engine.performanceInsights(instanceType),
@@ -464,47 +434,17 @@ export function createRdsInstance(
     });
   }
 
-  return connectTo(
-    instance,
-    password,
-    proxy ? createProxy(proxy === true ? {} : proxy) : undefined,
-  );
-
-  function createProxy(proxy: ProxyArgs) {
-    // A secret for each additional user the proxy can connect as
-    const secrets = proxyCredentials(proxy.credentials, name).map(
-      ({ username, password }) => {
-        const secret = part("proxySecret", username, {
-          recoveryWindowInDays: 0,
-        });
-        part("proxySecretVersion", username, {
-          secretId: secret.id,
-          secretString: jsonStringify({ username, password }),
-        });
-        return secret;
-      },
-    );
-    // The proxy can connect as the master user and as each of those
-    const logins = [secret, ...secrets];
-
-    const role = part("proxyRole", proxyRoleArgs(logins));
-    const lookup = part("proxyRoleLookup", { name: "AWSServiceRoleForRDS" });
-    const rdsProxy = part(
-      "proxy",
-      proxyArgs(engine.proxyFamily, logins, role, subnets),
-      { dependsOn: [lookup] },
-    );
-    const targetGroup = part("proxyTargetGroup", {
-      dbProxyName: rdsProxy.name,
-    });
-    part("proxyTarget", {
-      dbProxyName: rdsProxy.name,
-      targetGroupName: targetGroup.name,
-      dbInstanceIdentifier: instance.identifier,
-    });
-
-    return rdsProxy;
-  }
+  if (!proxy) return connectTo(instance, password);
+  const rdsProxy = createRdsProxy(builder, proxy === true ? {} : proxy, {
+    master: secret,
+    engineFamily: engine.proxyFamily,
+    subnets,
+    owner,
+  });
+  createRdsProxyTarget(builder, rdsProxy, {
+    dbInstanceIdentifier: instance.identifier,
+  });
+  return connectTo(instance, password, rdsProxy);
 
   function connectTo(
     instance: rds.Instance,
@@ -525,23 +465,20 @@ export function createRdsInstance(
     };
   }
 
-  // A database created by the component, or by its 4.x form, is tagged with
-  // the secret that holds its password
+  // The master user's password: in the secret the user gave, or in the one
+  // a database created by the component, or by its 4.x form, is tagged with
   function passwordOf(instance: rds.Instance) {
-    return storedPassword(
-      credentialsSecretOf(
-        instance,
-        engine.tags.password,
-        `Failed to get password for ${engine.label} ${name}.`,
-      ),
+    const secret = existingPart("secret");
+    return secretField(
+      secret
+        ? secret.id
+        : tagOf(
+            instance,
+            engine.tags.password,
+            `The "${name}" ${engine.label} database can't find its password: its instance has no "${engine.tags.password}" tag, which names the secret that holds it. Pass the secret in "existing.secret", or set "password".`,
+          ),
+      "password",
       self,
     );
-  }
-
-  // The subnets the database is in: a `Vpc`'s private ones, or those given
-  function subnetsFor(vpc: RdsInstanceArgs["vpc"]) {
-    if (isVpc(vpc)) return subnetsOf(vpc, "private");
-    assertVpcIds(vpc, `the "${name}" ${engine.label} component`);
-    return output(vpc).subnets;
   }
 }

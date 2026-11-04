@@ -5,7 +5,7 @@ import {
   component,
   deferred,
 } from "../../parts-component";
-import { notAnOption, plain } from "../../args";
+import { notAnOption, plain, usedAsItIs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { Function } from "./function";
@@ -15,6 +15,7 @@ import {
   plainFunction,
 } from "../helpers/function-part";
 import type { AnyTask } from "../helpers/task";
+import { enabledState } from "../helpers/eventbridge";
 
 const parts = () => ({
   /**
@@ -309,13 +310,13 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  *   `MyCronJobHandler`. The function you've deployed keeps its name in AWS.
  * - `nodes.function` is empty for a job that runs a task, where `sst.aws.CronV2` failed
  *   when it was read.
- * - `function` can't be a handler or a function's args in an output: whether a function
- *   is created is decided from them, and a preview has to know. Only a function you
- *   have, or its ARN, can be an output.
- * - The function is a [`sst.aws.v5.Function`](/docs/component/aws/v5/function), and its
- *   args are typed as that takes them. Args written the way `sst.aws.Function` takes them,
- *   like `role` or `live`, still work, but don't type-check.
- * - Inside a function's args, what it's built from, like `handler`, `runtime` or `bundle`,
+ * - `function`, as a handler or a function's args, has to be a plain value, not an output:
+ *   it decides what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.v5.Function`](/docs/component/aws/v5/function) takes them.
  * - If you set part of the schedule's `target` with an object in `transform`, the rest
@@ -329,29 +330,36 @@ export class Cron extends component("sst:aws:CronV2", parts) {
   ) {
     super(name, args, opts);
 
-    notAnOption(args, "job", `Use "function" in the "${name}" cron job.`);
-    const task = plain(args.task, `The "task" of the "${name}" cron job`);
+    const owner = `the "${name}" cron job`;
+    notAnOption(args, "job", `Use "function".`, owner);
+    const task = plain(args.task, `The "task" of ${owner}`);
+    // A function you have can be given in `existing`
+    const existingFunction = args.existing?.function !== undefined;
+    if (existingFunction) usedAsItIs(args, ["function"], "function", owner);
+    if (existingFunction && task)
+      throw new VisibleError(
+        `The "${name}" cron job is given an existing "function" and a "task". A cron job runs one or the other.`,
+      );
     if (args.function && task)
       throw new VisibleError(
-        `You cannot provide both a function and a task in the "${name}" Cron component.`,
+        `The "${name}" cron job is given both a "function" and a "task". A cron job runs one or the other.`,
       );
-    if (!args.function && !task)
+    if (!args.function && !existingFunction && !task)
       throw new VisibleError(
-        `You must provide either a function or a task in the "${name}" Cron component.`,
+        `The "${name}" cron job needs a "function" or a "task" to run.`,
       );
 
     const event = output(args.event || {});
-    const fn = args.function
-      ? functionPart(
-          this,
-          "function",
-          plainFunction(
-            args.function,
-            `The "function" of the "${name}" cron job`,
-          ),
-          {},
-        )
-      : undefined;
+    const fn =
+      args.function || existingFunction
+        ? functionPart(
+            this,
+            "function",
+            // Without one, `functionPart()` uses the existing function
+            plainFunction(args.function!, `The "function" of ${owner}`),
+            {},
+          )
+        : undefined;
 
     // What the schedule runs, and what it takes to run it
     const runs = fn
@@ -400,9 +408,7 @@ export class Cron extends component("sst:aws:CronV2", parts) {
       scheduleExpression: args.schedule,
       scheduleExpressionTimezone: args.timezone,
       flexibleTimeWindow: { mode: "OFF" },
-      state: output(args.enabled ?? true).apply((enabled) =>
-        enabled ? "ENABLED" : "DISABLED",
-      ),
+      state: enabledState(args.enabled),
       target: fn
         ? {
             arn: fn.targetArn,

@@ -1,5 +1,6 @@
 import { Input, Output, all, output } from "@pulumi/pulumi";
 import { DurationSeconds } from "../../duration";
+import { plain } from "../../args";
 import { VisibleError } from "../../error";
 import type { Router as OriginalRouter } from "../router";
 import type { Router } from "../v5/router";
@@ -10,7 +11,12 @@ import { type ProtectionConfig, isSigning } from "../router-code";
  */
 export type AnyRouter = OriginalRouter | Router;
 
-export interface RouteArgs {
+/**
+ * How a site is served through a router: which router, and the domain and path
+ * it's served on there. The site sets its own origins, so its route takes
+ * nothing else.
+ */
+export interface SiteRouteArgs {
   /**
    * The `Router` component to serve it through. It has to be a plain value: whether
    * the router signs its requests decides who may call what it routes to.
@@ -83,6 +89,13 @@ export interface RouteArgs {
    * ```
    */
   path?: Input<string>;
+}
+
+/**
+ * How a component is served through a router: its route, and how the router
+ * reaches it.
+ */
+export interface RouteArgs extends SiteRouteArgs {
   /**
    * Rewrite the request path.
    *
@@ -180,15 +193,20 @@ export interface RouteArgs {
 /**
  * What a component served through a router needs to know of it: the route,
  * with where the router keeps its routes and its URL, and whether it signs
- * its requests to the component (`signs`).
+ * its requests to the component (`signs`). The router has to be a plain
+ * value.
  *
  * A V5 `Router` says whether it signs as a plain value, from its settings, so
  * what depends on it can be created directly. A 4.x one, or one referenced
  * with `get`, says it as an output: from its settings, or a tag that's looked
  * up, which a preview knows either way.
+ *
+ * @param what The route's `instance`, as the start of the error message when
+ * it isn't a plain value: `The "router.instance" of the "Web" Astro site`.
  */
-export function routeOf(route: RouteArgs) {
-  const { instance: router, ...rest } = route;
+export function routeOf(route: RouteArgs, what = `The router's "instance"`) {
+  const { instance, ...rest } = route;
+  const router = plain(instance, what);
   const signs: boolean | Output<boolean> =
     "_signs" in router
       ? router._signs
@@ -199,7 +217,7 @@ export function routeOf(route: RouteArgs) {
     route: all([rest, router._hasInlineRoutes]).apply(([route, inline]) => {
       if (inline)
         throw new VisibleError(
-          "Cannot route the site using the provided router. The Router component uses inline routes which has been deprecated.",
+          `The router has inline "routes", so nothing can be served through it with "router". Add the router's routes with "route()" and "routeBucket()" instead.`,
         );
       const pathPrefix = pathPrefixOf(route.path);
       return {

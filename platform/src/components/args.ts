@@ -112,12 +112,86 @@ export function plainDeep<T>(value: T, what: string, why?: string): T {
  * type-checked, and the option would be dropped without a word.
  *
  * ```ts
- * notAnOption(args, "transform", `Use the "transform" of the "${name}" queue.`);
+ * notAnOption(
+ *   args,
+ *   "route",
+ *   `Route it with "router".`,
+ *   `the "${name}" Astro site`,
+ * );
+ * ```
+ *
+ * @param owner What the option was given to, as `the "Web" Astro site`, so an
+ * app with several of them knows which. Leave it out only for a method's own
+ * options, which the call names.
+ */
+export function notAnOption(
+  args: object,
+  option: string,
+  instead: string,
+  owner?: string,
+) {
+  if ((args as Record<string, unknown>)[option] !== undefined)
+    throw new VisibleError(
+      `"${option}" isn't an option ${
+        owner ? `for ${owner}` : "here"
+      }. ${instead}`,
+    );
+}
+
+/**
+ * Fail when `existing` has a resource for a part the component can't take one
+ * for, saying what to do instead.
+ *
+ * ```ts
+ * notAnExistingPart(
+ *   args.existing,
+ *   "logGroup",
+ *   `the "${name}" MicroVm`,
+ *   `Change it in "transform.logGroup".`,
+ * );
  * ```
  */
-export function notAnOption(args: object, option: string, instead: string) {
-  if ((args as Record<string, unknown>)[option] !== undefined)
-    throw new VisibleError(`"${option}" isn't an option here. ${instead}`);
+export function notAnExistingPart(
+  existing: object | undefined,
+  part: string,
+  owner: string,
+  instead: string,
+) {
+  if ((existing as Record<string, unknown> | undefined)?.[part] !== undefined)
+    throw new VisibleError(
+      `"existing.${part}" isn't an option for ${owner}. ${instead}`,
+    );
+}
+
+/**
+ * Fail when a component given an existing resource is also given args that
+ * would configure it. The resource is used the way it is, so they'd be
+ * dropped without a word. Args a `get` made, with `getArgs()`, aren't
+ * checked: what else is in them came from a `$transform`.
+ *
+ * ```ts
+ * if (this.existingPart("queue"))
+ *   usedAsItIs(args, ["fifo", "delay", "dlq"], "queue", `the "${name}" queue`);
+ * ```
+ */
+export function usedAsItIs(
+  args: object,
+  keys: readonly string[],
+  part: string,
+  owner: string,
+) {
+  if (isFromGet(args)) return;
+  const set = keys.filter(
+    (key) => (args as Record<string, unknown>)[key] !== undefined,
+  );
+  if (set.length > 0)
+    throw new VisibleError(
+      `${owner[0].toUpperCase()}${owner.slice(
+        1,
+      )} is given an existing "${part}", which it uses the way it is. Remove ${set
+        .map((key) => `"${key}"`)
+        .join(", ")} from its args.`,
+    );
 }
 
 /**
@@ -153,4 +227,70 @@ export function withoutDependencies<T>(value: Output<T>): Output<T> {
     from.isSecret,
     Promise.resolve([]),
   );
+}
+
+/**
+ * Fail for each entry of `existing` the component has no use for, next to the
+ * resource it's given in `existing` and uses the way it is.
+ *
+ * ```ts
+ * onlyExisting(args.existing, ["instance", "secret", "proxy"], owner);
+ * ```
+ *
+ * @param used The entries it uses, the main resource first.
+ */
+export function onlyExisting(
+  existing: object | undefined,
+  used: readonly [string, ...string[]],
+  owner: string,
+) {
+  const [main] = used;
+  for (const key of Object.keys(existing ?? {}))
+    if (!used.includes(key))
+      notAnExistingPart(
+        existing,
+        key,
+        owner,
+        `It's given an existing "${main}", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+      );
+}
+
+/**
+ * `notAnOption()` for an option inside an arg, like `router.rewrite`, given
+ * its value.
+ */
+export function notAnOptionOf(
+  value: unknown,
+  option: string,
+  instead: string,
+  owner: string,
+) {
+  notAnOption({ [option]: value }, option, instead, owner);
+}
+
+// What a component's `get` gives it is `existing` alone: a resource that's
+// used the way it is. A `$transform` for the component runs on those args
+// too, and what it sets for every one of its kind, like a runtime for every
+// function, isn't meant for one that's only referenced.
+const fromGet = new WeakSet<object>();
+
+/**
+ * The args a component's `get` creates it with. `usedAsItIs()` doesn't check
+ * them.
+ *
+ * ```ts
+ * return new Queue(name, getArgs({ existing: { queue } }), opts);
+ * ```
+ */
+export function getArgs<T extends object>(args: T): T {
+  fromGet.add(args);
+  return args;
+}
+
+/**
+ * Whether a component's args are the ones its `get` made, which only
+ * reference a resource: what else is in them came from a `$transform`.
+ */
+export function isFromGet(args: object) {
+  return fromGet.has(args);
 }

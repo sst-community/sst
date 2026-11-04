@@ -1,7 +1,8 @@
-import { Input, Output, Resource, output } from "@pulumi/pulumi";
+import { Input, Output, Resource, all, output } from "@pulumi/pulumi";
 import { ec2 } from "@pulumi/aws";
 import { knownValue } from "../../args";
 import { VisibleError } from "../../error";
+import { warnOnce } from "../../../util/warn";
 import { Vpc as OriginalVpc } from "../vpc";
 import { Vpc } from "../v5/vpc";
 
@@ -23,7 +24,7 @@ export function isVpc(vpc: unknown): vpc is AnyVpc {
  * `Vpc`. Another resource, like a `Vpc.v1` or an `aws.ec2.Vpc`, would
  * otherwise be read as the ids.
  *
- * @param what The component, for the error: `the "MyRedis" Redis component`.
+ * @param what The component, for the error: `the "MyCluster" cluster`.
  */
 export function assertVpcIds(vpc: unknown, what: string) {
   if (Resource.isInstance(vpc))
@@ -38,7 +39,7 @@ export function assertVpcIds(vpc: unknown, what: string) {
  * `Vpc`, each is an output of its own, so what takes only the subnets doesn't
  * wait for the security groups.
  *
- * @param what The component, for the error: `the "MyRedis" Redis component`.
+ * @param what The component, for the error: `the "MyCluster" cluster`.
  */
 export function subnetsAndSecurityGroupsOf(
   vpc:
@@ -60,6 +61,54 @@ export function subnetsAndSecurityGroupsOf(
   assertVpcIds(vpc, what);
   const ids = output(vpc);
   return { subnets: ids.subnets, securityGroups: ids.securityGroups };
+}
+
+/**
+ * The private subnets and security groups that a Lambda function, or what
+ * Lambda runs like one, sends its traffic through: a `Vpc`'s, or the ids it's
+ * given. For a `Vpc` with no NAT, what's in its private subnets can't reach
+ * the internet, so that's a warning, given once.
+ *
+ * @param what The component, for the errors: `the "MyFunction" function`.
+ * @param noNat The warning for a `Vpc` with no NAT, given the VPC's id.
+ */
+export function privateNetworkOf(
+  vpc:
+    | AnyVpc
+    | Input<{
+        privateSubnets: Input<Input<string>[]>;
+        securityGroups: Input<Input<string>[]>;
+      }>,
+  what: string,
+  noNat: (id: string) => string,
+): { privateSubnets: Output<string[]>; securityGroups: Output<string[]> } {
+  if (isVpc(vpc)) {
+    // The two `Vpc`s type these differently
+    const privateSubnets: Input<Input<string>[]> = vpc.privateSubnets;
+    const securityGroups: Input<Input<string>[]> = vpc.securityGroups;
+    // What's put in the VPC waits for the warning
+    const warned = all([vpc.id, hasNat(vpc)]).apply(([id, nat]) => {
+      if (nat === false) warnOnce(noNat(id));
+    });
+    return {
+      privateSubnets: all([warned, privateSubnets]).apply(([, ids]) => ids),
+      securityGroups: all([warned, securityGroups]).apply(([, ids]) => ids),
+    };
+  }
+
+  assertVpcIds(vpc, what);
+  const ids = output(vpc).apply((vpc) => {
+    // 4.x took the subnets as `vpc.subnets`
+    if ((vpc as { subnets?: unknown }).subnets)
+      throw new VisibleError(
+        `"vpc.subnets" isn't an option for ${what}. It's "vpc.privateSubnets" now.`,
+      );
+    return vpc;
+  });
+  return {
+    privateSubnets: ids.privateSubnets,
+    securityGroups: ids.securityGroups,
+  };
 }
 
 /** The ids of a VPC's public or private subnets, from either kind of `Vpc`. */
@@ -88,7 +137,7 @@ export function subnetsOf(
  *
  * @param parent What the lookups are made for.
  * @param what What the subnets are for, for the error messages: `the "MyEfs"
- * EFS component`.
+ * file system`.
  */
 export function privateSubnetsOf(
   vpc: AnyVpc,

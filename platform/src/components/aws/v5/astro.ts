@@ -7,9 +7,8 @@ import type { Prettify } from "../../component";
 import { context } from "../../contract";
 import { VisibleError } from "../../error";
 import { isALtB } from "../../../util/compare-semver";
-import type { RouteArgs } from "../helpers/router";
+import type { SiteRouteArgs } from "../helpers/router";
 import {
-  type ServerPlan,
   type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
@@ -332,7 +331,7 @@ export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
    * Also, make sure to set this as the `base` in your `astro.config.mjs`, like
    * above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -414,36 +413,42 @@ export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  * #### Switch from `sst.aws.Astro`
  *
  * Change `sst.aws.Astro` to `sst.aws.v5.Astro` and keep the name. The site's bucket, its
- * server functions, and its CloudFront distribution or its entry in the router are kept. Its
- * files and its entries in the key-value store are written again by resources of a new
- * type, which the `sst` binary serves, and `sst migrate` takes the old ones out of the state
- * without deleting what they wrote. A few things are written differently:
+ * server functions, and its CloudFront distribution or its entry in the router are kept.
+ * Its files and its entries in the key-value store are written again by resources of a new
+ * type, which the `sst` binary serves, and `sst migrate` takes the old ones out of the
+ * state without deleting what they wrote. A few things are written differently:
  *
  * - The site is built in the deploy itself, once, with the values of what it's linked to.
  *   `sst.aws.Astro` built it with a command it kept in the state, which goes.
- * - `sst diff` builds the site too, to show what the build creates. Values that aren't known
- *   until the deploy, like those of what the same deploy creates on a new stage, are left
- *   out of that build, and a link none of whose properties are known is passed with only
- *   its `type`. A build that checks its environment, or reads a link while it prerenders,
- *   has to allow for that. `sst.aws.Astro` skipped its build in `sst diff` then.
- * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
- *   pack, build the site twice: in the preview, and in the deploy.
- * - `sst refresh` doesn't build the site, where `sst.aws.Astro` did. What's made from
- *   the build, like the servers in `nodes.server`, stays as it is, and isn't listed while
- *   it runs.
+ * - `sst diff` builds the site too, to show what the build creates. Values that aren't
+ *   known until the deploy, like those of what the same deploy creates on a new stage, are
+ *   left out of that build, and a link none of whose properties are known is passed with
+ *   only its `type`. A build that checks its environment, or reads a link while it
+ *   prerenders, has to allow for that. `sst.aws.Astro` skipped its build in `sst diff`
+ *   then.
+ * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a
+ *   policy pack, build the site twice: in the preview, and in the deploy.
+ * - `sst refresh` doesn't build the site, where `sst.aws.Astro` did. What's made from the
+ *   build, like the servers in `nodes.server`, stays as it is, and isn't listed while it
+ *   runs.
  * - `regions`, `warm`, `protection`, `edge`, `router`, `invalidation` and `server` have to
  *   be plain values, not outputs: they decide what's created. So do `path` and
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.Astro` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. A static site
- *   has none, so a server is listed once the build says there is one. In `sst dev`, the
- *   function the site runs as is `transform.devServer`, not `transform.server`.
+ *   has none, so a server is listed once the build says there is one.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.Astro` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.Astro` ignored it and
  *   wrote `UTF-8`.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.Astro` warmed it
- *   on every deploy. The switch warms it once.
+ * - With `warm`, the server is warmed again when its code changes. `sst.aws.Astro` warmed
+ *   it on every deploy. The switch warms it once.
  * - With `warm`, the warmer's function, rule, target and permission move into the site.
  */
 export class Astro extends component("sst:aws:Astro", parts) {
@@ -489,25 +494,19 @@ interface BuildMeta {
   routes?: { route: string; prerender?: boolean }[];
 }
 
-// An Astro site's build, and its server when it has one
-interface AstroBuild extends SiteBuild {
-  server?: ServerPlan;
-}
-
 // How an Astro site is built, with its package manager and the "astro-sst"
 // adapter, and what its server is
-const astro: SsrFramework<AstroBuild> = {
+const astro: SsrFramework = {
   label: "Astro",
   // A static site has no server
   alwaysServes: false,
   beforeBuild: (sitePath) =>
     checkAdapter(path.resolve(context().paths.root, sitePath)),
   load: loadBuild,
-  server: (build) => build.server!,
 };
 
 // Reads what the adapter built
-function loadBuild(builtPath: string): AstroBuild {
+function loadBuild(builtPath: string): SiteBuild {
   const outputPath = path.resolve(context().paths.root, builtPath);
   const metaPath = path.join(outputPath, "dist", "sst.buildMeta.json");
   if (!fs.existsSync(metaPath))

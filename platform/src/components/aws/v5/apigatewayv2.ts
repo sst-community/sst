@@ -14,21 +14,27 @@ import {
   optional,
 } from "../../parts-component";
 import type { Prettify } from "../../component";
-import { ifSet, plain } from "../../args";
+import { ifSet, plain, usedAsItIs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type Duration, type DurationHours, toSeconds } from "../../duration";
-import { physicalName } from "../../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function, type FunctionArgs } from "./function";
-import { type DomainArgs, domainOf } from "../helpers/domain";
+import {
+  type ApiGatewayAccessLogArgs,
+  type ApiGatewayDomainArgs,
+  accessLogGroup,
+  authorizerPermissionArgs,
+  createRegionalDomain,
+  notAnOldRouteTransform,
+  parseRoute,
+  routePermissionArgs,
+} from "../helpers/apigateway";
 import {
   type FunctionInput,
   functionPart,
   plainFunction,
 } from "../helpers/function-part";
-import { invokePermissionArgs } from "../helpers/function-permission";
-import { RETENTION } from "../logging";
 import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "../helpers/vpc";
 
 const parts = () => ({
@@ -45,7 +51,8 @@ const parts = () => ({
    */
   logGroup: cloudwatch.LogGroup,
   /**
-   * The VPC link, created when `vpc` is set.
+   * The VPC link, created when `vpc` is set. One you pass in `existing` is used without
+   * `vpc`.
    */
   vpcLink: optional(apigatewayv2.VpcLink),
   /**
@@ -194,35 +201,9 @@ export interface ApiGatewayV2CorsArgs {
   maxAge?: Input<Duration>;
 }
 
-export interface ApiGatewayV2DomainArgs extends DomainArgs {
-  /**
-   * The base mapping for the custom domain. This adds a suffix to the URL of the API.
-   *
-   * @example
-   *
-   * Given the following base path and domain name.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "api.example.com",
-   *     path: "v1"
-   *   }
-   * }
-   * ```
-   *
-   * The full URL of the API will be `https://api.example.com/v1/`.
-   *
-   * :::note
-   * There's an extra trailing slash when a base path is set.
-   * :::
-   *
-   * By default there is no base path, so if the `name` is `api.example.com`, the full URL will be `https://api.example.com`.
-   */
-  path?: Input<string>;
-}
-
-export interface ApiGatewayV2Args extends ComponentArgs<typeof parts> {
+export interface ApiGatewayV2Args
+  extends ComponentArgs<typeof parts>,
+    ApiGatewayAccessLogArgs {
   /**
    * [Link resources](/docs/linking/) to all your API Gateway routes.
    *
@@ -285,7 +266,7 @@ export interface ApiGatewayV2Args extends ComponentArgs<typeof parts> {
    * }
    * ```
    */
-  domain?: string | Prettify<Partial<ApiGatewayV2DomainArgs>>;
+  domain?: string | Prettify<Partial<ApiGatewayDomainArgs>>;
   /**
    * Customize the CORS (Cross-origin resource sharing) settings for your HTTP API.
    * @default `true`
@@ -310,27 +291,9 @@ export interface ApiGatewayV2Args extends ComponentArgs<typeof parts> {
    */
   cors?: Input<boolean | Prettify<ApiGatewayV2CorsArgs>>;
   /**
-   * Configure the [API Gateway logs](https://docs.aws.amazon.com/apigateway/latest/developerguide/view-cloudwatch-log-events-in-cloudwatch-console.html) in CloudWatch. By default, access logs are enabled and kept for 1 month.
-   * @default `{retention: "1 month"}`
-   * @example
-   * ```js
-   * {
-   *   accessLog: {
-   *     retention: "forever"
-   *   }
-   * }
-   * ```
-   */
-  accessLog?: Input<{
-    /**
-     * The duration the API Gateway logs are kept in CloudWatch.
-     * @default `1 month`
-     */
-    retention?: Input<keyof typeof RETENTION>;
-  }>;
-  /**
    * Configure the API to connect to private resources in a virtual private cloud or VPC.
-   * This creates a VPC link for your HTTP API.
+   * This creates a VPC link for your HTTP API. To use a VPC link you already have, pass it
+   * in `existing.vpcLink` and leave this out.
    *
    * @example
    * Create a `Vpc` component.
@@ -725,6 +688,8 @@ export interface ApiGatewayV2AuthorizerArgs {
  *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
  * - `nodes` has every resource, the certificate and each route's included. Reading
  *   `nodes.domainName` without a domain gives `undefined`, where it failed.
+ * - Next to `existing.domainName`, a domain's `name`, `dns` and `cert` are refused: the
+ *   domain name is used the way it is.
  * - The routes and authorizers are created with the provider the API has.
  *   `sst.aws.ApiGatewayV2` gave them only a `provider` passed to the API itself, so if
  *   your API takes its provider from a parent component or from `providers`, its routes
@@ -741,18 +706,18 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
+    const owner = `the "${name}" API`;
     this.handlerLink = args.link;
+    notAnOldRouteTransform(
+      args.transform,
+      owner,
+      `To give the routes an auth, give it in each route's args, or set "authorizationType" in "transform.route".`,
+    );
 
-    const routeTransform = args.transform?.route;
-    if (
-      typeof routeTransform === "object" &&
-      ("handler" in routeTransform || "args" in routeTransform)
-    )
-      throw new VisibleError(
-        `In the "${name}" API, "transform.route" changes each route's API Gateway route, so it has no "handler" or "args". To change the routes' functions, use "transform.handler". To give the routes an auth, give it in each route's args, or set "authorizationType" in "transform.route".`,
-      );
-
-    const vpc = vpcLinkNetwork(args.vpc, `the "${name}" API`);
+    // A VPC link: one for the VPC, or the one in `existing`
+    if (this.existingPart("vpcLink"))
+      usedAsItIs(args, ["vpc"], "vpcLink", owner);
+    const vpc = vpcLinkNetwork(args.vpc, owner);
     if (vpc)
       this.part("vpcLink", {
         securityGroupIds: vpc.securityGroups,
@@ -766,13 +731,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
 
     const logGroup = this.part(
       "logGroup",
-      {
-        name: `/aws/vendedlogs/apis/${physicalName(64, name)}`,
-        retentionInDays: output(args.accessLog).apply(
-          (accessLog) => RETENTION[accessLog?.retention ?? "1 month"],
-        ),
-      },
-      { ignoreChanges: ["name"] },
+      ...accessLogGroup(name, args, owner),
     );
 
     const stage = this.part("stage", {
@@ -785,64 +744,15 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
       },
     });
 
-    const existingDomainName = this.existingPart("domainName");
-    const domain = plain(args.domain, `The "domain" of the "${name}" API`);
-    if (domain || existingDomainName) {
-      const given =
-        typeof domain === "string" ? { name: domain } : domain ?? {};
-      if ("nameId" in given)
-        throw new VisibleError(
-          `The "domain.nameId" of the "${name}" API is given in "existing" now: { domain: { path }, existing: { domainName: "..." } }.`,
-        );
-      if (existingDomainName && given.name)
-        throw new VisibleError(
-          `The "${name}" API is given an existing "domainName", so it doesn't create one. Remove "name" from its domain.`,
-        );
-
-      const domainName = existingDomainName ?? this.createDomainName(given);
-      this.part("domainMapping", {
-        apiId: api.id,
-        domainName: domainName.id,
-        stage: stage.name,
-        apiMappingKey: given.path,
-      });
-    }
+    createRegionalDomain(this.builder(), this.delegateOpts(), {
+      name,
+      domain: args.domain,
+      existing: args.existing,
+      apiId: api.id,
+      stage: stage.name,
+    });
 
     this.report({ hint: this.url });
-  }
-
-  // The custom domain: its certificate, the domain name, and the DNS records
-  // that point at it.
-  private createDomainName(args: Partial<ApiGatewayV2DomainArgs>) {
-    const name = this.componentName;
-    if (!args.name)
-      throw new VisibleError(
-        `Domain "name" is required for the "${name}" API. To use a domain name you already have, pass it in "existing".`,
-      );
-    const domain = domainOf(args, `the "${name}" API`);
-
-    const certificateArn =
-      domain.cert ??
-      this.part("certificate", { domainName: domain.name, dns: domain.dns! })
-        .arn;
-    const domainName = this.part("domainName", {
-      domainName: domain.name,
-      domainNameConfiguration: {
-        certificateArn,
-        endpointType: "REGIONAL",
-        securityPolicy: "TLS_1_2",
-      },
-    });
-    domain.dns?.alias(
-      name,
-      {
-        name: domain.name,
-        aliasName: domainName.domainNameConfiguration.targetDomainName,
-        aliasZone: domainName.domainNameConfiguration.hostedZoneId,
-      },
-      this.delegateOpts(),
-    );
-    return domainName;
   }
 
   /**
@@ -947,7 +857,12 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     handler: FunctionInput,
     args: ApiGatewayV2RouteArgs = {},
   ) {
-    const { id, route } = this.newRoute(rawRoute, args);
+    const { id, route } = this.newRoute(rawRoute, args, [
+      "handler",
+      "permission",
+      "integration",
+      "route",
+    ]);
 
     const fn = functionPart(
       this,
@@ -965,11 +880,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     const permission = this.part(
       "permission",
       id,
-      invokePermissionArgs(
-        fn,
-        "apigateway.amazonaws.com",
-        interpolate`${this.nodes.api.executionArn}/*`,
-      ),
+      routePermissionArgs(fn, this.nodes.api.executionArn),
     );
 
     return this.integrate(
@@ -1025,7 +936,8 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   /**
    * Adds a private route to the API Gateway HTTP API.
    *
-   * To add private routes, you need to have a VPC link. Make sure to pass in a `vpc`.
+   * To add private routes, you need to have a VPC link. Make sure to pass in a `vpc`, or a
+   * VPC link in `existing.vpcLink`.
    * Learn more about [adding private routes](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-private.html).
    *
    * A couple of things to note:
@@ -1061,7 +973,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     const vpcLink = this.nodes.vpcLink;
     if (!vpcLink)
       throw new VisibleError(
-        `To add private routes, you need to have a VPC link. Configure "vpc" for the "${this.componentName}" API to create a VPC link.`,
+        `The "${this.componentName}" API has no VPC link for the "${rawRoute}" route. Give the API a "vpc", which creates one, or a VPC link in "existing.vpcLink".`,
       );
 
     const { id, route } = this.newRoute(rawRoute, args);
@@ -1075,15 +987,26 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
   }
 
   // The route in the form API Gateway takes, and the id its resources are
-  // kept under: its name, or the route itself.
-  private newRoute(rawRoute: string, args: ApiGatewayV2RouteArgs) {
-    const route = parseRoute(rawRoute);
-    const id = args.name ?? route;
-    this.assertNew("route", "route", id, args, [
-      "handler",
+  // kept under: its name, or the route itself. `transforms` are the parts
+  // the route has.
+  private newRoute(
+    rawRoute: string,
+    args: ApiGatewayV2RouteArgs,
+    transforms: ("handler" | "permission" | "integration" | "route")[] = [
       "integration",
       "route",
-    ]);
+    ],
+  ) {
+    const route = (() => {
+      if (rawRoute.toLowerCase() === "$default") return "$default";
+      const { method, path } = parseRoute(
+        rawRoute,
+        `the "${this.componentName}" API`,
+      );
+      return `${method} ${path}`;
+    })();
+    const id = args.name ?? route;
+    this.assertNew("route", "route", id, args, transforms);
     return { id, route };
   }
 
@@ -1159,10 +1082,21 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
    */
   public addAuthorizer(args: ApiGatewayV2AuthorizerArgs) {
     const { name } = args;
-    this.assertNew("authorizer", "authorizer", name, args);
+    const what = `the "${name}" authorizer of the "${this.componentName}" API`;
+    this.assertNew(
+      "authorizer",
+      "authorizer",
+      name,
+      args,
+      args.lambda
+        ? ["authorizer", "authorizerFunction", "authorizerPermission"]
+        : ["authorizer"],
+    );
     if (!args.lambda === !args.jwt)
       throw new VisibleError(
-        `Please provide one of "lambda" or "jwt" for the ${name} authorizer, and only one.`,
+        `${what[0].toUpperCase()}${what.slice(1)} is given ${
+          args.lambda ? "both" : "neither"
+        } of "lambda" and "jwt". Give it one of them.`,
       );
 
     const api = this.nodes.api;
@@ -1182,7 +1116,6 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
       });
     }
 
-    const what = `the "${name}" authorizer of the "${this.componentName}" API`;
     const settings = plain(args.lambda!, `The "lambda" of ${what}`);
     const fn = functionPart(
       this,
@@ -1213,11 +1146,7 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
     this.part(
       "authorizerPermission",
       name,
-      invokePermissionArgs(
-        fn,
-        "apigateway.amazonaws.com",
-        interpolate`${api.executionArn}/authorizers/${authorizer.id}`,
-      ),
+      authorizerPermissionArgs(fn, api.executionArn, authorizer.id),
     );
 
     return authorizer;
@@ -1234,17 +1163,6 @@ export class ApiGatewayV2 extends component("sst:aws:ApiGatewayV2", parts) {
 }
 
 const IDENTITY_SOURCE = "$request.header.Authorization";
-
-const METHODS = [
-  "ANY",
-  "DELETE",
-  "GET",
-  "HEAD",
-  "OPTIONS",
-  "PATCH",
-  "POST",
-  "PUT",
-];
 
 const ACCESS_LOG_FORMAT = JSON.stringify({
   // request info
@@ -1306,25 +1224,6 @@ function authorization(auth: Auth | undefined): {
       scopes: auth.jwt.scopes,
     };
   return none;
-}
-
-function parseRoute(rawRoute: string) {
-  if (rawRoute.toLowerCase() === "$default") return "$default";
-
-  const [methodRaw, path, ...rest] = rawRoute.split(" ");
-  if (path === undefined || rest.length > 0)
-    throw new VisibleError(
-      `Invalid route ${rawRoute}. A route must be in the format "METHOD /path".`,
-    );
-  const method = methodRaw.toUpperCase();
-  if (!METHODS.includes(method))
-    throw new VisibleError(`Invalid method ${methodRaw} in route ${rawRoute}`);
-  if (!path.startsWith("/"))
-    throw new VisibleError(
-      `Invalid path ${path} in route ${rawRoute}. Path must start with "/".`,
-    );
-
-  return `${method} ${path}`;
 }
 
 // Where the VPC link is: a `Vpc`'s public subnets and its security groups, or

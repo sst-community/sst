@@ -1,3 +1,4 @@
+import { getArgs } from "../../args";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { component } from "../../parts-component";
 import type { Input } from "../../input";
@@ -232,7 +233,8 @@ const engine: RdsEngine = {
  *   not outputs. They decide which resources are created.
  * - With `dev` set, `sst.aws.Postgres` created a component for the pane `sst dev` shows, in
  *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
- *   has nothing in AWS behind it.
+ *   has nothing in AWS behind it. An empty local password is shown as "[no password]" in
+ *   the pane.
  * - `nodes` has every resource, not only the instance. The secret that stores the master
  *   user's credentials is `nodes.secret`. In `sst dev` with `dev` set, reading one of them
  *   fails and says why it's missing, where `sst.aws.Postgres` gave `undefined`.
@@ -290,7 +292,7 @@ export class Postgres extends component("sst:aws:Postgres", parts) {
   public get proxyId() {
     if (!this.connection.proxyId)
       throw new VisibleError(
-        `Proxy is not enabled. Enable it with "proxy: true".`,
+        `The "${this.componentName}" Postgres database has no proxy, so it has no "proxyId". Enable one with "proxy: true", or give "get" the "proxyId" of the one it has.`,
       );
     return this.connection.proxyId;
   }
@@ -389,12 +391,12 @@ export class Postgres extends component("sst:aws:Postgres", parts) {
   ) {
     return new Postgres(
       name,
-      {
+      getArgs({
         existing: {
           instance: args.id,
           ...(args.proxyId ? { proxy: args.proxyId } : {}),
         },
-      } as PostgresArgs,
+      }) as PostgresArgs,
       opts,
     );
   }

@@ -133,22 +133,22 @@ export function parseLambdaEdgeArn(arn: string) {
 
 export function parseElasticSearch(arn: string) {
   // arn:aws:es:region:account-id:domain/domain-name
-  const tableName = arn.split("/")[1];
-  if (!arn.startsWith("arn:") || !tableName)
+  const domainName = arn.split("/")[1];
+  if (!arn.startsWith("arn:") || !domainName)
     throw new VisibleError(
-      `The provided ARN "${arn}" is not a ElasticSearch domain ARN.`,
+      `The provided ARN "${arn}" is not an ElasticSearch domain ARN.`,
     );
-  return { tableName };
+  return { domainName };
 }
 
 export function parseOpenSearch(arn: string) {
-  // arn:aws:opensearch:region:account-id:domain/domain-name
-  const tableName = arn.split("/")[1];
-  if (!arn.startsWith("arn:") || !tableName)
+  // arn:aws:es:region:account-id:domain/domain-name
+  const domainName = arn.split("/")[1];
+  if (!arn.startsWith("arn:") || !domainName)
     throw new VisibleError(
-      `The provided ARN "${arn}" is not a OpenSearch domain ARN.`,
+      `The provided ARN "${arn}" is not an OpenSearch domain ARN.`,
     );
-  return { tableName };
+  return { domainName };
 }
 
 export function parseDsqlPublicEndpoint(arn: string) {

@@ -329,4 +329,51 @@ describe("Queue", () => {
     await pulumi.settle();
     expect(() => queue.subscribe(FUNCTION_ARN)).toThrow(/multiple times/);
   });
+
+  // `sst.aws.Queue` took the subscriber's resource options third
+  it("refuses options given to subscribe", async () => {
+    const queue = new Queue("MyQueue");
+    expect(() =>
+      (queue.subscribe as any)(FUNCTION_ARN, {}, { protect: true }),
+    ).toThrow(
+      /"subscribe" on the "MyQueue" queue takes no options: what it creates is the queue's/,
+    );
+    await pulumi.settle();
+  });
+
+  it("says to use get in place of the static subscribe", () => {
+    expect(() =>
+      (Queue as any).subscribe(SHARED_ARN, "src/subscriber.handler"),
+    ).toThrow(
+      /reference it with "get" and subscribe to that: sst\.aws\.v5\.Queue\.get\(/,
+    );
+  });
+
+  it("refuses settings for a queue it's given", async () => {
+    expect(
+      () =>
+        new Queue("MyQueue", {
+          existing: { queue: QUEUE_URL },
+          fifo: true,
+          dlq: SHARED_ARN,
+        }),
+    ).toThrow(
+      'The "MyQueue" queue is given an existing "queue", which it uses the way it is. Remove "fifo", "dlq" from its args.',
+    );
+    await pulumi.settle();
+  });
+
+  // A `$transform` for every queue runs on one from `get` too, and isn't
+  // meant for it
+  it("leaves what a $transform sets on a queue from get", async () => {
+    const { $transform } = await import("../../../src/components/component");
+    $transform(Queue, (args, _opts, name) => {
+      if (name === "Shared") args!.visibilityTimeout = "1 minute";
+    });
+    Queue.get("Shared", QUEUE_URL);
+    await pulumi.settle();
+    expect(
+      pulumi.resources.find((r) => r.name === "SharedQueue"),
+    ).toMatchObject({ kind: "read" });
+  });
 });

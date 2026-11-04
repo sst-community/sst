@@ -13,7 +13,7 @@ import {
   named,
   optional,
 } from "../../parts-component";
-import { plain, plainDeep } from "../../args";
+import { plain, plainDeep, onlyExisting, getArgs } from "../../args";
 import type { Input } from "../../input";
 import type { DnsAdapter } from "../../dns-adapter";
 import { VisibleError } from "../../error";
@@ -417,18 +417,24 @@ export class Email extends component("sst:aws:Email", parts) {
   constructor(name: string, args: EmailArgs, opts?: ComponentResourceOptions) {
     super(name, args, opts);
 
-    // An identity that's already there: find the configuration set it sends with
+    const owner = `the "${name}" email`;
+
+    // An identity that's already there: find the configuration set it sends
+    // with, unless it's given too, and create nothing else
+    if (args.existing?.identity !== undefined)
+      onlyExisting(args.existing, ["identity", "configurationSet"], owner);
     const existing = this.existingPart("identity");
     if (existing) {
-      this.lookupPart(
-        "configurationSet",
-        existing.configurationSetName.apply((set) => set!),
-      );
+      if (!this.existingPart("configurationSet"))
+        this.lookupPart(
+          "configurationSet",
+          existing.configurationSetName.apply((set) => set!),
+        );
       this.senderValue = existing.emailIdentity;
       return;
     }
 
-    const what = (arg: string) => `The "${arg}" of the "${name}" email`;
+    const what = (arg: string) => `The "${arg}" of ${owner}`;
     const sender = plain(args.sender, what("sender"));
     const dns = plain(args.dns, what("dns"));
     const dkim = plain(args.dkim, what("dkim"));
@@ -441,25 +447,18 @@ export class Email extends component("sst:aws:Email", parts) {
       );
 
     const isDomain = !sender.includes("@");
-    if (!isDomain && dns)
-      throw new VisibleError(
-        `The "dns" property is only valid when "sender" is a domain.`,
+    // What's only for a domain, refused for an email address
+    const forDomain = (arg: string) =>
+      new VisibleError(
+        `"${arg}" is only an option for ${owner} when its "sender" is a domain, and it's the address "${sender}".`,
       );
-    if (!isDomain && dkim !== undefined)
-      throw new VisibleError(
-        `The "dkim" property is only valid when "sender" is a domain.`,
-      );
-    if (!isDomain && args.dmarc !== undefined)
-      throw new VisibleError(
-        `The "dmarc" property is only valid when "sender" is a domain.`,
-      );
-    if (mailFrom && !isDomain)
-      throw new VisibleError(
-        `The "mailFrom" property is only valid when "sender" is a domain.`,
-      );
+    if (!isDomain && dns) throw forDomain("dns");
+    if (!isDomain && dkim !== undefined) throw forDomain("dkim");
+    if (!isDomain && args.dmarc !== undefined) throw forDomain("dmarc");
+    if (mailFrom && !isDomain) throw forDomain("mailFrom");
     if (mailFrom && !mailFrom.domain.endsWith(`.${sender}`))
       throw new VisibleError(
-        `The "mailFrom.domain" "${mailFrom.domain}" must be a subdomain of the "sender" domain "${sender}".`,
+        `The "mailFrom.domain" of ${owner} is "${mailFrom.domain}". It has to be a subdomain of its "sender", "${sender}".`,
       );
 
     const configurationSet = this.part("configurationSet", {
@@ -646,7 +645,7 @@ export class Email extends component("sst:aws:Email", parts) {
   ) {
     return new Email(
       name,
-      { existing: { identity: sender } } as EmailArgs,
+      getArgs({ existing: { identity: sender } }) as EmailArgs,
       opts,
     );
   }

@@ -19,12 +19,16 @@ const pulumi = mockPulumi({
             : args.inputs.tags,
         }
       : {},
+  // The password in the secret a domain is tagged with, or in another
   call: (args) =>
     args.token === "aws:secretsmanager/getSecretVersion:getSecretVersion"
       ? {
           secretString: JSON.stringify({
             username: "searcher",
-            password: "stored-password",
+            password:
+              args.inputs.secretId === "secret-id"
+                ? "stored-password"
+                : `the password in ${args.inputs.secretId}`,
           }),
         }
       : undefined,
@@ -273,8 +277,8 @@ describe("OpenSearch", () => {
       () => new OpenSearch("MySearch", { storage: "5 GB" }),
       pulumi.settle,
     );
-    expect(errors.join("\n")).toMatch(
-      /Storage must be at least 10 GB for the MySearch OpenSearch domain/,
+    expect(errors).toContain(
+      `The "storage" of the "MySearch" OpenSearch domain is 5 GB. It has to be at least 10 GB.`,
     );
   });
 
@@ -289,6 +293,42 @@ describe("OpenSearch", () => {
       url: "https://search-domain.us-east-1.es.amazonaws.com",
     });
     expect(pulumi.reportOf("MySearch")).toBeUndefined();
+  });
+
+  it("reads the password from the secret it's given, or uses its own", async () => {
+    const fromSecret = new OpenSearch("FromSecret", {
+      existing: { domain: "app-dev-mysearch", secret: "my-secret" },
+    });
+    const given = new OpenSearch("Given", {
+      username: "owner",
+      password: "known",
+      existing: { domain: "app-dev-mysearch" },
+    });
+    await pulumi.settle();
+
+    expect(resource("FromSecretSecret")).toMatchObject({
+      kind: "read",
+      options: { id: "my-secret" },
+    });
+    expect(
+      await pulumi.resolve([fromSecret.username, fromSecret.password]),
+    ).toEqual(["searcher", "the password in my-secret"]);
+    expect(await pulumi.resolve([given.username, given.password])).toEqual([
+      "owner",
+      "known",
+    ]);
+  });
+
+  it("turns down what it would create next to a domain it's given", () => {
+    for (const part of ["policy", "secretVersion", "password"])
+      expect(
+        () =>
+          new OpenSearch("MySearch", {
+            existing: { domain: "app-dev-mysearch", [part]: "x" },
+          }),
+      ).toThrow(
+        `"existing.${part}" isn't an option for the "MySearch" OpenSearch domain. It's given an existing "domain", which it uses the way it is, so it creates nothing this would stand in for. Remove it.`,
+      );
   });
 
   it("looks a domain up by the name in the ARN it's given", async () => {
@@ -349,12 +389,32 @@ describe("OpenSearch", () => {
       ).toContain('password: "^Passw0rd^"');
     });
 
+    // An output that resolves to nothing is as good as leaving it out
+    it("falls back for dev values that are outputs of nothing", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const search = new OpenSearch("MySearch", {
+        username: "searcher",
+        password: "^Passw0rd^",
+        dev: {
+          url: output(undefined as unknown as string),
+          username: output(""),
+          password: output(undefined as unknown as string),
+        },
+      });
+      await pulumi.settle();
+      expect(await pulumi.resolve(search.link().properties)).toEqual({
+        username: "searcher",
+        password: "^Passw0rd^",
+        url: "http://localhost:9200",
+      });
+    });
+
     it("needs the local server's password", () => {
       expect(
         () =>
           new OpenSearch("MySearch", { dev: { url: "http://localhost:9200" } }),
       ).toThrow(
-        /You must provide the password to connect to your locally running OpenSearch domain/,
+        `The "MySearch" OpenSearch domain needs the password of your local server to connect to it in sst dev. Set "dev.password", or "password".`,
       );
     });
 

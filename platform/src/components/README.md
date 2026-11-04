@@ -144,7 +144,10 @@ the component reads its args.
     regions, name them with `this.willCreate(key, ids)` so `nodes` has them from the
     start.
   - A failure the user should read is a `VisibleError`. Its message is shown once and as
-    it's written, however many resources wait on what failed.
+    it's written, however many resources wait on what failed. It names the component
+    the way the rest do, `the "${name}" queue`, with the kind in lower case and args in
+    double quotes, so an app with several knows which one failed. An option that's
+    refused goes through `notAnOption(args, option, instead, owner)`.
   - A list another component counts, like a `Vpc`'s subnets, is a list of known length
     with an output in each place, not one output of a list.
   - Some V5 components still create parts inside `.apply()` with `optional`, `many` or
@@ -159,7 +162,9 @@ the component reads its args.
 - **`this.lookupPart(key, [id], resourceId)`** looks a part's resource up in place of
   creating it, when the component references something that's already deployed and
   works out the ids of its other parts itself: from a tag, or a data source. The V5
-  `Aurora` is given a cluster and finds its instance, secret and proxy this way.
+  `Aurora` is given a cluster and finds its instance, secret and proxy this way. A
+  resource the user passed in `existing` for the part is used instead of the lookup.
+  For an id passed there, write `this.existingPart(key) ?? this.lookupPart(...)`.
 - **`this.assertNew(what, key, id, args, transforms?)`** goes at the top of a method that
   adds a named thing (`addRoute`, `subscribe`). It rejects a name that's taken and a
   `transform` passed to the method, with a message that points at the component's own
@@ -191,10 +196,15 @@ the component reads its args.
 - **A part the user can switch off gets its own arg** (`publicAccessBlock: false`).
   `transform` changes a part; it doesn't remove one.
 - **For a resource the user already has, use `existing`**, not an arg of your own.
-  A static `get` is one line: `return new Uploads(name, { existing: { bucket: id } }, opts)`.
+  A static `get` is one line: `return new Uploads(name, getArgs({ existing: { bucket: id } }), opts)`.
   When the component has required args, return before reading them:
   `if (this.existingPart("table")) return;`. `get` then passes only `existing`, with a
-  cast to the args type.
+  cast to the args type. Args that would configure the resource are refused next to it,
+  with `usedAsItIs(args, keys, "table", owner)`: it's used the way it is, and they'd be
+  dropped without a word. So is an `existing` entry the component wouldn't use, with
+  `notAnExistingPart(args.existing, key, owner, instead)` or `onlyExisting()`. `getArgs()`
+  marks what `get` passes, which a `$transform` for the component runs on too: what it
+  adds there isn't refused.
 - **A check that needs a deployed value** goes in the output that everything depending
   on it reads, so the error stops what would have used it. The V5 `Dynamo` checks that
   the table's stream is enabled inside the stream ARN its subscribers are given, and
@@ -222,13 +232,18 @@ the component reads its args.
   a command `sst dev` runs (`dev`), a task `sst dev` runs locally (`task`), a bastion
   for `sst tunnel` (`tunnel`), and a URL to show after a deploy (`hint`). Call
   `this.report({ ... })` in the constructor, before `registerOutputs()`; a report after
-  it is an error. Don't name an output for the CLI. `context()` from `sst/components`
+  it is an error. Pulumi registers a component's outputs a moment after its
+  constructor, so a report from a method can come too late once the config awaits. A
+  component whose report waits on a method the app calls, like the V5
+  `ApiGatewayV1`'s hint on `deploy()`, overrides `registerOutputs()` to do nothing
+  until then, and the method reports and registers them. Don't name an output for the CLI. `context()` from `sst/components`
   gives the app, the stage, whether it's `sst dev`, the command and the paths. A
   component reads them there, not from `$app`, `$dev` or `$cli`, which are for an app's
   config. In a
   test, `app.reportOf(name)` is what a component reported.
   A component doesn't create a `DevCommand` for a command of its own: it reports
-  `dev`. The 5.0 `DevCommand` (`sst.x.v5.DevCommand`, in `experimental/v5/`) is for
+  `dev`. A report holds one pane, so a component with one per item, like the V5
+  `Service`'s pane for each container, creates them as a `many(DevCommand)` part. The 5.0 `DevCommand` (`sst.x.v5.DevCommand`, in `experimental/v5/`) is for
   an app's own commands, and reports the same way. It has no takeover map, so SST 4's
   `DevCommand` isn't refused on a new stage: SST 4's components still create it inside
   them.

@@ -5,10 +5,10 @@ import { type ComponentArgs, component } from "../../parts-component";
 import type { Prettify } from "../../component";
 import { context } from "../../contract";
 import { VisibleError } from "../../error";
-import { configText } from "../helpers/site-build";
-import type { RouteArgs } from "../helpers/router";
+import { configValue } from "../helpers/site-build";
+import type { SiteRouteArgs } from "../helpers/router";
+import { capitalized } from "../helpers/site";
 import {
-  type ServerPlan,
   type SiteBuild,
   type SsrFramework,
   type SsrSiteArgs,
@@ -342,11 +342,11 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
    * Also, make sure to set the base path in your `vite.config.ts` and `basename`
    * in your `react-router.config.ts`, like above.
    */
-  router?: RouteArgs;
+  router?: SiteRouteArgs;
 }
 
 /**
- * The `React` component lets you deploy a React app built with [React Router](https://reactrouter.com/) app to AWS.
+ * The `React` component lets you deploy a React app built with [React Router](https://reactrouter.com/) to AWS.
  *
  * @example
  *
@@ -354,7 +354,7 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *
  * Deploy a React app that's in the project root.
  *
- * ```js
+ * ```js title="sst.config.ts"
  * new sst.aws.v5.React("MyWeb");
  * ```
  *
@@ -362,7 +362,7 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *
  * Deploys the React app in the `my-react-app/` directory.
  *
- * ```js {2}
+ * ```js {2} title="sst.config.ts"
  * new sst.aws.v5.React("MyWeb", {
  *   path: "my-react-app/"
  * });
@@ -372,7 +372,7 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *
  * Set a custom domain for your React app.
  *
- * ```js {2}
+ * ```js {2} title="sst.config.ts"
  * new sst.aws.v5.React("MyWeb", {
  *   domain: "my-app.com"
  * });
@@ -382,7 +382,7 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *
  * Redirect `www.my-app.com` to `my-app.com`.
  *
- * ```js {4}
+ * ```js {4} title="sst.config.ts"
  * new sst.aws.v5.React("MyWeb", {
  *   domain: {
  *     name: "my-app.com",
@@ -396,7 +396,7 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  * [Link resources](/docs/linking/) to your React app. This will grant permissions
  * to the resources and allow you to access it in your app.
  *
- * ```ts {4}
+ * ```ts {4} title="sst.config.ts"
  * const bucket = new sst.aws.v5.Bucket("MyBucket");
  *
  * new sst.aws.v5.React("MyWeb", {
@@ -439,10 +439,15 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *   `buildCommand`, which the build reads, and the `name`, `aliases` and `redirects` of
  *   `domain`.
  * - `route` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.React` ignored them.
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. In SPA mode
- *   there's none, so a server is listed once the build says there is one. In `sst dev`, the
- *   function the site runs as is `transform.devServer`, not `transform.server`.
+ *   there's none, so a server is listed once the build says there is one.
+ * - In `sst dev`, the function the site runs as is `transform.devServer`, not
+ *   `transform.server`. Reading what isn't created there in `nodes`, like `nodes.server`,
+ *   says the site runs on your machine, where `sst.aws.React` gave `undefined`.
  * - `assets.textEncoding` sets the charset of text files. `sst.aws.React` ignored it and
  *   wrote `UTF-8`.
  * - With `warm`, the server is warmed again when its code changes. `sst.aws.React` warmed
@@ -482,52 +487,54 @@ export class React extends component("sst:aws:React", parts) {
   }
 }
 
-// A React Router app's build, and its server when it has one
-interface ReactBuild extends SiteBuild {
-  server?: ServerPlan;
-}
-
 // How a React Router app is built, with its package manager, and its server:
 // the React Router server build wrapped in a Lambda handler. In SPA mode
 // there's no server.
-const react: SsrFramework<ReactBuild> = {
+const react: SsrFramework = {
   label: "React",
   alwaysServes: false,
   load: loadBuild,
-  server: (build) => build.server!,
 };
 
 // Reads what React Router built
-function loadBuild(builtPath: string): ReactBuild {
+function loadBuild(builtPath: string, owner: string): SiteBuild {
   const outputPath = path.resolve(context().paths.root, builtPath);
   const serves = fs.existsSync(path.join(outputPath, "build", "server"));
 
   // The base path, which Vite's `base` and React Router's `basename` both
-  // set: `/docs/` and `/docs`
-  const viteBase = configText(outputPath, "vite.config")?.match(
-    /["']?base["']?:\s*["']([^"]+)["']/,
-  )?.[1];
-  const basename = configText(outputPath, "react-router.config")?.match(
-    /["']?basename["']?:\s*["']([^"]+)["']/,
-  )?.[1];
+  // set: `/docs/` and `/docs`. The asset paths are made from `base`, and the
+  // root URL works without a slash at its end with `basename`.
+  const viteBase = configValue(outputPath, "vite.config", "base") || undefined;
+  const basename =
+    configValue(outputPath, "react-router.config", "basename") || undefined;
   if (viteBase) {
     if (!viteBase.endsWith("/"))
       throw new VisibleError(
-        `The "base" value in the Vite config must end with a trailing slash ("/"). This is required for correct asset path construction.`,
+        `The "base" in the Vite config of ${owner} is "${viteBase}". End it with a "/": "${viteBase}/".`,
       );
     if (!basename)
       throw new VisibleError(
-        `Found "base" configured in the Vite config but missing "basename" in react-router.config. Both configurations are required.`,
+        `${capitalized(
+          owner,
+        )} sets "base" in its Vite config and no "basename" in its react-router.config. Set "basename" to "${viteBase.replace(
+          /\/$/,
+          "",
+        )}" too.`,
       );
   }
   if (basename) {
     if (basename.endsWith("/"))
       throw new VisibleError(
-        `The "basename" value in react-router.config must not end with a trailing slash ("/"). This ensures the root URL is accessible without a trailing slash.`,
+        `The "basename" in the react-router.config of ${owner} is "${basename}". Leave out the "/" at its end: "${basename.replace(
+          /\/$/,
+          "",
+        )}".`,
       );
     if (!viteBase)
       throw new VisibleError(
-        `Found "basename" configured in react-router.config but missing "base" in the Vite config. Both configurations are required.`,
+        `${capitalized(
+          owner,
+        )} sets "basename" in its react-router.config and no "base" in its Vite config. Set "base" to "${basename}/" too.`,
       );
   }
 

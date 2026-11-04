@@ -4,58 +4,26 @@ import {
   type Output,
   output,
 } from "@pulumi/pulumi";
-import { cloudwatch, ec2, ecs, getRegionOutput, iam } from "@pulumi/aws";
-import { Image } from "@pulumi/docker-build";
-import {
-  type ComponentArgs,
-  component,
-  many,
-  optional,
-} from "../../parts-component";
-import { notAnOption, plain, withDefault } from "../../args";
+import { ec2 } from "@pulumi/aws";
+import { type ComponentArgs, component, optional } from "../../parts-component";
+import { notAnExistingPart, plain } from "../../args";
 import { VisibleError } from "../../error";
 import { devStub, context } from "../../contract";
 import {
   type Container,
   type ContainerArgs,
   type FargateBaseArgs,
-  containerImage,
-  containersOf,
-  cpuOf,
-  executionRoleArgs,
-  logGroupArgs,
-  memoryOf,
-  networkOf,
-  storageOf,
-  taskDefinitionArgs,
+  createTaskDefinition,
+  fargateTaskOf,
+  fargateTaskParts,
   taskRoleArgs,
 } from "../helpers/fargate";
+import { securityGroupArgs } from "../helpers/load-balancer-args";
 import { permission } from "../permission";
 import type { Input } from "../../input";
 
 const parts = {
-  /**
-   * The Amazon ECS Execution Role.
-   */
-  executionRole: iam.Role,
-  /**
-   * The Amazon ECS Task Role.
-   */
-  taskRole: iam.Role,
-  /**
-   * The images built for the task's containers, by the container's name. There's one
-   * for each container that's built from a Dockerfile. It's added once the container's
-   * image settings are known.
-   */
-  image: many(Image),
-  /**
-   * The CloudWatch log groups of the task's containers, by the container's name.
-   */
-  logGroup: many(cloudwatch.LogGroup),
-  /**
-   * The Amazon ECS Task Definition.
-   */
-  taskDefinition: ecs.TaskDefinition,
+  ...fargateTaskParts,
   /**
    * The AWS Security Group for public tasks. Only created when `public` is `true`.
    */
@@ -200,6 +168,8 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
    *
    * To disable this and deploy your task in `sst dev`, pass in `false`. Read more about
    * [Live](/docs/live/) and [`sst dev`](/docs/reference/cli/#dev).
+   *
+   * It has to be a plain value: it decides whether the stub is deployed.
    */
   dev?:
     | false
@@ -343,9 +313,9 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
  * });
  * ```
  *
- * A role you pass is used as it is. What `link` and `permissions` grant isn't added to
- * the task role, and in `sst dev` neither is what the stub needs: to reach your machine,
- * and to let your AWS account assume the role.
+ * A role you pass is used as it is. What `link` grants isn't added to the task role, and
+ * `permissions` next to it is refused: add them to the role itself. In `sst dev` neither is
+ * what the stub needs: to reach your machine, and to let your AWS account assume the role.
  *
  * #### Switch from `sst.aws.Task`
  *
@@ -371,6 +341,17 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
  *   container's name.
  * - If you set part of the task definition's `runtimePlatform` with an object in
  *   `transform`, the rest of it is kept.
+ * - `dev` is a plain value: it decides whether the stub is deployed.
+ * - With `containers`, the top-level `image`, `command`, `entrypoint`, `logging`,
+ *   `environment`, `environmentFiles`, `volumes` and `ssm` are refused: set them on each
+ *   container. `sst.aws.Task` refused some of them and dropped the others.
+ * - A container's own `environmentFiles` are granted to the execution role, which
+ *   `sst.aws.Task` left out. A task whose containers have them gets its execution role
+ *   updated in place when you switch.
+ * - `permissions` next to a `taskRole` in `existing` are refused. `sst.aws.Task` left them
+ *   out of the role it was given.
+ * - `cluster` takes either `Cluster`, and refuses anything else. A `cpu`, `memory` or
+ *   `storage` Fargate doesn't offer is refused as the config is read.
  *
  * ---
  *
@@ -407,113 +388,54 @@ export class Task extends component("sst:aws:Task", parts) {
   ) {
     super(name, args, opts);
 
-    for (const role of ["taskRole", "executionRole"])
-      notAnOption(
-        args,
-        role,
-        `Pass the role, or its name, as "existing: { ${role} }" in the "${name}" task.`,
-      );
-    // An image that's built is a part. One that exists already is just the
-    // image a container is given.
-    notAnOption(
-      args.existing ?? {},
-      "image",
-      `Set the "image" of the container to the image's reference in the "${name}" task.`,
-    );
-
-    const cluster = args.cluster;
+    const task = fargateTaskOf(this.builder(), "task", name, args);
+    const { cluster, containers } = task;
+    const vpc = task.network;
     const isPublic =
       plain(args.public, `The "public" of the "${name}" task`) ?? false;
     if (isPublic && args.publicIp === false)
       throw new VisibleError(
         `"publicIp" can't be false when "public" is true in the "${name}" task: a public task has a public IP.`,
       );
+    if (!isPublic)
+      notAnExistingPart(
+        args.existing,
+        "publicSecurityGroup",
+        `the "${name}" task`,
+        `It's only created when "public" is true.`,
+      );
     // In `sst dev` a stub is deployed in place of the task. It hands what
     // the task is run with to the process on the user's machine.
-    const dev = context().dev && args.dev !== false;
-    const region = getRegionOutput({}, opts).region;
-    const architecture = withDefault(args.architecture, "x86_64" as const);
-    const cpu = cpuOf(args);
-    const memory = memoryOf(cpu, args);
-    const storage = storageOf(args);
-    const containers = containersOf("task", args, name);
-    const vpc = networkOf(cluster);
+    const dev =
+      plain(args.dev, `The "dev" of the "${name}" task`) !== false &&
+      context().dev;
     // A task in a `Vpc` is in a public subnet, and needs a public IP to
     // reach the internet
     const hasPublicIp = isPublic || (args.publicIp ?? vpc.isSstVpc);
 
     const publicSecurityGroup = isPublic
-      ? this.part("publicSecurityGroup", {
-          description: "Managed by SST",
-          vpcId: vpc.id,
-          egress: [
-            {
-              fromPort: 0,
-              toPort: 0,
-              protocol: "-1",
-              cidrBlocks: ["0.0.0.0/0"],
-            },
-          ],
-          ingress: [
-            {
-              fromPort: 0,
-              toPort: 0,
-              protocol: "-1",
-              cidrBlocks: ["0.0.0.0/0"],
-            },
-          ],
-        })
+      ? this.part("publicSecurityGroup", securityGroupArgs(vpc.id))
       : undefined;
 
     const taskRole = this.part(
       "taskRole",
       taskRoleArgs(
         args,
-        opts,
+        this,
         dev,
         // The stub reaches the user's machine through the stage's transport
         dev ? output(devStub()).apply((stub) => stub.permissions) : [],
       ),
     );
-    const executionRole = this.part(
-      "executionRole",
-      executionRoleArgs(args, opts),
-    );
 
-    // Each container that's deployed, with the image it runs and the log
-    // group it writes to. In `sst dev` that's the stub alone.
-    const deployed = (dev ? [stub(containers[0])] : containers).map(
-      (container) => ({
-        container,
-        image: containerImage(this, "image", container, {
-          architecture,
-          link: args.link,
-          region,
-        }),
-        logGroup: this.part(
-          "logGroup",
-          container.name,
-          logGroupArgs(container, cluster, name),
-          { ignoreChanges: ["name"] },
-        ),
-      }),
-    );
-
-    this.part(
-      "taskDefinition",
-      taskDefinitionArgs({
-        name,
-        cluster,
-        region,
-        link: args.link,
-        containers: deployed,
-        architecture,
-        cpu,
-        memory,
-        storage,
-        taskRole,
-        executionRole,
-      }),
+    // The containers that are deployed. In `sst dev` that's the stub alone.
+    createTaskDefinition(
+      this.builder(),
+      name,
+      task,
+      args.link,
+      dev ? [stub(containers[0])] : containers,
+      taskRole,
     );
 
     this.run = {
@@ -523,7 +445,7 @@ export class Task extends component("sst:aws:Task", parts) {
         ? vpc.publicSubnets.apply((subnets) => {
             if (!subnets.length)
               throw new VisibleError(
-                `Set "vpc.publicSubnets" on the Cluster to use "public" on the "${name}" Task.`,
+                `The "${name}" task is "public", and the "vpc" of its cluster has no "publicSubnets". Set them on the cluster.`,
               );
             return subnets;
           })

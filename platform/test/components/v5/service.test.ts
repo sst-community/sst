@@ -52,6 +52,12 @@ const pulumi = mockPulumi({
       };
     if (args.token === "aws:lb/getListener:getListener")
       return { arn: `${ALB_ARN}/listener/${args.inputs.port}` };
+    // The region is the provider's, as AWS answers
+    if (
+      args.token === "aws:index/getRegion:getRegion" &&
+      String(args.provider ?? "").includes("::West::")
+    )
+      return { name: "us-west-2", region: "us-west-2", id: "us-west-2" };
     return undefined;
   },
 });
@@ -1136,12 +1142,13 @@ describe("Service", () => {
             global.$dev = dev;
             const service = create(Service);
             await pulumi.settle();
-            // Reading the URL fails for a service with no load balancer
+            // Reading the URL fails for a service with no load balancer.
+            // Each says why in its own words.
             const url = () => {
               try {
                 return service.url;
-              } catch (error: any) {
-                return error.message as string;
+              } catch {
+                return "(fails)";
               }
             };
             return pulumi.resolve({
@@ -1460,7 +1467,9 @@ describe("Service", () => {
       });
       await pulumi.settle();
 
-      expect(() => service.url).toThrow(/no public ports are exposed/);
+      expect(() => service.url).toThrow(
+        `The "MyService" service has no "url": it has no "loadBalancer".`,
+      );
     });
 
     it("checks the load balancer it isn't deploying", () => {
@@ -1471,7 +1480,9 @@ describe("Service", () => {
             image: "nginx:latest",
             loadBalancer: { rules: [{ listen: "443/https" }] },
           }),
-      ).toThrow(/You must provide a custom domain for HTTPS protocol/);
+      ).toThrow(
+        `A rule of the load balancer of the "MyService" service listens on https, which needs a certificate. Set the "domain" of the load balancer.`,
+      );
     });
   });
 
@@ -1546,7 +1557,7 @@ describe("Service", () => {
     expect(await pulumi.resolve(service.nodes.cloudmapService.arn)).toBe(
       mockArn("MyServiceCloudmapService"),
     );
-    expect(() => service.url).toThrow(/no public ports are exposed/);
+    expect(() => service.url).toThrow(/it has no "loadBalancer"/);
     expect(await pulumi.resolve(service.service)).toBe(
       "MyService.test.app.sst",
     );
@@ -1947,6 +1958,55 @@ describe("Service", () => {
     });
   });
 
+  it("is in the region of the provider it's given", async () => {
+    const { Provider } = await import("@pulumi/aws");
+    new Service(
+      "MyService",
+      { cluster: cluster(), image: "nginx:latest" },
+      { providers: [new Provider("West", { region: "us-west-2" })] },
+    );
+    await pulumi.settle();
+
+    const [container] = JSON.parse(
+      resource("MyServiceTaskDefinition").inputs.containerDefinitions,
+    );
+    expect(container.logConfiguration.options["awslogs-region"]).toBe(
+      "us-west-2",
+    );
+  });
+
+  it("lets each container read its own environment files", async () => {
+    new Service("MyService", {
+      cluster: cluster(),
+      containers: [
+        {
+          name: "app",
+          image: "nginx:latest",
+          environmentFiles: ["arn:aws:s3:::my-bucket/app.env"],
+        },
+        {
+          name: "worker",
+          image: "nginx:latest",
+          environmentFiles: output(["arn:aws:s3:::my-bucket/worker.env"]),
+        },
+      ],
+    });
+    await pulumi.settle();
+
+    expect(
+      JSON.parse(
+        resource("MyServiceExecutionRole").inputs.inlinePolicies[0].policy,
+      ).statements,
+    ).toContainEqual({
+      sid: "ReadEnvironmentFiles",
+      actions: ["s3:GetObject"],
+      resources: [
+        "arn:aws:s3:::my-bucket/app.env",
+        "arn:aws:s3:::my-bucket/worker.env",
+      ],
+    });
+  });
+
   describe("what it's given", () => {
     const create = (args: object) => () =>
       new Service("MyService", {
@@ -1976,30 +2036,32 @@ describe("Service", () => {
 
     it("points taskRole and executionRole at existing", () => {
       expect(create({ taskRole: "my-task-role" })).toThrow(
-        /"taskRole" isn't an option here. Pass the role, or its name, as "existing: { taskRole }" in the "MyService" service/,
+        `"taskRole" isn't an option for the "MyService" service. Pass the role, or its name, as "existing: { taskRole }".`,
       );
       expect(create({ executionRole: "my-execution-role" })).toThrow(
-        /as "existing: { executionRole }" in the "MyService" service/,
+        `"executionRole" isn't an option for the "MyService" service. Pass the role, or its name, as "existing: { executionRole }".`,
       );
     });
 
     it("points what the 4.x Service deprecated at what replaced it", () => {
       expect(create({ public: { rules: [{ listen: "80/http" }] } })).toThrow(
-        /"public" isn't an option here. It's "loadBalancer" now/,
+        `"public" isn't an option for the "MyService" service. It's "loadBalancer" now, with the same settings.`,
       );
       expect(balanced({ ports: [{ listen: "80/http" }] })).toThrow(
-        /"ports" isn't an option here. It's "rules" now/,
+        `"ports" isn't an option for the load balancer of the "MyService" service. It's "rules" now.`,
       );
       expect(
         balanced({ rules: [{ listen: "80/http", path: "/api/*" }] }),
-      ).toThrow(/"path" isn't an option here. It's "conditions: { path }" now/);
+      ).toThrow(
+        `"path" isn't an option for rule 1 of the load balancer of the "MyService" service. It's "conditions: { path }" now.`,
+      );
     });
 
     it("takes an image you already have as the container's image", () => {
       expect(
         create({ existing: { image: { MyService: "my-image" } } }),
       ).toThrow(
-        /Set the "image" of the container to the image's reference in the "MyService" service/,
+        `"existing.image" isn't an option for the "MyService" service. Set the "image" of the container to the image's reference.`,
       );
     });
 
@@ -2010,7 +2072,28 @@ describe("Service", () => {
           health: { command: ["CMD", "true"] },
           containers: [{ name: "app", image: "nginx:latest" }],
         }),
-      ).toThrow(/You cannot provide both "containers" and "image".*"health"/);
+      ).toThrow(
+        `"health" isn't an option for the "MyService" service, which has "containers". Set it on each container.`,
+      );
+      // They'd be dropped
+      expect(
+        create({
+          image: undefined,
+          entrypoint: ["tini"],
+          containers: [{ name: "app", image: "nginx:latest" }],
+        }),
+      ).toThrow(
+        `"entrypoint" isn't an option for the "MyService" service, which has "containers". Set it on each container.`,
+      );
+      expect(
+        create({
+          image: undefined,
+          dev: { command: "npm run dev" },
+          containers: [{ name: "app", image: "nginx:latest" }],
+        }),
+      ).toThrow(
+        `"dev.command" isn't an option for the "MyService" service, which has "containers". Set it in the "dev" of each container.`,
+      );
     });
 
     it("rejects what decides the resources given as an output", () => {
@@ -2060,10 +2143,9 @@ describe("Service", () => {
     });
 
     it("needs rules for a load balancer", () => {
-      expect(balanced({})).toThrow(/You must provide the ports to expose/);
-      expect(balanced({ rules: [] })).toThrow(
-        /You must provide the ports to expose via "loadBalancer.rules"/,
-      );
+      const message = `The load balancer of the "MyService" service has no "rules". Give it at least one.`;
+      expect(balanced({})).toThrow(message);
+      expect(balanced({ rules: [] })).toThrow(message);
     });
 
     it("needs a rule to name its container when there are several", () => {
@@ -2105,30 +2187,34 @@ describe("Service", () => {
     it("keeps to one kind of protocol", () => {
       expect(
         balanced({ rules: [{ listen: "80/http" }, { listen: "53/udp" }] }),
-      ).toThrow(/Protocols must be either all http\/https, or all tcp/);
+      ).toThrow(
+        `The "rules" of the load balancer of the "MyService" service listen on http or https and on tcp, udp, tcp_udp or tls. Use one kind or the other.`,
+      );
       expect(
         balanced({ rules: [{ listen: "80/http", forward: "80/tcp" }] }),
       ).toThrow(
-        /The listen protocol "80\/http" must match the forward protocol/,
+        `Rule 1 of the load balancer of the "MyService" service listens on "80/http" and forwards to "80/tcp". Both have to be http or https, or both tcp, udp, tcp_udp or tls.`,
       );
       expect(
         balanced({ rules: [{ listen: "80/http", redirect: "443/tls" }] }),
       ).toThrow(
-        /The listen protocol "80\/http" must match the redirect protocol/,
+        `Rule 1 of the load balancer of the "MyService" service listens on "80/http" and redirects to "443/tls". Both have to be http or https, or both tcp, udp, tcp_udp or tls.`,
       );
       expect(
         balanced({
           rules: [{ listen: "80/tcp", conditions: { path: "/api/*" } }],
         }),
-      ).toThrow(/Only "http" protocols support conditions/);
+      ).toThrow(
+        `Rule 1 of the load balancer of the "MyService" service listens on "80/tcp" and has "conditions". Only a rule that listens on http or https takes them.`,
+      );
     });
 
     it("needs a domain to listen on https or tls", () => {
       expect(balanced({ rules: [{ listen: "443/https" }] })).toThrow(
-        /You must provide a custom domain for HTTPS protocol/,
+        /listens on https, which needs a certificate. Set the "domain" of the load balancer/,
       );
       expect(balanced({ rules: [{ listen: "443/tls" }] })).toThrow(
-        /You must provide a custom domain for TLS protocol/,
+        /listens on tls, which needs a certificate/,
       );
       expect(
         balanced({
@@ -2144,19 +2230,40 @@ describe("Service", () => {
           rules: [{ listen: "80/http", forward: "8080/http" }],
           health: { "80/http": { path: "/up" } },
         }),
-      ).toThrow(/Cannot configure health check for "80\/http"/);
+      ).toThrow(
+        `The "health" of the load balancer of the "MyService" service has "80/http", which no rule forwards to. Forward to it in "rules", or remove it.`,
+      );
+      // On an `Alb` too, where it would be dropped
+      expect(
+        create({
+          cluster: customCluster(),
+          loadBalancer: {
+            instance: alb(),
+            rules: [
+              {
+                listen: "80/http",
+                forward: "8080/http",
+                conditions: { path: "/api/*" },
+                priority: 100,
+              },
+            ],
+            health: { "3000/http": { path: "/up" } },
+          },
+        }),
+      ).toThrow(
+        `The "health" of the load balancer of the "MyService" service has "3000/http", which no rule forwards to. Forward to it in "rules", or remove it.`,
+      );
     });
 
     it("scales on requests only behind an application load balancer", () => {
-      expect(create({ scaling: { requestCount: 100 } })).toThrow(
-        /Request count scaling is only supported for http\/https protocols/,
-      );
+      const message = `The "scaling.requestCount" of the "MyService" service needs a load balancer with http or https rules.`;
+      expect(create({ scaling: { requestCount: 100 } })).toThrow(message);
       expect(
         balanced(
           { rules: [{ listen: "80/tcp" }] },
           { scaling: { requestCount: 100 } },
         ),
-      ).toThrow(/Request count scaling is only supported/);
+      ).toThrow(message);
       // There's no target to count the requests of
       expect(
         balanced(
@@ -2168,18 +2275,98 @@ describe("Service", () => {
       );
     });
 
+    // What isn't created for the args it's given wouldn't be used
+    it("refuses in existing what it doesn't create", () => {
+      const refused = (args: object, key: string, instead: string) =>
+        expect(create({ ...args, existing: { [key]: "theirs" } })).toThrow(
+          `"existing.${key}" isn't an option for the "MyService" service. ${instead}`,
+        );
+
+      for (const key of ["loadBalancer", "listener", "target"])
+        refused({}, key, `It's only created with "loadBalancer".`);
+      refused(
+        {
+          cluster: customCluster(),
+          loadBalancer: {
+            instance: alb(),
+            rules: [
+              {
+                listen: "80/http",
+                forward: "8080/http",
+                conditions: { path: "/api/*" },
+                priority: 100,
+              },
+            ],
+          },
+        },
+        "listener",
+        `The service is attached to an "Alb", which has its own.`,
+      );
+      refused(
+        { loadBalancer: { rules: [{ listen: "80/http" }] } },
+        "certificate",
+        `It's only created for the load balancer's "domain".`,
+      );
+      refused(
+        { scaling: { cpuUtilization: false } },
+        "autoScalingCpuPolicy",
+        `It's only created when "scaling.cpuUtilization" isn't false.`,
+      );
+      refused(
+        {},
+        "autoScalingRequestCountPolicy",
+        `It's only created with "scaling.requestCount".`,
+      );
+      refused(
+        {},
+        "devCommand",
+        `It's only created for a container with a "dev.command".`,
+      );
+    });
+
+    // The role is used the way it is
+    it("refuses permissions for a task role it's given", () => {
+      expect(
+        create({
+          permissions: [{ actions: ["s3:*"], resources: ["*"] }],
+          existing: { taskRole: "my-task-role" },
+        }),
+      ).toThrow(
+        `The "MyService" service is given an existing "taskRole", which it doesn't change. Add the "permissions" to the role itself.`,
+      );
+      // An empty list is taken
+      expect(
+        create({ permissions: [], existing: { taskRole: "my-task-role" } }),
+      ).not.toThrow();
+    });
+
+    it("refuses what isn't a cluster", () => {
+      expect(create({ cluster: { vpc: {} } })).toThrow(
+        `The "cluster" of the "MyService" service isn't a "Cluster" component. Pass a "Cluster".`,
+      );
+    });
+
     it("checks the rules on a load balancer it shares", () => {
       expect(
         create({
           cluster: customCluster(),
           loadBalancer: { instance: alb(), rules: [] },
         }),
-      ).toThrow(/You must provide at least one rule in "loadBalancer.rules"/);
+      ).toThrow(
+        `The load balancer of the "MyService" service has no "rules". Give it at least one.`,
+      );
       expect(shared({ priority: 0 })).toThrow(
-        /Priority 0 must be between 1 and 50000 in Service "MyService"/,
+        `The "priority" of rule 1 of the load balancer of the "MyService" service is 0. It has to be between 1 and 50000, and the services on an "Alb" each need their own range.`,
       );
       expect(shared({ conditions: {} })).toThrow(
-        /At least one condition \(path, query, or header\) must be set/,
+        `Rule 1 of the load balancer of the "MyService" service has no "conditions". A rule on an "Alb" needs a path, a query or a header: the "Alb" answers what no rule matches.`,
+      );
+      // What its target group and its listener rule are named after
+      expect(shared({ priority: output(100) })).toThrow(
+        /Rule 1 of the load balancer of the "MyService" service has to be a plain value/,
+      );
+      expect(shared({ forward: output("8080/http") })).toThrow(
+        /Rule 1 of the load balancer of the "MyService" service has to be a plain value/,
       );
       expect(shared({ container: "web" })).toThrow(
         /forwards to the container "web", which isn't one of the service's/,
@@ -2197,7 +2384,9 @@ describe("Service", () => {
             })),
           },
         }),
-      ).toThrow(/Duplicate priority 100 on listener "80\/http"/);
+      ).toThrow(
+        `Rule 2 of the load balancer of the "MyService" service has the priority 100 on "80/http", which another of its rules has. Give each its own.`,
+      );
       expect(
         create({
           loadBalancer: { instance: {}, rules: [{ listen: "80/http" }] },

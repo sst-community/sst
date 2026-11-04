@@ -406,7 +406,7 @@ describe("Cluster", () => {
       const { containerSubnets, ...vpc } = customVpc;
       const ids = { ...vpc, serviceSubnets: containerSubnets } as any;
       const message = (name: string) =>
-        `The "vpc.serviceSubnets" property of the "${name}" Cluster component has been renamed to "vpc.containerSubnets".`;
+        `"vpc.serviceSubnets" isn't an option for the "${name}" cluster. It's "vpc.containerSubnets" now.`;
 
       // As they're given, when the cluster is created
       expect(() => new Cluster("Given", { vpc: ids })).toThrow(
@@ -427,13 +427,13 @@ describe("Cluster", () => {
       const { containerSubnets, cloudmapNamespaceName, ...vpc } = customVpc;
 
       expect(() => new Cluster("NoSubnets", { vpc: vpc as any })).toThrow(
-        'Missing "vpc.containerSubnets" for the "NoSubnets" Cluster component.',
+        'The "vpc" of the "NoSubnets" cluster has no "containerSubnets". Give the subnets its containers run in.',
       );
       expect(
         () =>
           new Cluster("HalfANamespace", { vpc: { ...vpc, containerSubnets } }),
       ).toThrow(
-        'You must provide both "vpc.cloudmapNamespaceId" and "vpc.cloudmapNamespaceName" for the "HalfANamespace" Cluster component.',
+        'The "vpc" of the "HalfANamespace" cluster has one of "cloudmapNamespaceId" and "cloudmapNamespaceName". Give both, or neither.',
       );
       // Ids whose values aren't known yet are checked again once they are
       const errors = await applyErrors(
@@ -444,13 +444,13 @@ describe("Cluster", () => {
         pulumi.settle,
       );
       expect([...new Set(errors)]).toEqual([
-        'Missing "vpc.containerSubnets" for the "Later" Cluster component.',
+        'The "vpc" of the "Later" cluster has no "containerSubnets". Give the subnets its containers run in.',
       ]);
     });
 
     it("refuses another resource in place of a Vpc", async () => {
       const message = (name: string) =>
-        `The "vpc" of the "${name}" Cluster component isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`;
+        `The "vpc" of the "${name}" cluster isn't a "Vpc" component. Pass a "Vpc", or the ids of a VPC.`;
 
       expect(
         () => new Cluster("InAVpcV1", { vpc: new VpcV1("Old") as any }),
@@ -521,6 +521,20 @@ describe("Cluster", () => {
       expect(cluster.nodes.cluster).toBe(theirs);
       expect(names()).not.toContain("MyClusterCluster");
       expect(names()).not.toContain("MyClusterCapacityProviders");
+    });
+
+    // The cluster keeps the capacity providers it has
+    it("refuses capacity providers next to it", async () => {
+      expect(
+        () =>
+          new Cluster("MyCluster", {
+            vpc: customVpc,
+            existing: { cluster: SHARED, capacityProviders: "theirs" },
+          }),
+      ).toThrow(
+        `"existing.capacityProviders" isn't an option for the "MyCluster" cluster. The "cluster" it's given keeps the capacity providers it has.`,
+      );
+      await pulumi.settle();
     });
   });
 

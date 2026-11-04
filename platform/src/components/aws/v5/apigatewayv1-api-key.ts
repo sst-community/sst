@@ -34,7 +34,7 @@ export interface ApiKeyArgs
  *
  * You'll find this component returned by the `addApiKey` method of the `ApiGatewayV1UsagePlan` component.
  *
- * #### Switch from SST 4's
+ * #### Switch from `sst.aws.ApiGatewayV1ApiKey`
  *
  * Nothing changes: switching the API to `sst.aws.v5.ApiGatewayV1` switches its keys, and
  * keeps them. A function linked to a key reads its `value` as before.

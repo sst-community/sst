@@ -38,7 +38,7 @@ export interface UsagePlanArgs
  *
  * You'll find this component returned by the `addUsagePlan` method of the `ApiGatewayV1` component.
  *
- * #### Switch from SST 4's
+ * #### Switch from `sst.aws.ApiGatewayV1UsagePlan`
  *
  * Nothing changes: switching the API to `sst.aws.v5.ApiGatewayV1` switches its usage plans
  * and their keys, and keeps them.
@@ -47,15 +47,12 @@ export class ApiGatewayV1UsagePlan extends component(
   "sst:aws:ApiGatewayV1UsagePlan",
   parts,
 ) {
-  private readonly provider?: ComponentResourceOptions["provider"];
-
   constructor(
     name: string,
     args: UsagePlanArgs,
     opts?: ComponentResourceOptions,
   ) {
     super(name, args, opts);
-    this.provider = opts?.provider;
     this.part("usagePlan", {
       apiStages: [{ apiId: args.apiId, stage: args.apiStage }],
       quotaSettings:
@@ -91,7 +88,7 @@ export class ApiGatewayV1UsagePlan extends component(
     return new ApiGatewayV1ApiKey(
       name,
       { ...args, usagePlanId: this.nodes.usagePlan.id },
-      { provider: this.provider },
+      { provider: this.componentOpts.provider },
     );
   }
 }

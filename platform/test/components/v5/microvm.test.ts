@@ -2,6 +2,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
@@ -640,21 +641,28 @@ describe("MicroVm", () => {
         { networkConnector: "arn:aws:lambda:us-east-1:1:network-connector:x" },
         { vpc: { privateSubnets: ["subnet-1"], securityGroups: ["sg-1"] } },
       ),
-    ).toThrow(/is given an existing "networkConnector".*Remove "vpc"/);
+    ).toThrow(
+      `The "Sandbox" MicroVm is given an existing "networkConnector", which it uses the way it is. Remove "vpc" from its args.`,
+    );
     const connector = "arn:aws:lambda:us-east-1:1:network-connector:x";
     expect(
       given({ networkConnector: connector, operatorRole: "a-role" }),
     ).toThrow(
-      /is given an existing "networkConnector", so it creates no connector and no "operatorRole"/,
+      `"existing.operatorRole" isn't an option for the "Sandbox" MicroVm. It's given an existing "networkConnector", so it creates no connector to use it for.`,
     );
     expect(
       given(
         { networkConnector: connector },
         { transform: { operatorRole: { description: "x" } } },
       ),
-    ).toThrow(/Remove "operatorRole" from its "existing" and "transform"/);
+    ).toThrow(
+      `The "Sandbox" MicroVm is given an existing "networkConnector", so it creates no connector and no "operatorRole". Remove "operatorRole" from its "transform".`,
+    );
     expect(given({ operatorRole: "a-role" })).toThrow(
-      /is given an existing "operatorRole", which is only used to create a network connector for "vpc"/,
+      `"existing.operatorRole" isn't an option for the "Sandbox" MicroVm. It's only used to create a network connector for "vpc". Set "vpc", or remove it.`,
+    );
+    expect(given({}, { dev: output(false) })).toThrow(
+      /The "dev" of the "Sandbox" MicroVm has to be a plain value/,
     );
     // The roles made for it register after the test, otherwise
     await pulumi.settle();

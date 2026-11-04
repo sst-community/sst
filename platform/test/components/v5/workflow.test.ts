@@ -260,6 +260,29 @@ describe("Workflow", () => {
     ).toThrow(/"runtime"/);
   });
 
+  // A function that's already there is used the way it is
+  it("uses an existing function, and refuses what would configure it", async () => {
+    const mine = new Function("Mine", {
+      handler: "src/workflow.handler",
+      durable: true,
+    });
+    const workflow = new Workflow("MyWorkflow", {
+      existing: { function: mine },
+    } as any);
+    expect(workflow.nodes.function).toBe(mine);
+    expect(
+      () =>
+        new Workflow("Other", {
+          handler: "src/workflow.handler",
+          retention: "7 days",
+          existing: { function: mine },
+        }),
+    ).toThrow(
+      'The "Other" workflow is given an existing "function", which it uses the way it is. Remove "handler", "retention" from its args.',
+    );
+    await pulumi.settle();
+  });
+
   it("can be linked by a function, with its version", async () => {
     const workflow = new Workflow("MyWorkflow", {
       handler: "src/workflow.handler",

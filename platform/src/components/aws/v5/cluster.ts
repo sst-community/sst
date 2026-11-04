@@ -1,6 +1,7 @@
 import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
 import { ecs } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../../parts-component";
+import { notAnExistingPart, getArgs } from "../../args";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
 import { type AnyVpc, assertVpcIds, isVpc } from "../helpers/vpc";
@@ -196,7 +197,15 @@ export class Cluster extends component("sst:aws:Cluster", parts) {
     this.network = vpcOf(name, args.vpc);
 
     // A cluster that's already deployed is used as it is
-    if (this.existingPart("cluster")) return;
+    if (this.existingPart("cluster")) {
+      notAnExistingPart(
+        args.existing,
+        "capacityProviders",
+        `the "${name}" cluster`,
+        `The "cluster" it's given keeps the capacity providers it has.`,
+      );
+      return;
+    }
 
     const cluster = this.part("cluster", {
       // The same value the 4.x `Cluster` writes. Its `get` reads this tag,
@@ -283,7 +292,7 @@ export class Cluster extends component("sst:aws:Cluster", parts) {
   ) {
     return new Cluster(
       name,
-      { vpc: args.vpc, existing: { cluster: args.id } },
+      getArgs({ vpc: args.vpc, existing: { cluster: args.id } }),
       opts,
     );
   }
@@ -294,7 +303,7 @@ export class Cluster extends component("sst:aws:Cluster", parts) {
 function vpcOf(name: string, vpc: ClusterArgs["vpc"]) {
   if (isVpc(vpc)) return vpc;
 
-  assertVpcIds(vpc, `the "${name}" Cluster component`);
+  assertVpcIds(vpc, `the "${name}" cluster`);
 
   // The ids are checked as they're given, so what's missing fails a preview
   // even where their values aren't known yet, and once more when they are
@@ -316,14 +325,14 @@ function checkIds(
   // 4.x also took the subnets of the containers as `serviceSubnets`
   if ((vpc as { serviceSubnets?: unknown }).serviceSubnets)
     throw new VisibleError(
-      `The "vpc.serviceSubnets" property of the "${name}" Cluster component has been renamed to "vpc.containerSubnets". Update your code to use "vpc.containerSubnets" instead.`,
+      `"vpc.serviceSubnets" isn't an option for the "${name}" cluster. It's "vpc.containerSubnets" now.`,
     );
   if (!vpc.containerSubnets)
     throw new VisibleError(
-      `Missing "vpc.containerSubnets" for the "${name}" Cluster component.`,
+      `The "vpc" of the "${name}" cluster has no "containerSubnets". Give the subnets its containers run in.`,
     );
   if (!vpc.cloudmapNamespaceId !== !vpc.cloudmapNamespaceName)
     throw new VisibleError(
-      `You must provide both "vpc.cloudmapNamespaceId" and "vpc.cloudmapNamespaceName" for the "${name}" Cluster component.`,
+      `The "vpc" of the "${name}" cluster has one of "cloudmapNamespaceId" and "cloudmapNamespaceName". Give both, or neither.`,
     );
 }

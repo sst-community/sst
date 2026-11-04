@@ -10,7 +10,7 @@ import {
   named,
   optional,
 } from "../../parts-component";
-import { plain, withDefault } from "../../args";
+import { plain, withDefault, getArgs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type DurationDays, toDays } from "../../duration";
@@ -405,7 +405,7 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
     );
     if (regions && vpc)
       throw new VisibleError(
-        `Cannot use "vpc" with multi-region "regions". VPC endpoints are only supported for single-region clusters.`,
+        `"vpc" isn't an option for the "${name}" DSQL cluster, which has a peer in "regions". VPC endpoints are only for a cluster in one region.`,
       );
     if (
       regions &&
@@ -609,7 +609,7 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
     const peerCluster = this.nodes.peerCluster;
     if (!peerCluster)
       throw new VisibleError(
-        `Cannot access "peer" on "${this.componentName}" because it is a single-region cluster. Set "regions.peer" to enable multi-region.`,
+        `The "${this.componentName}" DSQL cluster is in one region, so it has no "peer". Set "regions.peer" to give it one.`,
       );
     return {
       /** The region of the peer cluster. */
@@ -692,13 +692,13 @@ export class Dsql extends component("sst:aws:Dsql", parts) {
   ) {
     return new Dsql(
       name,
-      {
+      getArgs({
         existing: {
           cluster: args.id,
           ...(args.peer ? { peerCluster: args.peer.id } : {}),
         },
         ...(args.peer ? { regions: { peer: args.peer.region } } : {}),
-      } as DsqlArgs,
+      }) as DsqlArgs,
       opts,
     );
   }

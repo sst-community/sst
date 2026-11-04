@@ -548,7 +548,7 @@ describe("StaticSite", () => {
     });
     expect(new Set(failures).size).toBe(1);
     expect((failures[0] as Error).message).toMatch(
-      /^No build output found at ".*\/vite\/missing"\.$/,
+      /^The "Web" static site has no build output at ".*\/vite\/missing"\. Set "build.output"/,
     );
   });
 
@@ -620,16 +620,24 @@ describe("StaticSite", () => {
   it("turns down what sst.aws.StaticSite took and the V5 one doesn't", () => {
     // @ts-expect-error
     expect(() => new Site("Web", { path: "web", route: {} })).toThrow(
-      /"route" isn't an option/,
+      /"route" isn't an option for the "Web" static site\./,
     );
     // @ts-expect-error
     expect(() => new Site("Web", { path: "web", base: "/docs" })).toThrow(
-      /"base" isn't an option/,
+      /"base" isn't an option for the "Web" static site\./,
     );
     // @ts-expect-error
     expect(() => new Site("Web", { path: "web", cdn: false })).toThrow(
-      /"cdn" isn't an option/,
+      /"cdn" isn't an option for the "Web" static site\./,
     );
+    expect(
+      () =>
+        new Site("Web", {
+          path: "web",
+          // @ts-expect-error
+          dev: output(false),
+        }),
+    ).toThrow(/"dev" of the "Web" static site has to be a plain value/);
     expect(
       () =>
         // @ts-expect-error
@@ -648,7 +656,9 @@ describe("StaticSite", () => {
         // @ts-expect-error
         new Site("Web", { path: "web", assets: { bucket: output("b") } }),
     ).toThrow(/"assets.bucket"/);
-    expect(() => new Site("Web", { path: "missing" })).toThrow(/No site found/);
+    expect(() => new Site("Web", { path: "missing" })).toThrow(
+      /There's no folder at ".*\/missing", the "path" of the "Web" static site\./,
+    );
   });
 
   it("needs edge routing, and no domain or edge code of its own, behind a router", () => {
@@ -660,7 +670,9 @@ describe("StaticSite", () => {
           edgeRouting: false,
           router: { instance: router },
         }),
-    ).toThrow(/"edgeRouting: false" and "router"/);
+    ).toThrow(
+      /The "A" static site can't have both "edgeRouting: false" and "router"/,
+    );
     expect(
       () =>
         new Site("B", {
@@ -668,7 +680,9 @@ describe("StaticSite", () => {
           domain: "example.com",
           router: { instance: router },
         }),
-    ).toThrow(/"domain" and "router"/);
+    ).toThrow(
+      /The "B" static site can't have both "domain" and "router"\. Set "domain" on the Router/,
+    );
     expect(
       () =>
         new Site("C", {
@@ -676,7 +690,73 @@ describe("StaticSite", () => {
           edge: { viewerRequest: { injection: "" } },
           router: { instance: router },
         }),
-    ).toThrow(/"edge" and "router"/);
+    ).toThrow(/The "C" static site can't have both "edge" and "router"/);
+  });
+
+  it("takes only a router, a path and a domain in its route", () => {
+    const router = new Router("Router");
+    for (const [key, value] of Object.entries({
+      rewrite: { regex: "^/a", to: "/" },
+      readTimeout: "30 seconds",
+      keepAliveTimeout: "10 seconds",
+      connectionTimeout: "3 seconds",
+      connectionAttempts: 1,
+    }))
+      expect(
+        () =>
+          new Site("Web", {
+            path: "web",
+            router: { instance: router, [key]: value } as any,
+          }),
+      ).toThrow(
+        new RegExp(
+          `"router\\.${key}" isn't an option for the "Web" static site\\. A route to a site takes "instance", "path" and "domain"`,
+        ),
+      );
+    expect(
+      () =>
+        new Site("Web", {
+          path: "web",
+          router: { instance: output(router) as any },
+        }),
+    ).toThrow(
+      /"router\.instance" of the "Web" static site has to be a plain value/,
+    );
+  });
+
+  it("refuses an existing distribution, or one of its parts behind a router", () => {
+    expect(
+      () =>
+        new Site("Web", {
+          path: "web",
+          existing: { cdn: "E2IDLMESRN6V62" },
+        }),
+    ).toThrow(
+      /"existing\.cdn" isn't an option for the "Web" static site\. A site creates its own distribution/,
+    );
+    expect(
+      () =>
+        new Site("Web", {
+          path: "web",
+          router: { instance: new Router("Router") },
+          existing: { kvStore: STORE_ARN },
+        }),
+    ).toThrow(
+      /"existing\.kvStore" isn't an option for the "Web" static site\. It's served through "router"/,
+    );
+  });
+
+  it("refuses a store in existing next to the one edge names", () => {
+    expect(
+      () =>
+        new Site("Web", {
+          path: "web",
+          edge: { viewerRequest: { injection: "", kvStore: STORE_ARN } },
+          existing: { kvStore: STORE_ARN },
+        }),
+    ).toThrow(
+      /"existing\.kvStore" isn't an option for the "Web" static site\. It routes with the store "edge\.viewerRequest\.kvStore" names/,
+    );
   });
 
   it("refuses kvStores, which a CloudFront function takes one of", () => {
@@ -689,7 +769,11 @@ describe("StaticSite", () => {
               [viewer]: { injection: "", kvStores: [STORE_ARN] },
             } as any,
           }),
-      ).toThrow(/"kvStores" isn't an option here. Use "kvStore"/);
+      ).toThrow(
+        new RegExp(
+          `"edge\\.${viewer}\\.kvStores" isn't an option for the "Web" static site\\. Use "kvStore"`,
+        ),
+      );
   });
 
   it("keeps its functions when transform.cdn sets defaultCacheBehavior with an object", async () => {

@@ -81,6 +81,8 @@ takeover(ApiGatewayV1, {
 });
 
 // Each usage plan and API key is a component of its own, at the top of the
-// app, as in 4.x
+// app, as in 4.x. Nothing moved. The maps say the 4.x forms have these 5.0
+// forms, so a stage switches them with `sst migrate`, and a new stage refuses
+// the 4.x ones.
 takeover(ApiGatewayV1UsagePlan, {});
 takeover(ApiGatewayV1ApiKey, {});

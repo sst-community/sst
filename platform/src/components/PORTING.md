@@ -42,9 +42,10 @@ has no 4.x components.
   `Cluster`, so the V5 one can't be passed to them. Port the components that take it
   first, and have each accept both the original and the V5 one. The component that's
   taken goes last: an app switches to it once everything it's passed to is V5.
-  The V5 `Service` and `Task` take either `Cluster`. The arg is declared again in each
-  (`cluster: OriginalCluster | Cluster`), and the V5 `Cluster` gives them the same
-  `nodes.cluster` and `vpc` to read as the 4.x one. The V5 `Service` and `Task` take
+  The V5 `Service` and `Task` take either `Cluster`. The arg is declared once, in
+  `FargateArgs` (`helpers/fargate.ts`), as an `AnyCluster`, checked with `isCluster()`
+  (`helpers/cluster.ts`), and the V5 `Cluster` gives them the same `nodes.cluster` and
+  `vpc` to read as the 4.x one. The V5 `Service` and `Task` take
   either `Efs` the same way, and the V5 `Service` either `Alb`. A component built the
   5.0 way names neither: it takes an `AnyEfs` and checks it with `isEfs()`
   (`helpers/efs.ts`), and is served through an `AnyRouter` with `routeOf()`
@@ -142,19 +143,23 @@ has no 4.x components.
 | A function arg, built the 5.0 way: a handler or args as a plain value, or a function or its ARN, which can be an output | `FunctionInput`, and `plainFunction(definition, what)` before `functionPart()`, in `helpers/function-part.ts` |
 | Letting a service invoke that function | `invokePermissionArgs(fn, principal, sourceArn)` in `helpers/function-permission.ts` |
 | A custom domain (`name`, `dns`, `cert`), built the 5.0 way: the 5.0 certificate (`aws/v5/dns-validated-certificate.ts`) as a part, and the records pointed at the service with the adapter's `alias()` | `DomainArgs` and `domainOf(domain, owner)` in `helpers/domain.ts` |
-| Event source mappings | `filterCriteria()`, `batchSettings()` in `helpers/event-source.ts` |
-| Letting a service send to a queue | `sendPolicyArgs(queueArn)` in `helpers/queue-policy.ts` |
-| A Fargate task: its containers, roles, images, log groups and task definition | `containersOf()`, `taskRoleArgs()`, `executionRoleArgs()`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
+| Event source mappings, and a named subscriber with its function and mapping | `filterCriteria()`, `batchSettings()`, `assertNamedSubscriber()`, `eventSourceSubscriber()` in `helpers/event-source.ts` |
+| Letting a service send to a queue | `sendPolicy(queueArn)` in `helpers/queue-policy.ts`, the args and options of the queue's one policy, kept on delete |
+| An EventBridge rule's state, and a rule that calls a function | `enabledState()`, `ruleFunctionTarget()` in `helpers/eventbridge.ts` |
+| A Fargate task: its containers, roles, images, log groups and task definition | `fargateTaskParts`, `fargateTaskOf()` and `createTaskDefinition(builder, ...)`, which the `Task` and the `Service` share, and `containersOf()`, `sizeOf()`, `taskRoleArgs(args, parent, dev, additional)`, `executionRoleArgs(containers, parent)`, `containerImage()`, `logGroupArgs()`, `taskDefinitionArgs()` in `helpers/fargate.ts` |
+| A `cluster` arg: either kind of `Cluster` | `AnyCluster`, `isCluster(value)` in `helpers/cluster.ts` |
+| A role's inline policy from permissions, and refusing `permissions` next to a role you have | `inlinePolicies()`, `noPermissionsFor()` in `helpers/iam.ts` |
 | The VPC of a cluster, whichever way the cluster was given it | `networkOf(cluster)` in `helpers/fargate.ts` |
 | A shared load balancer: either kind of `Alb` | `AnyAlb`, `isAlb(value)` in `helpers/alb.ts` |
-| A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)`, `subnetsOf(vpc, kind)`, `hasNat(vpc)`, `assertVpcIds(vpc, what)`, `subnetsAndSecurityGroupsOf(vpc, what)` in `helpers/vpc.ts` |
+| A `vpc` arg: either kind of `Vpc`, or the ids of a VPC | `TakesVpc<Args>`, `AnyVpc`, `isVpc(vpc)`, `subnetsOf(vpc, kind)`, `hasNat(vpc)`, `assertVpcIds(vpc, what)`, `subnetsAndSecurityGroupsOf(vpc, what)`, and `privateNetworkOf(vpc, what, noNat)` for a resource in the private subnets, in `helpers/vpc.ts` |
 | A resource for each private subnet of a VPC, kept by its AZ | `privateSubnetsOf(vpc, parent, what)` in `helpers/vpc.ts`: by the AZ's number for a `Vpc` the app creates, by its name for one from `get`; and `subnetsByAz(subnets, parent, what)` for subnet ids. Where it's a promise, of what a preview knows, create them with `after()` |
 | Deciding from an output a preview knows, like a lookup's | `knownValue(output)` in `args.ts`, for `after()` |
-| A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `securityGroupArgs()`, `forbidden()`, `loadBalancerDomain()`, `pointDomainAt()` in `helpers/load-balancer-args.ts`, on `domainOf()` and the 5.0 adapters |
-| A database or cache that runs on the user's machine in `sst dev`: the pane that says how to set up the local server | `localServerPane(message)` in `helpers/local-server.ts`, given to `this.report({ dev })`, with a password in it shown by `shownPassword()` |
-| An RDS database: storage limit, replicas, the proxy, a stored password, and a local one in `sst dev` | `maxStorage()`, `replicaArgs()`, `proxyCredentials()`, `proxyRoleArgs()`, `proxyArgs()`, `storedPassword()`, `localDatabase()` in `helpers/rds.ts` |
+| A load balancer: its security group, what a listener answers by default, a domain with aliases and its DNS records | `LoadBalancerDomainArgs`, `securityGroupArgs()`, `forbidden()`, `loadBalancerDomain()`, `certificateOf()`, `pointDomainAt()` in `helpers/load-balancer-args.ts`, on `domainOf()` and the 5.0 adapters |
+| A database or cache that runs on the user's machine in `sst dev`: the pane that says how to set up the local server | `localServerPane(server, using, listening)` in `helpers/local-server.ts`, given to `this.report({ dev })`, with a password in it shown by `shownPassword()`; `devValue()` for a `dev` value's default, and `localPassword()`, which refuses a missing one |
+| An RDS database: storage limit, replicas, the proxy, a stored password, and a local one in `sst dev` | `rdsCredentialParts` and `rdsProxyParts`, with `createCredentials(builder, ...)`, `createRdsProxy(builder, ...)` and `createRdsProxyTarget(builder, ...)`, which the `Aurora` and the RDS-instance databases share, and `maxStorage()`, `replicaArgs()`, `localDatabase()` in `helpers/rds.ts` |
+| A password kept in a secret a resource is tagged with | `tagOf(resource, tag, notFound)`, `secretField(secretId, field, parent)` in `helpers/secret.ts` |
 | A database on an RDS instance, whole: what the `Postgres` and the `Mysql` share | `rdsInstanceParts`, `RdsInstanceArgs`, and `createRdsInstance(this.builder(), name, args, engine)` with the engine's `RdsEngine`, in `helpers/rds-instance.ts`; the tests in `test/components/v5/rds-instance.suite.ts` |
-| A site with a server, whole: what the `Nextjs`, `Astro`, `SvelteKit`, `TanStackStart`, `Remix`, `React`, `Nuxt`, `SolidStart` and `Analog` share | `ssrSiteParts`, `SsrSiteArgs`, and `createSsrSite(this.builder(), name, args, framework)` with the framework's `SsrFramework`, in `helpers/ssr-site.ts`. The framework gives its build command, reads its build into a `SiteBuild` with the site's plan, says how its server is built (`ServerPlan`, which the site's own args are merged into) and creates what it adds, like `Nextjs`'s image optimizer. A framework with args of its own, like `Remix`'s `buildDirectory`, is made from the site's args and checks them in `check`. One whose build has no versioned folder says `versionedFiles: false`, so `invalidation.paths: "versioned"` makes no invalidation, as in SST 4. A framework without a build command of its own builds with `defaultBuildCommand(sitePath)` in `helpers/site-build.ts`, the `build` script by the app's package manager. `configText(sitePath, "vite.config")` there reads a config file in whichever extension it has, and `readNitro(outputDir, framework, howToSet)` in `helpers/nitro.ts` reads a Nitro build, refusing one without the `aws-lambda` preset. `urlAccessArgs(fn, distributionArn)` gives the permissions to call a function's URL. The takeover map's shared part is `ssrSiteTakeover(label, warmedWhen)` in `takeover/ssr-site.ts`, and the tests every site passes are in `test/components/v5/ssr-site.suite.ts` |
+| A site with a server, whole: what the `Nextjs`, `Astro`, `SvelteKit`, `TanStackStart`, `Remix`, `React`, `Nuxt`, `SolidStart` and `Analog` share | `ssrSiteParts`, `SsrSiteArgs`, and `createSsrSite(this.builder(), name, args, framework)` with the framework's `SsrFramework`, in `helpers/ssr-site.ts`. The framework gives its build command, reads its build into a `SiteBuild` with the site's plan, says how its server is built (`ServerPlan`, which the site's own args are merged into) and creates what it adds, like `Nextjs`'s image optimizer. A framework with args of its own, like `Remix`'s `buildDirectory`, is made from the site's args and checks them in `check`. One whose build has no versioned folder says `versionedFiles: false`, so `invalidation.paths: "versioned"` makes no invalidation, as in SST 4. A framework without a build command of its own builds with `defaultBuildCommand(sitePath)` in `helpers/site-build.ts`, the `build` script by the app's package manager. `configText(sitePath, "vite.config")` there reads a config file in whichever extension it has, and `configValue(sitePath, file, key)` a value in it, like the base path. `nitroSite()` in `helpers/nitro.ts` loads a Nitro build, refusing one without the `aws-lambda` preset, for the four Nitro frameworks. A framework's `load(builtPath, owner)` gives a `SiteBuild`, with `server` when the site runs one; only a framework that creates parts for its server, like `Nextjs`, gives `server()`. What a site shares with the `StaticSite` (its path, `sst dev`, `router`) is in `helpers/site.ts`, and its distribution, which the `Router` shares too, in `helpers/distribution.ts`. `urlAccessArgs(fn, distributionArn)` gives the permissions to call a function's URL. The takeover map's shared part is `ssrSiteTakeover(label, warmedWhen)` in `takeover/ssr-site.ts`, and the tests every site passes are in `test/components/v5/ssr-site.suite.ts` |
 | A site's viewer request function, which routes it with the key-value store | `siteRequestCode(namespace, injection, blocksCloudFrontUrl)` in `helpers/ssr-site.ts`, which the `StaticSite` shares. A site with no server isn't on `createSsrSite`: the `StaticSite` builds with `buildSite()` and uploads its folder as it is |
 | What two components share, as more than args: their parts, built by a helper | `this.builder()`, which gives the helper the component's `part()`, `existingPart()`, `runsLocally()` and `report()`. Declare the shared parts as `const parts = sharedParts`; the docs follow it |
 | An arg with a default, then converted | `withDefault(value, fallback, convert?)` in `args.ts` |
@@ -162,13 +167,16 @@ has no 4.x components.
 | An arg that must not be an output | `plain(value, what, why?)` in `args.ts`; `why` when it doesn't decide which resources are created, like what a build reads |
 | An arg that must not have an output anywhere inside it | `plainDeep(value, what, why?)` in `args.ts` |
 | An `efs` arg: either kind of `Efs`, or an access point's ARN | `AnyEfs`, `isEfs(value)` in `helpers/efs.ts` |
-| Serving a component through a `Router` | `RouteArgs`, `AnyRouter`, `routeOf(route)` in `helpers/router.ts` |
+| Serving a component through a `Router` | `RouteArgs`, `SiteRouteArgs` (a site's: the instance, domain and path), `AnyRouter`, `routeOf(route, what)`, which checks the instance is plain, in `helpers/router.ts` |
 | A `bucket` arg: either kind of `Bucket` | `AnyBucket` in `helpers/bucket.ts` |
-| A `queue` or `topic` arg: either kind of `Queue` or `SnsTopic` | `AnyQueue` in `helpers/queue.ts`, `AnySnsTopic` in `helpers/sns-topic.ts` |
+| A `queue` or `topic` arg: either kind of `Queue` or `SnsTopic`, or an ARN | `AnyQueue`, `queueArnOf()` in `helpers/queue.ts`, `AnySnsTopic`, `topicArnOf()` in `helpers/sns-topic.ts` |
+| An API Gateway API's custom domain, access log, routes and their permissions, and the account's logging role | `ApiGatewayDomainArgs`, `apiDomainOf()`, `createRegionalDomain()`, `ApiGatewayAccessLogArgs`, `accessLogGroup()`, `parseRoute()`, `routePermissionArgs()`, `authorizerPermissionArgs()` in `helpers/apigateway.ts`, and `apiGatewayAccount(builder, name)` in `helpers/apigateway-account.ts` |
 | A `task` arg: either kind of `Task` | `AnyTask` in `helpers/task.ts` |
 | Building a site in the program, with what it links | `buildSite()` in `helpers/site-build.ts` |
 | A site's files, key-value entries and invalidation, as the 4.x sites make them | `siteFiles()`, `siteKvEntries()`, `siteInvalidation()` in `site-code.ts` |
-| An option a method no longer takes | `notAnOption(args, option, instead)` in `args.ts` |
+| An option that isn't taken, or one inside an arg | `notAnOption(args, option, instead, owner)`, `notAnOptionOf(value, option, instead, owner)` in `args.ts` |
+| An `existing` entry the component won't use | `notAnExistingPart(args.existing, part, owner, instead)`, or `onlyExisting(args.existing, used, owner)` next to a main resource, in `args.ts` |
+| Settings next to a resource given in `existing` | `usedAsItIs(args, keys, part, owner)` in `args.ts`; a `get` creates the component with `getArgs({ existing })`, which it doesn't check |
 | A value made on this machine from things in AWS, like built code | `withoutDependencies(output)` in `args.ts` |
 
 A helper returns the args of a part, or checks an arg. The component still creates
@@ -185,10 +193,9 @@ Args that several components take are declared once, in a helper. The docs gener
 reads every file in `aws/helpers/`, and a helper file gets no page of its own:
 
 - An interface the components' args extend, for args they share. `FargateBaseArgs` in
-  `helpers/fargate.ts` is what a task and a service both run, and with what, built the
-  5.0 way; `FargateArgs`, which it extends, is their `cluster` and `volumes`, which the
-  `Service` takes alone until it's rebuilt. Their args show on each page as the
-  component's own.
+  `helpers/fargate.ts` is what a task and a service both run, and with what;
+  `FargateArgs`, which it extends, is their `cluster` and `volumes`. Their args show on
+  each page as the component's own.
 - A named type the args use. `ContainerArgs` in `helpers/fargate.ts` and `ProxyArgs` in
   `helpers/rds.ts` get a section on each page that uses them, as if the page's file
   declared them.
@@ -612,8 +619,8 @@ and `get`; `postgres.ts` and `mysql.ts` for the same, built by one helper
 (`helpers/rds-instance.ts`), with an optional group of parts (the proxy) and a part
 per item in a list; `aurora.ts` for a
 `get` that finds the rest of what it references, and a transform that applies to more
-than one part; `cluster.ts` for the smallest one: nothing moved, so no takeover map,
-and a `get` that takes args next to the id; `efs.ts` for a part per item of a list
+than one part; `cluster.ts` for the smallest one: nothing moved, so its takeover map
+is empty, and a `get` that takes args next to the id; `efs.ts` for a part per item of a list
 that's only known on deploy (a mount target per subnet), and a `get` that finds the
 other part it needs; `dsql.ts` for parts in another region, and features that each add a
 group of parts; `task.ts` for parts per item of a plain list (containers), a part

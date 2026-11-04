@@ -9,13 +9,18 @@ import {
 import { RandomPassword } from "@pulumi/random";
 import { elasticache, secretsmanager } from "@pulumi/aws";
 import { type ComponentArgs, component, optional } from "../../parts-component";
-import { ifSet, plain, withDefault } from "../../args";
+import { ifSet, notAnExistingPart, plain, withDefault, onlyExisting, getArgs } from "../../args";
 import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { toGBs } from "../../size";
 import { context } from "../../contract";
 import { type AnyVpc, subnetsAndSecurityGroupsOf } from "../helpers/vpc";
-import { localServerPane, shownPassword } from "../helpers/local-server";
+import {
+  devValue,
+  localPassword,
+  localServerPane,
+} from "../helpers/local-server";
+import { secretField, tagOf } from "../helpers/secret";
 
 const parts = {
   /**
@@ -24,7 +29,9 @@ const parts = {
    */
   authToken: optional(RandomPassword),
   /**
-   * The Secrets Manager secret that stores the auth token of a cluster.
+   * The Secrets Manager secret that stores the auth token of a cluster. Next to an
+   * existing `cluster`, the auth token is read from the one given here, or from the one
+   * the cluster is tagged with.
    */
   secret: optional(secretsmanager.Secret),
   /**
@@ -44,15 +51,18 @@ const parts = {
    */
   cluster: optional(elasticache.ReplicationGroup),
   /**
-   * The ElastiCache serverless cache, when `serverless` is set.
+   * The ElastiCache serverless cache, when `serverless` is set. It can't be one you
+   * already have: SST can't find the password of a cache it didn't create.
    */
   serverlessCache: optional(elasticache.ServerlessCache),
   /**
-   * The `default` user of a serverless cache, which has the password.
+   * The `default` user of a serverless cache, which has the password. It can't be one you
+   * already have.
    */
   user: optional(elasticache.User),
   /**
-   * The user group a serverless cache takes its passwords from.
+   * The user group a serverless cache takes its passwords from. It can't be one you
+   * already have.
    */
   userGroup: optional(elasticache.UserGroup),
 };
@@ -220,6 +230,8 @@ export interface RedisArgs extends ComponentArgs<typeof parts> {
          * `elasticache:DeleteUserGroup`. Changing a setting later may also call the matching
          * `Modify` actions.
          *
+         * This has to be a plain value, not an output: it decides which resources are created.
+         *
          * :::danger
          * Turning this on or off for an existing cache changes how clients connect, so apps
          * that were linked before have to be deployed again.
@@ -328,6 +340,9 @@ export interface RedisArgs extends ComponentArgs<typeof parts> {
    * This will skip deploying a Redis ElastiCache instance and link to the locally running
    * Redis server instead. `sst dev` shows what the local server has to be set up with, in a
    * pane of its own.
+   *
+   * This has to be a plain value, not an output: it decides whether the cluster is
+   * deployed. The values inside it can be outputs.
    *
    * @example
    *
@@ -536,6 +551,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
     super(name, args, opts);
 
     const self = this;
+    const owner = `the "${name}" Redis cluster`;
 
     // `sst.aws.Redis` also took the number of nodes as `nodes`, when neither
     // `cluster` nor `serverless` was set. Left in, it would be ignored and
@@ -544,14 +560,36 @@ export class Redis extends component("sst:aws:Redis", parts) {
     if (nodes !== undefined)
       throw new VisibleError(
         args.cluster !== undefined || args.serverless || nodes === 0
-          ? `The "nodes" arg of the "${name}" Redis component is gone, and \`sst.aws.Redis\` ignored it here. Remove it; nothing in AWS changes.`
-          : `The "nodes" arg of the "${name}" Redis component is now "cluster.nodes". Pass the same number as \`cluster: { nodes }\`; nothing in AWS changes.`,
+          ? `The "nodes" of ${owner} is gone, and sst.aws.Redis ignored it here. Remove it; nothing in AWS changes.`
+          : `The "nodes" of ${owner} is "cluster.nodes" now. Pass the same number as "cluster: { nodes }"; nothing in AWS changes.`,
       );
+
+    // A serverless cache takes its password from the user and the user group
+    // it creates. One given in their place would leave the cache without the
+    // password it links, and SST can't read the password of a cache it
+    // didn't create.
+    notAnExistingPart(
+      args.existing,
+      "serverlessCache",
+      owner,
+      `SST can't find the password of a serverless cache it didn't create. Link it with an "sst.Linkable" that has its endpoint and password.`,
+    );
+    for (const key of ["user", "userGroup"])
+      notAnExistingPart(
+        args.existing,
+        key,
+        owner,
+        `A serverless cache's password is set through the "user" and the "userGroup" it creates. To set up its users yourself, set "serverless.password" to false and change the cache in "transform.serverlessCache".`,
+      );
+    // Given a cluster that's already deployed, it uses the secret with its
+    // auth token, and creates nothing else
+    if (args.existing?.cluster !== undefined)
+      onlyExisting(args.existing, ["cluster", "secret"], owner);
 
     // In `sst dev`, a Redis server on the user's machine stands in for the
     // cluster, one that's already deployed too. This is the only place the
     // component handles dev mode.
-    const dev = plain(args.dev, `The "dev" of the "${name}" Redis`);
+    const dev = plain(args.dev, `The "dev" of ${owner}`);
     if (dev && context().dev) {
       this.runsLocally();
       this.connection = runLocally(dev);
@@ -569,15 +607,9 @@ export class Redis extends component("sst:aws:Redis", parts) {
     const version = all([engine, args.version]).apply(
       ([engine, v]) => v ?? (engine === "redis" ? "7.1" : "7.2"),
     );
-    const vpc = subnetsAndSecurityGroupsOf(
-      args.vpc,
-      `the "${name}" Redis component`,
-    );
+    const vpc = subnetsAndSecurityGroupsOf(args.vpc, owner);
 
-    const serverless = plain(
-      args.serverless,
-      `The "serverless" of the "${name}" Redis`,
-    );
+    const serverless = plain(args.serverless, `The "serverless" of ${owner}`);
     if (serverless) {
       this.connection = createServerless(serverless === true ? {} : serverless);
       return;
@@ -680,7 +712,8 @@ export class Redis extends component("sst:aws:Redis", parts) {
       options: Exclude<NonNullable<RedisArgs["serverless"]>, boolean>,
     ): Connection {
       const password =
-        (options.password ?? true)
+        (plain(options.password, `The "serverless.password" of ${owner}`) ??
+        true)
           ? self.part("authToken", {
               length: 32,
               special: true,
@@ -704,7 +737,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
           })
         : undefined;
 
-      const limits = serverlessLimits(name, options);
+      const limits = serverlessLimits(owner, options);
       const cache = self.part("serverlessCache", {
         description: "Managed by SST",
         engine,
@@ -712,7 +745,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
           const major = v.split(".")[0];
           if (parseInt(major) < 7)
             throw new VisibleError(
-              `In the Redis component "${name}", \`serverless\` needs version 7 or later, but \`version\` is "${v}".`,
+              `The "version" of ${owner} is "${v}". A serverless cache needs version 7 or later.`,
             );
           return major;
         }),
@@ -740,7 +773,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
           const address = endpoints?.[0]?.address;
           if (!address)
             throw new VisibleError(
-              "The serverless Redis cache has no endpoint address yet.",
+              `The serverless cache of ${owner} has no endpoint address yet.`,
             );
           return address;
         }),
@@ -767,19 +800,22 @@ export class Redis extends component("sst:aws:Redis", parts) {
       };
     }
 
-    // A cluster created by this component, or by `sst.aws.Redis`, is tagged
-    // with the secret that holds its auth token
+    // The auth token of a cluster that's already deployed: in the secret the
+    // user gave, or in the one a cluster created by this component, or by
+    // `sst.aws.Redis`, is tagged with
     function authTokenOf(cluster: elasticache.ReplicationGroup) {
-      const secretId = cluster.tagsAll.apply((tags) => {
-        if (!tags?.["sst:ref:secret"])
-          throw new VisibleError(
-            `Failed to lookup secret for Redis cluster "${name}".`,
-          );
-        return tags["sst:ref:secret"];
-      });
-      return secretsmanager
-        .getSecretVersionOutput({ secretId }, { parent: self })
-        .secretString.apply((v) => JSON.parse(v).authToken as string);
+      const secret = self.existingPart("secret");
+      return secretField(
+        secret
+          ? secret.id
+          : tagOf(
+              cluster,
+              "sst:ref:secret",
+              `The "${name}" Redis cluster can't find its auth token: its cluster has no "sst:ref:secret" tag, which names the secret that holds it. Pass the secret in "existing.secret".`,
+            ),
+        "authToken",
+        self,
+      );
     }
 
     // What `sst dev` connects to, and the pane that says how the local server
@@ -787,20 +823,17 @@ export class Redis extends component("sst:aws:Redis", parts) {
     function runLocally(dev: NonNullable<RedisArgs["dev"]>): Connection {
       const local = {
         clusterId: output("placeholder"),
-        host: output(dev.host ?? "localhost"),
-        port: output(dev.port ?? 6379),
-        username: output(dev.username ?? "default"),
-        password: output(dev.password ?? ""),
+        host: devValue(dev.host, "localhost"),
+        port: devValue(dev.port, 6379),
+        username: devValue(dev.username, "default"),
+        password: localPassword(dev.password, undefined),
       };
 
       self.report({
         dev: localServerPane(
-          interpolate`Make sure your local Redis server is using:
-
-  username: "${local.username}"
-  password: "${shownPassword(local.password)}"
-
-Listening on "${local.host}:${local.port}"...`,
+          "Redis server",
+          { username: local.username, password: local.password },
+          interpolate`${local.host}:${local.port}`,
         ),
       });
 
@@ -871,7 +904,8 @@ Listening on "${local.host}:${local.port}"...`,
    *
    * :::caution
    * This only works with a provisioned cluster. The `clusterId` of a cache created with
-   * `serverless` can't be used here and fails with a "Failed to lookup secret" error.
+   * `serverless` can't be used here: it fails with an error that says the cluster can't
+   * be found.
    * :::
    *
    * @param name The name of the component.
@@ -904,7 +938,7 @@ Listening on "${local.host}:${local.port}"...`,
   ) {
     return new Redis(
       name,
-      { existing: { cluster: clusterId } } as RedisArgs,
+      getArgs({ existing: { cluster: clusterId } }) as RedisArgs,
       opts,
     );
   }
@@ -916,7 +950,7 @@ Listening on "${local.host}:${local.port}"...`,
  * outputs, so they're read once known.
  */
 function serverlessLimits(
-  name: string,
+  owner: string,
   options: Exclude<NonNullable<RedisArgs["serverless"]>, boolean>,
 ) {
   return {
@@ -925,7 +959,7 @@ function serverlessLimits(
       .apply(([min, max]) => {
         const minimum = min ? Math.ceil(toGBs(min)) : undefined;
         const maximum = max ? Math.ceil(toGBs(max)) : 10;
-        checkRange(name, "storage", "GB", minimum, maximum, !max);
+        checkRange(owner, "storage", "GB", minimum, maximum, !max);
         return { minimum, maximum };
       }),
     ecpuPerSecond: output(options.ecpuPerSecond)
@@ -934,7 +968,7 @@ function serverlessLimits(
         const minimum = min;
         const maximum = max ?? 5000;
         checkRange(
-          name,
+          owner,
           "ecpuPerSecond",
           "",
           minimum,
@@ -947,7 +981,7 @@ function serverlessLimits(
 }
 
 function checkRange(
-  name: string,
+  owner: string,
   key: string,
   unit: string,
   minimum: number | undefined,
@@ -961,11 +995,11 @@ function checkRange(
   ] as const) {
     if (value !== undefined && value < 1)
       throw new VisibleError(
-        `In the Redis component "${name}", \`serverless.${key}.${limit}\` has to be at least 1${suffix}.`,
+        `The "serverless.${key}.${limit}" of ${owner} is ${value}${suffix}. It has to be at least 1${suffix}.`,
       );
   }
   if (minimum !== undefined && minimum > maximum)
     throw new VisibleError(
-      `In the Redis component "${name}", \`serverless.${key}.minimum\` (${minimum}${suffix}) is above \`serverless.${key}.maximum\` (${maximum}${suffix}${maximumIsDefault ? ", the default" : ""}). Set a \`maximum\` that is at least the \`minimum\`.`,
+      `The "serverless.${key}.minimum" of ${owner} (${minimum}${suffix}) is above its "serverless.${key}.maximum" (${maximum}${suffix}${maximumIsDefault ? ", the default" : ""}). Set a "maximum" that is at least the "minimum".`,
     );
 }

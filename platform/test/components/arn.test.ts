@@ -247,7 +247,7 @@ describe("parseElasticSearch", () => {
       parseElasticSearch(
         "arn:aws:es:us-east-1:123456789012:domain/my-domain",
       ),
-    ).toEqual({ tableName: "my-domain" });
+    ).toEqual({ domainName: "my-domain" });
   });
 
   it("throws on invalid ARN", () => {
@@ -261,7 +261,7 @@ describe("parseOpenSearch", () => {
       parseOpenSearch(
         "arn:aws:opensearch:us-east-1:123456789012:domain/my-domain",
       ),
-    ).toEqual({ tableName: "my-domain" });
+    ).toEqual({ domainName: "my-domain" });
   });
 
   it("throws on invalid ARN", () => {

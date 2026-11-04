@@ -666,12 +666,14 @@ describe("Bucket", () => {
         bucket.notify({
           notifications: [{ name: "Auditor", function: FUNCTION_ARN }],
         }),
-      ).toThrow(/Cannot call "notify" on the "MyBucket" bucket multiple times/);
+      ).toThrow(
+        /"notify" was already called on the "MyBucket" bucket. A bucket has one notification configuration/,
+      );
     });
 
     it("needs notifications or EventBridge", () => {
       expect(() => new Bucket("MyBucket").notify({})).toThrow(
-        /Cannot call "notify" on the "MyBucket" bucket without notifications or EventBridge enabled/,
+        /"notify" on the "MyBucket" bucket needs "notifications", or "eventBridge" set to true/,
       );
     });
 
@@ -681,11 +683,13 @@ describe("Bucket", () => {
         return () => bucket.notify({ notifications });
       };
       expect(notify({ name: "A" })).toThrow(
-        /At least one of function, queue, or topic is required for the "A"/,
+        'The "A" notification of the "MyBucket" bucket has none of "function", "queue" and "topic". Give it one.',
       );
       expect(
         notify({ name: "A", function: FUNCTION_ARN, queue: QUEUE_ARN }),
-      ).toThrow(/Only one of function, queue, or topic is allowed for the "A"/);
+      ).toThrow(
+        'The "A" notification of the "MyBucket" bucket has more than one of "function", "queue" and "topic".',
+      );
       expect(
         notify(
           { name: "A", function: FUNCTION_ARN },
@@ -895,7 +899,7 @@ describe("Bucket", () => {
 
     it("says where the options that are gone went", async () => {
       expect(() => new Bucket("MyBucket", { public: true } as any)).toThrow(
-        /"public" isn't an option here. Use "access" instead/,
+        /"public" isn't an option for the "MyBucket" bucket. Use "access" instead/,
       );
       expect(
         () =>
@@ -933,6 +937,64 @@ describe("Bucket", () => {
       );
       await pulumi.settle();
     });
+
+    // A `$transform` for every bucket runs on one from `get` too, and isn't
+    // meant for it
+    it("leaves what a $transform sets on one from get", async () => {
+      const { $transform } = await import("../../../src/components/component");
+      $transform(Bucket, (args, _opts, name) => {
+        if (name === "Shared") args!.versioning = true;
+      });
+      Bucket.get("Shared", "existing-bucket");
+      await pulumi.settle();
+      expect(resource("SharedBucket").kind).toBe("read");
+    });
+  });
+
+  it("says what to write in place of SST 4's subscribe methods", () => {
+    const bucket = new Bucket("MyBucket") as any;
+    expect(() => bucket.subscribe("src/subscriber.handler")).toThrow(
+      /"subscribe" isn't a method of the "MyBucket" bucket. Notify the function with "notify"/,
+    );
+    expect(() => bucket.subscribeQueue(QUEUE_ARN)).toThrow(
+      /notifications: \[\{ name: "MyQueue", queue \}\]/,
+    );
+    expect(() => bucket.subscribeTopic(QUEUE_ARN)).toThrow(
+      /notifications: \[\{ name: "MyTopic", topic \}\]/,
+    );
+    const Static = Bucket as any;
+    for (const method of ["subscribe", "subscribeQueue", "subscribeTopic"])
+      expect(() => Static[method]("arn:aws:s3:::shared", QUEUE_ARN)).toThrow(
+        /reference (it|the bucket) with "get" and call "notify" on that: sst\.aws\.v5\.Bucket\.get\(/,
+      );
+    expect(() =>
+      Static.subscribeEventBridge("Resizer", "shared", FUNCTION_ARN),
+    ).toThrow(/"subscribeEventBridge" is a method of the bucket/);
+  });
+
+  it("names the bucket when a lifecycle rule's id is wrong", async () => {
+    const { output } = await import("@pulumi/pulumi");
+    const errors = await applyErrors(() => {
+      new Bucket("MyBucket", {
+        lifecycle: [
+          { id: "same", expiresIn: "1 day" },
+          { id: "same", expiresIn: "2 days" },
+        ],
+      });
+      new Bucket("Other", {
+        lifecycle: [{ id: output(" "), expiresIn: "1 day" }],
+      });
+    }, pulumi.settle);
+    expect(errors).toContainEqual(
+      expect.stringContaining(
+        'Lifecycle rules 0 and 1 of the "MyBucket" bucket have the same "id", "same".',
+      ),
+    );
+    expect(errors).toContainEqual(
+      expect.stringContaining(
+        'Lifecycle rule 0 of the "Other" bucket has an empty "id".',
+      ),
+    );
   });
 
   it("links with its name and permission to use the bucket", async () => {

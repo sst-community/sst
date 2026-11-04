@@ -173,6 +173,39 @@ describe("CognitoIdentityPool", () => {
     expect(pool.nodes.roleAttachment).toBeDefined();
   });
 
+  it("uses an existing pool the way it is, with the roles given next to it", async () => {
+    expect(
+      () =>
+        new CognitoIdentityPool("Refused", {
+          userPools: [{ userPool: "us-east-1_abc", client: "abc" }],
+          existing: { identityPool: POOL_ID },
+        }),
+    ).toThrow(
+      /The "Refused" identity pool is given an existing "identityPool", which it uses the way it is. Remove "userPools" from its args/,
+    );
+
+    // A role given by its name is looked up by it, not by the attachment's
+    const pool = new CognitoIdentityPool("MyIdentityPool", {
+      existing: { identityPool: POOL_ID, authenticatedRole: "my-auth-role" },
+    });
+    await pulumi.settle();
+    expect(
+      registered(ROLE)
+        .map((r) => r.options.id)
+        .sort(),
+    ).toEqual(["my-auth-role", "pool-unauth"]);
+    expect(pool.nodes.authenticatedRole).toBeDefined();
+
+    // What a $transform gives every identity pool isn't refused for one from
+    // get
+    const { $transform } = await import("../../../src/components/component");
+    $transform(CognitoIdentityPool, (args, _opts, name) => {
+      if (name === "TransformedPool") args!.permissions = { authenticated: [] };
+    });
+    CognitoIdentityPool.get("TransformedPool", POOL_ID);
+    await pulumi.settle();
+  });
+
   it("can be linked by a function", async () => {
     const pool = new CognitoIdentityPool("MyIdentityPool");
     new Function("Api", { handler: "src/api.handler", link: [pool] });
