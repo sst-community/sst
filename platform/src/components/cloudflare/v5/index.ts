@@ -10,7 +10,6 @@ export * from "./queue";
 export * from "./cron";
 export * from "./workflow";
 export * from "./durable-object";
-export * from "./auth";
 export * from "./static-site";
 export * from "./astro";
 export * from "./react-router";

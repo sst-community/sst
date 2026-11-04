@@ -17,7 +17,6 @@ import "./queue";
 import "./cron";
 import "./workflow";
 import "./durable-object";
-import "./auth";
 import "./static-site";
 import "./astro";
 import "./react-router";

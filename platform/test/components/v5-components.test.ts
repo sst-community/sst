@@ -119,7 +119,6 @@ const rebuilt: Record<Group, string[]> = {
     "cron.ts",
     "workflow.ts",
     "durable-object.ts",
-    "auth.ts",
     "static-site.ts",
     "astro.ts",
     "react-router.ts",

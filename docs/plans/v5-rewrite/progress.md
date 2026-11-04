@@ -4,14 +4,14 @@ What's been done on [the plan](plan.md), newest first. Each entry says what was 
 
 ## 2026-11-03: step 4, Cloudflare's components built the 5.0 way, and their lab check
 
-**Done, not committed:**
+**Done, committed (not pushed):**
 
 - **The harness takes a provider's `v5` folder.** Cloudflare's 5.0 components are in `cloudflare/v5/`, as `sst.cloudflare.v5.X`, with their maps in `cloudflare/takeover/`, which `sideEffects` lists. `v5-components.test.ts` checks both providers' folders, with `RENAMED` and the types SST 4 spelled otherwise by provider. A takeover suite says `provider: "cloudflare"` to run its third way with a Cloudflare provider. The docs generator and the sidebar list Cloudflare's 5.0 pages, and keep the V5 class names by provider (`Bucket`, `Cron`, `Queue`, `StaticSite` and others are in both).
 - **The `Worker`**, the base of the rest: its zone found with a function, not SST 4's `ZoneLookup`; each of a domain's aliases and redirects kept by its domain, moved from SST 4's place in the list by the map; the IAM user a link to AWS gives it created directly; what it's linked to read without waiting on it, so a Worker inside a component can link that component; its bindings read together, so one that's secret keeps them all secret, as SST 4 did. Every `existing` entry is refused: it builds its code.
 - **`Kv`, `D1`, `Bucket`, `Hyperdrive`, `Ai`, `RateLimit`:** one resource each, or none, with `get` through `existing` and one helper that uses what's in `existing` or looks it up by an id with its account in front. `Bucket` gives a linked Worker its jurisdiction; `Hyperdrive` keeps its origin secret; `RateLimit` checks its settings when it's created.
 - **`Queue`** with one unnamed consumer, inside the queue where SST 4 kept it in a `QueueWorkerSubscriber`, and `dlq.retryDelay` sent in seconds; **`Cron`**, **`Workflow`** and **`DurableObject`**, each with its Worker kept under SST 4's name, so a Worker with Durable Object migrations finds its current tag.
 - **The sites,** `StaticSite` (SST 4's `StaticSiteV2`, with its type, `sst:cloudflare:StaticSite`, which SST 4's first `StaticSite` has too), `Astro`, `ReactRouter` and `TanStackStart`, built in the program on one helper, with the Wrangler config SST 4 wrote, and a binding whose id a preview doesn't know left out of it.
-- **Left out:** Cloudflare's `Auth`, the maintainer's call, as for `Auth.v1`; it was ported and tested first, and is in the history.
+- **Left out:** Cloudflare's `Auth`, the maintainer's call, as for `Auth.v1`; it was ported and tested first, and is in the history at `a679fb872`.
 - **A review of the set** found no resource a switch would lose, and 17 things to fix, all fixed: a preview's Wrangler config with empty binding ids, a queue given by its id read with its account in its id, a Worker that refused an output domain and took `existing` entries it would ignore, the R2 jurisdiction in a site's Wrangler config, four duplicates made helpers, and "Switch from" notes. It also found a framework bug: a `$transform` that set a part's `transform` for every component of a type made that type's `get` fail; fixed in `parts-component.ts`, with a test.
 
 **Checked:** `tsc`, the platform tests (4,199, 123 files), Prettier on what was clean before, and the docs generator: 16 Cloudflare pages, each with its switch notes.
