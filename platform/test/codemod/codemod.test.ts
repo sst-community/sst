@@ -379,3 +379,207 @@ describe("more args", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("services, sites and nodes", () => {
+  it("makes a Service's public its loadBalancer, ports its rules and a rule's path a condition", () => {
+    const out = config(
+      `new sst.aws.Service("Web", { cluster, public: { domain: "a.com", ports: [{ listen: "80/http", path: "/api/*" }, { listen: "443/https", forward: "80/http", conditions: { header: h } , path: "/x" }] } });`,
+    );
+    expect(out.text).toBe(
+      `new sst.aws.v5.Service("Web", { cluster, loadBalancer: { domain: "a.com", rules: [{ listen: "80/http", conditions: { path: "/api/*" } }, { listen: "443/https", forward: "80/http", conditions: { path: "/x", header: h } }] } });`,
+    );
+    expect(out.notes).toEqual([]);
+  });
+
+  it("drops what's set for one container next to containers, and permissions next to a role of your own", () => {
+    const out = config(
+      `new sst.aws.Service("Web", {\n  cluster,\n  image: "nginx",\n  health: { command: ["x"] },\n  containers: [{ name: "a", image: "a" }],\n  dev: { command: "npm run dev", url: "http://localhost:3000" },\n});\nnew sst.aws.Task("Job", { cluster, taskRole: "my-role", permissions: [{ actions: ["s3:*"], resources: ["*"] }] });`,
+    );
+    expect(out.text).toBe(
+      `new sst.aws.v5.Service("Web", {\n  cluster,\n  containers: [{ name: "a", image: "a" }],\n  dev: { url: "http://localhost:3000" },\n});\nnew sst.aws.v5.Task("Job", { cluster, existing: { taskRole: "my-role" } });`,
+    );
+    expect(out.changes.filter((c) => c.includes("next to"))).toHaveLength(4);
+  });
+
+  it("changes a StaticSite's route and its KV stores, and a Router's", () => {
+    const out = config(
+      `new sst.aws.StaticSite("Web", { route: { router, path: "/docs" }, cdn: true, edge: { viewerRequest: { injection: "x", kvStores: [a] }, viewerResponse: { injection: "y", kvStores: [b, c] } } });\nnew sst.aws.Router("R", { edge: { viewerRequest: { injection: "x", kvStore: a, kvStores: [a] } } });`,
+    );
+    expect(out.text).toBe(
+      `new sst.aws.v5.StaticSite("Web", { router: { instance: router, path: "/docs" }, edge: { viewerRequest: { injection: "x" }, viewerResponse: { injection: "y", kvStore: b } } });\nnew sst.aws.v5.Router("R", { edge: { viewerRequest: { injection: "x", kvStore: a } } });`,
+    );
+    expect(
+      config(`new sst.aws.Router("R", { routes: { "/*": "https://a.com" } });`)
+        .notes,
+    ).toHaveLength(1);
+  });
+
+  it("gives a Workflow's transform.function to the function's transform, with its role", () => {
+    expect(
+      config(
+        `new sst.aws.Workflow("W", { handler: "a.h", role: role.arn, transform: { function: { function: { timeout: 30 } } } });`,
+      ).text,
+    ).toBe(
+      `new sst.aws.v5.Workflow("W", { handler: "a.h", transform: { function: { transform: { function: { timeout: 30 } }, existing: { role: role.arn } } } });`,
+    );
+    expect(
+      config(`new sst.aws.Workflow("W", { handler: "a.h", role: "r" });`).text,
+    ).toBe(
+      `new sst.aws.v5.Workflow("W", { handler: "a.h", transform: { function: { existing: { role: "r" } } } });`,
+    );
+  });
+
+  it("reads a Vpc's records where SST 4 had lists, and a Cloudflare Cron's script on its Worker", () => {
+    expect(
+      config(
+        `const vpc = new sst.aws.Vpc("V");\nf(vpc.nodes.privateSubnets);\nvpc.nodes.publicSubnets[1].id;\nvpc.nodes.natGateways.apply((n) => n.length);`,
+      ).text,
+    ).toBe(
+      `const vpc = new sst.aws.v5.Vpc("V");\nf(Object.values(vpc.nodes.privateSubnet));\nvpc.nodes.publicSubnet["2"].id;\n$output(Object.values(vpc.nodes.natGateway)).apply((n) => n.length);`,
+    );
+    expect(
+      config(
+        `const cron = new sst.cloudflare.Cron("C", { job: "a.ts", schedules: ["* * * * *"] });\ncron.nodes.worker.id;\ncron.nodes.worker.url;`,
+      ).text,
+    ).toBe(
+      `const cron = new sst.cloudflare.v5.Cron("C", { worker: "a.ts", schedules: ["* * * * *"] });\ncron.nodes.worker.nodes.worker.id;\ncron.nodes.worker.url;`,
+    );
+  });
+
+  it("changes nothing a second time", () => {
+    for (const text of [
+      `new sst.aws.Service("Web", { cluster, public: { ports: [{ listen: "80/http", path: "/a" }] }, image: "x", containers: [] });`,
+      `new sst.aws.StaticSite("Web", { edge: { viewerResponse: { injection: "y", kvStores: [b] } } });`,
+      `new sst.aws.Workflow("W", { handler: "a.h", role: "r", transform: { function: { role: x } } });`,
+      `const vpc = new sst.aws.Vpc("V");\nvpc.nodes.privateSubnets[0];`,
+      `const c = new sst.cloudflare.Cron("C", { worker: "a.ts" });\nc.nodes.worker.id;`,
+    ]) {
+      const once = config(text).text;
+      expect(once).not.toBe(text);
+      const twice = config(once);
+      expect(twice.text, text).toBe(once);
+      expect(twice.changes, text).toEqual([]);
+    }
+  });
+});
+
+describe("what a method gave", () => {
+  it("reads its nodes on the component, by its id", () => {
+    const out = config(
+      `const bus = new sst.aws.Bus("Bus");\nconst sub = bus.subscribe("Sub", "a.handler");\nlink(sub.nodes.function);\nconst api = new sst.aws.ApiGatewayV2("Api");\nconst r = api.route("get /notes", "b.handler");\nr.nodes.integration.id;\nconst a = api.addAuthorizer({ name: "Auth", jwt: {} });\na.nodes.authorizer.id;\nconst q = new sst.aws.Queue("Q");\nconst s = q.subscribe("c.handler");\ns.nodes.function.name;`,
+    );
+    expect(out.text).toBe(
+      `const bus = new sst.aws.v5.Bus("Bus");\nconst sub = bus.subscribe("Sub", "a.handler");\nlink(bus.nodes.subscriber["Sub"]);\nconst api = new sst.aws.v5.ApiGatewayHttp("Api");\nconst r = api.route("get /notes", "b.handler");\napi.nodes.integration["GET /notes"].id;\nconst a = api.addAuthorizer({ name: "Auth", jwt: {} });\na.id;\nconst q = new sst.aws.v5.Queue("Q");\nconst s = q.subscribe("c.handler");\nq.nodes.subscriber.name;`,
+    );
+    expect(out.notes).toEqual([]);
+  });
+
+  it("lists a read whose id it can't write there", () => {
+    const out = config(
+      `const bus = new sst.aws.Bus("Bus");\nfunction f(n: string) { return bus.subscribe(n, "a.handler"); }\nconst api = new sst.aws.ApiGatewayV2("Api");\nconst r = api.route(route, "b.handler");\nr.nodes.route;`,
+    );
+    expect(out.text).toContain("r.nodes.route;");
+    expect(out.notes).toHaveLength(1);
+  });
+
+  it("gives a Realtime subscriber's nodes by the id it's named with", () => {
+    const out = config(
+      `const rt = new sst.aws.Realtime("Rt", { authorizer: "auth.handler" });\nconst s = rt.subscribe("sub.handler", { filter: "chat/#" });\ns.nodes.rule.arn;`,
+    );
+    expect(out.text).toMatch(/rt\.nodes\.topicRule\["[A-Z][a-z]{5}"\]\.arn;$/);
+  });
+
+  it("puts a sub-item's own transform in the component's, for its id", () => {
+    const out = config(
+      `const api = new sst.aws.ApiGatewayV2("Api", { cors: true });\napi.route("GET /a", "a.handler", { transform: { route: { authorizationType: "NONE" } } });\napi.route("POST /b", "b.handler", { transform: { route: (args) => { args.operationName = "b"; } } });`,
+    );
+    expect(out.text).toBe(
+      `const api = new sst.aws.v5.ApiGatewayHttp("Api", { transform: { route: (args_, opts, name, id) => { if (id === "GET /a") Object.assign(args_, { authorizationType: "NONE" }); if (id === "POST /b") ((args) => { args.operationName = "b"; })(args_, opts, name); } }, cors: true });\napi.route("GET /a", "a.handler");\napi.route("POST /b", "b.handler");`,
+    );
+  });
+
+  it("keeps a WebSocket authorizer's args when it gives it its name, and lists an API's transform.route.args", () => {
+    const out = config(
+      `const ws = new sst.aws.ApiGatewayWebSocket("Ws");\nws.addAuthorizer("Auth", { transform: { authorizer: { name: "x" } } });\nnew sst.aws.ApiGatewayV2("Api", { transform: { route: { args: { auth: { iam: true } } } } });`,
+    );
+    expect(out.text).toBe(
+      `const ws = new sst.aws.v5.ApiGatewayWebSocket("Ws", { transform: { authorizer: (args, opts, name, id) => { if (id === "Auth") Object.assign(args, { name: "x" }); } } });\nws.addAuthorizer({ name: "Auth", });\nnew sst.aws.v5.ApiGatewayHttp("Api", { transform: { route: { args: { auth: { iam: true } } } } });`,
+    );
+    expect(out.notes).toHaveLength(1);
+  });
+
+  it("puts a single part's transform there as it is, and lists what it can't move", () => {
+    expect(
+      config(
+        `const q = new sst.aws.Queue("Q");\nq.subscribe("a.handler", { batch: { size: 5 }, transform: { function: { memory: "1 GB" }, eventSourceMapping: (a) => {} } });`,
+      ).text,
+    ).toBe(
+      `const q = new sst.aws.v5.Queue("Q", { transform: { subscriber: { memory: "1 GB" }, eventSourceMapping: (a) => {} } });\nq.subscribe("a.handler", { batch: { size: 5 } });`,
+    );
+    const out = config(
+      `const topic = new sst.aws.SnsTopic("T", { transform: { subscription: {} } });\ntopic.subscribe("S", "a.handler", { transform: { subscription: { rawMessageDelivery: true } } });`,
+    );
+    expect(out.text).toContain(
+      `{ transform: { subscription: { rawMessageDelivery: true } } }`,
+    );
+    expect(out.notes).toHaveLength(1);
+  });
+
+  it("makes a Bucket's subscribe a notification, and its static subscribeEventBridge the bucket's", () => {
+    const out = config(
+      `const bucket = new sst.aws.Bucket("B");\nbucket.subscribe({ handler: "a.handler", live: false }, { events: ["s3:ObjectCreated:*"], transform: { notification: { eventbridge: false } } });\nsst.aws.Bucket.subscribeEventBridge("Resize", bucket.name, "r.handler", { pattern: {}, transform: { rule: { state: "ENABLED" } } });\nsst.aws.Bucket.subscribeEventBridge("Other", "their-bucket", "o.handler");`,
+    );
+    expect(out.text).toBe(
+      `const bucket = new sst.aws.v5.Bucket("B", { transform: { notification: { eventbridge: false }, eventBridgeRule: (args, opts, name, id) => { if (id === "Resize") Object.assign(args, { state: "ENABLED" }); } } });\nbucket.notify({ notifications: [{ name: "Subscriber", function: { handler: "a.handler", dev: false }, events: ["s3:ObjectCreated:*"] }] });\nbucket.subscribeEventBridge("Resize", "r.handler", { pattern: {} });\nsst.aws.v5.Bucket.get("OtherBucket", "their-bucket").subscribeEventBridge("Other", "o.handler");`,
+    );
+    expect(out.notes).toEqual([]);
+  });
+
+  it("changes nothing a second time", () => {
+    for (const text of [
+      `const bus = new sst.aws.Bus("Bus");\nconst sub = bus.subscribe("Sub", "a.handler", { transform: { rule: { name: "x" } } });\nsub.nodes.rule;`,
+      `const bucket = new sst.aws.Bucket("B");\nbucket.subscribeQueue(queue.arn, { filterPrefix: "a/" });`,
+    ]) {
+      const once = config(text).text;
+      expect(once).not.toBe(text);
+      const twice = config(once);
+      expect(twice.text, text).toBe(once);
+      expect(twice.changes, text).toEqual([]);
+    }
+  });
+});
+
+describe("a site's server.edge", () => {
+  it("moves it to the top level, where SST 4 took it", () => {
+    expect(
+      config(
+        `new sst.aws.Nextjs("Web", { server: { memory: "1 GB", edge: { viewerRequest: { injection: "x" } } } });\nnew sst.aws.Astro("A", { server: { edge: e } });`,
+      ).text,
+    ).toBe(
+      `new sst.aws.v5.Nextjs("Web", { edge: { viewerRequest: { injection: "x" } }, server: { memory: "1 GB" } });\nnew sst.aws.v5.Astro("A", { edge: e, });`,
+    );
+  });
+});
+
+describe("subscribers without a name", () => {
+  it("lists one 5.0 doesn't keep, and rewrites one with a name", () => {
+    const out = config(
+      `const topic = new sst.aws.SnsTopic("T");\ntopic.subscribe("a.handler", { filter: {} });\ntopic.subscribe("Named", "a.handler");\ntopic.subscribeQueue("Q", queue);\nsst.aws.SnsTopic.subscribe(arn, "b.handler");\nsst.aws.SnsTopic.subscribe("Other", arn, "b.handler");`,
+    );
+    expect(out.text).toBe(
+      `const topic = new sst.aws.v5.SnsTopic("T");\ntopic.subscribe("a.handler", { filter: {} });\ntopic.subscribe("Named", "a.handler");\ntopic.subscribeQueue("Q", queue);\nsst.aws.v5.SnsTopic.subscribe(arn, "b.handler");\nsst.aws.v5.SnsTopic.get("OtherTopic", arn).subscribe("Other", "b.handler");`,
+    );
+    // The first and the static one with no name; `queue` can't be told apart
+    expect(out.notes).toHaveLength(3);
+  });
+
+  it("gives SST 4's Queue.subscribe options to get", () => {
+    expect(
+      config(
+        `sst.aws.Queue.subscribe(arn, "a.handler", { batch: { size: 1 } }, { provider: east });`,
+      ).text,
+    ).toBe(
+      `sst.aws.v5.Queue.get("SubscribedQueue", arn, { provider: east }).subscribe("a.handler", { batch: { size: 1 } });`,
+    );
+  });
+});

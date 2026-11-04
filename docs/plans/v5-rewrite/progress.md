@@ -2,6 +2,23 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 5, the codemod's rules
+
+The rest of the codemod's rules, from the list of 131 rewrites made from every component's "Switch from" section, and the examples through it.
+
+**Done, committed and pushed:**
+
+- **What a route, a subscriber and the like gave** (`platform/src/codemod/parts.ts`): SST 4's `route()`, `subscribe()`, `addAuthorizer()`, `addDataSource()`, `addResolver()`, `addIdentityProvider()` and the rest returned a component for the sub-item; 5.0's return the component or the resource. A read of the result's `nodes`, like `sub.nodes.function`, becomes the component's, by the sub-item's id: `bus.nodes.subscriber["Sub"]`. The id is worked out as 5.0 works it out: a route's `"GET /notes"` from `"get /notes"`, a resolver's type and field, and a `Realtime` subscriber's hash of its filter and handler (a test checks the codemod's copy of the hash against the platform's). A sub-item's own `transform` moves into the component's: for a part there are several of, as a function that applies it for that id only, with `Object.assign`, as SST 4 merged it; for one there's one of, like a `Queue`'s subscriber, as it is. Where the id isn't written as a string, the component isn't made in the same file, or it has a transform of its own for that part, it's listed.
+- **Subscribers without a name**: SST 4's `SnsTopic`, `Dynamo` and `KinesisStream` took a subscriber without a name, which 5.0 doesn't keep. The codemod tells the two forms apart by what's second, lists one without a name, and rewrites only one with.
+- **`Bucket`**: `subscribe`, `subscribeQueue` and `subscribeTopic` become `notify` with one notification, their `transform.notification` the bucket's; the static `subscribeEventBridge(name, bucket.name, ...)` becomes the bucket's own, or `get`'s for a bucket that isn't in the app.
+- **The rest**: `Service`'s `public`, `ports` and a rule's `path`; the top-level args next to `containers`, and `permissions` next to a `taskRole`, which SST 4 didn't apply; `StaticSite`'s `route`, `cdn` and `kvStores`, and `Router`'s; an SSR site's `server.edge`, which SST 4 refused; `Workflow`'s `transform.function` and `role`; `Vpc`'s lists in `nodes`; Cloudflare `Cron`'s `nodes.worker`; SST 4's `Queue.subscribe` options, which are `get`'s now. A `Router`'s `routes` and an API's `transform.route.args` are listed.
+- **The examples**: all 194 through it, 183 changed, with 520 changes and 8 things listed (a `Router` with `routes` in five, and three components with no 5.0 form); no rule failed. Each example was type-checked against the platform before and after: the only new errors are the five `routes`. One example, `aws-nextjs-basic-auth`, had `server.edge`, which SST 4 refuses, so it's rewritten too.
+- **The plan's table** says Codemod where the codemod now makes the change, with a row each for `Service`'s `public` and `Alb`'s `nodes.listeners`, which had none.
+
+Checked: 51 tests, `tsc`, and the CLI on a small app (a dry run, the write, and a second run with nothing to change). A second pass found an edit two rules could make over the same text (a WebSocket authorizer's args), now avoided, and a transform's function that renamed its arguments for a name that was only a key.
+
+**Left:** the migration guide, written for the move with `sst migrate`, and an app moved with the codemod in the lab, step 5's exit.
+
 ## 2026-11-04: step 5, the codemod started
 
 The first of step 5's items: `sst migrate --codemod`, which rewrites an app's config for 5.0. The maintainer's choices are in [Decisions](plan.md#decisions): TypeScript in the platform, written in place with what it couldn't do listed, and where the 5.0 components are as a setting until the swap.

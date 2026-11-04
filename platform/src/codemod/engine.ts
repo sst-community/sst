@@ -43,10 +43,12 @@ export class FileContext {
       root: ts.ObjectLiteralExpression;
       path: string[];
       props: {
-        prop: ts.ObjectLiteralElementLike;
         key: string;
-        from: ts.ObjectLiteralExpression;
+        // A prop moved, from its object, or an entry put there as code
+        prop?: ts.ObjectLiteralElementLike;
+        from?: ts.ObjectLiteralExpression;
         keep?: boolean;
+        text?: string;
       }[];
     }
   >();
@@ -201,11 +203,39 @@ export class FileContext {
     this.moves.set(id, entry);
   }
 
+  /**
+   * Put an entry, as code, into the object at `path` under `root`, creating
+   * what isn't there, with the moves to the same place.
+   */
+  put(
+    root: ts.ObjectLiteralExpression,
+    path: string[],
+    key: string,
+    text: string,
+  ) {
+    const id = `${root.pos}:${path.join(".")}`;
+    const entry = this.moves.get(id) ?? { root, path, props: [] };
+    entry.props.push({ key, text });
+    this.moves.set(id, entry);
+  }
+
+  // Nodes a rule rewrote whole, which the rules for what's in them leave
+  private skipped = new Set<ts.Node>();
+
+  /** Leave a node to the rule that rewrites what's around it. */
+  skip(node: ts.Node) {
+    this.skipped.add(node);
+  }
+
+  isSkipped(node: ts.Node) {
+    return this.skipped.has(node);
+  }
+
   /** Write the moves the rules asked for. */
   finish() {
     for (const { root, path, props } of this.moves.values()) {
       const entries = props.map(
-        ({ prop, key }) => `${key}: ${valueText(this, prop)}`,
+        ({ prop, key, text }) => `${key}: ${text ?? valueText(this, prop!)}`,
       );
       // The deepest object of the path that's there
       let target = root;
@@ -223,14 +253,17 @@ export class FileContext {
       );
       // A prop of the object the new entry goes in becomes it, in its place
       const inPlace =
-        rest.length > 0 ? props.find((p) => p.from === target) : undefined;
-      if (inPlace) this.replace(inPlace.prop, inner);
+        rest.length > 0
+          ? props.find((p) => p.prop && p.from === target)
+          : undefined;
+      if (inPlace) this.replace(inPlace.prop!, inner);
       else {
         insertFirst(this, target, inner);
         this.filled.add(target);
       }
       for (const p of props)
-        if (p !== inPlace && !p.keep) this.remove(p.from, p.prop);
+        if (p !== inPlace && !p.keep && p.prop && p.from)
+          this.remove(p.from, p.prop);
     }
     this.moves.clear();
     this.flushRemovals();
@@ -471,4 +504,20 @@ export function argsOf(
 ) {
   const arg = call.arguments?.[index];
   return arg && ts.isObjectLiteralExpression(arg) ? arg : undefined;
+}
+
+/**
+ * The name to give a component looked up with `get`, from the name of what's
+ * done with it, like a subscriber's.
+ */
+export function getName(
+  ctx: FileContext,
+  name: ts.Expression | undefined,
+  suffix: string,
+  fallback = "Subscribed",
+) {
+  if (name && ts.isStringLiteralLike(name))
+    return JSON.stringify(name.text + suffix);
+  if (name) return `\`\${${ctx.text(name)}}${suffix}\``;
+  return JSON.stringify(`${fallback}${suffix}`);
 }

@@ -90,6 +90,15 @@ describe("the codemod's names", () => {
     },
   );
 
+  it("name a Realtime subscriber as the platform does", async () => {
+    const naming = await import("../../src/components/naming");
+    const { logicalName, prettyHash } = await import("../../src/codemod/parts");
+    for (const value of ["chat/#sub.handler", "a", "", "x".repeat(200)])
+      expect(logicalName(prettyHash(value, 6)), value).toBe(
+        naming.logicalName(naming.hashStringToPrettyString(value, 6)),
+      );
+  });
+
   it("give Cloudflare's experimental names their forms", async () => {
     const x = classes(
       await import("../../src/components/cloudflare/experimental"),

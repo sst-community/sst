@@ -94,6 +94,19 @@ export function codemod(input: CodemodInput): CodemodResult {
       ts.forEachChild(node, visit);
     };
     visit(sf);
+    for (const rule of rules) {
+      try {
+        rule.finish?.(ctx);
+      } catch (error) {
+        ctx.note(
+          sf,
+          rule.name,
+          `The codemod's "${rule.name}" rule failed: ${
+            (error as Error).message
+          }`,
+        );
+      }
+    }
     ctx.finish();
     let after: string | undefined;
     try {

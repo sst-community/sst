@@ -3,6 +3,7 @@ import {
   argsOf,
   chain,
   componentOf,
+  getName,
   isFive,
   isLeftOut,
   keyOf,
@@ -14,6 +15,7 @@ import {
   type Ref,
 } from "./engine";
 import { leftOut, v1 } from "./names";
+import { nameless, overloaded, partRules } from "./parts";
 
 // The sites built on SST 4's SsrSite
 const ssrSites = [
@@ -31,6 +33,8 @@ const ssrSites = [
 export interface Rule {
   name: string;
   visit(ctx: FileContext, node: ts.Node): void;
+  /** After every node of a file is visited, for what's written once. */
+  finish?(ctx: FileContext): void;
 }
 
 // Each `new` of one of these components, by its 5.0 name, with its args
@@ -158,7 +162,7 @@ export const rules: Rule[] = [
       )
         return;
       const ref = chain(node);
-      if (!ref) return;
+      if (!ref || ctx.isSkipped(node)) return;
       if (ref.v1) {
         ctx.note(
           node,
@@ -216,11 +220,12 @@ export const rules: Rule[] = [
     name: "function-args",
     visit(ctx, node) {
       if (!ts.isObjectLiteralExpression(node) || !prop(node, "handler")) return;
+      // A component's own args, like a `Workflow`'s, aren't a function's
       const parent = node.parent;
       if (
         ts.isNewExpression(parent) &&
         parent.arguments?.[1] === node &&
-        chain(parent.expression)?.five === "Function"
+        chain(parent.expression)
       )
         return;
       if (insideSst4(ctx, node)) functionArgs(ctx, node);
@@ -369,6 +374,22 @@ export const rules: Rule[] = [
     {
       name: `${c}-domain-name-id`,
       visit: onNew([c], domainNameId(`\`${c}\``)),
+    },
+    {
+      // What else SST 4 took in `transform.route`: every route's args
+      name: `${c}-route-args`,
+      visit: onNew(
+        [c],
+        (ctx: FileContext, args: ts.ObjectLiteralExpression) => {
+          const p = prop(objectAt(args, ["transform", "route"]), "args");
+          if (p)
+            ctx.note(
+              p,
+              "api-route-args",
+              `\`${c}\`'s \`transform.route.args\` is gone: give each route its args, like its \`auth\`, in \`route()\`.`,
+            );
+        },
+      ),
     },
     {
       name: `${c}-route-handler`,
@@ -676,11 +697,35 @@ export const rules: Rule[] = [
         SnsTopic: "Topic",
         Queue: "Queue",
       }[ref.five]!;
+      // SnsTopic's, Dynamo's and KinesisStream's could be called without a
+      // name, and 5.0 doesn't keep a subscriber added that way
+      if (overloaded[ref.five]?.includes(method)) {
+        const without = nameless(ctx, node, 1);
+        if (without !== false) {
+          ctx.note(
+            node,
+            "static-subscribe",
+            `${
+              without
+                ? "This subscriber has no name"
+                : "If this subscriber has no name"
+            }: 5.0 doesn't keep one added without a name, as SST 4's deprecated \`${
+              ref.name
+            }.${method}(arn, subscriber, args)\` did. Remove it and deploy with SST 4, then add it back with a name: \`${ctx.qualified(
+              ref,
+            )}.get(name, arn).${method}(name, subscriber, args)\`.`,
+          );
+          return;
+        }
+      }
       const [first, second] = node.arguments;
       const arn = named ? second : first;
       if (!arn) return;
       const subscriber = named ? first : undefined;
       const args = node.arguments[named ? 3 : 2];
+      // SST 4's Queue took the options its subscriber is created with, which
+      // are `get`'s now
+      const opts = named ? undefined : node.arguments[3];
       if (args && ts.isObjectLiteralExpression(args) && prop(args, "transform"))
         ctx.note(
           args,
@@ -693,8 +738,11 @@ export const rules: Rule[] = [
         );
       ctx.replace(
         node.expression.name,
-        `get(${getName(ctx, subscriber, suffix)}, ${ctx.text(arn)}).${method}`,
+        `get(${getName(ctx, subscriber, suffix)}, ${ctx.text(arn)}${
+          opts ? `, ${ctx.text(opts)}` : ""
+        }).${method}`,
       );
+      if (opts) ctx.edit(node.arguments[2].getEnd(), opts.getEnd(), "");
       ctx.edit(
         named ? first.getEnd() : arn.getStart(ctx.sf),
         named ? arn.getEnd() : (node.arguments[1] ?? arn).getStart(ctx.sf),
@@ -794,7 +842,332 @@ export const rules: Rule[] = [
       );
     },
   },
+
+  // Service: `public` is `loadBalancer`, its `ports` are `rules`, and a
+  // rule's `path` is `conditions.path`
+  { name: "service-load-balancer", visit: onNew(["Service"], loadBalancer) },
+
+  // Task and Service: with `containers`, what's set for one container goes,
+  // and `permissions` go next to a role of your own, as SST 4 left them out
+  ...(["Task", "Service"] as const).map((c) => ({
+    name: `${c.toLowerCase()}-containers`,
+    visit: onNew([c], (ctx, args) => {
+      if (!prop(args, "containers")) return;
+      const ignored = (
+        obj: ts.ObjectLiteralExpression | undefined,
+        keys: string[],
+        at = "",
+      ) => {
+        for (const key of keys) {
+          const p = prop(obj, key);
+          if (!obj || !p) continue;
+          ctx.remove(obj, p);
+          ctx.change(
+            p,
+            "fargate-containers",
+            `\`${c}\`'s \`${at}${key}\` next to \`containers\` is removed: SST 4 didn't apply it with \`containers\`. Set it on each container to apply it`,
+          );
+        }
+      };
+      ignored(args, [
+        "image",
+        "command",
+        "entrypoint",
+        "logging",
+        "environment",
+        "environmentFiles",
+        "volumes",
+        "ssm",
+        ...(c === "Service" ? ["health"] : []),
+      ]);
+      if (c === "Service")
+        ignored(
+          objectProp(args, "dev"),
+          ["command", "autostart", "directory"],
+          "dev.",
+        );
+    }),
+  })),
+  ...(["Task", "Service"] as const).map((c) => ({
+    name: `${c.toLowerCase()}-permissions`,
+    visit: onNew([c], (ctx, args) => {
+      const permissions = prop(args, "permissions");
+      if (
+        !permissions ||
+        !(
+          prop(args, "taskRole") ||
+          prop(objectProp(args, "existing"), "taskRole")
+        )
+      )
+        return;
+      ctx.remove(args, permissions);
+      ctx.change(
+        permissions,
+        "fargate-permissions",
+        `\`${c}\`'s \`permissions\` next to \`taskRole\` are removed: SST 4 didn't add them to the role it was given, so nothing deployed changes. To grant them, add them to that role`,
+      );
+    }),
+  })),
+
+  // StaticSite: a site's `route`, `cdn` and `router` as the SSR sites', and
+  // the one KV store a CloudFront function takes
+  { name: "static-site", visit: onNew(["StaticSite"], siteArgs) },
+  {
+    name: "static-site-kv-stores",
+    visit: onNew(["StaticSite"], (ctx, args) => {
+      const edge = objectProp(args, "edge");
+      for (const event of ["viewerRequest", "viewerResponse"]) {
+        const fn = objectProp(edge, event);
+        const stores = prop(fn, "kvStores");
+        if (!fn || !stores) continue;
+        const list =
+          ts.isPropertyAssignment(stores) &&
+          ts.isArrayLiteralExpression(stores.initializer)
+            ? stores.initializer
+            : undefined;
+        const first = list?.elements[0];
+        if (
+          event === "viewerRequest" ||
+          prop(fn, "kvStore") ||
+          (list && !first)
+        ) {
+          ctx.remove(fn, stores);
+          ctx.change(
+            stores,
+            "static-site-kv-stores",
+            `\`StaticSite\`'s \`edge.${event}.kvStores\` is removed: SST 4 used ${
+              event === "viewerRequest" ? "only `kvStore` there" : "`kvStore`"
+            }`,
+          );
+        } else if (first && !ts.isSpreadElement(first)) {
+          ctx.replace(stores, `kvStore: ${ctx.text(first)}`);
+          ctx.change(
+            stores,
+            "static-site-kv-stores",
+            "`StaticSite`'s `edge.viewerResponse.kvStores` is `kvStore`, the first of them, the one SST 4 used",
+          );
+        } else
+          ctx.note(
+            stores,
+            "static-site-kv-stores",
+            "`StaticSite`'s `edge.viewerResponse.kvStores` is `kvStore`: a CloudFront function takes one, and SST 4 used the first.",
+          );
+      }
+    }),
+  },
+
+  // Router: `kvStores` did something only for the inline `routes`, which are
+  // gone
+  {
+    name: "router-kv-stores",
+    visit: onNew(["Router"], (ctx, args) => {
+      const routes = prop(args, "routes");
+      if (routes) {
+        ctx.note(
+          routes,
+          "router-routes",
+          "`Router`'s `routes` are gone. With SST 4, add each with `route()` or `routeBucket()` in place of `routes` and deploy; then switch the `Router`.",
+        );
+        return;
+      }
+      const edge = objectProp(args, "edge");
+      for (const event of ["viewerRequest", "viewerResponse"]) {
+        const fn = objectProp(edge, event);
+        const stores = prop(fn, "kvStores");
+        if (!fn || !stores) continue;
+        ctx.remove(fn, stores);
+        ctx.change(
+          stores,
+          "router-kv-stores",
+          `\`Router\`'s \`edge.${event}.kvStores\` is removed: SST 4 used it only with \`routes\``,
+        );
+      }
+    }),
+  },
+
+  // Workflow: `transform.function` transforms the function's args, and its
+  // `role` is the function's `existing.role`
+  { name: "workflow", visit: onNew(["Workflow"], workflowArgs) },
+
+  // Vpc: the lists in `nodes` are records, by the AZ's number from "1"
+  {
+    name: "vpc-nodes",
+    visit: onNodes(["Vpc"], (ctx, node) => {
+      const singular = vpcLists[node.name.text];
+      if (!singular) return;
+      const nodes = ctx.text(node.expression);
+      const parent = node.parent;
+      if (
+        ts.isElementAccessExpression(parent) &&
+        parent.expression === node &&
+        ts.isNumericLiteral(parent.argumentExpression)
+      )
+        ctx.replace(
+          parent,
+          `${nodes}.${singular}["${
+            Number(parent.argumentExpression.text) + 1
+          }"]`,
+        );
+      else if (
+        ts.isPropertyAccessExpression(parent) &&
+        parent.expression === node
+      )
+        ctx.replace(node, `$output(Object.values(${nodes}.${singular}))`);
+      else ctx.replace(node, `Object.values(${nodes}.${singular})`);
+      ctx.change(
+        node,
+        "vpc-nodes",
+        `\`Vpc\`'s \`nodes.${node.name.text}\` is \`nodes.${singular}\`, a record by the AZ's number from "1"`,
+      );
+    }),
+  },
+
+  // Cloudflare's Cron: `nodes.worker` is the `Worker`, not its script
+  {
+    name: "cloudflare-cron-nodes-worker",
+    visit: onNodes(
+      ["Cron"],
+      (ctx, node) => {
+        if (node.name.text !== "worker") return;
+        // Already the `Worker`'s: what only it has is read
+        const after = node.parent;
+        if (
+          ts.isPropertyAccessExpression(after) &&
+          after.expression === node &&
+          ["nodes", "url"].includes(after.name.text)
+        )
+          return;
+        ctx.edit(node.getEnd(), node.getEnd(), ".nodes.worker");
+        ctx.change(
+          node,
+          "cloudflare-cron-nodes-worker",
+          "Cloudflare's `Cron`'s `nodes.worker` is its `Worker`, and the script SST 4 gave there is `nodes.worker.nodes.worker`",
+        );
+      },
+      "cloudflare",
+    ),
+  },
+
+  // What a route, a subscriber and the like gave: their `nodes` and their
+  // own `transform` are the component's
+  ...partRules,
 ];
+
+// SST 4's lists in a Vpc's `nodes`, and the record each is in 5.0
+const vpcLists: Record<string, string> = {
+  privateSubnets: "privateSubnet",
+  publicSubnets: "publicSubnet",
+  natGateways: "natGateway",
+  natInstances: "natInstance",
+  elasticIps: "elasticIp",
+  privateRouteTables: "privateRouteTable",
+  publicRouteTables: "publicRouteTable",
+};
+
+// A Service's `public`, `ports` and each rule's `path`
+function loadBalancer(ctx: FileContext, args: ts.ObjectLiteralExpression) {
+  const pub = prop(args, "public");
+  if (pub && !prop(args, "loadBalancer")) {
+    ctx.rename(pub, "loadBalancer");
+    ctx.change(
+      pub,
+      "service-public",
+      "`Service`'s `public` is `loadBalancer`, with the same settings",
+    );
+  }
+  const balancer =
+    objectProp(args, "loadBalancer") ?? (pub && objectProp(args, "public"));
+  if (!balancer) return;
+  const ports = prop(balancer, "ports");
+  if (ports && !prop(balancer, "rules")) {
+    ctx.rename(ports, "rules");
+    ctx.change(
+      ports,
+      "service-ports",
+      "`Service`'s `loadBalancer.ports` is `loadBalancer.rules`",
+    );
+  }
+  const list = prop(balancer, "rules") ?? ports;
+  if (
+    !list ||
+    !ts.isPropertyAssignment(list) ||
+    !ts.isArrayLiteralExpression(list.initializer)
+  )
+    return;
+  for (const rule of list.initializer.elements) {
+    if (!ts.isObjectLiteralExpression(rule)) continue;
+    const path = prop(rule, "path");
+    if (!path) continue;
+    if (prop(rule, "conditions") && !objectProp(rule, "conditions")) {
+      ctx.note(
+        path,
+        "service-rule-path",
+        "A `Service` rule's `path` is `conditions.path`.",
+      );
+      continue;
+    }
+    ctx.move(rule, path, rule, ["conditions"], "path");
+    ctx.change(
+      path,
+      "service-rule-path",
+      "A `Service` rule's `path` is `conditions.path`",
+    );
+  }
+}
+
+// A Workflow's `transform.function`, which was its function's own
+// `transform`, and its `role`
+function workflowArgs(ctx: FileContext, args: ts.ObjectLiteralExpression) {
+  const transformProp = prop(args, "transform");
+  const transform = objectProp(args, "transform");
+  const fn = prop(transform, "function");
+  const role = prop(args, "role");
+  const roleText = role && valueOf(ctx, role);
+  if (fn && ts.isPropertyAssignment(fn)) {
+    ctx.replace(
+      fn,
+      `function: { transform: ${ctx.text(fn.initializer)}${
+        roleText ? `, existing: { role: ${roleText} }` : ""
+      } }`,
+    );
+    ctx.change(
+      fn,
+      "workflow-transform",
+      "`Workflow`'s `transform.function` is `transform.function.transform`: `transform.function` transforms the function's args",
+    );
+    if (role) {
+      ctx.remove(args, role);
+      ctx.change(
+        role,
+        "workflow-role",
+        "`Workflow`'s `role` is `transform.function.existing.role`",
+      );
+    }
+    return;
+  }
+  if (!role) return;
+  if (fn || (transformProp && !transform)) {
+    ctx.note(
+      role,
+      "workflow-role",
+      "`Workflow`'s `role` is the function's: `transform: { function: { existing: { role } } }`.",
+    );
+    return;
+  }
+  ctx.move(args, role, args, ["transform", "function", "existing"], "role");
+  ctx.change(
+    role,
+    "workflow-role",
+    "`Workflow`'s `role` is `transform.function.existing.role`",
+  );
+}
+
+// A prop's value as text, `x` for a shorthand `x`
+function valueOf(ctx: FileContext, p: ts.ObjectLiteralElementLike) {
+  if (ts.isPropertyAssignment(p)) return ctx.text(p.initializer);
+  if (ts.isShorthandPropertyAssignment(p)) return ctx.text(p.name);
+  return undefined;
+}
 
 // Whether a component that shares its name with a 5.0 one is SST 4's first:
 // `Cron` with `job`, and Cloudflare's `StaticSite` until the swap
@@ -966,6 +1339,25 @@ function siteArgs(
         `\`${ref.five}\`'s \`route: { router, ... }\` is \`router: { instance, ... }\`.`,
       );
   }
+  // SST 4 refused `server.edge`, and took it at the top level
+  const server = objectProp(args, "server");
+  const serverEdge = prop(server, "edge");
+  if (server && serverEdge && ssrSites.includes(ref.five)) {
+    if (prop(args, "edge"))
+      ctx.note(
+        serverEdge,
+        "site-server-edge",
+        `\`${ref.five}\`'s \`server.edge\` is \`edge\`, which it has: SST 4 refused \`server.edge\`.`,
+      );
+    else {
+      ctx.move(server, serverEdge, args, [], "edge");
+      ctx.change(
+        serverEdge,
+        "site-server-edge",
+        `\`${ref.five}\`'s \`server.edge\` is \`edge\`, as SST 4 took it`,
+      );
+    }
+  }
   const cdn = prop(args, "cdn");
   if (cdn) {
     if (literal(cdn) === true) {
@@ -999,18 +1391,6 @@ function siteArgs(
       `\`${ref.five}\`'s \`router.${key}\` is removed: SST 4 ignored it for a site. A rewrite goes on the router's \`route()\`, and its timeouts on the router's origins`,
     );
   }
-}
-
-// The name a static `subscribe` gives the component it looks up with `get`
-function getName(
-  ctx: FileContext,
-  name: ts.Expression | undefined,
-  suffix: string,
-) {
-  if (name && ts.isStringLiteralLike(name))
-    return JSON.stringify(name.text + suffix);
-  if (name) return `\`\${${ctx.text(name)}}${suffix}\``;
-  return JSON.stringify(`Subscribed${suffix}`);
 }
 
 // A Lambda authorizer's `payload` and `response`, which API Gateway ignores on
