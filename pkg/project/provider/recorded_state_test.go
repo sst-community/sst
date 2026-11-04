@@ -86,6 +86,15 @@ func TestRecordedStatesAreScrubbed(t *testing.T) {
 		regexp.MustCompile(`\b([0-9]{12})\.dkr\.ecr\.`),
 		regexp.MustCompile(`"(?:accountId|ownerId|AWS:SourceOwner|aws:SourceAccount)":"?([0-9]{12})`),
 	}
+	// A Cloudflare account's id: in a field, in JSON or in JSON inside a
+	// string, as a dynamic provider's code captured it, and in a path of
+	// Cloudflare's API
+	cloudflareAccounts := []*regexp.Regexp{
+		regexp.MustCompile(`(?:accountId|account_id|DEFAULT_ACCOUNT_ID)\\?"?\s*[:=]\s*\\?"([0-9a-f]{32})\b`),
+		regexp.MustCompile(`/accounts/([0-9a-f]{32})\b`),
+	}
+	// The account's workers.dev subdomain, in a Worker's URL
+	workersDev := regexp.MustCompile(`\b([a-z0-9-]+)\.workers\.dev\b`)
 	homes := regexp.MustCompile(`(/home/[^/"]+|/Users/[^/"]+)`)
 	private := map[string]*regexp.Regexp{
 		"an AWS access key":          regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`),
@@ -104,6 +113,18 @@ func TestRecordedStatesAreScrubbed(t *testing.T) {
 				if match[1] != "123456789012" {
 					t.Fatalf("%s holds the account id %s", file, match[1])
 				}
+			}
+		}
+		for _, pattern := range cloudflareAccounts {
+			for _, match := range pattern.FindAllStringSubmatch(text, -1) {
+				if match[1] != "0123456789abcdef0123456789abcdef" {
+					t.Fatalf("%s holds the Cloudflare account id %s", file, match[1])
+				}
+			}
+		}
+		for _, match := range workersDev.FindAllStringSubmatch(text, -1) {
+			if match[1] != "example" {
+				t.Fatalf("%s holds the workers.dev subdomain %s", file, match[1])
 			}
 		}
 		for _, home := range homes.FindAllString(text, -1) {

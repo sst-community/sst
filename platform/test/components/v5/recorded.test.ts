@@ -6,12 +6,19 @@ import { mockPulumi } from "../../helpers/graph";
 import { SECRET, SIG } from "../../../src/testing/state";
 
 // The V5 components against what v4.23.1 really deployed for the lab app
-// (`testdata/states`), with the app's own config (`test/recorded`). The mock
-// is given the state, so what's registered gets the ids and outputs AWS gave.
-// First the 4.x components run, and have to give what the state has. Then the
-// V5 ones, which have to take over what the 4.x ones gave.
+// (`testdata/states`), with the app's own config (`test/recorded`), and
+// Cloudflare's against what an SST 4 built from `main` after it deployed. The
+// mock is given the state, so what's registered gets the ids and outputs AWS
+// or Cloudflare gave. First the 4.x components run, and have to give what the
+// state has. Then the V5 ones, which have to take over what the 4.x ones gave.
 
 const states = path.join(__dirname, "../../../../testdata/states/v4.23.1");
+// Its Cloudflare components are v4.23.1's, with the fix that keeps the API's
+// credentials out of the state
+const mainStates = path.join(
+  __dirname,
+  "../../../../testdata/states/v4.23.1-main",
+);
 const app = path.join(__dirname, "../../recorded");
 
 // What a function's build wrote: the CLI's build made one source map each
@@ -59,8 +66,18 @@ const lookups: Record<string, (inputs: any) => Record<string, any>> = {
   }),
 };
 
+// A Worker's code, as the CLI builds it: in a folder of its own in the app's
+// `.sst/artifacts`, at its handler's path. Its contents aren't in the state,
+// only their hash.
+function buildWorker(functionID: string, handler: string) {
+  const out = path.join(app, ".sst", "artifacts", `${functionID}-src`);
+  fs.mkdirSync(path.dirname(path.join(out, handler)), { recursive: true });
+  fs.writeFileSync(path.join(out, handler), "export default {};\n");
+  return { handler, out, errors: [] };
+}
+
 /** The mock, given a recorded state and what the CLI answered for it. */
-function replay(file: string, stage: string) {
+function replay(file: string, stage: string, folder = states) {
   return mockPulumi({
     app: "v5-lab",
     stage,
@@ -68,7 +85,7 @@ function replay(file: string, stage: string) {
     // The app was deployed from another folder
     recorded: JSON.parse(
       fs
-        .readFileSync(path.join(states, file), "utf8")
+        .readFileSync(path.join(folder, file), "utf8")
         .replaceAll("/home/user/v5-lab", app),
     ),
     // OpenNext bundles a site's functions itself, without source maps, and
@@ -76,8 +93,8 @@ function replay(file: string, stage: string) {
     sourcemaps: (functionID) =>
       /^(Next|SvelteServer)/.test(functionID) ? [] : [sourcemap],
     call: (args) => lookups[args.token]?.(args.inputs),
-    // The lab account's bootstrap, where functions' code went
-    cli: (method) =>
+    cli: (method, args) =>
+      // The lab account's bootstrap, where functions' code went
       method === "Provider.Aws.Bootstrap"
         ? {
             asset: "sst-asset-xoecubtcmnma",
@@ -88,7 +105,9 @@ function replay(file: string, stage: string) {
             appsyncHttp: "appsync.example.com",
             appsyncRealtime: "appsync-realtime.example.com",
           }
-        : undefined,
+        : method === "Runtime.Build" && args.runtime === "worker"
+          ? buildWorker(args.functionID, args.handler)
+          : undefined,
   });
 }
 
@@ -251,6 +270,13 @@ function needless(order: string) {
     // its cluster, file system and private subnets, as in the Service suite.
     // It's in the public subnets, and has nothing to do with them.
     /^WebLoadBalancer before (ClusterCluster|Files\w+|NetPrivateSubnet\d)$/.test(
+      order,
+    ) ||
+    // SST 4's Cloudflare Worker waited on everything in what it's linked to,
+    // from reading its name, as in the Worker suite: the API's, on the URL
+    // of the workflow's Worker. Its binding waits on the workflow and its
+    // script, which is all Cloudflare needs.
+    /^CfApiScript before CfFlowScriptUrl\.sst\.cloudflare\.WorkerUrl$/.test(
       order,
     )
   );
@@ -890,4 +916,208 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
 
   it("keeps secret what was secret, but for what's made from a function's ARN", () =>
     keepsSecrets(run.result, true));
+});
+
+// The Cloudflare account the state was deployed in, as scrubbed
+const CLOUDFLARE_ACCOUNT = "0123456789abcdef0123456789abcdef";
+
+// The lab's Cloudflare sites as each framework built them with Cloudflare's
+// adapter, and its static site's files: what SST 4 and 5.0 read of a build,
+// where the state has it. Their contents aren't in the state, only a hash of
+// each Worker's code.
+function writeCloudflareSites(dir: string, astroHeaders: string) {
+  const write = (file: string, content: string) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), content);
+  };
+  // Each framework's config gives Cloudflare's adapter SST's Wrangler config
+  const config =
+    "export default { configPath: process.env.SST_WRANGLER_PATH };";
+  const worker = "export default {};";
+  // Astro 6 writes a Wrangler config next to its Worker, and its adapter the
+  // headers of the files it serves
+  write(
+    "cf-astro/package.json",
+    JSON.stringify({ name: "cf-astro", dependencies: { astro: "^6.0.0" } }),
+  );
+  write("cf-astro/astro.config.mjs", config);
+  write(
+    "cf-astro/dist/server/wrangler.json",
+    JSON.stringify({ main: "entry.mjs", assets: { directory: "../client" } }),
+  );
+  write("cf-astro/dist/server/entry.mjs", worker);
+  write("cf-astro/dist/client/_headers", astroHeaders);
+  // React Router, with Cloudflare's Vite plugin
+  write("cf-react-router/package.json", JSON.stringify({ name: "cf-rr" }));
+  write("cf-react-router/vite.config.ts", config);
+  write("cf-react-router/build/server/index.js", worker);
+  write("cf-react-router/build/client/favicon.ico", "");
+  // TanStack Start, with Cloudflare's Vite plugin, which writes a Wrangler
+  // config next to its Worker
+  write("cf-tanstack-start/package.json", JSON.stringify({ name: "cf-ts" }));
+  write("cf-tanstack-start/vite.config.ts", config);
+  write(
+    "cf-tanstack-start/dist/server/wrangler.json",
+    JSON.stringify({ main: "index.js", assets: { directory: "../client" } }),
+  );
+  write("cf-tanstack-start/dist/server/index.js", worker);
+  write("cf-tanstack-start/dist/client/favicon.ico", "");
+  // The static site isn't built: its folder is uploaded as it is
+  write("cf-static/index.html", "<html>Home</html>");
+  write("cf-static/404.html", "<html>Not found</html>");
+}
+
+describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => {
+  let run: Run;
+  const realFetch = globalThis.fetch;
+  // The scripts Cloudflare's API lists, with their Durable Object migration
+  // tags, which a Worker with migrations reads
+  let scripts: { id: string; migration_tag: string }[] = [];
+  beforeAll(async () => {
+    const pulumi = replay("cloudflare.json", "reccf", mainStates);
+    // Where the lab's CLI put the platform: SST's own Workers are built from
+    // there
+    // @ts-ignore
+    global.$cli.paths.platform = path.join(app, ".sst", "platform");
+    const resources = JSON.parse(
+      fs.readFileSync(path.join(mainStates, "cloudflare.json"), "utf8"),
+    ).checkpoint.latest.resources;
+    writeCloudflareSites(
+      path.join(app, "sites"),
+      resources.find((r: any) => r.urn.endsWith("::CfAstroWorkerScript")).inputs
+        .assets.config.headers,
+    );
+    // Nothing else of Cloudflare's API is called
+    globalThis.fetch = (async (url: string | URL) => {
+      if (
+        String(url) !==
+        `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT}/workers/scripts`
+      )
+        throw new Error(`The test doesn't answer ${url}`);
+      return new Response(
+        JSON.stringify({ success: true, result: scripts, errors: [] }),
+      );
+    }) as typeof fetch;
+    // The account SST 4's CLI and 5.0's give the components
+    process.env.CLOUDFLARE_DEFAULT_ACCOUNT_ID = CLOUDFLARE_ACCOUNT;
+    const cf = await import("../../../src/components/cloudflare/index");
+    expect(cf.DEFAULT_ACCOUNT_ID).toBe(CLOUDFLARE_ACCOUNT);
+    const lab = await import("../../recorded/v5-lab");
+    run = await pulumi.takesOverState(
+      // When SST 4 deployed the stage, none of its scripts was there
+      () => {
+        scripts = [];
+        lab.cloudflare(cf as any);
+        lab.cfSites(cf as any, "true");
+      },
+      // When it moves, the API Worker has the tag of its one migration
+      () => {
+        scripts = [{ id: "v5-lab-reccf-cfapiscript", migration_tag: "v1" }];
+        lab.cloudflare(cf.v5);
+        lab.cfSites(cf.v5, "true");
+      },
+      (r) => r.type === "sst:sst:LinkRef",
+    );
+  });
+  afterAll(() => {
+    globalThis.fetch = realFetch;
+    delete process.env.CLOUDFLARE_DEFAULT_ACCOUNT_ID;
+    fs.rmSync(path.join(app, "sites"), { recursive: true, force: true });
+    fs.rmSync(path.join(app, ".sst"), { recursive: true, force: true });
+  });
+
+  const fields = (changed: Run["result"]["changed"]) =>
+    changed.map(({ name, fields }) => [name, fields]);
+
+  it("is what SST 4's components deploy, but for what a build changes", () => {
+    const { deployed } = run;
+    expect(deployed.unclaimed).toEqual([]);
+    expect(deployed.created).toEqual([]);
+    expect(Object.fromEntries(fields(deployed.changed))).toEqual({
+      // The command that built each site runs again, here the test's
+      ...Object.fromEntries(
+        ["CfAstroBuilder", "CfReactRouterBuilder", "CfTanStackBuilder"].map(
+          (name) => [name, ["create", "environment", "triggers", "update"]],
+        ),
+      ),
+      // Each Worker's code is the test's build, not the CLI's, so its hash
+      // isn't the state's
+      ...Object.fromEntries(
+        [
+          "CfApiScript",
+          "CfAstroWorkerScript",
+          "CfFlowScriptScript",
+          "CfJobsSubscriberFunctionScript",
+          "CfReactRouterWorkerScript",
+          "CfSiteRouterScript",
+          "CfTanStackWorkerScript",
+          "CfTickHandlerScript",
+        ].map((name) => [name, ["contentSha256"]]),
+      ),
+    });
+    expect(deployed.unordered).toEqual([]);
+    expect(deployed.revealed).toEqual([]);
+    expect(deployed.hidden).toEqual([]);
+  });
+
+  it("is taken over by the V5 components", () => {
+    const { result } = run;
+    // What has nothing in Cloudflare behind it: the command that built each
+    // site, and the queue's subscriber's wrapper. The lab's move took out
+    // two more, which the mock doesn't compare: the command provider, and
+    // the link reference the program's runner made for the cron's Worker,
+    // which 4.x created at the top of the app.
+    expect(result.unclaimed).toEqual([
+      "command:local:Command::CfAstroBuilder",
+      "command:local:Command::CfReactRouterBuilder",
+      "command:local:Command::CfTanStackBuilder",
+      "sst:cloudflare:QueueWorkerSubscriber::CfJobsSubscriber",
+    ]);
+    expect(result.created).toEqual([]);
+    // Kept at a new address, as in the lab: the cron's Worker moves into
+    // the cron, and the queue's consumer and its Worker into the queue
+    expect(
+      result.pairs
+        .filter(
+          ([was, now]) => was.name !== now.name || was.parent !== now.parent,
+        )
+        .map(([was, now]) =>
+          was.name === now.name ? now.name : `${was.name} as ${now.name}`,
+        )
+        .sort(),
+    ).toEqual([
+      "CfJobsSubscriberConsumer as CfJobsConsumer",
+      "CfJobsSubscriberFunction",
+      "CfJobsSubscriberFunctionScript",
+      "CfJobsSubscriberFunctionUrl.sst.cloudflare.WorkerUrl",
+      "CfTickHandler",
+      "CfTickHandlerScript",
+      "CfTickHandlerUrl.sst.cloudflare.WorkerUrl",
+    ]);
+    // What a deploy updates. The lab's move updated more, which the mock
+    // can't see: each WorkerUrl's and the WorkerPlacement's `__provider`,
+    // their provider's code as each CLI bundled the config, from the same
+    // source; the etag the updated scripts' URL and placement read, which
+    // Cloudflare gives back after an update and the mock gives as the
+    // state's; and the Astro Worker's code, which each Astro build changes,
+    // where both builds here are the test's files.
+    expect(fields(result.changed)).toEqual([
+      // The API Worker has the tag of its migration now, so it has none to
+      // apply. The lab's move listed the tag too, which is an output.
+      ["CfApiScript", ["migrations"]],
+      // SST 4 told the CLI how to run the static site in `sst dev` from a
+      // deployed site too, as in the StaticSite suite. The V5 one says so
+      // only where it runs it. Nothing in Cloudflare changes.
+      ["CfSite", ["outputs"]],
+    ]);
+    expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
+  });
+
+  // Nothing SST 4 kept secret is in plain text now, a Worker's bindings among
+  // them. No site here links a secret, so where a site's build is was plain
+  // in the state too (see the sites' suite).
+  it("keeps secret what was secret", () => {
+    expect(run.result.revealed).toEqual([]);
+    expect(run.result.hidden).toEqual([]);
+  });
 });

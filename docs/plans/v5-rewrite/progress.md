@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, Cloudflare's sites with a server in the lab, and a recorded Cloudflare app
+
+**Checked in the lab,** on a stage of its own with both Cloudflare groups: the one above, and SST's `cloudflare-astro` (Astro 6), `cloudflare-react-router` and `cloudflare-tanstack-start` examples, each linked to a `Kv` it counts visits in (`LAB_ONLY=cloudflare,cfsites`). Deployed with SST 4, built from `main`.
+
+- **Deployed with SST 4, and called:** every route and site answered; Astro's prerendered page was served from the Worker's assets.
+- **Recorded before the switch,** from the state the home stored, scrubbed: the Cloudflare account id and the workers.dev subdomain replaced, the site builders' environments emptied.
+- **Replayed under the mock** (`testdata/states/v4.23.1-main/cloudflare.json`, built from `main` after 4.23.1, as its README says): SST 4's components give what the state has, but for what a build changes, and the 5.0 ones take over what they gave, with the same seven at a new address as in the lab and nothing revealed. What the mock can't see is said in the test: the code each CLI bundled into SST 4's dynamic resources, the etags Cloudflare gives back, and the Astro build's new code. The recordings' check fails on a Cloudflare account id or workers.dev subdomain that isn't the scrubbed one.
+- **`sst migrate --check` passed:** 61 kept, 7 at a new address, 11 updated in place, nothing replaced or deleted. SST 4's three site builders leave the state, with nothing in the cloud behind them. The updates: SST 4's dynamic resources' code, the API Worker's migration tag, and the Astro Worker's code, which every Astro build changes, in SST 4 too.
+- **The move** kept all 24 cloud resources by id. Every route and site answered the same, and the visit counts went on from where they were. `sst diff` after it shows only the Astro Worker's code again, as SST 4's does.
+- **Removed, and cleaned up:** `sst remove` deleted everything; Cloudflare lists no script, KV namespace, D1 database, queue, workflow or Durable Object namespace, and the stage's 84 state versions and its passphrase are deleted.
+
 ## 2026-11-03: step 4, Cloudflare's components built the 5.0 way, and their lab check
 
 **Done, committed (not pushed):**

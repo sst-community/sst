@@ -2,12 +2,17 @@
  * The lab app that deployed the recorded states in `testdata/states`: its
  * groups as its `sst.config.ts` creates them, with the domain scrubbed as in
  * the states. Each takes the components it's written with, the 4.x ones or
- * the V5 ones, as `sst.aws` or `sst.aws.v5`.
+ * the V5 ones, as `sst.aws` or `sst.aws.v5`, or `sst.cloudflare` or
+ * `sst.cloudflare.v5`.
  */
 import type * as aws from "../../src/components/aws/index";
+import type * as cf from "../../src/components/cloudflare/index";
 
 /** The components a group is written with. It's typed as the V5 ones. */
 export type Components = typeof aws.v5;
+
+/** The Cloudflare components a group is written with, typed as the V5 ones. */
+export type CloudflareComponents = typeof cf.v5;
 
 /** The VPC the containers and databases are in: either kind of `Vpc`. */
 export type Vpc =
@@ -29,6 +34,19 @@ function httpApi(aws: Components): Components["ApiGatewayHttp"] {
   return (
     (aws as { ApiGatewayV2?: Components["ApiGatewayHttp"] }).ApiGatewayV2 ??
     aws.ApiGatewayHttp
+  );
+}
+
+/**
+ * SST 4's Cloudflare `StaticSiteV2`, which is `StaticSite` in 5.0, with the
+ * same type. 4.x's own `StaticSite` is the one `StaticSiteV2` replaced.
+ */
+function staticSite(
+  cf: CloudflareComponents,
+): CloudflareComponents["StaticSite"] {
+  return (
+    (cf as { StaticSiteV2?: CloudflareComponents["StaticSite"] })
+      .StaticSiteV2 ?? cf.StaticSite
   );
 }
 
@@ -281,4 +299,80 @@ export function databases(aws: Components, vpc: Vpc) {
   });
 
   return { connections };
+}
+
+/**
+ * Cloudflare's components: a Worker linked to one of each kind of thing it
+ * can bind, a queue with a consumer, a cron, and a static site. `Bucket` and
+ * `Hyperdrive` are left out: the lab account has no R2, and there's no
+ * database.
+ */
+export function cloudflare(cf: CloudflareComponents) {
+  const dir = "functions/cf";
+
+  const kv = new cf.Kv("CfKv");
+  const db = new cf.D1("CfDb");
+  const ai = new cf.Ai("CfAi");
+  const limit = new cf.RateLimit("CfLimit", {
+    namespaceId: 1001,
+    limit: 100,
+    period: "1 minute",
+  });
+  const counter = new cf.DurableObject("CfCounter", { className: "Counter" });
+  const flow = new cf.Workflow("CfFlow", {
+    handler: `${dir}/flow.ts`,
+    className: "Flow",
+    link: [kv],
+  });
+
+  const jobs = new cf.Queue("CfJobs");
+  jobs.subscribe({ handler: `${dir}/consumer.ts`, link: [kv] });
+
+  new cf.Cron("CfTick", {
+    worker: { handler: `${dir}/cron.ts`, link: [kv] },
+    schedules: ["* * * * *"],
+  });
+
+  const api = new cf.Worker("CfApi", {
+    handler: `${dir}/api.ts`,
+    url: true,
+    link: [kv, db, jobs, ai, limit, counter, flow],
+    migrations: [{ tag: "v1", newSqliteClasses: ["Counter"] }],
+    environment: { MODE: "lab" },
+    placement: { mode: "smart" },
+  });
+
+  const site = new (staticSite(cf))("CfSite", {
+    path: "sites/cf-static",
+    notFound: "404",
+  });
+
+  return { api, site };
+}
+
+/**
+ * Cloudflare's three sites with a server, each linked to a KV namespace. The
+ * lab builds each with its build script; a test builds them with
+ * `buildCommand`, from files it makes.
+ */
+export function cfSites(cf: CloudflareComponents, buildCommand?: string) {
+  const kv = new cf.Kv("CfSitesKv");
+
+  const astro = new cf.Astro("CfAstro", {
+    path: "sites/cf-astro",
+    link: [kv],
+    buildCommand,
+  });
+  const reactRouter = new cf.ReactRouter("CfReactRouter", {
+    path: "sites/cf-react-router",
+    link: [kv],
+    buildCommand,
+  });
+  const tanStack = new cf.TanStackStart("CfTanStack", {
+    path: "sites/cf-tanstack-start",
+    link: [kv],
+    buildCommand,
+  });
+
+  return { astro, reactRouter, tanStack };
 }

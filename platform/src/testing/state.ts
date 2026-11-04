@@ -459,9 +459,33 @@ export function policyDocument(inputs: Record<string, any>) {
  * what its schema marks secret, like a registry's password, however it's
  * given (pulumi-docker-build 0.0.22, `provider/internal`: `image.go`,
  * `cache.go`, `dockerfile.go`, `auth.go`), for the fields the components
- * give.
+ * give. The Cloudflare provider keeps secret what its schema marks secret in
+ * a Worker's bindings, like a binding's `text`, however it's given
+ * (pulumi-cloudflare 6.15.0's schema, `WorkersScriptBinding`).
  */
 export function asChecked(type: string, inputs: Record<string, any>) {
+  if (type === "cloudflare:index/workersScript:WorkersScript")
+    return inputs.bindings
+      ? {
+          ...inputs,
+          bindings: within(inputs.bindings, (bindings) =>
+            Array.isArray(bindings)
+              ? bindings.map((binding) =>
+                  within(binding, (binding) =>
+                    Object.fromEntries(
+                      Object.entries(binding).map(([key, value]) => [
+                        key,
+                        SECRET_BINDING_FIELDS.includes(key) && value != null
+                          ? asSecret(value)
+                          : value,
+                      ]),
+                    ),
+                  ),
+                )
+              : bindings,
+          ),
+        }
+      : inputs;
   if (type !== "docker-build:index:Image") return inputs;
   const cache = (c: any, to: boolean) =>
     within(c, (c) => ({
@@ -520,6 +544,9 @@ export function asChecked(type: string, inputs: Record<string, any>) {
       : {}),
   };
 }
+
+// What the Cloudflare provider's schema marks secret in a Worker's binding
+const SECRET_BINDING_FIELDS = ["text", "keyBase64", "keyJwk"];
 
 // A value as a secret, if it isn't one
 function asSecret(value: any) {
