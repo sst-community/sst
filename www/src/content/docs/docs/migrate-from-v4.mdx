@@ -1,35 +1,63 @@
 ---
 title: Migrate From v4
-description: Move your SST v4 app to v5, then switch its components one at a time.
+description: Rewrite your config for SST 5's components with the codemod, then move each stage with sst migrate, keeping what you've deployed.
 ---
 
-v5 rebuilds SST's components on one foundation. It still has the v4 components, so you move an app in two steps:
-
-1. **Install v5.** Your config keeps working as it is, and deploys what it deployed with v4.
-2. **Switch components to `sst.aws.v5.*`**, one at a time, when you want to. Each switch keeps what you've deployed.
+SST 5 rebuilds SST's components on one foundation. You move an app in two steps: the codemod rewrites your config for the new components, then `sst migrate` moves each stage to them in one deploy. What you've deployed is kept. The move is checked first, and it stops before it would delete or replace anything that holds data.
 
 :::caution
-v5 is in pre-release. Its components can still change in any way before 5.0.0, so try it on a stage of its own first.
+SST 5 is in pre-release. Its components can still change in any way before 5.0.0, so move a stage of its own first.
 :::
+
+In short:
+
+1. [Get ready](#before-you-start) on SST 4.
+2. [Install SST 5](#install-sst-5).
+3. [Rewrite your config](#rewrite-your-config) with `sst migrate --codemod`.
+4. [Check a stage](#check-a-stage) with `sst migrate --check`.
+5. [Move it](#move-a-stage) with `sst migrate`, and confirm with `sst diff`.
+
+Then the next stage: a dev stage first, and production last.
 
 ---
 
 ## What changes
 
-- **The CLI is 5.x.** Everything in `sst.aws.*` is still the v4 component, and deploys the same way.
-- **The v5 components are new, as `sst.aws.v5.*`.** A v5 component has the same type as the one it replaces, `sst:aws:Queue` for both queues. So when you switch one, what you've deployed is kept, what links to it sees no change, `Resource.MyQueue.type` stays the same, and a `$transform` for either applies to both.
-- **20 components are ported:** `Alb`, `ApiGatewayV2`, `AppSync`, `Aurora`, `Bucket`, `Bus`, `Cluster`, `CognitoUserPool`, `CronV2`, `Dsql`, `Dynamo`, `Efs`, `Function`, `Mysql`, `Postgres`, `Queue`, `Redis`, `Service`, `SnsTopic` and `Task`.
-- **The rest aren't ported yet**, like the sites (`Nextjs`, `Astro`, `StaticSite` and the others), `Vpc`, `Router` and `Cdn`. Keep using their v4 components. An app can mix the two.
+- **The components are new.** Until 5.0.0 they're `sst.aws.v5.*`, `sst.cloudflare.v5.*` and `sst.x.v5.*`. At the release they take the place of SST 4's, as `sst.aws.*` and the rest, and the codemod writes those names.
+- **Each has the same type as the one it replaces**, `sst:aws:Queue` for both queues. So what links to it sees no change, `Resource.MyQueue.type` stays the same, and a `$transform` for either applies to both.
+- **A few have new names**, with the same type:
+
+  | SST 4 | SST 5 |
+  | --- | --- |
+  | `sst.aws.ApiGatewayV1` | `sst.aws.v5.ApiGatewayRest` |
+  | `sst.aws.ApiGatewayV2` | `sst.aws.v5.ApiGatewayHttp` |
+  | `sst.aws.CronV2` | `sst.aws.v5.Cron` |
+  | `sst.cloudflare.StaticSiteV2` | `sst.cloudflare.v5.StaticSite` |
+
+- **A stage moves once, and whole.** SST 5 doesn't deploy SST 4's components. On a stage deployed with SST 4, `sst deploy` and `sst dev` are refused until it has moved; `sst diff`, `sst refresh` and `sst remove` still run. A new stage is refused SST 4's components too.
+- **The move keeps what's deployed.** Each component knows which of SST 4's resources each of its own takes the place of, and the move carries them over under their new names. A resource that can't be carried over, like a site's uploaded files, is let go without being deleted, and what takes its place writes the same thing again.
 
 ---
 
-## Before you install
+## Before you start
 
-1. **Update to the latest v4 and deploy.** Then the changes v4 made since your version are deployed on their own, and not with the move.
+1. **Every component you use has to have a 5.0 form.** These don't. Deal with each one with SST 4 and deploy, before you move a stage that has it.
 
-2. **Use Node.js 22 or later.**
+   | Component | What to do |
+   | --- | --- |
+   | `sst.aws.Cron`, the first one | Move to `sst.aws.CronV2`, which is `Cron` in 5.0. Its schedule replaces the rule. |
+   | `sst.aws.Vector` | Move its vectors to a vector database of their own, then remove it. |
+   | `sst.aws.OpenControl` | Remove it, and run OpenControl outside of SST. |
+   | `sst.aws.Auth.v1` | Move to `sst.aws.Auth`, OpenAuth's. |
+   | `.v1` of `Vpc`, `Cluster`, `Postgres` and `Redis` | Move to the component's current version. |
+   | `sst.cloudflare.StaticSite`, the first one | Move to `sst.cloudflare.StaticSiteV2`, which is `StaticSite` in 5.0. |
+   | `sst.cloudflare.Auth` and `sst.cloudflare.x.SolidStart` | Remove them, or keep the stage on SST 4. |
 
-3. **Check your `sst.config.ts`** for the four things v5 reads differently. Most apps have none of them.
+2. **Update to the latest SST 4 and deploy.** Then what SST 4 changed since your version is deployed on its own, and not with the move.
+
+3. **Use Node.js 22 or later.**
+
+4. **Check your `sst.config.ts`** for the four things SST 5 reads differently. Most apps have none of them.
 
    - **A `version` rule has to allow 5.x.** An app without one runs with any version.
 
@@ -45,23 +73,24 @@ v5 is in pre-release. Its components can still change in any way before 5.0.0, s
      });
      ```
 
-     | Rule | v4 | `5.0.0-alpha.1` | `5.0.0-alpha.2` and later |
-     | --- | --- | --- | --- |
-     | No `version` | ✓ | ✓ | ✓ |
-     | `"4.x"` or `"^4"` | ✓ | | |
-     | `">= 4"` | ✓ | | ✓ |
-     | `"5.x"` | | | ✓ |
-     | `">= 5.0.0-0"` | | ✓ | ✓ |
+     | Rule | SST 4 | SST 5 |
+     | --- | --- | --- |
+     | No `version` | ✓ | ✓ |
+     | `"4.x"` or `"^4"` | ✓ | |
+     | `">= 4"` | ✓ | ✓ |
+     | `"5.x"` | | ✓ |
 
-   - **A provider pinned to a version** has to be in the major version SST's components are built for, like `aws` `7.x`. A newer major version is refused too now, and the error gives the versions to use.
+   - **A provider pinned to a version** has to be in the major version SST's components are built for, like `aws` `7.x`. A newer major version is refused too, and the error gives the versions to use.
 
    - **A file that re-exports a global by name**, like `export { aws }`, no longer builds. `export const x = aws` and `export default aws` work.
 
    - **A file that `app()` imports can't use a provider while it loads.** Providers aren't installed yet when `app()` runs, so a provider there is a stub that throws when it's used.
 
+5. **Commit your changes.** The codemod leaves a file with changes git hasn't committed as it is, so that what it changes shows as a diff.
+
 ---
 
-## Install v5
+## Install SST 5
 
 In your app:
 
@@ -69,108 +98,122 @@ In your app:
 npm install sst@npm:@sst-community/sst@next-experimental
 ```
 
-Or, for an app that isn't JavaScript, install the CLI globally. This replaces a global v4 CLI.
+Or, for an app that isn't JavaScript, install the CLI globally, with `VERSION` set to the pre-release's version from the [releases page](https://github.com/sst-community/sst/releases). This replaces a global SST 4 CLI.
 
 ```bash frame="none"
-curl -fsSL https://raw.githubusercontent.com/sst-community/sst/main/install | VERSION=5.0.0-alpha.2 bash
-```
-
-Then run `sst diff` on your stage. With your config as it was, the move itself shouldn't change anything.
-
-```bash frame="none"
-sst diff --stage <stage>
+curl -fsSL https://raw.githubusercontent.com/sst-community/sst/main/install | VERSION=<version> bash
 ```
 
 ---
 
-## Switch a component
+## Rewrite your config
 
-1. **Read its "Switch from" section.** Every v5 component's page has one, with what's written differently. The [list below](#component-by-component) sums them up.
+The codemod rewrites your `sst.config.ts`, and the files it imports, for the new components. It needs no stage and no credentials. Run it with `--dry-run` first, to see the diff without writing anything:
 
-2. **Change the class and keep the name.**
+```bash frame="none"
+sst migrate --codemod --dry-run
+sst migrate --codemod
+```
 
-   ```ts title="sst.config.ts" del={1} ins={2}
-   const queue = new sst.aws.Queue("MyQueue");
-   const queue = new sst.aws.v5.Queue("MyQueue");
-   ```
+It makes the changes that are mechanical:
 
-3. **Make the changes the section lists.**
+- **The names**: `sst.aws.Queue` becomes `sst.aws.v5.Queue`, wherever it's written, in a `new`, a `get`, a type or a `$transform`; and the four renamed components get their new names.
+- **The args written differently**, like a function's `role`, which is `existing.role`, a service's `public`, which is `loadBalancer`, or a site's `route`, which is `router`. Args that SST 4 ignored, and SST 5 refuses, are removed, and it says where they go if you meant them.
+- **What a method gave.** A route, a subscriber or a data source isn't a component of its own any more. So a read like `subscriber.nodes.function` becomes the component's, `bus.nodes.subscriber["MySubscriber"]`, and a subscriber's own `transform` moves into the component's `transform`, for that subscriber only.
+- **The static methods that took an ARN**, which are methods of what `get` gives: `sst.aws.Bus.subscribe(name, arn, ...)` becomes `sst.aws.v5.Bus.get("MyBus", arn).subscribe(name, ...)`.
 
-4. **Run `sst diff`.** Expect updates in place. If something that holds data is replaced or deleted, stop and check the section again.
+It lists each change, and each thing it couldn't do, marked `!`, with what to write:
 
-5. **Deploy.**
+```txt frame="none"
+✓  sst.config.ts:9   `sst.aws.Bus` is `sst.aws.v5.Bus`
+✓  sst.config.ts:11  `Bus`'s `subscribe`'s `transform.rule` is the bus's `transform.rule`, for its id
+✓  sst.config.ts:18  `Service`'s `public` is `loadBalancer`, with the same settings
+!  sst.config.ts:25  `Router`'s `routes` are gone. With SST 4, add each with `route()` or `routeBucket()` in place of `routes` and deploy; then switch the `Router`.
 
-Some components are taken by others. Switch the ones that take them first, or in the same deploy:
+3 changes, and 1 thing to do by hand, marked !. Then run `sst migrate --check` on a stage.
+```
 
-- The services on an `Alb`.
-- The services and tasks in a `Cluster`.
-- The functions, services and tasks that mount an `Efs`.
+Do what it lists, then run it again: it changes nothing a second time. Some of what it lists has to be done with SST 4 and deployed before the stage can move, like a `Router`'s `routes` or a subscriber without a name. It doesn't change a package's components, or anything in `node_modules`.
 
-A v5 component takes either version of these, but a v4 one only takes the v4 version.
+### What the codemod can't see
 
-### What every v5 component does differently
+A few changes depend on what your values are, not on how they're written. Look for these yourself:
 
-- **Args that decide what gets created are plain values, not outputs.** Their types don't take an output, and one passed anyway is refused when your config runs, with the arg's name.
-- **An object in `transform` is merged in**, nested objects too. In v4 it replaced the nested object it named. To replace one, use a function.
+- **Args that decide what gets created are plain values, not outputs.** A deploy refuses an output there, with the arg's name and why. Each component's docs say which args.
+- **`nodes` has every resource a component creates**, and each is the resource itself, not an output of it. Drop an `.apply()` around a `nodes` entry. Some may be `undefined`, like a service's `nodes.autoScalingTarget`, and each component's docs say which.
+- **An object in `transform` is merged in**, nested objects too. SST 4 replaced the nested object it named. To replace one, use a function.
 
   ```ts title="sst.config.ts"
   transform: {
-    // v4 replaced every variable, v5 adds A
+    // SST 4 replaced every variable, SST 5 adds A
     function: { environment: { variables: { A: "1" } } },
   }
   ```
 
-- **`nodes` has every resource the component creates**, and each is the resource itself, not an output of it.
-- **A resource you already have goes in `existing`.** For example, a function's `role` becomes `existing: { role }`, and a service's `taskRole` becomes `existing: { taskRole }`.
-- **What only wires resources together is part of its parent.** A subscriber, a data source or an identity provider is no longer a component of its own, so its `transform` moves to the parent's `transform`, and its resources are in the parent's `nodes`.
-- **Static methods that took the ARN of a resource outside your app are gone.** Look the resource up with `get`, and call the method on what `get` returns.
+- **A `transform` function can be given outputs** where SST 4 gave plain values, in a `Vpc`, a `Bucket`, a `Dynamo` table, a `Task` and a `Redis`. For a part a component has several of, like a route or a subscriber, it's called for each one, with its id last.
 
-  ```ts title="sst.config.ts" del={1} ins={2}
-  sst.aws.Bus.subscribe("MySubscriber", busArn, "src/subscriber.handler");
-  sst.aws.v5.Bus.get("Shared", "my-shared-bus").subscribe("MySubscriber", "src/subscriber.handler");
-  ```
+Each component's page has a "Switch from" section with everything that's written or works differently:
 
-- **If you set `tags` with an object in `transform`**, the tags SST sets are kept next to yours, and added back when you switch.
-- **The functions a v5 component creates are `sst.aws.v5.Function`s.** You can keep writing their definitions the way `sst.aws.Function` takes them.
-
-### What a switch can replace
-
-Most switches only update resources in place. These are the exceptions:
-
-- **A function whose part has a new name uploads its code again.** The function is updated in place. `CronV2`'s function is one: it was `MyCronJobHandler` and is `MyCronJobFunction`.
-- **Nothing is replaced for a change of provider alone.** v4 created some resources with your app's provider, whatever the component was given: a durable function's URL alias, `AppSync`'s Lambda data sources and domain association, and the queue subscribers of a `Bus` or an `SnsTopic`. And what it added to a resource you looked up with `get` and a `provider` didn't get that provider: a `Bucket`'s notifications, a `Dynamo` table's subscribers, a `CognitoUserPool`'s clients. A v5 component gives each of them its own `provider`, and the switch keeps them, updated in place with that provider's default tags. A client keeps its ID.
-- **A subscriber without a name isn't kept.** On a `Dynamo` table or an `SnsTopic`, every subscriber needs a name. Remove an unnamed one and deploy before you switch, then add it back with a name.
-
-A `Service` also lists what `sst dev` runs for each container as removed and created again. That's only in your state; nothing changes in AWS.
+- **AWS:** [`Alb`](/docs/component/aws/v5/alb/), [`Analog`](/docs/component/aws/v5/analog/), [`ApiGatewayHttp`](/docs/component/aws/v5/apigateway-http/), [`ApiGatewayRest`](/docs/component/aws/v5/apigateway-rest/), [`ApiGatewayRestApiKey`](/docs/component/aws/v5/apigateway-rest-api-key/), [`ApiGatewayRestUsagePlan`](/docs/component/aws/v5/apigateway-rest-usage-plan/), [`ApiGatewayWebSocket`](/docs/component/aws/v5/apigateway-websocket/), [`AppSync`](/docs/component/aws/v5/app-sync/), [`Astro`](/docs/component/aws/v5/astro/), [`Aurora`](/docs/component/aws/v5/aurora/), [`Auth`](/docs/component/aws/v5/auth/), [`Bucket`](/docs/component/aws/v5/bucket/), [`Bus`](/docs/component/aws/v5/bus/), [`Cdn`](/docs/component/aws/v5/cdn/), [`Cluster`](/docs/component/aws/v5/cluster/), [`CognitoIdentityPool`](/docs/component/aws/v5/cognito-identity-pool/), [`CognitoUserPool`](/docs/component/aws/v5/cognito-user-pool/), [`CognitoUserPoolClient`](/docs/component/aws/v5/cognito-user-pool-client/), [`Cron`](/docs/component/aws/v5/cron/), [`DnsValidatedCertificate`](/docs/component/aws/v5/dns-validated-certificate/), [`Dsql`](/docs/component/aws/v5/dsql/), [`Dynamo`](/docs/component/aws/v5/dynamo/), [`Efs`](/docs/component/aws/v5/efs/), [`Email`](/docs/component/aws/v5/email/), [`Function`](/docs/component/aws/v5/function/), [`KinesisStream`](/docs/component/aws/v5/kinesis-stream/), [`MicroVm`](/docs/component/aws/v5/microvm/), [`Mysql`](/docs/component/aws/v5/mysql/), [`Nextjs`](/docs/component/aws/v5/nextjs/), [`Nuxt`](/docs/component/aws/v5/nuxt/), [`OpenSearch`](/docs/component/aws/v5/open-search/), [`Postgres`](/docs/component/aws/v5/postgres/), [`Queue`](/docs/component/aws/v5/queue/), [`React`](/docs/component/aws/v5/react/), [`Realtime`](/docs/component/aws/v5/realtime/), [`Redis`](/docs/component/aws/v5/redis/), [`Remix`](/docs/component/aws/v5/remix/), [`Router`](/docs/component/aws/v5/router/), [`Service`](/docs/component/aws/v5/service/), [`SnsTopic`](/docs/component/aws/v5/sns-topic/), [`SolidStart`](/docs/component/aws/v5/solid-start/), [`StaticSite`](/docs/component/aws/v5/static-site/), [`StepFunctions`](/docs/component/aws/v5/step-functions/), [`SvelteKit`](/docs/component/aws/v5/svelte-kit/), [`TanStackStart`](/docs/component/aws/v5/tan-stack-start/), [`Task`](/docs/component/aws/v5/task/), [`Vpc`](/docs/component/aws/v5/vpc/), [`Workflow`](/docs/component/aws/v5/workflow/).
+- **Cloudflare:** [`Ai`](/docs/component/cloudflare/v5/ai/), [`Astro`](/docs/component/cloudflare/v5/astro/), [`Bucket`](/docs/component/cloudflare/v5/bucket/), [`Cron`](/docs/component/cloudflare/v5/cron/), [`D1`](/docs/component/cloudflare/v5/d1/), [`DurableObject`](/docs/component/cloudflare/v5/durable-object/), [`Hyperdrive`](/docs/component/cloudflare/v5/hyperdrive/), [`Kv`](/docs/component/cloudflare/v5/kv/), [`Queue`](/docs/component/cloudflare/v5/queue/), [`RateLimit`](/docs/component/cloudflare/v5/rate-limit/), [`ReactRouter`](/docs/component/cloudflare/v5/react-router/), [`StaticSite`](/docs/component/cloudflare/v5/static-site/), [`TanStackStart`](/docs/component/cloudflare/v5/tan-stack-start/), [`Worker`](/docs/component/cloudflare/v5/worker/), [`Workflow`](/docs/component/cloudflare/v5/workflow/).
+- **Experimental:** [`DevCommand`](/docs/component/experimental/v5/dev-command/).
 
 ---
 
-## Component by component
+## Check a stage
 
-The links go to each component's page, where its "Switch from" section has the details.
+`sst migrate --check` previews the move of a stage and changes nothing:
 
-| Component | What to change |
-| --- | --- |
-| [`Alb`](/docs/component/aws/v5/alb/) | Switch its services first. `nodes.listeners` is `nodes.listener`. |
-| [`ApiGatewayV2`](/docs/component/aws/v5/apigateway-http/) | Becomes `sst.aws.v5.ApiGatewayHttp`, named for the HTTP API it creates. A route's `transform` moves to the API's. `domain.nameId` becomes `existing: { domainName }`. `domain` is plain. |
-| [`AppSync`](/docs/component/aws/v5/app-sync/) | The `transform` of a data source, function or resolver moves to the API's. `domain` is plain. With a `provider`, see [above](#what-a-switch-can-replace). |
-| [`Aurora`](/docs/component/aws/v5/aurora/) | `replicas`, `proxy` and its `credentials` are plain. The master user's secret is `nodes.secret`. `transform.replica` changes only the replicas. |
-| [`Bucket`](/docs/component/aws/v5/bucket/) | `public: true` becomes `access: "public"`. `subscribe`, `subscribeQueue` and `subscribeTopic` become `notify`. `versioning`, `cors` and `lifecycle` are plain. |
-| [`Bus`](/docs/component/aws/v5/bus/) | The static `subscribe` and `subscribeQueue` become `get(...)` and then the method. A subscriber's `transform` moves to the bus's. |
-| [`Cluster`](/docs/component/aws/v5/cluster/) | Switch its services and tasks first. `addService` and `addTask` are gone. `Cluster.v1` has no v5 form. |
-| [`CognitoUserPool`](/docs/component/aws/v5/cognito-user-pool/) | An identity provider's `transform` becomes `transform.identityProvider`. `domain` and `triggers` are plain. |
-| [`CronV2`](/docs/component/aws/v5/cron/) | Becomes `sst.aws.v5.Cron`, without the version: the first `Cron` has no v5 form. `job` becomes `function`, and `nodes.job` becomes `nodes.function`. |
-| [`Dsql`](/docs/component/aws/v5/dsql/) | `regions.peer` is plain. `transform.peerBackupVault` changes only the peer's vault. |
-| [`Dynamo`](/docs/component/aws/v5/dynamo/) | Every subscriber needs a name. The static `subscribe` becomes `get(...).subscribe(...)`. A subscriber's resources are in the table's `nodes`. |
-| [`Efs`](/docs/component/aws/v5/efs/) | Switch what mounts it first. |
-| [`Function`](/docs/component/aws/v5/function/) | `role` becomes `existing.role`, `logging.logGroup` becomes `existing.logGroup`, `live` becomes `dev` and `url.route` becomes `url.router`; the v4 forms still work. `dev`, `logging`, `url`, `python` and `concurrency` are plain. |
-| [`Mysql`](/docs/component/aws/v5/mysql/) | `proxy` and its `credentials` are plain. The master user's secret is `nodes.secret`. |
-| [`Postgres`](/docs/component/aws/v5/postgres/) | `proxy` and its `credentials` are plain. The master user's secret is `nodes.secret`. |
-| [`Queue`](/docs/component/aws/v5/queue/) | Nothing. |
-| [`Redis`](/docs/component/aws/v5/redis/) | Nothing. |
-| [`Service`](/docs/component/aws/v5/service/) | `taskRole` and `executionRole` go in `existing`. `public` becomes `loadBalancer`, its `ports` become `rules`, and a rule's `path` becomes `conditions.path`. `loadBalancer`, `scaling` and `containers` are plain. |
-| [`SnsTopic`](/docs/component/aws/v5/sns-topic/) | Every subscriber needs a name. With a `provider`, see [above](#what-a-switch-can-replace). |
-| [`Task`](/docs/component/aws/v5/task/) | `taskRole` and `executionRole` go in `existing`. `containers` is plain. |
+```bash frame="none"
+sst migrate --check --stage dev
+```
+
+It shows what the move keeps, what it carries over to a new name, and what it updates in place. It fails if the move would:
+
+- delete or replace anything that holds data, like a bucket, a table, a database or a log group;
+- create, delete or replace anything the components don't say they take the place of.
+
+Expect updates in place, like a function's description or the tags SST sets. A few things are expected to change more:
+
+- **A function whose part has a new name uploads its code again.** The function is updated in place. `CronV2`'s function is one: it was `MyCronJobHandler` and is `MyCronJobFunction`.
+- **A file uploaded under a key made from what's in it**, like a function's code or a site's build, is replaced when what's in it changes, as on any deploy.
+- **Nothing is replaced for a change of provider alone.** SST 4 created some resources with your app's provider, whatever the component was given, like the queue subscribers of a `Bus`. A 5.0 component gives each one its own `provider`, and the move keeps them, updated in place.
+
+For a stage you deploy with `sst dev`, check it the way `sst dev` deploys it, with a stub in place of each function:
+
+```bash frame="none"
+sst migrate --check --dev --stage dev
+```
+
+---
+
+## Move a stage
+
+When the check passes, move the stage:
+
+```bash frame="none"
+sst migrate --stage dev
+```
+
+It takes the stage's lock, checks the move again, and stops there if the check fails. Then it saves a copy of the stage's state in your app's home, takes out of the state what the components let go of, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so what it deploys is what it checked.
+
+Then confirm. `sst diff` should show nothing to create or destroy:
+
+```bash frame="none"
+sst diff --stage dev
+```
+
+From then on, the stage deploys with `sst deploy` and `sst dev` as before. Move the next stage the same way, with production last.
+
+:::danger
+Don't deploy a stage that has moved with SST 4, like from an old branch or in CI. It would try to put back SST 4's resources in place of what moved.
+:::
+
+Set a `version` rule, so that anyone on SST 4 is told their version doesn't match, before the config runs:
+
+```ts title="sst.config.ts"
+version: "5.x",
+```
 
 ---
 
@@ -197,22 +240,8 @@ Before 5.0 is released, SST's components move out of `v5`: `sst.aws.v5.Queue` be
 
 ---
 
-## After you switch
-
-Once your config uses `sst.aws.v5.*`, it doesn't run with a v4 CLI, which has no `sst.aws.v5`. Set a `version` rule, so that anyone on v4 is told their version doesn't match, before the config runs:
-
-```ts title="sst.config.ts"
-version: "5.x",
-```
-
----
-
 ## Going back
 
-**To switch a component back,** change `sst.aws.v5.X` back to `sst.aws.X`, and run `sst diff` before you deploy. A v5 component keeps some resources under new names, like a `Mysql`'s secret. The v4 component doesn't know those names, so it creates them again under its own, and deletes the v5 ones. Check that nothing that holds data is in that list. Switching back hasn't been tried in AWS yet.
+**Before you deploy anything else to a stage that has moved,** you can put it back on SST 4 with the copy the move saved. In your app's home, the copy is at `migrate/<app>/<stage>/<id>.json`, next to the stage's state at `app/<app>/<stage>.json`; on AWS, the home is your account's SST state bucket. Copy it over the stage's state, then deploy with SST 4 and the config from before the codemod. Going back this way hasn't been tried in AWS yet.
 
-**To go back to the v4 CLI,** switch every component back first. Then install the latest v4:
-
-```bash frame="none"
-npm install sst@npm:@sst-community/sst@latest
-```
+Once the stage has been deployed again with SST 5, the copy no longer matches what's deployed. Fix forward instead.

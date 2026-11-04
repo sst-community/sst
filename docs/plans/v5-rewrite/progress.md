@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 5, the migration guide
+
+The migration guide (`www/src/content/docs/docs/migrate-from-v4.mdx`) rewritten for 5.0's path, beside its section for package authors.
+
+**Done, committed:**
+
+- **What changes:** the new components and their names until the release, the types they keep, the four with new names, and that a stage moves once, and whole.
+- **Before you start:** the components with no 5.0 form, which version of SST each step runs, and committing first.
+- **Install SST 5**, as a pre-release from npm or with the install script and its version.
+- **Rewrite your config** with `sst migrate --codemod`, its `--dry-run` first, what it prints, and what it can't see, with a link to each 5.0 component's "Switch from" section.
+- **Check a stage** with `sst migrate --check`, with `--dev` for one that runs in `sst dev`, and **move it** with `sst migrate`, then `sst diff` to confirm; a stage that's moved isn't deployed with SST 4 again, and the config's `version` becomes `"5.x"`.
+- **Going back**, from the copy of the state `sst migrate` keeps, said to be untried.
+
+Checked: the page builds and serves, and each of its links goes to a page that's there.
+
 ## 2026-11-04: step 5, the codemod's rules
 
 The rest of the codemod's rules, from the list of 131 rewrites made from every component's "Switch from" section, and the examples through it.
