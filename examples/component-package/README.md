@@ -1,6 +1,6 @@
 # A component package
 
-A package to copy when you write an SST component for others to install. It works with SST 5, which is in pre-release. How a package component works is in [Write a Package Component](https://github.com/sst-community/sst/blob/v5/www/src/content/docs/docs/write-a-package-component.mdx).
+A package to copy when you write an SST component for others to install. It works with SST 5, which is in pre-release. How a package component works is in [Write a Package Component](https://github.com/sst-community/sst/blob/v5-rewrite/www/src/content/docs/docs/write-a-package-component.mdx).
 
 The component is `Webhook`: a function URL that takes webhook deliveries and puts each on an SQS queue. A function that links it can read the queue.
 
@@ -37,7 +37,6 @@ Commit your lockfile.
 
 - **Pulumi and the providers** in `devDependencies` are the versions SST 5 installs for an app. Your tests then run against what an app deploys with. `node_modules/sst/platform/package.json` lists them, and which providers each of SST's groups loads, under `groups`. Importing `sst/components/aws` loads all five of its providers.
 - **TypeScript stays on 6.** `@pulumi/pulumi` accepts only versions below 7, and npm stops an install that asks for 7.
-- **`google-protobuf` is pinned to 3.21.2**, as SST pins it. With the version `@pulumi/pulumi` gets otherwise, every resource `mock()` registers fails.
 
 ## Test it
 

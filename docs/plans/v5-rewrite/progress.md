@@ -2,6 +2,20 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 4, the template package moved
+
+The plan's next item in step 4: the template package moves to this branch's components, so authors always have a working one to copy, the first of the packages in the order the maintainer chose: the template, then Floci, then `packages/aws-saas`.
+
+**Done, committed and pushed:**
+
+- **The template needs no `skipLibCheck` or `google-protobuf` pin** (`examples/component-package`, merged in from `v5-community-packages`). Step 3 found that a package needs neither ([progress](#2026-11-01-step-3-the-package-setup)), and both are gone from its config and its README. It already used the 5.0 `Function`.
+- **`check.yml` runs for `v5-rewrite`**, as for `main` and `v5`, so its job tests the template against `sst` packed from each commit on this branch, with the rest of the checks.
+- **The links to the template and its guide name `v5-rewrite`**: the guide's went to `v5`, which never had the template. They change again when 5.0 is released.
+
+**Checked**, the CI job's steps, locally: the platform's types built, `sst` packed from this branch, and the template installed from npm with that `sst` in place, then type-checked, compiled and tested, its 3 tests passing with the `google-protobuf` that `@pulumi/pulumi` asks for (3.21.4). The SDK's types check, `go test -vet=all ./...`, and the docs build. The packed `sst` lists the five providers its README says `sst/components/aws` loads.
+
+**Left:** CI's first run on this branch, after the push. The API reports the packages' exit asks for, made with API Extractor: the maintainer decided they're made after the swap, as it renames every export they'd list ([decision](plan.md#decisions)).
+
 ## 2026-11-04: step 4, zipping and hashing timed, and an entry point for each group
 
 The plan's next item in step 4: time zipping and hashing on a large site, and move them to Go only if they're slow.

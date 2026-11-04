@@ -46,8 +46,5 @@
     "sst": "npm:@sst-community/sst@^5.0.0-0",
     "typescript": "^6",
     "vitest": "^5"
-  },
-  "overrides": {
-    "google-protobuf": "3.21.2"
   }
 }

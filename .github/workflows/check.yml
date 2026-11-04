@@ -1,15 +1,18 @@
 name: check
 
-# v5 runs it too, as its pre-releases are tagged on that branch.
+# v5 runs it too, as its pre-releases are tagged on that branch, and
+# v5-rewrite, where 5.0 is built.
 on:
   push:
     branches:
       - main
       - v5
+      - v5-rewrite
   pull_request:
     branches:
       - main
       - v5
+      - v5-rewrite
     types: [opened, synchronize, reopened]
 
 permissions:
