@@ -43,7 +43,7 @@ import {
 import { mapsFrom, moving, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
-import { notAnOption } from "./args";
+import { isFromGet, notAnOption } from "./args";
 
 export {
   type ComponentArgs,
@@ -260,7 +260,14 @@ export class PartsComponent<P extends Parts> extends Component {
         throw new VisibleError(
           `"${key}" is not something you can pass an existing resource for in the "${name}" component (${typeName}). ${has}`,
         );
-      if (this.partTransforms[key] && !isMany(parts[key]))
+      // What a `get` was given only references the resource. A `$transform`
+      // for every component of this kind runs on its args too, and what it
+      // sets for the part has nothing to apply to here.
+      if (
+        this.partTransforms[key] &&
+        !isMany(parts[key]) &&
+        !(args && isFromGet(args))
+      )
         throw new VisibleError(
           `The "${name}" component (${typeName}) is given an existing "${key}", so it doesn't create one and there is nothing to transform. Remove "${key}" from its transform.`,
         );

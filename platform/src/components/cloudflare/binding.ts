@@ -57,6 +57,11 @@ export interface R2BucketBinding {
   type: "r2BucketBindings";
   properties: {
     bucketName: Input<string>;
+    /**
+     * The bucket's [jurisdiction](https://developers.cloudflare.com/r2/reference/data-location/#jurisdictional-restrictions),
+     * for a bucket that has one.
+     */
+    jurisdiction?: Input<string>;
   };
 }
 

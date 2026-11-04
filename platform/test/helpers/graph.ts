@@ -73,6 +73,13 @@ export interface TakeoverCases<A, B> {
   cases: Record<string, Create<A | B> | TakeoverCase<A | B>>;
   /** Anything else to check in every case. */
   check?: (way: TakeoverWay) => unknown;
+  /**
+   * The provider the component's own resources are made with, which the
+   * "with another provider" way gives it one of.
+   *
+   * @default `"aws"`
+   */
+  provider?: "aws" | "cloudflare";
 }
 
 // A resource's address, as the mock works it out
@@ -321,11 +328,19 @@ export function mockPulumi(input?: MockInput) {
           given: (r) => r.parent.endsWith("::test:Parent::Parent"),
         }),
         "with another provider": async () => {
-          const { Provider } = await import("@pulumi/aws");
+          const provider =
+            suite.provider === "cloudflare"
+              ? async () => {
+                  const { Provider } = await import("@pulumi/cloudflare");
+                  return () => new Provider("West", { apiToken: "west" });
+                }
+              : async () => {
+                  const { Provider } = await import("@pulumi/aws");
+                  return () => new Provider("West", { region: "us-west-2" });
+                };
+          const West = await provider();
           return {
-            opts: () => ({
-              provider: new Provider("West", { region: "us-west-2" }),
-            }),
+            opts: () => ({ provider: West() }),
             given: (r) =>
               [r.options.provider, ...Object.values(r.options.providers ?? {})]
                 .filter(Boolean)

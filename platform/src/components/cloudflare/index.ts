@@ -23,3 +23,9 @@ export { binding } from "./binding.js";
  * experimental packages, you may be fired for using
  */
 export * as x from "./experimental/index";
+
+// The V5 components, as `sst.cloudflare.v5`
+export * as v5 from "./v5/index.js";
+
+// How the V5 components take over from the ones they replace
+import "./takeover/index.js";

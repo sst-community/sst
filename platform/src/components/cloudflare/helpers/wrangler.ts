@@ -70,6 +70,10 @@ export function createWranglerConfig(input: {
     }
 
     const properties = binding.properties ?? {};
+    // A binding to what isn't created yet, like a namespace in a new stage's
+    // preview, has no id to give, so it's left out
+    const known = (...keys: string[]) =>
+      keys.every((key) => typeof properties[key] === "string");
     switch (binding.binding) {
       case "aiBindings":
         ai = {
@@ -78,48 +82,59 @@ export function createWranglerConfig(input: {
         };
         break;
       case "kvNamespaceBindings":
+        if (!known("namespaceId")) break;
         kvNamespaces.push({
           binding: link.name,
-          id: stringValue(properties.namespaceId),
+          id: properties.namespaceId,
           remote: true,
         });
         break;
       case "secretTextBindings":
       case "plainTextBindings":
-        vars[link.name] = stringValue(properties.text);
+        if (!known("text")) break;
+        vars[link.name] = properties.text as string;
         break;
       case "serviceBindings":
+        if (!known("service")) break;
         services.push({
           binding: link.name,
-          service: stringValue(properties.service),
+          service: properties.service,
           remote: true,
         });
         break;
       case "queueBindings":
+        if (!known("queueName")) break;
         queueProducers.push({
           binding: link.name,
-          queue: stringValue(properties.queueName),
+          queue: properties.queueName,
           remote: true,
         });
         break;
       case "r2BucketBindings":
+        if (!known("bucketName")) break;
         r2Buckets.push({
           binding: link.name,
-          bucket_name: stringValue(properties.bucketName),
+          bucket_name: properties.bucketName,
+          // A bucket outside any jurisdiction gives none
+          ...(known("jurisdiction")
+            ? { jurisdiction: properties.jurisdiction }
+            : {}),
           remote: true,
         });
         break;
       case "d1DatabaseBindings":
+        if (!known("id")) break;
         d1Databases.push({
           binding: link.name,
-          database_id: stringValue(properties.id),
+          database_id: properties.id,
           remote: true,
         });
         break;
       case "hyperdriveBindings":
+        if (!known("id")) break;
         hyperdrives.push({
           binding: link.name,
-          id: stringValue(properties.id),
+          id: properties.id,
         });
         break;
       case "versionMetadataBindings":
@@ -128,18 +143,20 @@ export function createWranglerConfig(input: {
         };
         break;
       case "workflowBindings":
+        if (!known("workflowName", "className", "scriptName")) break;
         workflows.push({
           binding: link.name,
-          name: stringValue(properties.workflowName),
-          class_name: stringValue(properties.className),
-          script_name: stringValue(properties.scriptName),
+          name: properties.workflowName,
+          class_name: properties.className,
+          script_name: properties.scriptName,
           remote: true,
         });
         break;
       case "rateLimitBindings":
+        if (!known("namespaceId")) break;
         rateLimits.push({
           name: link.name,
-          namespace_id: stringValue(properties.namespaceId),
+          namespace_id: properties.namespaceId,
           simple: properties.simple,
         });
         break;
@@ -208,10 +225,6 @@ export function writeWranglerConfig(args: {
   }
 
   return wranglerPath;
-}
-
-function stringValue(input: unknown) {
-  return typeof input === "string" ? input : "";
 }
 
 const wranglerNameRegex = /[^a-z0-9-]+/g;

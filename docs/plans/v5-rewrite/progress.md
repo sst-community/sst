@@ -2,6 +2,28 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-03: step 4, Cloudflare's components built the 5.0 way, and their lab check
+
+**Done, not committed:**
+
+- **The harness takes a provider's `v5` folder.** Cloudflare's 5.0 components are in `cloudflare/v5/`, as `sst.cloudflare.v5.X`, with their maps in `cloudflare/takeover/`, which `sideEffects` lists. `v5-components.test.ts` checks both providers' folders, with `RENAMED` and the types SST 4 spelled otherwise by provider. A takeover suite says `provider: "cloudflare"` to run its third way with a Cloudflare provider. The docs generator and the sidebar list Cloudflare's 5.0 pages, and keep the V5 class names by provider (`Bucket`, `Cron`, `Queue`, `StaticSite` and others are in both).
+- **The `Worker`**, the base of the rest: its zone found with a function, not SST 4's `ZoneLookup`; each of a domain's aliases and redirects kept by its domain, moved from SST 4's place in the list by the map; the IAM user a link to AWS gives it created directly; what it's linked to read without waiting on it, so a Worker inside a component can link that component; its bindings read together, so one that's secret keeps them all secret, as SST 4 did. Every `existing` entry is refused: it builds its code.
+- **`Kv`, `D1`, `Bucket`, `Hyperdrive`, `Ai`, `RateLimit`:** one resource each, or none, with `get` through `existing` and one helper that uses what's in `existing` or looks it up by an id with its account in front. `Bucket` gives a linked Worker its jurisdiction; `Hyperdrive` keeps its origin secret; `RateLimit` checks its settings when it's created.
+- **`Queue`** with one unnamed consumer, inside the queue where SST 4 kept it in a `QueueWorkerSubscriber`, and `dlq.retryDelay` sent in seconds; **`Cron`**, **`Workflow`** and **`DurableObject`**, each with its Worker kept under SST 4's name, so a Worker with Durable Object migrations finds its current tag.
+- **The sites,** `StaticSite` (SST 4's `StaticSiteV2`, with its type, `sst:cloudflare:StaticSite`, which SST 4's first `StaticSite` has too), `Astro`, `ReactRouter` and `TanStackStart`, built in the program on one helper, with the Wrangler config SST 4 wrote, and a binding whose id a preview doesn't know left out of it.
+- **Left out:** Cloudflare's `Auth`, the maintainer's call, as for `Auth.v1`; it was ported and tested first, and is in the history.
+- **A review of the set** found no resource a switch would lose, and 17 things to fix, all fixed: a preview's Wrangler config with empty binding ids, a queue given by its id read with its account in its id, a Worker that refused an output domain and took `existing` entries it would ignore, the R2 jurisdiction in a site's Wrangler config, four duplicates made helpers, and "Switch from" notes. It also found a framework bug: a `$transform` that set a part's `transform` for every component of a type made that type's `get` fail; fixed in `parts-component.ts`, with a test.
+
+**Checked:** `tsc`, the platform tests (4,199, 123 files), Prettier on what was clean before, and the docs generator: 16 Cloudflare pages, each with its switch notes.
+
+**Checked in the lab,** in a Cloudflare account without R2 (so `Bucket` and `Hyperdrive` are checked under the mock only), on a stage of its own (`LAB_ONLY=cloudflare`): a Worker linked to a `Kv`, a `D1`, a `Queue` with a consumer, an `Ai`, a `RateLimit`, a `DurableObject` and a `Workflow`, with Durable Object migrations, placement and an environment variable; a `Cron`; and a `StaticSite` with a 404 page. The SST 4 side was deployed with a CLI built from `main`, which keeps the API token out of the state.
+
+- **Deployed with SST 4, and called:** every binding answered, the queue's consumer handled a message, and the site served its page and its 404.
+- **`sst migrate --check` passed:** 43 resources kept, 7 at a new address, 7 updated in place, nothing replaced or deleted. The updates: SST 4's dynamic resources' code, and the API Worker, which reads its Durable Object migration tag and sends no steps, as SST 4 does on its second deploy.
+- **The move** kept all 17 resources by id, the queue's consumer under its new name. `sst diff` after it showed no changes. Every route answered the same, and the Durable Object's count went on from where it was.
+- **The cron job ran after the move,** its Worker moved into the `Cron` from the top of the app and its trigger kept: Cloudflare took about four minutes to fire a new trigger.
+- **Removed, and cleaned up:** `sst remove` deleted the 34 resources and components; Cloudflare's API lists no script, KV namespace, D1 database, queue, workflow or Durable Object namespace in the account. Then the stage's 64 state versions and markers, its `migrate` copy among them, and its passphrase. Nothing of it is left. The exported states hold no API token.
+
 ## 2026-11-03: step 4, the maintainer's calls on what the review left
 
 **Done, not committed:**

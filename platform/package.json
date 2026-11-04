@@ -9,7 +9,8 @@
     "build": "bash ./scripts/build"
   },
   "sideEffects": [
-    "./src/components/aws/takeover/*.ts"
+    "./src/components/aws/takeover/*.ts",
+    "./src/components/cloudflare/takeover/*.ts"
   ],
   "trustedDependencies": [
     "esbuild",

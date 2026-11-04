@@ -786,6 +786,27 @@ describe("Component parts", () => {
       ).toThrow(/"topic" is not something you can pass an existing resource for.*queue, deadLetters, alarm/);
     });
 
+    // A `$transform` for every inbox sets the queue's transform on one that a
+    // `get` only references too
+    it("takes a transform for a part that a get is given", async () => {
+      const { getArgs } = await import("../../src/components/args");
+      const Inbox = defineInbox();
+      new Inbox(
+        "A",
+        getArgs({
+          existing: { queue: "https://sqs.example.com/123/mine" },
+          transform: { queue: { delaySeconds: 5 } },
+        }),
+      );
+      await pulumi.settle();
+      // Looked up, not created
+      expect(
+        pulumi.resources
+          .filter((r) => r.type === "aws:sqs/queue:Queue")
+          .map((r) => r.kind),
+      ).toEqual(["read"]);
+    });
+
     it("rejects a transform for a part that is given", () => {
       const Inbox = defineInbox();
       expect(

@@ -2,7 +2,6 @@ import {
   type ComponentResourceOptions,
   type Input,
   type Output,
-  all,
   output,
 } from "@pulumi/pulumi";
 import * as cloudflare from "@pulumi/cloudflare";
@@ -14,9 +13,9 @@ import {
 } from "../dns-adapter";
 import { transform } from "../component";
 import { plain } from "../args";
-import { VisibleError } from "../error";
 import { DEFAULT_ACCOUNT_ID } from "./account-id";
 import { DnsRecord as OverridableDnsRecord } from "./providers/dns-record";
+import { zoneOf as findZone } from "./helpers/zone";
 import type { DnsArgs } from "./dns";
 
 /**
@@ -135,22 +134,6 @@ export function cloudflareDnsAdapter(args: DnsArgs): DnsAdapter {
       );
       return { id: output(args.zone), name: zone.name };
     }
-    const found = all([domain, args.accountId ?? DEFAULT_ACCOUNT_ID]).apply(
-      async ([domain, accountId]) => {
-        const name = domain.replace(/\.$/, "");
-        const labels = name.split(".");
-        for (let i = 0; i <= labels.length - 2; i++) {
-          const candidate = labels.slice(i).join(".");
-          const zones = await cloudflare.getZones(
-            { name: candidate, account: { id: accountId } },
-            { parent: opts.parent },
-          );
-          const zone = zones.results.find((z) => z.name === candidate);
-          if (zone) return { id: zone.id, name: zone.name };
-        }
-        throw new VisibleError(`Could not find hosted zone for domain ${name}`);
-      },
-    );
-    return { id: found.id, name: found.name };
+    return findZone(domain, args.accountId ?? DEFAULT_ACCOUNT_ID, opts.parent);
   }
 }

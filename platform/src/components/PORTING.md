@@ -2,8 +2,10 @@
 
 The rules for porting one of SST's 4.x components to V5, as a person or an agent, and the
 checklist. Everything in `README.md` beside this file applies: read it first. What's here
-is specific to SST's own components in `platform/src/components/aws/`, and goes once 5.0
-has no 4.x components.
+is specific to SST's own components in `platform/src/components/aws/` and
+`platform/src/components/cloudflare/`, and goes once 5.0 has no 4.x components. It's
+written for AWS; for Cloudflare, read `cloudflare/` for `aws/` and `sst.cloudflare` for
+`sst.aws`. The 5.0 `Worker` (`cloudflare/v5/worker.ts`) is the reference there.
 
 ## Ground rules
 
@@ -14,11 +16,14 @@ has no 4.x components.
   that hasn't switched.
 - **The V5 component has the original's name, in the `v5` folder.** `Queue` in
   `aws/queue.ts` is ported as `Queue` in `aws/v5/queue.ts`, with the same type,
-  `sst:aws:Queue`. An app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`.
+  `sst:aws:Queue`. An app uses it as `sst.aws.v5.Queue`, next to `sst.aws.Queue`. A
+  Cloudflare one is in `cloudflare/v5/`, as `sst.cloudflare.v5.Worker`.
   A few have a clearer name than SST 4's, which the maintainer chose: `CronV2` is
   ported as `Cron` in `aws/v5/cron.ts`, `ApiGatewayV1` as `ApiGatewayRest` in
-  `aws/v5/apigateway-rest.ts`, `ApiGatewayV2` as `ApiGatewayHttp` in `aws/v5/apigateway-http.ts`. Each keeps its original's type (`sst:aws:CronV2`), which
-  a deployed one has, and is listed in `RENAMED` in `test/components/v5-components.test.ts`.
+  `aws/v5/apigateway-rest.ts`, `ApiGatewayV2` as `ApiGatewayHttp` in `aws/v5/apigateway-http.ts`,
+  and Cloudflare's `StaticSiteV2` as `StaticSite` in `cloudflare/v5/static-site.ts`. Each keeps its original's type (`sst:aws:CronV2`), which
+  a deployed one has, and is listed in `RENAMED` in `test/components/v5-components.test.ts`,
+  by provider.
   The tests and the docs generator find the original by its type.
 - **The same type is what makes it the same component.** A deployed `sst:aws:Queue`
   named `MyQueue` is the one `new sst.aws.v5.Queue("MyQueue")` creates, so it's kept, and
@@ -220,7 +225,7 @@ that a new stage refuses the 4.x one and only `sst migrate` switches a stage to 
 A map is a file that's imported for what it does, not for what it exports. The CLI
 bundles a config with esbuild, which leaves such a file out of a package that says it
 has no side effects, so `sideEffects` in `platform/package.json` lists
-`aws/takeover/*.ts`. Without that line every map is dropped from a real build and a
+`aws/takeover/*.ts` and `cloudflare/takeover/*.ts`. Without that line every map is dropped from a real build and a
 switch deletes and recreates whatever moved, while every test under the mock passes.
 `v5-components.test.ts` bundles the components the way the CLI does and checks the maps
 are in.
@@ -459,7 +464,8 @@ describe("takes over a deployed Queue", () => {
 - Each case deploys the original, then the V5 component, and expects everything the
   original created to be kept as it is. It's run three ways: as it is, inside another
   component, and with a `provider` of its own. So a case has to pass its `opts` on to
-  the component, and fails when it doesn't.
+  the component, and fails when it doesn't. A Cloudflare component's suite says
+  `provider: "cloudflare"`, so that third way gives it a Cloudflare provider.
 - When the original renamed one of its resources with an alias, or moved one into
   the component from the top of the app, each case is also checked against its graph
   as it was before: a stage deployed with an older 4.x has the old addresses. The 4.x
@@ -544,7 +550,7 @@ describe("takes over a deployed Queue", () => {
 - `sst dev` behaviour is tested by setting `global.$dev = true` in a `beforeEach`.
 - An error thrown inside `.apply()` can't be asserted: under the mock it's an
   unhandled rejection, which fails the run. Test the errors that are thrown directly.
-- `v5-components.test.ts` runs over every file in `aws/v5/`. It fails when one doesn't
+- `v5-components.test.ts` runs over every file in `aws/v5/` and `cloudflare/v5/`. It fails when one doesn't
   have the name and type of the component it replaces, isn't exported from
   `aws/v5/index.ts`, has a takeover map that isn't imported, or names another
   component's type.

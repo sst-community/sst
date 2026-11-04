@@ -87,6 +87,12 @@ export interface MockInput {
    */
   preview?: boolean;
   /**
+   * In a preview, whether a resource's id isn't known yet, as for one a
+   * deploy creates: what's given its id gets an output that isn't known.
+   * Otherwise a resource's id is made from its name.
+   */
+  unknownId?: (args: pulumi.runtime.MockResourceArgs) => boolean;
+  /**
    * Run as the stage moves to new components, the way `sst migrate` runs the
    * program: each component reports what its state map says about its parts,
    * which `moved()` returns. With `preview`, it's `sst migrate --check`.
@@ -333,7 +339,14 @@ export function mockPulumi(input?: MockInput) {
         reply = undefined;
         if (recorded) return { id: recorded.id, state: recorded.outputs };
         return {
-          id: `${args.name}_id`,
+          // No id is one that isn't known, to the engine in a preview
+          id:
+            input?.preview && input.unknownId?.(args)
+              ? ""
+              : // SST 4's Cloudflare zone lookup is given the zone's id as its own
+                args.name.endsWith(".sst.cloudflare.ZoneLookup")
+                ? zoneOf(args.inputs.domain).id
+                : `${args.name}_id`,
           state: {
             ...args.inputs,
             arn: `arn:aws:mock:us-east-1:123456789012:${args.name}`,

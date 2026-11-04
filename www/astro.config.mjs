@@ -247,6 +247,13 @@ const sidebar = [
           "docs/component/cloudflare/react-router",
           "docs/component/cloudflare/tan-stack-start",
           {
+            label: "V5",
+            collapsed: true,
+            items: v5Components("cloudflare").map(
+              (name) => `docs/component/cloudflare/${name}`,
+            ),
+          },
+          {
             label: "Internal",
             collapsed: true,
             items: ["docs/component/cloudflare/queue-worker-subscriber"],

@@ -52,8 +52,9 @@ const documentedSources = new Set<string>();
 // The helper files hold arg types that several V5 components share. They're
 // read so a page can show those types, and get no page of their own.
 const HELPERS = "platform/src/components/aws/helpers/";
-// The V5 components' class names, by the name of the component each replaces,
-// the SST 4 one of its Pulumi type: its own, or another (`CronV2` for `Cron`).
+// The V5 components' class names, by the provider and name of the component
+// each replaces, the SST 4 one of its Pulumi type: its own, or another
+// (`aws:CronV2` for `Cron`).
 // The SST 4 components' names by their type. And the source file of the page
 // that's being written
 const v5Classes = new Map<string, string>();
@@ -88,14 +89,37 @@ if (!cmd || cmd === "components") {
     if (isHelperSource(sourceFile)) continue;
     documentedSources.add(sourceFile);
     const type = pulumiTypeOf(sourceFile);
-    if (type && !isV5Source(sourceFile))
+    // A deprecated class can share its type with what replaced it, as
+    // Cloudflare's first `StaticSite` does with `StaticSiteV2`: the original
+    // is the one that isn't deprecated
+    const deprecated = component
+      .getChildrenByKind(TypeDoc.ReflectionKind.Class)[0]
+      ?.comment?.blockTags.some((tag) => tag.tag === "@deprecated");
+    if (type && !isV5Source(sourceFile) && !(deprecated && originals.has(type)))
       originals.set(type, useClassName(component));
   }
   for (const component of components) {
     const sourceFile = component.sources![0].fileName;
     if (!isV5Source(sourceFile)) continue;
     const name = useClassName(component);
-    v5Classes.set(originals.get(pulumiTypeOf(sourceFile)!) ?? name, name);
+    const group = sourceFile.split("/")[3];
+    // An SST 4 component without a page of its own, like Cloudflare's
+    // `DurableObject`, isn't among what's documented: find it on disk
+    const type = pulumiTypeOf(sourceFile)!;
+    if (!originals.has(type)) {
+      const dir = path.join("..", "platform/src/components", group);
+      for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".ts"))) {
+        const code = fs.readFileSync(path.join(dir, file), "utf8");
+        const declared = code.match(/\b(?:__)?pulumiType = "(sst:[\w:]+)"/)?.[1];
+        const cls = code.match(/^export class (\w+)/m)?.[1];
+        if (declared === type && cls && !/@deprecated/.test(code))
+          originals.set(type, cls);
+      }
+    }
+    v5Classes.set(
+      `${group}:${originals.get(pulumiTypeOf(sourceFile)!) ?? name}`,
+      name
+    );
   }
 
   for (const component of components) {
@@ -2880,8 +2904,12 @@ function useV5Names(prop: TypeDoc.Reflection, text: string) {
     return text;
   // A component's constructor, its static methods, and its name in code:
   // `sst.aws.StepFunctions.pass(`, or `sst.aws.Workflow` in the SDK's docs
-  return text.replace(/\bsst\.aws\.(\w+)(?=\(|\.\w+\(|`)/g, (match, name) =>
-    v5Classes.has(name) ? `sst.aws.v5.${v5Classes.get(name)}` : match
+  return text.replace(
+    /\bsst\.(aws|cloudflare)\.(\w+)(?=\(|\.\w+\(|`)/g,
+    (match, group, name) => {
+      const v5 = v5Classes.get(`${group}:${name}`);
+      return v5 ? `sst.${group}.v5.${v5}` : match;
+    }
   );
 }
 
@@ -3471,6 +3499,9 @@ async function buildComponents() {
       "../platform/src/components/aws/workflow.ts",
       ...v5Components().map(
         (name) => `../platform/src/components/aws/${name}.ts`,
+      ),
+      ...v5Components("cloudflare").map(
+        (name) => `../platform/src/components/cloudflare/${name}.ts`,
       ),
       "../platform/src/components/cloudflare/ai.ts",
       "../platform/src/components/cloudflare/astro.ts",
