@@ -66,9 +66,9 @@ import {
   zipCode,
 } from "../helpers/function-code";
 import { devStubCode, linkEncryptionKey } from "../helpers/function-shared";
-import { FunctionEnvironmentUpdate } from "../providers/function-environment-update";
+import { FunctionEnvironmentUpdate } from "../resources/function-environment-update";
 import { KvKeys } from "../resources/kv-keys";
-import { KvRoutesUpdate } from "../providers/kv-routes-update";
+import { KvRoutesUpdate } from "../resources/kv-routes-update";
 
 const parts = {
   /**
@@ -1705,9 +1705,10 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  *
  * Change `sst.aws.Function` to `sst.aws.v5.Function` and keep the name. The function, its
  * role, log group, code and URL are kept. Behind a router, its route's entry in the router's
- * store is written again by a resource of a new type, which the `sst` binary serves, and
- * `sst migrate` takes the old one out of the state without deleting it. A few things are
- * written differently:
+ * store and its route in the router's list are written again by resources of a new type,
+ * which the `sst` binary serves, and `sst migrate` takes the old ones out of the state
+ * without deleting them. What it adds to its environment after it's created is written again
+ * once the same way. A few things are written differently:
  *
  * - `handler`, `bundle`, `runtime`, `architecture`, `nodejs` and `copyFiles` have to be
  *   plain values, not outputs: the function is built from them, and a preview has to
@@ -1723,8 +1724,8 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  * - `nodes.function` and `nodes.logGroup` are the resources themselves, not outputs.
  * - The alias the URL of a durable function points at is created with the function's
  *   `provider`. `sst.aws.Function` created it with your app's provider, whatever the
- *   function was given. If a durable function has a `url` and a `provider`, the alias is
- *   replaced on switch, and the URL with it.
+ *   function was given. If a durable function has a `url` and a `provider`, the switch
+ *   gives the alias that provider and keeps it, and the URL with it.
  * - `transform: { function: { environment: { variables: { A: "1" } } } }` adds a
  *   variable where it used to replace them all.
  * - A `vpc` that's another resource, like an `aws.ec2.Vpc`, is refused: pass a `Vpc`, or

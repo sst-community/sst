@@ -20,6 +20,7 @@ import {
   buildHashes,
   comparable,
   hiddenInPlainText,
+  isAdopted,
   policyDocument,
   replayer,
   revealedPaths,
@@ -42,6 +43,8 @@ export interface RecordedResource {
   custom: boolean;
   inputs: Record<string, any>;
   options: Record<string, any>;
+  /** The id a resource in the cloud was given. */
+  id?: string;
   /** What a component registered as its outputs. The CLI reads some of them. */
   outputs?: Record<string, any>;
   /**
@@ -286,6 +289,9 @@ export function mockPulumi(input?: MockInput) {
   // engine's mock is told only its type and name, and asks for it as soon as
   // the request is sent, so the answer is handed over then (`send()`).
   const replay = input?.recorded ? replayer(input.recorded) : undefined;
+  // What's being registered, while it's sent, and the id it's imported by
+  let registering: RecordedResource | undefined;
+  let importing: string | undefined;
   let reply:
     | { type: string; name: string; found?: { id: string; outputs: any } }
     | undefined;
@@ -337,16 +343,19 @@ export function mockPulumi(input?: MockInput) {
           );
         const recorded = reply?.found;
         reply = undefined;
-        if (recorded) return { id: recorded.id, state: recorded.outputs };
+        // No id is one that isn't known, to the engine in a preview
+        const id = recorded
+          ? recorded.id
+          : input?.preview && input.unknownId?.(args)
+            ? ""
+            : // SST 4's Cloudflare zone lookup is given the zone's id as its own
+              args.name.endsWith(".sst.cloudflare.ZoneLookup")
+              ? zoneOf(args.inputs.domain).id
+              : importing ?? `${args.name}_id`;
+        if (registering) registering.id = id;
+        if (recorded) return { id, state: recorded.outputs };
         return {
-          // No id is one that isn't known, to the engine in a preview
-          id:
-            input?.preview && input.unknownId?.(args)
-              ? ""
-              : // SST 4's Cloudflare zone lookup is given the zone's id as its own
-                args.name.endsWith(".sst.cloudflare.ZoneLookup")
-                ? zoneOf(args.inputs.domain).id
-                : `${args.name}_id`,
+          id,
           state: {
             ...args.inputs,
             arn: `arn:aws:mock:us-east-1:123456789012:${args.name}`,
@@ -424,14 +433,27 @@ export function mockPulumi(input?: MockInput) {
     resources.push(r);
     const own = urn(r.type, r.name, r.parent);
     addresses.set(own, answersTo(r, addresses.get(r.parent)));
-    // A component isn't in the engine's mock's state, and gets no answer
-    const register = () =>
-      send(
-        registerResource,
-        req,
-        callback,
-        r.custom ? addresses.get(own)! : [],
-      );
+    // A component isn't in the engine's mock's state, and gets no answer.
+    // What's imported keeps the id it's imported by, as in a deploy.
+    const register = () => {
+      registering = r.custom ? r : undefined;
+      importing = req.getImportid() || undefined;
+      try {
+        return send(
+          registerResource,
+          req,
+          callback,
+          r.custom
+            ? [
+                ...addresses.get(own)!,
+                ...formerSstAddresses(r.type, addresses.get(own)!),
+              ]
+            : [],
+        );
+      } finally {
+        registering = importing = undefined;
+      }
+    };
     // The program's checks look at a resource before it's registered, as
     // they do in a deploy. What they find is kept in `findings`, for a test
     // to read, and the resource is registered anyway.
@@ -858,6 +880,10 @@ export function mockPulumi(input?: MockInput) {
             JSON.stringify(pair.original[key]) !==
             JSON.stringify(pair.now[key]),
         );
+        // What a move adopts is imported by its id, where a create would
+        // make a second one
+        if (isAdopted(before) && now.options.importId !== before.id)
+          fields.push("importId");
         if (fields.length) changed.push({ ...pair, fields } as any);
       }
 
@@ -885,14 +911,16 @@ export function mockPulumi(input?: MockInput) {
           return reaches(from);
         };
       };
+      // What took the place of each original resource: what claims it, or
+      // what it was released to
       const before = new Map(
-        pairs.map(([before, now]) => [
+        [...pairs, ...releases].map(([before, now]) => [
           urn(before.type, before.name, before.parent),
           now,
         ]),
       );
       const ordered = dependsOn(resources);
-      const unordered = pairs.flatMap(([original, now]) =>
+      const unordered = [...pairs, ...releases].flatMap(([original, now]) =>
         ((original.options.dependencies ?? []) as string[])
           .map((dependency) => before.get(dependency))
           .filter(
@@ -1028,6 +1056,27 @@ function deployOptions(r: RecordedResource, againstState = false) {
         ];
       }),
   );
+}
+
+// Where SST 4 kept what one of SST's own resources takes the place of, at
+// each address it answers to: a dynamic resource with its kind added to its
+// name. A move writes the same again, so a recorded state answers for it with
+// what that held. What a component reads of one, like a Worker's URL, comes
+// back the same; an output nothing reads may not, like a DNS record's id
+// (an existing record's is "existing-record") or the placement's account.
+function formerSstAddresses(type: string, own: Iterable<string>) {
+  const kind = /^sst:(aws|cloudflare|vercel):(\w+)$/.exec(type);
+  if (!kind) return [];
+  return [...own].map((address) => {
+    const [stack, project, types, name] = address.split("::");
+    const parents = types.slice(0, types.lastIndexOf("$") + 1);
+    return [
+      stack,
+      project,
+      `${parents}pulumi-nodejs:dynamic:Resource`,
+      `${name}.sst.${kind[1]}.${kind[2]}`,
+    ].join("::");
+  });
 }
 
 // SST 4's lookups, made with resources, by the kind each adds to its name.

@@ -78,7 +78,9 @@ export interface HttpsRedirectArgs extends ComponentArgs<typeof parts> {
  * different:
  *
  * - `sourceDomains` and `dns` have to be plain values, not outputs.
- * - The CloudFront function is inside the redirect. SST 4 created it at the top of the app.
+ * - The CloudFront function is inside the redirect. SST 4 created it at the top of the app,
+ *   with the app's provider. A redirect with a provider of its own gives it that one, and
+ *   keeps it.
  * - `transform` takes each part, and `nodes` has them.
  */
 export class HttpsRedirect extends component("sst:aws:HttpsRedirect", parts) {

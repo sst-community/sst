@@ -40,7 +40,7 @@ import {
   releasedAddresses,
   versionOf,
 } from "./takeover";
-import { mapsFrom, moving, reportPart } from "./move";
+import { adoptable, mapsFrom, moving, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
 import { isFromGet, notAnOption } from "./args";
@@ -379,10 +379,33 @@ export class PartsComponent<P extends Parts> extends Component {
     return new cls(
       ...transformPart(this.transformOf(key, id), name, args, {
         ...opts,
+        ...this.adoptedOf(key, id),
         aliases: [...(opts?.aliases ?? []), ...this.aliasesOf(key, name, id)],
         parent: this,
       }),
     );
+  }
+
+  // The id of what a part takes the place of, when the core says a move adopts
+  // it: the part imports it, where a create would make a second one in the
+  // cloud. The map gives the released resource's name; the core gives the ids
+  // by name (`adoptable()`), until the move finishes.
+  private adoptedOf(key: string, id?: string): { import?: string } {
+    const ids = adoptable();
+    if (Object.keys(ids).length === 0) return {};
+    for (const [map, current] of this.keysIn(this.takeoverMaps(), key)) {
+      if (current === undefined) continue;
+      const old = map.released?.[current]?.(this, {
+        name: this.componentName,
+        id,
+      });
+      for (const address of [old ?? []].flat()) {
+        const found =
+          typeof address.name === "string" ? ids[address.name] : undefined;
+        if (found) return { import: found };
+      }
+    }
+    return {};
   }
 
   /**
@@ -653,6 +676,7 @@ export class PartsComponent<P extends Parts> extends Component {
       transformations: [
         (child) => {
           this.partDelegated.add(child.resource);
+          if (moving()) this.reportDelegated(child);
           const aliases = this.delegatedAliases(child.name, child.type);
           if (aliases.length === 0) return undefined;
           return {
@@ -876,7 +900,7 @@ export class PartsComponent<P extends Parts> extends Component {
       this.componentType,
       versionOf(this.constructor),
       formerTypeOf(this.constructor),
-      this.nested,
+      this.outer,
     );
     return from === undefined ? [] : mapsAfter(this.constructor, from);
   }
@@ -922,6 +946,29 @@ export class PartsComponent<P extends Parts> extends Component {
     return old.map((address, i) =>
       aliasOf(address, i === 0 ? name : `${name}-${i}`),
     );
+  }
+
+  // While the stage moves, tell the core what a resource created on this
+  // component's behalf takes the place of, by the maps
+  private reportDelegated(child: ResourceTransformationArgs) {
+    const released = this.takeoverMaps().flatMap((map) => [
+      map.delegatedReleased?.(this, {
+        name: child.name,
+        type: child.type,
+        componentName: this.componentName,
+      }) ?? [],
+    ].flat());
+    if (!released.length) return;
+    reportPart({
+      component: this.urn,
+      type: this.componentType,
+      key: child.name,
+      // Set once the resource's transformations, this among them, have run
+      urn: all([]).apply(() => child.resource.urn),
+      releases: released.map((old) =>
+        releasedAddresses(old, this, this.componentName),
+      ),
+    });
   }
 
   // Where a resource created on this component's behalf lived, by the maps

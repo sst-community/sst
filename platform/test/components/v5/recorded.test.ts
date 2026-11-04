@@ -241,8 +241,8 @@ function needless(order: string) {
     // A 4.x site creates what it makes from its build inside an apply that
     // waits for the router's outputs, as in the sites' suite. Nothing about
     // the site's server or its entries needs the router's distribution or
-    // store removed after them.
-    /^(Next|Astro|Svelte)(Server\w+Function|KvKeys\.sst\.aws\.KvKeys) before Router(KvStore|CdnDistribution)$/.test(
+    // store removed after them. A static site's entries the same.
+    /^((Next|Astro|Svelte)Server\w+Function|(Next|Astro|Svelte|Static)KvKeys) before Router(KvStore|CdnDistribution)$/.test(
       order,
     ) ||
     // A 4.x route or authorizer function depends on the API, as in the
@@ -276,9 +276,7 @@ function needless(order: string) {
     // from reading its name, as in the Worker suite: the API's, on the URL
     // of the workflow's Worker. Its binding waits on the workflow and its
     // script, which is all Cloudflare needs.
-    /^CfApiScript before CfFlowScriptUrl\.sst\.cloudflare\.WorkerUrl$/.test(
-      order,
-    )
+    /^CfApiScript before CfFlowScriptUrl$/.test(order)
   );
 }
 
@@ -1089,15 +1087,27 @@ describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => 
       "CfJobsSubscriberConsumer as CfJobsConsumer",
       "CfJobsSubscriberFunction",
       "CfJobsSubscriberFunctionScript",
-      "CfJobsSubscriberFunctionUrl.sst.cloudflare.WorkerUrl",
       "CfTickHandler",
       "CfTickHandlerScript",
-      "CfTickHandlerUrl.sst.cloudflare.WorkerUrl",
+    ]);
+    // Each Worker's URL and the API's placement were SST 4's dynamic
+    // resources, released to the ones SST's provider serves, which are given
+    // what they held
+    expect(
+      result.releases.map(([was, now]) => `${was.name} as ${now.name}`).sort(),
+    ).toEqual([
+      "CfApiPlacement.sst.cloudflare.WorkerPlacement as CfApiPlacement",
+      "CfApiUrl.sst.cloudflare.WorkerUrl as CfApiUrl",
+      "CfAstroWorkerUrl.sst.cloudflare.WorkerUrl as CfAstroWorkerUrl",
+      "CfFlowScriptUrl.sst.cloudflare.WorkerUrl as CfFlowScriptUrl",
+      "CfJobsSubscriberFunctionUrl.sst.cloudflare.WorkerUrl as CfJobsSubscriberFunctionUrl",
+      "CfReactRouterWorkerUrl.sst.cloudflare.WorkerUrl as CfReactRouterWorkerUrl",
+      "CfSiteRouterUrl.sst.cloudflare.WorkerUrl as CfSiteRouterUrl",
+      "CfTanStackWorkerUrl.sst.cloudflare.WorkerUrl as CfTanStackWorkerUrl",
+      "CfTickHandlerUrl.sst.cloudflare.WorkerUrl as CfTickHandlerUrl",
     ]);
     // What a deploy updates. The lab's move updated more, which the mock
-    // can't see: each WorkerUrl's and the WorkerPlacement's `__provider`,
-    // their provider's code as each CLI bundled the config, from the same
-    // source; the etag the updated scripts' URL and placement read, which
+    // can't see: the etag the updated scripts' URL and placement read, which
     // Cloudflare gives back after an update and the mock gives as the
     // state's; and the Astro Worker's code, which each Astro build changes,
     // where both builds here are the test's files.

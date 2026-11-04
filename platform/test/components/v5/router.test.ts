@@ -60,6 +60,7 @@ describe("Router", () => {
     Function = (await import("../../../src/components/aws/v5/function"))
       .Function;
     await import("../../../src/components/aws/takeover/router");
+    await import("../../../src/components/aws/takeover/cdn");
     await import("../../../src/components/aws/takeover/function");
     await import("../../../src/components/aws/takeover/bucket");
     await import(

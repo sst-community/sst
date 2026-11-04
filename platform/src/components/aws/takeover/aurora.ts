@@ -1,4 +1,4 @@
-import { takeover } from "../../takeover";
+import { sstResource, takeover } from "../../takeover";
 import { Aurora } from "../v5/aurora";
 
 takeover(Aurora, {
@@ -15,5 +15,11 @@ takeover(Aurora, {
     proxySecretVersion: (_, { name, id }) => ({
       name: `${name}ProxySecretVersion${id}`,
     }),
+  },
+  // What waits for the role RDS needs before the proxy is created was one of
+  // SST's own dynamic resources: the one in its place finds the role
+  released: {
+    proxyRoleLookup: (_, { name }) =>
+      sstResource("aws.RdsRoleLookup", { name: `${name}ProxyRoleLookup` }),
   },
 });

@@ -53,6 +53,40 @@ var dataKinds = map[string][]string{
 	"sst.aws.VectorTable": {"dimension"},
 }
 
+// SST 4's provider resources that a move adopts, by the kind each adds to its
+// name: what takes the place of one imports it by its id, as its create would
+// make a second one in the cloud and leave the first behind
+// (docs/plans/v5-rewrite/reference.md, SST's provider resources).
+var adoptKinds = map[string]bool{
+	"sst.aws.OriginAccessControl": true,
+}
+
+// Adoptable is the id of each of SST 4's provider resources in a state that a
+// move adopts, by its name, which the program is told while the stage moves:
+// the part in its place imports it. A name two of them share is left out, so
+// neither is adopted, and the check refuses the move.
+func Adoptable(resources []apitype.ResourceV3) map[string]string {
+	ids := map[string]string{}
+	shared := map[string]bool{}
+	for _, res := range resources {
+		if !res.Custom || res.Delete || res.Type != dynamicType || res.ID == "" || !adoptKinds[kindOf(string(res.URN))] {
+			continue
+		}
+		name := res.URN.Name()
+		if _, ok := ids[name]; ok {
+			shared[name] = true
+		}
+		ids[name] = string(res.ID)
+	}
+	for name := range shared {
+		delete(ids, name)
+	}
+	return ids
+}
+
+// The type of SST 4's provider resources: Pulumi's dynamic resources
+const dynamicType = "pulumi-nodejs:dynamic:Resource"
+
 // SST 4's lookups, made with resources, by the kind each adds to its name.
 // SST 5 makes them with functions. Nothing in the cloud is behind one, so a
 // move releases it: it leaves the state without its delete being called, so

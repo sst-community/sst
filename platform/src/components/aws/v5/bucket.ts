@@ -1038,12 +1038,11 @@ export interface BucketEventBridgeSubscriberArgs {
  *   on the bucket, or on `get` for a bucket that isn't in your app, and the static one is
  *   refused with what to write. What it created is kept. It's created with the bucket's
  *   `provider`, where `sst.aws.Bucket` used your app's: if your bucket has a `provider`,
- *   its rule, target and permission are replaced on switch.
+ *   the switch gives its rule, target and permission that provider and keeps them.
  * - `get` gives its options to the component, so a `provider` or `parent` you pass it
  *   applies to the bucket's notifications too. `sst.aws.Bucket.get` gave them to the bucket it
  *   looked up and to nothing else. If you pass `get` a `provider` and call `notify` on that
- *   bucket, its notifications are replaced on switch, to be created with that provider:
- *   remove them and deploy before you switch, then add them back.
+ *   bucket, the switch gives its notifications that provider and keeps them.
  */
 export class Bucket extends component("sst:aws:Bucket", parts) {
   constructor(

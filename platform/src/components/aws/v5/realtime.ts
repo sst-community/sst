@@ -238,9 +238,8 @@ export interface RealtimeSubscriberArgs {
  *   permission too.
  * - A subscriber is created with the provider the server has. `sst.aws.Realtime` gave it
  *   only a `provider` passed to the server itself, so if your server takes its provider
- *   from a parent component or from `providers`, its subscribers are replaced on switch,
- *   their log groups with them, which `sst migrate --check` refuses: remove them and
- *   deploy before you switch, then add them back.
+ *   from a parent component or from `providers`, the switch gives its subscribers that
+ *   provider and keeps them, with the provider's default tags.
  */
 export class Realtime extends component("sst:aws:Realtime", parts) {
   private readonly iotEndpoint: Output<string>;

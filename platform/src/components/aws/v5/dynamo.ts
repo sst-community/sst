@@ -494,9 +494,8 @@ type IndexKey = string | string[];
  *   place.
  * - A subscriber is created with the provider the table has. `sst.aws.Dynamo` gave it only
  *   a `provider` passed to the table itself, so if your table takes its provider from a
- *   parent component or from `providers`, its subscribers are replaced on switch, their
- *   log groups with them, which `sst migrate --check` refuses: remove them and deploy
- *   before you switch, then add them back.
+ *   parent component or from `providers`, the switch gives its subscribers that provider
+ *   and keeps them, with the provider's default tags.
  * - To subscribe to the stream of a table that isn't in your app, reference the table with
  *   `get`, by its name or the stream ARN you gave the static `subscribe`, and subscribe
  *   to that. The static `subscribe` is refused with what to write.
@@ -510,8 +509,7 @@ type IndexKey = string | string[];
  * - `get` gives its options to the component, so a `provider` or `parent` you pass it
  *   applies to the table's subscribers too. `sst.aws.Dynamo.get` gave them to the table it
  *   looked up and to nothing else. If you pass `get` a `provider` and subscribe to that
- *   table, the subscriber is replaced on switch, to be created with that provider: remove
- *   it and deploy before you switch, then add it back.
+ *   table, the switch gives the subscriber that provider and keeps it.
  * - A `transform` function for the table is given the table's keys, indexes, attributes
  *   and stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
  */

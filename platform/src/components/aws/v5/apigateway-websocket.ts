@@ -360,10 +360,9 @@ export interface ApiGatewayWebSocketRouteArgs {
  *   setup is kept when the API is removed.
  * - The routes and authorizers are created with the provider the API has.
  *   `sst.aws.ApiGatewayWebSocket` gave them only a `provider` passed to the API itself, so
- *   if your API takes its provider from a parent component or from `providers`, its routes
- *   and authorizers are replaced on switch, their functions' log groups with them, which
- *   `sst migrate --check` refuses: remove them and deploy before you switch, then add
- *   them back.
+ *   if your API takes its provider from a parent component or from `providers`, the switch
+ *   gives its routes and authorizers that provider and keeps them, with the provider's
+ *   default tags.
  */
 export class ApiGatewayWebSocket extends component(
   "sst:aws:ApiGatewayWebSocket",

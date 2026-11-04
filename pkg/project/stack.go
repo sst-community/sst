@@ -94,7 +94,8 @@ type CompleteEvent struct {
 	Versions  map[string]int
 	// Moved is whether the state has the marker of a stage on SST 5's
 	// components (MovedMarker), and MovedComponents the version of each
-	// component it says the stage has in a 5.0 form, by type
+	// component it says the stage has in a 5.0 form, by type, and of those
+	// inside SST's components by their type after ">"
 	Moved           bool
 	MovedComponents map[string]int
 	// RecordedVersions are the version of each component the last deploy

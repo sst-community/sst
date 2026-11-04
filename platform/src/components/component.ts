@@ -20,6 +20,7 @@ import {
   versionOf,
 } from "./takeover.js";
 import {
+  type Outer,
   mapsFrom,
   newFormCreated,
   noteCreated,
@@ -59,11 +60,14 @@ export class Component extends ComponentResource {
   /** The name the component was created with. */
   protected readonly componentName: string;
   /**
-   * Whether it's inside one of SST's components, and moves with it.
+   * The outermost of SST's components it's inside, which it moves with, if
+   * it's inside one.
    *
    * @internal
    */
-  protected readonly nested: boolean;
+  protected readonly outer: Outer | undefined;
+  // Its version: the one its maps take it to, or 0 for SST 4's form
+  private readonly componentVersion: number;
 
   constructor(
     type: string,
@@ -79,22 +83,22 @@ export class Component extends ComponentResource {
     checkComponent(type, name, args);
     // Every component is at a version: the one its maps take it to, or 1. SST
     // 4's form of one that has a 5.0 form is version 0. One inside another of
-    // SST's components moves with it, so only its maps are applied.
-    const nested = Component.insideSst(opts?.parent);
+    // SST's components moves with the outermost.
+    const outer = Component.outerSst(opts?.parent);
     const version =
       takeoverOf(new.target) === undefined && takenOverTypes().has(type)
         ? 0
         : versionOf(new.target);
-    if (!nested) {
-      if (version === 0) oldFormCreated(type, name);
-      else
-        newFormCreated(
-          formerTypeOf(new.target) ?? type,
-          type,
-          name,
-          version,
-        );
-    }
+    if (version === 0) {
+      if (!outer) oldFormCreated(type, name);
+    } else
+      newFormCreated(
+        formerTypeOf(new.target) ?? type,
+        type,
+        name,
+        version,
+        outer,
+      );
 
     // `this` is not available to the transformations below until `super`
     // returns, so they reach the component through this variable.
@@ -106,7 +110,7 @@ export class Component extends ComponentResource {
       // Pulumi carries the alias over to its children.
       aliases: [
         ...(opts?.aliases ?? []),
-        ...takeoverAliases(new.target, type, nested, opts),
+        ...takeoverAliases(new.target, type, outer, opts),
       ],
       transformations: [
         // Ensure logical and physical names are prefixed
@@ -131,17 +135,26 @@ export class Component extends ComponentResource {
     self = this;
     this.componentType = type;
     this.componentName = name;
-    this.nested = nested;
-    noteCreated(type, version, this, nested);
+    this.outer = outer;
+    this.componentVersion = version;
+    noteCreated(type, version, this, outer);
   }
 
-  // Whether a resource is one of SST's components, or inside one
-  private static insideSst(resource: Resource | undefined): boolean {
+  // The outermost of SST's components a resource is, or is inside
+  private static outerSst(resource: Resource | undefined): Outer | undefined {
+    let outer: Component | undefined;
     for (let at = resource; at; at = (at as any).__parentResource) {
       if (at instanceof Component && at.componentType.startsWith("sst:"))
-        return true;
+        outer = at;
     }
-    return false;
+    return (
+      outer && {
+        type: outer.componentType,
+        formerType: formerTypeOf(outer.constructor),
+        version: outer.componentVersion,
+        name: outer.componentName,
+      }
+    );
   }
 
   /**
@@ -220,11 +233,11 @@ export class Component extends ComponentResource {
 function takeoverAliases(
   component: Function,
   type: string,
-  nested: boolean,
+  outer: Outer | undefined,
   opts?: ComponentResourceOptions,
 ) {
   const from = formerTypeOf(component);
-  if (!from || mapsFrom(type, versionOf(component), from, nested) !== 0)
+  if (!from || mapsFrom(type, versionOf(component), from, outer) !== 0)
     return [];
   const moved = (opts?.aliases ?? []).flatMap((alias) =>
     typeof alias === "object" &&

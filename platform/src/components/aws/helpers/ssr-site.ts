@@ -58,8 +58,8 @@ import {
 } from "./site-build";
 import { BucketFiles } from "../resources/bucket-files";
 import { KvKeys } from "../resources/kv-keys";
-import { DistributionInvalidation } from "../providers/distribution-invalidation";
-import { KvRoutesUpdate } from "../providers/kv-routes-update";
+import { DistributionInvalidation } from "../resources/distribution-invalidation";
+import { KvRoutesUpdate } from "../resources/kv-routes-update";
 import {
   CF_BLOCK_CLOUDFRONT_URL_INJECTION,
   CF_ROUTER_INJECTION,

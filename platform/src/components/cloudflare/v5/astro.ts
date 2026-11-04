@@ -136,6 +136,10 @@ export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
    * Set a custom domain for your Astro site. Supports domains hosted on Cloudflare.
    *
+   * A domain given as an object is a plain value, not an output: each of
+   * its `aliases` and `redirects` creates resources of its own. Its `name`
+   * can be an output, and so can a domain given as a string.
+   *
    * @example
    *
    * ```js
@@ -360,9 +364,9 @@ const astro: SsrFramework = {
  *   pack, build the site twice: in the preview, and in the deploy.
  * - `sst refresh` doesn't build the site, where `sst.cloudflare.Astro` did. Its Worker stays as
  *   it is, and isn't listed while it runs.
- * - `path`, `buildCommand`, `link` and `domain` have to be plain values, not outputs: the
- *   build reads them, or they decide what's created. The domain's `name` can still be an
- *   output.
+ * - `path`, `buildCommand` and `link` have to be plain values, not outputs: the build reads
+ *   them, or they decide what's created. A `domain` given as an object is a plain value
+ *   too. Its `name` can be an output, and so can a domain given as a string.
  * - `compatibility` sets the Worker's compatibility date and flags, and the Wrangler config's.
  *   One set in `transform.server` still reaches both.
  * - In `sst dev`, reading `nodes.server` says the site runs on your machine, where

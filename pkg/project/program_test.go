@@ -108,7 +108,7 @@ func TestProgramDefine(t *testing.T) {
 	json.Unmarshal([]byte(define["$cli"]), &struct {
 		State *map[string]interface{} `json:"state"`
 	}{&rawState})
-	if keys := sortedKeys(rawState); !reflect.DeepEqual(keys, []string{"components", "empty", "moved", "nested", "types", "version"}) {
+	if keys := sortedKeys(rawState); !reflect.DeepEqual(keys, []string{"adopt", "components", "empty", "moved", "nested", "types", "version"}) {
 		t.Fatalf("$cli.state has %v", keys)
 	}
 	if !cli.State.Moved || cli.State.Empty || !reflect.DeepEqual(cli.State.Components, map[string]int{"sst:aws:Bucket": 1}) {
@@ -117,6 +117,26 @@ func TestProgramDefine(t *testing.T) {
 	// An empty list, not null
 	if cli.State.Types == nil || len(cli.State.Types) != 0 {
 		t.Fatalf("$cli.state.types is %v", cli.State.Types)
+	}
+
+	// The ids of what a move adopts, on any run: a deploy after a move that
+	// stopped partway takes them over too
+	withAdopt, err := p.programDefine(&StackInput{Command: "deploy"}, StageState{
+		Adopt: map[string]string{"SiteS3AccessControl.sst.aws.OriginAccessControl": "E2OAC"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var moved struct {
+		State struct {
+			Adopt map[string]string `json:"adopt"`
+		} `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(withAdopt["$cli"]), &moved); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(moved.State.Adopt, map[string]string{"SiteS3AccessControl.sst.aws.OriginAccessControl": "E2OAC"}) {
+		t.Fatalf("$cli is %s", withAdopt["$cli"])
 	}
 }
 

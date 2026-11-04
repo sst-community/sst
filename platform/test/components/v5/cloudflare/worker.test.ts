@@ -306,15 +306,11 @@ describe("Worker", () => {
       placement: output({ region: "aws:us-east-1" }),
     });
     await pulumi.settle();
-    expect(
-      resource("MyWorkerPlacement.sst.cloudflare.WorkerPlacement").inputs,
-    ).toMatchObject({
+    expect(resource("MyWorkerPlacement").inputs).toMatchObject({
       region: "aws:us-east-1",
       scriptName: resource("MyWorkerScript").inputs.scriptName,
     });
-    expect(
-      resource("MyWorkerPlacement.sst.cloudflare.WorkerPlacement").inputs,
-    ).not.toHaveProperty("mode");
+    expect(resource("MyWorkerPlacement").inputs).not.toHaveProperty("mode");
   });
 
   it("tells sst dev to build it, and reports its handler", async () => {

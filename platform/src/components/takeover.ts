@@ -52,6 +52,34 @@ export interface ReleasedAddress extends OldAddress {
 }
 
 /**
+ * Where SST 4 kept one of SST's own resources: a Pulumi dynamic resource, with
+ * its kind added to its name, like `MySiteAssetFiles.sst.aws.BucketFiles`.
+ * The `sst` binary serves the ones that take their place, under types of their
+ * own, so a move releases the old one: it leaves the state without its delete,
+ * which would remove what it wrote, and the new one writes the same again, or
+ * adopts it by its id.
+ *
+ * @param kind The resource's cloud and kind, like `aws.BucketFiles`.
+ * @param at Where it was, with the name it was given before its kind was
+ * added.
+ */
+export function sstResource(
+  kind: `${"aws" | "cloudflare" | "vercel"}.${string}`,
+  at: OldAddress,
+): ReleasedAddress {
+  return {
+    ...at,
+    type: "pulumi-nodejs:dynamic:Resource",
+    // Kept a plain name when it's given one, for a move that adopts it by its
+    // id: the core gives the ids by name
+    name:
+      typeof at.name === "string"
+        ? `${at.name}.sst.${kind}`
+        : interpolate`${at.name}.sst.${kind}`,
+  };
+}
+
+/**
  * How a component takes over from what it was before, so that a stage keeps
  * the resources that are already deployed: from its form before SST 5, or
  * from its own earlier version.
@@ -131,6 +159,23 @@ export interface Takeover<P extends Parts, C = unknown> {
       componentName: string;
     },
   ) => OldAddress | OldAddress[] | undefined;
+  /**
+   * What a resource something created on the component's behalf takes the
+   * place of, when a move can't carry that over, as `released` says for a
+   * part: the CAA records a DNS adapter creates for a certificate were SST 4's
+   * dynamic resources. Give the old address, with its type, by the name and
+   * type the resource has now, or `undefined`.
+   */
+  delegatedReleased?: (
+    component: C,
+    resource: {
+      /** The resource's name, and its type. */
+      name: string;
+      type: string;
+      /** The component's name. */
+      componentName: string;
+    },
+  ) => ReleasedAddress | ReleasedAddress[] | undefined;
 }
 
 // A part's key in a map: one of the component's parts, or, in a map of an

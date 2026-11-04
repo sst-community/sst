@@ -10,7 +10,7 @@ import { transform } from "../component";
 import { plain } from "../args";
 import { VisibleError } from "../error";
 import { DEFAULT_TEAM_ID } from "./account-id";
-import { DnsRecord as OverridableDnsRecord } from "./providers/dns-record";
+import { DnsRecord as OverridableDnsRecord } from "./resources/dns-record";
 import type { DnsArgs } from "./dns";
 
 /**

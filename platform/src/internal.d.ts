@@ -16,7 +16,8 @@ declare global {
       moved?: boolean;
       /**
        * The version of each component the marker says the stage has in a 5.0
-       * form, by type. A marker written before components had versions lists
+       * form, by type, and of those inside SST's components by their type
+       * after `>`. A marker written before components had versions lists
        * only their types.
        */
       components?: Record<string, number> | string[];
@@ -26,6 +27,12 @@ declare global {
       nested?: string[];
       /** Whether nothing is deployed on the stage. */
       empty?: boolean;
+      /**
+       * The id of each of SST 4's provider resources a move adopts, by its
+       * name: the part in its place imports it. The state has them until a
+       * move finishes.
+       */
+      adopt?: Record<string, string>;
     };
   };
 }

@@ -375,8 +375,10 @@ export function rdsInstanceSuite(
         );
 
         pulumi.reset();
-        create(Postgres);
-        await pulumi.settle();
+        await pulumi.asMove(original, async () => {
+          create(Postgres);
+          await pulumi.settle();
+        });
         expect(names()).toEqual(
           expect.arrayContaining([
             "MyDatabaseSecret",

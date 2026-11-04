@@ -5,7 +5,7 @@ import {
   type RecordedResource,
   mockPulumi as mockEngine,
 } from "../../src/testing/mock";
-import { stateGraph } from "../../src/testing/state";
+import { adoptable, deployedIn, stateGraph } from "../../src/testing/state";
 
 export type { RecordedResource };
 
@@ -222,20 +222,37 @@ export function mockPulumi(input?: MockInput) {
 
   // The V5 side runs as the stage moves, so each component tells the core
   // what its state map says, and what a part releases is compared with the
-  // part that takes its place
-  const asMove = async (run: () => Promise<unknown>) => {
+  // part that takes its place. The core gives it the ids of what the move
+  // adopts, from what's deployed (`move.Adoptable`): the mock's, made from
+  // the name, or a recorded state's.
+  const asMove = async (
+    before: RecordedResource[],
+    run: () => Promise<unknown>,
+  ) => {
     const cli = (globalThis as any).$cli;
-    const was = cli.move;
+    const was = { move: cli.move, state: cli.state };
+    const adopt = adoptable(
+      input?.recorded
+        ? deployedIn(input.recorded)
+        : before.map((r) => ({ ...r, id: `${r.name}_id` })),
+    );
     cli.move = true;
+    cli.state = { ...cli.state, adopt };
     try {
       await run();
     } finally {
-      cli.move = was;
+      cli.move = was.move;
+      cli.state = was.state;
     }
   };
 
   return {
     ...engine,
+    /**
+     * Runs what replaces a deployed graph as the stage moves, as the
+     * takeover tests do, so each part tells the core what it releases.
+     */
+    asMove,
     /**
      * Runs a program that deployed a recorded state, then what replaces it,
      * with the mock given that state (`recorded`), and compares each with
@@ -270,7 +287,7 @@ export function mockPulumi(input?: MockInput) {
       const asDeployed = engine.compare(recorded);
 
       await newRun();
-      await asMove(async () => {
+      await asMove(before, async () => {
         v5();
         await engine.settle();
       });
@@ -291,7 +308,7 @@ export function mockPulumi(input?: MockInput) {
       if (before.length === 0) throw new Error("The original created nothing");
 
       await newRun();
-      await asMove(async () => {
+      await asMove(before, async () => {
         v5();
         await engine.settle();
       });
@@ -389,7 +406,7 @@ export function mockPulumi(input?: MockInput) {
               if (before.length === 0)
                 throw new Error("The original created nothing");
 
-              await asMove(() => deploy(suite.v5(), test.v5, true));
+              await asMove(before, () => deploy(suite.v5(), test.v5, true));
               const result = mock.takeover(before);
               const wrappers = expected(test.wrappers);
               const isWrapper = (r: string) =>

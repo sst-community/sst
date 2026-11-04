@@ -223,9 +223,8 @@ export interface SnsTopicSubscriberArgs {
  *   function subscriber only a `provider` passed to the topic itself, and a queue
  *   subscriber your app's provider, whatever the topic had. So if your topic has a
  *   `provider` and a queue subscribed to it, or takes its provider from a parent component
- *   or from `providers`, those subscribers are replaced on switch, a function's log group
- *   with it, which `sst migrate --check` refuses: remove them and deploy before you
- *   switch, then add them back.
+ *   or from `providers`, the switch gives those subscribers the topic's provider and keeps
+ *   them, with the provider's default tags.
  */
 export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
   constructor(

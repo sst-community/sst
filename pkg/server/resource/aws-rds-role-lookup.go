@@ -3,6 +3,7 @@ package resource
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -61,7 +62,7 @@ func (r *RdsRoleLookup) handle(input *RdsRoleLookupInputs) (error) {
 		})
 
 		if err == nil {
-			fmt.Println("found role", input.Name)
+			slog.Info("found role", "name", input.Name)
 			return nil
 		}
 

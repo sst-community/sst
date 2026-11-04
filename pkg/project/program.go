@@ -22,9 +22,21 @@ import (
 // $dev. state is what the stage's state has: the components' versions, which
 // the program contract's context() reads, whether the stage has moved to SST
 // 5's components and which it has in their 5.0 form, the types of the
-// components it has, and whether it's empty. $cli says which version of the
-// contract the core speaks.
+// components it has, whether it's empty, and the ids of what a move adopts.
+// $cli says which version of the contract the core speaks.
 func (p *Project) programDefine(input *StackInput, state StageState) (map[string]string, error) {
+	stateOf := map[string]interface{}{
+		"version":    state.Versions,
+		"moved":      state.Moved,
+		"components": nonNilMap(state.Components),
+		"types":      nonNil(state.Types),
+		"nested":     nonNil(state.Nested),
+		"empty":      state.Empty,
+		// Given on every run, not only a move's: a deploy after a move that
+		// stopped partway takes them over too, where it would make a second
+		// one and leave SST 4's in the account
+		"adopt": nonNilMap(state.Adopt),
+	}
 	cli := map[string]interface{}{
 		"command":  input.Command,
 		"contract": ContractVersion,
@@ -36,14 +48,7 @@ func (p *Project) programDefine(input *StackInput, state StageState) (map[string
 			"work":     p.PathWorkingDir(),
 			"platform": p.PathPlatformDir(),
 		},
-		"state": map[string]interface{}{
-			"version":    state.Versions,
-			"moved":      state.Moved,
-			"components": nonNilMap(state.Components),
-			"types":      nonNil(state.Types),
-			"nested":     nonNil(state.Nested),
-			"empty":      state.Empty,
-		},
+		"state": stateOf,
 	}
 	cliBytes, err := json.Marshal(cli)
 	if err != nil {
@@ -210,9 +215,9 @@ func nonNil(list []string) []string {
 }
 
 // nonNilMap is the map, or an empty one, so the program reads an object
-func nonNilMap(versions map[string]int) map[string]int {
-	if versions == nil {
-		return map[string]int{}
+func nonNilMap[V any](values map[string]V) map[string]V {
+	if values == nil {
+		return map[string]V{}
 	}
-	return versions
+	return values
 }

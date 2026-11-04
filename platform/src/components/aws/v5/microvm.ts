@@ -34,7 +34,7 @@ import { inlinePolicies, noPermissionsFor } from "../helpers/iam";
 import { type AnyVpc, privateNetworkOf } from "../helpers/vpc";
 import { RETENTION } from "../logging";
 import { Permission, permission } from "../permission";
-import { MicrovmImagePrune } from "../providers/microvm-image-prune";
+import { MicrovmImagePrune } from "../resources/microvm-image-prune";
 import type { FunctionArgs } from "./function";
 
 const parts = {
@@ -432,7 +432,9 @@ export interface MicroVmArgs extends ComponentArgs<typeof parts> {
  *
  * Change `sst.aws.MicroVm` to `sst.aws.v5.MicroVm` and keep the name. The image and its
  * versions, its roles, its log group and its network connector are kept, and the image
- * isn't built again.
+ * isn't built again. What deletes the image's old versions is a resource of a new type,
+ * which the `sst` binary serves: `sst migrate` takes SST 4's out of the state, and the
+ * new one prunes once.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const sandbox = new sst.aws.MicroVm("Sandbox", { image: { context: "./sandbox" } });

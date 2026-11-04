@@ -87,7 +87,8 @@ export function ssrSiteSuite(
     root: app,
     // A Worker's `workers.dev` URL, as Cloudflare gives it
     state: (args) =>
-      args.type === "pulumi-nodejs:dynamic:Resource" &&
+      (args.type === "pulumi-nodejs:dynamic:Resource" ||
+        args.type === "sst:cloudflare:WorkerUrl") &&
       "scriptName" in args.inputs &&
       args.inputs.enabled === true
         ? { url: `${args.inputs.scriptName}.acme.workers.dev` }
@@ -523,16 +524,42 @@ export function ssrSiteSuite(
       );
     });
 
-    it("refuses what decides what it creates or builds as an output", () => {
+    // As the Worker takes it
+    it("takes a domain that's an output as the domain's name", async () => {
+      new Site("Web", {
+        path: "web",
+        buildCommand: "true",
+        domain: output("app.example.com"),
+      });
+      await pulumi.settle();
       expect(
-        () =>
-          new Site("Web", {
-            path: "web",
-            domain: output("app.example.com") as any,
-          }),
-      ).toThrow(
-        `The "domain" of the "Web" ${c.label} site has to be a plain value`,
+        pulumi.resources
+          .filter(
+            (r) =>
+              r.type ===
+              "cloudflare:index/workersCustomDomain:WorkersCustomDomain",
+          )
+          .map((r) => [r.name, r.inputs.hostname]),
+      ).toEqual([["WebWorkerDomain", "app.example.com"]]);
+    });
+
+    it("refuses a domain object that's an output, as the site's", async () => {
+      const failures = await rejectionsOf(async () => {
+        new Site("Web", {
+          path: "web",
+          buildCommand: "true",
+          domain: output({ name: "app.example.com" }) as any,
+        });
+        await pulumi.settle();
+      });
+      expect(failures.map((f) => (f as Error).message)).toContainEqual(
+        expect.stringContaining(
+          `The "domain" of the "Web" ${c.label} site is an output that isn't a domain's name.`,
+        ),
       );
+    });
+
+    it("refuses what decides what it creates or builds as an output", () => {
       expect(
         () => new Site("Link", { path: "web", link: output([]) as any }),
       ).toThrow(

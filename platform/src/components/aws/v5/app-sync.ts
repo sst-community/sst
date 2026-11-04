@@ -517,11 +517,9 @@ export interface AppSyncFunctionArgs {
  * - What a data source, an AppSync function, a resolver or a custom domain creates is
  *   created inside the API, with the provider the API has. `sst.aws.AppSync` created it
  *   beside the API: a Lambda data source's function and the domain's association with
- *   your app's provider, and the rest with only a `provider` passed to the API itself. So
- *   if your API has a `provider`, a Lambda data source's function and the domain's
- *   association are replaced on switch; and if it takes its provider from a parent
- *   component or from `providers`, so is everything its data sources, AppSync functions
- *   and resolvers created. Remove them and deploy before you switch, then add them back.
+ *   your app's provider, and the rest with only a `provider` passed to the API itself. The
+ *   switch gives each of them the API's provider and keeps them, with the provider's
+ *   default tags.
  * - `nodes` has every resource, the certificate included.
  */
 export class AppSync extends component("sst:aws:AppSync", parts) {

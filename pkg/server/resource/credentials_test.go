@@ -19,7 +19,7 @@ func TestCredentials(t *testing.T) {
 		t.Setenv("CLOUDFLARE_API_KEY", "")
 		t.Setenv("CLOUDFLARE_EMAIL", "")
 		req, _ := http.NewRequest("POST", "https://api.cloudflare.com/client/v4/zones/z/dns_records", nil)
-		if err := (&CloudflareResource{context.Background(), app}).authorize(req); err != nil {
+		if err := NewCloudflareResource(context.Background(), projectCloudflare(app)).authorize(req); err != nil {
 			t.Fatal(err)
 		}
 		if req.Header.Get("Authorization") != "Bearer env-token" {
@@ -32,7 +32,7 @@ func TestCredentials(t *testing.T) {
 		t.Setenv("CLOUDFLARE_API_KEY", "")
 		t.Setenv("CLOUDFLARE_EMAIL", "")
 		req, _ := http.NewRequest("POST", "https://api.cloudflare.com/client/v4/zones/z/dns_records", nil)
-		if err := (&CloudflareResource{context.Background(), app}).authorize(req); err == nil {
+		if err := NewCloudflareResource(context.Background(), projectCloudflare(app)).authorize(req); err == nil {
 			t.Fatal("no error without credentials")
 		}
 	})
@@ -40,7 +40,7 @@ func TestCredentials(t *testing.T) {
 	t.Run("Vercel's", func(t *testing.T) {
 		t.Setenv("VERCEL_API_TOKEN", "vercel-token")
 		req, _ := http.NewRequest("POST", "https://api.vercel.com/v4/domains/example.com/records", nil)
-		if err := (&VercelResource{context.Background(), app}).authorize(req); err != nil {
+		if err := NewVercelResource(context.Background()).authorize(req); err != nil {
 			t.Fatal(err)
 		}
 		if req.Header.Get("Authorization") != "Bearer vercel-token" {
@@ -51,7 +51,7 @@ func TestCredentials(t *testing.T) {
 	t.Run("Vercel's missing", func(t *testing.T) {
 		t.Setenv("VERCEL_API_TOKEN", "")
 		req, _ := http.NewRequest("POST", "https://api.vercel.com/v4/domains/example.com/records", nil)
-		if err := (&VercelResource{context.Background(), app}).authorize(req); err == nil {
+		if err := NewVercelResource(context.Background()).authorize(req); err == nil {
 			t.Fatal("no error without a token")
 		}
 	})

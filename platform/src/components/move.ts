@@ -48,7 +48,8 @@ export function moving() {
 /**
  * The type of the marker that says a stage is on SST 5's components. It also
  * lists the version of each component the stage has, which the record of a
- * deploy that finished takes the place of. The core refuses to deploy a stage
+ * deploy that finished adds to: the core reads both, the marker's first where
+ * both list one (`pkg/project/moved.go`). The core refuses to deploy a stage
  * that has something deployed and no marker, except with `sst migrate`
  * (`pkg/project/moved.go`).
  *
@@ -71,6 +72,18 @@ export const versionsRecord = "sst:sst:Versions";
  */
 export function stageMoved() {
   return typeof $cli !== "undefined" && $cli.state?.moved === true;
+}
+
+/**
+ * The id of each of SST 4's provider resources a move adopts, by its name, as
+ * the core says (`move.Adoptable` in `pkg/move`): SST 4's origin access
+ * control, which a create would make a second of. The part in its place
+ * imports it. The state has them until a move finishes, so a deploy after a
+ * move that stopped partway takes them over too.
+ * @internal
+ */
+export function adoptable(): Record<string, string> {
+  return (typeof $cli !== "undefined" && $cli.state?.adopt) || {};
 }
 
 // Whether nothing is deployed on the stage
@@ -97,6 +110,33 @@ function stageHas(type: string, nested = false) {
   return types.has(type) || (nested && nestedTypes().has(type));
 }
 
+/**
+ * The outermost of SST's components one is inside, which it moves with: its
+ * type, its form before SST 5's type when that's another, the code's version
+ * of it, and its name.
+ *
+ * @internal
+ */
+export interface Outer {
+  type: string;
+  formerType?: string;
+  version: number;
+  name: string;
+}
+
+// The key the record lists a component's version under: its type, or for one
+// inside SST's components, which moves with those, its type after `>`. A
+// component can be at the top of the app in SST 4's form and inside a 5.0 one
+// in its 5.0 form, so the two are listed apart.
+function keyOf(type: string, nested: boolean) {
+  return nested ? `>${type}` : type;
+}
+
+// The type a key in the record is for
+function typeOfKey(key: string) {
+  return key.startsWith(">") ? key.slice(1) : key;
+}
+
 // The version of each component the marker lists, by type. A marker written
 // before components had versions listed only their types.
 function listedVersions(): Record<string, number> {
@@ -116,23 +156,44 @@ function listedVersions(): Record<string, number> {
  * moved, and switching it is a move. Otherwise no deploy that finished
  * created it, as when the stage's first one failed, so it's at the code's.
  *
+ * One inside another of SST's components follows the outermost: it's in its
+ * form before SST 5 while that one is, and there's none of it to take over
+ * when the stage has none of that one. Otherwise it's at the version the
+ * record lists for those inside SST's components, which every one of them is
+ * at, as the same code created them all, or else the version listed for its
+ * type.
+ *
  * @param formerType The type of its form before SST 5, when that's another.
- * @param nested Whether it's inside one of SST's components.
+ * @param outer The outermost of SST's components it's inside, if any.
  * @param version The code's version of it.
  * @internal
  */
 export function stageVersionOf(
   type: string,
   formerType?: string,
-  nested = false,
+  outer?: Outer,
   version?: number,
 ): number | undefined {
   if (stageEmpty()) return undefined;
+  const nested = outer !== undefined;
   if (!stageHas(type, nested))
     return formerType && formerType !== type && stageHas(formerType, nested)
       ? 0
       : undefined;
   if (!stageMoved()) return 0;
+  if (outer) {
+    const outerHas = stageVersionOf(
+      outer.type,
+      outer.formerType,
+      undefined,
+      outer.version,
+    );
+    if (outerHas === undefined || outerHas === 0) return outerHas;
+    // A record that doesn't list it apart, as one written before those
+    // inside were, has it under its type, as the same code created both
+    const listed = listedVersions();
+    return listed[keyOf(type, true)] ?? listed[type] ?? version ?? 1;
+  }
   return (
     listedVersions()[type] ?? (takenOverTypes().has(type) ? 0 : (version ?? 1))
   );
@@ -205,6 +266,9 @@ export function oldFormCreated(type: string, name: string) {
  * between, checked, and releases what they can't carry over; and at a later
  * one, the stage was deployed with newer code.
  *
+ * One inside another of SST's components moves with the outermost, so only
+ * its version is checked: SST 4's form of that one refuses the deploy itself.
+ *
  * @internal
  */
 export function newFormCreated(
@@ -212,22 +276,25 @@ export function newFormCreated(
   type: string,
   name: string,
   version: number,
+  outer?: Outer,
 ) {
   const className = type.replaceAll(":", ".");
+  const who = outer ? `"${name}", inside "${outer.name}",` : `"${name}"`;
   const ahead = (has: number) =>
     new VisibleError(
-      `"${name}" is version ${version} of ${className}, and this stage has version ${has}, from newer code. Deploy it with code that has version ${has} or later: a stage doesn't go back to an earlier version by a deploy.`,
+      `${who} is version ${version} of ${className}, and this stage has version ${has}, from newer code. Deploy it with code that has version ${has} or later: a stage doesn't go back to an earlier version by a deploy.`,
     );
   if (moving()) {
-    if (run().oldForms.has(from)) throw splitError(name, "new", from);
-    const has = stageVersionOf(type, from, false, version);
+    if (!outer && run().oldForms.has(from))
+      throw splitError(name, "new", from);
+    const has = stageVersionOf(type, from, outer, version);
     if (has !== undefined && has > version) throw ahead(has);
-    run().newForms.add(from);
+    if (!outer) run().newForms.add(from);
     return;
   }
   if (!stageMoved() || !deploys()) return;
-  const has = stageVersionOf(type, from, false, version);
-  if (has === undefined || has === version) return;
+  const has = stageVersionOf(type, from, outer, version);
+  if (has === undefined || has === version || (outer && has === 0)) return;
   if (has === 0)
     throw new VisibleError(
       `"${name}" is SST 5's ${className}, and this stage still has SST 4's ${from.replaceAll(
@@ -237,7 +304,7 @@ export function newFormCreated(
     );
   if (has < version)
     throw new VisibleError(
-      `"${name}" is version ${version} of ${className}, and this stage has version ${has}. Moving it to version ${version} is a move: \`sst migrate --check\` shows what it does, and \`sst migrate\` makes it.`,
+      `${who} is version ${version} of ${className}, and this stage has version ${has}. Moving it to version ${version} is a move: \`sst migrate --check\` shows what it does, and \`sst migrate\` makes it.`,
     );
   throw ahead(has);
 }
@@ -253,11 +320,12 @@ export function noteCreated(
   type: string,
   version: number,
   component: Resource,
-  nested: boolean,
+  outer?: Outer,
 ) {
   const { created, components } = run();
-  created.set(type, Math.max(created.get(type) ?? 0, version));
-  if (!nested) components.push(component);
+  const key = keyOf(type, outer !== undefined);
+  created.set(key, Math.max(created.get(key) ?? 0, version));
+  if (!outer) components.push(component);
 }
 
 /**
@@ -271,9 +339,9 @@ export function mapsFrom(
   type: string,
   version: number,
   formerType?: string,
-  nested = false,
+  outer?: Outer,
 ): number | undefined {
-  const has = stageVersionOf(type, formerType, nested, version);
+  const has = stageVersionOf(type, formerType, outer, version);
   return has === undefined || has >= version ? undefined : has;
 }
 
@@ -294,10 +362,12 @@ export function leaveMarker(when: "before" | "after") {
     versions = new Map();
     const listed = listedVersions();
     for (const [type, version] of versionedTypes())
-      if (stageEmpty() || !stageHas(type, true)) versions.set(type, version);
+      if (stageEmpty() || !stageHas(type, true))
+        for (const nested of [false, true])
+          versions.set(keyOf(type, nested), version);
     if (!stageEmpty())
-      for (const [type, version] of Object.entries(listed))
-        if (stageHas(type, true)) versions.set(type, version);
+      for (const [key, version] of Object.entries(listed))
+        if (stageHas(typeOfKey(key), true)) versions.set(key, version);
   }
   if (when === "after" && moving()) versions = createdVersions();
   if (!versions) return undefined;
@@ -330,20 +400,20 @@ export function recordVersions() {
 // SST 4's form, and what else it created at its version, as an app's own
 // component, whose map may be registered as the program runs. One created
 // later, inside an \`apply\`, is listed so already. SST 4's form is version 0,
-// which is what a stage has of one when nothing's listed. One kept in SST 4's
-// form at the top of the app isn't listed even when one of SST's 5.0
-// components has the 5.0 form inside it, like a site's bucket: that one moves
-// with the site, and listing it would refuse the app's own. Until a move
-// switches the app's own, the one inside is taken as at version 0 on each
-// run, and given its first map's aliases again, which only match what's
-// already its own.
+// which is what a stage has of one when nothing's listed. Those inside SST's
+// components are listed apart, at the code's version: one kept in SST 4's form
+// at the top of the app isn't listed even when one of SST's 5.0 components has
+// the 5.0 form inside it, like a site's bucket, as listing it would refuse the
+// app's own, and the site's moves with the site.
 function createdVersions() {
   const { oldForms, created } = run();
-  const versions = new Map(
-    [...versionedTypes()].filter(([type]) => !oldForms.has(type)),
-  );
-  for (const [type, version] of created)
-    if (version >= 1 && !oldForms.has(type)) versions.set(type, version);
+  const versions = new Map<string, number>();
+  for (const [type, version] of versionedTypes()) {
+    if (!oldForms.has(type)) versions.set(type, version);
+    versions.set(keyOf(type, true), version);
+  }
+  for (const [key, version] of created)
+    if (version >= 1 && !oldForms.has(key)) versions.set(key, version);
   return versions;
 }
 

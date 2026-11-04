@@ -167,9 +167,8 @@ export interface KinesisStreamSubscriberArgs {
  *   where the static `subscribe` named the stream.
  * - A subscriber is created with the provider the stream has. `sst.aws.KinesisStream`
  *   gave it only a `provider` passed to the stream itself, so if your stream takes its
- *   provider from a parent component or from `providers`, its subscribers are replaced on
- *   switch, their log groups with them, which `sst migrate --check` refuses: remove them
- *   and deploy before you switch, then add them back.
+ *   provider from a parent component or from `providers`, the switch gives its subscribers
+ *   that provider and keeps them, with the provider's default tags.
  * - To subscribe to a stream that isn't in your app, reference it with `get`, by its
  *   name or the ARN you gave the static `subscribe`, and subscribe to that. The static
  *   `subscribe` is refused with what to write.
@@ -183,8 +182,8 @@ export interface KinesisStreamSubscriberArgs {
  * - `get` gives its options to the component, so a `provider` or `parent` you pass it
  *   applies to the stream's subscribers too. The static `subscribe` created a subscriber
  *   with your app's provider, at the top of your app. If you pass `get` a `provider`, or a
- *   parent that has `providers`, and subscribe to that stream, the subscriber is replaced
- *   on switch: remove it and deploy before you switch, then add it back.
+ *   parent that has `providers`, and subscribe to that stream, the switch gives the
+ *   subscriber that provider and keeps it.
  */
 export class KinesisStream extends component("sst:aws:KinesisStream", parts) {
   constructor(

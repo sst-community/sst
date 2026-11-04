@@ -5,11 +5,10 @@ import { HttpsRedirect } from "../v5/https-redirect";
 // no parent, so with the app's provider whatever the redirect's was. The V5
 // redirect keeps it inside, under the same name.
 //
-// A redirect with a provider of its own gives the function that provider,
-// which Pulumi carries out by replacing it, and the replacement keeps the
-// function's name, which CloudFront refuses while the old one is there. So
-// the map doesn't list that replace, and `sst migrate --check` refuses the
-// move before anything changes.
+// A redirect with a provider of its own gives the function that provider.
+// Pulumi asks the new provider whether that replaces it, and AWS's provider
+// replaces nothing for a provider change, so the function is kept: its name
+// is the old one, as the part ignores changes to it.
 takeover(HttpsRedirect, {
   moved: {
     requestFunction: (_, { name }) => ({

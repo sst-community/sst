@@ -140,9 +140,7 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  * - The Worker is created with the provider the cron job has. SST 4 created
  *   it with your app's provider, whatever the cron job had, so if your cron
  *   job has a `provider`, or takes one from a parent component or from
- *   `providers`, its Worker is replaced on switch, which
- *   `sst migrate --check` refuses: remove the cron job and deploy before you
- *   switch, then add it back.
+ *   `providers`, the switch gives its Worker that provider and keeps it.
  */
 export class Cron extends component("sst:cloudflare:Cron", parts) {
   constructor(name: string, args: CronArgs, opts?: ComponentResourceOptions) {

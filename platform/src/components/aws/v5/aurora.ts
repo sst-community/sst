@@ -604,7 +604,9 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  *
  * Change `sst.aws.Aurora` to `sst.aws.v5.Aurora` and keep the name. The cluster you've
  * deployed is kept, and so is everything around it: its instances, password, secrets,
- * parameter groups and proxy.
+ * parameter groups and proxy. What waits for the role RDS needs before the proxy is
+ * created is a resource of a new type, which the `sst` binary serves: `sst migrate`
+ * takes SST 4's out of the state, and the new one finds the role.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const database = new sst.aws.Aurora("MyDatabase", { engine: "postgres", vpc });

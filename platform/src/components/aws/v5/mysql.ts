@@ -220,7 +220,9 @@ const engine: RdsEngine = {
  *
  * Change `sst.aws.Mysql` to `sst.aws.v5.Mysql` and keep the name. The database you've
  * deployed is kept, and so is everything around it: its password, secrets, parameter group
- * and proxy.
+ * and proxy. What waits for the role RDS needs before the proxy is created is a resource
+ * of a new type, which the `sst` binary serves: `sst migrate` takes SST 4's out of the
+ * state, and the new one finds the role.
  *
  * ```ts title="sst.config.ts" del={1} ins={2}
  * const database = new sst.aws.Mysql("MyDatabase", { vpc });

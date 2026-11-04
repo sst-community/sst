@@ -195,6 +195,8 @@ describe("the marker of a stage on SST 5's components", () => {
       new sst.aws.Bucket("Uploads");
       expect(leaveMarker("after")?.has(Bucket)).toBe(false);
       expect(recordVersions()?.has(Bucket)).toBe(false);
+      // The site's is listed apart
+      expect(recordVersions()?.get(`>${Bucket}`)).toBe(1);
       // So the next deploy runs it and leaves it unlisted, and refuses a 5.0
       // one at the top
       newRun();
@@ -314,28 +316,123 @@ describe("the marker of a stage on SST 5's components", () => {
       }
     });
 
-    it("is moved inside one of SST's components, which the stage lists apart", async () => {
+    describe("inside one of SST's components", () => {
       // One of SST's own, as a function inside a queue
       const Nested = "sst:test:Docs";
       const N3 = class extends component(Nested, { docs: aws.s3.Bucket }) {
-        constructor(name: string, opts?: $util.ComponentResourceOptions) {
-          super(name, {}, opts);
+        constructor(name: string, args: {}, opts?: $util.ComponentResourceOptions) {
+          super(name, args, opts);
           (this as any).part("docs", {});
         }
       };
       takeover(N3, { version: 2, moved: { files: "bucket" } });
       takeover(N3, { version: 3, moved: { docs: "files" } });
-      stage({
-        move: true,
-        moved: true,
-        components: { [Nested]: 1 },
-        types: ["sst:aws:Site"],
-        nested: [Nested],
+      // The component it's in: at version 1, and one with a form before SST 5
+      const Site = "sst:aws:Site";
+      const Former = "sst:test:Former";
+      const F1 = class extends component(Former, { docs: N3 }) {
+        constructor(name: string) {
+          super(name, {});
+          (this as any).part("docs", {});
+        }
+      };
+      takeover(F1, {});
+
+      it("is moved, at the version the stage lists apart", async () => {
+        stage({
+          move: true,
+          moved: true,
+          components: { [`>${Nested}`]: 1 },
+          types: [Site],
+          nested: [Nested],
+        });
+        const site = new Component(Site, "Web");
+        new N3("WebDocs", {}, { parent: site });
+        await app.settle();
+        expect(aliasNames("WebDocsDocs")).toEqual(["WebDocsBucket", "WebDocsFiles"]);
+        expect(recordVersions()?.get(`>${Nested}`)).toBe(3);
       });
-      const site = new Component("sst:aws:Site", "Web");
-      new N3("WebDocs", { parent: site });
-      await app.settle();
-      expect(aliasNames("WebDocsDocs")).toEqual(["WebDocsBucket", "WebDocsFiles"]);
+
+      it("is listed apart from one of its type at the top of the app", async () => {
+        // Which the stage has at another version
+        stage({
+          moved: true,
+          components: { [Nested]: 2, [`>${Nested}`]: 3 },
+          types: [Site, Nested],
+        });
+        const site = new Component(Site, "Web");
+        expect(() => new N3("WebDocs", {}, { parent: site })).not.toThrow();
+        await app.settle();
+        expect(aliasNames("WebDocsDocs")).toEqual([]);
+      });
+
+      it("is in its form before SST 5 while the one it's in is", async () => {
+        // As when SST 4's form of that one is switched, on a stage where
+        // another of SST's components has one inside it at version 3
+        stage({
+          move: true,
+          moved: true,
+          components: { [`>${Nested}`]: 3 },
+          types: [Site, Former],
+          nested: [Nested],
+        });
+        new F1("Old");
+        await app.settle();
+        expect(aliasNames("OldDocsDocs")).toEqual(["OldDocsBucket", "OldDocsFiles"]);
+      });
+
+      it("reads a record that lists it under its type", async () => {
+        // As one written before those inside SST's were listed apart
+        stage({
+          move: true,
+          moved: true,
+          components: { [Nested]: 1 },
+          types: [Site],
+          nested: [Nested],
+        });
+        const site = new Component(Site, "Web");
+        new N3("WebDocs", {}, { parent: site });
+        await app.settle();
+        expect(aliasNames("WebDocsDocs")).toEqual(["WebDocsBucket", "WebDocsFiles"]);
+      });
+
+      it("has nothing to take over in one the stage has none of", async () => {
+        stage({
+          move: true,
+          moved: true,
+          components: { [`>${Nested}`]: 1 },
+          types: [Site],
+          nested: [Nested],
+        });
+        const other = new Component("sst:aws:Other", "Other");
+        new N3("OtherDocs", {}, { parent: other });
+        await app.settle();
+        expect(aliasNames("OtherDocsDocs")).toEqual([]);
+      });
+
+      it("is refused at another version outside a move", () => {
+        stage({
+          moved: true,
+          components: { [`>${Nested}`]: 1 },
+          types: [Site],
+          nested: [Nested],
+        });
+        const site = new Component(Site, "Web");
+        expect(() => new N3("WebDocs", {}, { parent: site })).toThrow(
+          '"WebDocs", inside "Web", is version 3 of sst.test.Docs, and this stage has version 1. Moving it to version 3 is a move: `sst migrate --check` shows what it does, and `sst migrate` makes it.',
+        );
+        newRun();
+        stage({
+          moved: true,
+          components: { [`>${Nested}`]: 4 },
+          types: [Site],
+          nested: [Nested],
+        });
+        const docs = new Component(Site, "Docs");
+        expect(() => new N3("DocsDocs", {}, { parent: docs })).toThrow(
+          /"DocsDocs", inside "Docs", is version 3 of sst.test.Docs, and this stage has version 4, from newer code/,
+        );
+      });
     });
 
     it("is recorded at its version when its map is registered as the program runs", () => {

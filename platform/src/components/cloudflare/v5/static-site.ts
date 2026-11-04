@@ -18,7 +18,7 @@ import {
 } from "../../aws/helpers/site";
 import { buildSite, writeViteTypes } from "../../aws/helpers/site-build";
 import { workerSite } from "../helpers/site";
-import { Worker, type WorkerArgs } from "./worker";
+import { Worker, type WorkerArgs, checkDomain } from "./worker";
 
 const parts = {
   /**
@@ -187,6 +187,10 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
   environment?: Input<Record<string, Input<string>>>;
   /**
    * Set a custom domain for your static site. Supports domains hosted on Cloudflare.
+   *
+   * A domain given as an object is a plain value, not an output: each of
+   * its `aliases` and `redirects` creates resources of its own. Its `name`
+   * can be an output, and so can a domain given as a string.
    *
    * :::tip
    * You can migrate an externally hosted domain to Cloudflare by
@@ -389,8 +393,9 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
  *   pack, build the site twice: in the preview, and in the deploy.
  * - `sst refresh` doesn't build the site, where `sst.cloudflare.StaticSiteV2` did. Its Worker
  *   stays as it is, and isn't listed while it runs.
- * - `path`, `build` and `domain` have to be plain values, not outputs: the build reads them,
- *   or they decide what's created. The domain's `name` can still be an output.
+ * - `path` and `build` have to be plain values, not outputs: the build reads them. A
+ *   `domain` given as an object is a plain value too, as it decides what's created. Its
+ *   `name` can be an output, and so can a domain given as a string.
  * - `indexPage` and `errorPage` are gone, and refused: Cloudflare serves the files as they're
  *   named. SST 4's Worker was given them as `INDEX_PAGE` and `ERROR_PAGE`, and served those
  *   files for `/` and for a page that isn't there. Name the home page `index.html`, and the
@@ -433,7 +438,7 @@ export class StaticSite extends component("sst:cloudflare:StaticSite", parts) {
     const sitePath = sitePathOf(args.path, owner);
     const dev = plain(args.dev, option("dev"));
     const build = plainDeep(args.build, option("build"), BUILD_READS_IT);
-    const domain = plain(args.domain, option("domain"));
+    const domain = checkDomain(args.domain, owner);
     const root = context().paths.root;
 
     this.siteUrl = workerSite(this.builder(), name, args, {

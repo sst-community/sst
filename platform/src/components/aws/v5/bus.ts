@@ -294,9 +294,8 @@ export interface BusSubscriberArgs {
  *   subscriber only a `provider` passed to the bus itself, and a queue subscriber your
  *   app's provider, whatever the bus had. So if your bus has a `provider` and a queue
  *   subscribed to it, or takes its provider from a parent component or from `providers`,
- *   those subscribers are replaced on switch, a function's log group with it, which
- *   `sst migrate --check` refuses: remove them and deploy before you switch, then add them
- *   back.
+ *   the switch gives those subscribers the bus's provider and keeps them, with the
+ *   provider's default tags.
  */
 export class Bus extends component("sst:aws:Bus", parts) {
   constructor(

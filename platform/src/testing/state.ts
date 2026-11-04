@@ -638,6 +638,50 @@ export function stateGraph(state: StateExport): RecordedResource[] {
  * an address the state has comes back with the id and outputs deployed there,
  * as the engine reads them from the state.
  */
+// SST 4's provider resources a move adopts by their id, by the kind each adds
+// to its name (`adoptKinds` in pkg/move): a create would make a second one
+const ADOPTED = [".sst.aws.OriginAccessControl"];
+
+/** Whether a move adopts a resource of SST 4's by its id. */
+export function isAdopted(r: { type: string; name: string; custom: boolean }) {
+  return (
+    r.custom &&
+    r.type === "pulumi-nodejs:dynamic:Resource" &&
+    ADOPTED.some((kind) => r.name.endsWith(kind))
+  );
+}
+
+/**
+ * The ids of what a move adopts, by name, as the core gives them to the
+ * program while the stage moves (`move.Adoptable` in pkg/move): a name two
+ * resources share is left out.
+ */
+export function adoptable(
+  resources: { type: string; name: string; custom: boolean; id?: string }[],
+) {
+  const ids: Record<string, string> = {};
+  const shared = new Set<string>();
+  for (const r of resources) {
+    if (!isAdopted(r) || !r.id) continue;
+    if (r.name in ids) shared.add(r.name);
+    ids[r.name] = r.id;
+  }
+  for (const name of shared) delete ids[name];
+  return ids;
+}
+
+/** What's deployed on a recorded stage, as `adoptable()` reads it. */
+export function deployedIn(state: StateExport) {
+  return (state.checkpoint.latest?.resources ?? [])
+    .filter((r) => !r.delete)
+    .map((r) => ({
+      type: r.type,
+      name: r.urn.slice(r.urn.lastIndexOf("::") + 2),
+      custom: r.custom === true,
+      id: r.id,
+    }));
+}
+
 export function replayer(state: StateExport) {
   const byAddress = new Map(
     (state.checkpoint.latest?.resources ?? [])

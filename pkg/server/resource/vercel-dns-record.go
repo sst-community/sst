@@ -8,14 +8,18 @@ import (
 	"io"
 	"net/http"
 	"os"
-
-	"github.com/sst/sst/v3/pkg/project"
 )
 
-// Base resource for Vercel providers
+// VercelResource is what SST's Vercel resources share: the context their
+// calls run in. The token for Vercel's API is the environment's, for the RPC
+// and the provider the sst binary serves (pkg/provider) alike.
 type VercelResource struct {
 	context context.Context
-	project *project.Project
+}
+
+// NewVercelResource is a VercelResource whose calls run in ctx
+func NewVercelResource(ctx context.Context) *VercelResource {
+	return &VercelResource{ctx}
 }
 
 // authorize sets the token the CLI has for Vercel's API, VERCEL_API_TOKEN, on
@@ -100,7 +104,7 @@ func (r *VercelDnsRecord) createOrUpdateRecord(input *VercelDnsRecordInputs) (st
 		return "", err
 	}
 	
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequestWithContext(r.context, "POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return "", err
 	}

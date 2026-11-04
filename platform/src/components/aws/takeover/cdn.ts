@@ -1,6 +1,13 @@
-import { takeover } from "../../takeover";
+import { sstResource, takeover } from "../../takeover";
 import { Cdn } from "../v5/cdn";
 
-// Nothing moved. The map says the 4.x form has this 5.0 form, so a stage
-// switches it with `sst migrate`, and a new stage refuses the 4.x one.
-takeover(Cdn, {});
+// Nothing moved. The waiter was one of SST's own dynamic resources: the one
+// in its place waits again once.
+takeover(Cdn, {
+  released: {
+    waiter: (_, { name }) =>
+      sstResource("aws.DistributionDeploymentWaiter", {
+        name: `${name}Waiter`,
+      }),
+  },
+});

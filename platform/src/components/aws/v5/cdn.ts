@@ -2,7 +2,6 @@ import {
   ComponentResourceOptions,
   Input,
   Output,
-  all,
   interpolate,
   output,
 } from "@pulumi/pulumi";
@@ -18,7 +17,7 @@ import { plain, usedAsItIs, getArgs } from "../../args";
 import { logicalName } from "../../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { HttpsRedirect } from "./https-redirect";
-import { DistributionDeploymentWaiter } from "../providers/distribution-deployment-waiter";
+import { DistributionDeploymentWaiter } from "../resources/distribution-deployment-waiter";
 import { useProvider } from "../helpers/provider";
 import { type DomainArgs, domainOf } from "../helpers/domain";
 
@@ -193,8 +192,9 @@ export interface CdnArgs extends ComponentArgs<typeof parts> {
   domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Whether to wait for the CloudFront distribution to be deployed before
-   * completing the deployment of the app. This is necessary if you need to use the
-   * distribution URL in other resources. It has to be a plain value.
+   * completing the deployment of the app. What uses its URL doesn't wait for it: to
+   * have something wait, give it `dependsOn: [cdn.nodes.waiter]`. It has to be a plain
+   * value.
    * @default `true`
    */
   wait?: boolean;
@@ -274,13 +274,15 @@ export function cdnDomain(
  * #### Switch from `sst.aws.Cdn`
  *
  * The components that create a `Cdn` create this one once they're switched. The
- * distribution, its certificate, its DNS records and its redirect are kept. A few things
- * are written differently:
+ * distribution, its certificate, its DNS records and its redirect are kept. What waits
+ * for the distribution to deploy is a resource of a new type, which the `sst` binary
+ * serves: `sst migrate` takes SST 4's out of the state, and the new one waits once. A
+ * few things are written differently:
  *
  * - `domain`, with its `name`, `aliases` and `redirects`, and `wait` have to be plain
  *   values, not outputs.
  * - `nodes.distribution` is the distribution itself. In `sst.aws.Cdn` it was an output
- *   that waited for the distribution to be deployed. `url` still waits for it.
+ *   of it.
  * - `transform` also takes the `waiter`, the `certificate` and the `redirect`.
  * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
  *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for
@@ -288,13 +290,11 @@ export function cdnDomain(
  * - The DNS records that validate the certificate are named after the domains they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's
  *   `HostedZoneLookup` and `ZoneLookup` leave the state.
- * - A CDN with `domain.redirects`, created with a provider of its own, can't switch
- *   yet: SST 4 created the redirect's CloudFront function with the app's provider,
- *   and moving it to another provider would replace it under the same name.
- *   `sst migrate --check` says so.
+ * - A CDN with `domain.redirects`, created with a provider of its own, gives its
+ *   redirect's CloudFront function that provider, and keeps it: SST 4 created it with
+ *   the app's provider.
  */
 export class Cdn extends component("sst:aws:CDN", parts) {
-  private readonly deployed: Output<unknown>;
   private readonly _domainUrl: Output<string | undefined>;
 
   constructor(name: string, args: CdnArgs, opts?: ComponentResourceOptions) {
@@ -321,7 +321,6 @@ export class Cdn extends component("sst:aws:CDN", parts) {
         "distribution",
         `the "${name}" CDN`,
       );
-      this.deployed = output(true);
       this._domainUrl = existing.aliases.apply((aliases) =>
         aliases?.length ? `https://${aliases[0]}` : undefined,
       );
@@ -376,8 +375,11 @@ export class Cdn extends component("sst:aws:CDN", parts) {
     });
 
     // As the 4.x `Cdn` deploys it: unless `wait` is set to `true`, a change to
-    // the distribution after it's created isn't waited for.
-    const waiter = this.part(
+    // the distribution after it's created isn't waited for. The deploy waits
+    // for it at its end; what reads the distribution doesn't, as in SST 4,
+    // whose waiter was created inside an `apply`, so reading it waited for
+    // nothing. Something that needs it deployed depends on the waiter.
+    this.part(
       "waiter",
       {
         distributionId: distribution.id,
@@ -386,7 +388,6 @@ export class Cdn extends component("sst:aws:CDN", parts) {
       },
       { ignoreChanges: wait ? undefined : ["*"] },
     );
-    this.deployed = waiter.isDone;
     this._domainUrl = domain
       ? output(`https://${domain.name}`)
       : output(undefined);
@@ -424,9 +425,7 @@ export class Cdn extends component("sst:aws:CDN", parts) {
    * The CloudFront URL of the distribution.
    */
   public get url() {
-    return interpolate`https://${this.whenDeployed(
-      this.nodes.distribution.domainName,
-    )}`;
+    return interpolate`https://${this.nodes.distribution.domainName}`;
   }
 
   /**
@@ -435,15 +434,6 @@ export class Cdn extends component("sst:aws:CDN", parts) {
    */
   public get domainUrl() {
     return this._domainUrl;
-  }
-
-  /**
-   * A value of the distribution, once the distribution is deployed: what a
-   * component served through it reads.
-   * @internal
-   */
-  public whenDeployed<T>(value: Input<T>): Output<T> {
-    return all([this.deployed, value]).apply(([, value]) => value as T);
   }
 
   /**

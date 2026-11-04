@@ -1,4 +1,4 @@
-import { takeover } from "../../takeover";
+import { sstResource, takeover } from "../../takeover";
 import { Worker } from "../v5/worker";
 
 // The 4.x `Worker` named each of the domain's aliases and redirects after its
@@ -19,5 +19,13 @@ takeover(Worker, {
     redirectRule: (worker, { name, id }) => ({
       name: `${name}Redirect${place(worker, "redirect", id)}Rule`,
     }),
+  },
+  // Its URL and its placement were SST's own dynamic resources: the ones in
+  // their place set them again
+  released: {
+    url: (_, { name }) =>
+      sstResource("cloudflare.WorkerUrl", { name: `${name}Url` }),
+    placement: (_, { name }) =>
+      sstResource("cloudflare.WorkerPlacement", { name: `${name}Placement` }),
   },
 });

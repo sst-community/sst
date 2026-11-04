@@ -33,8 +33,8 @@ import { DEFAULT_ACCOUNT_ID } from "../account-id";
 import { normalizeCompatibility } from "../helpers/compatibility";
 import { cfFetch } from "../helpers/fetch";
 import { zoneOf } from "../helpers/zone";
-import { WorkerUrl } from "../providers/worker-url";
-import { WorkerPlacement } from "../providers/worker-placement";
+import { WorkerUrl } from "../resources/worker-url";
+import { WorkerPlacement } from "../resources/worker-placement";
 
 const parts = {
   /**
@@ -476,6 +476,43 @@ const BINDING_TYPES: Record<BindingInclude["binding"], string> = {
 };
 
 /**
+ * Check a Worker's `domain`, for what it's given for: an output is the
+ * domain's name, which is one custom domain whatever it is, and an object is
+ * a plain value, as each of its aliases and redirects creates resources of
+ * its own. Its `name` can be an output. A site checks the domain it gives its
+ * Worker this way, so a mistake is said of the site.
+ *
+ * @param owner The component, in messages: `the "Api" Worker`.
+ * @internal
+ */
+export function checkDomain(
+  given: WorkerArgs["domain"],
+  owner: string,
+): WorkerArgs["domain"] {
+  if (Output.isInstance(given) || given instanceof Promise)
+    return output(given).apply((domain: unknown) => {
+      if (typeof domain === "string" && domain) return domain;
+      throw new VisibleError(
+        `The "domain" of ${owner} is an output that isn't a domain's name. A domain given as an object has to be a plain value, since its aliases and redirects each create resources; its "name" can be an output.`,
+      );
+    });
+  if (given && typeof given === "object" && "name" in given)
+    for (const list of ["aliases", "redirects"] as const)
+      plain(
+        given[list],
+        `The "domain.${list}" of ${owner}`,
+        "Each one's resources are named after it, so they're known before they're created.",
+      )?.forEach((hostname) =>
+        plain(
+          hostname,
+          `Each of the "domain.${list}" of ${owner}`,
+          "Each one's resources are named after it, so they're known before they're created.",
+        ),
+      );
+  return given;
+}
+
+/**
  * The `Worker` component lets you create a Cloudflare Worker.
  *
  * @example
@@ -538,7 +575,9 @@ const BINDING_TYPES: Record<BindingInclude["binding"], string> = {
  * #### Switch from `sst.cloudflare.Worker`
  *
  * Change `sst.cloudflare.Worker` to `sst.cloudflare.v5.Worker` and keep the
- * name. The Worker and everything it created are kept.
+ * name. The Worker and everything it created are kept. Its `workers.dev`
+ * URL and its placement are set again by resources of a new type, which the
+ * `sst` binary serves, and `sst migrate` takes SST 4's out of the state.
  *
  * - `link` is a plain value, not an output: a link to something in AWS gives
  *   the Worker an IAM user. Each link's values can still be outputs.
@@ -671,40 +710,14 @@ export class Worker extends component("sst:cloudflare:Worker", parts) {
     });
 
     function domainOf() {
-      const given = args.domain;
+      const given = checkDomain(args.domain, owner);
       if (!given) return;
-      // An output is the domain's name, which is one custom domain whatever
-      // it is. Aliases and redirects each create resources of their own.
-      if (Output.isInstance(given) || given instanceof Promise)
-        return {
-          name: output(given).apply((domain: unknown) => {
-            if (typeof domain === "string" && domain) return domain;
-            throw new VisibleError(
-              `The "domain" of ${owner} is an output that isn't a domain's name. A domain given as an object has to be a plain value, since its aliases and redirects each create resources; its "name" can be an output.`,
-            );
-          }),
-          alias: [],
-          redirect: [],
-        };
-      if (typeof given === "object" && "name" in given) {
-        for (const list of ["aliases", "redirects"] as const)
-          plain(
-            given[list],
-            `The "domain.${list}" of ${owner}`,
-            "Each one's resources are named after it, so they're known before they're created.",
-          )?.forEach((hostname) =>
-            plain(
-              hostname,
-              `Each of the "domain.${list}" of ${owner}`,
-              "Each one's resources are named after it, so they're known before they're created.",
-            ),
-          );
+      if (typeof given === "object" && "name" in given)
         return {
           name: given.name,
           alias: given.aliases ?? [],
           redirect: given.redirects ?? [],
         };
-      }
       return { name: given as Input<string>, alias: [], redirect: [] };
     }
 

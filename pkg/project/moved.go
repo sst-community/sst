@@ -7,6 +7,7 @@ import (
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/sst/sst/v3/internal/util"
+	"github.com/sst/sst/v3/pkg/move"
 )
 
 // MovedMarker is the type of the resource that says a stage is on SST 5's
@@ -21,8 +22,12 @@ const MovedMarker = "sst:sst:Moved"
 
 // VersionsRecord is the type of the record of the version of each component a
 // deploy created, which the program leaves once everything it deployed is
-// deployed. What it lists takes the place of what the marker lists, which a
-// deploy that failed partway wrote before it began.
+// deployed. It adds what the marker can't list, as a component whose map an
+// app registers as its program runs. Where both list a component, the
+// marker's is the latest: a plain deploy writes it as it begins, with the
+// versions the stage has, and a move once everything it moved is deployed.
+// So after a deploy that failed partway, it has the version of a component
+// that deploy began to create, where the record has an older code's.
 const VersionsRecord = "sst:sst:Versions"
 
 // StageState is what the program is told about the stage's state.
@@ -30,8 +35,9 @@ type StageState struct {
 	// Versions are the components' versions, by name, as 4.x recorded them
 	Versions map[string]int
 	// Moved is whether the state has the marker, and Components the version
-	// of each component it says the stage has in a 5.0 form, by type. SST 4's
-	// form is version 0, and isn't listed.
+	// of each component it says the stage has in a 5.0 form, by type, and of
+	// those inside SST's components by their type after ">". SST 4's form is
+	// version 0, and isn't listed.
 	Moved      bool
 	Components map[string]int
 	// Types are the types of the components the state has, other than those
@@ -41,15 +47,18 @@ type StageState struct {
 	Nested []string
 	// Empty is whether nothing is deployed: a new stage, or a removed one
 	Empty bool
+	// Adopt is the id of each of SST 4's provider resources a move adopts, by
+	// its name (move.Adoptable). The state has them until a move finishes.
+	Adopt map[string]string
 }
 
 // stageState reads what the program is told from what the stage's state has.
 func stageState(completed *CompleteEvent) StageState {
 	components := map[string]int{}
-	for typ, version := range completed.MovedComponents {
+	for typ, version := range completed.RecordedVersions {
 		components[typ] = version
 	}
-	for typ, version := range completed.RecordedVersions {
+	for typ, version := range completed.MovedComponents {
 		components[typ] = version
 	}
 	top, nested := componentTypes(completed.Resources)
@@ -60,6 +69,7 @@ func stageState(completed *CompleteEvent) StageState {
 		Types:      top,
 		Nested:     nested,
 		Empty:      !holdsResources(completed.Resources),
+		Adopt:      move.Adoptable(completed.Resources),
 	}
 }
 

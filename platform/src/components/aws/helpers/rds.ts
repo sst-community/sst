@@ -13,7 +13,7 @@ import type { Input } from "../../input";
 import { VisibleError } from "../../error";
 import { type SizeGbTb, toGBs } from "../../size";
 import type { DevReport } from "../../contract";
-import { RdsRoleLookup } from "../providers/rds-role-lookup";
+import { RdsRoleLookup } from "../resources/rds-role-lookup";
 import { devValue, localPassword, localServerPane } from "./local-server";
 
 // What the databases on RDS share: the `Aurora`, and the `Postgres` and the

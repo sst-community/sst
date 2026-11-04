@@ -279,14 +279,22 @@ takeover(ApiGatewayHttp, {
   does. It then needs no entry in the takeover map. The name goes in the declaration
   and not in the map because it has to outlive the map: once someone has switched, the
   kept name is the one in their state.
-- Something 4.x created without the component's `provider` is replaced on switch when
-  the component has one, because a part is always created with it. 4.x did this for
-  what it created with no parent (the alias of a durable function's URL, AppSync's
-  domain association), for a wrapper it forgot to give the provider (`SnsTopic`'s queue
-  subscribers), and for what's added to a component from a `get` that gave its options
-  to the lookup alone (`Bucket.get`, `Dynamo.get`, `CognitoUserPool.get`). A port can't
-  avoid it. The "with another provider" way of a takeover case finds it: expect it in
-  the case, and say so in the "Switch from" section.
+- Something 4.x created without the component's `provider` is given it on switch,
+  because a part is always created with it. 4.x did this for what it created with no
+  parent (the alias of a durable function's URL, AppSync's domain association), for a
+  wrapper it forgot to give the provider (`SnsTopic`'s queue subscribers), and for
+  what's added to a component from a `get` that gave its options to the lookup alone
+  (`Bucket.get`, `Dynamo.get`, `CognitoUserPool.get`). That alone replaces nothing:
+  Pulumi asks the new provider whether a change of provider replaces what it manages,
+  and AWS's and Cloudflare's say no, so it's kept, with that provider's default tags.
+  The "with another provider" way of a takeover case finds it: expect it in the case,
+  and say so in the "Switch from" section.
+- A replace has to create the new resource before it deletes the old one, or the check
+  refuses it: in between, what uses it goes without it, and the cloud can refuse the
+  delete while it's in use. Pulumi's provider deletes first a resource given its name,
+  as no two can have it. A part like that which a switch replaces is given
+  `deleteBeforeReplace: false`, and a new name on the switch where the cloud keeps a
+  name to one resource.
 - An object in `transform` is merged into the defaults, nested objects included; 4.x
   replaced a nested object whole. So a config that sets a nested default this way
   (`transform: { instance: { tags: { team: "data" } } }`) deploys something different
@@ -319,9 +327,9 @@ takeover(ApiGatewayHttp, {
   component after it's released that moves its resources ships version 2.
 - `takeover()` also takes `from`, the type a component had, for one that takes over
   from a component of another type. Only version 1 can. No V5 component needs it.
-- One of SST's own provider resources (`KvKeys`, `BucketFiles`) adds its type to its
-  name: `MyFunctionRouteKey.sst.aws.KvKeys`. As a part it's matched without that. If it
-  moved, write its old name in full, as a function in `moved`.
+- One of SST 4's provider resources (`KvKeys`, `BucketFiles`) added its kind to its
+  name: `MyFunctionRouteKey.sst.aws.KvKeys`. The ones that take their place don't, and
+  a move releases the old one (below).
 - A resource 4.x created outside of any component got no name from SST. Add its type to
   `UNPREFIXED_TYPES` in `naming-rules.ts` so it keeps the name the provider gave it
   (the V5 `Function` does this for the alias of a durable function's URL).
@@ -349,19 +357,31 @@ takeover(Site, {
   // as when the type changes. The old one leaves the state without its delete
   // being called; the part writes the same thing again, or adopts it by its id.
   released: {
-    files: (_, { name }) => sstResource("BucketFiles", { name: `${name}AssetFiles` }),
+    files: (_, { name }) =>
+      sstResource("aws.BucketFiles", { name: `${name}AssetFiles` }),
   },
 });
 ```
 
-SST's own resources, like a site's files (`BucketFiles`) and a router's entries
-(`KvKeys`), are served by the `sst` binary as a Pulumi provider: use the classes in
-`aws/resources/`, not the 4.x dynamic ones in `aws/providers/`. 4.x's were dynamic
-resources with their kind added to their name, so a part that takes the place of one
-releases it with `sstResource(kind, address)` (`aws/takeover/helpers.ts`). `sst migrate`
-marks what's released as retained in the state, so Pulumi takes it out without calling
-its delete, which would delete what it wrote. The takeover tests run the V5 side as a
-move, and check that what takes a released resource's place is given what it was.
+SST's own resources, like a site's files (`BucketFiles`), a router's entries (`KvKeys`),
+an invalidation or a Worker's URL, are served by the `sst` binary as a Pulumi provider:
+use the classes in `aws/resources/`, `cloudflare/resources/` and `vercel/resources/`,
+not the 4.x dynamic ones in `providers/`. 4.x's were dynamic resources with their kind
+added to their name, so a part that takes the place of one releases it with
+`sstResource(kind, address)` (`takeover.ts`), the kind with its cloud:
+`"aws.BucketFiles"`. `sst migrate` marks what's released as retained in the state, so
+Pulumi takes it out without calling its delete, which would delete what it wrote. The
+takeover tests run the V5 side as a move, and check that what takes a released
+resource's place is given what it was, and that what depended on it depends on what
+takes its place.
+
+Most of them write the same thing again. One whose create would make a second thing in
+the cloud is adopted instead: the core gives the program the ids of SST 4's origin
+access controls while the stage moves (`move.Adoptable` in `pkg/move`), and the part
+that releases one imports it by its id, which `sst migrate --check` requires. A
+resource a DNS adapter creates for a component isn't a part: the map releases what it
+takes the place of with `delegatedReleased`, as the certificate's does for its CAA
+records on Cloudflare and Vercel.
 A released resource with no `parent` is looked for in the component at each address it
 answers to: its own, the type it takes over from, and a name a parent's map gave it
 before, as with a subscriber's function. Under one of those, a name that starts with
@@ -385,12 +405,14 @@ when the stage has none of it, so a new stage starts with all of them (`componen
 - A move switches all of a component at once: one that switches some and keeps others
   in SST 4's form is refused, since a later deploy could switch those back without a
   move.
-- One inside another of SST's components moves with that one, and isn't counted. So
-  a move that keeps the app's own `Bucket` in SST 4's form doesn't list `Bucket`, even
-  when a 5.0 site has a 5.0 one inside it. Until a move switches the app's own, the
-  site's is taken as at version 0 on each run, and gets its first map's aliases
-  again: harmless while the map of a component that's nested only moves parts. One
-  that lists a part as `replaced` or `added` would let that through a later move too.
+- One inside another of SST's components moves with the outermost one, and is listed
+  apart, under its type after `>`. So a move that keeps the app's own `Bucket` in SST
+  4's form doesn't list `Bucket`, even when a 5.0 site has a 5.0 one inside it, and
+  lists `>sst:aws:Bucket`. One inside is in SST 4's form while the outermost one is,
+  whatever the stage lists for the others, so switching that one takes over what's
+  inside it too. Otherwise it's at the version listed apart, which all of them are
+  at. A deploy refuses one inside at another version, as it does one at the top, and
+  says which component it's in.
 
 `mock()` runs as a new stage's first deploy, so a package that still wraps SST 4's form
 of such a component finds out in its tests.

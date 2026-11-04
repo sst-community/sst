@@ -77,21 +77,29 @@ func TestKeepMarker(t *testing.T) {
 
 func TestStageState(t *testing.T) {
 	bucket := resourceAt("urn:pulumi:dev::app::sst:aws:Bucket::Uploads", "sst:aws:Bucket")
+	// SST 4's origin access control, which a move adopts by its id
+	control := resourceAt("urn:pulumi:dev::app::sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource::WebS3AccessControl.sst.aws.OriginAccessControl", "pulumi-nodejs:dynamic:Resource")
+	control.Custom, control.ID = true, "E2OAC"
 	state := stageState(&CompleteEvent{
-		Versions:        map[string]int{"Uploads": 1},
-		Moved:           true,
+		Versions: map[string]int{"Uploads": 1},
+		Moved:    true,
+		// A deploy that began to create the first "Uploads", with version 2
+		// of it, and failed partway, wrote the marker as it began
 		MovedComponents: map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 2},
-		// The last deploy that finished recorded what it created
-		RecordedVersions: map[string]int{"acme:index:Uploads": 1},
-		Resources:        []apitype.ResourceV3{bucket},
+		// The last deploy that finished recorded every component it knew at
+		// its own version, the first "Uploads" not yet created, and what an
+		// app registered as its program ran, which the marker can't list
+		RecordedVersions: map[string]int{"acme:index:Uploads": 1, "acme:index:Late": 3},
+		Resources:        []apitype.ResourceV3{bucket, control},
 	})
 	assert.Equal(t, StageState{
 		Versions:   map[string]int{"Uploads": 1},
 		Moved:      true,
-		Components: map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 1},
+		Components: map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 2, "acme:index:Late": 3},
 		Types:      []string{"sst:aws:Bucket"},
 		Nested:     []string{},
 		Empty:      false,
+		Adopt:      map[string]string{"WebS3AccessControl.sst.aws.OriginAccessControl": "E2OAC"},
 	}, state)
 	assert.True(t, stageState(&CompleteEvent{}).Empty)
 }

@@ -397,9 +397,8 @@ export interface QueueSubscriberArgs {
  *   place.
  * - The subscriber is created with the provider the queue has. `sst.aws.Queue` gave it only
  *   a `provider` passed to the queue itself, so if your queue takes its provider from a
- *   parent component or from `providers`, its subscriber is replaced on switch, its log
- *   group with it, which `sst migrate --check` refuses: remove it and deploy before you
- *   switch, then add it back.
+ *   parent component or from `providers`, the switch gives its subscriber that provider and
+ *   keeps it, with the provider's default tags.
  * - `subscribe` returns the queue, where it returned the subscriber: its function is
  *   `queue.nodes.subscriber`, and its event source mapping
  *   `queue.nodes.eventSourceMapping`.

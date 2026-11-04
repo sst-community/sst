@@ -17,7 +17,7 @@ import {
   withoutUnknowns,
 } from "../../aws/helpers/site-build";
 import { DEFAULT_ACCOUNT_ID } from "../account-id";
-import { Worker, type WorkerArgs } from "../v5/worker";
+import { Worker, type WorkerArgs, checkDomain } from "../v5/worker";
 import {
   DEFAULT_COMPATIBILITY_DATE,
   DEFAULT_COMPATIBILITY_FLAGS,
@@ -146,7 +146,7 @@ export function ssrSite(
     option("link"),
     "A link to something in AWS gives the site's Worker an IAM user, so the list has to be known before the user is created.",
   );
-  const domain = plain(args.domain, option("domain"));
+  const domain = checkDomain(args.domain, owner);
   const buildCommand = plain(
     args.buildCommand,
     option("buildCommand"),

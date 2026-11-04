@@ -1,5 +1,5 @@
 import { Input, Resource, interpolate } from "@pulumi/pulumi";
-import type { OldAddress, ReleasedAddress } from "../../takeover";
+import type { OldAddress } from "../../takeover";
 
 /**
  * The old address of a resource that 4.x kept in a component of its own,
@@ -73,23 +73,4 @@ export function subscriberFunction(
     childOf(type, component, "", beside),
     childOf(type, component, "Function", beside),
   ];
-}
-
-/**
- * Where 4.x kept one of SST's own resources: a Pulumi dynamic resource, with
- * its kind added to its name, like `MySiteAssetFiles.sst.aws.BucketFiles`.
- * The `sst` binary serves the ones that take their place, under types of their
- * own, so a move releases the old one: it leaves the state without its delete,
- * which would remove what it wrote, and the new one writes the same again.
- *
- * @param kind The resource's kind, like `BucketFiles`.
- * @param at Where it was, with the name it was given before its kind was
- * added.
- */
-export function sstResource(kind: string, at: OldAddress): ReleasedAddress {
-  return {
-    ...at,
-    type: "pulumi-nodejs:dynamic:Resource",
-    name: interpolate`${at.name}.sst.aws.${kind}`,
-  };
 }

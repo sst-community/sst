@@ -82,9 +82,9 @@ func projectAws(p *project.Project) func() (aws.Config, error) {
 
 func Register(ctx context.Context, p *project.Project, r *rpc.Server) error {
 	awsResource := NewAwsResource(ctx, projectAws(p))
-	cloudflareResource := &CloudflareResource{ctx, p}
-	vercelResource := &VercelResource{ctx, p}
-	
+	cloudflareResource := NewCloudflareResource(ctx, projectCloudflare(p))
+	vercelResource := NewVercelResource(ctx)
+
 	// AWS Resources
 	r.RegisterName("Resource.Aws.BucketFiles", &BucketFiles{awsResource})
 	r.RegisterName("Resource.Aws.DistributionDeploymentWaiter", &DistributionDeploymentWaiter{awsResource})

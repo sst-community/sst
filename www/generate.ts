@@ -3526,6 +3526,7 @@ async function buildComponents() {
       "../platform/src/components/aws/iam-edit.ts",
       "../platform/src/components/aws/permission.ts",
       "../platform/src/components/aws/providers/function-environment-update.ts",
+      "../platform/src/components/aws/resources/function-environment-update.ts",
       "../platform/src/components/aws/step-functions/choice.ts",
       "../platform/src/components/aws/step-functions/fail.ts",
       "../platform/src/components/aws/step-functions/map.ts",

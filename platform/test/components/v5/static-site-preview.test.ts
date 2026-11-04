@@ -84,19 +84,19 @@ describe("a StaticSite in a new stage's preview", () => {
     expect(inSite("Built")).toEqual([
       "BuiltAssetFiles",
       "BuiltAssets",
-      "BuiltInvalidation.sst.aws.DistributionInvalidation",
+      "BuiltInvalidation",
       "BuiltKvKeys",
-      "BuiltRoutesUpdate.sst.aws.KvRoutesUpdate",
+      "BuiltRoutesUpdate",
     ]);
     expect(inSite("Plain")).toEqual([
       "PlainAssetFiles",
       "PlainAssets",
       "PlainCdn",
       "PlainCloudfrontFunctionRequest",
-      "PlainInvalidation.sst.aws.DistributionInvalidation",
+      "PlainInvalidation",
       "PlainKvKeys",
       "PlainKvStore",
-      "PlainS3AccessControl.sst.aws.OriginAccessControl",
+      "PlainS3AccessControl",
     ]);
   });
 });

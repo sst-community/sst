@@ -76,7 +76,7 @@ func Main(version string) error {
 	}()
 
 	load := envAws()
-	s := newServer(version, resources(load))
+	s := newServer(version, resources(load, envCloudflare()))
 	s.functions = functions(load)
 	handle, err := rpcutil.ServeWithOptions(rpcutil.ServeOptions{
 		Cancel: stop,
@@ -240,16 +240,41 @@ func (s *server) Create(ctx context.Context, req *pulumirpc.CreateRequest) (*pul
 }
 
 // Read gives back what it's given, as SST's dynamic resources do: nothing
-// they make can be read from the cloud as it was given.
-func (s *server) Read(_ context.Context, req *pulumirpc.ReadRequest) (*pulumirpc.ReadResponse, error) {
-	if _, err := s.handler(req.GetUrn()); err != nil {
+// they make can be read from the cloud as it was given. An import, which
+// gives nothing but an id, reads the resource from the cloud: a move adopts
+// what SST 4 created that way, when a create would make a second one.
+func (s *server) Read(ctx context.Context, req *pulumirpc.ReadRequest) (*pulumirpc.ReadResponse, error) {
+	h, err := s.handler(req.GetUrn())
+	if err != nil {
 		return nil, err
 	}
-	return &pulumirpc.ReadResponse{
-		Id:         req.GetId(),
-		Properties: req.GetProperties(),
-		Inputs:     req.GetInputs(),
-	}, nil
+	if len(req.GetProperties().GetFields()) > 0 || len(req.GetInputs().GetFields()) > 0 {
+		return &pulumirpc.ReadResponse{
+			Id:         req.GetId(),
+			Properties: req.GetProperties(),
+			Inputs:     req.GetInputs(),
+		}, nil
+	}
+	inputs, outs, ok, err := h.imported(ctx, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("%s can't be adopted by its id", resource.URN(req.GetUrn()).Type())
+	}
+	// Gone: the engine says so
+	if inputs == nil {
+		return &pulumirpc.ReadResponse{}, nil
+	}
+	properties, err := marshal(outs)
+	if err != nil {
+		return nil, err
+	}
+	given, err := marshal(inputs)
+	if err != nil {
+		return nil, err
+	}
+	return &pulumirpc.ReadResponse{Id: req.GetId(), Properties: properties, Inputs: given}, nil
 }
 
 func (s *server) Update(ctx context.Context, req *pulumirpc.UpdateRequest) (*pulumirpc.UpdateResponse, error) {

@@ -414,9 +414,10 @@ export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *
  * Change `sst.aws.Astro` to `sst.aws.v5.Astro` and keep the name. The site's bucket, its
  * server functions, and its CloudFront distribution or its entry in the router are kept.
- * Its files and its entries in the key-value store are written again by resources of a new
- * type, which the `sst` binary serves, and `sst migrate` takes the old ones out of the
- * state without deleting what they wrote. A few things are written differently:
+ * Its files, its entries in the key-value store and its route in the router's list are
+ * written again by resources of a new type, which the `sst` binary serves, and `sst
+ * migrate` takes the old ones out of the state without deleting what they wrote. Its
+ * CloudFront invalidation runs once more. A few things are written differently:
  *
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. A static site

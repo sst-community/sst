@@ -207,9 +207,8 @@ export interface QueueSubscriberArgs {
  *   set.
  * - The subscriber is created with the provider the queue has. SST 4 gave it
  *   only a `provider` passed to the queue itself, so if your queue takes its
- *   provider from a parent component or from `providers`, its Worker is
- *   replaced on switch, which `sst migrate --check` refuses: remove the
- *   subscriber and deploy before you switch, then add it back.
+ *   provider from a parent component or from `providers`, the switch gives
+ *   its Worker that provider and keeps it.
  */
 export class Queue extends component("sst:cloudflare:Queue", parts) {
   constructor(

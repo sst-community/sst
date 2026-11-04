@@ -127,7 +127,7 @@ describe("a Nextjs site in a new stage's preview", () => {
       "NextCloudfrontFunctionRequest",
       "NextImageOptimizer",
       "NextImageOptimizerPublicFunctionUrlAccess",
-      "NextInvalidation.sst.aws.DistributionInvalidation",
+      "NextInvalidation",
       "NextKvKeys",
       "NextKvStore",
       "NextPublicFunctionUrlAccessUseast1",

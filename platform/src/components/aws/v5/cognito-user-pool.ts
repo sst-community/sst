@@ -590,13 +590,13 @@ export interface CognitoUserPoolIdentityProviderArgs {
  * - An identity provider is created inside the user pool, with the provider the user pool
  *   has. `sst.aws.CognitoUserPool` created it beside the user pool, with only a `provider`
  *   passed to the user pool itself. So if your user pool takes its provider from a parent
- *   component or from `providers`, its identity providers are replaced on switch: remove
- *   them and deploy before you switch, then add them back.
+ *   component or from `providers`, the switch gives its identity providers that provider
+ *   and keeps them.
  * - `get` gives its options to the component, so a `provider` you pass it reaches the
  *   clients and identity providers you add, and a `parent` or `providers` the identity
  *   providers. `sst.aws.CognitoUserPool.get` gave them to the user pool it looked up and
- *   to nothing else. So a client or an identity provider added to a user pool from `get`
- *   with a provider is replaced on switch, and a client gets a new ID.
+ *   to nothing else. So the switch gives a client or an identity provider added to a user
+ *   pool from `get` with a provider that provider, and keeps it, with its ID.
  * - `nodes.userPool` is the user pool, not an output of it. `nodes` has every resource,
  *   the certificate, the trigger functions and the identity providers included.
  */

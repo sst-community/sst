@@ -45,9 +45,9 @@ import { buildSite, writeViteTypes } from "../helpers/site-build";
 import { siteRequestCode } from "../helpers/ssr-site";
 import { type BucketFile, BucketFiles } from "../resources/bucket-files";
 import { KvKeys } from "../resources/kv-keys";
-import { DistributionInvalidation } from "../providers/distribution-invalidation";
-import { KvRoutesUpdate } from "../providers/kv-routes-update";
-import { OriginAccessControl } from "../providers/origin-access-control";
+import { DistributionInvalidation } from "../resources/distribution-invalidation";
+import { KvRoutesUpdate } from "../resources/kv-routes-update";
+import { OriginAccessControl } from "../resources/origin-access-control";
 import {
   CF_BLOCK_CLOUDFRONT_URL_INJECTION,
   type KV_SITE_METADATA,
@@ -1075,9 +1075,11 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
  *
  * Change `sst.aws.StaticSite` to `sst.aws.v5.StaticSite` and keep the name. The site's
  * bucket, its CloudFront distribution and functions, or its entry in the router are kept.
- * Its files and its entries in the key-value store are written again by resources of a new
- * type, which the `sst` binary serves, and `sst migrate` takes the old ones out of the state
- * without deleting what they wrote. A few things are written differently:
+ * Its files, its entries in the key-value store and its route in the router's list are
+ * written again by resources of a new type, which the `sst` binary serves, and `sst migrate`
+ * takes the old ones out of the state without deleting what they wrote. Its CloudFront
+ * invalidation runs once more, and its origin access control is kept, by its id. A few
+ * things are written differently:
  *
  * - With `build`, the site is built in the deploy itself, once. `sst.aws.StaticSite`
  *   built it with a command it kept in the state, which goes.

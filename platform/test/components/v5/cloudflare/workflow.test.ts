@@ -63,8 +63,7 @@ describe("Workflow", () => {
       // reading its name, like the URL setting of the workflow's own Worker.
       // Its bindings wait on the workflow they name, which is all Cloudflare
       // needs.
-      needlessOrder:
-        /^ApiScript before MyWorkflowScriptUrl\.sst\.cloudflare\.WorkerUrl$/,
+      needlessOrder: /^ApiScript before MyWorkflowScriptUrl$/,
       check: () => {
         expect(named(WORKFLOW)).toEqual(["MyWorkflowWorkflow"]);
         expect(resource("MyWorkflowWorkflow").inputs).toMatchObject({

@@ -248,9 +248,7 @@ describe("MicroVm", () => {
       stage: "test",
     });
 
-    expect(
-      resource("SandboxImagePrune.sst.aws.MicrovmImagePrune").inputs,
-    ).toMatchObject({
+    expect(resource("SandboxImagePrune").inputs).toMatchObject({
       imageArn: "arn:aws:mock:us-east-1:123456789012:SandboxImage",
       imageVersion: "3",
       region: "us-east-1",

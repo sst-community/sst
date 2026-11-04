@@ -30,6 +30,7 @@ fs.mkdirSync(bundle);
 fs.writeFileSync(path.join(bundle, "bundle.mjs"), "export default {};\n");
 
 const SCRIPT = "cloudflare:index/workersScript:WorkersScript";
+const DOMAIN = "cloudflare:index/workersCustomDomain:WorkersCustomDomain";
 // What SST 4 kept in the state and the V5 site doesn't: the command that built
 // it, which has nothing in Cloudflare behind it
 const BUILDER = "command:local:Command::WebBuilder";
@@ -38,7 +39,8 @@ const pulumi = mockPulumi({
   root: app,
   // A Worker's `workers.dev` URL, as Cloudflare gives it
   state: (args) =>
-    args.type === "pulumi-nodejs:dynamic:Resource" &&
+    (args.type === "pulumi-nodejs:dynamic:Resource" ||
+      args.type === "sst:cloudflare:WorkerUrl") &&
     "scriptName" in args.inputs &&
     args.inputs.enabled === true
       ? { url: `${args.inputs.scriptName}.acme.workers.dev` }
@@ -291,10 +293,43 @@ it("refuses SST 4's index and error pages", () => {
     );
 });
 
-it("refuses what decides what it creates or builds as an output", () => {
+// As the Worker takes it: a domain given as a string is one custom domain,
+// whatever it is
+it("takes a domain that's an output as the domain's name", async () => {
+  new Site("Web", { path: "web", domain: output("app.example.com") });
+  await pulumi.settle();
   expect(
-    () => new Site("Web", { path: "web", domain: output("a.com") as any }),
-  ).toThrow(`The "domain" of the "Web" static site has to be a plain value`);
+    pulumi.resources
+      .filter((r) => r.type === DOMAIN)
+      .map((r) => [r.name, r.inputs.hostname]),
+  ).toEqual([["WebRouterDomain", "app.example.com"]]);
+});
+
+it("refuses a domain object that's an output, as the site's", async () => {
+  const failures = await rejectionsOf(async () => {
+    new Site("Web", {
+      path: "web",
+      domain: output({ name: "app.example.com" }) as any,
+    });
+    await pulumi.settle();
+  });
+  expect(failures.map((f) => (f as Error).message)).toContainEqual(
+    expect.stringContaining(
+      `The "domain" of the "Web" static site is an output that isn't a domain's name.`,
+    ),
+  );
+  expect(
+    () =>
+      new Site("Other", {
+        path: "web",
+        domain: { name: "app.example.com", aliases: output([]) as any },
+      }),
+  ).toThrow(
+    `The "domain.aliases" of the "Other" static site has to be a plain value`,
+  );
+});
+
+it("refuses what decides what it creates or builds as an output", () => {
   expect(
     () =>
       new Site("Build", {

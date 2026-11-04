@@ -105,6 +105,10 @@ describe("takes over a deployed StaticSite", () => {
   pulumi.takeoverCases<AnyClass, AnyClass>({
     original: () => OriginalSite,
     v5: () => Site,
+    // The 4.x site's entries waited for the router's outputs, as in the sites'
+    // suite. Nothing about them needs the router's distribution removed after
+    // them: they're in the router's store, which they still wait for.
+    needlessOrder: /^WebKvKeys before RouterCdnDistribution$/,
     cases: {
       "on a distribution of its own": (Site, opts) =>
         new Site("Web", { path: "web" }, opts),
@@ -414,12 +418,10 @@ describe("StaticSite", () => {
         "WebKvStore",
         "WebCloudfrontFunctionRequest",
         "WebCdn",
-        "WebInvalidation.sst.aws.DistributionInvalidation",
+        "WebInvalidation",
       ]),
     );
-    expect(names()).not.toContain(
-      "WebS3AccessControl.sst.aws.OriginAccessControl",
-    );
+    expect(names()).not.toContain("WebS3AccessControl");
   });
 
   it("uploads the site's files, but SST's own", async () => {
@@ -478,7 +480,7 @@ describe("StaticSite", () => {
     expect(names()).not.toContain("WebKvStore");
     expect(names()).not.toContain("WebKvKeys");
     expect(names()).not.toContain("WebCloudfrontFunctionRequest");
-    expect(names()).toContain("WebS3AccessControl.sst.aws.OriginAccessControl");
+    expect(names()).toContain("WebS3AccessControl");
     const distribution = resource("WebCdnDistribution").inputs;
     expect(distribution.defaultRootObject).toBe("index.html");
     expect(distribution.origins[0].originPath).toBe("/web");
@@ -494,6 +496,40 @@ describe("StaticSite", () => {
         responsePagePath: "/index.html",
       }),
     ]);
+  });
+
+  // SST 4's, which a create would make a second of, is taken by its id: the
+  // core gives the ids of SST 4's that a move adopts, until the move finishes
+  it("adopts SST 4's origin access control by its id", async () => {
+    const cli = (globalThis as any).$cli;
+    const state = cli.state;
+    const create = () => new Site("Web", { path: "web", edgeRouting: false });
+    try {
+      cli.state = {
+        ...state,
+        adopt: { "WebS3AccessControl.sst.aws.OriginAccessControl": "E2OAC" },
+      };
+      create();
+      await pulumi.settle();
+      expect(resource("WebS3AccessControl").options.importId).toBe("E2OAC");
+      expect(resource("WebCdnDistribution").inputs.origins[0]).toMatchObject({
+        originAccessControlId: "E2OAC",
+      });
+
+      // Another site's is left alone, and so is this one with none to adopt
+      pulumi.reset();
+      cli.state = {
+        ...state,
+        adopt: { "DocsS3AccessControl.sst.aws.OriginAccessControl": "E3OAC" },
+      };
+      create();
+      await pulumi.settle();
+      expect(resource("WebS3AccessControl").options).not.toHaveProperty(
+        "importId",
+      );
+    } finally {
+      cli.state = state;
+    }
   });
 
   it("builds the site, with Vite's types for its environment", async () => {
@@ -561,7 +597,7 @@ describe("StaticSite", () => {
     await pulumi.settle();
     expect(names()).not.toContain("WebCdn");
     expect(names()).not.toContain("WebKvStore");
-    expect(names()).toContain("WebRoutesUpdate.sst.aws.KvRoutesUpdate");
+    expect(names()).toContain("WebRoutesUpdate");
     const files = resource("WebAssetFiles").inputs.files as { key: string }[];
     expect(files.map((f) => f.key)).toContain("docs/index.html");
     const metadata = JSON.parse(

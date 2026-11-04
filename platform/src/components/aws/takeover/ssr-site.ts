@@ -1,8 +1,8 @@
 import { Resource } from "@pulumi/pulumi";
-import type { Takeover } from "../../takeover";
+import { type Takeover, sstResource } from "../../takeover";
 import { logicalName } from "../../naming";
 import type { SsrSiteParts } from "../helpers/ssr-site";
-import { childWithin, sstResource } from "./helpers";
+import { childWithin } from "./helpers";
 
 // With `warm`, a 4.x site kept a warmer for each region in a `Cron` of its
 // own, inside the site: a function, the rule that runs it, the rule's target
@@ -35,12 +35,19 @@ export function ssrSiteTakeover(
       warmerPermission: (site, { name, id }) =>
         warmer(site, name, id, "Permission"),
     },
-    // The site's files and its entries in the key-value store were SST's own
-    // dynamic resources
+    // The site's files, its entries in the key-value store, its route in the
+    // router's list and its invalidation were SST's own dynamic resources
     released: {
       assetFiles: (_, { name }) =>
-        sstResource("BucketFiles", { name: `${name}AssetFiles` }),
-      kvKeys: (_, { name }) => sstResource("KvKeys", { name: `${name}KvKeys` }),
+        sstResource("aws.BucketFiles", { name: `${name}AssetFiles` }),
+      kvKeys: (_, { name }) =>
+        sstResource("aws.KvKeys", { name: `${name}KvKeys` }),
+      routesUpdate: (_, { name }) =>
+        sstResource("aws.KvRoutesUpdate", { name: `${name}RoutesUpdate` }),
+      invalidation: (_, { name }) =>
+        sstResource("aws.DistributionInvalidation", {
+          name: `${name}Invalidation`,
+        }),
     },
     replaced: {
       prewarm: `The server is warmed once. sst.aws.${label} warmed it on every deploy; this warms it ${warmedWhen}.`,

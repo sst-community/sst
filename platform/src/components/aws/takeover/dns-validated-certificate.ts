@@ -1,4 +1,4 @@
-import { takeover } from "../../takeover";
+import { sstResource, takeover } from "../../takeover";
 import { logicalName } from "../../naming";
 import { DnsValidatedCertificate } from "../v5/dns-validated-certificate";
 
@@ -10,6 +10,10 @@ import { DnsValidatedCertificate } from "../v5/dns-validated-certificate";
 // 4.x also looked up each record's hosted zone with a resource, which the V5
 // one does with a function of SST's provider. Those leave the state: `sst
 // migrate` releases them, as nothing in the cloud is behind them.
+//
+// On a Cloudflare or a Vercel domain, the CAA records Amazon needs to issue
+// the certificate were SST's own dynamic resources, which add their kind to
+// their name. The ones in their place take the records that are there.
 takeover(DnsValidatedCertificate, {
   delegated: (certificate, { name, componentName }) => {
     for (const record of certificate._validationRecords) {
@@ -21,5 +25,11 @@ takeover(DnsValidatedCertificate, {
         ),
       };
     }
+  },
+  delegatedReleased: (_, { name, type }) => {
+    if (type === "sst:cloudflare:DnsRecord")
+      return sstResource("cloudflare.DnsRecord", { name });
+    if (type === "sst:vercel:DnsRecord")
+      return sstResource("vercel.DnsRecord", { name });
   },
 });

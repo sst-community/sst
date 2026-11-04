@@ -13,7 +13,8 @@
 //     again or adopts it. So does one of SST 4's lookups, which SST 5 makes
 //     with a function.
 //   - A part the map lists as new is created.
-//   - A part the map lists as replaced is replaced, unless it holds data.
+//   - A part the map lists as replaced is replaced, unless it holds data, or
+//     the old one would be deleted before the new one is created.
 //   - A file uploaded under a key that follows from what's in it, like a
 //     function's code, is replaced when the file changed, as any deploy
 //     replaces it.
@@ -123,17 +124,32 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 		}
 	}
 
-	// What the preview deletes, and the id of each resource it imports
+	// What the preview deletes, and the id of each resource it imports or
+	// already has: a move that stopped partway may have imported it, and its
+	// retry finds it in the state
 	deleted := map[string]bool{}
 	imported := map[string]string{}
 	for _, step := range steps {
 		if step.Op == apitype.OpDelete {
 			deleted[step.URN] = true
 		}
-		if step.Op == apitype.OpImport && step.New != nil {
+		if step.New != nil && step.New.ID != "" && (step.Op == apitype.OpImport || step.Op == apitype.OpSame || step.Op == apitype.OpUpdate) {
 			imported[step.URN] = step.New.ID
 		}
 	}
+	// The names more than one of SST 4's resources a move adopts have: the
+	// core gives the program their ids by name, so it gives neither
+	adoptNames := map[string]int{}
+	for _, step := range steps {
+		if step.Op == apitype.OpDelete && step.Type == dynamicType && adoptKinds[kindOf(step.URN)] {
+			adoptNames[nameOf(step.URN)]++
+		}
+	}
+	sharedNames := map[string]bool{}
+	for name, count := range adoptNames {
+		sharedNames[name] = count > 1
+	}
+
 	// The parts in the place of what's released, when the preview really
 	// takes that out of the state
 	inPlace := map[string]Part{}
@@ -231,6 +247,8 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 				problem(urn, step, "replace", "It holds data."+changedBecause(fields))
 			case setsExpiry(steps):
 				problem(urn, step, "replace", "It sets when what's stored expires."+changedBecause(fields))
+			case custom && deletesFirst(steps):
+				problem(urn, step, "replace", "It would be deleted before what takes its place is created, so what uses it goes without it in between, and the cloud may refuse to delete it while it's in use. Its part has to be created first, with `deleteBeforeReplace: false`, under a name of its own."+changedBecause(fields))
 			case !custom:
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: "Nothing in the cloud is behind it."})
 			case replaced[urn].Replaced != "":
@@ -280,11 +298,17 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 			switch {
 			// What holds data is released only to what adopts it: the
 			// same resource in the cloud, imported by its id
-			case isReleased && data && (step.Old == nil || step.Old.ID == "" || imported[part.URN] != step.Old.ID):
+			case isReleased && data && !adopted(step, imported[part.URN]):
 				problem(urn, step, "delete", "It holds data, and "+nameOf(part.URN)+", in its place, doesn't adopt it by its id.")
+			case isReleased && step.Type == dynamicType && adoptKinds[kindOf(urn)] && !adopted(step, imported[part.URN]):
+				why := nameOf(part.URN) + ", in its place, doesn't adopt it by its id, so a second one would be made in the cloud and this one left there."
+				if sharedNames[nameOf(urn)] {
+					why += " The stage has more than one named " + nameOf(urn) + ", in different components, so the core can't tell which is whose."
+				}
+				problem(urn, step, "delete", why)
 			case isReleased:
 				result.Released = append(result.Released, Change{URN: urn, Type: step.Type, Why: "Taken out of the state without being deleted, with " + nameOf(part.URN) + " in its place."})
-			case step.Type == "pulumi-nodejs:dynamic:Resource" && lookupKinds[kindOf(urn)]:
+			case step.Type == dynamicType && lookupKinds[kindOf(urn)]:
 				result.Released = append(result.Released, Change{URN: urn, Type: step.Type, Why: "One of SST 4's lookups, which SST 5 makes with a function: nothing in the cloud is behind it."})
 			case !custom:
 				result.Left = append(result.Left, Change{URN: urn, Type: step.Type, Why: "Nothing in the cloud is behind it."})
@@ -351,6 +375,22 @@ func setsExpiry(steps []apitype.StepEventMetadata) bool {
 			if state != nil && expiryTypes[state.Type] {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// deletesFirst is whether a replace deletes the resource before it creates
+// what takes its place: Pulumi's delete-before-replace, which its provider
+// asks for when a resource is given its name, as no two can have it. The
+// preview's steps are in the order the deploy takes them.
+func deletesFirst(group []apitype.StepEventMetadata) bool {
+	for _, s := range group {
+		switch s.Op {
+		case apitype.OpCreateReplacement:
+			return false
+		case apitype.OpDeleteReplaced:
+			return true
 		}
 	}
 	return false
@@ -624,4 +664,10 @@ func sortKept(list []Kept) {
 
 func sortChanges(list []Change) {
 	sort.Slice(list, func(i, j int) bool { return list[i].URN < list[j].URN })
+}
+
+// adopted is whether what's released was imported by its id, the one the
+// part in its place has
+func adopted(step apitype.StepEventMetadata, importedID string) bool {
+	return step.Old != nil && step.Old.ID != "" && importedID == string(step.Old.ID)
 }

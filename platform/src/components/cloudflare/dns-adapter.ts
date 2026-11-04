@@ -14,7 +14,7 @@ import {
 import { transform } from "../component";
 import { plain } from "../args";
 import { DEFAULT_ACCOUNT_ID } from "./account-id";
-import { DnsRecord as OverridableDnsRecord } from "./providers/dns-record";
+import { DnsRecord as OverridableDnsRecord } from "./resources/dns-record";
 import { zoneOf as findZone } from "./helpers/zone";
 import type { DnsArgs } from "./dns";
 

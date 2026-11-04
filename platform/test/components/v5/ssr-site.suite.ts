@@ -796,7 +796,7 @@ export function ssrSiteSuite(
           `${S}AssetFiles`,
           `${S}ServerUseast1`,
           `${S}KvKeys`,
-          `${S}Invalidation.sst.aws.DistributionInvalidation`,
+          `${S}Invalidation`,
           `${S}Cdn`,
           `${S}KvStore`,
           `${S}ServerCachePolicy`,

@@ -6,26 +6,113 @@ import (
 	"reflect"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	cf "github.com/cloudflare/cloudflare-go"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	sstresource "github.com/sst/sst/v3/pkg/server/resource"
 )
 
 // resources are the resources the provider serves, by type, with the AWS
-// setup load gives. Each is the code the RPC serves the old entries with.
-func resources(load func() (aws.Config, error)) map[string]handler {
+// setup and the Cloudflare credentials load and cloudflare give. Each is the
+// code the RPC serves SST 4's entries with, or, for what SST 4 wrote in
+// TypeScript, the same calls made in Go.
+func resources(load func() (aws.Config, error), cloudflare func() (*cf.API, error)) map[string]handler {
+	onAws := func(ctx context.Context) *sstresource.AwsResource { return sstresource.NewAwsResource(ctx, load) }
+	onCloudflare := func(ctx context.Context) *sstresource.CloudflareResource {
+		return sstresource.NewCloudflareResource(ctx, cloudflare)
+	}
 	return map[string]handler{
 		"sst:aws:BucketFiles": typed[sstresource.BucketFilesInputs, sstresource.BucketFilesOutputs]{
 			open: func(ctx context.Context) implementation[sstresource.BucketFilesInputs, sstresource.BucketFilesOutputs] {
-				return &sstresource.BucketFiles{AwsResource: sstresource.NewAwsResource(ctx, load)}
+				return &sstresource.BucketFiles{AwsResource: onAws(ctx)}
 			},
 		},
 		"sst:aws:KvKeys": typed[sstresource.KvKeysInputs, sstresource.KvKeysOutputs]{
 			open: func(ctx context.Context) implementation[sstresource.KvKeysInputs, sstresource.KvKeysOutputs] {
-				return &sstresource.KvKeys{AwsResource: sstresource.NewAwsResource(ctx, load)}
+				return &sstresource.KvKeys{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:aws:KvRoutesUpdate": typed[sstresource.KvRoutesUpdateInputs, sstresource.KvRoutesUpdateOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.KvRoutesUpdateInputs, sstresource.KvRoutesUpdateOutputs] {
+				return &sstresource.KvRoutesUpdate{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:aws:DistributionInvalidation": typed[sstresource.DistributionInvalidationInputs, struct{}]{
+			open: func(ctx context.Context) implementation[sstresource.DistributionInvalidationInputs, struct{}] {
+				return &sstresource.DistributionInvalidation{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:aws:DistributionDeploymentWaiter": typed[sstresource.DistributionDeploymentWaiterInputs, sstresource.DistributionDeploymentWaiterOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.DistributionDeploymentWaiterInputs, sstresource.DistributionDeploymentWaiterOutputs] {
+				return &sstresource.DistributionDeploymentWaiter{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:aws:FunctionEnvironmentUpdate": typed[sstresource.FunctionEnvironmentUpdateInputs, sstresource.FunctionEnvironmentUpdateOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.FunctionEnvironmentUpdateInputs, sstresource.FunctionEnvironmentUpdateOutputs] {
+				return &sstresource.FunctionEnvironmentUpdate{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:aws:MicrovmImagePrune": typed[sstresource.MicrovmImagePruneInputs, sstresource.MicrovmImagePruneOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.MicrovmImagePruneInputs, sstresource.MicrovmImagePruneOutputs] {
+				return &sstresource.MicrovmImagePrune{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:aws:OriginAccessControl": typed[sstresource.OriginAccessControlInputs, sstresource.OriginAccessControlOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.OriginAccessControlInputs, sstresource.OriginAccessControlOutputs] {
+				return &sstresource.OriginAccessControl{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:aws:RdsRoleLookup": typed[sstresource.RdsRoleLookupInputs, sstresource.RdsRoleLookupOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.RdsRoleLookupInputs, sstresource.RdsRoleLookupOutputs] {
+				return &sstresource.RdsRoleLookup{AwsResource: onAws(ctx)}
+			},
+		},
+		"sst:cloudflare:DnsRecord": typed[sstresource.CloudflareDnsRecordInputs, sstresource.CloudflareDnsRecordOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.CloudflareDnsRecordInputs, sstresource.CloudflareDnsRecordOutputs] {
+				return &sstresource.CloudflareDnsRecord{CloudflareResource: onCloudflare(ctx)}
+			},
+		},
+		"sst:cloudflare:WorkerUrl": typed[sstresource.WorkerUrlInputs, sstresource.WorkerUrlOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.WorkerUrlInputs, sstresource.WorkerUrlOutputs] {
+				return &sstresource.WorkerUrl{CloudflareResource: onCloudflare(ctx)}
+			},
+		},
+		"sst:cloudflare:WorkerPlacement": typed[sstresource.WorkerPlacementInputs, sstresource.WorkerPlacementOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.WorkerPlacementInputs, sstresource.WorkerPlacementOutputs] {
+				return &sstresource.WorkerPlacement{CloudflareResource: onCloudflare(ctx)}
+			},
+		},
+		"sst:vercel:DnsRecord": typed[sstresource.VercelDnsRecordInputs, sstresource.VercelDnsRecordOutputs]{
+			open: func(ctx context.Context) implementation[sstresource.VercelDnsRecordInputs, sstresource.VercelDnsRecordOutputs] {
+				return &sstresource.VercelDnsRecord{VercelResource: sstresource.NewVercelResource(ctx)}
 			},
 		},
 	}
 }
+
+// What each resource does besides create, checked when the binary is built:
+// the provider finds an optional method by its signature, so one that drifted
+// from it would be skipped without a word, and a delete would leave what the
+// resource made behind
+var (
+	_ updater[sstresource.BucketFilesInputs, sstresource.BucketFilesOutputs]                                   = (*sstresource.BucketFiles)(nil)
+	_ deleter[sstresource.BucketFilesOutputs]                                                                  = (*sstresource.BucketFiles)(nil)
+	_ updater[sstresource.KvKeysInputs, sstresource.KvKeysOutputs]                                             = (*sstresource.KvKeys)(nil)
+	_ deleter[sstresource.KvKeysOutputs]                                                                       = (*sstresource.KvKeys)(nil)
+	_ updater[sstresource.KvRoutesUpdateInputs, sstresource.KvRoutesUpdateOutputs]                             = (*sstresource.KvRoutesUpdate)(nil)
+	_ deleter[sstresource.KvRoutesUpdateOutputs]                                                               = (*sstresource.KvRoutesUpdate)(nil)
+	_ updater[sstresource.DistributionInvalidationInputs, struct{}]                                            = (*sstresource.DistributionInvalidation)(nil)
+	_ updater[sstresource.DistributionDeploymentWaiterInputs, sstresource.DistributionDeploymentWaiterOutputs] = (*sstresource.DistributionDeploymentWaiter)(nil)
+	_ updater[sstresource.FunctionEnvironmentUpdateInputs, sstresource.FunctionEnvironmentUpdateOutputs]       = (*sstresource.FunctionEnvironmentUpdate)(nil)
+	_ updater[sstresource.MicrovmImagePruneInputs, sstresource.MicrovmImagePruneOutputs]                       = (*sstresource.MicrovmImagePrune)(nil)
+	_ deleter[sstresource.OriginAccessControlOutputs]                                                          = (*sstresource.OriginAccessControl)(nil)
+	_ adopter[sstresource.OriginAccessControlInputs, sstresource.OriginAccessControlOutputs]                   = (*sstresource.OriginAccessControl)(nil)
+	_ updater[sstresource.RdsRoleLookupInputs, sstresource.RdsRoleLookupOutputs]                               = (*sstresource.RdsRoleLookup)(nil)
+	_ updater[sstresource.CloudflareDnsRecordInputs, sstresource.CloudflareDnsRecordOutputs]                   = (*sstresource.CloudflareDnsRecord)(nil)
+	_ updater[sstresource.WorkerUrlInputs, sstresource.WorkerUrlOutputs]                                       = (*sstresource.WorkerUrl)(nil)
+	_ updater[sstresource.WorkerPlacementInputs, sstresource.WorkerPlacementOutputs]                           = (*sstresource.WorkerPlacement)(nil)
+	_ deleter[sstresource.WorkerPlacementOutputs]                                                              = (*sstresource.WorkerPlacement)(nil)
+	_ updater[sstresource.VercelDnsRecordInputs, sstresource.VercelDnsRecordOutputs]                           = (*sstresource.VercelDnsRecord)(nil)
+)
 
 // handler is a resource's operations on Pulumi's properties
 type handler interface {
@@ -35,14 +122,33 @@ type handler interface {
 	create(ctx context.Context, inputs resource.PropertyMap) (string, resource.PropertyMap, error)
 	update(ctx context.Context, id string, olds, news resource.PropertyMap) (resource.PropertyMap, error)
 	delete(ctx context.Context, id string, outs resource.PropertyMap) error
+	// imported is the resource with an id, read from the cloud, for a move
+	// that adopts what SST 4 created. ok is false for a resource that can't
+	// be adopted.
+	imported(ctx context.Context, id string) (inputs, outs resource.PropertyMap, ok bool, err error)
 }
 
 // implementation is a resource as the RPC serves it, with typed inputs I and
-// outputs O (pkg/server/resource)
+// outputs O (pkg/server/resource). It may also update (updater), delete
+// (deleter), and be adopted (adopter). One that doesn't update keeps its
+// outputs, and one that doesn't delete leaves what it made, as the RPC does
+// for a method a resource doesn't have.
 type implementation[I any, O any] interface {
 	Create(input *I, output *sstresource.CreateResult[O]) error
+}
+
+type updater[I any, O any] interface {
 	Update(input *sstresource.UpdateInput[I, O], output *sstresource.UpdateResult[O]) error
+}
+
+type deleter[O any] interface {
 	Delete(input *sstresource.DeleteInput[O], output *int) error
+}
+
+// adopter reads a resource with an id from the cloud, as its inputs and
+// outputs would have it
+type adopter[I any, O any] interface {
+	Adopt(id string) (*I, *O, error)
 }
 
 // typed adapts an implementation to Pulumi's properties: they go through JSON
@@ -112,8 +218,12 @@ func (t typed[I, O]) update(ctx context.Context, id string, olds, news resource.
 	if err := decode(news, &input.News); err != nil {
 		return nil, err
 	}
+	impl, ok := t.open(ctx).(updater[I, O])
+	if !ok {
+		return olds, nil
+	}
 	var result sstresource.UpdateResult[O]
-	if err := t.open(ctx).Update(&input, &result); err != nil {
+	if err := impl.Update(&input, &result); err != nil {
 		return nil, err
 	}
 	return encode(result.Outs)
@@ -124,8 +234,29 @@ func (t typed[I, O]) delete(ctx context.Context, id string, props resource.Prope
 	if err := decode(props, &input.Outs); err != nil {
 		return err
 	}
+	impl, ok := t.open(ctx).(deleter[O])
+	if !ok {
+		return nil
+	}
 	var result int
-	return t.open(ctx).Delete(&input, &result)
+	return impl.Delete(&input, &result)
+}
+
+func (t typed[I, O]) imported(ctx context.Context, id string) (resource.PropertyMap, resource.PropertyMap, bool, error) {
+	impl, ok := t.open(ctx).(adopter[I, O])
+	if !ok {
+		return nil, nil, false, nil
+	}
+	inputs, outs, err := impl.Adopt(id)
+	if err != nil || inputs == nil {
+		return nil, nil, true, err
+	}
+	in, err := encode(inputs)
+	if err != nil {
+		return nil, nil, true, err
+	}
+	out, err := encode(outs)
+	return in, out, true, err
 }
 
 // decode is Pulumi's properties as a resource's type

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/tokens"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -233,6 +235,25 @@ func TestReplaced(t *testing.T) {
 	r := Check(replace(code), []Part{{URN: code, Key: "code", Replaced: "Its code is uploaded again under the function's new name."}})
 	assert.True(t, r.OK())
 	assert.Equal(t, []Change{{URN: code, Type: "aws:s3/bucketObjectv2:BucketObjectv2", Why: "Its code is uploaded again under the function's new name."}}, r.Replaced)
+}
+
+// A resource given its name is deleted first, which leaves what uses it
+// without it, and the cloud can refuse: a CloudFront function in use
+func TestReplacedByDeletingFirst(t *testing.T) {
+	function := urn("sst:aws:HttpsRedirect$aws:cloudfront/function:Function", "WebRedirectCloudfrontFunctionRequest")
+	parts := []Part{{URN: function, Key: "requestFunction", Replaced: "Created again."}}
+	steps := []apitype.StepEventMetadata{
+		step(apitype.OpDeleteReplaced, function),
+		step(apitype.OpReplace, function, keys("provider")),
+		step(apitype.OpCreateReplacement, function, keys("provider")),
+	}
+	assert.Equal(t, [][2]string{
+		{"replace WebRedirectCloudfrontFunctionRequest", "It would be deleted before what takes its place is created, so what uses it goes without it in between, and the cloud may refuse to delete it while it's in use. Its part has to be created first, with `deleteBeforeReplace: false`, under a name of its own. Changed: provider."},
+	}, problems(Check(steps, parts)))
+	// Created first, it's replaced as the map says
+	r := Check([]apitype.StepEventMetadata{steps[2], steps[1], steps[0]}, parts)
+	assert.True(t, r.OK())
+	assert.Len(t, r.Replaced, 1)
 }
 
 func TestReplacedWhereItMoved(t *testing.T) {
@@ -631,4 +652,81 @@ func TestLookups(t *testing.T) {
 	// Another of SST's resources isn't one
 	waiter := urn("sst:aws:CDN$pulumi-nodejs:dynamic:Resource", "WebWaiter.sst.aws.DistributionDeploymentWaiter")
 	assert.Len(t, problems(Check([]apitype.StepEventMetadata{step(apitype.OpDelete, waiter)}, nil)), 1)
+}
+
+// SST 4's origin access control is adopted by its id: a create would make a
+// second one in the cloud, and leave this one there
+func TestAdopting(t *testing.T) {
+	oldControl := urn("sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource", "SiteS3AccessControl.sst.aws.OriginAccessControl")
+	newControl := urn("sst:aws:StaticSite$sst:aws:OriginAccessControl", "SiteS3AccessControl")
+	part := []Part{{URN: newControl, Key: "accessControl", Releases: []string{oldControl}}}
+
+	r := Check([]apitype.StepEventMetadata{
+		step(apitype.OpDelete, oldControl, withID("E2OAC")),
+		step(apitype.OpCreate, newControl, inTheCloud()),
+	}, part)
+	assert.Equal(t, [][2]string{
+		{"delete SiteS3AccessControl.sst.aws.OriginAccessControl", "SiteS3AccessControl, in its place, doesn't adopt it by its id, so a second one would be made in the cloud and this one left there."},
+	}, problems(r))
+
+	r = Check([]apitype.StepEventMetadata{
+		step(apitype.OpDelete, oldControl, withID("E2OAC")),
+		step(apitype.OpImport, newControl, withID("E2OAC"), inTheCloud()),
+	}, part)
+	assert.True(t, r.OK(), problems(r))
+	assert.Len(t, r.Released, 1)
+	assert.Len(t, r.Created, 1)
+
+	// What's written again isn't adopted
+	r = Check([]apitype.StepEventMetadata{
+		step(apitype.OpDelete, oldFiles, withID("files")),
+		step(apitype.OpCreate, newFiles, inTheCloud()),
+	}, []Part{{URN: newFiles, Key: "files", Releases: []string{oldFiles}}})
+	assert.True(t, r.OK(), problems(r))
+}
+
+func TestAdoptable(t *testing.T) {
+	res := func(typ, address, id string) apitype.ResourceV3 {
+		return apitype.ResourceV3{URN: resource.URN(address), Type: tokens.Type(typ), ID: resource.ID(id), Custom: true}
+	}
+	const dynamic = "pulumi-nodejs:dynamic:Resource"
+	ids := Adoptable([]apitype.ResourceV3{
+		res(dynamic, urn("sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource", "SiteS3AccessControl.sst.aws.OriginAccessControl"), "E2OAC"),
+		// What's written again
+		res(dynamic, oldFiles, "files"),
+		// The 5.0 one
+		res("sst:aws:OriginAccessControl", urn("sst:aws:StaticSite$sst:aws:OriginAccessControl", "DocsS3AccessControl"), "E3OAC"),
+		// Two of the same name, in different components: neither
+		res(dynamic, urn("sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource", "WebS3AccessControl.sst.aws.OriginAccessControl"), "E4OAC"),
+		res(dynamic, urn("test:Parent$sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource", "WebS3AccessControl.sst.aws.OriginAccessControl"), "E5OAC"),
+	})
+	pending := res(dynamic, urn("sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource", "DocsS3AccessControl.sst.aws.OriginAccessControl"), "E6OAC")
+	pending.Delete = true
+	assert.Equal(t, map[string]string{"SiteS3AccessControl.sst.aws.OriginAccessControl": "E2OAC"}, ids)
+	// One a replace left to delete
+	assert.Empty(t, Adoptable([]apitype.ResourceV3{pending}))
+}
+
+// A move that stopped after it adopted one: its retry finds the part in the
+// state with the id, and a name two of SST 4's share is said why it's refused
+func TestAdoptingAgain(t *testing.T) {
+	oldControl := urn("sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource", "WebS3AccessControl.sst.aws.OriginAccessControl")
+	newControl := urn("sst:aws:StaticSite$sst:aws:OriginAccessControl", "WebS3AccessControl")
+	part := []Part{{URN: newControl, Key: "accessControl", Releases: []string{oldControl}}}
+	r := Check([]apitype.StepEventMetadata{
+		step(apitype.OpDelete, oldControl, withID("E2OAC")),
+		step(apitype.OpSame, newControl, withID("E2OAC"), inTheCloud()),
+	}, part)
+	assert.True(t, r.OK(), problems(r))
+
+	other := urn("test:Parent$sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource", "WebS3AccessControl.sst.aws.OriginAccessControl")
+	r = Check([]apitype.StepEventMetadata{
+		step(apitype.OpDelete, oldControl, withID("E2OAC")),
+		step(apitype.OpDelete, other, withID("E3OAC")),
+		step(apitype.OpCreate, newControl, inTheCloud()),
+	}, part)
+	assert.Contains(t, problems(r), [2]string{
+		"delete WebS3AccessControl.sst.aws.OriginAccessControl",
+		"WebS3AccessControl, in its place, doesn't adopt it by its id, so a second one would be made in the cloud and this one left there. The stage has more than one named WebS3AccessControl.sst.aws.OriginAccessControl, in different components, so the core can't tell which is whose.",
+	})
 }

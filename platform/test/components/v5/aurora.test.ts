@@ -434,8 +434,10 @@ describe("Aurora", () => {
       );
 
       pulumi.reset();
-      create(Aurora);
-      await pulumi.settle();
+      await pulumi.asMove(original, async () => {
+        create(Aurora);
+        await pulumi.settle();
+      });
       expect(names()).toEqual(
         expect.arrayContaining([
           "MyDatabaseSecret",

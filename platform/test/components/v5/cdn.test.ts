@@ -42,6 +42,8 @@ describe("Cdn", () => {
     );
     await import("../../../src/components/aws/takeover/https-redirect");
     await import("../../../src/components/aws/takeover/bucket");
+    // Its waiter takes the place of 4.x's, which is released
+    await import("../../../src/components/aws/takeover/cdn");
   });
 
   beforeEach(() => {
@@ -91,10 +93,9 @@ describe("Cdn", () => {
             new Cdn("MyCdn", { ...origin, wait: false }, opts);
           },
           check: () =>
-            expect(
-              resource("MyCdnWaiter.sst.aws.DistributionDeploymentWaiter")
-                .options.ignoreChanges,
-            ).toEqual(["*"]),
+            expect(resource("MyCdnWaiter").options.ignoreChanges).toEqual([
+              "*",
+            ]),
         },
         "a domain on Route 53": {
           create: (Cdn, opts) => {
@@ -127,9 +128,7 @@ describe("Cdn", () => {
           check: () => {
             expect(names()).toContain("MyCdnCNAMERecordAppexamplecom");
             expect(names()).toContain("MyCdnSslCNAMERecordAppexamplecom");
-            expect(names()).toContain(
-              "MyCdnSslCAAapp.example.comRecord.sst.cloudflare.DnsRecord",
-            );
+            expect(names()).toContain("MyCdnSslCAAapp.example.comRecord");
           },
           changed: (way) =>
             way === "with another provider"
@@ -176,7 +175,7 @@ describe("Cdn", () => {
           check: () => {
             expect(names()).toContain("MyCdnALIASRecordExamplecom");
             expect(names()).toContain("MyCdnCNAMERecordAppexamplecom");
-            expect(names()).toContain("MyCdnSslCaaRecord.sst.vercel.DnsRecord");
+            expect(names()).toContain("MyCdnSslCaaRecord");
           },
         },
         "a domain with aliases that share a record's name": {
@@ -212,9 +211,8 @@ describe("Cdn", () => {
           },
           check: () => expect(names()).toContain("MyCdnRedirect"),
           // 4.x created the redirect's function with the app's provider,
-          // whatever the redirect's was. V5 uses the redirect's, which
-          // would replace it under the same name: the map doesn't list
-          // that, so the move's check refuses it.
+          // whatever the redirect's was. V5 gives it the redirect's, which
+          // AWS's provider takes without replacing it
           changed: (way) =>
             way === "with another provider"
               ? [
@@ -264,10 +262,7 @@ describe("Cdn", () => {
           create: (Cdn, opts) => {
             Cdn.get("MyCdn", "E2IDLMESRN6V62", opts);
           },
-          check: () =>
-            expect(names()).not.toContain(
-              "MyCdnWaiter.sst.aws.DistributionDeploymentWaiter",
-            ),
+          check: () => expect(names()).not.toContain("MyCdnWaiter"),
         },
       },
     });

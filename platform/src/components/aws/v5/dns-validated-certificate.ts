@@ -52,7 +52,10 @@ export interface DnsValidatedCertificateArgs
  * #### Switch from SST 4's certificate
  *
  * The components that create a certificate create this one once they're switched. The
- * certificate and its DNS records are kept. A few things are different:
+ * certificate and its DNS records are kept. On a Cloudflare or a Vercel domain, its
+ * CAA records are written again by resources of a new type, which the `sst` binary
+ * serves, and take the records that are there; `sst migrate` takes SST 4's out of the
+ * state. A few things are different:
  *
  * - `domainName`, `alternativeNames` and `dns` have to be plain values, not outputs.
  * - The records are named after the domains they validate, not after their names in DNS.

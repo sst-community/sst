@@ -308,17 +308,158 @@ func TestRead(t *testing.T) {
 	assert.Empty(t, f.calls)
 }
 
+// opened is what a resource's open gives, for a test to see what does its work
+func (t typed[I, O]) opened(ctx context.Context) any { return t.open(ctx) }
+
 func TestResources(t *testing.T) {
-	served := resources(envAws())
-	assert.Len(t, served, 2)
+	served := resources(envAws(), envCloudflare())
+	ctx := context.Background()
+	// Each type, with what does its work
+	want := map[string]any{
+		"sst:aws:BucketFiles":                  &sstresource.BucketFiles{},
+		"sst:aws:KvKeys":                       &sstresource.KvKeys{},
+		"sst:aws:KvRoutesUpdate":               &sstresource.KvRoutesUpdate{},
+		"sst:aws:DistributionInvalidation":     &sstresource.DistributionInvalidation{},
+		"sst:aws:DistributionDeploymentWaiter": &sstresource.DistributionDeploymentWaiter{},
+		"sst:aws:FunctionEnvironmentUpdate":    &sstresource.FunctionEnvironmentUpdate{},
+		"sst:aws:MicrovmImagePrune":            &sstresource.MicrovmImagePrune{},
+		"sst:aws:OriginAccessControl":          &sstresource.OriginAccessControl{},
+		"sst:aws:RdsRoleLookup":                &sstresource.RdsRoleLookup{},
+		"sst:cloudflare:DnsRecord":             &sstresource.CloudflareDnsRecord{},
+		"sst:cloudflare:WorkerUrl":             &sstresource.WorkerUrl{},
+		"sst:cloudflare:WorkerPlacement":       &sstresource.WorkerPlacement{},
+		"sst:vercel:DnsRecord":                 &sstresource.VercelDnsRecord{},
+	}
+	assert.Len(t, served, len(want))
+	for typ, impl := range want {
+		h, ok := served[typ]
+		require.True(t, ok, typ)
+		opener, ok := h.(interface{ opened(context.Context) any })
+		require.True(t, ok, typ)
+		assert.IsType(t, impl, opener.opened(ctx), typ)
+	}
+}
 
-	files, ok := served["sst:aws:BucketFiles"].(typed[sstresource.BucketFilesInputs, sstresource.BucketFilesOutputs])
-	require.True(t, ok)
-	assert.IsType(t, &sstresource.BucketFiles{}, files.open(context.Background()))
+// What only creates: an invalidation, a lookup that waits
+type createOnly struct{ calls *[]string }
 
-	keys, ok := served["sst:aws:KvKeys"].(typed[sstresource.KvKeysInputs, sstresource.KvKeysOutputs])
-	require.True(t, ok)
-	assert.IsType(t, &sstresource.KvKeys{}, keys.open(context.Background()))
+func (c createOnly) Create(input *struct {
+	Name string `json:"name"`
+}, output *sstresource.CreateResult[struct{}]) error {
+	*c.calls = append(*c.calls, "Create")
+	*output = sstresource.CreateResult[struct{}]{ID: "made"}
+	return nil
+}
+
+// An update of what doesn't update keeps its outputs, and a delete of what
+// doesn't delete leaves it, as the RPC does for a method it doesn't have
+func TestCreateOnly(t *testing.T) {
+	calls := []string{}
+	s := newServer("5.0.0", map[string]handler{
+		"sst:aws:Thing": typed[struct {
+			Name string `json:"name"`
+		}, struct{}]{
+			open: func(context.Context) implementation[struct {
+				Name string `json:"name"`
+			}, struct{}] {
+				return createOnly{&calls}
+			},
+		},
+	})
+	urn := "urn:pulumi:dev::app::sst:aws:Thing::Thing"
+	ctx := context.Background()
+	outs := resource.NewPropertyMapFromMap(map[string]any{"kept": "yes"})
+	updated, err := s.Update(ctx, &pulumirpc.UpdateRequest{
+		Urn: urn, Id: "made",
+		Olds: props(t, outs),
+		News: props(t, resource.NewPropertyMapFromMap(map[string]any{"name": "b"})),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"kept": "yes"}, plain(t, updated.Properties))
+	_, err = s.Delete(ctx, &pulumirpc.DeleteRequest{Urn: urn, Id: "made", Properties: props(t, outs)})
+	require.NoError(t, err)
+	assert.Empty(t, calls)
+
+	// Nor can it be adopted
+	_, err = s.Read(ctx, &pulumirpc.ReadRequest{Urn: urn, Id: "made"})
+	assert.ErrorContains(t, err, "sst:aws:Thing can't be adopted by its id")
+}
+
+// What a move adopts by its id
+type adoptable struct{ found bool }
+
+func (a adoptable) Create(input *sstresource.OriginAccessControlInputs, output *sstresource.CreateResult[sstresource.OriginAccessControlOutputs]) error {
+	return errors.New("a create would make a second one")
+}
+
+func (a adoptable) Adopt(id string) (*sstresource.OriginAccessControlInputs, *sstresource.OriginAccessControlOutputs, error) {
+	if !a.found {
+		return nil, nil, nil
+	}
+	return &sstresource.OriginAccessControlInputs{Name: "app-dev-site-abcd1234"}, &sstresource.OriginAccessControlOutputs{}, nil
+}
+
+func TestImport(t *testing.T) {
+	serve := func(found bool) *server {
+		return newServer("5.0.0", map[string]handler{
+			"sst:aws:OriginAccessControl": typed[sstresource.OriginAccessControlInputs, sstresource.OriginAccessControlOutputs]{
+				open: func(context.Context) implementation[sstresource.OriginAccessControlInputs, sstresource.OriginAccessControlOutputs] {
+					return adoptable{found}
+				},
+			},
+		})
+	}
+	urn := "urn:pulumi:dev::app::sst:aws:StaticSite$sst:aws:OriginAccessControl::SiteS3AccessControl"
+	ctx := context.Background()
+
+	resp, err := serve(true).Read(ctx, &pulumirpc.ReadRequest{Urn: urn, Id: "E2OAC"})
+	require.NoError(t, err)
+	assert.Equal(t, "E2OAC", resp.Id)
+	assert.Equal(t, map[string]any{"name": "app-dev-site-abcd1234"}, plain(t, resp.Inputs))
+	assert.Equal(t, map[string]any{}, plain(t, resp.Properties))
+
+	// One that's gone
+	resp, err = serve(false).Read(ctx, &pulumirpc.ReadRequest{Urn: urn, Id: "E2OAC"})
+	require.NoError(t, err)
+	assert.Equal(t, "", resp.Id)
+
+	// A refresh gives back what it's given
+	inputs := props(t, resource.NewPropertyMapFromMap(map[string]any{"name": "app-dev-site"}))
+	resp, err = serve(false).Read(ctx, &pulumirpc.ReadRequest{Urn: urn, Id: "E2OAC", Inputs: inputs})
+	require.NoError(t, err)
+	assert.Equal(t, "E2OAC", resp.Id)
+	assert.Equal(t, plain(t, inputs), plain(t, resp.Inputs))
+}
+
+func TestCloudflareCredentials(t *testing.T) {
+	for _, key := range []string{"SST_CLOUDFLARE_API_TOKEN", "SST_CLOUDFLARE_API_KEY", "SST_CLOUDFLARE_EMAIL", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL"} {
+		t.Setenv(key, "")
+	}
+	t.Run("the CLI's token", func(t *testing.T) {
+		t.Setenv("SST_CLOUDFLARE_API_TOKEN", "resolved")
+		t.Setenv("CLOUDFLARE_API_TOKEN", "own")
+		api, err := envCloudflare()()
+		require.NoError(t, err)
+		assert.Equal(t, "resolved", api.APIToken)
+	})
+	t.Run("the CLI's key and email", func(t *testing.T) {
+		t.Setenv("SST_CLOUDFLARE_API_KEY", "key")
+		t.Setenv("SST_CLOUDFLARE_EMAIL", "me@example.com")
+		api, err := envCloudflare()()
+		require.NoError(t, err)
+		assert.Equal(t, "key", api.APIKey)
+		assert.Equal(t, "me@example.com", api.APIEmail)
+	})
+	t.Run("the environment's own", func(t *testing.T) {
+		t.Setenv("CLOUDFLARE_API_TOKEN", "own")
+		api, err := envCloudflare()()
+		require.NoError(t, err)
+		assert.Equal(t, "own", api.APIToken)
+	})
+	t.Run("none", func(t *testing.T) {
+		_, err := envCloudflare()()
+		assert.Error(t, err)
+	})
 }
 
 func TestVersion(t *testing.T) {
