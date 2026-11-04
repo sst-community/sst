@@ -43,6 +43,7 @@ require (
 	github.com/posthog/posthog-go v0.0.0-20240221135834-4944045455b4
 	github.com/pulumi/pulumi/pkg/v3 v3.267.0
 	github.com/pulumi/pulumi/sdk/v3 v3.267.0
+	github.com/sergi/go-diff v1.4.0
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
 	github.com/tailscale/hujson v0.0.0-20241010212012-29efb4a0184b
@@ -164,7 +165,6 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v5 v5.0.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.3.5 // indirect
-	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/texttheater/golang-levenshtein v1.0.1 // indirect

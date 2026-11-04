@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 5, the codemod started
+
+The first of step 5's items: `sst migrate --codemod`, which rewrites an app's config for 5.0. The maintainer's choices are in [Decisions](plan.md#decisions): TypeScript in the platform, written in place with what it couldn't do listed, and where the 5.0 components are as a setting until the swap.
+
+**Done, committed and pushed:**
+
+- **The engine** (`platform/src/codemod/`): TypeScript's parser over `sst.config.ts` and the files it imports, without SST's types, as after the swap an app's 4.x names have none. A variable is followed to what it holds by its symbol, through imports and `await import()`. Edits are text at the parsed positions, so formatting and comments stay: props moved into one `existing` make one object, adjacent removals one edit, and an object a move empties goes with its key. `names.ts` lists each group's 5.0 exports, the renamed components and those with no 5.0 form; a test checks them against the platform's exports.
+- **The CLI** (`cmd/sst/codemod.go`): `sst migrate --codemod`, with `--dry-run` and `--force`. It runs the codemod from `.sst/platform` with Node, refuses a file git hasn't committed, writes, and lists each change and each thing to do by hand. Checked on a small app: a dry run, the refusal, the write, and a second run with nothing left to change.
+- **The rules so far**: names (the `v5` namespace, the renames, Cloudflare's `x` names, `sst.x.DevCommand`, what has no 5.0 form, `.v1`), `sst.linkable`, a function's `role`, `logging.logGroup`, `live` and `url.route` in a `Function` and in a function's args given to any component, `CronV2`'s `job`, `Task`'s and `Service`'s roles, `Redis`'s `nodes`, `Cluster`'s `forceUpgrade`, `vpc.serviceSubnets`, `addService` and `addTask`, `Router`'s `invalidation`, `Auth`'s `authorizer` and `forceUpgrade`, the API Gateways' `domain.nameId` and `transform.route.handler`, the REST and WebSocket APIs' `accessLog`, the WebSocket API's `addAuthorizer`, a REST route's `streaming`, the static `subscribe`s, a site's `route`, `cdn` and ignored `router` args, `Bucket`'s `public` and `publicAccessBlock`, `Email`'s `dkim`, `Alb`'s `nodes.listeners`, `Nextjs`'s revalidation subscriber, and Cloudflare's `Kv`, `D1` and `Cron`.
+
+**Left:** the rest of the spec's mechanical items (a list of 131, made from every component's "Switch from" section): moving a sub-item's own `transform` into the component's, scoped by its id; reads of `nodes` on what `route()`, `subscribe()` and the like return; `Bucket`'s `subscribe*` and `notify`'s `transform`; `Service`'s `public`; the rest of `StaticSite`, `Router`, `Realtime`, `Workflow`, `CognitoUserPool` and Cloudflare's. Then the examples through it, the table's "Way across" column brought in line with the decisions, and the guide.
+
 ## 2026-11-04: step 4, the migration guide's section for package authors
 
 The last of step 4's items. The guide is still the one written for the v5 alphas, which step 5 writes again for the move with `sst migrate`; the section is written to stay.

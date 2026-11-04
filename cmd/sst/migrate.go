@@ -44,6 +44,12 @@ var CmdMigrate = &cli.Command{
 			"A resource is released when the one that takes its place can't be carried over from it, like a site's files, which SST now uploads with a resource of a new type. The new one writes the same thing again.",
 			"",
 			"A stage deployed with SST 4 can't be deployed with `sst deploy` or `sst dev` until it has moved. Its `sst diff` still runs, and so do `sst refresh` and `sst remove`.",
+			"",
+			"With `--codemod`, it rewrites your `sst.config.ts`, and the files it imports, for the new components first: their names, and the changes to their args that are mechanical. It lists each change, and each thing it couldn't do with what to write. It leaves a file with changes git hasn't committed as it is, unless you pass `--force`, so its changes show as a diff. With `--dry-run`, it prints the diff and writes nothing.",
+			"",
+			"```bash frame=\"none\"",
+			"sst migrate --codemod",
+			"```",
 		}, "\n"),
 	},
 	Flags: []cli.Flag{
@@ -64,6 +70,30 @@ var CmdMigrate = &cli.Command{
 			},
 		},
 		{
+			Name: "codemod",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Rewrite the config for the new components",
+				Long:  "Rewrite `sst.config.ts`, and the files it imports, for the new components, and list what it couldn't do. It needs no stage.",
+			},
+		},
+		{
+			Name: "dry-run",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Print the codemod's diff",
+				Long:  "With `--codemod`, print the changes as a diff and write nothing.",
+			},
+		},
+		{
+			Name: "force",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Rewrite files git hasn't committed",
+				Long:  "With `--codemod`, rewrite files that have changes git hasn't committed.",
+			},
+		},
+		{
 			Name: "json",
 			Type: "bool",
 			Description: cli.Description{
@@ -73,6 +103,12 @@ var CmdMigrate = &cli.Command{
 		},
 	},
 	Examples: []cli.Example{
+		{
+			Content: "sst migrate --codemod",
+			Description: cli.Description{
+				Short: "Rewrite the config for the new components",
+			},
+		},
 		{
 			Content: "sst migrate --check --stage production",
 			Description: cli.Description{
@@ -87,6 +123,12 @@ var CmdMigrate = &cli.Command{
 		},
 	},
 	Run: func(c *cli.Cli) error {
+		if c.Bool("codemod") {
+			return runCodemod(c)
+		}
+		if c.Bool("dry-run") || c.Bool("force") {
+			return util.NewReadableError(nil, "`--dry-run` and `--force` go with `--codemod`.")
+		}
 		moving := !c.Bool("check")
 		jsonOutput := c.Bool("json")
 		if moving && jsonOutput {
