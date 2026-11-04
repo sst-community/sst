@@ -13,7 +13,14 @@ What's been done on [the plan](plan.md), newest first. Each entry says what was 
 - **The docs generator writes the "Switch from" notes the nine sites share,** in place of ten copies in each.
 - **`Auth.v1` is left out of 5.0,** and Cloudflare's components are next, with the mock first.
 
-**Checked:** `tsc`, the platform tests (3,691), Prettier on what was clean before, and the docs generator: the renamed pages, the sites' notes in order. Not in AWS yet: the lab check of the three API Gateway components is next.
+**Checked:** `tsc`, the platform tests (3,691), Prettier on what was clean before, and the docs generator: the renamed pages, the sites' notes in order.
+
+**Checked in the lab** (a stage of its own, and a CLI built from the branch). A REST API that waits between its routes and `deploy()`, as a config that imports its routes does, an HTTP API, and a WebSocket API with an authorizer.
+
+- **Deployed with SST 4, and called:** every route answered. SST 4 showed no URL for the REST API: its hint was lost after the wait.
+- **`sst migrate --check` passed:** 70 resources kept, 52 at a new address, 6 updated in place; 6 replaced, each as its map says: the REST API deployed again with the same routes, and the functions' code uploaded under a new key.
+- **The move** kept 55 of 62 resources by id, 48 under a new name, the API Gateway account's setup among them; the other 7 are that deployment and code. `sst diff` after it showed no changes, every route answered at the same URL, and the REST API's URL was shown: its outputs, registered by `deploy()`, reached the CLI.
+- **Removed, and cleaned up:** `sst remove` deleted 72 resources. Then the stage's 61 state versions and markers, its `migrate` copy among them, its passphrase, and 5 source maps of SST 4's functions. Nothing of it is left. The account's API Gateway logging role is the one it had before.
 
 ## 2026-11-03: step 4, a review of the 5.0 components as a set, and its fixes
 
