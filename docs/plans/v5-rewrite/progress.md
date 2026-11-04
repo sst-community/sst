@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 4, the Floci package checked against this branch's components, and a target's container no longer stopped under a command
+
+The next package in the maintainer's order. They chose to check the Floci package's four components against this branch and stop there: the components its check allows are left for its own repo.
+
+**Done, committed and pushed:**
+
+- **The draft passes against `sst` packed from this branch** (the Floci package, drafted outside this repo for rogueturnip): its tests under `mock()`, and with Docker SST's target suite and the deploy of the 5.0 `Function`, `Bucket`, `Dynamo` and `Queue` with a subscriber on Floci, with its check on, with a CLI built from this branch. Its vendored `sst` is the one packed from this branch now.
+- **A target's container is no longer stopped under a command** (`pkg/target/uses.go`). Found running the draft's tests together: the deploy test failed in one run of two, as the target suite's remove and its `sst target stop` stopped the container just after the deploy had started it. A remove stopped it when no stage on the target had anything deployed or a lock taken, but a command starts the target when it loads its home, before it takes its stage's lock, and `sst diff` takes none; `sst target stop` stopped it whatever ran. Now a command holds a shared lock on a file beside the target's home from when it starts the target until it exits. A remove stops the container, and `sst target stop` and `reset` act, only while they hold that lock alone; otherwise they leave it as it is, and the two commands say why. A command that starts meanwhile waits, then starts it again. The system lets go of the lock when the process exits, however it exits, so a crashed command keeps nothing running, and the check for a stage's lock is gone. The target suite skips its `sst target stop` check when another command is running on the target. The file is beside the home, not in it, so a reset can remove the home while the lock is held, which Windows doesn't allow for an open file.
+
+**Checked:** a Go test of the lock (another command in the way, a command that starts while it's held, and the lock taken again after), the target and project packages' tests and the CLI's, the platform's tests, and a build and vet for Windows. With Docker, the draft's tests run together, as they failed: with only the remove fixed, the deploy test failed in both of two runs; with the fix, all 8 tests passed in both of two runs. After each run: no file in the target's state, the container stopped, no registry container.
+
 ## 2026-11-04: step 4, the template package moved
 
 The plan's next item in step 4: the template package moves to this branch's components, so authors always have a working one to copy, the first of the packages in the order the maintainer chose: the template, then Floci, then `packages/aws-saas`.

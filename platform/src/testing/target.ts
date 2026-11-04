@@ -56,7 +56,8 @@ export interface TargetSuiteCheck {
  * - the bucket is created in the target, through its endpoint, and removed;
  * - the stage's state is kept in the target's home, not the app's;
  * - with nothing deployed on it, its container is stopped, and
- *   `sst target stop` stops it;
+ *   `sst target stop` stops it, unless another command is running on the
+ *   target;
  * - nothing is sent to AWS through the proxy the CLI was given.
  *
  * It throws with every check that failed, and returns them all.
@@ -270,13 +271,16 @@ export async function targetSuite(
           !after.includes(`<Name>${outputs.bucket}</Name>`),
         after === undefined ? "The target doesn't answer" : outputs.bucket,
       );
+      // It leaves the container running while another command runs on the
+      // target, like another app's deploy, which it would stop under it
       if (target.container) {
         const stop = await run(["target", "stop", "--stage", stage]);
-        check(
-          "sst target stop stops its container",
-          stop.code === 0 && (await running(target.name)) === false,
-          stop.tail,
-        );
+        if (!stop.output.includes("Another command is running"))
+          check(
+            "sst target stop stops its container",
+            stop.code === 0 && (await running(target.name)) === false,
+            stop.tail,
+          );
       }
     }
 

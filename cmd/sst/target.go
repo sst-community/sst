@@ -19,7 +19,7 @@ var CmdTarget = &cli.Command{
 		Long: strings.Join([]string{
 			"Manage the target a stage is bound to in your `sst.config.ts`, like an emulator on this machine.",
 			"",
-			"The CLI starts a target's container when a command needs the stage, and stops it when `sst remove` leaves nothing deployed on it.",
+			"The CLI starts a target's container when a command needs the stage, and stops it when `sst remove` leaves nothing deployed on it and no other command is running on it.",
 			"",
 			"```bash frame=\"none\"",
 			"sst target stop --stage local",
@@ -32,7 +32,7 @@ var CmdTarget = &cli.Command{
 			Description: cli.Description{
 				Short: "Stop the target's container",
 				Long: strings.Join([]string{
-					"Stop the container of the stage's target. Its data is kept, and the next command on a stage bound to it starts it again.",
+					"Stop the container of the stage's target. Its data is kept, and the next command on a stage bound to it starts it again. It's left running while another command is running on a stage bound to it.",
 				}, "\n"),
 			},
 			Run: CmdTargetStop,
@@ -44,7 +44,7 @@ var CmdTarget = &cli.Command{
 				Long: strings.Join([]string{
 					"Remove the container of the stage's target and its data, and the state of every stage on it, of every app. The next command on a stage bound to it starts it new.",
 					"",
-					"Everything deployed on the target is gone. It asks first, and says which stages have something deployed.",
+					"Everything deployed on the target is gone. It asks first, and says which stages have something deployed. It's not reset while another command is running on a stage bound to it.",
 					"",
 					"```bash frame=\"none\"",
 					"sst target reset --stage local",
@@ -87,9 +87,16 @@ func CmdTargetStop(c *cli.Cli) error {
 		return err
 	}
 	defer p.Cleanup()
-	stopped, err := local.StopContainer(context.Background())
+	stopped := false
+	alone, err := local.Alone(func() (err error) {
+		stopped, err = local.StopContainer(context.Background())
+		return err
+	})
 	if err != nil {
 		return util.NewReadableError(err, err.Error())
+	}
+	if !alone {
+		return util.NewReadableError(nil, fmt.Sprintf("Another command is running on a stage bound to the %q target, so its container is left running. Stop it once that command is done.", local.Name()))
 	}
 	if !stopped {
 		fmt.Printf("The %q target's container isn't running.\n", local.Name())
@@ -128,8 +135,12 @@ func CmdTargetReset(c *cli.Cli) error {
 			return nil
 		}
 	}
-	if err := local.Reset(context.Background()); err != nil {
+	alone, err := local.Alone(func() error { return local.Reset(context.Background()) })
+	if err != nil {
 		return util.NewReadableError(err, err.Error())
+	}
+	if !alone {
+		return util.NewReadableError(nil, fmt.Sprintf("Another command is running on a stage bound to the %q target, so it's not reset. Reset it once that command is done.", local.Name()))
 	}
 	color.New(color.FgGreen, color.Bold).Print("✓ ")
 	color.New(color.FgWhite).Printf(" Reset the %q target. The next command on a stage bound to it starts it new.\n", local.Name())

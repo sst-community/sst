@@ -185,6 +185,10 @@ func (l *Local) Start(ctx context.Context) error {
 	if s.Container == nil {
 		return waitReady(ctx, s.Endpoint)
 	}
+	// First, so a remove doesn't stop the container under this command
+	if err := use(usesFile(s.Name)); err != nil {
+		return fmt.Errorf("using the %q target: %w", s.Name, err)
+	}
 	if err := s.Container.start(ctx, s.Name, docker); err != nil {
 		return err
 	}
@@ -224,24 +228,6 @@ func (l *Local) Reset(ctx context.Context) error {
 // "app/stage", from the state in its home.
 func Deployed(name string) ([]string, error) {
 	return deployedIn(HomeDir(name))
-}
-
-// Locked lists the stages on a target that a command is running on, as
-// "app/stage": a first deploy has nothing in its state yet.
-func Locked(name string) ([]string, error) {
-	return lockedIn(HomeDir(name))
-}
-
-func lockedIn(home string) ([]string, error) {
-	files, err := filepath.Glob(filepath.Join(home, "state", "lock", "*", "*.json"))
-	if err != nil {
-		return nil, err
-	}
-	stages := []string{}
-	for _, file := range files {
-		stages = append(stages, filepath.Base(filepath.Dir(file))+"/"+strings.TrimSuffix(filepath.Base(file), ".json"))
-	}
-	return stages, nil
 }
 
 func deployedIn(home string) ([]string, error) {

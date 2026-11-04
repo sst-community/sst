@@ -414,17 +414,3 @@ func TestDeployed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, none)
 }
-
-func TestLocked(t *testing.T) {
-	home := t.TempDir()
-	dir := filepath.Join(home, "state", "lock", "shop")
-	require.NoError(t, os.MkdirAll(dir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "local.json"), []byte("{}"), 0644))
-	locked, err := lockedIn(home)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"shop/local"}, locked)
-
-	none, err := lockedIn(t.TempDir())
-	require.NoError(t, err)
-	assert.Empty(t, none)
-}
