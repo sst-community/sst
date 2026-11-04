@@ -5,10 +5,13 @@
 # the automatic review sets the labels and the `review` status and runs the
 # checks on the title, generated docs, versions and testing note, so those are
 # off here. It doesn't approve or request changes; a committer approves every
-# pull request (.github/CODEOWNERS). The app has write access to the repo, so
-# nothing here lets it commit: its finishing touches are off, and only members
-# of the org can chat with it. A change to this file needs the code owner's
-# review.
+# pull request (.github/CODEOWNERS). Its `CodeRabbit` check only shows its
+# progress; it isn't required. The app has write access to the repo, so its
+# finishing touches, which commit or open pull requests, are off, and only
+# members of the org can chat with it. A few commands still commit, such as
+# `@coderabbitai local commit`, and no setting here turns them off, but they
+# need the commenter to have write access to the repo. A change to this file
+# needs the code owner's review.
 
 language: en-US
 tone_instructions: "Plain and direct. Say what to change and why, in a sentence or two. No praise, no emoji."
@@ -44,7 +47,8 @@ reviews:
     issue_assessment:
       mode: "off"
 
-  # Each of these commits to a branch of this repo.
+  # Each of these commits to a branch of this repo or opens a pull request, and
+  # turning it off also turns off its command.
   finishing_touches:
     docstrings:
       enabled: false
