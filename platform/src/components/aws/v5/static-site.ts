@@ -44,6 +44,7 @@ import {
 import { buildSite, writeViteTypes } from "../helpers/site-build";
 import { siteRequestCode } from "../helpers/ssr-site";
 import { type BucketFile, BucketFiles } from "../resources/bucket-files";
+import { hashFiles } from "../helpers/file-hashes";
 import { KvKeys } from "../resources/kv-keys";
 import { DistributionInvalidation } from "../resources/distribution-invalidation";
 import { KvRoutesUpdate } from "../resources/kv-routes-update";
@@ -1559,7 +1560,7 @@ async function filesOf(input: {
   ].reverse();
 
   const bucketFiles: BucketFile[] = [];
-  const filesProcessed: string[] = [];
+  const filesProcessed = new Set<string>();
   for (const fileOption of fileOptions) {
     const files = globSync(fileOption.files, {
       cwd: outputDir,
@@ -1571,36 +1572,27 @@ async function filesOf(input: {
           ? [fileOption.ignore]
           : fileOption.ignore ?? []),
       ],
-    }).filter((file) => !filesProcessed.includes(file));
+    }).filter((file) => !filesProcessed.has(file));
 
+    const sources = files.map((file) => path.resolve(outputDir, file));
+    const hashes = await hashFiles(sources);
     bucketFiles.push(
-      ...(await Promise.all(
-        files.map(async (file) => {
-          const source = path.resolve(outputDir, file);
-          const content = await fs.promises.readFile(source, "utf-8");
-          const hash = crypto
-            .createHash("sha256")
-            .update(content)
-            .digest("hex");
-          return {
-            source,
-            key: toPosix(
-              path.join(
-                assetsPath ?? "",
-                pathPrefix?.replace(/^\//, "") ?? "",
-                file,
-              ),
-            ),
-            hash,
-            cacheControl: fileOption.cacheControl,
-            contentType:
-              fileOption.contentType ??
-              getContentType(file, input.textEncoding),
-          };
-        }),
-      )),
+      ...files.map((file, i) => ({
+        source: sources[i],
+        key: toPosix(
+          path.join(
+            assetsPath ?? "",
+            pathPrefix?.replace(/^\//, "") ?? "",
+            file,
+          ),
+        ),
+        hash: hashes[i],
+        cacheControl: fileOption.cacheControl,
+        contentType:
+          fileOption.contentType ?? getContentType(file, input.textEncoding),
+      })),
     );
-    filesProcessed.push(...files);
+    for (const file of files) filesProcessed.add(file);
   }
   return bucketFiles;
 }
@@ -1662,7 +1654,8 @@ function kvEntriesOf(input: {
 }
 
 // The invalidation's version: it changes when a file, or how the files are
-// uploaded, does
+// uploaded, does. Each file is read as bytes, one at a time: a file that isn't
+// text read as text can hash the same after a change.
 function versionOf(outputDir: string, assets: unknown) {
   const hash = crypto.createHash("md5");
   hash.update(JSON.stringify(assets ?? {}));
@@ -1672,7 +1665,7 @@ function versionOf(outputDir: string, assets: unknown) {
     follow: true,
     cwd: outputDir,
   }).forEach((file) =>
-    hash.update(fs.readFileSync(path.resolve(outputDir, file), "utf-8")),
+    hash.update(fs.readFileSync(path.resolve(outputDir, file))),
   );
   return hash.digest("hex");
 }

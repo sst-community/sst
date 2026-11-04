@@ -2,11 +2,35 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 4, zipping and hashing timed, and an entry point for each group
+
+The plan's next item in step 4: time zipping and hashing on a large site, and move them to Go only if they're slow.
+
+**Timed** under Node, as the program runs them, on a site made for it: 20,001 files, 837 MB, of them 18,000 pages, scripts and styles and 2,000 binary files of 50 to 500 KB.
+
+| | Before | After |
+| --- | --- | --- |
+| A site with a server's files (`siteFiles`) | 9.3 s, 1.9 GB | 1.0 s, 0.3 GB |
+| `StaticSite`, the whole program side, under the mock | 24.4 s, 1.9 GB | 6.7 s, 0.8 GB |
+| A function's zip (`zipCode`), 13,500 files, 112 MB | 2.6 to 4 s, 0.6 GB | the same |
+
+**Not moved to Go.** What was slow wasn't the language: each file was read as text, all at once, so memory grew to more than twice the site's size, and a site of about 2 GB would have run Node out of memory; and `StaticSite` checked each file against a list of the ones before it, which grows with the square of the files. The zip is fast enough as it is.
+
+**Done, committed and pushed:**
+
+- **Files are hashed as bytes, a few at a time** (`aws/helpers/file-hashes.ts`), for `StaticSite` and the sites with a server. Hashing as text was also wrong: bytes that aren't valid UTF-8 read as text are one replacement character, so a change to an image could leave its hash as it was, and the file wasn't uploaded again. Text hashes as it did, so a site of text keeps its hashes.
+- **The invalidation's version keeps SST 4's formula**, the files' bytes read one at a time, where it read them as text, for the same reason. A move gives the invalidation that takes SST 4's place what SST 4's had, which the takeover tests check, so it isn't made from the upload's hashes; that read is most of `StaticSite`'s 6.7 seconds.
+- **A set for the files already taken**, in place of the list.
+
+**Checked:** `tsc`, all platform tests, and a test that two files that read the same as text hash apart. Not checked in the lab: the hashes have the same form, and the core's `BucketFiles` only compares them.
+
+**Decided: an entry point for each group, not for each component** ([decision](plan.md#decisions)), the step's next item. Measured from esbuild's metafiles of each component: 32 of AWS's components reach the `docker-build`, `random` and `tls` providers beside AWS's, about 1 MB against AWS's 83 MB, and Cloudflare's `Worker` reaches AWS's. An entry point for each would save little, and each would be API to hold still for all of 5.x. The maintainer chose the groups' entry points, `sst/components/aws` and `sst/components/cloudflare`, as now.
+
 ## 2026-11-04: step 4, the known gaps in components that have a 5.0 form
 
 The maintainer said to close the gaps that can be closed, of those listed after the components were ported: a `Cdn` with redirects and a provider of its own, nested components' versions, Cloudflare's sites and an output `domain`, and what was checked under the mock only.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **A nested component follows the outermost of SST's components it's in** (`move.ts`, `component.ts`). The record lists its version apart, under its type after `>`, so one at the top of the app in SST 4's form and one inside a 5.0 component in its 5.0 form no longer share an entry. It's in its form before SST 5 while the outermost one is, so switching that one takes over what's inside it even when another component's is at a later version; before, its maps were skipped then. A plain deploy refuses one inside at another version, as one at the top, and names the component it's in; before, a nested component's next version would have been moved by a plain deploy, without the check. The core passes the record through unchanged.
 - **A provider change alone replaces nothing.** The gap with the `Cdn` rested on a premise that was wrong: that moving a resource from the app's provider to the component's replaces it. Pulumi asks the new provider's `DiffConfig`, and AWS's and Cloudflare's providers ask for no replace on any setting, so the resource is kept, with that provider's default tags. So the `Cdn`'s redirect, which SST 4 created with the app's provider, switches with no change to its code. The same premise was in the notes of 16 components and 10 of the plan's decisions, which said that subscribers, routes, authorizers, identity providers and associations made with a parent's provider or from `providers` are replaced on switch and that `--check` refuses it; they now say each is kept. In SST 4, a provider in another region or account than the app's couldn't have worked for any of them, as each has to be beside its component.
@@ -31,7 +55,7 @@ The maintainer said to close the gaps that can be closed, of those listed after 
 
 The maintainer said to continue, with the next item of step 4. `BucketFiles` and `KvKeys` were moved on 2026-11-01; this moves the rest that 5.0's components create ([decision](plan.md#decisions)).
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **SST's provider serves 13 resources now** (`pkg/provider/resources.go`): with `BucketFiles` and `KvKeys`, the invalidation, the CDN's waiter, a function's environment update, a router's list of routes, the MicroVM image prune, the origin access control and the RDS role lookup (`aws/resources/`), Cloudflare's DNS record, a Worker's URL and its placement (`cloudflare/resources/`), and Vercel's DNS record (`vercel/resources/`). The Worker's URL and placement were SST 4's TypeScript dynamic resources; their calls are Go now (`pkg/server/resource/cloudflare-worker-url.go`, `cloudflare-worker-placement.go`), with SST 4's retries and `CLOUDFLARE_API_BASE_URL`. Cloudflare's and Vercel's resources call the API with the credentials the CLI resolved, from the provider's environment, as AWS's do. A resource that doesn't update keeps its outputs, and one that doesn't delete leaves what it made, as the RPC did; what each one does is checked when the binary is built.
 - **The maps release SST 4's**, in the `Function`, `Router`, `Cdn`, `StaticSite`, the sites with a server, `MicroVm`, the three RDS databases, the certificate and Cloudflare's `Worker`, with `sstResource()`, now in `takeover.ts`, the kind with its cloud. A map's `delegatedReleased` releases what a DNS adapter creates for a component: the certificate's CAA records on Cloudflare and Vercel.
@@ -63,7 +87,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, Cloudflare's components built the 5.0 way, and their lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The harness takes a provider's `v5` folder.** Cloudflare's 5.0 components are in `cloudflare/v5/`, as `sst.cloudflare.v5.X`, with their maps in `cloudflare/takeover/`, which `sideEffects` lists. `v5-components.test.ts` checks both providers' folders, with `RENAMED` and the types SST 4 spelled otherwise by provider. A takeover suite says `provider: "cloudflare"` to run its third way with a Cloudflare provider. The docs generator and the sidebar list Cloudflare's 5.0 pages, and keep the V5 class names by provider (`Bucket`, `Cron`, `Queue`, `StaticSite` and others are in both).
 - **The `Worker`**, the base of the rest: its zone found with a function, not SST 4's `ZoneLookup`; each of a domain's aliases and redirects kept by its domain, moved from SST 4's place in the list by the map; the IAM user a link to AWS gives it created directly; what it's linked to read without waiting on it, so a Worker inside a component can link that component; its bindings read together, so one that's secret keeps them all secret, as SST 4 did. Every `existing` entry is refused: it builds its code.
@@ -85,7 +109,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, the maintainer's calls on what the review left
 
-**Done, not committed:**
+**Done, committed and pushed:**
 
 - **`ApiGatewayRest` and `ApiGatewayHttp`.** The maintainer asked "Can we change the names of the api gateways to be more clear what they are instead of v1 and v2?", and chose these: the REST API (SST 4's `ApiGatewayV1`, with its `ApiGatewayRestApiKey` and `ApiGatewayRestUsagePlan`) and the HTTP API (`ApiGatewayV2`), in `aws/v5/apigateway-rest.ts` and `apigateway-http.ts`. Each keeps its type, so a switch keeps what's deployed. The components test lists the renamed ones in `RENAMED` and finds each original by its type, as the docs generator now does too, which replaces the rule that read a dropped version from the type.
 - **`Realtime`'s subscribers take an optional name,** which keys them in `nodes` and `transform`, and a function or its ARN with one. Without a name they're keyed by SST 4's hash, so a switch keeps them.
@@ -105,7 +129,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, a review of the 5.0 components as a set, and its fixes
 
-**Done, not committed:** the maintainer asked for "a review of all the components and make sure they are right. There's not a lot of duplications and they follow the right pattern and consistent". Six reviewers read the 5.0 components, each family against the rulebook and one pattern across all of them; about 75 findings, each checked against the code. Five agents then fixed them, a family each, on files of their own, and the rest was done across them. 119 files, with 7 new helpers.
+**Done, committed and pushed:** the maintainer asked for "a review of all the components and make sure they are right. There's not a lot of duplications and they follow the right pattern and consistent". Six reviewers read the 5.0 components, each family against the rulebook and one pattern across all of them; about 75 findings, each checked against the code. Five agents then fixed them, a family each, on files of their own, and the rest was done across them. 119 files, with 7 new helpers.
 
 - **The rules, in the framework and the rulebook.**
   - Every error names its component the same way, `the "Web" Astro site`; `notAnOption` takes the owner.
@@ -139,7 +163,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, `CronV2` is `Cron` in 5.0
 
-**Done, not committed:** the maintainer decided that a 5.0 component drops the version SST 4 put in its name, where it can ([decision](plan.md#decisions)). With SST 4's first `Cron` left out of 5.0, `CronV2` is `sst.aws.v5.Cron`.
+**Done, committed and pushed:** the maintainer decided that a 5.0 component drops the version SST 4 put in its name, where it can ([decision](plan.md#decisions)). With SST 4's first `Cron` left out of 5.0, `CronV2` is `sst.aws.v5.Cron`.
 
 - The file is `aws/v5/cron.ts`, with its map and tests renamed to match, and its args are `CronArgs`. Its type stays `sst:aws:CronV2`, which a deployed one has: `sst:aws:Cron` is the first `Cron`'s, and a 5.0 component of that type would be taken for it. "Switch from" says so.
 - The rule is written in `PORTING.md`: a component drops the version from its name and its file, and keeps its type. The naming test and the docs generator find the original from the version in the type, so there's no list of renamed components to keep. On a 5.0 page, an inherited example of `sst.aws.CronV2(` is shown as `sst.aws.v5.Cron(`, and one of the first `sst.aws.Cron(` is left alone.
@@ -148,7 +172,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, SST 4's deprecated components left out of 5.0
 
-**Done, not committed:** the maintainer decided to leave SST 4's deprecated components out of 5.0, and to add one back if users ask for it ([decision](plan.md#decisions)): `Cron`, `Vector` and `OpenControl`, and Cloudflare's first `StaticSite`. SST 4 names what to use instead of each.
+**Done, committed and pushed:** the maintainer decided to leave SST 4's deprecated components out of 5.0, and to add one back if users ask for it ([decision](plan.md#decisions)): `Cron`, `Vector` and `OpenControl`, and Cloudflare's first `StaticSite`. SST 4 names what to use instead of each.
 
 - The 5.0 forms of `Cron`, `Vector` and `OpenControl` are removed, with their maps and their tests. Each was ported, reviewed and lab-checked first, as the entries below say, and comes back from the history as it was: `Cron` from `de729d193`, `Vector` from `e574fea61`, `OpenControl` from `9e35da796`.
 - Cloudflare's first `StaticSite` won't be ported, and its `sst.cloudflare.x.StaticSite` alias goes with it.
@@ -158,7 +182,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, the `OpenControl` built the 5.0 way, the last of Community, and its lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`OpenControl`** (`aws/v5/opencontrol.ts`), deprecated as SST 4's is. Its key and its server's function keep their names, so its map is empty. The server is a 5.0 `Function`, given the key as `OPENCONTROL_KEY` and a URL without CORS, as SST 4 gave it.
   - `server` is a plain value, a handler or a function's args: the function is created from it. A function's ARN is refused, since the server is reached through the URL of the function the component creates. So are `existing.server` and `existing.key`, with what to write.
@@ -182,7 +206,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, the `OpenSearch` built the 5.0 way, and its lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`OpenSearch`** (`aws/v5/open-search.ts`). The domain, its policy, the generated password and the secret it's kept in keep their names, so its map is empty.
   - With `dev` set, SST 4 created a `DevCommand` for the pane `sst dev` shows, in every deploy. The 5.0 one tells `sst dev` through the program contract, and creates nothing in `sst dev`: reading `nodes` there says why it's empty.
@@ -207,7 +231,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, the `KinesisStream` built the 5.0 way, and its lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`KinesisStream`** (`aws/v5/kinesis-stream.ts`), as the 5.0 `Dynamo`'s stream subscribers are built. SST 4 kept each subscription in a component of its own at the top of the app; the 5.0 one keeps the subscriber's function and event source mapping inside the stream, by the subscriber's name, and `subscribe` returns the stream. A subscriber without a name, a subscriber's own `transform`, and a handler or args in an output are refused with what to write.
   - The map finds a subscriber where either of SST 4's forms put it: after the stream's component, or, for the static `subscribe`, after the stream's own name.
@@ -233,7 +257,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, the `Vector` built the 5.0 way, the first of Community, and its lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`Vector`** (`aws/v5/vector.ts`), deprecated as SST 4's is. SST 4 kept its database in a `Postgres.v1` inside it, which has no 5.0 form. The 5.0 one takes that database's cluster, instance and subnet group over as parts of its own, through `childWithin` in its map, and a move takes the `Postgres` component out of the state. Its table and its three functions keep their names.
   - What SST 4 took only through `transform.postgres` the 5.0 one takes as args of its own: `vpc`, `version`, `scaling` and `databaseName`, with SST 4's defaults and types. Changing a cluster's subnet group would replace it, so an app that put the database in a VPC needs `vpc`.
@@ -261,7 +285,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, the `MicroVm` built the 5.0 way, the last of Kept, and its lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`MicroVm`** (`aws/v5/microvm.ts`). Every part has SST 4's name and place, so its map is empty: the image and its versions, the roles, the log group, the code's zip, the prune resource and the network connector are kept as they are, and the image isn't built again.
   - In `sst dev` it reports its pane through the program contract, where SST 4 created a `DevCommand`. A move of a stage last deployed by `sst dev` takes that component out of the state; nothing in AWS is behind it. It runs locally through `this.runsLocally()`, so `nodes` says why a part isn't there.
@@ -298,7 +322,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, the `ApiGatewayV1` built the 5.0 way, and its lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`ApiGatewayV1`** (`aws/v5/apigatewayv1.ts`), with the usage plan and the API key as small 5.0 components of their own (`apigatewayv1-usage-plan.ts`, `apigatewayv1-api-key.ts`), at the top of the app as SST 4 made them, so nothing of theirs moves.
   - The routes and authorizers are inside the API, by the route's name or the route itself, where SST 4 kept each in a component of its own. `route` and `routeIntegration` return the API.
@@ -347,7 +371,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 ## 2026-11-03: step 4, seven of Kept built the 5.0 way, a map for every 5.0 component, and their lab check
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`StepFunctions`, `Cron`, `CognitoIdentityPool`, `Auth`, `Realtime`, `Workflow` and `ApiGatewayWebSocket`** (`aws/v5/`), each built the 5.0 way: its own args, no 4.x file, nothing created inside an `apply`, a "Switch from" section, and on the clean break's list.
   - `StepFunctions`: the state classes are SST 4's (`aws/step-functions/`, which the clean-break test now walks). The five integrations that take a component have their own args and take the V5 `Function`, `SnsTopic`, `Queue`, `Task` and `Bus` as well as the 4.x ones. `lambdaInvoke` creates a V5 `Function`, under the name SST 4 gave its function.
@@ -400,7 +424,7 @@ The maintainer said to continue, with the next item of step 4. `BucketFiles` and
 
 The maintainer decided that every component gets a 5.0 form, so these come first: the sites on the base the `Nextjs`, `Astro` and `SvelteKit` share.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`TanStackStart`, `Nuxt`, `SolidStart`, `Analog`, `Remix` and `React`** (`aws/v5/`), each `createSsrSite()` with its framework's reader of the build. The args and docs are SST 4's, with the examples on `sst.aws.v5`, a "Switch from" section, and takeover maps from `ssrSiteTakeover()`. All six are on the clean break's list. `TanStackStart` keeps SST 4's type, `sst:aws:TanstackStart`, with its small "s".
 - **Shared:**
@@ -475,7 +499,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `StaticSite` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `StaticSite`** (`aws/v5/static-site.ts`) with its own args, docs and parts, on the clean break's list. It isn't on `createSsrSite()`: it has no server, no framework, and serves its files itself. What it shares with the sites with a server: `buildSite()` for its `build`, `routeOf()` for a router, the 5.0 `Cdn` and `Bucket`, `kvNamespace()`, and the code of the viewer request function that routes it, out of `createSsrSite()` into `siteRequestCode()`.
 - **Built the 5.0 way:** nothing created inside an `apply`. What decides what's created is a plain value: `build`, `vite`, `indexPage`, `errorPage`, `edge`, `edgeRouting`, `router`, `invalidation` and `assets.bucket`. A `build` runs in the deploy and in `sst diff`, once, and not for `sst refresh` or in `sst dev`.
@@ -502,7 +526,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `Astro` and the `SvelteKit` built the 5.0 way, on the sites' base
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `Astro`** (`aws/v5/astro.ts`) is a call to `createSsrSite()` with Astro's build: what the "astro-sst" adapter says in `dist/sst.buildMeta.json` becomes the site's plan, and its server when it has one (the adapter's entry, `sharp` installed, streaming as the adapter says, and the 404 page copied in). A static site has no server, so its servers are listed once the build says there is one. Its own args and docs, and on the clean break's list.
 - **What the review of the base found, for it:** a site whose framework has no build command of its own builds with its `build` script, run by the package manager whose lockfile is in the site's folder or the app's (`defaultBuildCommand()` in `helpers/site-build.ts`), as SST 4 does. A framework's `beforeBuild` runs before every build, a command given or not: the `Astro`'s check that SST's adapter 3.x isn't building an Astro 6 app.
@@ -519,7 +543,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, one base for the sites with a server, out of `Nextjs`
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **What every site with a server creates is in `helpers/ssr-site.ts`**, as the databases' is in `helpers/rds-instance.ts`: the shared parts (`ssrSiteParts`), the shared args (`SsrSiteArgs`), and `createSsrSite(this.builder(), name, args, framework)`, which creates the site from its build: the bucket and its files, the server in each region with its warmer and the permissions to call it, the distribution or the route through a router, the key-value entries and the invalidation, and in `sst dev` the pane the site runs in.
 - **A framework says what's its own** (`SsrFramework`): the command that builds the site when it isn't given one, how its build is read (a `SiteBuild`, with the plan of what's served from S3 and from the server, and whether it has a server), how the server is built (a `ServerPlan`, which the site's own `environment`, `permissions`, `link`, `layers` and `server` args are merged into, as SST 4 merges them), and what it creates beside the server. `Nextjs`'s is OpenNext's build command, ISR's queue, table and seed, and the image optimizer. With a build id, the prewarm is keyed by it; without one, by the server's code.
@@ -555,7 +579,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `Service` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/service.ts`): what it took from 4.x's (`dev`, `serviceRegistry`, `capacity`, `health`, `wait`) is its own now, on the `FargateBaseArgs` it shares with the `Task`, and it's on the clean break's list. The 4.x `Alb` it can share is reached through `helpers/alb.ts`, which takes either kind; any other `loadBalancer.instance` is refused, where 4.x ignored it.
 - **Its panes in `sst dev` are SST 5's `DevCommand`**, one for each container with a `dev.command`, created directly where they were created inside an `apply`. `sst dev` ran nothing for a container without a command, so none is created for it. SST 5's `DevCommand` takes the role the command runs as (`aws.role`, internal, as SST 4's had) and reads `context()`.
@@ -567,7 +591,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `Alb` built the 5.0 way, and the load balancers' domains
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `Alb`'s own args and docs** (`aws/v5/alb.ts`), with no 4.x component file reached, and on the clean break's list. Its `vpc` is either kind of `Vpc` or the ids; any other resource is refused, where it was read as the ids.
 - **A load balancer's domain on the 5.0 certificate and adapters.** `helpers/load-balancer-args.ts` builds `loadBalancerDomain()` (renamed from `domainOf()`, which is `helpers/domain.ts`'s) on `domainOf()`, and points the domain and its aliases with the adapters' `alias()`. The `Service`, which shares it, has its domain on them too, ahead of its rebuild, with its docs saying so.
@@ -579,7 +603,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `Email` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/email.ts`), with no 4.x component file reached, and on the clean break's list.
 - **Its DNS records on the 5.0 adapters, none created inside an `apply`.** 4.x created a domain's DKIM records once SES had given the identity's tokens, named after them, so a preview of a new stage showed none. The V5 one creates the three directly, named after their place (`dkim1` to `dkim3`), with the tokens in order as their values; its map gives each its old name from the token, as the certificate's does. The DMARC and MAIL FROM records keep the names they had, since those are known up front.
@@ -591,7 +615,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `CognitoUserPool` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/cognito-user-pool.ts`): the user pool's, its triggers', an identity provider's, and its client's (`aws/v5/cognito-user-pool-client.ts`), with no 4.x component file reached. Both are on the clean break's list.
 - **Its custom domain on the 5.0 certificate**, in `us-east-1` as Cognito's CloudFront needs, and the DNS adapters, through `domainOf()`. A prefix domain is as it was.
@@ -603,7 +627,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `AppSync` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/app-sync.ts`): the API's, and a data source's, an AppSync function's and a resolver's, with no 4.x component file reached, and on the clean break's list. Two of 4.x's examples named the wrong field (`requestTemplate` for an AppSync function's `requestMappingTemplate`, and the same for the response); they're right now.
 - **Its domain on the 5.0 certificate**, in `us-east-1` as AppSync needs, and the DNS adapters, through `domainOf()`, as the `ApiGatewayV2`'s is. The certificate's map gives its validation records their old names.
@@ -615,7 +639,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `ApiGatewayV2` built the 5.0 way, and one domain helper
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **One helper for a custom domain built the 5.0 way** (`helpers/domain.ts`): `DomainArgs`, with its docs, and `domainOf()`, which checks that the name and the DNS adapter are plain and that there's a `cert` without one. The `Cdn`'s domain builds on it, so the checks are in one place. The components that aren't rebuilt yet keep SST 4's adapters through `helpers/custom-domain.ts`, which goes with the last of them.
 - **The `ApiGatewayV2`'s own args and docs** (`aws/v5/apigatewayv2.ts`), with no 4.x component file reached, and on the clean break's list. Its domain uses the 5.0 certificate and the DNS adapters, as the `Cdn`'s does: the certificate's map gives its validation records their old names, and SST 4's lookups of the hosted zone leave the state.
@@ -629,7 +653,7 @@ The maintainer decided that every component gets a 5.0 form, so these come first
 
 ## 2026-11-02: step 4, the `Dsql` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/dsql.ts`), with no 4.x component file reached, and on the clean break's list. Its `vpc` is either kind of `Vpc`, alone or as `vpc.instance` with the endpoints to create, and the endpoints are in its private subnets read with `subnetsOf()`. Any other value is refused with what to pass, where it failed on a missing property.
 - **A witness region that's the peer region is refused** when both are plain, where AWS refused it on deploy.
@@ -645,7 +669,7 @@ Left: a lab check. The single-region cluster in a VPC, which the October lab run
 
 ## 2026-11-02: step 4, the rest of the review's fixes
 
-**Done, committed (not pushed).** The smaller fixes the [review](plan.md#decisions) asked for:
+**Done, committed and pushed.** The smaller fixes the [review](plan.md#decisions) asked for:
 
 - **The clean-break test follows imports through helpers.** A rebuilt component reaches 4.x's code only through a helper that takes either kind, which the test lists with the 4.x file each may import. It found one more: the `Task`'s container `health` and `dev` were typed by the 4.x `Service`'s args, and are its own now.
 - **The rebuilt components read `context()`**, the program contract, for the app, the stage, `sst dev` and the paths, as a package's components do, not `$app`, `$dev` or `$cli`.
@@ -660,7 +684,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, one base for the databases on an RDS instance
 
-**Done, committed (not pushed).** The second fix from the [review](plan.md#decisions): the `Postgres` and the `Mysql` differed in 48 of their 873 lines, and their tests in 57 of 827, so a fix was made by hand in each, as several were the same day.
+**Done, committed and pushed.** The second fix from the [review](plan.md#decisions): the `Postgres` and the `Mysql` differed in 48 of their 873 lines, and their tests in 57 of 827, so a fix was made by hand in each, as several were the same day.
 
 - **`helpers/rds-instance.ts` builds either**: the parts, the args that read the same for each, and the whole of what the constructor does, from the engine's settings (`RdsEngine`: its name, defaults, parameter group, Performance Insights, the tags 4.x writes, the proxy's engine family). Each component keeps its class, its docs, its getters and `get`, and the args that read differently for it (`version`, `username`, `dev`). Each is about 400 lines now.
 - **`localDatabase()`** in `helpers/rds.ts` is what `sst dev` connects to and the pane for it, for the `Postgres`, the `Mysql` and the `Aurora`.
@@ -673,7 +697,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 **The review.** Before the rest of the components, the maintainer asked whether the design still holds: the same functionality for developers, a codebase clearly more mature than 4.x's, and custom components still easy to write. An independent review and a read of the code found the design right, and what to fix, now a [decision](plan.md#decisions) with its order. The main one was a bug: an app's or a package's own component that renamed a part with `sst.takeover()`, as the README says to, was refused on a stage SST 5 created, as if it were SST 4's. And after one move, a later map was applied with no check.
 
-**Done, committed (not pushed): component versions** ([decision](plan.md#decisions)).
+**Done, committed and pushed: component versions** ([decision](plan.md#decisions)).
 
 - **Maps are numbered.** `sst.takeover(C, { version: 2, moved })`; version 1 takes over from a component's form before SST 5, and is the default. A component with no map is at version 1, SST 4's form at 0. A map's keys may be what a part was called in its version.
 - **The state records each component's version** in `sst:sst:Versions`, left at the end of every deploy and waiting for everything it deployed, so it has what an app or a package registered as the program ran, components inside SST's own included, and a deploy that fails partway leaves the one before. The marker keeps saying the stage is on SST 5, with a list the record takes the place of. The core reads both, and tells the program which types the stage has only inside SST's components.
@@ -695,7 +719,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Mysql` and the `Aurora` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `Mysql`'s and the `Aurora`'s own args and docs** (`aws/v5/mysql.ts`, `aws/v5/aurora.ts`), with no 4.x component file imported, and on the clean break's list. Their parts, and what each is created with, are the proofs of concept's, which took over 4.x's. Each takes either kind of `Vpc`, or ids, and refuses another resource in its place.
 - **In `sst dev` with `dev` set, each reports the pane for the local database**, as the `Postgres` does, where 4.x created a `DevCommand` in every deploy, and `dev` wins over `existing`.
@@ -714,7 +738,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Postgres` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `Postgres`'s own args and docs** (`aws/v5/postgres.ts`), with no 4.x component file imported, and on the clean break's list. Its parts, and what each is created with, are the proof of concept's, which took over 4.x's. `vpc` takes either kind of `Vpc`, or subnet ids.
 - **In `sst dev` with `dev` set, it reports the pane for the local database** with `localServerPane()`, where 4.x created a `DevCommand` in every deploy; a switch takes that out of the state. The password is still asked for in `sst dev` alone. A password from a secret stays a secret in the report, and the core reads it decrypted, as it read 4.x's.
@@ -729,7 +753,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Redis` built the 5.0 way, and a 5.0 `DevCommand`
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `Redis`'s own args and docs** (`aws/v5/redis.ts`), with no 4.x component file imported, and on the clean break's list. `vpc` takes either kind of `Vpc`, or ids; another resource in its place is refused.
 - **The deprecated `nodes` is refused** with what to write: `cluster.nodes` where neither `cluster` nor `serverless` is set, and nothing where one is, since 4.x ignored it there. Left in and ignored, it would reshard the cluster ([decision](plan.md#decisions)).
@@ -769,7 +793,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Efs` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/efs.ts`), with no 4.x component file imported, and on the clean break's list.
 - **No mount target is made inside an `apply`** (the maintainer chose this design from three, on 2026-11-02). 4.x, and the `v5` branch's port, made one for each subnet once the subnets' ids were known, named after each id, so a new stage's `sst diff` didn't list them. Now each is kept by its availability zone, EFS's own rule of one mount target in each:
@@ -788,7 +812,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Task` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/task.ts`), with no 4.x component file imported, and on the clean break's list. What a task and a service both run, and with what, is `FargateBaseArgs` in `helpers/fargate.ts`, with a container's args, `ContainerArgs`, the 5.0 way: their docs are the 5.0 components' own, written for any page. The `Service` takes them when it's rebuilt. The tables of the CPU and memory Fargate allows moved into the helper too; the 4.x file imports them from there.
 - **`publicIp` is kept, not deprecated.** 4.x marked it deprecated in favor of `public` and refused the two together, but `public` also opens a security group to everything and moves the task to the public subnets, so a task in a cluster given the ids of a VPC had no other way to get a public IP. The V5 `Task` refuses only `public` with `publicIp: false`. Every 4.x state switches as it is, since 4.x never took both.
@@ -802,7 +826,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Cluster` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/cluster.ts`), with no 4.x component file imported, and on the clean break's list. Its `vpc` is either kind of `Vpc` (`AnyVpc`) or the ids of a VPC.
 - **What 4.x took and 5.0 doesn't:** the deprecated `vpc.serviceSubnets` is refused with what to write (`vpc.containerSubnets`, the same subnets), and `forceUpgrade`, which upgraded a `Cluster.v1`, is no longer an arg; one left in is ignored. Any resource in place of a `Vpc`, a `Vpc.v1` or an `aws.ec2.Vpc`, is refused, where it was read as the ids and failed on what's missing.
@@ -818,7 +842,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `CronV2` built the 5.0 way, and a function part's args
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `CronV2`'s own args and docs** (`aws/v5/cron-v2.ts`), with no 4.x component file imported, and on the clean break's list. The 4.x `Task` it can run is reached through `AnyTask` (`helpers/task.ts`), and its function goes through `plainFunction()`. A 4.x config that gave the function's args in an output switches by writing them plainly, with outputs inside, which a takeover case shows. Its examples use the 5.0 `Vpc`, since a new stage refuses SST 4's.
 - **A `$transform` for functions can add to what a component's function is given again.** `functionPart()` made a function's `link`, `environment` and `permissions` outputs whatever was given, so a `$transform` that spread `args.environment` copied an output and lost what it added, with no error, in every 5.0 component. They're made outputs only when one side is one, as 4.x left them. A test fails without it.
@@ -832,7 +856,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Bus` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/bus.ts`), with no 4.x component file imported, and on the clean break's list. Its function subscribers go through `plainFunction()`, and a queue subscriber is either kind of `Queue` or an ARN. The map already found what 4.x's static `Bus.subscribe` and `subscribeQueue` created.
 - **The "Switch from" section** says the plain-function rule, what the methods return, and which provider each subscriber is created with: as for the `SnsTopic`, a provider a bus takes from a parent, or one that reaches `get` any way, replaces a subscriber 4.x created with another.
@@ -845,7 +869,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Dynamo` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/dynamo.ts`), with no 4.x component file imported, and on the clean break's list. Its subscriber goes through `plainFunction()`. A subscriber without a name is refused in every shifted form 4.x took, a handler with the subscription's args included. The map already found what the static `Dynamo.subscribe` created.
 - **A subscriber of a component that takes its provider from a parent, or from `providers`, is replaced on switch**, for the `Dynamo`, `Queue` and `SnsTopic`: 4.x gave it only a `provider` passed to the component itself, and the 5.0 subscriber has the component's. Its log group goes with it, so `sst migrate --check` refuses the move; each "Switch from" section says to remove the subscriber and deploy first. A test shows it for each.
@@ -860,7 +884,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `SnsTopic` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/sns-topic.ts`), with no 4.x component file imported, and on the clean break's list. Its function subscribers go through `plainFunction()`, and a queue subscriber is either kind of `Queue` (`AnyQueue`) or an ARN.
 - **What 4.x's static `SnsTopic.subscribe(name, topicArn, ...)` and `subscribeQueue(name, topicArn, ...)` created is kept.** They named it after the topic's own name, at the top of the app, and `get(name, topicArn)` with the method takes their place.
@@ -875,7 +899,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 ## 2026-11-02: step 4, the `Queue` built the 5.0 way
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/queue.ts`), with no 4.x component file imported, and on the clean break's list. Its subscriber goes through `plainFunction()`, as the `Bucket`'s do.
 - **What 4.x's static `Queue.subscribe(queueArn, ...)` created is kept.** It was named after the queue's own name, and the map didn't look there. `Queue.get(name, queueArn).subscribe(...)` takes its place, given the options the static one was.
@@ -892,7 +916,7 @@ Left from the review: a shared base for the sites, out of `Nextjs`, before `Astr
 
 The first of the rest of Core, after the gate. The `Bucket` is the most used of them, and the sites and a router's bucket routes build on it.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Its own args and docs** (`aws/v5/bucket.ts`), with no 4.x component file imported, and on the clean break's list. The 4.x `Queue` and `SnsTopic` it can notify are reached through `AnyQueue` (`helpers/queue.ts`) and `AnySnsTopic` (`helpers/sns-topic.ts`).
 - **A function it's given is decided from what a preview knows.** A notification's `function`, and the subscriber of `subscribeEventBridge`, is a handler or args as a plain value, or a function or its ARN, which can be an output. `plainFunction()` in `helpers/function-part.ts` checks it, with `FunctionInput` as its type, and refuses a handler or args in an output with a message. The other components that create functions take it as each is rebuilt.
@@ -909,7 +933,7 @@ The first of the rest of Core, after the gate. The `Bucket` is the most used of 
 
 The maintainer asked to bring `main`'s fix for SST's Cloudflare and Vercel resources onto `v5-rewrite`.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`main` merged into `v5-rewrite`:** SST's Cloudflare and Vercel resources call the API with the credentials the CLI resolved. The RPC resources get them in Go. The dynamic providers written in TypeScript read `SST_CLOUDFLARE_*` from the program's environment on each call, as SST reads `SST_AWS_*` for AWS. A site's build doesn't get them. Each of these resources updates once on its next deploy. The 5.0 Cloudflare and Vercel adapters still create their CAA records with SST 4's record resource, so those records keep nothing secret in their inputs now either.
 - **The Cloudflare fetch helper:** `v5-rewrite` read the token when a request was made, from `$app` or the environment. `main`'s reads only the environment, so the code saved with SST's dynamic providers reads nothing from the app's config. The merge keeps `main`'s.
@@ -924,7 +948,7 @@ The maintainer asked to bring `main`'s fix for SST's Cloudflare and Vercel resou
 
 Every component with a domain created its DNS records through the adapters, inside an `apply`, and looked up each record's zone with a resource, so a new stage's preview showed none of them ([decision](plan.md#decisions)).
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The adapters' 5.0 form** (`dns-adapter.ts`, and `dns-adapter.ts` in `aws/`, `cloudflare/` and `vercel/`), which `sst.aws.dns()`, `sst.cloudflare.dns()` and `sst.vercel.dns()` also give: `record`, `alias` and `caa`, which create directly and name from plain values as 4.x did. A record whose name in DNS isn't known yet is named after a `key`.
 - **Zones found with functions.** SST's provider serves its first function, `sst:aws:getHostedZone`: it lists the zones once a run, takes the longest zone the domain ends with, a public one over a private one of the same name, and refuses two alike, where 4.x took the first listed and kept it in the state. Cloudflare's zone comes from Cloudflare's provider. `--check` releases SST 4's lookups, and the move marks them retained, so their delete isn't called.
@@ -954,7 +978,7 @@ Every component with a domain created its DNS records through the adapters, insi
 
 A stage that keeps 4.x server-rendered sites failed `sst migrate --check`: their servers' code and source maps are uploaded again on every deploy, under new keys, and nothing maps them. The same would fail any later move of a stage whose code changed since its last deploy, or that has a 5.0 site, whose build changes its code each time too.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **A file uploaded again because it changed isn't the move's doing** ([decision](plan.md#decisions)). `--check` lets an object in a bucket be replaced without a map when only its key changed, in nothing but a hash of what's in it, as SST keys a function's code and its source maps. A key that changes in anything else needs the map, as when a map renames a function, and so do a key a preview doesn't know, a move to another bucket, and anything that isn't an object in a bucket. What a map says comes first. It's judged from the preview alone, so it holds for a 4.x component a move keeps, a 5.0 one in a later move, and an app's own objects.
 
@@ -966,7 +990,7 @@ A stage that keeps 4.x server-rendered sites failed `sst migrate --check`: their
 
 The maintainer asked for the long-term direction for SST's provider resources and for how a move releases, then said yes to it ([decisions](plan.md#decisions)). This closes the gate's last item: releasing `BucketFiles` and `KvKeys`.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The `sst` binary serves SST's own resources as a Pulumi provider** (`pkg/provider`): `sst:aws:BucketFiles` and `sst:aws:KvKeys`, the classes in `aws/resources/`, which the V5 `Nextjs`, `Router` and `Function` use. Each run's work folder links the running binary in as the plugin, and its `Pulumi.yaml` points Pulumi at it, so the provider is always the CLI's version. It gets the stage's setup from the environment, never from its config: the region, a target's endpoint, and the credentials the CLI resolved, until they expire; then it makes its own the way the CLI made them (the profile, and the roles to assume), so a deploy or an `sst dev` that outlasts them goes on, and nothing is asked for twice, like a code from an MFA device.
 - **`sst migrate` moves a stage.** It takes the stage's lock, runs the check, and stops there if it fails. Then, under the same lock, it saves a copy of the state in the home, marks what the maps release as retained, and deploys with a preview first, so Pulumi takes each released entry out of the state without calling its delete. A remove that leaves nothing takes the copies too.
@@ -988,7 +1012,7 @@ The maintainer asked for the long-term direction for SST's provider resources an
 
 The maintainer said to continue. With the `Router` and its `Cdn` done, `Nextjs` was the last of the gate's three hard components.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The V5 `Nextjs`** (`sst:aws:Nextjs`), built the 5.0 way: its own args and docs, no 4.x component file, and nothing inside an `apply`. It's served through a `Router`, V5 or 4.x, with `router`, or through a V5 `Cdn` of its own. Its parts keep 4.x's names, so a switch moves nothing in the cloud.
 - **The site is built in the program, once per deploy** (`buildSite()` in `helpers/site-build.ts`), with the values of its links and its environment ([decision](plan.md#decisions)). A preview builds it without the values it doesn't know, and passes a link none of whose properties it knows with only its type. Builds take their turn, as many at once as `SST_BUILD_CONCURRENCY_SITE` says; 4.x sites keep a limit of their own. A failed build fails the deploy once, with the end of its output, and the `nodes` made from it fail with it. 4.x kept its build in the state as a `command:local:Command`, which a switch takes out. `sst migrate --check` lets a 4.x site's build go, or be replaced as it is on every deploy, since it only writes the site's files on this machine; a user's own local command only goes when it's deleted without a delete command.
@@ -1040,7 +1064,7 @@ These came after the lab's check, which ran the first round's CLI. They change w
 
 The maintainer said to continue, with `Nextjs` and `Router` next. The `Router` comes first: every site, and a function's URL, is served through it. Two decisions came first ([Decisions](plan.md#decisions)): a site builds once per deploy, and the V5 `Router` drops inline routes.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **A V5 `Cdn`** (`sst:aws:CDN`, as 4.x spelled it), which the `Router` and the sites are built on. Its domain, with the `name`, `aliases` and `redirects` that name its DNS records, and `wait` are plain values, so its distribution, deploy waiter, certificate and redirect are created directly. It keeps 4.x's names, so a switch moves nothing. It also keeps a quirk of 4.x's: unless `wait` is set to `true`, the waiter only waits for the first deploy.
 - **The V5 `Router`**, built the 5.0 way: its own args and docs, no 4.x component file, and nothing inside an `apply`. `domain`, `edge`, `protection`, `waf` and `waf.logging`, and a route's pattern, are plain values. The distribution, key-value store, request and response functions, cache policy, Lambda@Edge signer and WAF are parts, with 4.x's names. A route is a pair of parts inside the router, its entry in the store and its line in the router's list, where 4.x kept each in a component of its own at the top of the app; the takeover map finds them there. Their entries in the store are the same, byte for byte. `get` finds a router from another stage by its distribution's tags, as 4.x does.
@@ -1083,7 +1107,7 @@ The maintainer said to continue, with `Nextjs` and `Router` next. The `Router` c
 
 The maintainer said to continue. The `Function` with its dev stubs is the gate's other hard component the recordings already check; what was left was building it the 5.0 way.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **What an app creates once is made once in each run** (`perRun()` and `newRun()` in `util/lazy.ts`). The key links are encrypted with and the shared dev stub code were statics of the 4.x `Function`, which the V5 one reached into. They're in `aws/helpers/function-shared.ts` now, which both use, with the same names, so nothing changes in an app. The CLI's run and the mock's `reset()` start a new run, so a test sees what a run creates whatever ran before it; the takeover helpers no longer reset the 4.x `Function` by hand, and neither do the tests. The 4.x `Function`'s `reset()` is gone.
 - **The V5 `Function` owns its args** (`FunctionArgs`, its types and its docs) and imports no 4.x component file. The 4.x `Efs` and `Router` are reached through `helpers/efs.ts` (`AnyEfs`, `isEfs()`) and `helpers/router.ts` (`RouteArgs`, `AnyRouter`, `routeOf()`), which take either kind, as `helpers/vpc.ts` does for the `Vpc`. A V5 `Router` joins `AnyRouter` when there is one.
@@ -1122,7 +1146,7 @@ The maintainer said to continue. The `Function` with its dev stubs is the gate's
 
 The maintainer said to continue. The `Vpc` is the gate's hard component that the VPC recording can check right away, and the first built the 5.0 way.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The V5 `Vpc`** (`aws/v5/vpc.ts`, `sst.aws.v5.Vpc`, type `sst:aws:Vpc`). Its args, types and docs are its own, and it imports no 4.x component file: the clean break, read as no 4.x component file or its types, with the parts framework, `args`, `contract` and `error` as 5.0's own. Every resource keeps the name 4.x gave it. Nothing is created inside an `apply`: `az`, `nat` and `bastion` are plain, and a subnet, route table, Elastic IP and NAT in each AZ are parts keyed by the AZ's number, from a count a preview knows. The bastion is reported to the core for `sst tunnel`. No `registerVersion`; the version tags 4.x writes are kept.
 - **The bastion's image is one image.** 4.x took the newest `al2023-ami-20*` for Arm, and Amazon releases one per kernel in the same second, so a diff could replace the bastion. The V5 `Vpc` reads Amazon's public parameter for the newest image with the default kernel. A switch replaces the bastion once if it doesn't run that image, which the state map lists, and the docs tell the user to start `sst tunnel` again.
@@ -1162,7 +1186,7 @@ The maintainer said to continue. The `Vpc` is the gate's hard component that the
 
 Looking into the `Function` with its dev stubs, the first of the gate's hard components, showed that the gap the recordings found there wasn't one.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **Each run in the takeover helpers starts as a run of the program does** (`src/auto/run.ts`): with the 4.x `Function`'s dev stub code forgotten, which its functions share within a run. `takesOverState()` ran both programs in one process, so the V5 `Function` found the object the 4.x run had created, created nothing, and the stub code was listed as unclaimed. The `Function` suite already reset it by hand; `takesOver()` and `takeoverCases()` now do it for every suite.
 
@@ -1172,7 +1196,7 @@ Looking into the `Function` with its dev stubs, the first of the gate's hard com
 
 The maintainer said yes to the VPC recording next: the lab's containers and databases, which v4.23.1 deployed in a VPC (`vpc-containers-databases.json`), checked as the serverless group is. `Vpc` has no V5 form yet, so both programs are given the 4.x one, as the lab does.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The lab's VPC groups are in the repo** (`test/recorded/v5-lab.ts`: `net`, `containers`, `databases`, and the web service's image folder), and in `recorded.test.ts`, with what the lab account answered the lookups the deploy made: its availability zones, the bastion's image, and the registry login an image is pushed with.
 - **The replay reads the state as if the app were deployed from the test's folder:** a state names the app's folder (`/home/user/v5-lab`, scrubbed), and a service writes into its image's folder, so the folder has to be real.
@@ -1189,7 +1213,7 @@ The maintainer said yes to the VPC recording next: the lab's containers and data
 
 The maintainer asked to continue with step 4. Its first item after `--check` is checking each component's map, under the mock, against the states v4.23.1 really deployed (`testdata/states`), so CI catches what only the AWS run caught before.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **The mock replays a recorded state** (`recorded` in `mockPulumi()`, `src/testing/state.ts`). A resource at an address the state has, or that answers to one through an alias, comes back with the id and outputs AWS gave, as the engine reads them from the state, a secret as `[secret]`. The answer is handed to the engine's mock as the request is sent, so two resources of the same type and name get their own. A lookup answers as the provider did where the state says: the region of the provider a resource is created with, and an IAM policy rendered as the AWS provider's source renders it (a set of one a string, a longer one sorted in reverse, a condition's values in order, keys in a fixed order, `&{` as `${`, HTML escaped as Go does). `cli` answers for the CLI, like the bucket the lab's code went to.
 - **`stateGraph()`** reads a state into the graph `takeover()` compares, with what the provider adds taken off (the defaults it lists, `tagsAll`, a region that's the provider's), and what a state can't hold left out of the comparison (`deleteBeforeReplace`, what a function is built from). Against a state, a value is hidden only where the state has a secret (the provider can keep one on what holds it, like a list, or on the field itself), an asset or archive is compared only as one, and a build's hash, which the mock's build can't match, as the CLI's.
@@ -1221,7 +1245,7 @@ The maintainer asked to continue with step 4. Its first item after `--check` is 
 
 The maintainer asked for step 3's check against the recordings, then step 4. The recordings can't be replayed as step 1 did it: each stage's passphrase was deleted with the stage, and the state's secrets can't be read without it. So the check means deploying the stages again, and the maintainer left it for later. Step 4 starts with `sst migrate --check`, the gate for every component.
 
-**Done, reviewed, committed (not pushed):**
+**Done, reviewed, committed and pushed:**
 
 - **`sst migrate --check --stage <stage>`** runs Pulumi's preview of the move (the path `sst diff` takes, which writes nothing) and sorts each step by [goals 1 to 3](goals.md) (`pkg/move`):
   - **kept**: the same resource, at its address or at a new one, maybe updated in place, with the fields that change;
@@ -1262,7 +1286,7 @@ The maintainer asked for step 3's check against the recordings, then step 4. The
 
 The maintainer asked what closes the gaps the last entry left, and chose for each ([decisions](plan.md#decisions)).
 
-**Done, reviewed, committed (not pushed):**
+**Done, reviewed, committed and pushed:**
 
 - **Code that imports `sst` needs no `skipLibCheck`.** `sst` installs `@types/aws-lambda`, which three of its SDK's declarations use. Two declarations had type errors that a `@ts-expect-error` hid in the source, which a declaration drops: `VectorClient`'s and `event`'s. Both are written so they need none. A check in CI type-checks what an app imports from `sst` against the built SDK without `skipLibCheck`, under NodeNext and bundler, and that every package its declarations import is one `sst` installs, or one an app brings for the module that uses it (`hono` for `sst/auth`, `zod` or `valibot` for `sst/event`).
 - **The target suite checks `sst dev`.** It runs `sst dev`, calls a function through the target, and checks that the worker on this machine answers with the target's credentials and region and nothing planted. A target that doesn't run functions turns it off. It also checks that the container stops once nothing is deployed on it, and that `sst target stop` stops it.
@@ -1281,7 +1305,7 @@ The maintainer asked what closes the gaps the last entry left, and chose for eac
 
 The maintainer said to go on to the Floci package. It's to live in a repo of its own, with rogueturnip, so it was drafted outside this repo and not published, for them to take over.
 
-**Done, reviewed, committed (not pushed):**
+**Done, reviewed, committed and pushed:**
 
 - **The target suite, `targetSuite(target)` in `sst/testing`**, which a package that exports a target runs in its own CI. It runs the `sst` CLI on an app with one bucket, bound to the target. Its deploy, `sst shell` and remove run with the developer's AWS settings planted around the CLI: keys, a session token, a profile, a region, endpoints, a role, credential and config files, and a proxy that records where it's sent. It checks that the program and `sst shell` get the target's credentials and region and nothing planted, that the program can reach nothing but this machine (the fence refuses it, not just no network), that the bucket is created and removed in the target, that the state is in the target's home, and that nothing went to AWS through the proxy. It cleans up after itself, and keeps a stage's state if the stage couldn't be removed.
 - **`context().target`**, in the program contract: the stage's target, when it isn't the real cloud. A package's check can turn itself on for its own target's stages only. `mock()` takes a `target` to bind its stage to one.
@@ -1306,7 +1330,7 @@ The maintainer said to go on to the Floci package. It's to live in a repo of its
 
 The plan asks that a package need no `moduleResolution: "bundler"`, `skipLibCheck` or pinned `google-protobuf`, and that a group not pull in every provider, or that the reason be written down. Each was tried in a copy of the template package (`examples/component-package` on `v5-community-packages`), with `sst` packed from this branch.
 
-**Done, reviewed, committed (not pushed):**
+**Done, reviewed, committed and pushed:**
 
 - **`skipLibCheck`.** Without it, a package's `tsc` found 45 errors in SST's declarations, for two reasons:
   - **TypeScript names a type by its shortest path.** The V5 components' declarations named `OptionalPart`, `ManyPart`, `ComponentClass` and the rest as `import("../..")`, which is the `sst` global's module. That module loads every group, so `sst/components/aws` reached Cloudflare's and Vercel's declarations, and their providers. The global's module is now left out of the build of the declarations, and copied in as its own: it's only re-exports. So they're named through `core`. A test checks that no file of the platform imports it, which would bring it back. The one that did, `aws/helpers/arn.ts`, didn't use it.
@@ -1332,7 +1356,7 @@ The plan asks that a package need no `moduleResolution: "bundler"`, `skipLibChec
 
 The maintainer chose how a check stops a deploy: with a preview first, so a deploy never half-applies ([decision](plan.md#decisions)).
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`sst.check({ name, component, resource, invoke })`** turns a check on for the program: it looks at each component with its args (SST's hook, after `$transform`), each resource with its inputs, and each provider function the program calls (Pulumi's resource and invoke transforms). What it finds stops the program, with the check's name, the resource and how to fix it. A value that isn't known yet in a preview is given as `unknown`, not left out.
 - **A preview first.** The program keeps its checks' names with the state (`_checks`, a hidden output, only when it has some), and a deploy of such a stage runs Pulumi's preview first, as `--policy` does. A deploy with no preview whose program turns out to have checks stops in `sst.check()`, before anything is registered, and the CLI runs it again with a preview first.
@@ -1351,7 +1375,7 @@ The maintainer chose how a check stops a deploy: with a preview first, so a depl
 
 The maintainer asked whether to adopt #212's HTTP transport now, rather than wait, and said yes to porting it: without it a target's stage could deploy, but `sst dev`'s functions couldn't reach it.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **#212's server and client, by rogueturnip,** as `httpbus`: sst dev and each stub publish and subscribe over HTTP on this machine, with a token on every request. What's changed is the wording, which named Floci.
 - **`transport.HTTP`, a `Transport` behind them:** `Stub` gives the stub sst dev's address as a container reaches it, `host.docker.internal`, and the token; `Connect` starts the server; `Remove` forgets them. The port and token are kept per stage in the working folder, readable only by the developer, so each run gives the stubs the same ones. The server listens on `127.0.0.1`, which Docker Desktop's containers reach; on Linux, also on the Docker bridge's address, only while sst dev runs. #212 listened on every interface.
@@ -1367,7 +1391,7 @@ The maintainer asked whether to adopt #212's HTTP transport now, rather than wai
 
 The maintainer said to work through step 3. The target came first: it doesn't wait on #212's transport.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`pkg/target`:** the `Target` interface: start and stop, the providers, the home, and the environment of what the core starts on the stage. The real cloud is the built-in, `Cloud`, and does what the core did before. `Local` is a target on this machine, from its settings, which the core carries out.
 - **A stage is bound to its target in the config,** as `targets: { local: emulator }` in `app()`. A target is a plain object of the type `Target`: `app()` is read before the platform is loaded, so no function from `sst/components` can make one there ([decision](plan.md#decisions)).
@@ -1396,7 +1420,7 @@ The maintainer said to work through step 3. The target came first: it doesn't wa
 
 The maintainer said to close two open items: bring in the fixes `v5-rewrite` was missing, and delete the lab's old state versions.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`main` merged into `v5-rewrite`:** v4.23.1's `Router` fixes, the type files left alone on `sst remove` (#201), the globals for a project with `.sst` in its path (#206), and the subscriber function names (#214), which came after the release. A build of `v5-rewrite` no longer shows `Router` changes on a stage v4.23.1 deployed, so a test build needs nothing on top.
 - **`pkg/js`:** #206 compares the project's `.sst` folder by its real path too. That's kept beside the rewrite's globals, which are imports. #206's tests give the globals as a module now, and the file in `.sst` they check uses the global: an import a `.ts` file doesn't use is dropped, so the test couldn't see one otherwise.
@@ -1419,7 +1443,7 @@ The maintainer said to close two open items: bring in the fixes `v5-rewrite` was
 
 The maintainer said to go on. `sst.runtime` came before the target: it finishes the runtime, and one lab run checks both it and the runtime's `sst dev` changes. The target needs #212's transport, with rogueturnip, and Docker.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`sst.runtime(settings)`** (`platform/src/components/runtime.ts`, exported with `sst.component`): a runtime made of commands, for a language SST doesn't build in. Its settings are the Lambda runtime its functions deploy with (`lambda`), and the core's command settings: the folder, the build command and its output, the dev command, and the files to watch. It turns down settings with no Lambda runtime or no dev command. It's marked with a key of its own, which an output keeps.
 - **The V5 `Function` takes one as its `runtime`**, given as it is or in an output. Its build input carries the commands, so the CLI builds it with them for a deploy and runs it with them in `sst dev`, and it's deployed with the Lambda runtime they name. A function with a runtime name is as it was. What's neither is turned down, and so are `injections` with one, as they're for a Node.js function SST builds.
@@ -1455,7 +1479,7 @@ The maintainer said to go on. `sst.runtime` came before the target: it finishes 
 
 The maintainer said yes to the transport's commit, and the runtime came next. The plan draws it from the five built-ins and a runtime made of commands, the one packages will give with `sst.runtime`.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`runtime.Runtime`** (`pkg/runtime/runtime.go`) is `Match`, `Build`, `Run` and `ShouldRebuild`, and writes down what a runtime has to do: build into the function's folder, with an error in the function's code in the build's errors, not as the runtime failing; build different functions at once, and again into the same folder while a worker runs from it; run a worker against the Lambda runtime API with the environment it's given; a worker's logs end when it exits, and stopping it doesn't wait; and say which files a function uses.
 - **`ShouldRunEagerly` is gone.** Python said no to it because a change to shared code rebuilt every function, and the core started a worker again at once for each, a few seconds apiece. Now the core starts again at once only the workers of the three functions invoked last, whatever the runtime, and the rest when they're invoked. Python gets the function in use started ahead of its next invocation, which it didn't before, and a Node.js change to shared code no longer starts a worker for every function either. After a deploy, only those three are built at once; the rest build when they're invoked.
@@ -1500,7 +1524,7 @@ The maintainer said yes to the transport's commit, and the runtime came next. Th
 
 The maintainer said to go on, with the places to plug in. The transport came first: its built-in already does all four things the plan's interface asks, spread over the CLI, the program and a 4.x component, and #212's HTTP transport is the second one to draw it from.
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`bridge.Transport`** (`cmd/sst/mosaic/aws/bridge/transport.go`): `Stub` (the stub's environment and the permissions its role needs), `Connect` (the CLI's side) and `Remove` (on `sst remove`). `Stub` and `Connect` each find or create what the transport needs outside the state, like the Event API: the program asks for `Stub` while `sst dev` connects, and in `sst deploy --dev` and `sst diff --dev` without it. It writes down what a connection has to do, which `bridge.Conn` never said: an event goes to whoever subscribes at the time; one may be lost, reordered or copied; an error from `Publish` means it may not have been sent, and no error doesn't mean it arrived; a new subscription may miss events for a moment, lasts as long as the connection, and comes back by itself; the largest packet arrives whole; a slow subscriber's events may be held up or lost; and calls come from many goroutines at once. An error that may pass if `sst dev` starts again wraps `bridge.ErrNotReady`, so `sst dev` tells it apart without knowing the transport.
 - **AppSync behind it** (`pkg/transport/appsync.go`), as it was: the shared Event API, or the stage's own with `dev.appsync: "stage"`. `sst dev` connects through `Project.Transport()`, and `sst remove` removes through it, still looking for the stage's own Event API whatever `dev.appsync` is now.
@@ -1629,7 +1653,7 @@ The maintainer approved the plan and asked for step 2, with step 1's recordings 
 
 ### Step 2: the core's state and lock behind `Home`
 
-**Done, committed (not pushed):**
+**Done, committed and pushed:**
 
 - **`Home` is a store of bytes** (`pkg/project/provider/home.go`): `Get`, `Put` (with `IfAbsent`), `Remove`, `List`, and the passphrase. A home whose store keeps versions (`VersionedHome`, the AWS home) also removes versions. The lock, the secrets' encryption, and the history (cleanup, prune, purge, the stages list) are written once, in `state.go`, on top of it. They were written three times before, once in each home.
 - **The lock is a conditional write.** The AWS home writes it with `If-None-Match: *`, so S3 refuses the second of two writes. The local home creates the file with `O_EXCL`. Between 4.x and 5.0, the race stays what it was: 4.x reads, then writes.

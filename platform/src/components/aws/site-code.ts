@@ -9,6 +9,7 @@ import { globSync } from "glob";
 import type { BucketFile } from "./providers/bucket-files";
 import { type BaseSiteFileOptions, getContentType } from "../base/base-site";
 import { toPosix } from "../path";
+import { hashFiles } from "./helpers/file-hashes";
 import { type Duration, toSeconds } from "../duration";
 import type { KV_SITE_METADATA, ProtectionConfig } from "./router-code";
 
@@ -187,39 +188,32 @@ export async function siteFiles(input: {
     ];
 
     // Upload files based on fileOptions
-    const filesUploaded: string[] = [];
+    const filesUploaded = new Set<string>();
     for (const fileOption of fileOptions.reverse()) {
       const files = globSync(fileOption.files, {
         cwd: path.resolve(outputPath, copy.from),
         nodir: true,
         dot: true,
         ignore: fileOption.ignore,
-      }).filter((file) => !filesUploaded.includes(file));
+      }).filter((file) => !filesUploaded.has(file));
 
-      bucketFiles.push(
-        ...(await Promise.all(
-          files.map(async (file) => {
-            const source = path.resolve(outputPath, copy.from, file);
-            const content = await fs.promises.readFile(source, "utf-8");
-            const hash = crypto
-              .createHash("sha256")
-              .update(content)
-              .digest("hex");
-            return {
-              source,
-              key: toPosix(
-                path.join(copy.to, pathPrefix?.replace(/^\//, "") ?? "", file),
-              ),
-              hash,
-              cacheControl: fileOption.cacheControl,
-              contentType:
-                fileOption.contentType ??
-                getContentType(file, input.textEncoding),
-            };
-          }),
-        )),
+      const sources = files.map((file) =>
+        path.resolve(outputPath, copy.from, file),
       );
-      filesUploaded.push(...files);
+      const hashes = await hashFiles(sources);
+      bucketFiles.push(
+        ...files.map((file, i) => ({
+          source: sources[i],
+          key: toPosix(
+            path.join(copy.to, pathPrefix?.replace(/^\//, "") ?? "", file),
+          ),
+          hash: hashes[i],
+          cacheControl: fileOption.cacheControl,
+          contentType:
+            fileOption.contentType ?? getContentType(file, input.textEncoding),
+        })),
+      );
+      for (const file of files) filesUploaded.add(file);
     }
   }
   return bucketFiles;
@@ -499,7 +493,8 @@ export function siteInvalidation(input: {
         }).forEach((filePath) => hash.update(filePath));
       }
 
-      // For non-versioned files, use file content for digest
+      // For non-versioned files, use file content for digest: its bytes, as
+      // a file that isn't text read as text can hash the same after a change
       if (invalidation.paths !== "versioned") {
         globSync("**", {
           ignore: item.versionedSubDir
@@ -511,10 +506,7 @@ export function siteInvalidation(input: {
           cwd: path.resolve(outputPath, item.from),
         }).forEach((filePath) =>
           hash.update(
-            fs.readFileSync(
-              path.resolve(outputPath, item.from, filePath),
-              "utf-8",
-            ),
+            fs.readFileSync(path.resolve(outputPath, item.from, filePath)),
           ),
         );
       }
