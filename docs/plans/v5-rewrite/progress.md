@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 4, the migration guide's section for package authors
+
+The last of step 4's items. The guide is still the one written for the v5 alphas, which step 5 writes again for the move with `sst migrate`; the section is written to stay.
+
+**Done, committed and pushed:**
+
+- **"If you wrote a package"** in *Migrate From v4*: what a package built on the alphas changes, and what it can do now. Measured, not recalled: a script read what each entry a package imports exports (`sst/components`, its groups, `sst/testing`), with the TypeScript compiler, at `v5.0.0-alpha.2` and on this branch, and for each component under `v5` its args' keys and its public members, and compared them. Removed or renamed: `v5.ApiGatewayV2` and `v5.CronV2`, now `ApiGatewayHttp` and `Cron` with the same args and members; `Redis`'s `nodes` and `Cluster`'s `forceUpgrade`; `linkable` and `V5Args` in `sst/components`. The core's functions and types have the same signatures but `deferred()`, which takes more, and `mock()`, which gives more. New: `context()`, `check()`, `runtime()`, the `Target` type, `targetSuite()`, and versions with `takeover()`. Then the setup that's no longer needed, and the swap to come.
+- **The guide said a provider change replaces some resources**, the premise the lab disproved earlier the same day, which the components' notes and the plan's decisions were corrected for. It now says they're kept.
+
+**Checked:** each name against this branch's exports, and the page in the docs site.
+
 ## 2026-11-04: step 4, `packages/aws-saas` moved to this branch's components
 
 The last package in the maintainer's order, built on the v5 alphas. It's on its own branch, `v5-saas`, which the maintainer chose to merge this branch into, with the package's move on top.

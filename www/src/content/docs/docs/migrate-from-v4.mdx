@@ -138,14 +138,7 @@ A v5 component takes either version of these, but a v4 one only takes the v4 ver
 Most switches only update resources in place. These are the exceptions:
 
 - **A function whose part has a new name uploads its code again.** The function is updated in place. `CronV2`'s function is one: it was `MyCronJobHandler` and is `MyCronJobFunction`.
-- **Some resources v4 created with your app's provider**, whatever the component was given. A v5 component creates them with its own `provider`. So if the component has a `provider`, they're replaced:
-  - A durable function's URL alias, and its URL with it.
-  - `AppSync`'s Lambda data source functions and its domain association.
-  - The queue subscribers of a `Bus` or an `SnsTopic`.
-  - What `Bucket.subscribeEventBridge` created.
-
-  Each one's section says what to do: usually, remove it and deploy before you switch, then add it back.
-- **Some resources added to a resource you looked up with `get` and a `provider`.** The `provider` now applies to them as well, so they're replaced: a `Bucket`'s notifications, a `Dynamo` table's subscribers, and a `CognitoUserPool`'s clients, which get new IDs.
+- **Nothing is replaced for a change of provider alone.** v4 created some resources with your app's provider, whatever the component was given: a durable function's URL alias, `AppSync`'s Lambda data sources and domain association, and the queue subscribers of a `Bus` or an `SnsTopic`. And what it added to a resource you looked up with `get` and a `provider` didn't get that provider: a `Bucket`'s notifications, a `Dynamo` table's subscribers, a `CognitoUserPool`'s clients. A v5 component gives each of them its own `provider`, and the switch keeps them, updated in place with that provider's default tags. A client keeps its ID.
 - **A subscriber without a name isn't kept.** On a `Dynamo` table or an `SnsTopic`, every subscriber needs a name. Remove an unnamed one and deploy before you switch, then add it back with a name.
 
 A `Service` also lists what `sst dev` runs for each container as removed and created again. That's only in your state; nothing changes in AWS.
@@ -178,6 +171,29 @@ The links go to each component's page, where its "Switch from" section has the d
 | [`Service`](/docs/component/aws/v5/service/) | `taskRole` and `executionRole` go in `existing`. `public` becomes `loadBalancer`, its `ports` become `rules`, and a rule's `path` becomes `conditions.path`. `loadBalancer`, `scaling` and `containers` are plain. |
 | [`SnsTopic`](/docs/component/aws/v5/sns-topic/) | Every subscriber needs a name. With a `provider`, see [above](#what-a-switch-can-replace). |
 | [`Task`](/docs/component/aws/v5/task/) | `taskRole` and `executionRole` go in `existing`. `containers` is plain. |
+
+---
+
+## If you wrote a package
+
+A [package component](/docs/write-a-package-component/) built on the v5 alphas, up to `5.0.0-alpha.2`, works on 5.0 with a few changes. The rest of what it imports from `sst/components`, `sst/components/aws` and `sst/testing` is the same.
+
+- **Two of SST's components have new names**, with the same type, so what an app deployed with them is kept:
+  - `v5.ApiGatewayV2` is `v5.ApiGatewayHttp`, and its types are `ApiGatewayHttpArgs`, `ApiGatewayHttpAuthorizerArgs` and `ApiGatewayHttpRouteArgs`.
+  - `v5.CronV2` is `v5.Cron`, and its args are `CronArgs`.
+- **Two args are gone:** `Redis`'s `nodes`, which is `cluster.nodes`, and `Cluster`'s `forceUpgrade`.
+- **`linkable` is gone** from `sst/components`. Use `Linkable.wrap`. `V5Args`, which wrapped a v4 component's args, is gone too.
+- **Drop `skipLibCheck` and the `google-protobuf` pin.** SST's types check without `skipLibCheck`, under `moduleResolution: "bundler"` or `"NodeNext"`, and `mock()` works with the `google-protobuf` that `@pulumi/pulumi` installs.
+- **`mock()` answers more as the cloud would.** An `Email`'s domain gets three DKIM tokens, so a test that gave them in `state` doesn't have to.
+
+Then there's what a package can do now that it couldn't:
+
+- **Read the app with `context()`**: its name, stage, removal and providers, whether it runs for `sst dev`, the command, and the stage's target.
+- **Version a component**, so that renaming its parts moves an app's stage with `sst migrate` instead of replacing what's deployed. Give the component its next version with `takeover()`, and say where each part was.
+- **Export a check**, made with `check()`, that an app turns on in `run()`. A deploy runs a preview first and stops on what the check finds.
+- **Export a runtime**, made with `runtime()`, for a language SST doesn't build in, or **a target**, of the `Target` type, which `targetSuite()` from `sst/testing` tests.
+
+Before 5.0 is released, SST's components move out of `v5`: `sst.aws.v5.Queue` becomes `sst.aws.Queue`, and `v5.Queue` from `sst/components/aws` becomes `Queue`. From 5.0 on, what a package builds on changes only in a major version.
 
 ---
 
