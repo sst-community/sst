@@ -33,7 +33,6 @@ func TestProgramDefine(t *testing.T) {
 		},
 	}
 	define, err := p.programDefine(&StackInput{Command: "deploy", Dev: true}, StageState{
-		Versions:   map[string]int{"Bucket": 2},
 		Moved:      true,
 		Components: map[string]int{"sst:aws:Bucket": 1},
 	})
@@ -65,8 +64,9 @@ func TestProgramDefine(t *testing.T) {
 
 	// $cli is the command, the version of the program contract the core
 	// speaks, whether it's sst dev, whether the stage is moving to new
-	// components, the paths, and from the state the versions of the
-	// components, whether the stage has moved and whether it's empty.
+	// components, the paths, and from the state whether the stage has moved,
+	// the versions of the components it has in their 5.0 form, and whether
+	// it's empty.
 	var cli struct {
 		Command  string            `json:"command"`
 		Contract int               `json:"contract"`
@@ -74,7 +74,6 @@ func TestProgramDefine(t *testing.T) {
 		Move     bool              `json:"move"`
 		Paths    map[string]string `json:"paths"`
 		State    struct {
-			Version    map[string]int `json:"version"`
 			Moved      bool           `json:"moved"`
 			Components map[string]int `json:"components"`
 			Types      []string       `json:"types"`
@@ -101,14 +100,11 @@ func TestProgramDefine(t *testing.T) {
 	if !reflect.DeepEqual(cli.Paths, wantPaths) {
 		t.Fatalf("$cli.paths is %v, want %v", cli.Paths, wantPaths)
 	}
-	if !reflect.DeepEqual(cli.State.Version, map[string]int{"Bucket": 2}) {
-		t.Fatalf("$cli.state.version is %v", cli.State.Version)
-	}
 	var rawState map[string]interface{}
 	json.Unmarshal([]byte(define["$cli"]), &struct {
 		State *map[string]interface{} `json:"state"`
 	}{&rawState})
-	if keys := sortedKeys(rawState); !reflect.DeepEqual(keys, []string{"adopt", "components", "empty", "moved", "nested", "types", "version"}) {
+	if keys := sortedKeys(rawState); !reflect.DeepEqual(keys, []string{"adopt", "components", "empty", "moved", "nested", "types"}) {
 		t.Fatalf("$cli.state has %v", keys)
 	}
 	if !cli.State.Moved || cli.State.Empty || !reflect.DeepEqual(cli.State.Components, map[string]int{"sst:aws:Bucket": 1}) {

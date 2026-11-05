@@ -33,33 +33,6 @@ func (a *aws) Bootstrap(input *BootstrapInput, output *provider.AwsBootstrapData
 	return nil
 }
 
-type AppsyncInput struct {
-}
-type AppsyncOutput struct {
-	Http     string `json:"http"`
-	Realtime string `json:"realtime"`
-	Arn      string `json:"arn"`
-	// Shared is whether every app and stage in the account and region uses it
-	Shared bool `json:"shared"`
-}
-
-func (a *aws) Appsync(input *AppsyncInput, output *AppsyncOutput) error {
-	unknown, ok := a.project.Provider("aws")
-	if !ok {
-		return fmt.Errorf("aws provider not found")
-	}
-	existing := unknown.(*provider.AwsProvider)
-	api, err := existing.ResolveAppSync(context.Background(), a.project.AppSyncScope())
-	if err != nil {
-		return err
-	}
-	output.Http = api.Http
-	output.Realtime = api.Realtime
-	output.Arn = api.Arn
-	output.Shared = api.Shared
-	return nil
-}
-
 func Register(ctx context.Context, p *project.Project, r *rpc.Server) error {
 	r.RegisterName("Provider.Aws", &aws{
 		project: p,

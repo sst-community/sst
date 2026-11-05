@@ -10,10 +10,10 @@ import (
 // is platform/src/components/contract.ts.
 const ContractVersion = 1
 
-// Report is what a component told the core through the program contract. A
-// component's record is its _sst output. The 4.x components name each item
-// as an output of its own (_metadata, _dev, _task, _tunnel, _hint), which the
-// core reads the same way until they go.
+// Report is what a component told the core through the program contract: its
+// record, the _sst output. SST 4's components named each item as an output
+// of its own (_metadata, _dev, _task, _tunnel, _hint), which the core doesn't
+// read: it runs only SST 5's.
 type Report struct {
 	Contract int             `json:"contract"`
 	Function *FunctionReport `json:"function,omitempty"`
@@ -30,15 +30,6 @@ type FunctionReport struct {
 	Dev      bool   `json:"dev,omitempty"`
 }
 
-// The output 4.x's components give each item of a report as
-var legacyOutputs = map[string]string{
-	"_metadata": "function",
-	"_dev":      "dev",
-	"_task":     "task",
-	"_tunnel":   "tunnel",
-	"_hint":     "hint",
-}
-
 // ErrNewerContract is returned for a record written by a newer platform than
 // this CLI's, which it can't read.
 type ErrNewerContract struct {
@@ -53,35 +44,15 @@ func (e *ErrNewerContract) Error() string {
 // decrypted. It's nil when it reported nothing. A field of the wrong type is
 // left out, and the rest is read, as the core always has.
 func readReport(outputs map[string]interface{}) (*Report, error) {
-	if record, ok := outputs["_sst"].(map[string]interface{}); ok {
-		report := decode[Report](record)
-		if report.Contract > ContractVersion {
-			return nil, &ErrNewerContract{Version: report.Contract}
-		}
-		return report, nil
-	}
-	legacy := map[string]interface{}{}
-	for output, item := range legacyOutputs {
-		value := outputs[output]
-		object, isObject := value.(map[string]interface{})
-		_, isString := value.(string)
-		switch {
-		case item == "hint" && isString:
-			legacy[item] = value
-		// A 4.x site names what it is as _metadata too, with no handler: it
-		// isn't a function
-		case item == "function" && isObject:
-			if _, ok := object["handler"].(string); ok {
-				legacy[item] = value
-			}
-		case item != "hint" && item != "function" && isObject:
-			legacy[item] = value
-		}
-	}
-	if len(legacy) == 0 {
+	record, ok := outputs["_sst"].(map[string]interface{})
+	if !ok {
 		return nil, nil
 	}
-	return decode[Report](legacy), nil
+	report := decode[Report](record)
+	if report.Contract > ContractVersion {
+		return nil, &ErrNewerContract{Version: report.Contract}
+	}
+	return report, nil
 }
 
 // decode reads value into a T as json.Unmarshal does, which leaves out a

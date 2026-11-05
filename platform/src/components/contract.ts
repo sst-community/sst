@@ -48,8 +48,6 @@ export interface Context {
     /** SST's folder in the user's home. */
     home: string;
   };
-  /** The version of each component in the state, by its name. */
-  versions: Record<string, number>;
   /**
    * Where the stage's cloud calls go, when it isn't the real cloud: its target
    * in `app()`. A package's check can turn itself on for its own target's
@@ -67,7 +65,6 @@ export function context(): Context {
     command: $cli.command,
     move: $cli.move === true,
     paths: $cli.paths,
-    versions: $cli.state?.version ?? {},
     target: ($app as { targets?: Record<string, Target> }).targets?.[
       $app.stage
     ],

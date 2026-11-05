@@ -32,8 +32,6 @@ const VersionsRecord = "sst:sst:Versions"
 
 // StageState is what the program is told about the stage's state.
 type StageState struct {
-	// Versions are the components' versions, by name, as 4.x recorded them
-	Versions map[string]int
 	// Moved is whether the state has the marker, and Components the version
 	// of each component it says the stage has in a 5.0 form, by type, and of
 	// those inside SST's components by their type after ">". SST 4's form is
@@ -63,7 +61,6 @@ func stageState(completed *CompleteEvent) StageState {
 	}
 	top, nested := componentTypes(completed.Resources)
 	return StageState{
-		Versions:   completed.Versions,
 		Moved:      completed.Moved,
 		Components: components,
 		Types:      top,
@@ -152,10 +149,22 @@ func holdsResources(resources []apitype.ResourceV3) bool {
 }
 
 // refuseUnmoved refuses to deploy a stage that hasn't moved to SST 5's
-// components, except as the move itself. A diff, a refresh and a remove still
-// run on it.
+// components, except as the move itself, and to remove one. SST 4's own
+// resources in it, like a site's files, delete through code only SST 4's CLI
+// serves, and that code takes a call this CLI doesn't serve as done: a remove
+// would leave them in the cloud and drop them from the state. A diff and a
+// refresh still run on it: a refresh's read keeps what the state has.
 func (p *Project) refuseUnmoved(input *StackInput, state StageState) error {
-	if input.Command != "deploy" || input.Move || state.Moved || state.Empty {
+	if input.Move || state.Moved || state.Empty {
+		return nil
+	}
+	if input.Command == "remove" {
+		return util.NewReadableError(nil, fmt.Sprintf(
+			"The stage %q was deployed with SST 4's components, and hasn't moved to SST 5's, so SST 5 can't remove it: some of what SST 4 created there can only be deleted by SST 4. Remove it with SST 4, or move it with `sst migrate` and then remove it.",
+			p.app.Stage,
+		))
+	}
+	if input.Command != "deploy" {
 		return nil
 	}
 	return util.NewReadableError(nil, fmt.Sprintf(

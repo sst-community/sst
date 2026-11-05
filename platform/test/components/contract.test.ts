@@ -43,7 +43,6 @@ describe("The program contract", () => {
       app: { name: "shop", stage: "dev" },
       dev: false,
       command: "deploy",
-      versions: {},
     });
     expect(context().paths.root).toBe("/");
     expect(context().target).toBeUndefined();

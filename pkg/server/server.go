@@ -23,7 +23,6 @@ import (
 	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/server/aws"
-	"github.com/sst/sst/v3/pkg/server/resource"
 	"github.com/sst/sst/v3/pkg/server/runtime"
 )
 
@@ -172,7 +171,6 @@ func (s *Server) Start(ctx context.Context, p *project.Project) error {
 	log.Info("starting")
 	defer log.Info("server done")
 
-	resource.Register(ctx, p, s.Rpc)
 	aws.Register(ctx, p, s.Rpc)
 	runtime.Register(ctx, p, s.Rpc)
 	s.Rpc.RegisterName("Dev", &devContract{project: p})

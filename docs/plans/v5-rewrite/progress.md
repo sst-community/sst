@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-05: step 5, the core stops running 4.x components
+
+What the core kept for SST 4's components goes, before the swap ([plan](plan.md#5-moving-an-app)).
+
+- **Reports are records only** (`pkg/project/report.go`). The core no longer reads 4.x's output names (`_metadata`, `_dev`, `_task`, `_tunnel`, `_hint`). A stage SST 4 deployed reports nothing; the test reads the three recorded states and finds that.
+- **No 4.x versions.** The core no longer reads `sst:sst:Version` or gives every SST resource version 1 (`completed.go`), and `$cli.state` has no `version`. `context()` loses `versions`, which only gave those: a 5.0 component's version is the marker's and the record's, by type. `typePackage` went with it. The `$cli` type and the mock keep `version` until the swap, for the 4.x files.
+- **The RPC serves none of SST 4's provider resources.** `Resource.*` and `Provider.Aws.Appsync` (only 4.x's `Function` in `sst dev` called it) are gone; `Runtime`, `Provider.Aws.Bootstrap`, `Dev` and `Move` stay. The work stays in `pkg/server/resource`, which the provider in the `sst` binary runs. What only the RPC served goes: the hosted zone lookup (a function of the provider now), the origin access identity, the vector table, and Cloudflare's worker script and assets, which no component creates.
+- **`sst remove` is refused on a stage that hasn't moved** ([decision](plan.md#decisions)). The code v4.23.1 stored with its dynamic resources reaches the RPC with the token, finds no method, and takes it as done: a read keeps the state's values and a delete deletes nothing, which the RPC test shows on a recorded state. So a remove would have dropped a site's files, a router's routes or a DNS record from the state and left them in the cloud. The message says to remove it with SST 4, or to move it and then remove it. `sst diff` and `sst refresh` still run. The migration guide says so.
+- **Until the swap,** a CLI built from the branch can't diff an SST 4 config with `Auth`, `Cluster`, `Postgres`, `Redis` or `Vpc`: their constructors read the version map the core no longer gives. Nothing is released between the two.
+
+**Checked:** the Go tests (`pkg/...`, `cmd/sst`) and vet; the platform's `tsc` and its suite.
+
 ## 2026-11-04: step 5, Linking's new types tried, and not kept
 
 New types for linked resources were built, measured and taken out the same day; `sst-env.d.ts` stays as SST 4 writes it ([decision](plan.md#decisions), [Linking](plan.md#linking)).

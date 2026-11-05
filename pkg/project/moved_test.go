@@ -81,8 +81,7 @@ func TestStageState(t *testing.T) {
 	control := resourceAt("urn:pulumi:dev::app::sst:aws:StaticSite$pulumi-nodejs:dynamic:Resource::WebS3AccessControl.sst.aws.OriginAccessControl", "pulumi-nodejs:dynamic:Resource")
 	control.Custom, control.ID = true, "E2OAC"
 	state := stageState(&CompleteEvent{
-		Versions: map[string]int{"Uploads": 1},
-		Moved:    true,
+		Moved: true,
 		// A deploy that began to create the first "Uploads", with version 2
 		// of it, and failed partway, wrote the marker as it began
 		MovedComponents: map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 2},
@@ -93,7 +92,6 @@ func TestStageState(t *testing.T) {
 		Resources:        []apitype.ResourceV3{bucket, control},
 	})
 	assert.Equal(t, StageState{
-		Versions:   map[string]int{"Uploads": 1},
 		Moved:      true,
 		Components: map[string]int{"sst:aws:Bucket": 1, "acme:index:Uploads": 2, "acme:index:Late": 3},
 		Types:      []string{"sst:aws:Bucket"},
@@ -119,12 +117,20 @@ func TestRefuseUnmoved(t *testing.T) {
 	assert.NoError(t, p.refuseUnmoved(&StackInput{Command: "deploy", Move: true}, unmoved))
 	assert.NoError(t, p.refuseUnmoved(&StackInput{Command: "deploy", Move: true, Dev: true}, unmoved))
 
-	// What changes nothing, and what deploys nothing, runs
-	for _, command := range []string{"diff", "refresh", "remove"} {
+	// What changes nothing runs
+	for _, command := range []string{"diff", "refresh"} {
 		assert.NoError(t, p.refuseUnmoved(&StackInput{Command: command}, unmoved), command)
 	}
 
-	// A stage that moved, and a new one
-	assert.NoError(t, p.refuseUnmoved(&StackInput{Command: "deploy"}, moved))
-	assert.NoError(t, p.refuseUnmoved(&StackInput{Command: "deploy"}, empty))
+	// A remove deletes SST 4's own resources through code only SST 4 serves
+	err = p.refuseUnmoved(&StackInput{Command: "remove"}, unmoved)
+	assert.ErrorContains(t, err, "can't remove it")
+	assert.ErrorContains(t, err, "Remove it with SST 4")
+	assert.ErrorContains(t, err, "`sst migrate`")
+
+	// A stage that moved, and a new one or a removed one
+	for _, command := range []string{"deploy", "remove"} {
+		assert.NoError(t, p.refuseUnmoved(&StackInput{Command: command}, moved), command)
+		assert.NoError(t, p.refuseUnmoved(&StackInput{Command: command}, empty), command)
+	}
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	cloudflare "github.com/cloudflare/cloudflare-go"
-	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/project/provider"
 )
 
@@ -28,21 +27,6 @@ type CloudflareResource struct {
 // the credentials load gives. load is called for each request.
 func NewCloudflareResource(ctx context.Context, load func() (*cloudflare.API, error)) *CloudflareResource {
 	return &CloudflareResource{ctx, load}
-}
-
-// projectCloudflare is the credentials the CLI has for Cloudflare's API: the
-// app's cloudflare provider's, or else the environment's
-func projectCloudflare(p *project.Project) func() (*cloudflare.API, error) {
-	return func() (*cloudflare.API, error) {
-		if loaded, ok := p.Provider("cloudflare"); ok {
-			cf, ok := loaded.(*provider.CloudflareProvider)
-			if !ok {
-				return nil, fmt.Errorf("the cloudflare provider is a %T", loaded)
-			}
-			return cf.Api(), nil
-		}
-		return provider.NewCloudflareAPI(nil)
-	}
 }
 
 // authorize sets the credentials on a request to Cloudflare's API

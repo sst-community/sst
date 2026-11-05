@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/sst/sst/v3/pkg/project"
 )
 
 type Echo struct{}
@@ -228,21 +230,13 @@ func TestServerFile(t *testing.T) {
 	}
 }
 
-type StoredLookup struct{ deleted chan string }
-
-type StoredDeleteInput struct {
-	ID string `json:"id"`
-}
-
-func (l *StoredLookup) Delete(input *StoredDeleteInput, output *struct{}) error {
-	l.deleted <- input.ID
-	return nil
-}
-
-// The code Pulumi stored with each of SST's dynamic resources, here as
+// The code Pulumi stored with each of SST 4's dynamic resources, here as
 // v4.23.1 stored it in a recorded state, reaches the RPC: it calls
 // SST_SERVER + "/rpc", so it carries the token. Pulumi runs that code, not the
-// program's, to delete or read a resource, so `sst remove` depends on it.
+// program's, to read or delete one. The RPC serves none of their methods, and
+// the code takes a missing one as done: a read keeps what the state has, so
+// `sst refresh` runs on a stage that hasn't moved, and a delete deletes
+// nothing, so `sst remove` refuses one (pkg/project, refuseUnmoved).
 func TestServerTakesStoredProviderCode(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -279,13 +273,18 @@ func TestServerTakesStoredProviderCode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "provider.js"), []byte(stored), 0644); err != nil {
 		t.Fatal(err)
 	}
-	driver := `require(process.argv[1]).handler().delete("zone", {}).then(
-		() => console.log("deleted"),
-		(err) => console.log("failed: " + err.message))`
+	driver := `const provider = require(process.argv[1]).handler();
+	provider.read("zone", { zoneId: "Z1" })
+		.then((read) => provider.delete("zone", {}).then(() => console.log("read " + read.props.zoneId + ", deleted")))
+		.catch((err) => console.log("failed: " + err.message))`
 
-	s := newTestServer(t)
-	lookup := &StoredLookup{deleted: make(chan string, 1)}
-	s.Rpc.RegisterName("Resource.Aws.HostedZoneLookup", lookup)
+	s, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.Start(ctx, &project.Project{})
 	run := func(sstServer string) string {
 		cmd := exec.Command(node, "-e", driver, filepath.Join(dir, "provider.js"))
 		cmd.Env = append(os.Environ(), "SST_SERVER="+sstServer)
@@ -296,19 +295,11 @@ func TestServerTakesStoredProviderCode(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 
-	if out := run(s.URL()); out != "deleted" {
+	if out := run(s.URL()); out != "read Z1, deleted" {
 		t.Fatalf("with the token: %v", out)
-	}
-	if id := <-lookup.deleted; id != "zone" {
-		t.Fatalf("deleted %v", id)
 	}
 	if out := run("http://" + s.listener.Addr().String()); !strings.HasPrefix(out, "failed: Failed to call RPC: 404") {
 		t.Fatalf("without the token: %v", out)
-	}
-	select {
-	case id := <-lookup.deleted:
-		t.Fatalf("deleted %v without the token", id)
-	default:
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
-	"github.com/pulumi/pulumi/sdk/v3/go/common/tokens"
 	"github.com/sst/sst/v3/pkg/id"
 	"github.com/sst/sst/v3/pkg/project/common"
 	"github.com/sst/sst/v3/pkg/project/provider"
@@ -34,7 +33,6 @@ func (p *Project) GetCompleted(ctx context.Context) (*CompleteEvent, error) {
 func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWorkdir) (*CompleteEvent, error) {
 	complete := &CompleteEvent{
 		Links:       common.Links{},
-		Versions:    map[string]int{},
 		ImportDiffs: map[string][]ImportDiff{},
 		Devs:        Devs{},
 		Functions:   map[string]FunctionReport{},
@@ -73,23 +71,6 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 		outputs, ok := parsePlaintext(res.Outputs).(map[string]interface{})
 		if !ok {
 			continue
-		}
-		if typePackage(res.Type) == "sst" {
-			if res.Type == "sst:sst:Version" {
-				target, targetOk := outputs["target"].(string)
-				version, versionOk := outputs["version"].(float64)
-				if targetOk && versionOk {
-					complete.Versions[target] = int(version)
-				}
-			}
-
-			if res.Type != "sst:sst:Version" {
-				name := res.URN.Name()
-				_, ok := complete.Versions[name]
-				if !ok {
-					complete.Versions[name] = 1
-				}
-			}
 		}
 		report, err := readReport(outputs)
 		if err != nil {
@@ -192,10 +173,4 @@ func parsePlaintext(input interface{}) interface{} {
 	default:
 		return cast
 	}
-}
-
-// The package of a resource's type, its first part. A component's type can
-// have two parts, like "acme:Uploads", which Pulumi's Module() fails on.
-func typePackage(t tokens.Type) string {
-	return strings.SplitN(string(t), ":", 2)[0]
 }

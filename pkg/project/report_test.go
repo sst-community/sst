@@ -54,40 +54,20 @@ func TestReadReportRecord(t *testing.T) {
 	}
 }
 
-// 4.x's output names are read as the same items as a record.
-func TestReadReportLegacy(t *testing.T) {
-	var outputs map[string]interface{}
-	json.Unmarshal([]byte(`{
-		"_metadata": {"handler": "src/server.handler", "dev": true},
-		"_dev": {"command": "npm run dev", "directory": "web", "environment": {"MODE": "local"}, "autostart": true, "links": ["Docs"], "aws": {}},
-		"_task": {"command": "node seed.js", "directory": "scripts"},
-		"_tunnel": {"ip": "10.0.0.1", "username": "ec2-user", "privateKey": "key", "subnets": ["10.0.0.0/16"]},
-		"_hint": "https://shop-dev-webbucket-drrmzcfu.example.com",
-		"_live": {"functionID": "Web"},
-		"url": "https://example.com"
-	}`), &outputs)
-	report, err := readReport(outputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := *wantReport
-	want.Contract = 0
-	dev := *want.Dev
-	dev.Aws = &struct {
-		Role string `json:"role"`
-	}{}
-	want.Dev = &dev
-	if !reflect.DeepEqual(report, &want) {
-		t.Fatalf("read %+v", report)
-	}
-}
-
 func TestReadReportNothing(t *testing.T) {
 	for _, outputs := range []map[string]interface{}{
 		{},
 		{"url": "https://example.com"},
-		// as before, an item of the wrong kind is nothing
-		{"_hint": 5, "_dev": "npm run dev"},
+		// a record of the wrong kind
+		{"_sst": "npm run dev"},
+		// SST 4's output names, which only its components wrote
+		{
+			"_metadata": map[string]interface{}{"handler": "src/server.handler", "dev": true},
+			"_dev":      map[string]interface{}{"command": "npm run dev", "directory": "web"},
+			"_task":     map[string]interface{}{"command": "node seed.js"},
+			"_tunnel":   map[string]interface{}{"ip": "10.0.0.1"},
+			"_hint":     "https://example.com",
+		},
 	} {
 		report, err := readReport(outputs)
 		if err != nil || report != nil {
@@ -153,82 +133,26 @@ func TestCompleteAdd(t *testing.T) {
 	}
 }
 
-// Every component in the states 4.x left in the lab is read as before: the
-// same functions, dev commands, tasks, tunnels and hints as the reading this
-// replaced, which is copied in below.
+// A stage SST 4 deployed reports nothing, though its components named
+// functions, dev commands and hints as outputs of their own: the core reads
+// only records.
 func TestReadReportRecordedStates(t *testing.T) {
 	for _, name := range []string{"serverless-sites", "vpc-containers-databases", "serverless-dev"} {
 		state := readJSON(t, filepath.Join("..", "..", "testdata", "states", "v4.23.1", name+".json"))
 		resources := state["checkpoint"].(map[string]interface{})["latest"].(map[string]interface{})["resources"].([]interface{})
-		complete := &CompleteEvent{
-			Devs:      Devs{},
-			Functions: map[string]FunctionReport{},
-			Tasks:     map[string]Task{},
-			Tunnels:   map[string]Tunnel{},
-			Hints:     map[string]string{},
-		}
-		was := oldReading{functions: map[string]bool{}, devs: map[string]bool{}, tasks: map[string]bool{}, tunnels: map[string]bool{}, hints: map[string]string{}}
+		named := 0
 		for _, r := range resources {
-			r := r.(map[string]interface{})
-			urn := resource.URN(r["urn"].(string))
-			outputs, _ := r["outputs"].(map[string]interface{})
-			was.read(urn, r["type"].(string), r["custom"] == true, outputs)
+			outputs, _ := r.(map[string]interface{})["outputs"].(map[string]interface{})
+			if _, ok := outputs["_hint"]; ok {
+				named++
+			}
 			report, err := readReport(outputs)
-			if err != nil {
-				t.Fatalf("%v: %v", name, err)
-			}
-			if report != nil {
-				complete.add(urn, report)
+			if err != nil || report != nil {
+				t.Fatalf("%v: read %+v, %v", name, report, err)
 			}
 		}
-		now := oldReading{functions: map[string]bool{}, devs: map[string]bool{}, tasks: map[string]bool{}, tunnels: map[string]bool{}, hints: complete.Hints}
-		for fn := range complete.Functions {
-			now.functions[fn] = true
+		if named == 0 {
+			t.Fatalf("%v: no component named a hint", name)
 		}
-		for dev := range complete.Devs {
-			now.devs[dev] = true
-		}
-		for task := range complete.Tasks {
-			now.tasks[task] = true
-		}
-		for tunnel := range complete.Tunnels {
-			now.tunnels[tunnel] = true
-		}
-		if len(was.functions) == 0 || len(was.hints) == 0 || !reflect.DeepEqual(was, now) {
-			t.Fatalf("%v: read before\n%+v\nnow\n%+v", name, was, now)
-		}
-	}
-}
-
-// What the core read from a component before the program contract: the
-// functions the sst dev UI listed, by their type, and the rest by the output
-// 4.x names for it.
-type oldReading struct {
-	functions, devs, tasks, tunnels map[string]bool
-	hints                           map[string]string
-}
-
-func (o oldReading) read(urn resource.URN, t string, custom bool, outputs map[string]interface{}) {
-	name := urn.Name()
-	if !custom && (t == "sst:aws:Function" || t == "sst:cloudflare:Worker") {
-		o.functions[name] = true
-	}
-	if _, ok := outputs["_dev"].(map[string]interface{}); ok {
-		o.devs[name] = true
-	}
-	if _, ok := outputs["_task"].(map[string]interface{}); ok {
-		o.tasks[name] = true
-	}
-	if tunnel, ok := outputs["_tunnel"].(map[string]interface{}); ok {
-		_, ip := tunnel["ip"].(string)
-		_, username := tunnel["username"].(string)
-		_, key := tunnel["privateKey"].(string)
-		_, subnets := tunnel["subnets"].([]interface{})
-		if ip && username && key && subnets {
-			o.tunnels[name] = true
-		}
-	}
-	if hint, ok := outputs["_hint"].(string); ok {
-		o.hints[string(urn)] = hint
 	}
 }

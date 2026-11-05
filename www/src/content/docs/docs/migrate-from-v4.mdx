@@ -34,7 +34,7 @@ Then the next stage: a dev stage first, and production last.
   | `sst.aws.CronV2` | `sst.aws.v5.Cron` |
   | `sst.cloudflare.StaticSiteV2` | `sst.cloudflare.v5.StaticSite` |
 
-- **A stage moves once, and whole.** SST 5 doesn't deploy SST 4's components. On a stage deployed with SST 4, `sst deploy` and `sst dev` are refused until it has moved; `sst diff`, `sst refresh` and `sst remove` still run. A new stage is refused SST 4's components too.
+- **A stage moves once, and whole.** SST 5 doesn't deploy SST 4's components. On a stage deployed with SST 4, `sst deploy`, `sst dev` and `sst remove` are refused until it has moved; `sst diff` and `sst refresh` still run. To remove a stage you won't move, like an old preview stage, use SST 4, as the branch it was deployed from does. A new stage is refused SST 4's components too.
 - **The move keeps what's deployed.** Each component knows which of SST 4's resources each of its own takes the place of, and the move carries them over under their new names. A resource that can't be carried over, like a site's uploaded files, is let go without being deleted, and what takes its place writes the same thing again.
 
 ---

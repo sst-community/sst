@@ -3,8 +3,9 @@
 // 2026-11-01). Pulumi runs it as it runs any provider: the CLI names its own
 // binary as the package's plugin in the work folder's Pulumi.yaml
 // (pkg/project), and the binary serves this when it's run by the plugin's
-// name (cmd/sst/main.go). Each resource does its work here, with the code the
-// CLI's RPC serves the old entries with (pkg/server/resource).
+// name (cmd/sst/main.go). Each resource does its work here, with the code in
+// pkg/server/resource. SST 4's entries of them, which call the CLI's RPC,
+// leave the state when a stage moves (pkg/move), so the RPC serves none.
 //
 // The stage's setup comes from the environment Pulumi gives every plugin,
 // which the CLI fills (aws.go), never from the provider's config: the state
