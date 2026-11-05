@@ -1,3 +1,4 @@
+import type { Vpc } from "./vpc";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -31,7 +32,7 @@ import { DurationHours, toSeconds } from "../duration";
 import { notAnExistingPart, plain, usedAsItIs } from "../args";
 import { bootstrap } from "./helpers/bootstrap";
 import { inlinePolicies, noPermissionsFor } from "./helpers/iam";
-import { type AnyVpc, privateNetworkOf } from "./helpers/vpc";
+import { privateNetworkOf } from "./helpers/vpc";
 import { RETENTION } from "./logging";
 import { Permission, permission } from "./permission";
 import { MicrovmImagePrune } from "./resources/microvm-image-prune";
@@ -280,7 +281,7 @@ export interface MicroVmArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   vpc?:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * A list of VPC security group IDs.

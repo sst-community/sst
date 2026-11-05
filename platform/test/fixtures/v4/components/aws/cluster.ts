@@ -6,7 +6,7 @@ import {
   Prettify,
   Transform,
   transform,
-} from "../../../../../src/components/component";
+} from "../component";
 import { Input } from "../../../../../src/components/input";
 import { Service, ServiceArgs } from "./service";
 import { ecs } from "@pulumi/aws";
@@ -320,7 +320,7 @@ export class Cluster extends Component {
     function registerVersion(overrideVersion?: ComponentVersion) {
       const newMajorVersion = _version.major;
       const oldMajorVersion =
-        overrideVersion?.major ?? $cli.state.version[name];
+        overrideVersion?.major ?? $cli.state.version?.[name];
       self.registerVersion({
         new: newMajorVersion,
         old: oldMajorVersion,
@@ -334,8 +334,8 @@ export class Cluster extends Component {
           `To upgrade:`,
           `  - Set \`forceUpgrade: "v${newMajorVersion}"\` on the "Cluster" component. Learn more https://sst-community.github.io/sst/docs/component/aws/cluster#forceupgrade`,
           ``,
-          `To continue using v${$cli.state.version[name]}:`,
-          `  - Rename "Cluster" to "Cluster.v${$cli.state.version[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
+          `To continue using v${$cli.state.version?.[name]}:`,
+          `  - Rename "Cluster" to "Cluster.v${$cli.state.version?.[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
         ].join("\n"),
         forceUpgrade: args.forceUpgrade,
       });

@@ -1,3 +1,4 @@
+import type { Queue } from "./queue";
 import { ComponentResourceOptions, jsonStringify } from "@pulumi/pulumi";
 import { lambda, sns, sqs } from "@pulumi/aws";
 import {
@@ -18,7 +19,7 @@ import {
 import { invokePermissionArgs } from "./helpers/function-permission";
 import { assertNamedSubscriber } from "./helpers/event-source";
 import { sendPolicy } from "./helpers/queue-policy";
-import { type AnyQueue, queueArnOf } from "./helpers/queue";
+import { queueArnOf } from "./helpers/queue";
 import { permission } from "./permission";
 
 const parts = () => ({
@@ -373,7 +374,7 @@ export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
    */
   public subscribeQueue(
     name: string,
-    queue: Input<string | AnyQueue>,
+    queue: Input<string | Queue>,
     args: SnsTopicSubscriberArgs = {},
   ) {
     assertNamedSubscriber(

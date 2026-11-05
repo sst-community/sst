@@ -1,3 +1,4 @@
+import type { Queue } from "./queue";
 import {
   ComponentResourceOptions,
   interpolate,
@@ -18,7 +19,7 @@ import { parseEventBusArn } from "./helpers/arn";
 import { enabledState, ruleFunctionTarget } from "./helpers/eventbridge";
 import { type FunctionInput, plainFunction } from "./helpers/function-part";
 import { sendPolicy } from "./helpers/queue-policy";
-import { type AnyQueue, queueArnOf } from "./helpers/queue";
+import { queueArnOf } from "./helpers/queue";
 import { permission } from "./permission";
 
 const parts = () => ({
@@ -394,7 +395,7 @@ export class Bus extends component("sst:aws:Bus", parts) {
    */
   public subscribeQueue(
     name: string,
-    queue: Input<string | AnyQueue>,
+    queue: Input<string | Queue>,
     args: BusSubscriberArgs = {},
   ) {
     this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);

@@ -5,15 +5,8 @@ import { VisibleError } from "../../error";
 import { warnOnce } from "../../../util/warn";
 import { Vpc } from "../vpc";
 
-/**
- * A `Vpc` component. Every component that takes a VPC reads its `id`,
- * `publicSubnets`, `privateSubnets`, `securityGroups`, `nodes.vpc` and
- * `nodes.cloudmapNamespace`, and whether it has a NAT with `hasNat()`.
- */
-export type AnyVpc = Vpc;
-
 /** Whether a `vpc` arg is a `Vpc` component, and not the ids of a VPC. */
-export function isVpc(vpc: unknown): vpc is AnyVpc {
+export function isVpc(vpc: unknown): vpc is Vpc {
   return vpc instanceof Vpc;
 }
 
@@ -41,7 +34,7 @@ export function assertVpcIds(vpc: unknown, what: string) {
  */
 export function subnetsAndSecurityGroupsOf(
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         subnets: Input<Input<string>[]>;
         securityGroups: Input<Input<string>[]>;
@@ -72,7 +65,7 @@ export function subnetsAndSecurityGroupsOf(
  */
 export function privateNetworkOf(
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         privateSubnets: Input<Input<string>[]>;
         securityGroups: Input<Input<string>[]>;
@@ -111,7 +104,7 @@ export function privateNetworkOf(
 
 /** The ids of a VPC's public or private subnets. */
 export function subnetsOf(
-  vpc: AnyVpc,
+  vpc: Vpc,
   kind: "public" | "private",
 ): Output<string[]> {
   const ids: Input<Input<string>[]> =
@@ -138,7 +131,7 @@ export function subnetsOf(
  * file system`.
  */
 export function privateSubnetsOf(
-  vpc: AnyVpc,
+  vpc: Vpc,
   parent: Resource,
   what: string,
 ):
@@ -189,6 +182,6 @@ export function subnetsByAz(
  * Whether a VPC's private subnets reach the internet through a NAT.
  * `undefined` when that isn't known, as for a `Vpc` that's referenced.
  */
-export function hasNat(vpc: AnyVpc): Output<boolean | undefined> {
+export function hasNat(vpc: Vpc): Output<boolean | undefined> {
   return output(vpc.hasNat);
 }

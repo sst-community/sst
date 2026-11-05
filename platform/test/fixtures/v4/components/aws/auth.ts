@@ -3,11 +3,7 @@ import {
   jsonStringify,
   Output,
 } from "@pulumi/pulumi";
-import {
-  Component,
-  Transform,
-  transform,
-} from "../../../../../src/components/component";
+import { Component, Transform, transform } from "../component";
 import { Link } from "../../../../../src/components/link";
 import { FunctionArgs, Function } from "./function";
 import { Dynamo } from "./dynamo";
@@ -273,7 +269,7 @@ export class Auth extends Component implements Link.Linkable {
 
     self.registerVersion({
       new: _version,
-      old: $cli.state.version[name],
+      old: $cli.state.version?.[name],
       message: [
         `There is a new version of "Auth" that has breaking changes.`,
         ``,
@@ -283,8 +279,8 @@ export class Auth extends Component implements Link.Linkable {
         `To upgrade:`,
         `  - Set \`forceUpgrade: "v${_version}"\` on the "Auth" component. Learn more https://sst-community.github.io/sst/docs/component/aws/auth#forceupgrade`,
         ``,
-        `To continue using v${$cli.state.version[name]}:`,
-        `  - Rename "Auth" to "Auth.v${$cli.state.version[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
+        `To continue using v${$cli.state.version?.[name]}:`,
+        `  - Rename "Auth" to "Auth.v${$cli.state.version?.[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
       ].join("\n"),
       forceUpgrade: args.forceUpgrade,
     });

@@ -1,10 +1,11 @@
+import type { Vpc } from "./vpc";
 import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
 import { ecs } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../parts-component";
 import { notAnExistingPart, getArgs } from "../args";
 import { VisibleError } from "../error";
 import type { Input } from "../input";
-import { type AnyVpc, assertVpcIds, isVpc } from "./helpers/vpc";
+import { assertVpcIds, isVpc } from "./helpers/vpc";
 
 const parts = {
   /**
@@ -73,7 +74,7 @@ export interface ClusterArgs extends ComponentArgs<typeof parts> {
    * A `Task` can be given a public IP with its `publicIp` instead.
    */
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * The ID of the VPC.

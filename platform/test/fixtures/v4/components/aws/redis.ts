@@ -7,11 +7,7 @@ import {
   output,
 } from "@pulumi/pulumi";
 import { RandomPassword } from "@pulumi/random";
-import {
-  Component,
-  Transform,
-  transform,
-} from "../../../../../src/components/component.js";
+import { Component, Transform, transform } from "../component.js";
 import { Link } from "../../../../../src/components/link.js";
 import { Input } from "../../../../../src/components/input.js";
 import { elasticache, secretsmanager } from "@pulumi/aws";
@@ -574,7 +570,7 @@ export class Redis extends Component implements Link.Linkable {
     }
 
     function registerVersion(overrideVersion?: number) {
-      const oldVersion = overrideVersion ?? $cli.state.version[name];
+      const oldVersion = overrideVersion ?? $cli.state.version?.[name];
       self.registerVersion({
         new: _version,
         old: oldVersion,

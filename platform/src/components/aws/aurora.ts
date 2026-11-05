@@ -1,3 +1,4 @@
+import type { Vpc } from "./vpc";
 import { all, ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
 import { rds, secretsmanager } from "@pulumi/aws";
 import {
@@ -24,7 +25,7 @@ import {
 } from "./helpers/rds";
 import { secretField, tagOf } from "./helpers/secret";
 import { permission } from "./permission";
-import { type AnyVpc, subnetsAndSecurityGroupsOf } from "./helpers/vpc";
+import { subnetsAndSecurityGroupsOf } from "./helpers/vpc";
 
 const parts = {
   /**
@@ -375,7 +376,7 @@ export interface AuroraArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * A list of subnet IDs in the VPC to deploy the Aurora cluster in.

@@ -24,15 +24,12 @@ import { Task, TaskArgs, TaskBaseArgs } from "./step-functions/task";
 import { Wait, WaitArgs } from "./step-functions/wait";
 import { JSONata } from "./step-functions/state";
 import { Function, FunctionArgs } from "./function";
-import {
-  type AnyFunction,
-  type FunctionInput,
-  plainFunction,
-} from "./helpers/function-part";
-import type { AnyBus } from "./helpers/bus";
-import type { AnyQueue } from "./helpers/queue";
-import type { AnySnsTopic } from "./helpers/sns-topic";
-import type { AnyTask } from "./helpers/task";
+import { type FunctionInput, plainFunction } from "./helpers/function-part";
+import type { Bus } from "./bus";
+import type { Queue } from "./queue";
+import type { SnsTopic } from "./sns-topic";
+// The ECS task, not a state machine's task
+import type { Task as EcsTask } from "./task";
 import { rolesToPass } from "./helpers/fargate";
 
 const parts = () => ({
@@ -165,7 +162,7 @@ export interface LambdaInvokeArgs extends TaskBaseArgs {
    * handler or the args have to be plain values, since whether a function is created is
    * decided from them. A function you have, or its ARN, can be an output.
    */
-  function: Input<string> | FunctionArgs | Input<AnyFunction>;
+  function: Input<string> | FunctionArgs | Input<Function>;
   /**
    * The payload to send to the Lambda function. Values can include outputs from
    * other resources and JSONata expressions.
@@ -196,7 +193,7 @@ export interface SnsPublishArgs extends TaskBaseArgs {
   /**
    * The `SnsTopic` component to publish the message to.
    */
-  topic: AnySnsTopic;
+  topic: SnsTopic;
   /**
    * The message to send to the SNS topic.
    */
@@ -240,7 +237,7 @@ export interface SqsSendMessageArgs extends TaskBaseArgs {
   /**
    * The `Queue` component to send the message to.
    */
-  queue: AnyQueue;
+  queue: Queue;
   /**
    * The message body to send to the SQS queue. The maximum size is 256KB.
    */
@@ -290,7 +287,7 @@ export interface EcsRunTaskArgs extends TaskBaseArgs {
    * });
    * ```
    */
-  task: AnyTask;
+  task: EcsTask;
   /**
    * The environment variables to apply to the ECS task. Values can include outputs
    * from other resources and JSONata expressions.
@@ -335,7 +332,7 @@ export interface EventBridgePutEventsArgs extends TaskBaseArgs {
     /**
      * The `Bus` component to send the event to.
      */
-    bus: AnyBus;
+    bus: Bus;
     /**
      * The source of the event. This string or JSONata expression identifies the
      * service or component that generated it.
@@ -1020,7 +1017,7 @@ function invokedArn(
     `The "function" of the "${state}" state`,
   );
   if (Output.isInstance(definition))
-    return (definition as Output<string | AnyFunction>).apply((value) =>
+    return (definition as Output<string | Function>).apply((value) =>
       typeof value === "string" ? value : value.targetArn,
     ) as Output<string>;
   if (typeof definition === "string")
@@ -1029,6 +1026,6 @@ function invokedArn(
       : new Function(`${state}Function`, { handler: definition }).targetArn;
   // A function, or the args of one to create
   if (definition instanceof Function || "targetArn" in (definition as object))
-    return output((definition as AnyFunction).targetArn) as Output<string>;
+    return output((definition as Function).targetArn) as Output<string>;
   return new Function(`${state}Function`, definition as FunctionArgs).targetArn;
 }

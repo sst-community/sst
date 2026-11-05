@@ -1,3 +1,4 @@
+import type { Vpc } from "./vpc";
 import {
   ComponentResourceOptions,
   all,
@@ -35,7 +36,7 @@ import {
   functionPart,
   plainFunction,
 } from "./helpers/function-part";
-import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "./helpers/vpc";
+import { assertVpcIds, isVpc, subnetsOf } from "./helpers/vpc";
 
 const parts = () => ({
   /**
@@ -328,7 +329,7 @@ export interface ApiGatewayHttpArgs
    * ```
    */
   vpc?:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * A list of VPC security group IDs.

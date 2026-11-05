@@ -27,19 +27,12 @@ export type FunctionPart = Output<{
   targetResponseStreamingInvokeArn: Output<string>;
 }>;
 
-/** A `Function` component. */
-export type AnyFunction = Function;
-
 /**
  * What a user can pass for a function: a handler, its args, or one they
  * have, as its ARN, the function itself, or the workflow it runs.
  */
 export type FunctionDefinition = Input<
-  | string
-  | FunctionArgs
-  | FunctionArn
-  | Function
-  | Workflow
+  string | FunctionArgs | FunctionArn | Function | Workflow
 >;
 
 /**
@@ -98,11 +91,7 @@ export function plainFunction(
   return output(definition as Input<any>).apply((value: unknown) => {
     if (typeof value === "string" && value.startsWith("arn:"))
       return value as FunctionArn;
-    if (
-      value instanceof Function ||
-      value instanceof Workflow
-    )
-      return value;
+    if (value instanceof Function || value instanceof Workflow) return value;
     throw new VisibleError(
       `${what} is an output that isn't a function or the ARN of one. A handler or the function's args have to be a plain value, since whether a function is created is decided from them. To use a function you have, pass the function itself or its ARN.`,
     );
@@ -177,7 +166,9 @@ export function functionPart(
       ? definition
       : existingFunction(
           part.existing,
-          `The "existing.${key}"${id === undefined ? "" : ` named "${id}"`} of "${part.name}"`,
+          `The "existing.${key}"${
+            id === undefined ? "" : ` named "${id}"`
+          } of "${part.name}"`,
         );
   // What was passed decides what to do, not the values inside it. Waiting on
   // those too would leave the function out of a preview whenever an arg isn't

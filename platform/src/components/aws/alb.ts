@@ -1,3 +1,4 @@
+import type { Vpc } from "./vpc";
 import {
   ComponentResourceOptions,
   interpolate,
@@ -31,7 +32,7 @@ import {
   pointDomainAt,
   securityGroupArgs,
 } from "./helpers/load-balancer-args";
-import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "./helpers/vpc";
+import { assertVpcIds, isVpc, subnetsOf } from "./helpers/vpc";
 
 const parts = () => ({
   /**
@@ -106,7 +107,7 @@ export interface AlbArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * The VPC ID.

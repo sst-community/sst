@@ -47,7 +47,6 @@ import { isFromGet, notAnOption } from "./args";
 
 export {
   type ComponentArgs,
-  type V5Args,
   type DeferredPart,
   type Existing,
   type ManyPart,

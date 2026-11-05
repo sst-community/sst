@@ -1,3 +1,4 @@
+import type { Alb } from "./alb";
 import {
   all,
   ComponentResourceOptions,
@@ -31,7 +32,7 @@ import type { Input } from "../input";
 import { hashStringToPrettyString } from "../naming";
 import { transformPart } from "../transform";
 import { context } from "../contract";
-import { type AnyAlb, isAlb } from "./helpers/alb";
+import { isAlb } from "./helpers/alb";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import {
   type Container,
@@ -714,7 +715,7 @@ export interface ServiceAlbArgs {
    * }
    * ```
    */
-  instance: AnyAlb;
+  instance: Alb;
   /**
    * The rules for routing traffic from the ALB to this service's containers.
    * Each rule must have explicit conditions and priority.

@@ -1,3 +1,4 @@
+import type { Vpc } from "./vpc";
 import {
   all,
   ComponentResourceOptions,
@@ -16,7 +17,7 @@ import {
 } from "./helpers/arn";
 import { useProvider } from "./helpers/provider";
 import { permission } from "./permission";
-import { type AnyVpc, isVpc, subnetsOf } from "./helpers/vpc";
+import { isVpc, subnetsOf } from "./helpers/vpc";
 
 const parts = {
   /**
@@ -203,10 +204,10 @@ export interface DsqlArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   vpc?:
-    | AnyVpc
+    | Vpc
     | {
         /** The VPC to create the endpoints in. */
-        instance: AnyVpc;
+        instance: Vpc;
         /** Which endpoints to create. */
         endpoints?: {
           /**

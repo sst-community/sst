@@ -6,11 +6,7 @@ import {
   Output,
   output,
 } from "@pulumi/pulumi";
-import {
-  Component,
-  Transform,
-  transform,
-} from "../../../../../src/components/component";
+import { Component, Transform, transform } from "../component";
 import { Link } from "../../../../../src/components/link";
 import { Input } from "../../../../../src/components/input.js";
 import { iam, rds, secretsmanager } from "@pulumi/aws";
@@ -582,10 +578,10 @@ export class Postgres extends Component implements Link.Linkable {
     function registerVersion(overrideVersion?: number) {
       self.registerVersion({
         new: _version,
-        old: overrideVersion ?? $cli.state.version[name],
+        old: overrideVersion ?? $cli.state.version?.[name],
         message: [
           `This component has been renamed. Please change:\n`,
-          `"sst.aws.Postgres" to "sst.aws.Postgres.v${$cli.state.version[name]}"\n`,
+          `"sst.aws.Postgres" to "sst.aws.Postgres.v${$cli.state.version?.[name]}"\n`,
           `Learn more https://sst-community.github.io/sst/docs/components/#versioning`,
         ].join("\n"),
       });

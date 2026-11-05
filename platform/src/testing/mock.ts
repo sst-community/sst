@@ -281,7 +281,7 @@ export function mockPulumi(input?: MockInput) {
     contract: contractVersion,
     command: input?.preview ? "diff" : "deploy",
     move: input?.move === true,
-    state: { version: {} },
+    state: {},
     paths: { root: input?.root ?? "/", work, platform },
   };
 

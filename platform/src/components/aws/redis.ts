@@ -1,3 +1,4 @@
+import type { Vpc } from "./vpc";
 import {
   all,
   ComponentResourceOptions,
@@ -14,7 +15,7 @@ import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { toGBs } from "../size";
 import { context } from "../contract";
-import { type AnyVpc, subnetsAndSecurityGroupsOf } from "./helpers/vpc";
+import { subnetsAndSecurityGroupsOf } from "./helpers/vpc";
 import {
   devValue,
   localPassword,
@@ -316,7 +317,7 @@ export interface RedisArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * A list of subnet IDs in the VPC to deploy the Redis instance in.

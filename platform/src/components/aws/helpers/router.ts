@@ -4,9 +4,6 @@ import { plain } from "../../args";
 import { VisibleError } from "../../error";
 import type { Router } from "../router";
 
-/** A `Router` component. */
-export type AnyRouter = Router;
-
 /**
  * How a site is served through a router: which router, and the domain and path
  * it's served on there. The site sets its own origins, so its route takes
@@ -35,7 +32,7 @@ export interface SiteRouteArgs {
    * }
    * ```
    */
-  instance: AnyRouter;
+  instance: Router;
   /**
    * Route requests matching a specific domain pattern.
    *

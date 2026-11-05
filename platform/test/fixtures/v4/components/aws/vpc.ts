@@ -5,11 +5,7 @@ import {
   Output,
   output,
 } from "@pulumi/pulumi";
-import {
-  Component,
-  Transform,
-  transform,
-} from "../../../../../src/components/component";
+import { Component, Transform, transform } from "../component";
 import { Input } from "../../../../../src/components/input";
 import {
   ec2,
@@ -798,11 +794,11 @@ export class Vpc extends Component implements Link.Linkable {
     function registerVersion(overrideVersion?: number) {
       self.registerVersion({
         new: _version,
-        old: overrideVersion ?? $cli.state.version[name],
+        old: overrideVersion ?? $cli.state.version?.[name],
         message: [
           `There is a new version of "Vpc" that has breaking changes.`,
           ``,
-          `To continue using the previous version, rename "Vpc" to "Vpc.v${$cli.state.version[name]}". Or recreate this component to update - https://sst-community.github.io/sst/docs/components/#versioning`,
+          `To continue using the previous version, rename "Vpc" to "Vpc.v${$cli.state.version?.[name]}". Or recreate this component to update - https://sst-community.github.io/sst/docs/components/#versioning`,
         ].join("\n"),
       });
     }

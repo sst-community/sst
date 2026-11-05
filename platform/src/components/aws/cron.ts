@@ -1,3 +1,4 @@
+import type { Task } from "./task";
 import { all, ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { iam, scheduler } from "@pulumi/aws";
 import { type ComponentArgs, component, deferred } from "../parts-component";
@@ -10,7 +11,6 @@ import {
   functionPart,
   plainFunction,
 } from "./helpers/function-part";
-import type { AnyTask } from "./helpers/task";
 import { enabledState } from "./helpers/eventbridge";
 import { rolesToPass } from "./helpers/fargate";
 
@@ -86,7 +86,7 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
    * });
    * ```
    */
-  task?: AnyTask;
+  task?: Task;
   /**
    * The event that'll be passed to the function or task.
    *

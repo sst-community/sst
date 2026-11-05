@@ -1,3 +1,6 @@
+import type { Router } from "./router";
+import type { Efs } from "./efs";
+import type { Vpc } from "./vpc";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -49,10 +52,10 @@ import type { EsbuildOptions } from "../esbuild";
 import { rpc } from "../rpc/rpc";
 import { devStub, context } from "../contract";
 import { type Runtime, commandsOf, isRuntime } from "../runtime";
-import { type AnyVpc, privateNetworkOf } from "./helpers/vpc";
+import { privateNetworkOf } from "./helpers/vpc";
 import { inlinePolicies } from "./helpers/iam";
-import { type AnyEfs, isEfs } from "./helpers/efs";
-import { type AnyRouter, type RouteArgs, routeOf } from "./helpers/router";
+import { isEfs } from "./helpers/efs";
+import { type RouteArgs, routeOf } from "./helpers/router";
 import { RETENTION } from "./logging";
 import { Permission, permission } from "./permission";
 import { bootstrap } from "./helpers/bootstrap";
@@ -1502,7 +1505,7 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
     /**
      * The EFS file system to mount. Or an EFS access point ARN.
      */
-    efs: Input<AnyEfs | string>;
+    efs: Input<Efs | string>;
     /**
      * The path to mount the volume.
      * @default `"/mnt/efs"`
@@ -1547,7 +1550,7 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   vpc?:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * A list of VPC security group IDs.
@@ -2164,7 +2167,7 @@ export class Function extends component("sst:aws:Function", parts) {
       const urlArgs = url === true ? {} : url;
       // 4.x takes the router as `route.router`
       const given = plain(
-        (urlArgs as { route?: Omit<RouteArgs, "instance"> & { router: AnyRouter } })
+        (urlArgs as { route?: Omit<RouteArgs, "instance"> & { router: Router } })
           .route,
         option("url.route"),
       );

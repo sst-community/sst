@@ -1,3 +1,5 @@
+import type { SnsTopic } from "./sns-topic";
+import type { Queue } from "./queue";
 import {
   ComponentResourceOptions,
   Output,
@@ -39,8 +41,8 @@ import {
 import { invokePermissionArgs } from "./helpers/function-permission";
 import { enabledState, ruleFunctionTarget } from "./helpers/eventbridge";
 import { sendPolicy } from "./helpers/queue-policy";
-import { type AnyQueue, queueArnOf } from "./helpers/queue";
-import { type AnySnsTopic, topicArnOf } from "./helpers/sns-topic";
+import { queueArnOf } from "./helpers/queue";
+import { topicArnOf } from "./helpers/sns-topic";
 import { permission } from "./permission";
 
 const parts = () => ({
@@ -698,7 +700,7 @@ export interface BucketNotificationArgs {
    * }
    * ```
    */
-  queue?: Input<string | AnyQueue>;
+  queue?: Input<string | Queue>;
   /**
    * The topic that'll be notified: a topic component, or the ARN of a topic.
    *
@@ -727,7 +729,7 @@ export interface BucketNotificationArgs {
    * }
    * ```
    */
-  topic?: Input<string | AnySnsTopic>;
+  topic?: Input<string | SnsTopic>;
   /**
    * A list of S3 event types that'll trigger a notification.
    * @default All S3 events

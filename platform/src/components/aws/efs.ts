@@ -1,3 +1,4 @@
+import type { Vpc } from "./vpc";
 import {
   ComponentResourceOptions,
   type Output,
@@ -15,7 +16,6 @@ import { notAnExistingPart, usedAsItIs, withDefault, getArgs } from "../args";
 import { VisibleError } from "../error";
 import type { Input } from "../input";
 import {
-  type AnyVpc,
   assertVpcIds,
   isVpc,
   privateSubnetsOf,
@@ -116,7 +116,7 @@ export interface EfsArgs extends ComponentArgs<typeof parts> {
    * while the old ones are there.
    */
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * The ID of the VPC.

@@ -254,20 +254,6 @@ export type Existing<P extends Parts> = {
 /** A parts map, or the function that returns it. */
 type PartsOf<T> = T extends () => infer P ? P : T;
 
-// The args of an SST 5 component that takes the same args as the component it
-// replaces: the original's args, with `transform` and `existing` for the new
-// component's parts.
-//
-//   interface QueueV5Args extends V5Args<QueueArgs, typeof parts> {}
-//
-// (Not a doc comment: an interface that extends this would show it as its own
-// description in the generated docs.)
-export type V5Args<Original, P extends Parts | (() => Parts)> = Omit<
-  Original,
-  "transform"
-> &
-  ComponentArgs<P>;
-
 /**
  * The args every component built from parts accepts. Extend it in your
  * component's args.

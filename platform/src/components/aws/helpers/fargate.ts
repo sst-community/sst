@@ -49,9 +49,11 @@ import type { Permission } from "../permission";
 import type { FunctionPermissionArgs } from "../function";
 import type { DurationMinutes } from "../../duration";
 import { bootstrap } from "./bootstrap";
-import { type AnyCluster, isCluster } from "./cluster";
+import { isCluster } from "./cluster";
+import type { Cluster } from "../cluster";
 import { imageBuilder } from "./container-builder";
-import { type AnyEfs, isEfs } from "./efs";
+import { isEfs } from "./efs";
+import type { Efs } from "../efs";
 import { inlinePolicies, noPermissionsFor } from "./iam";
 import { isVpc } from "./vpc";
 
@@ -290,7 +292,7 @@ export type Network = {
  * The VPC of a cluster, read the same way whether the cluster was given a
  * `Vpc` or the ids of one.
  */
-export function networkOf(cluster: AnyCluster): Network {
+export function networkOf(cluster: Cluster): Network {
   const ids = (list: Input<Input<string>[]> | undefined) =>
     output(list ?? []) as Output<string[]>;
 
@@ -343,7 +345,7 @@ export interface FargateArgs {
    * }
    * ```
    */
-  cluster: AnyCluster;
+  cluster: Cluster;
   /**
    * Mount Amazon EFS file systems into the container.
    *
@@ -389,7 +391,7 @@ export interface FargateArgs {
      * The Amazon EFS file system to mount.
      */
     efs: Input<
-      | AnyEfs
+      | Efs
       | {
           /**
            * The ID of the EFS file system.
@@ -1319,7 +1321,7 @@ export function executionRoleArgs(
  */
 export function logGroupArgs(
   container: Container,
-  cluster: AnyCluster,
+  cluster: Cluster,
   name: string,
 ): cloudwatch.LogGroupArgs {
   const logging = all([container.logging, cluster.nodes.cluster.name]).apply(
@@ -1329,7 +1331,9 @@ export function logGroupArgs(
         logging?.name ??
         // In the case of shared Cluster across stage, log group name can thrash
         // if Task name is the same. Need to suffix the task name with random hash.
-        `/sst/cluster/${clusterName}/${physicalName(64, name)}/${container.name}`,
+        `/sst/cluster/${clusterName}/${physicalName(64, name)}/${
+          container.name
+        }`,
     }),
   );
   return {
@@ -1467,7 +1471,7 @@ function ignoreSstDirectory(contextPath: string, dockerfile: string) {
 export function taskDefinitionArgs(task: {
   /** The component's name. */
   name: string;
-  cluster: AnyCluster;
+  cluster: Cluster;
   region: Output<string>;
   link: FargateBaseArgs["link"];
   /** Each container, with the image it runs and the log group it writes to. */
@@ -1484,13 +1488,14 @@ export function taskDefinitionArgs(task: {
   const linkEnvs = Link.propertiesToEnv(Link.getProperties(task.link));
   // Each container's volumes, as the ids of a file system and its access point
   const volumes = task.containers.map(({ container }) =>
-    output(container.volumes).apply((volumes) =>
-      volumes?.map((volume) => ({
-        path: volume.path,
-        efs: isEfs(volume.efs)
-          ? { fileSystem: volume.efs.id, accessPoint: volume.efs.accessPoint }
-          : volume.efs,
-      })),
+    output(container.volumes).apply(
+      (volumes) =>
+        volumes?.map((volume) => ({
+          path: volume.path,
+          efs: isEfs(volume.efs)
+            ? { fileSystem: volume.efs.id, accessPoint: volume.efs.accessPoint }
+            : volume.efs,
+        })),
     ),
   );
   const containers = output(

@@ -1,3 +1,4 @@
+import type { Bucket } from "./bucket";
 import {
   ComponentResourceOptions,
   Input,
@@ -22,7 +23,6 @@ import { Size } from "../size";
 import { physicalName } from "../naming";
 import { RETENTION } from "./logging";
 import { useProvider } from "./helpers/provider";
-import type { AnyBucket } from "./helpers/bucket";
 import {
   type Protection,
   createServerDistribution,
@@ -1505,7 +1505,7 @@ async function handler(event) {
    */
   public routeBucket(
     pattern: string,
-    bucket: Input<AnyBucket>,
+    bucket: Input<Bucket>,
     args?: Input<RouterBucketRouteArgs>,
   ) {
     const namespace = this.newRoute(pattern, args);

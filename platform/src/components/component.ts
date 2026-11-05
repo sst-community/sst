@@ -180,48 +180,6 @@ export class Component extends ComponentResource {
   public static naming(type: string, rule: NamingRule) {
     registerNamingRule(type, rule);
   }
-
-  /** @internal */
-  protected registerVersion(input: {
-    new: number;
-    old?: number;
-    message?: string;
-    forceUpgrade?: `v${number}`;
-  }) {
-    // Check component version
-    const oldVersion = input.old;
-    const newVersion = input.new ?? 1;
-    if (oldVersion) {
-      const className = this.componentType.replaceAll(":", ".");
-      // Invalid forceUpgrade value
-      if (input.forceUpgrade && input.forceUpgrade !== `v${newVersion}`) {
-        throw new VisibleError(
-          [
-            `The value of "forceUpgrade" does not match the version of "${className}" component.`,
-            `Set "forceUpgrade" to "v${newVersion}" to upgrade to the new version.`,
-          ].join("\n"),
-        );
-      }
-      // Version upgraded without forceUpgrade
-      if (oldVersion < newVersion && !input.forceUpgrade) {
-        throw new VisibleError(input.message ?? "");
-      }
-      // Version downgraded
-      if (oldVersion > newVersion) {
-        throw new VisibleError(
-          [
-            `It seems you are trying to use an older version of "${className}".`,
-            `You need to recreate this component to rollback - https://sst-community.github.io/sst/docs/components/#versioning`,
-          ].join("\n"),
-        );
-      }
-    }
-
-    // Set version
-    if (newVersion > 1) {
-      new Version(this.componentName, newVersion, { parent: this });
-    }
-  }
 }
 
 // The addresses of the component this one takes over from, when that one
@@ -301,15 +259,3 @@ export function $print(...msg: Input<any>[]) {
   return all(msg).apply((msg) => console.log(...msg));
 }
 
-export class Version extends ComponentResource {
-  constructor(target: string, version: number, opts: ComponentResourceOptions) {
-    super("sst:sst:Version", target + "Version", {}, opts);
-    this.registerOutputs({ target, version });
-  }
-}
-
-export type ComponentVersion = { major: number; minor: number };
-export function parseComponentVersion(version: string): ComponentVersion {
-  const [major, minor] = version.split(".");
-  return { major: parseInt(major), minor: parseInt(minor) };
-}

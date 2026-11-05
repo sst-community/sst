@@ -23,7 +23,8 @@ import {
   replicaArgs,
 } from "./rds";
 import { secretField, tagOf } from "./secret";
-import { type AnyVpc, subnetsAndSecurityGroupsOf } from "./vpc";
+import { subnetsAndSecurityGroupsOf } from "./vpc";
+import type { Vpc } from "../vpc";
 
 // What the `Postgres` and the `Mysql` share: a database on an RDS instance,
 // with its secret, its parameter group, read replicas and a proxy. Each
@@ -237,7 +238,7 @@ export interface RdsInstanceArgs
    * ```
    */
   vpc:
-    | AnyVpc
+    | Vpc
     | Input<{
         /**
          * A list of subnet IDs in the VPC.
