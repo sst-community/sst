@@ -392,17 +392,17 @@ export interface EmailArgs extends ComponentArgs<typeof parts> {
  * - `dmarc` can only be set when `sender` is a domain, and that's checked even when
  *   it's given as an output.
  * - `transform` also takes `event` and `verification`.
- * - `dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ * - `dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work.
  * - A domain's three DKIM records are named after their place, not after the tokens SES
  *   gives, so a preview shows them. A domain's hosted zone is found without a resource:
  *   SST 4's `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
  * - With a DKIM key of your own, set through `transform.identity`, SES gives no tokens,
- *   and `sst.aws.Email` created no DKIM records. Set `dkim` to `false` to say so; a deploy
+ *   and SST 4's `Email` created no DKIM records. Set `dkim` to `false` to say so; a deploy
  *   without it says to. The domain's other records are kept.
  * - An event whose name isn't a capitalized name made of letters and numbers is kept
- *   under the name `sst.aws.Email` gave it.
+ *   under the name SST 4's `Email` gave it.
  */
 export class Email extends component("sst:aws:Email", parts) {
   private readonly senderValue: Output<string>;

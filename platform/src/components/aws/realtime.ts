@@ -212,9 +212,9 @@ export interface RealtimeSubscriberArgs {
  * function and permission, and every subscriber's function, permission and topic rule are
  * kept. A few things are written differently:
  *
- * - The subscribers are inside the component, where `sst.aws.Realtime` kept each in a
+ * - The subscribers are inside the component, where SST 4's `Realtime` kept each in a
  *   component of its own at the top of the app. Each subscriber's function is
- *   `nodes.subscriber`, by its name, the hash `sst.aws.Realtime` named it with.
+ *   `nodes.subscriber`, by its name, the hash SST 4's `Realtime` named it with.
  * - A subscriber can be given a `name`, which its resources are named after, and can be a
  *   function you have, as well as a handler, the function's args or an ARN. A function
  *   you have needs a name. A subscriber you've deployed keeps its place without one: given
@@ -230,13 +230,13 @@ export interface RealtimeSubscriberArgs {
  *   given its ARN as a string.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - `nodes.authHandler` is an output, as it was, and `nodes` has the authorizer's
  *   permission too.
- * - A subscriber is created with the provider the server has. `sst.aws.Realtime` gave it
+ * - A subscriber is created with the provider the server has. SST 4's `Realtime` gave it
  *   only a `provider` passed to the server itself, so if your server takes its provider
  *   from a parent component or from `providers`, the switch gives its subscribers that
  *   provider and keeps them, with the provider's default tags.

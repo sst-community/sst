@@ -4,7 +4,7 @@ import { AppSync } from "../app-sync";
 import { childOf } from "./helpers";
 
 // The 4.x `AppSync` keeps each data source, AppSync function and resolver in a
-// component of its own, next to the API. The V5 one keeps their resources
+// component of its own, next to the API. SST 5's keeps their resources
 // inside the API, under the data source's or function's name, or the resolver's
 // operation.
 const DATA_SOURCE = "sst:aws:AppSyncDataSource";

@@ -123,9 +123,9 @@ export interface DevCommandArgs {
  *
  * A few things work differently:
  *
- * - `dev.command` is required. [`sst.x.DevCommand`](/docs/component/experimental/dev-command)
+ * - `dev.command` is required. SST 4's `DevCommand`
  *   took one without it, and `sst dev` ran nothing.
- * - What `sst dev` runs is kept in the state in `sst dev` alone. `sst.x.DevCommand` kept it,
+ * - What `sst dev` runs is kept in the state in `sst dev` alone. SST 4's `DevCommand` kept it,
  *   with its environment, in every deploy, so a deploy takes it out.
  */
 export class DevCommand extends component("sst:sst:DevCommand", parts) {

@@ -422,12 +422,12 @@ export interface AnalogArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.Analog` warmed
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `Analog` warmed
  *   it on every deploy. The switch warms it once.
  * - With `awsLambda: { streaming: true }` in Nitro's config, the server's URL streams its
- *   responses. `sst.aws.Analog` ignored it and buffered them.
+ *   responses. SST 4's `Analog` ignored it and buffered them.
  * - The base path is read from `vite.config` with any extension, like `.js` or `.mts`, and
- *   it's what's in the quotes after `base`. `sst.aws.Analog` read only `vite.config.ts`,
+ *   it's what's in the quotes after `base`. SST 4's `Analog` read only `vite.config.ts`,
  *   and failed without it, and read on to the last quote of the line.
  */
 export class Analog extends component("sst:aws:Analog", parts) {

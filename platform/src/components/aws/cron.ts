@@ -298,21 +298,21 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  *
  * A few things are written differently:
  *
- * - It's named `Cron`. `sst.aws.CronV2` had the version in its name because it replaced
+ * - It's named `Cron`. SST 4's `CronV2` had the version in its name because it replaced
  *   SST 4's first `Cron`, which has no 5.0 form. It keeps its type, `sst:aws:CronV2`, which
  *   is what a deployed one has.
  * - The deprecated `job` is gone. Use `function`, as written below. So is
  *   `nodes.job`: read `nodes.function`.
  * - The function is named after `function`: `MyCronJobFunction`, where it was
  *   `MyCronJobHandler`. The function you've deployed keeps its name in AWS.
- * - `nodes.function` is empty for a job that runs a task, where `sst.aws.CronV2` failed
+ * - `nodes.function` is empty for a job that runs a task, where SST 4's `CronV2` failed
  *   when it was read.
  * - `function`, as a handler or a function's args, has to be a plain value, not an output:
  *   it decides what's created. A function you already have, or its ARN, can still be an
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.

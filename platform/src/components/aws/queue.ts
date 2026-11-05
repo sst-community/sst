@@ -383,14 +383,14 @@ export interface QueueSubscriberArgs {
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - A subscriber's function is described after the component, `Subscribed to MyQueue`,
- *   where `sst.aws.Queue` named the component it kept the subscriber in: an update in
+ *   where SST 4's `Queue` named the component it kept the subscriber in: an update in
  *   place.
- * - The subscriber is created with the provider the queue has. `sst.aws.Queue` gave it only
+ * - The subscriber is created with the provider the queue has. SST 4's `Queue` gave it only
  *   a `provider` passed to the queue itself, so if your queue takes its provider from a
  *   parent component or from `providers`, the switch gives its subscriber that provider and
  *   keeps it, with the provider's default tags.
@@ -402,10 +402,10 @@ export interface QueueSubscriberArgs {
  *   what it creates is the queue's, with the queue's options. For a queue that isn't in
  *   your app, write `new sst.aws.Queue(name, { existing: { queue: queueUrl }, transform })`,
  *   which is what `get` does, with your `transform`.
- * - `sst.aws.Queue.subscribe(queueArn, subscriber)` becomes
+ * - SST 4's `Queue.subscribe(queueArn, subscriber)` becomes
  *   `sst.aws.Queue.get(name, queueArn).subscribe(subscriber)`, and is refused with what
  *   to write. What it created is kept. It's created with the options you give `get`: if
- *   you gave `sst.aws.Queue.subscribe` a `parent` or a `provider`, give `get` the same, or
+ *   you gave SST 4's `Queue.subscribe` a `parent` or a `provider`, give `get` the same, or
  *   the switch doesn't keep it.
  */
 export class Queue extends component("sst:aws:Queue", parts) {

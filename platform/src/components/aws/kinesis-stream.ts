@@ -152,15 +152,15 @@ export interface KinesisStreamSubscriberArgs {
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - A subscriber's function is described after the component, `Subscribed to MyStream`,
- *   where `sst.aws.KinesisStream` named the component it kept the subscriber in: an
+ *   where SST 4's `KinesisStream` named the component it kept the subscriber in: an
  *   update in place. For a stream from `get`, it names the component `get` created,
  *   where the static `subscribe` named the stream.
- * - A subscriber is created with the provider the stream has. `sst.aws.KinesisStream`
+ * - A subscriber is created with the provider the stream has. SST 4's `KinesisStream`
  *   gave it only a `provider` passed to the stream itself, so if your stream takes its
  *   provider from a parent component or from `providers`, the switch gives its subscribers
  *   that provider and keeps them, with the provider's default tags.

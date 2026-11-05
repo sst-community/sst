@@ -1010,32 +1010,32 @@ export interface BucketEventBridgeSubscriberArgs {
  *   created. A function you already have, or its ARN, can still be an output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - A `transform` function for `cors` or `lifecycle` is given outputs where
- *   `sst.aws.Bucket` gave it plain values, like `corsRules[0].allowedOrigins` and
+ *   SST 4's `Bucket` gave it plain values, like `corsRules[0].allowedOrigins` and
  *   `rules`. Change them with `apply`, or set them with an object.
  * - A notification's function is described after the component, `Notified by MyBucket on
- *   ...`, where `sst.aws.Bucket` named the component it kept the notifications in: an
+ *   ...`, where SST 4's `Bucket` named the component it kept the notifications in: an
  *   update in place.
  * - `transform: { publicAccessBlock: false }` becomes `publicAccessBlock: false`.
  * - `public: true` becomes `access: "public"`.
  * - The `transform` of `notify` becomes the bucket's `transform.notification`.
  * - `subscribe`, `subscribeQueue` and `subscribeTopic` are gone, and are refused with what
  *   to write. Use `notify`, which keeps the subscriber you had.
- * - The static `sst.aws.Bucket.subscribe`, `subscribeQueue` and `subscribeTopic`, which
+ * - The static SST 4's `Bucket.subscribe`, `subscribeQueue` and `subscribeTopic`, which
  *   took a bucket's ARN, are gone too: call `notify` on `get`. They're refused with what
  *   to write. What they created isn't kept: remove it and deploy before you switch, then
  *   add it back with `notify`.
- * - `sst.aws.Bucket.subscribeEventBridge(name, bucketName, ...)` is `subscribeEventBridge`
+ * - SST 4's `Bucket.subscribeEventBridge(name, bucketName, ...)` is `subscribeEventBridge`
  *   on the bucket, or on `get` for a bucket that isn't in your app, and the static one is
  *   refused with what to write. What it created is kept. It's created with the bucket's
- *   `provider`, where `sst.aws.Bucket` used your app's: if your bucket has a `provider`,
+ *   `provider`, where SST 4's `Bucket` used your app's: if your bucket has a `provider`,
  *   the switch gives its rule, target and permission that provider and keeps them.
  * - `get` gives its options to the component, so a `provider` or `parent` you pass it
- *   applies to the bucket's notifications too. `sst.aws.Bucket.get` gave them to the bucket it
+ *   applies to the bucket's notifications too. SST 4's `Bucket.get` gave them to the bucket it
  *   looked up and to nothing else. If you pass `get` a `provider` and call `notify` on that
  *   bucket, the switch gives its notifications that provider and keeps them.
  */

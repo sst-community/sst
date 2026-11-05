@@ -1720,10 +1720,10 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  * - `logging: { logGroup: name }` becomes `existing: { logGroup }`, with the log group
  *   or its name.
  * - `live: false` becomes `dev: false`, and `url.route` becomes `url.router`.
- * - The way `sst.aws.Function` takes those four still works.
+ * - The way SST 4's `Function` takes those four still works.
  * - `nodes.function` and `nodes.logGroup` are the resources themselves, not outputs.
  * - The alias the URL of a durable function points at is created with the function's
- *   `provider`. `sst.aws.Function` created it with your app's provider, whatever the
+ *   `provider`. SST 4's `Function` created it with your app's provider, whatever the
  *   function was given. If a durable function has a `url` and a `provider`, the switch
  *   gives the alias that provider and keeps it, and the URL with it.
  * - `transform: { function: { environment: { variables: { A: "1" } } } }` adds a
@@ -1731,11 +1731,12 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
  * - A `vpc` that's another resource, like an `aws.ec2.Vpc`, is refused: pass a `Vpc`, or
  *   the ids of its subnets and security groups.
  *
- * The V5 components create their functions, like a queue's subscriber, as
+ * SST 5's components create their functions, like a queue's subscriber, as
  * `sst.aws.Function` too. There you can keep writing the function the way
- * `sst.aws.Function` takes it, but for what a build reads: `handler`, `bundle`,
+ * SST 4's `Function` takes it, but for what a build reads: `handler`, `bundle`,
  * `runtime`, `architecture`, `nodejs` and `copyFiles` have to be plain values there
  * too.
+
  */
 export class Function extends component("sst:aws:Function", parts) {
   private readonly durable: boolean;
@@ -1769,12 +1770,9 @@ export class Function extends component("sst:aws:Function", parts) {
     }
 
     const option = (arg: string) => `The "${arg}" of the "${name}" function`;
-    // A few options are written another way for the 4.x `Function`: `live`,
-    // `role`, `logging.logGroup` and `url.route`. They're taken here too. A
-    // `$transform` written for the 4.x one runs on this one, as they have
-    // the same type, and so does the definition of a function part. One
-    // written for this one runs on the 4.x one too, which turns down a runtime
-    // from `sst.runtime`.
+    // A few options are written as SST 4's `Function` took them: `live`,
+    // `role`, `logging.logGroup` and `url.route`. They're taken here too, from
+    // a `$transform` and the definition of a function part as well.
     const given = args as Record<string, any>;
     const original: {
       live?: boolean;
@@ -2583,7 +2581,7 @@ export class Function extends component("sst:aws:Function", parts) {
       }
 
       // Who may call the URL depends on whether the router signs its
-      // requests. A V5 router's settings say so plainly. A 4.x one, or one
+      // requests. A router's settings say so plainly. One
       // that's referenced, says so in an output a preview knows. Its
       // distribution is only passed in.
       const permit = (oac: boolean) => {

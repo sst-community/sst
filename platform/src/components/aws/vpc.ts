@@ -421,9 +421,6 @@ interface Network {
  *
  * A few things work differently:
  *
- * - Switch what's in the VPC first, or along with it. The V5 components that take a `vpc`
- *   take either kind. A 4.x component, like [`sst.aws.Nextjs`](/docs/component/aws/nextjs)'s
- *   server function, is typed for `sst.aws.Vpc` alone.
  * - `az`, `nat` and `bastion` are plain values, since they decide what's created. Some
  *   values inside them can still be outputs, like an AZ's name, `nat.ec2.ami` or
  *   `bastion.instanceProfile`. Each arg says which.
@@ -435,13 +432,13 @@ interface Network {
  *   they were. The NAT's and the bastion's security groups are the resources, not
  *   outputs of them, and `undefined` when they aren't created. With `nat: "ec2"` and
  *   `bastion`, the first NAT instance is the bastion: `nodes.bastionInstance` and
- *   `nodes.bastionSecurityGroup` are `undefined`, where `sst.aws.Vpc` gave the NAT's, and
+ *   `nodes.bastionSecurityGroup` are `undefined`, where SST 4's `Vpc` gave the NAT's, and
  *   `bastion` is the instance's ID.
  * - `transform` takes the same keys, and one for each resource it didn't have, like
  *   `cloudmapNamespace`. A function there is given outputs where it was given plain
  *   values, like a subnet's `availabilityZone` when `az` is a number.
  * - The bastion runs the newest Amazon Linux 2023 image with Amazon's default kernel.
- *   `sst.aws.Vpc` looked for the newest image of any kernel, and Amazon releases several
+ *   SST 4's `Vpc` looked for the newest image of any kernel, and Amazon releases several
  *   at once, so which one it found could change from one deploy to the next. A switch
  *   replaces the bastion once if it doesn't run that image. Start `sst tunnel` again
  *   after that deploy. The image is read from Amazon's public SSM parameter, so a deploy
@@ -450,15 +447,15 @@ interface Network {
  * - `get` looks up the VPC, its default security group, its Internet Gateway and its
  *   Cloud Map namespace, which are in `nodes`, and finds the subnets and the bastion with
  *   lookups that aren't resources, so `nodes` has no subnets, route tables or NATs. A
- *   switch drops the lookups `sst.aws.Vpc.get` kept in the state, which changes nothing in
+ *   switch drops the lookups SST 4's `Vpc.get` kept in the state, which changes nothing in
  *   AWS. Its `nodes.securityGroup` is looked up as a default security group, where
- *   `sst.aws.Vpc.get` looked it up as a security group, and its `nodes.cloudmapNamespace`
+ *   SST 4's `Vpc.get` looked it up as a security group, and its `nodes.cloudmapNamespace`
  *   has no `vpc`, which AWS doesn't give.
  * - If you set `tags` with an object in `transform` on the VPC, the NAT instances or the
  *   bastion, or on the NAT's or the bastion's security group, it keeps the tags SST sets
  *   next to yours. They're added back when you switch. A stage that references this VPC
  *   with `get` finds its bastion by them.
- * - `sst.aws.Vpc.v1` has no V5 form.
+ * - SST 4's `Vpc.v1` has no 5.0 form.
  *
  * ---
  *

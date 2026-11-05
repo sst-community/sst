@@ -78,7 +78,7 @@ export interface BucketArgs extends ComponentArgs<typeof parts> {
  * A few things are different:
  *
  * - A Worker it's linked to is given the bucket's jurisdiction, for a bucket
- *   that has one, like `eu`. `sst.cloudflare.Bucket` left it out of the
+ *   that has one, like `eu`. SST 4's `Bucket` left it out of the
  *   binding, and a Worker can't reach such a bucket without it. If you set
  *   `jurisdiction` in `transform`, the Worker is updated on the switch. A
  *   site it's linked to has it in the Wrangler config its build and

@@ -230,9 +230,6 @@ export interface AlbArgs extends ComponentArgs<typeof parts> {
  *
  * A few things work differently:
  *
- * - Switch the services on the load balancer first, or along with it. A
- *   `sst.aws.Service` takes either one. A
- *   [`sst.aws.Service`](/docs/component/aws/service) only takes `sst.aws.Alb`.
  * - `nodes.listeners` is `nodes.listener`. `nodes` also has the certificate, which can
  *   be transformed.
  * - A transform function for `listener` is also given the listener's protocol and port:
@@ -240,8 +237,8 @@ export interface AlbArgs extends ComponentArgs<typeof parts> {
  * - A `domain` with `dns: false` and no `cert` is refused. There's nothing to validate
  *   a certificate with.
  * - `domain`, with its `name`, `aliases` and `dns`, has to be a plain value, not an
- *   output. `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   output. `domain.dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work.
  * - The DNS records that validate the certificate are named after the domains they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's

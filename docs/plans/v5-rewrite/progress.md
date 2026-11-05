@@ -15,11 +15,13 @@ The first part of [the swap](plan.md#5-moving-an-app): the files move, and what 
 
 **Checked:** `tsc`; the platform's suite, 102 files and 4057 tests, against 126 and 4258 before; the Go tests; the CLI builds.
 
-**Left for the swap:** the components' prose that says "V5", and their "Switch from" sections, which name SST 4's component as `sst.aws.X`; the rulebook and `PORTING.md`; `registerVersion`, `V5Args` and the `Any…` names.
+**Left for the swap:** the rulebook and `PORTING.md`; `registerVersion`, `V5Args` and the `Any…` names.
 
 **Then the codemod** writes SST 5's names, `sst.aws.X`: its switch for where the 5.0 components were (`sst.aws.v5` until the swap) goes, and a config the v5 alphas wrote, as `sst.aws.v5.X`, has `v5` taken out and nothing else changed. A second run changes nothing: `Workflow`'s rule leaves a `transform.function` that's already 5.0's, with only `transform` and `existing`, as it is. Its tests' expectations are SST 5's names; what they're given is as it was.
 
 **Then the docs site** is built from SST 5's components. The sidebar lists every component file of a provider (`www/src/component-files.mjs`, which the generator reads too), with an Internal group for those other components use, and no Deprecated group: SST 4's pages are gone. A component's page is at `docs/component/aws/queue`, and links into `v5/` are links to it. The "Switch from" notes the generator adds come from SST 4's component in the fixtures, and the one about `$transform` with SST 4's name goes. The migration guide and the guide to a local component name SST 5's components without `v5`, and say a package's `v5.Queue` is `Queue`. Checked: `bun ./generate.ts components` and `bunx astro build`, 316 pages, none under a `v5` path.
+
+**Then the components' docs** say what's true after the swap. Each "Switch from" section is made again from what it said before it, with SST 4's component written as SST 4's (`SST 4's \`Queue\``) and SST 5's as `sst.aws.Queue`, and a before and after that are the same line now left out. What said a component takes either kind, or to switch what's in a VPC, a cluster or a load balancer first, says what it takes, or goes: a move switches every component at once. "The V5 one" is SST 5's.
 
 ## 2026-11-05: step 5, the core stops running 4.x components
 

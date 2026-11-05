@@ -1,6 +1,6 @@
 // What a site with a server works out from its build: the files it uploads, what it
 // keeps in the key-value store its CloudFront function reads, and when to clear
-// CloudFront's cache. The 4.x sites and the V5 ones deploy the same, so it lives
+// CloudFront's cache. SST 4's sites and SST 5's deploy the same, so it lives
 // here, in one place.
 import fs from "fs";
 import path from "path";

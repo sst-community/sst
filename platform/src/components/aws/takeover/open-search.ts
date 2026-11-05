@@ -6,6 +6,6 @@ import { OpenSearch } from "../open-search";
 // migrate`, and a new stage refuses the 4.x one.
 //
 // With `dev` set, the 4.x one created a component for the pane `sst dev`
-// shows, at the top of the app, which the V5 one reports in place of it: a
+// shows, at the top of the app, which SST 5's reports in place of it: a
 // move drops it, and there's nothing in the cloud behind it.
 takeover(OpenSearch, {});

@@ -4,7 +4,7 @@ import { childOf } from "./helpers";
 
 // The 4.x `CognitoUserPool` keeps each identity provider in a component of its
 // own. That component isn't inside the user pool or named after it: it's next
-// to it, under the name the provider was added with. The V5 one keeps them
+// to it, under the name the provider was added with. SST 5's keeps them
 // inside the user pool, under that name.
 const IDENTITY_PROVIDER = "sst:aws:CognitoIdentityProvider";
 

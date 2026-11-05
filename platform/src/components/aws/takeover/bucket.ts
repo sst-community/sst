@@ -6,7 +6,7 @@ import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Bucket` keeps what `notify()` creates in a component of its own,
 // named after the bucket. It's created with the bucket's own options, so it's
-// next to the bucket wherever the bucket is. The V5 one keeps it inside the
+// next to the bucket wherever the bucket is. SST 5's keeps it inside the
 // bucket, with each notification's resources under the notification's name.
 //
 // A bucket referenced with the 4.x `Bucket.get` isn't given the options `get`

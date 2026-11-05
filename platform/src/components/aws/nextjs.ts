@@ -628,7 +628,7 @@ const ASSETS: Pick<SitePlan, "assets" | "isrCache"> = {
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
  * - The ISR data is seeded again when it changes, and with `warm` the server is warmed
- *   again when it's built. `sst.aws.Nextjs` did both on every deploy. The data is keyed by
+ *   again when it's built. SST 4's `Nextjs` did both on every deploy. The data is keyed by
  *   the build's id, which Next.js makes new on every build unless the app sets
  *   `generateBuildId`, so it's most often seeded on every deploy all the same. The switch
  *   does both once.

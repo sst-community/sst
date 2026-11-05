@@ -4,7 +4,7 @@ import { Dynamo } from "../dynamo";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Dynamo` keeps each subscription in a component of its own, at the
-// top of the app. The V5 one keeps them inside the table. The component was
+// top of the app. SST 5's keeps them inside the table. The component was
 // named after the table and the subscriber: after the table's component for one
 // added with `table.subscribe()`, and after the table's own name for one added
 // with the static `Dynamo.subscribe()`, which only has a stream ARN.

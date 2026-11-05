@@ -414,10 +414,10 @@ export interface SolidStartArgs
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.SolidStart`
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `SolidStart`
  *   warmed it on every deploy. The switch warms it once.
  * - The base path is read from `app.config` with any extension, like `.js` or `.mjs`, and
- *   it's what's in the quotes after `baseURL`. `sst.aws.SolidStart` read only
+ *   it's what's in the quotes after `baseURL`. SST 4's `SolidStart` read only
  *   `app.config.ts`, and failed without it, and read on to the last quote of the line.
  */
 export class SolidStart extends component("sst:aws:SolidStart", parts) {

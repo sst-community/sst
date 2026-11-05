@@ -212,7 +212,7 @@ export function functionPart(
         ...transformPart(
           part.transform,
           part.name,
-          // Written the way the 4.x `Function` takes it, or the V5 one
+          // Written the way SST 4's `Function` took it, or SST 5's
           withDefaults(defaults, args),
           part.opts,
         ),

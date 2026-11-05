@@ -438,18 +438,17 @@ export interface MicroVmArgs extends ComponentArgs<typeof parts> {
  *
  * A few things work differently:
  *
- * - In `sst dev`, `sst.aws.MicroVm` created a component for the pane `sst dev` shows. The
- *   V5 one tells `sst dev` itself, so a deploy in `sst dev` drops that component. It has
+ * - In `sst dev`, SST 4's `MicroVm` created a component for the pane `sst dev` shows.
+ *   SST 5's tells `sst dev` itself, so a deploy in `sst dev` drops that component. It has
  *   nothing in AWS behind it. The pane is named after the MicroVm, `Sandbox` where it
  *   was `SandboxDev`, and that's the name `SST_CHILD` takes.
  * - `dev` is a plain value, not an output: it decides whether the image is built.
- * - `vpc` takes either `Vpc`. A VPC with no NAT gets the warning with a V5 `Vpc` too. A
- *   `vpc` that's another resource, like an `aws.ec2.Vpc`, is refused: pass its subnets
- *   and security groups.
+ * - A `Vpc` with no NAT gets the warning too. A `vpc` that's another resource, like an
+ *   `aws.ec2.Vpc`, is refused: pass its subnets and security groups.
  * - `nodes` also has the code's zip, the resource that prunes the image's versions and
  *   the operator role. In `sst dev`, reading `nodes.image`, `nodes.code`,
  *   `nodes.buildRole`, `nodes.imagePrune` or the connector's two throws an error that
- *   says the image runs locally, where `sst.aws.MicroVm` gave `undefined`. `arn` is still
+ *   says the image runs locally, where SST 4's `MicroVm` gave `undefined`. `arn` is still
  *   `undefined` there.
  * - If you set `environmentVariables` on the image, or `configuration` on the network
  *   connector, with an object in `transform`, it keeps what SST sets next to yours. The

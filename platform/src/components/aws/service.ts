@@ -1417,7 +1417,7 @@ export interface ServiceArgs
  *
  * - `taskRole: "my-task-role"` becomes `existing: { taskRole: "my-task-role" }`, and the
  *   same for `executionRole`.
- * - `public`, which `sst.aws.Service` deprecated, is `loadBalancer`. Its `ports` are
+ * - `public`, which SST 4's `Service` deprecated, is `loadBalancer`. Its `ports` are
  *   `rules`, and a rule's `path` is `conditions.path`.
  * - `loadBalancer`, its `domain`, its `rules` and each rule are plain values, not outputs.
  *   So are `scaling` and its `cpuUtilization`, `memoryUtilization` and `requestCount`, the
@@ -1428,17 +1428,17 @@ export interface ServiceArgs
  * - With `containers`, the top-level `image`, `command`, `entrypoint`, `logging`,
  *   `environment`, `environmentFiles`, `volumes`, `ssm` and `health`, and `dev.command`,
  *   `dev.autostart` and `dev.directory`, are refused: set them on each container.
- *   `sst.aws.Service` refused some of them and dropped the others.
+ *   SST 4's `Service` refused some of them and dropped the others.
  * - A container's own `environmentFiles` are granted to the execution role, which
- *   `sst.aws.Service` left out. A service whose containers have them gets its execution
+ *   SST 4's `Service` left out. A service whose containers have them gets its execution
  *   role updated in place when you switch.
- * - `permissions` next to a `taskRole` in `existing` are refused. `sst.aws.Service` left
+ * - `permissions` next to a `taskRole` in `existing` are refused. SST 4's `Service` left
  *   them out of the role it was given.
  * - A `loadBalancer.health` check on an `Alb` for a port no rule forwards to is refused.
- *   `sst.aws.Service` dropped it.
+ *   SST 4's `Service` dropped it.
  * - A `cpu`, `memory` or `storage` Fargate doesn't offer is refused as the config is read.
- * - A domain's `dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ * - A domain's `dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work. The DNS records that validate its certificate are named after the
  *   domains they validate, and a domain's hosted zone is found without a resource: SST
  *   4's `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
@@ -1451,12 +1451,12 @@ export interface ServiceArgs
  *   `nodes.autoScalingTarget` may be `undefined`: they aren't created for an ECS service or
  *   a task definition you pass in `existing`.
  * - A `transform` function for `service`, `taskDefinition`, `logGroup`, `target` or
- *   `listener` is given outputs where `sst.aws.Service` gave it plain values. For a part
+ *   `listener` is given outputs where SST 4's `Service` gave it plain values. For a part
  *   there are several of, it's also given which one.
  * - `transform.listenerRule` applies to the rules of the service's own load balancer too,
  *   not only to the rules on an `Alb`.
- * - `loadBalancer.instance` takes either `Alb`, and `cluster` either `Cluster`. Each
- *   refuses anything else.
+ * - `loadBalancer.instance` takes an `Alb`, and `cluster` a `Cluster`. Each refuses
+ *   anything else.
  * - If you set part of the ECS service's `networkConfiguration` or
  *   `deploymentCircuitBreaker`, of a target group's `healthCheck`, or of the task
  *   definition's `runtimePlatform`, with an object in `transform`, the rest of it is kept.

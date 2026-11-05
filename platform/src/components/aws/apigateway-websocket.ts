@@ -308,7 +308,7 @@ export interface ApiGatewayWebSocketRouteArgs {
  * resources are kept. A few things are written differently:
  *
  * - The routes and authorizers are inside the component, where
- *   `sst.aws.ApiGatewayWebSocket` kept each in a component of its own. A route is kept by
+ *   SST 4's `ApiGatewayWebSocket` kept each in a component of its own. A route is kept by
  *   its name, or the route itself, like `sendMessage`; `route` and `addAuthorizer` return
  *   the API and the authorizer, not those components.
  * - `addAuthorizer` takes one object, with the authorizer's name in it, as
@@ -328,24 +328,24 @@ export interface ApiGatewayWebSocketRouteArgs {
  * - `transform.accessLog` is `transform.logGroup`, and the certificate is `nodes.certificate`.
  * - `domain` has to be a plain value, not an output. `domain.nameId` is
  *   `existing.domainName`.
- * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ * - `domain.dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work.
  * - The DNS records that validate the certificate are named after the domain they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's
  *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
- * - `nodes.domainName` is `undefined` without a domain, where `sst.aws.ApiGatewayWebSocket`
+ * - `nodes.domainName` is `undefined` without a domain, where SST 4's `ApiGatewayWebSocket`
  *   threw.
  * - An authorizer's `jwt`, and its `lambda.payload` and `lambda.response`, are refused. API
  *   Gateway doesn't take a JWT authorizer on a WebSocket API, which
- *   `sst.aws.ApiGatewayWebSocket` refused in the deploy, and ignores the other two. A
+ *   SST 4's `ApiGatewayWebSocket` refused in the deploy, and ignores the other two. A
  *   route's `auth.jwt` is refused the same way.
  * - An authorizer's `lambda` and a route's handler have to be plain values: whether a
  *   function is created is decided from them. A function you have, or its ARN, can be an
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
@@ -353,12 +353,12 @@ export interface ApiGatewayWebSocketRouteArgs {
  *   domain name is used the way it is.
  * - API Gateway's account settings, which give the API a role to write its access log
  *   with, are read and set up with the provider the API has.
- *   `sst.aws.ApiGatewayWebSocket` used only a `provider` passed to the API itself, so an
+ *   SST 4's `ApiGatewayWebSocket` used only a `provider` passed to the API itself, so an
  *   API that takes its provider from a parent component or from `providers` has the
  *   account of that provider's region set up, where it had the default region's. The
  *   setup is kept when the API is removed.
  * - The routes and authorizers are created with the provider the API has.
- *   `sst.aws.ApiGatewayWebSocket` gave them only a `provider` passed to the API itself, so
+ *   SST 4's `ApiGatewayWebSocket` gave them only a `provider` passed to the API itself, so
  *   if your API takes its provider from a parent component or from `providers`, the switch
  *   gives its routes and authorizers that provider and keeps them, with the provider's
  *   default tags.

@@ -469,7 +469,7 @@ export interface SvelteKitArgs
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.SvelteKit`
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `SvelteKit`
  *   warmed it on every deploy. The switch warms it once.
  */
 export class SvelteKit extends component("sst:aws:SvelteKit", parts) {

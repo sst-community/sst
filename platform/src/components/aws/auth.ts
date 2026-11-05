@@ -229,7 +229,7 @@ export interface AuthArgs extends ComponentArgs<typeof parts> {
  * #### Switch from SST 4's `sst.aws.Auth`
  *
  * Keep the name, and `sst migrate` moves it. The table, the issuer
- * function and the router are kept: each becomes its V5 form, the `Dynamo`, the
+ * function and the router are kept: each becomes its 5.0 form, the `Dynamo`, the
  * `Function` and the `Router`, as each one's own "Switch from" says. A few things are
  * written differently:
  *
@@ -240,15 +240,15 @@ export interface AuthArgs extends ComponentArgs<typeof parts> {
  * - `domain` has to be a plain value, not an output: it decides whether the router is
  *   created. A handler or the issuer's args have to be plain values too; what's in the
  *   args can be an output.
- * - `transform.router` transforms the V5 `Router`, whose own `transform` is shaped by its
+ * - `transform.router` transforms SST 5's `Router`, whose own `transform` is shaped by its
  *   parts.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
- * - `sst.aws.Auth.v1`, the auth server before OpenAuth, has no 5.0 form.
+ * - SST 4's `Auth.v1`, the auth server before OpenAuth, has no 5.0 form.
  */
 export class Auth extends component("sst:aws:Auth", parts) {
   private readonly issuerUrl: Output<string>;

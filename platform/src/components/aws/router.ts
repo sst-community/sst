@@ -981,9 +981,9 @@ interface Routing {
  * without deleting them. A few things are written differently:
  *
  * - `routes` is gone. Add each route with `route()` or `routeBucket()`. A router that's
- *   deployed with `routes` switches to `route()` on `sst.aws.Router` first, then to this
+ *   deployed with `routes` switches to `route()` on SST 4's `Router` first, then to this
  *   one: `sst migrate --check` fails on one that hasn't.
- * - `invalidation` is gone. `sst.aws.Router` never used it. A site served through the
+ * - `invalidation` is gone. SST 4's `Router` never used it. A site served through the
  *   router invalidates its own files, with its own `invalidation`.
  * - `domain`, `edge`, `edge.viewerRequest`, `edge.viewerResponse`, `protection`,
  *   `protection.edgeFunction`, `waf` and `waf.logging` have to be plain values, not
@@ -991,16 +991,17 @@ interface Routing {
  * - `nodes.cdn` is the `Cdn` itself, not an output.
  * - `transform` also takes the key-value store, the functions, the Lambda@Edge function
  *   and its role, and each route's entries in the store.
- * - A route is part of the router: `sst.aws.Router` kept each one in a component of its
+ * - A route is part of the router: SST 4's `Router` kept each one in a component of its
  *   own at the top of your app. A switch takes those components out of the state, which
  *   changes nothing in AWS.
- * - An `sst.aws.Function` that links the router and is routed to with `route()` would
+ * - An SST 4's `Function` that links the router and is routed to with `route()` would
  *   wait on its own route, and never be deployed: it waits for everything in what it
  *   links. Switch it to `sst.aws.Function` with the router, or serve it with its own
  *   `url.router`.
  * - If you set `tags` on the CDN with an object in `transform`, it keeps the tags SST
  *   sets next to yours. They're added back when you switch, and a stage that references
  *   this router with `get` reads them.
+
  */
 export class Router extends component("sst:aws:Router", parts) {
   private readonly routing: Routing;

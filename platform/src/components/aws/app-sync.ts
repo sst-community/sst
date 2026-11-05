@@ -499,18 +499,18 @@ export interface AppSyncFunctionArgs {
  *   created. A function you already have, or its ARN, can still be an output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
- * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ * - `domain.dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work.
  * - The DNS records that validate the certificate are named after the domain they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's
  *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
  * - What a data source, an AppSync function, a resolver or a custom domain creates is
- *   created inside the API, with the provider the API has. `sst.aws.AppSync` created it
+ *   created inside the API, with the provider the API has. SST 4's `AppSync` created it
  *   beside the API: a Lambda data source's function and the domain's association with
  *   your app's provider, and the rest with only a `provider` passed to the API itself. The
  *   switch gives each of them the API's provider and keeps them, with the provider's

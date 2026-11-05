@@ -479,14 +479,14 @@ type IndexKey = string | string[];
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - A subscriber's function is described after the component, `Subscribed to MyTable`,
- *   where `sst.aws.Dynamo` named the component it kept the subscriber in: an update in
+ *   where SST 4's `Dynamo` named the component it kept the subscriber in: an update in
  *   place.
- * - A subscriber is created with the provider the table has. `sst.aws.Dynamo` gave it only
+ * - A subscriber is created with the provider the table has. SST 4's `Dynamo` gave it only
  *   a `provider` passed to the table itself, so if your table takes its provider from a
  *   parent component or from `providers`, the switch gives its subscribers that provider
  *   and keeps them, with the provider's default tags.
@@ -501,7 +501,7 @@ type IndexKey = string | string[];
  *     .subscribe("MySubscriber", "src/subscriber.handler");
  *   ```
  * - `get` gives its options to the component, so a `provider` or `parent` you pass it
- *   applies to the table's subscribers too. `sst.aws.Dynamo.get` gave them to the table it
+ *   applies to the table's subscribers too. SST 4's `Dynamo.get` gave them to the table it
  *   looked up and to nothing else. If you pass `get` a `provider` and subscribe to that
  *   table, the switch gives the subscriber that provider and keeps it.
  * - A `transform` function for the table is given the table's keys, indexes, attributes

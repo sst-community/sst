@@ -281,11 +281,11 @@ export function cdnDomain(
  *
  * - `domain`, with its `name`, `aliases` and `redirects`, and `wait` have to be plain
  *   values, not outputs.
- * - `nodes.distribution` is the distribution itself. In `sst.aws.Cdn` it was an output
+ * - `nodes.distribution` is the distribution itself. In SST 4's `Cdn` it was an output
  *   of it.
  * - `transform` also takes the `waiter`, the `certificate` and the `redirect`.
- * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for
+ * - `domain.dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for
  *   SST 4's adapters doesn't work.
  * - The DNS records that validate the certificate are named after the domains they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's

@@ -419,12 +419,12 @@ export interface NuxtArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.Nuxt` warmed it
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `Nuxt` warmed it
  *   on every deploy. The switch warms it once.
- * - The build has to use Nitro's `aws-lambda` preset. `sst.aws.Nuxt` deployed any build,
+ * - The build has to use Nitro's `aws-lambda` preset. SST 4's `Nuxt` deployed any build,
  *   and one with another preset had no handler for its server.
  * - The base path is read from `nuxt.config` with any extension, like `.js` or `.mjs`, and
- *   it's what's in the quotes after `baseURL`. `sst.aws.Nuxt` read only `nuxt.config.ts`,
+ *   it's what's in the quotes after `baseURL`. SST 4's `Nuxt` read only `nuxt.config.ts`,
  *   and failed without it, and read on to the last quote of the line.
  */
 export class Nuxt extends component("sst:aws:Nuxt", parts) {

@@ -431,14 +431,12 @@ export interface EventBridgePutEventsArgs extends TaskBaseArgs {
  *
  * - `logging` has to be a plain value, not an output: it decides whether the log group is
  *   created. What's in it can still be an output.
- * - `lambdaInvoke` creates a V5 `Function` from a handler or the function's args, with the
- *   name `sst.aws.StepFunctions` gave its function. Switch from `sst.aws.Function` the
+ * - `lambdaInvoke` creates SST 5's `Function` from a handler or the function's args, with the
+ *   name SST 4's `StepFunctions` gave its function. Switch from SST 4's `Function` the
  *   same way as that function: its own "Switch from" says what changes. A handler or the
  *   args have to be plain values; a function you have, or its ARN, can be an output.
- * - `snsPublish`, `sqsSendMessage`, `ecsRunTask` and `eventBridgePutEvents` take the V5
- *   `SnsTopic`, `Queue`, `Task` and `Bus`, as well as the 4.x ones.
  * - `nodes` has the role and the log group too.
- * - With `logging: false`, the state machine deploys. `sst.aws.StepFunctions` gave it a log
+ * - With `logging: false`, the state machine deploys. SST 4's `StepFunctions` gave it a log
  *   destination of `undefined:*`, which AWS turns down.
  */
 export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
@@ -1029,7 +1027,7 @@ function invokedArn(
     return definition.startsWith("arn:")
       ? output(definition)
       : new Function(`${state}Function`, { handler: definition }).targetArn;
-  // A function, either kind, or the args of one to create
+  // A function, or the args of one to create
   if (definition instanceof Function || "targetArn" in (definition as object))
     return output((definition as AnyFunction).targetArn) as Output<string>;
   return new Function(`${state}Function`, definition as FunctionArgs).targetArn;

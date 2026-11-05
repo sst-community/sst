@@ -371,15 +371,15 @@ export interface TanStackStartArgs
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.TanStackStart`
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `TanStackStart`
  *   warmed it on every deploy. The switch warms it once.
  * - The base path is read from the server's code where TanStack Start's builds with Nitro 3
  *   put it, `.output/server/_ssr/ssr.mjs`, as well as where earlier ones did.
- *   `sst.aws.TanStackStart` read only the earlier place, so a site under a router's `path`
+ *   SST 4's `TanStackStart` read only the earlier place, so a site under a router's `path`
  *   failed to deploy with a current TanStack Start.
  * - A build whose Nitro preset isn't found is refused with where to set it for the site's
  *   own setup: `vite.config.ts` in the site's folder, or `app.config.ts`.
- *   `sst.aws.TanStackStart` looked for `vite.config.ts` in the folder above the site's.
+ *   SST 4's `TanStackStart` looked for `vite.config.ts` in the folder above the site's.
  */
 export class TanStackStart extends component("sst:aws:TanstackStart", parts) {
   private readonly siteUrl: Output<string>;

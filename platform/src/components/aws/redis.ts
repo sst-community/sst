@@ -502,22 +502,22 @@ interface Connection {
  * A few things work differently:
  *
  * - The deprecated `nodes` is gone. Where `cluster` isn't set, pass the same number as
- *   `cluster.nodes`. Where `cluster` or `serverless` is set, `sst.aws.Redis` ignored it, so
+ *   `cluster.nodes`. Where `cluster` or `serverless` is set, SST 4's `Redis` ignored it, so
  *   remove it. Either way nothing in AWS changes.
  * - A `transform.cluster` function is given `clusterMode`, `numNodeGroups`,
- *   `replicasPerNodeGroup` and `automaticFailoverEnabled` as outputs, where `sst.aws.Redis`
+ *   `replicasPerNodeGroup` and `automaticFailoverEnabled` as outputs, where SST 4's `Redis`
  *   gave plain values. A function that reads one of them to decide what to set has to
  *   decide inside an `apply`, or from your own config.
- * - With `dev` set, `sst.aws.Redis` created a component for the pane `sst dev` shows, in
- *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
+ * - With `dev` set, SST 4's `Redis` created a component for the pane `sst dev` shows, in
+ *   every deploy. SST 5's tells `sst dev` itself, so a deploy drops that component. It
  *   has nothing in AWS behind it.
  * - `nodes.cluster` is the cluster, not an output of it. `nodes.cluster` and
  *   `nodes.serverlessCache` are `undefined` when the other kind is deployed, where
- *   `sst.aws.Redis` threw an error. `nodes` also has the auth token and its secret, the
+ *   SST 4's `Redis` threw an error. `nodes` also has the auth token and its secret, the
  *   subnet group, the parameter group, and a serverless cache's user and user group.
  * - If you set `tags` on the cluster with an object in `transform`, it keeps the tags SST
  *   sets next to yours. They're added back when you switch.
- * - `sst.aws.Redis.v1` has no V5 form.
+ * - SST 4's `Redis.v1` has no 5.0 form.
  *
  * ---
  *

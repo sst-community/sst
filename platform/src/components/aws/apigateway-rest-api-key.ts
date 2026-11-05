@@ -39,7 +39,7 @@ export interface ApiKeyArgs
  * Switching the API to `sst.aws.ApiGatewayRest` switches its keys, and keeps them. A
  * function linked to a key reads its `value` as before. It's named `ApiGatewayRestApiKey`,
  * as the API is `ApiGatewayRest`, and keeps its type, `sst:aws:ApiGatewayV1ApiKey`, so
- * `sst-env.d.ts` still lists a linked key as `sst.aws.ApiGatewayV1ApiKey`.
+ * `sst-env.d.ts` still lists a linked key as SST 4's `ApiGatewayV1ApiKey`.
  */
 export class ApiGatewayRestApiKey extends component(
   "sst:aws:ApiGatewayV1ApiKey",

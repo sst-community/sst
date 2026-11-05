@@ -161,18 +161,14 @@ export interface ClusterGetArgs {
  *
  * A few things work differently:
  *
- * - Switch the services and tasks in the cluster first, or along with it. A
- *   `sst.aws.Service` and a `sst.aws.Task` take either cluster. A
- *   [`sst.aws.Service`](/docs/component/aws/service) and a
- *   [`sst.aws.Task`](/docs/component/aws/task) are typed for `sst.aws.Cluster` alone.
  * - The deprecated `addService` and `addTask` are gone. Create the service or the task,
  *   and pass it the cluster. Those methods also gave it the cluster's `provider`, so pass
  *   that along if the cluster has one.
  * - The deprecated `vpc.serviceSubnets` is gone. Pass the same subnets as
  *   `vpc.containerSubnets`; nothing in AWS changes.
  * - `forceUpgrade` isn't taken: remove it. It upgraded a cluster from `Cluster.v1`, and
- *   `sst.aws.Cluster.v1` has no V5 form.
- * - `get` takes any ECS cluster. `sst.aws.Cluster.get` refused one without the version
+ *   SST 4's `Cluster.v1` has no 5.0 form.
+ * - `get` takes any ECS cluster. SST 4's `Cluster.get` refused one without the version
  *   tag SST puts on the clusters it creates.
  * - `nodes.cluster` is the cluster, not an output of it. `nodes` also has the capacity
  *   providers.

@@ -259,11 +259,11 @@ export interface BusSubscriberArgs {
  *
  * A few things work differently:
  *
- * - `sst.aws.Bus.subscribe` and `sst.aws.Bus.subscribeQueue`, which took the ARN of a bus
+ * - SST 4's `Bus.subscribe` and SST 4's `Bus.subscribeQueue`, which took the ARN of a bus
  *   that isn't in your app, are `get` followed by `subscribe` or `subscribeQueue`, and are
  *   refused with what to write. `get` takes the bus's ARN, or its name. What they created
  *   is kept, as long as `get` isn't given a provider, directly, through its `parent`, or
- *   in `providers`: `sst.aws.Bus` created it with your app's, and another one replaces
+ *   in `providers`: SST 4's `Bus` created it with your app's, and another one replaces
  *   it, a function's log group included.
  *
  *   ```ts title="sst.config.ts" del={1} ins={2}
@@ -276,7 +276,7 @@ export interface BusSubscriberArgs {
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
@@ -285,7 +285,7 @@ export interface BusSubscriberArgs {
  *   `bus.nodes.rule.MySubscriber`.
  * - A subscriber's `transform` is the bus's: its `rule` and `target` apply to every
  *   subscriber, and a function there is given the subscriber's name.
- * - A subscriber is created with the provider the bus has. `sst.aws.Bus` gave a function
+ * - A subscriber is created with the provider the bus has. SST 4's `Bus` gave a function
  *   subscriber only a `provider` passed to the bus itself, and a queue subscriber your
  *   app's provider, whatever the bus had. So if your bus has a `provider` and a queue
  *   subscribed to it, or takes its provider from a parent component or from `providers`,

@@ -46,6 +46,7 @@ export interface AiArgs {}
  * Keep the name, and `sst migrate` moves it. It
  * creates nothing in Cloudflare, and a Worker it's linked to gets the same
  * binding, so nothing there changes.
+
  */
 export class Ai extends component("sst:cloudflare:Ai", parts) {
   constructor(

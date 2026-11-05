@@ -628,12 +628,12 @@ export interface ApiGatewayRestIntegrationArgs {
  *
  * A few things are written differently:
  *
- * - It's named `ApiGatewayRest`, for the REST API it creates. `sst.aws.ApiGatewayV1` was
+ * - It's named `ApiGatewayRest`, for the REST API it creates. SST 4's `ApiGatewayV1` was
  *   named after the version of API Gateway's API that creates one. It keeps its type,
  *   `sst:aws:ApiGatewayV1`, which is what a deployed one has, so `sst-env.d.ts` still
- *   lists a linked one as `sst.aws.ApiGatewayV1`. Its args' types are renamed the same
+ *   lists a linked one as SST 4's `ApiGatewayV1`. Its args' types are renamed the same
  *   way: `ApiGatewayRestArgs`, `ApiGatewayRestRouteArgs` and the others.
- * - The routes and authorizers are inside the component, where `sst.aws.ApiGatewayV1`
+ * - The routes and authorizers are inside the component, where SST 4's `ApiGatewayV1`
  *   kept each in a component of its own. A route is kept by its name, or the route itself,
  *   like `GET /notes`. `route` and `routeIntegration` return the API, and `addAuthorizer`
  *   returns the authorizer, with its `id`, not those components.
@@ -645,8 +645,8 @@ export interface ApiGatewayRestIntegrationArgs {
  *   certificate is `nodes.certificate`, an output.
  * - `domain`, `endpoint` and `cors` have to be plain values, not outputs. `domain.nameId` is
  *   `existing.domainName`.
- * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ * - `domain.dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work.
  * - The DNS records that validate the certificate are named after the domain they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's
@@ -655,12 +655,12 @@ export interface ApiGatewayRestIntegrationArgs {
  *   instead: `api.route("GET /", { handler: "src/get.handler", streaming: true })`. A route
  *   to a function you have, or to its ARN, doesn't stream.
  * - A route added after `deploy()`, or a second `deploy()`, is refused.
- *   `sst.aws.ApiGatewayV1` deployed such a route, but without CORS for its path. If your
+ *   SST 4's `ApiGatewayV1` deployed such a route, but without CORS for its path. If your
  *   app adds one, move it above `deploy()` and deploy with SST 4 first, which adds CORS
  *   for its path; then switch.
  * - `nodes.domainName` is `undefined` without a domain or before `deploy()`, where
- *   `sst.aws.ApiGatewayV1` threw.
- * - A refresh doesn't make the API deploy again. `sst.aws.ApiGatewayV1` deployed it again
+ *   SST 4's `ApiGatewayV1` threw.
+ * - A refresh doesn't make the API deploy again. SST 4's `ApiGatewayV1` deployed it again
  *   after every refresh, which reads empty settings back from AWS.
  * - An authorizer's `tokenFunction` and `requestFunction` take a `Function`, or the ARN of a
  *   function, as well as a handler or the function's args.
@@ -669,19 +669,19 @@ export interface ApiGatewayRestIntegrationArgs {
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - Next to `existing.domainName`, a domain's `name`, `dns` and `cert` are refused: the
  *   domain name is used the way it is.
  * - API Gateway's account settings, which give the API a role to write its access log
- *   with, are read and set up with the provider the API has. `sst.aws.ApiGatewayV1` used
+ *   with, are read and set up with the provider the API has. SST 4's `ApiGatewayV1` used
  *   only a `provider` passed to the API itself, so an API that takes its provider from a
  *   parent component or from `providers` has the account of that provider's region set
  *   up, where it had the default region's. The setup is kept when the API is removed.
  * - The routes and authorizers are created with the provider the API has.
- *   `sst.aws.ApiGatewayV1` gave them only a `provider` passed to the API itself. So if your
+ *   SST 4's `ApiGatewayV1` gave them only a `provider` passed to the API itself. So if your
  *   API takes its provider from a parent component or from `providers`, the switch gives
  *   its routes and authorizers that provider and keeps them, with the provider's default
  *   tags.

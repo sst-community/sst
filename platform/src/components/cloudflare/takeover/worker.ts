@@ -2,7 +2,7 @@ import { sstResource, takeover } from "../../takeover";
 import { Worker } from "../worker";
 
 // The 4.x `Worker` named each of the domain's aliases and redirects after its
-// place in the list. The V5 one keeps each by its domain.
+// place in the list. SST 5's keeps each by its domain.
 const place = (worker: Worker, part: "alias" | "redirect", id?: string) =>
   (worker as unknown as { hostnames: Record<typeof part, string[]> }).hostnames[
     part

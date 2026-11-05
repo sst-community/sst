@@ -1082,16 +1082,16 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
  * invalidation runs once more, and its origin access control is kept, by its id. A few
  * things are written differently:
  *
- * - With `build`, the site is built in the deploy itself, once. `sst.aws.StaticSite`
+ * - With `build`, the site is built in the deploy itself, once. SST 4's `StaticSite`
  *   built it with a command it kept in the state, which goes.
  * - `sst diff` builds the site too, to see what it uploads. Values that aren't known until
  *   the deploy, like those of what the same deploy creates on a new stage, are left out of
- *   that build's `environment`. `sst.aws.StaticSite` skipped its build in `sst diff` then.
+ *   that build's `environment`. SST 4's `StaticSite` skipped its build in `sst diff` then.
  * - The build gets `SST=1` and `SST_RESOURCE_App` in its environment, as the other sites'
  *   builds do, and not what the CLI is given for its own calls to Cloudflare.
  * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
  *   pack, build the site twice: in the preview, and in the deploy.
- * - `sst refresh` doesn't build the site, where `sst.aws.StaticSite` did. Its files stay as
+ * - `sst refresh` doesn't build the site, where SST 4's `StaticSite` did. Its files stay as
  *   they are.
  * - `path`, `build`, `vite`, `indexPage`, `errorPage`, `edge`, `edgeRouting`, `router`,
  *   `invalidation` and `assets.bucket` have to be plain values, not outputs: they decide
@@ -1100,28 +1100,28 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
  * - `route`, `base` and `cdn` are gone. Serve the site through a Router with `router`.
  * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
  *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
- *   `sst.aws.StaticSite` ignored them.
+ *   SST 4's `StaticSite` ignored them.
  * - `edge.viewerRequest.kvStores` and `edge.viewerResponse.kvStores` are gone, and refused.
- *   Use `kvStore`. `sst.aws.StaticSite` gave the viewer response function the first of
+ *   Use `kvStore`. SST 4's `StaticSite` gave the viewer response function the first of
  *   `kvStores`.
  * - A viewer request or response function is created when its `injection` is given. An
  *   `injection` given as an output that turns out empty still creates one, where
- *   `sst.aws.StaticSite` created none.
- * - `assets.textEncoding` sets the charset of text files. `sst.aws.StaticSite` ignored it
+ *   SST 4's `StaticSite` created none.
+ * - `assets.textEncoding` sets the charset of text files. SST 4's `StaticSite` ignored it
  *   and wrote `UTF-8`.
  * - Vite's types are written when the keys of `environment` are known, in `sst diff` too.
- *   `sst.aws.StaticSite` waited for every value.
+ *   SST 4's `StaticSite` waited for every value.
  * - The bucket an `assets.bucket` names is looked up with a function, not a resource of the
  *   state. `sst migrate` takes SST 4's lookup out of the state, which changes nothing in AWS.
  * - `nodes` has a key for each resource the site creates, like `nodes.kvKeys`.
  *   `nodes.assets` is `undefined` when `assets.bucket` names a bucket. In `sst dev`, reading
- *   `nodes` says the site runs on your machine, where `sst.aws.StaticSite` gave `undefined`.
+ *   `nodes` says the site runs on your machine, where SST 4's `StaticSite` gave `undefined`.
  * - `transform.cdn` is given the distribution's `customErrorResponses`, its
  *   `defaultRootObject` and its `defaultCacheBehavior.functionAssociations` as plain values,
  *   not outputs.
  * - If you set the `defaultCacheBehavior` of `transform.cdn` with an object, it's merged
  *   with the one the site sets: it keeps the functions the site associates with it, where
- *   `sst.aws.StaticSite` replaced it whole.
+ *   SST 4's `StaticSite` replaced it whole.
  */
 export class StaticSite extends component("sst:aws:StaticSite", parts) {
   private readonly siteUrl: Output<string>;

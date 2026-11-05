@@ -254,7 +254,7 @@ export type Existing<P extends Parts> = {
 /** A parts map, or the function that returns it. */
 type PartsOf<T> = T extends () => infer P ? P : T;
 
-// The args of a V5 component that takes the same args as the component it
+// The args of an SST 5 component that takes the same args as the component it
 // replaces: the original's args, with `transform` and `existing` for the new
 // component's parts.
 //

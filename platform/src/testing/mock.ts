@@ -75,7 +75,7 @@ export interface MockInput {
   root?: string;
   /**
    * For the platform's own takeover tests: the components a 4.x component
-   * wraps things in, which go when its V5 component takes over.
+   * wraps things in, which go when SST 5's component takes over.
    */
   wrappers?: RegExp;
   /** Extra state for a resource, on top of its inputs. */
@@ -134,9 +134,9 @@ const legacyOutputs: Record<string, string> = {
 /**
  * A component's outputs as the core reads them (`pkg/project/report.go`): what
  * it reported, and the rest of its outputs. A report is its record (`_sst`)
- * when it has one, and otherwise what it named with 4.x's output names. So a
- * V5 component that reports what a 4.x one named is the same to the core, and
- * one that writes a record and an old name too isn't.
+ * when it has one, and otherwise what it named with 4.x's output names. So an
+ * SST 5 component that reports what an SST 4 one named is the same to the
+ * core, and one that writes a record and an old name too isn't.
  */
 function asTheCoreReads(outputs: Record<string, any>) {
   const { _sst, ...rest } = outputs;
@@ -628,7 +628,7 @@ export function mockPulumi(input?: MockInput) {
     },
     /**
      * Deploys a component, then what replaces it, and checks the second
-     * against the first with `takeover()`: a V5 component against the one it
+     * against the first with `takeover()`: an SST 5 component against the one it
      * takes over from, or a component against how it was before a change.
      *
      * @param original Creates the component that's deployed.

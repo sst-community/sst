@@ -346,15 +346,15 @@ const reactRouter: SsrFramework = {
  * differently:
  *
  * - The app is built in the deploy itself, once, with the values of what it's linked to.
- *   `sst.cloudflare.ReactRouter` built it with a command it kept in the state, which goes.
+ *   SST 4's `ReactRouter` built it with a command it kept in the state, which goes.
  * - `sst diff` builds the app too, and writes the Wrangler config its build reads. Values
  *   that aren't known until the deploy, like those of what the same deploy creates on a new
  *   stage, are left out of that build and of that config, and so is the binding to something
- *   that isn't created yet, like a new KV namespace. `sst.cloudflare.ReactRouter` skipped its
+ *   that isn't created yet, like a new KV namespace. SST 4's `ReactRouter` skipped its
  *   build in `sst diff` then.
  * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
  *   pack, build the app twice: in the preview, and in the deploy.
- * - `sst refresh` doesn't build the app, where `sst.cloudflare.ReactRouter` did. Its Worker
+ * - `sst refresh` doesn't build the app, where SST 4's `ReactRouter` did. Its Worker
  *   stays as it is, and isn't listed while it runs.
  * - `path`, `buildCommand` and `link` have to be plain values, not outputs: the build reads
  *   them, or they decide what's created. A `domain` given as an object is a plain value
@@ -362,7 +362,7 @@ const reactRouter: SsrFramework = {
  * - `compatibility` sets the Worker's compatibility date and flags, and the Wrangler config's.
  *   One set in `transform.server` still reaches both.
  * - In `sst dev`, reading `nodes.server` says the app runs on your machine, where
- *   `sst.cloudflare.ReactRouter` gave `undefined`.
+ *   SST 4's `ReactRouter` gave `undefined`.
  */
 export class ReactRouter extends component(
   "sst:cloudflare:ReactRouter",

@@ -78,7 +78,7 @@ export interface KvGetArgs {
  *
  * - The deprecated `id` is gone. Use `namespaceId`, which is the same value.
  * - `get` takes the same args. The namespace it references is looked up
- *   inside the component, where `sst.cloudflare.Kv.get` looked it up beside
+ *   inside the component, where SST 4's `Kv.get` looked it up beside
  *   it. A switch takes the old lookup out of the state and looks the
  *   namespace up again, which changes nothing in Cloudflare. Its
  *   `namespaceId` can be an output.

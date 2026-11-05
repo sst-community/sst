@@ -100,7 +100,7 @@ export interface RateLimitArgs {
  *
  * - `namespaceId`, `limit` and `period` are checked when the component is
  *   created, where they're plain values, and the error names it.
- *   `sst.cloudflare.RateLimit` checked `namespaceId` as it deployed, and
+ *   SST 4's `RateLimit` checked `namespaceId` as it deployed, and
  *   passed the others to Cloudflare as they were.
  * - `limit` has to be a positive integer, and `period` 10 seconds or 1
  *   minute, as Cloudflare takes them.

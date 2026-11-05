@@ -228,18 +228,18 @@ const engine: RdsEngine = {
  *
  * - `proxy`, its list of `credentials`, and each credential's `username` are plain values,
  *   not outputs. They decide which resources are created.
- * - With `dev` set, `sst.aws.Postgres` created a component for the pane `sst dev` shows, in
- *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
+ * - With `dev` set, SST 4's `Postgres` created a component for the pane `sst dev` shows, in
+ *   every deploy. SST 5's tells `sst dev` itself, so a deploy drops that component. It
  *   has nothing in AWS behind it. An empty local password is shown as "[no password]" in
  *   the pane.
  * - `nodes` has every resource, not only the instance. The secret that stores the master
  *   user's credentials is `nodes.secret`. In `sst dev` with `dev` set, reading one of them
- *   fails and says why it's missing, where `sst.aws.Postgres` gave `undefined`.
- * - `proxyId` fails as soon as it's read when there is no proxy, where `sst.aws.Postgres`
+ *   fails and says why it's missing, where SST 4's `Postgres` gave `undefined`.
+ * - `proxyId` fails as soon as it's read when there is no proxy, where SST 4's `Postgres`
  *   failed on deploy.
  * - If you set `tags` on the instance with an object in `transform`, it keeps the tags
  *   SST sets next to yours. They're added back when you switch.
- * - `sst.aws.Postgres.v1` has no V5 form.
+ * - SST 4's `Postgres.v1` has no 5.0 form.
  *
  * ---
  *

@@ -10,7 +10,7 @@ import { childOf } from "./helpers";
 // The 4.x `ApiGatewayV1` keeps each route in a component of its own, at the
 // top of the app: named after the route's `name`, or a hash of its method
 // and path, and of one type for a route to a function and another for a
-// route to an integration. The V5 one keeps a route's resources inside the
+// route to an integration. SST 5's keeps a route's resources inside the
 // API, under its name or the route itself, and says which it was.
 const LAMBDA_ROUTE = "sst:aws:ApiGatewayV1LambdaRoute";
 const INTEGRATION_ROUTE = "sst:aws:ApiGatewayV1IntegrationRoute";

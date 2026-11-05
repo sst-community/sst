@@ -325,10 +325,7 @@ export function networkOf(cluster: AnyCluster): Network {
   };
 }
 
-/**
- * What a V5 task and a V5 service take that the 4.x ones don't: either kind
- * of cluster, and either kind of file system.
- */
+/** What a `Task` and a `Service` take: their cluster and their file systems. */
 export interface FargateArgs {
   /**
    * The ECS Cluster to use. Create one in your app, if you haven't already.

@@ -133,9 +133,9 @@ export interface CognitoIdentityPoolArgs extends ComponentArgs<typeof parts> {
  *
  * - `nodes` has the roles' attachment too, and `transform` takes it.
  * - An identity pool from `get` reads the pool, the attachment and the roles inside the
- *   component, where `sst.aws.CognitoIdentityPool.get` read them at the top of the app. A
+ *   component, where SST 4's `CognitoIdentityPool.get` read them at the top of the app. A
  *   read creates nothing, so the switch only drops the old ones from the state. The
- *   options given to `get`, like a `parent`, are the component's now: `sst.aws.CognitoIdentityPool.get`
+ *   options given to `get`, like a `parent`, are the component's now: SST 4's `CognitoIdentityPool.get`
  *   gave them to the pool it read and put the component at the top of the app.
  * - An identity pool given in `existing`, as `get` gives it, is used the way it is:
  *   `userPools` and `permissions` next to it are refused, where they were dropped.

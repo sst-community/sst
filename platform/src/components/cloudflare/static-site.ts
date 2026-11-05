@@ -383,15 +383,15 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
  * A few things are written differently:
  *
  * - With `build`, the site is built in the deploy itself, once.
- *   `sst.cloudflare.StaticSiteV2` built it with a command it kept in the state, which goes.
+ *   SST 4's `StaticSiteV2` built it with a command it kept in the state, which goes.
  * - `sst diff` builds the site too, to see what it uploads. Values that aren't known until the
  *   deploy, like those of what the same deploy creates on a new stage, are left out of that
- *   build's `environment`. `sst.cloudflare.StaticSiteV2` skipped its build in `sst diff` then.
+ *   build's `environment`. SST 4's `StaticSiteV2` skipped its build in `sst diff` then.
  * - The build gets `SST=1` and `SST_RESOURCE_App` in its environment, as the other sites'
  *   builds do, and not what the CLI is given for its own calls to Cloudflare.
  * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
  *   pack, build the site twice: in the preview, and in the deploy.
- * - `sst refresh` doesn't build the site, where `sst.cloudflare.StaticSiteV2` did. Its Worker
+ * - `sst refresh` doesn't build the site, where SST 4's `StaticSiteV2` did. Its Worker
  *   stays as it is, and isn't listed while it runs.
  * - `path` and `build` have to be plain values, not outputs: the build reads them. A
  *   `domain` given as an object is a plain value too, as it decides what's created. Its
@@ -402,17 +402,17 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
  *   error page `404.html` with `notFound: "404"`, which serves the nearest one. If you set
  *   either, the switch updates the Worker in place, without those two variables.
  * - With `dev: false`, `sst dev` deploys the site and doesn't also start it with
- *   `npm run dev`, as `sst.cloudflare.StaticSiteV2` did. `sst shell --target` gets no
+ *   `npm run dev`, as SST 4's `StaticSiteV2` did. `sst shell --target` gets no
  *   environment from a deployed site.
  * - `trailingSlash` and `notFound` can be outputs.
- *   `sst.cloudflare.StaticSiteV2` served an output given for either as the default.
+ *   SST 4's `StaticSiteV2` served an output given for either as the default.
  * - Vite's types are written when the keys of `environment` are known, in `sst diff` too.
- *   `sst.cloudflare.StaticSiteV2` waited for every value.
+ *   SST 4's `StaticSiteV2` waited for every value.
  * - In `sst dev`, reading `nodes.server` says the site runs on your machine, where
- *   `sst.cloudflare.StaticSiteV2` gave `undefined`.
- * - SST 4's first, deprecated `sst.cloudflare.StaticSite` has the same type, but this isn't
+ *   SST 4's `StaticSiteV2` gave `undefined`.
+ * - SST 4's first, deprecated SST 4's `StaticSite` has the same type, but this isn't
  *   what replaces it: it kept the site's files in a KV namespace, which a switch would
- *   delete. Move it to `sst.cloudflare.StaticSiteV2` with SST 4, and deploy, before the
+ *   delete. Move it to SST 4's `StaticSiteV2` with SST 4, and deploy, before the
  *   stage moves; otherwise `sst migrate --check` refuses the switch. A
  *   `$transform(sst.cloudflare.StaticSite, ...)` applies to this one too.
  */

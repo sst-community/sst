@@ -5,7 +5,7 @@ import { parseQueueArn } from "../helpers/arn";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Queue` keeps a subscription in a component of its own, named after
-// the queue's ARN. The V5 one keeps it inside the queue. 4.x created that
+// the queue's ARN. SST 5's keeps it inside the queue. 4.x created that
 // component at the top of the app, or next to the queue when it was given the
 // queue's parent: the 4.x `Nextjs` subscribes to its revalidation queue that way.
 const SUBSCRIBER = "sst:aws:QueueLambdaSubscriber";

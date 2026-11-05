@@ -271,20 +271,19 @@ export interface WorkflowArgs
  * #### Switch from SST 4's `sst.aws.Workflow`
  *
  * Keep the name, and `sst migrate` moves it. Its function,
- * `<name>Handler`, becomes a V5 `Function` under the same name, as the `Function`'s own
+ * `<name>Handler`, becomes SST 5's `Function` under the same name, as the `Function`'s own
  * "Switch from" says. A few things are written differently:
  *
  * - `transform.function` transforms the function's args, as the `transform` of any part
- *   does. What `sst.aws.Workflow` took there, the function's own `transform`, goes in
+ *   does. What SST 4's `Workflow` took there, the function's own `transform`, goes in
  *   `transform.function.transform`.
  * - What the function is built from, like `handler`, `runtime` or `bundle`, has to be a
  *   plain value, not an output, as [`sst.aws.Function`](/docs/component/aws/function)
  *   takes it. So does `logging`, since whether there are logs decides whether a log group
  *   is created. What's in `logging` can be an output.
- * - A workflow can be given to the V5 `Cron`, `Bus` and the other V5 components that take
- *   a function, as `sst.aws.Workflow` could be to theirs. SST 4's components don't take the
- *   V5 one: switch a component the workflow is given to with it.
- * - `role` isn't one of its args, as it isn't the V5 `Function`'s. To give the function a
+ * - A workflow can be given to `Cron`, `Bus` and the other components that take a
+ *   function, as SST 4's `Workflow` could be to theirs.
+ * - `role` isn't one of its args, as it isn't `Function`'s. To give the function a
  *   role you have, write `transform: { function: { existing: { role } } }`.
  *
  * ---

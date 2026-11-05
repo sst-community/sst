@@ -3,7 +3,7 @@ import { Bus } from "../bus";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Bus` keeps each subscription in a component of its own, at the top
-// of the app. The V5 one keeps them inside the bus. The component was named
+// of the app. SST 5's keeps them inside the bus. The component was named
 // after the bus and the subscriber: after the bus's component for one added
 // with `bus.subscribe()`, and after the bus's own name for one added with the
 // static `Bus.subscribe()`, which only has the bus's ARN.

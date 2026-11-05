@@ -425,10 +425,10 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. In SPA mode
  *   there's none, so a server is listed once the build says there is one.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.React` warmed
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `React` warmed
  *   it on every deploy. The switch warms it once.
  * - The base path is read from `vite.config` and `react-router.config` in any of their
- *   extensions, like `.js`. `sst.aws.React` read only the `.ts` files.
+ *   extensions, like `.js`. SST 4's `React` read only the `.ts` files.
  */
 export class React extends component("sst:aws:React", parts) {
   private readonly siteUrl: Output<string>;

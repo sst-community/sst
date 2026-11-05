@@ -6,8 +6,8 @@ import { childOf } from "./helpers";
 
 // The 4.x `ApiGatewayV2` keeps each route in a component of its own, next to
 // the API. There are three kinds, one for each thing a route can send requests
-// to. It's named after the route's `name`, or after a hash of the route. The V5
-// one keeps a route's resources inside the API, under the route's name or the
+// to. It's named after the route's `name`, or after a hash of the route.
+// SST 5's keeps a route's resources inside the API, under the route's name or the
 // route itself.
 const LAMBDA = "sst:aws:ApiGatewayV2LambdaRoute";
 const ROUTES = [

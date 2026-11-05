@@ -422,7 +422,7 @@ export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. A static site
  *   has none, so a server is listed once the build says there is one.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.Astro` warmed
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `Astro` warmed
  *   it on every deploy. The switch warms it once.
  */
 export class Astro extends component("sst:aws:Astro", parts) {

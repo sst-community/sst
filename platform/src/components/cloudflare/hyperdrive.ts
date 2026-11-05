@@ -249,11 +249,11 @@ export interface HyperdriveGetArgs {
  * A few things are different:
  *
  * - `origin` is kept secret in the state, whether or not its `password` is a
- *   secret. `sst.cloudflare.Hyperdrive` kept it in plain text when the
+ *   secret. SST 4's `Hyperdrive` kept it in plain text when the
  *   password was a plain string; the switch marks it secret, which changes
  *   nothing in Cloudflare.
  * - `get` takes the same args. The config it references is looked up inside
- *   the component, where `sst.cloudflare.Hyperdrive.get` looked it up beside
+ *   the component, where SST 4's `Hyperdrive.get` looked it up beside
  *   it. A switch takes the old lookup out of the state and looks the config
  *   up again, which changes nothing in Cloudflare. Its `hyperdriveId` can be
  *   an output.

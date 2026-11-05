@@ -358,22 +358,22 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
  * - `nodes.taskDefinition` is the task definition, not an output of it. `nodes` also has
  *   the log groups and the images, by container name.
  * - A `transform` function for `logGroup` or `taskDefinition` is given outputs where
- *   `sst.aws.Task` gave it plain values. For `logGroup` and `image` it's also given the
+ *   SST 4's `Task` gave it plain values. For `logGroup` and `image` it's also given the
  *   container's name.
  * - If you set part of the task definition's `runtimePlatform` with an object in
  *   `transform`, the rest of it is kept.
  * - `dev` is a plain value: it decides whether the stub is deployed.
  * - With `containers`, the top-level `image`, `command`, `entrypoint`, `logging`,
  *   `environment`, `environmentFiles`, `volumes` and `ssm` are refused: set them on each
- *   container. `sst.aws.Task` refused some of them and dropped the others.
+ *   container. SST 4's `Task` refused some of them and dropped the others.
  * - A container's own `environmentFiles` are granted to the execution role, which
- *   `sst.aws.Task` left out. A task whose containers have them gets its execution role
+ *   SST 4's `Task` left out. A task whose containers have them gets its execution role
  *   updated in place when you switch.
- * - `permissions` next to a `taskRole` in `existing` are refused. `sst.aws.Task` left them
+ * - `permissions` next to a `taskRole` in `existing` are refused. SST 4's `Task` left them
  *   out of the role it was given.
  * - `nodes.taskRole` and `nodes.executionRole` may be `undefined`: they aren't created for
  *   a task definition you pass in `existing`.
- * - `cluster` takes either `Cluster`, and refuses anything else. A `cpu`, `memory` or
+ * - `cluster` takes a `Cluster`, and refuses anything else. A `cpu`, `memory` or
  *   `storage` Fargate doesn't offer is refused as the config is read.
  *
  * ---

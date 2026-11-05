@@ -5,7 +5,7 @@ import { parseTopicArn } from "../helpers/arn";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `SnsTopic` keeps each subscription in a component of its own, next to
-// the topic and named after the subscriber. The V5 one keeps them inside the
+// the topic and named after the subscriber. SST 5's keeps them inside the
 // topic. A subscriber that was added without a name isn't carried over: its
 // name was made from the topic's ARN, the filter and the handler.
 const FUNCTION = "sst:aws:SnsTopicLambdaSubscriber";

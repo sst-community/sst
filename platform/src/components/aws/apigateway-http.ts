@@ -663,10 +663,10 @@ export interface ApiGatewayHttpAuthorizerArgs {
  *
  * A few things work differently:
  *
- * - It's named `ApiGatewayHttp`, for the HTTP API it creates. `sst.aws.ApiGatewayV2` was
+ * - It's named `ApiGatewayHttp`, for the HTTP API it creates. SST 4's `ApiGatewayV2` was
  *   named after the version of API Gateway's API that creates one, which creates WebSocket
  *   APIs too. It keeps its type, `sst:aws:ApiGatewayV2`, which is what a deployed one has,
- *   so `sst-env.d.ts` still lists a linked one as `sst.aws.ApiGatewayV2`. Its args' types
+ *   so `sst-env.d.ts` still lists a linked one as SST 4's `ApiGatewayV2`. Its args' types
  *   are renamed the same way: `ApiGatewayHttpArgs`, `ApiGatewayHttpRouteArgs` and the
  *   others.
  * - `route`, `routeUrl` and `routePrivate` return the API, so calls chain. What a route
@@ -682,12 +682,12 @@ export interface ApiGatewayHttpAuthorizerArgs {
  *   created. A function you already have, or its ARN, can still be an output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
- * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
- *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ * - `domain.dns` is an adapter SST 5's components use, like SST 4's `dns()`,
+ *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work.
  * - The DNS records that validate the certificate are named after the domain they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's
@@ -697,7 +697,7 @@ export interface ApiGatewayHttpAuthorizerArgs {
  * - Next to `existing.domainName`, a domain's `name`, `dns` and `cert` are refused: the
  *   domain name is used the way it is.
  * - The routes and authorizers are created with the provider the API has.
- *   `sst.aws.ApiGatewayV2` gave them only a `provider` passed to the API itself, so if
+ *   SST 4's `ApiGatewayV2` gave them only a `provider` passed to the API itself, so if
  *   your API takes its provider from a parent component or from `providers`, the switch
  *   gives its routes and authorizers that provider and keeps them, with the provider's
  *   default tags.

@@ -7,7 +7,7 @@ import { childOf } from "./helpers";
 // The 4.x `ApiGatewayWebSocket` keeps each route in a component of its own,
 // next to the API: named after the route's `name`, after the route itself for
 // `$connect`, `$disconnect` and `$default`, or after a hash of any other
-// route. The V5 one keeps a route's resources inside the API, under its name
+// route. SST 5's keeps a route's resources inside the API, under its name
 // or the route itself, and says which it was.
 const ROUTE = "sst:aws:ApiGatewayWebSocketRoute";
 const PREDEFINED = ["$connect", "$disconnect", "$default"];

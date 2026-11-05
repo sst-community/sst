@@ -1,6 +1,6 @@
 // The code of the CloudFront functions a router, and a site served through it
 // or on its own, run at the edge, and what they keep in the key-value store. The
-// 4.x and the V5 components deploy the same code, so it lives here, in one place.
+// SST 4's components and SST 5's deploy the same code, so it lives here, in one place.
 import crypto from "crypto";
 import type { DurationSeconds } from "../duration";
 import type { Size } from "../size";

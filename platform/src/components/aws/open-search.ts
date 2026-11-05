@@ -272,27 +272,27 @@ export interface OpenSearchArgs extends ComponentArgs<typeof parts> {
  *
  * A few things work differently:
  *
- * - With `dev` set, `sst.aws.OpenSearch` created a component for the pane `sst dev`
- *   shows, in every deploy. The V5 one tells `sst dev` itself, so a deploy drops that
+ * - With `dev` set, SST 4's `OpenSearch` created a component for the pane `sst dev`
+ *   shows, in every deploy. SST 5's tells `sst dev` itself, so a deploy drops that
  *   component. It has nothing in AWS behind it. An empty local password is shown as
  *   "[no password]" in the pane.
  * - `nodes` has every resource. Reading one that isn't created in `sst dev` with `dev`
- *   set throws an error that says why, where `sst.aws.OpenSearch` gave `undefined`.
+ *   set throws an error that says why, where SST 4's `OpenSearch` gave `undefined`.
  * - If you set `tags` on the domain with an object in `transform`, it keeps the tags SST
- *   sets next to yours. They're added back when you switch. `sst.aws.OpenSearch`
+ *   sets next to yours. They're added back when you switch. SST 4's `OpenSearch`
  *   replaced them, which left `get` unable to find the domain's username and password.
  * - The same goes for the domain's other settings SST sets as objects: `clusterConfig`,
  *   `ebsOptions`, `advancedSecurityOptions`, `nodeToNodeEncryption`, `encryptAtRest` and
  *   `domainEndpointOptions`. One you set with an object in `transform` keeps what SST
- *   sets in it that you don't, where `sst.aws.OpenSearch` replaced it whole. So a master
+ *   sets in it that you don't, where SST 4's `OpenSearch` replaced it whole. So a master
  *   user given by its ARN would get SST's username and password next to it: replace
  *   `advancedSecurityOptions` in a function, as
  *   `domain: (args) => { args.advancedSecurityOptions = { ... } }`.
  * - `get` takes the domain's name, or its ARN, which is the component's `id`.
- *   `sst.aws.OpenSearch.get` was documented to take the `id`, but couldn't look a domain
+ *   SST 4's `OpenSearch.get` was documented to take the `id`, but couldn't look a domain
  *   up by its ARN.
  * - `get` looks the domain up inside the component, with the component's `provider`.
- *   `sst.aws.OpenSearch.get` looked it up at the top of your app, with your app's
+ *   SST 4's `OpenSearch.get` looked it up at the top of your app, with your app's
  *   provider, so a switch takes that lookup out of the state, which changes nothing in
  *   AWS.
  *

@@ -4,7 +4,7 @@ import { KinesisStream } from "../kinesis-stream";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `KinesisStream` keeps each subscription in a component of its own,
-// at the top of the app, as the 4.x `Dynamo` does. The V5 one keeps them
+// at the top of the app, as the 4.x `Dynamo` does. SST 5's keeps them
 // inside the stream. The component was named after the stream and the
 // subscriber: after the stream's component for one added with
 // `stream.subscribe()`, and after the stream's own name for one added with the

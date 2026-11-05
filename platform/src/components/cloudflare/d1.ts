@@ -81,10 +81,10 @@ export interface D1GetArgs {
  * - `get` takes the database's ID in an object, `get(name, { databaseId })`.
  *   The deprecated form with the ID as the second argument is gone.
  * - `get` gives the component the options it's passed, `parent` and
- *   `provider` included, where `sst.cloudflare.D1.get` gave them to the
+ *   `provider` included, where SST 4's `D1.get` gave them to the
  *   lookup alone. A D1 referenced inside another component is now inside it.
  * - The database `get` references is looked up inside the component, where
- *   `sst.cloudflare.D1.get` looked it up beside it. A switch takes the old
+ *   SST 4's `D1.get` looked it up beside it. A switch takes the old
  *   lookup out of the state and looks the database up again, which changes
  *   nothing in Cloudflare. Its `databaseId` can be an output.
  * - You can pass a database you already have in `existing`, or its ID, in

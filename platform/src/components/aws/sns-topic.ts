@@ -187,7 +187,7 @@ export interface SnsTopicSubscriberArgs {
  * A few things work differently:
  *
  * - `subscribe` and `subscribeQueue` take a name first. Without one, they're refused:
- *   `sst.aws.SnsTopic` named such a subscriber after what it subscribed and its filter,
+ *   SST 4's `SnsTopic` named such a subscriber after what it subscribed and its filter,
  *   so a switch can't find it. Remove the subscriber and deploy before you switch, then add it back
  *   with a name.
  * - A subscriber's handler or function args have to be a plain value, not an output:
@@ -195,26 +195,26 @@ export interface SnsTopicSubscriberArgs {
  *   output.
  * - A function's args are typed as
  *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
- *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   SST 4's `Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - A subscriber's function is described after the component, `Subscribed to MyTopic`,
- *   where `sst.aws.SnsTopic` named the component it kept the subscriber in: an update in
+ *   where SST 4's `SnsTopic` named the component it kept the subscriber in: an update in
  *   place.
  * - `subscribe` and `subscribeQueue` return the topic, where they returned the
  *   subscriber: what each one created is in the topic's `nodes`, by the subscriber's
  *   name, like `topic.nodes.subscription.Emailer`.
  * - The `transform` of `subscribe` and `subscribeQueue` becomes the topic's `transform`,
  *   whose function form is given the subscriber's name.
- * - `sst.aws.SnsTopic.subscribe(name, topicArn, subscriber)` becomes
+ * - SST 4's `SnsTopic.subscribe(name, topicArn, subscriber)` becomes
  *   `sst.aws.SnsTopic.get("SharedEvents", topicArn).subscribe(name, subscriber)`, and
  *   the same for `subscribeQueue`. Each is refused with what to write. What those created
  *   is kept, as long as `get` isn't
  *   given a provider, directly, through its `parent`, or in `providers`:
- *   `sst.aws.SnsTopic` created them with your app's, and another one replaces them, a
+ *   SST 4's `SnsTopic` created them with your app's, and another one replaces them, a
  *   function's log group included.
- * - A subscriber is created with the provider the topic has. `sst.aws.SnsTopic` gave a
+ * - A subscriber is created with the provider the topic has. SST 4's `SnsTopic` gave a
  *   function subscriber only a `provider` passed to the topic itself, and a queue
  *   subscriber your app's provider, whatever the topic had. So if your topic has a
  *   `provider` and a queue subscribed to it, or takes its provider from a parent component

@@ -419,14 +419,14 @@ export interface RemixArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
  *   is given an AWS provider of its own, the server is listed once it's created; set
  *   `regions` to have it from the start.
- * - With `warm`, the server is warmed again when its code changes. `sst.aws.Remix` warmed
+ * - With `warm`, the server is warmed again when its code changes. SST 4's `Remix` warmed
  *   it on every deploy. The switch warms it once.
  * - `buildDirectory` has to be a plain value, not an output: what's deployed is read from
  *   it.
  * - The base path is read from the Vite config in any of its extensions, like
- *   `vite.config.js`, and it's what's in the quotes after `base`. `sst.aws.Remix` read only
+ *   `vite.config.js`, and it's what's in the quotes after `base`. SST 4's `Remix` read only
  *   `vite.config.ts`, and failed without it, and read on to the last quote of the line.
- * - The Vite config isn't loaded to check it. `sst.aws.Remix` loaded it with Vite after the
+ * - The Vite config isn't loaded to check it. SST 4's `Remix` loaded it with Vite after the
  *   build, and failed when that Vite wasn't found from the app.
  */
 export class Remix extends component("sst:aws:Remix", parts) {

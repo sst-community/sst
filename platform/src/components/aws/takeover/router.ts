@@ -4,7 +4,7 @@ import { childOf } from "./helpers";
 
 // The 4.x `Router` keeps each route of `route()` and `routeBucket()` in a
 // component of its own, at the top of the app, named after the router and the
-// pattern. The V5 one keeps them inside the router. A route's entries in the
+// pattern. SST 5's keeps them inside the router. A route's entries in the
 // store and its line in the router's list were SST's own dynamic resources,
 // which add their kind to their name: the ones that take their place write
 // them again, and 4.x's are released.

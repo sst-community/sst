@@ -2,9 +2,8 @@ import { RandomBytes } from "@pulumi/random";
 import type { s3 } from "@pulumi/aws";
 import { perRun } from "../../../util/lazy";
 
-// What an app creates once and its functions share, whichever `Function`
-// creates them: the 4.x one or the V5 one. Each run of the program creates
-// them again.
+// What an app creates once and its functions share. Each run of the program
+// creates them again.
 
 /**
  * The key links are encrypted with, for every function in the app.

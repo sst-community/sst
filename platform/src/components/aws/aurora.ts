@@ -606,13 +606,13 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  *
  * - `replicas`, `proxy`, its list of `credentials`, and each credential's `username` are
  *   plain values, not outputs. They decide which resources are created.
- * - With `dev` set, `sst.aws.Aurora` created a component for the pane `sst dev` shows, in
- *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
+ * - With `dev` set, SST 4's `Aurora` created a component for the pane `sst dev` shows, in
+ *   every deploy. SST 5's tells `sst dev` itself, so a deploy drops that component. It
  *   has nothing in AWS behind it. An empty local password is shown as "[no password]" in
  *   the pane.
  * - `nodes` has every resource, not only the cluster and the instance. The secret that
  *   stores the master user's credentials is `nodes.secret`. In `sst dev` with `dev` set,
- *   reading one of them fails and says why it's missing, where `sst.aws.Aurora` gave
+ *   reading one of them fails and says why it's missing, where SST 4's `Aurora` gave
  *   `undefined`.
  * - `transform.instance` still applies to the primary instance and to each replica. To
  *   change only the replicas, use `transform.replica`, which is applied after it.

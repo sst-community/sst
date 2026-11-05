@@ -185,24 +185,19 @@ export interface EfsArgs extends ComponentArgs<typeof parts> {
  *
  * A few things work differently:
  *
- * - Switch what mounts the file system first, or along with it. A `sst.aws.Function`,
- *   `sst.aws.Service` and `sst.aws.Task` take either one. A
- *   [`sst.aws.Function`](/docs/component/aws/function),
- *   [`sst.aws.Service`](/docs/component/aws/service) and
- *   [`sst.aws.Task`](/docs/component/aws/task) only know `sst.aws.Efs`.
  * - `nodes.fileSystem` and `nodes.accessPoint` are the resources, not outputs of them.
  *   `nodes` also has the security group and the mount targets.
- * - Each mount target is kept by its availability zone, where `sst.aws.Efs` kept it by
+ * - Each mount target is kept by its availability zone, where SST 4's `Efs` kept it by
  *   its subnet's id: by the AZ's number in a `Vpc` your app creates, and by the AZ's name
  *   in any other VPC. So a subnet that's replaced replaces its mount target, removing the
  *   old one first, since EFS allows one in each AZ. Switching keeps them all, and so does
  *   switching the `Vpc` too.
  * - The mount targets can be transformed. A transform function is also given the key
  *   it's kept by.
- * - The VPC given by its ids is looked up with a function, where `sst.aws.Efs` read it
+ * - The VPC given by its ids is looked up with a function, where SST 4's `Efs` read it
  *   into the state, so a deploy drops that read.
  * - A file system from `get` is looked up inside the component, with its access point.
- *   `sst.aws.Efs.get` looked them up at the top of the app, so a deploy drops those two
+ *   SST 4's `Efs.get` looked them up at the top of the app, so a deploy drops those two
  *   lookups from its state and reads the same resources again.
  * - If you set part of the access point's `posixUser` or `rootDirectory` with an object
  *   in `transform`, the rest of it is kept.
