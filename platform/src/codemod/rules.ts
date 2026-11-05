@@ -149,8 +149,8 @@ const moveKey =
 
 export const rules: Rule[] = [
   {
-    // `sst.aws.X` is `sst.aws.v5.X` until the swap, with the 5.0 name: and the
-    // components with no 5.0 form are listed
+    // `sst.aws.X` takes its 5.0 name, and `sst.aws.v5.X`, as the v5 alphas
+    // wrote it, is `sst.aws.X`: and the components with no 5.0 form are listed
     name: "name",
     visit(ctx, node) {
       if (!ts.isPropertyAccessExpression(node) && !ts.isQualifiedName(node))
@@ -174,7 +174,7 @@ export const rules: Rule[] = [
       if (
         !ref.written5 &&
         isLeftOut(ref.group, ref.name) &&
-        oldForm(ctx, node, ref)
+        oldForm(node, ref)
       ) {
         ctx.note(node, "left-out", leftOut[ref.group][ref.name]);
         return;
@@ -1123,6 +1123,21 @@ function workflowArgs(ctx: FileContext, args: ts.ObjectLiteralExpression) {
   const fn = prop(transform, "function");
   const role = prop(args, "role");
   const roleText = role && valueOf(ctx, role);
+  // Already 5.0's, as the codemod writes it: only `transform` and `existing`
+  if (
+    !role &&
+    fn &&
+    ts.isPropertyAssignment(fn) &&
+    ts.isObjectLiteralExpression(fn.initializer) &&
+    fn.initializer.properties.length > 0 &&
+    fn.initializer.properties.every(
+      (p) =>
+        p.name &&
+        ts.isIdentifier(p.name) &&
+        ["transform", "existing"].includes(p.name.text),
+    )
+  )
+    return;
   if (fn && ts.isPropertyAssignment(fn)) {
     ctx.replace(
       fn,
@@ -1170,17 +1185,17 @@ function valueOf(ctx: FileContext, p: ts.ObjectLiteralElementLike) {
 }
 
 // Whether a component that shares its name with a 5.0 one is SST 4's first:
-// `Cron` with `job`, and Cloudflare's `StaticSite` until the swap
-function oldForm(ctx: FileContext, node: ts.Node, ref: Ref) {
+// `Cron` with `job`. Cloudflare's `StaticSite`, and `Cron` without its args,
+// are read as 5.0's, which they are in a config the codemod already ran on.
+function oldForm(node: ts.Node, ref: Ref) {
   const call = node.parent;
   const args =
     ts.isNewExpression(call) && call.expression === node
       ? argsOf(call, 1)
       : undefined;
   if (ref.group === "aws" && ref.name === "Cron")
-    return args ? !!prop(args, "job") : ctx.namespace === "v5";
-  if (ref.group === "cloudflare" && ref.name === "StaticSite")
-    return ctx.namespace === "v5";
+    return !!args && !!prop(args, "job");
+  if (ref.group === "cloudflare" && ref.name === "StaticSite") return false;
   return true;
 }
 

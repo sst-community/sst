@@ -873,9 +873,7 @@ function resultOf(ctx: FileContext, ident: ts.Identifier) {
   const receiver = call.expression.expression;
   const sf = call.getSourceFile();
   const inner =
-    sf === ctx.sf
-      ? ctx
-      : new FileContext(sf, ctx.checker, ctx.namespace, sf.fileName);
+    sf === ctx.sf ? ctx : new FileContext(sf, ctx.checker, sf.fileName);
   const ref = componentOf(inner, receiver);
   const m = methodOf(ref, method);
   if (!ref || !m) return undefined;

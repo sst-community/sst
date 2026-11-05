@@ -1,20 +1,19 @@
 import path from "path";
 import { describe, expect, it } from "vitest";
-import { codemod, type Namespace } from "../../src/codemod";
+import { codemod } from "../../src/codemod";
 
 // The codemod on an app whose files are given here, at /app
-function run(files: Record<string, string>, namespace: Namespace = "v5") {
+function run(files: Record<string, string>) {
   return codemod({
     root: "/app",
-    namespace,
     read: (file) =>
       files[path.relative("/app", file).split(path.sep).join("/")],
   });
 }
 
 // The config after the codemod, and what it said
-function config(text: string, namespace: Namespace = "v5") {
-  const result = run({ "sst.config.ts": text }, namespace);
+function config(text: string) {
+  const result = run({ "sst.config.ts": text });
   return {
     text: result.files.find((f) => f.file === "sst.config.ts")?.after ?? text,
     changes: result.changes.map((c) => c.message),
@@ -26,10 +25,10 @@ describe("names", () => {
   it("writes each component where its 5.0 form is", () => {
     expect(
       config(`new sst.aws.Function("Api", { handler: "a.handler" });`).text,
-    ).toBe(`new sst.aws.v5.Function("Api", { handler: "a.handler" });`);
+    ).toBe(`new sst.aws.Function("Api", { handler: "a.handler" });`);
     // After the swap, SST 4's name is already the 5.0 one
     expect(
-      config(`new sst.aws.Function("Api", { handler: "a.handler" });`, "").text,
+      config(`new sst.aws.Function("Api", { handler: "a.handler" });`).text,
     ).toBe(`new sst.aws.Function("Api", { handler: "a.handler" });`);
   });
 
@@ -38,31 +37,29 @@ describe("names", () => {
       `const api = new sst.aws.ApiGatewayV2("Api");\nconst a: sst.aws.ApiGatewayV2Args = {};\nnew sst.aws.CronV2("C", { function: "a.h", schedule: "rate(1 day)" });`,
     );
     expect(out.text).toBe(
-      `const api = new sst.aws.v5.ApiGatewayHttp("Api");\nconst a: sst.aws.v5.ApiGatewayHttpArgs = {};\nnew sst.aws.v5.Cron("C", { function: "a.h", schedule: "rate(1 day)" });`,
+      `const api = new sst.aws.ApiGatewayHttp("Api");\nconst a: sst.aws.ApiGatewayHttpArgs = {};\nnew sst.aws.Cron("C", { function: "a.h", schedule: "rate(1 day)" });`,
     );
     expect(out.changes).toContain(
-      "`sst.aws.ApiGatewayV2` is `sst.aws.v5.ApiGatewayHttp`",
+      "`sst.aws.ApiGatewayV2` is `sst.aws.ApiGatewayHttp`",
     );
-    expect(config(`new sst.aws.ApiGatewayV1("Api");`, "").text).toBe(
+    expect(config(`new sst.aws.ApiGatewayV1("Api");`).text).toBe(
       `new sst.aws.ApiGatewayRest("Api");`,
     );
     expect(config(`new sst.cloudflare.StaticSiteV2("Site");`).text).toBe(
-      `new sst.cloudflare.v5.StaticSite("Site");`,
+      `new sst.cloudflare.StaticSite("Site");`,
     );
   });
 
   it("takes the alphas' v5 out of a name after the swap", () => {
     expect(
-      config(
-        `new sst.aws.v5.Queue("Q");\nnew sst.aws.v5.ApiGatewayV2("Api");`,
-        "",
-      ).text,
+      config(`new sst.aws.v5.Queue("Q");\nnew sst.aws.v5.ApiGatewayV2("Api");`)
+        .text,
     ).toBe(`new sst.aws.Queue("Q");\nnew sst.aws.ApiGatewayHttp("Api");`);
   });
 
   it("names a component in $transform and in a type", () => {
     expect(config(`$transform(sst.aws.Function, (args) => {});`).text).toBe(
-      `$transform(sst.aws.v5.Function, (args) => {});`,
+      `$transform(sst.aws.Function, (args) => {});`,
     );
   });
 
@@ -92,7 +89,6 @@ describe("names", () => {
   it("knows the 5.0 Cron by its function, after the swap", () => {
     const out = config(
       `new sst.aws.Cron("C", { function: "a.handler", schedule: "rate(1 day)" });`,
-      "",
     );
     expect(out.notes).toEqual([]);
     expect(out.changes).toEqual([]);
@@ -111,7 +107,7 @@ describe("args", () => {
       config(`new sst.aws.Function("F", { handler: "a.h", role: "arn:role" });`)
         .text,
     ).toBe(
-      `new sst.aws.v5.Function("F", { handler: "a.h", existing: { role: "arn:role" } });`,
+      `new sst.aws.Function("F", { handler: "a.h", existing: { role: "arn:role" } });`,
     );
   });
 
@@ -125,7 +121,7 @@ describe("args", () => {
     ].join("\n");
     expect(config(text).text).toBe(
       [
-        `new sst.aws.v5.Function("F", {`,
+        `new sst.aws.Function("F", {`,
         `  handler: "a.h",`,
         `  existing: { role: role.arn, logGroup: "/my/logs" },`,
         `  logging: { retention: "1 week" },`,
@@ -137,7 +133,7 @@ describe("args", () => {
         `new sst.aws.Task("T", { cluster, existing: { taskDefinition: td }, taskRole: "a", executionRole: "b" });`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.Task("T", { cluster, existing: { taskRole: "a", executionRole: "b", taskDefinition: td } });`,
+      `new sst.aws.Task("T", { cluster, existing: { taskRole: "a", executionRole: "b", taskDefinition: td } });`,
     );
   });
 
@@ -147,7 +143,7 @@ describe("args", () => {
         `new sst.aws.Function("F", { handler: "a.h", live: false, url: { route: { router } } });`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.Function("F", { handler: "a.h", dev: false, url: { router: { instance: router } } });`,
+      `new sst.aws.Function("F", { handler: "a.h", dev: false, url: { router: { instance: router } } });`,
     );
   });
 
@@ -165,39 +161,39 @@ describe("args", () => {
     });
     const files = Object.fromEntries(out.files.map((f) => [f.file, f.after]));
     expect(files["infra/cron.ts"]).toBe(
-      `export const cron = new sst.aws.v5.Cron("Cron", { function: "a.handler", schedule: "rate(1 day)" });`,
+      `export const cron = new sst.aws.Cron("Cron", { function: "a.handler", schedule: "rate(1 day)" });`,
     );
     expect(files["sst.config.ts"]).toContain(`cron.nodes.function.name;`);
   });
 
   it("moves Redis's nodes into cluster, or drops it where SST 4 ignored it", () => {
     expect(config(`new sst.aws.Redis("R", { vpc, nodes: 2 });`).text).toBe(
-      `new sst.aws.v5.Redis("R", { vpc, cluster: { nodes: 2 } });`,
+      `new sst.aws.Redis("R", { vpc, cluster: { nodes: 2 } });`,
     );
     expect(
       config(
         `new sst.aws.Redis("R", { vpc, cluster: { nodes: 3 }, nodes: 2 });`,
       ).text,
-    ).toBe(`new sst.aws.v5.Redis("R", { vpc, cluster: { nodes: 3 } });`);
+    ).toBe(`new sst.aws.Redis("R", { vpc, cluster: { nodes: 3 } });`);
     // The alphas had it too
     expect(config(`new sst.aws.v5.Redis("R", { vpc, nodes: 2 });`).text).toBe(
-      `new sst.aws.v5.Redis("R", { vpc, cluster: { nodes: 2 } });`,
+      `new sst.aws.Redis("R", { vpc, cluster: { nodes: 2 } });`,
     );
   });
 
   it("changes a Bucket's public and its public access block", () => {
     expect(config(`new sst.aws.Bucket("B", { public: true });`).text).toBe(
-      `new sst.aws.v5.Bucket("B", { access: "public" });`,
+      `new sst.aws.Bucket("B", { access: "public" });`,
     );
     expect(
       config(
         `new sst.aws.Bucket("B", { transform: { publicAccessBlock: false } });`,
       ).text,
-    ).toBe(`new sst.aws.v5.Bucket("B", { publicAccessBlock: false, });`);
+    ).toBe(`new sst.aws.Bucket("B", { publicAccessBlock: false, });`);
     // Cloudflare's Bucket isn't AWS's
     expect(
       config(`new sst.cloudflare.Bucket("B", { public: true });`).text,
-    ).toBe(`new sst.cloudflare.v5.Bucket("B", { public: true });`);
+    ).toBe(`new sst.cloudflare.Bucket("B", { public: true });`);
   });
 
   it("tells an Email that signs with its own key that its DKIM records are its own", () => {
@@ -205,7 +201,7 @@ describe("args", () => {
       config(
         `new sst.aws.Email("E", { sender: "a.com", transform: { identity: { dkimSigningAttributes: { domainSigningPrivateKey: k, domainSigningSelector: "s" } } } });`,
       ).text,
-    ).toMatch(/^new sst\.aws\.v5\.Email\("E", \{ dkim: false, sender/);
+    ).toMatch(/^new sst\.aws\.Email\("E", \{ dkim: false, sender/);
   });
 
   it("changes Cloudflare's Kv id, D1's get and Cron's job", () => {
@@ -213,16 +209,15 @@ describe("args", () => {
       `const kv = new sst.cloudflare.Kv("K");\nkv.id;\nsst.cloudflare.D1.get("Db", "abc");\nnew sst.cloudflare.Cron("C", { job: "w.ts", schedules: [] });`,
     );
     expect(out.text).toBe(
-      `const kv = new sst.cloudflare.v5.Kv("K");\nkv.namespaceId;\nsst.cloudflare.v5.D1.get("Db", { databaseId: "abc" });\nnew sst.cloudflare.v5.Cron("C", { worker: "w.ts", schedules: [] });`,
+      `const kv = new sst.cloudflare.Kv("K");\nkv.namespaceId;\nsst.cloudflare.D1.get("Db", { databaseId: "abc" });\nnew sst.cloudflare.Cron("C", { worker: "w.ts", schedules: [] });`,
     );
   });
 
   it("changes nothing a second time", () => {
     const first = config(
       `new sst.aws.Function("F", { handler: "a.h", role: "r" });\nnew sst.aws.ApiGatewayV2("Api");`,
-      "",
     );
-    const second = config(first.text, "");
+    const second = config(first.text);
     expect(second.changes).toEqual([]);
     expect(second.text).toBe(first.text);
   });
@@ -235,7 +230,7 @@ describe("more args", () => {
         `queue.subscribe({ handler: "a.h", role: "r", live: true });\nconst queue = new sst.aws.Queue("Q");`,
       ).text,
     ).toBe(
-      `queue.subscribe({ handler: "a.h", existing: { role: "r" } });\nconst queue = new sst.aws.v5.Queue("Q");`,
+      `queue.subscribe({ handler: "a.h", existing: { role: "r" } });\nconst queue = new sst.aws.Queue("Q");`,
     );
     // Not in a 5.0 component's call, nor twice in a Function inside one
     expect(
@@ -246,7 +241,6 @@ describe("more args", () => {
     expect(
       config(
         `new sst.aws.Cron("C", { function: new sst.aws.Function("F", { handler: "a.h", role: "r" }), schedule: "rate(1 day)" });`,
-        "",
       ).text,
     ).toBe(
       `new sst.aws.Cron("C", { function: new sst.aws.Function("F", { handler: "a.h", existing: { role: "r" } }), schedule: "rate(1 day)" });`,
@@ -259,7 +253,7 @@ describe("more args", () => {
         `new sst.aws.Function("F", {\n  handler: "a.h",\n  logging: { logGroup: "/l" },\n});`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.Function("F", {\n  existing: { logGroup: "/l" },\n  handler: "a.h",\n});`,
+      `new sst.aws.Function("F", {\n  existing: { logGroup: "/l" },\n  handler: "a.h",\n});`,
     );
   });
 
@@ -268,7 +262,7 @@ describe("more args", () => {
       `new sst.aws.ApiGatewayWebSocket("Ws", {\n  domain: { nameId: "api.a.com", dns: false },\n});`,
     );
     expect(out.text).toBe(
-      `new sst.aws.v5.ApiGatewayWebSocket("Ws", {\n  existing: { domainName: "api.a.com" },\n});`,
+      `new sst.aws.ApiGatewayWebSocket("Ws", {\n  existing: { domainName: "api.a.com" },\n});`,
     );
     expect(out.changes.some((c) => c.includes("`domain.dns` is removed"))).toBe(
       true,
@@ -281,7 +275,7 @@ describe("more args", () => {
         `new sst.aws.ApiGatewayV2("Api", { transform: { route: { handler: { memory: "1 GB" } } } });`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.ApiGatewayHttp("Api", { transform: { handler: { memory: "1 GB" }, } });`,
+      `new sst.aws.ApiGatewayHttp("Api", { transform: { handler: { memory: "1 GB" }, } });`,
     );
   });
 
@@ -291,13 +285,13 @@ describe("more args", () => {
         `new sst.aws.Nextjs("Web", { route: { router, path: "/docs" }, cdn: true });`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.Nextjs("Web", { router: { instance: router, path: "/docs" } });`,
+      `new sst.aws.Nextjs("Web", { router: { instance: router, path: "/docs" } });`,
     );
     const out = config(
       `new sst.aws.Astro("Web", { router: { instance: router, rewrite: { regex: "^/a", to: "/" } } });`,
     );
     expect(out.text).toBe(
-      `new sst.aws.v5.Astro("Web", { router: { instance: router } });`,
+      `new sst.aws.Astro("Web", { router: { instance: router } });`,
     );
     expect(
       config(`new sst.aws.Astro("Web", { cdn: false });`).notes,
@@ -310,7 +304,7 @@ describe("more args", () => {
         `const ws = new sst.aws.ApiGatewayWebSocket("Ws");\nws.addAuthorizer("Auth", { lambda: { function: "a.h", payload: "2.0" } });`,
       ).text,
     ).toBe(
-      `const ws = new sst.aws.v5.ApiGatewayWebSocket("Ws");\nws.addAuthorizer({ name: "Auth", lambda: { function: "a.h" } });`,
+      `const ws = new sst.aws.ApiGatewayWebSocket("Ws");\nws.addAuthorizer({ name: "Auth", lambda: { function: "a.h" } });`,
     );
   });
 
@@ -320,20 +314,20 @@ describe("more args", () => {
         `const api = new sst.aws.ApiGatewayV1("Api");\napi.route("GET /", "a.h", { streaming: true });`,
       ).text,
     ).toBe(
-      `const api = new sst.aws.v5.ApiGatewayRest("Api");\napi.route("GET /", { handler: "a.h", streaming: true }, { });`,
+      `const api = new sst.aws.ApiGatewayRest("Api");\napi.route("GET /", { handler: "a.h", streaming: true }, { });`,
     );
   });
 
   it("makes a static subscribe a method of what get gives", () => {
     expect(config(`sst.aws.Bus.subscribe("Sub", "arn:bus", "a.h");`).text).toBe(
-      `sst.aws.v5.Bus.get("SubBus", "arn:bus").subscribe("Sub", "a.h");`,
+      `sst.aws.Bus.get("SubBus", "arn:bus").subscribe("Sub", "a.h");`,
     );
     expect(
       config(
         `sst.aws.Queue.subscribe(queueArn, "a.h", { batch: { size: 5 } });`,
       ).text,
     ).toBe(
-      `sst.aws.v5.Queue.get("SubscribedQueue", queueArn).subscribe("a.h", { batch: { size: 5 } });`,
+      `sst.aws.Queue.get("SubscribedQueue", queueArn).subscribe("a.h", { batch: { size: 5 } });`,
     );
   });
 
@@ -343,7 +337,7 @@ describe("more args", () => {
         `const cluster = new sst.aws.Cluster("C", { vpc }, { provider: east });\ncluster.addService("Web", { image: "nginx" });`,
       ).text,
     ).toBe(
-      `const cluster = new sst.aws.v5.Cluster("C", { vpc }, { provider: east });\nnew sst.aws.v5.Service("Web", { cluster: cluster, image: "nginx" }, { provider: east });`,
+      `const cluster = new sst.aws.Cluster("C", { vpc }, { provider: east });\nnew sst.aws.Service("Web", { cluster: cluster, image: "nginx" }, { provider: east });`,
     );
   });
 
@@ -351,28 +345,26 @@ describe("more args", () => {
     expect(
       config(`const alb = new sst.aws.Alb("A", { vpc });\nalb.nodes.listeners;`)
         .text,
-    ).toBe(
-      `const alb = new sst.aws.v5.Alb("A", { vpc });\nalb.nodes.listener;`,
-    );
+    ).toBe(`const alb = new sst.aws.Alb("A", { vpc });\nalb.nodes.listener;`);
     expect(
       config(
         `new sst.aws.Nextjs("Web", { transform: { revalidationEventsSubscriber: { memory: "1 GB" } } });`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.Nextjs("Web", { transform: { revalidationQueue: { transform: { subscriber: { memory: "1 GB" } } } } });`,
+      `new sst.aws.Nextjs("Web", { transform: { revalidationQueue: { transform: { subscriber: { memory: "1 GB" } } } } });`,
     );
   });
 
   it("renames DevCommand, and Cloudflare's experimental names", () => {
     expect(
       config(`new sst.x.DevCommand("Studio", { dev: { command: "x" } });`).text,
-    ).toBe(`new sst.x.v5.DevCommand("Studio", { dev: { command: "x" } });`);
+    ).toBe(`new sst.x.DevCommand("Studio", { dev: { command: "x" } });`);
     expect(
       config(
         `new sst.cloudflare.x.Astro("Web");\nnew sst.cloudflare.x.StaticSite("Docs");`,
       ).text,
     ).toBe(
-      `new sst.cloudflare.v5.Astro("Web");\nnew sst.cloudflare.v5.StaticSite("Docs");`,
+      `new sst.cloudflare.Astro("Web");\nnew sst.cloudflare.StaticSite("Docs");`,
     );
     expect(
       config(`new sst.cloudflare.x.SolidStart("Web");`).notes,
@@ -386,7 +378,7 @@ describe("services, sites and nodes", () => {
       `new sst.aws.Service("Web", { cluster, public: { domain: "a.com", ports: [{ listen: "80/http", path: "/api/*" }, { listen: "443/https", forward: "80/http", conditions: { header: h } , path: "/x" }] } });`,
     );
     expect(out.text).toBe(
-      `new sst.aws.v5.Service("Web", { cluster, loadBalancer: { domain: "a.com", rules: [{ listen: "80/http", conditions: { path: "/api/*" } }, { listen: "443/https", forward: "80/http", conditions: { path: "/x", header: h } }] } });`,
+      `new sst.aws.Service("Web", { cluster, loadBalancer: { domain: "a.com", rules: [{ listen: "80/http", conditions: { path: "/api/*" } }, { listen: "443/https", forward: "80/http", conditions: { path: "/x", header: h } }] } });`,
     );
     expect(out.notes).toEqual([]);
   });
@@ -396,7 +388,7 @@ describe("services, sites and nodes", () => {
       `new sst.aws.Service("Web", {\n  cluster,\n  image: "nginx",\n  health: { command: ["x"] },\n  containers: [{ name: "a", image: "a" }],\n  dev: { command: "npm run dev", url: "http://localhost:3000" },\n});\nnew sst.aws.Task("Job", { cluster, taskRole: "my-role", permissions: [{ actions: ["s3:*"], resources: ["*"] }] });`,
     );
     expect(out.text).toBe(
-      `new sst.aws.v5.Service("Web", {\n  cluster,\n  containers: [{ name: "a", image: "a" }],\n  dev: { url: "http://localhost:3000" },\n});\nnew sst.aws.v5.Task("Job", { cluster, existing: { taskRole: "my-role" } });`,
+      `new sst.aws.Service("Web", {\n  cluster,\n  containers: [{ name: "a", image: "a" }],\n  dev: { url: "http://localhost:3000" },\n});\nnew sst.aws.Task("Job", { cluster, existing: { taskRole: "my-role" } });`,
     );
     expect(out.changes.filter((c) => c.includes("next to"))).toHaveLength(4);
   });
@@ -406,7 +398,7 @@ describe("services, sites and nodes", () => {
       `new sst.aws.StaticSite("Web", { route: { router, path: "/docs" }, cdn: true, edge: { viewerRequest: { injection: "x", kvStores: [a] }, viewerResponse: { injection: "y", kvStores: [b, c] } } });\nnew sst.aws.Router("R", { edge: { viewerRequest: { injection: "x", kvStore: a, kvStores: [a] } } });`,
     );
     expect(out.text).toBe(
-      `new sst.aws.v5.StaticSite("Web", { router: { instance: router, path: "/docs" }, edge: { viewerRequest: { injection: "x" }, viewerResponse: { injection: "y", kvStore: b } } });\nnew sst.aws.v5.Router("R", { edge: { viewerRequest: { injection: "x", kvStore: a } } });`,
+      `new sst.aws.StaticSite("Web", { router: { instance: router, path: "/docs" }, edge: { viewerRequest: { injection: "x" }, viewerResponse: { injection: "y", kvStore: b } } });\nnew sst.aws.Router("R", { edge: { viewerRequest: { injection: "x", kvStore: a } } });`,
     );
     expect(
       config(`new sst.aws.Router("R", { routes: { "/*": "https://a.com" } });`)
@@ -420,12 +412,12 @@ describe("services, sites and nodes", () => {
         `new sst.aws.Workflow("W", { handler: "a.h", role: role.arn, transform: { function: { function: { timeout: 30 } } } });`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.Workflow("W", { handler: "a.h", transform: { function: { transform: { function: { timeout: 30 } }, existing: { role: role.arn } } } });`,
+      `new sst.aws.Workflow("W", { handler: "a.h", transform: { function: { transform: { function: { timeout: 30 } }, existing: { role: role.arn } } } });`,
     );
     expect(
       config(`new sst.aws.Workflow("W", { handler: "a.h", role: "r" });`).text,
     ).toBe(
-      `new sst.aws.v5.Workflow("W", { handler: "a.h", transform: { function: { existing: { role: "r" } } } });`,
+      `new sst.aws.Workflow("W", { handler: "a.h", transform: { function: { existing: { role: "r" } } } });`,
     );
   });
 
@@ -435,14 +427,14 @@ describe("services, sites and nodes", () => {
         `const vpc = new sst.aws.Vpc("V");\nf(vpc.nodes.privateSubnets);\nvpc.nodes.publicSubnets[1].id;\nvpc.nodes.natGateways.apply((n) => n.length);`,
       ).text,
     ).toBe(
-      `const vpc = new sst.aws.v5.Vpc("V");\nf(Object.values(vpc.nodes.privateSubnet));\nvpc.nodes.publicSubnet["2"].id;\n$output(Object.values(vpc.nodes.natGateway)).apply((n) => n.length);`,
+      `const vpc = new sst.aws.Vpc("V");\nf(Object.values(vpc.nodes.privateSubnet));\nvpc.nodes.publicSubnet["2"].id;\n$output(Object.values(vpc.nodes.natGateway)).apply((n) => n.length);`,
     );
     expect(
       config(
         `const cron = new sst.cloudflare.Cron("C", { job: "a.ts", schedules: ["* * * * *"] });\ncron.nodes.worker.id;\ncron.nodes.worker.url;`,
       ).text,
     ).toBe(
-      `const cron = new sst.cloudflare.v5.Cron("C", { worker: "a.ts", schedules: ["* * * * *"] });\ncron.nodes.worker.nodes.worker.id;\ncron.nodes.worker.url;`,
+      `const cron = new sst.cloudflare.Cron("C", { worker: "a.ts", schedules: ["* * * * *"] });\ncron.nodes.worker.nodes.worker.id;\ncron.nodes.worker.url;`,
     );
   });
 
@@ -469,7 +461,7 @@ describe("what a method gave", () => {
       `const bus = new sst.aws.Bus("Bus");\nconst sub = bus.subscribe("Sub", "a.handler");\nlink(sub.nodes.function);\nconst api = new sst.aws.ApiGatewayV2("Api");\nconst r = api.route("get /notes", "b.handler");\nr.nodes.integration.id;\nconst a = api.addAuthorizer({ name: "Auth", jwt: {} });\na.nodes.authorizer.id;\nconst q = new sst.aws.Queue("Q");\nconst s = q.subscribe("c.handler");\ns.nodes.function.name;`,
     );
     expect(out.text).toBe(
-      `const bus = new sst.aws.v5.Bus("Bus");\nconst sub = bus.subscribe("Sub", "a.handler");\nlink(bus.nodes.subscriber["Sub"]);\nconst api = new sst.aws.v5.ApiGatewayHttp("Api");\nconst r = api.route("get /notes", "b.handler");\napi.nodes.integration["GET /notes"].id;\nconst a = api.addAuthorizer({ name: "Auth", jwt: {} });\na.id;\nconst q = new sst.aws.v5.Queue("Q");\nconst s = q.subscribe("c.handler");\nq.nodes.subscriber.name;`,
+      `const bus = new sst.aws.Bus("Bus");\nconst sub = bus.subscribe("Sub", "a.handler");\nlink(bus.nodes.subscriber["Sub"]);\nconst api = new sst.aws.ApiGatewayHttp("Api");\nconst r = api.route("get /notes", "b.handler");\napi.nodes.integration["GET /notes"].id;\nconst a = api.addAuthorizer({ name: "Auth", jwt: {} });\na.id;\nconst q = new sst.aws.Queue("Q");\nconst s = q.subscribe("c.handler");\nq.nodes.subscriber.name;`,
     );
     expect(out.notes).toEqual([]);
   });
@@ -494,7 +486,7 @@ describe("what a method gave", () => {
       `const api = new sst.aws.ApiGatewayV2("Api", { cors: true });\napi.route("GET /a", "a.handler", { transform: { route: { authorizationType: "NONE" } } });\napi.route("POST /b", "b.handler", { transform: { route: (args) => { args.operationName = "b"; } } });`,
     );
     expect(out.text).toBe(
-      `const api = new sst.aws.v5.ApiGatewayHttp("Api", { transform: { route: (args_, opts, name, id) => { if (id === "GET /a") Object.assign(args_, { authorizationType: "NONE" }); if (id === "POST /b") ((args) => { args.operationName = "b"; })(args_, opts, name); } }, cors: true });\napi.route("GET /a", "a.handler");\napi.route("POST /b", "b.handler");`,
+      `const api = new sst.aws.ApiGatewayHttp("Api", { transform: { route: (args_, opts, name, id) => { if (id === "GET /a") Object.assign(args_, { authorizationType: "NONE" }); if (id === "POST /b") ((args) => { args.operationName = "b"; })(args_, opts, name); } }, cors: true });\napi.route("GET /a", "a.handler");\napi.route("POST /b", "b.handler");`,
     );
   });
 
@@ -503,7 +495,7 @@ describe("what a method gave", () => {
       `const ws = new sst.aws.ApiGatewayWebSocket("Ws");\nws.addAuthorizer("Auth", { transform: { authorizer: { name: "x" } } });\nnew sst.aws.ApiGatewayV2("Api", { transform: { route: { args: { auth: { iam: true } } } } });`,
     );
     expect(out.text).toBe(
-      `const ws = new sst.aws.v5.ApiGatewayWebSocket("Ws", { transform: { authorizer: (args, opts, name, id) => { if (id === "Auth") Object.assign(args, { name: "x" }); } } });\nws.addAuthorizer({ name: "Auth", });\nnew sst.aws.v5.ApiGatewayHttp("Api", { transform: { route: { args: { auth: { iam: true } } } } });`,
+      `const ws = new sst.aws.ApiGatewayWebSocket("Ws", { transform: { authorizer: (args, opts, name, id) => { if (id === "Auth") Object.assign(args, { name: "x" }); } } });\nws.addAuthorizer({ name: "Auth", });\nnew sst.aws.ApiGatewayHttp("Api", { transform: { route: { args: { auth: { iam: true } } } } });`,
     );
     expect(out.notes).toHaveLength(1);
   });
@@ -514,7 +506,7 @@ describe("what a method gave", () => {
         `const q = new sst.aws.Queue("Q");\nq.subscribe("a.handler", { batch: { size: 5 }, transform: { function: { memory: "1 GB" }, eventSourceMapping: (a) => {} } });`,
       ).text,
     ).toBe(
-      `const q = new sst.aws.v5.Queue("Q", { transform: { subscriber: { memory: "1 GB" }, eventSourceMapping: (a) => {} } });\nq.subscribe("a.handler", { batch: { size: 5 } });`,
+      `const q = new sst.aws.Queue("Q", { transform: { subscriber: { memory: "1 GB" }, eventSourceMapping: (a) => {} } });\nq.subscribe("a.handler", { batch: { size: 5 } });`,
     );
     const out = config(
       `const topic = new sst.aws.SnsTopic("T", { transform: { subscription: {} } });\ntopic.subscribe("S", "a.handler", { transform: { subscription: { rawMessageDelivery: true } } });`,
@@ -530,7 +522,7 @@ describe("what a method gave", () => {
       `const bucket = new sst.aws.Bucket("B");\nbucket.subscribe({ handler: "a.handler", live: false }, { events: ["s3:ObjectCreated:*"], transform: { notification: { eventbridge: false } } });\nsst.aws.Bucket.subscribeEventBridge("Resize", bucket.name, "r.handler", { pattern: {}, transform: { rule: { state: "ENABLED" } } });\nsst.aws.Bucket.subscribeEventBridge("Other", "their-bucket", "o.handler");`,
     );
     expect(out.text).toBe(
-      `const bucket = new sst.aws.v5.Bucket("B", { transform: { notification: { eventbridge: false }, eventBridgeRule: (args, opts, name, id) => { if (id === "Resize") Object.assign(args, { state: "ENABLED" }); } } });\nbucket.notify({ notifications: [{ name: "Subscriber", function: { handler: "a.handler", dev: false }, events: ["s3:ObjectCreated:*"] }] });\nbucket.subscribeEventBridge("Resize", "r.handler", { pattern: {} });\nsst.aws.v5.Bucket.get("OtherBucket", "their-bucket").subscribeEventBridge("Other", "o.handler");`,
+      `const bucket = new sst.aws.Bucket("B", { transform: { notification: { eventbridge: false }, eventBridgeRule: (args, opts, name, id) => { if (id === "Resize") Object.assign(args, { state: "ENABLED" }); } } });\nbucket.notify({ notifications: [{ name: "Subscriber", function: { handler: "a.handler", dev: false }, events: ["s3:ObjectCreated:*"] }] });\nbucket.subscribeEventBridge("Resize", "r.handler", { pattern: {} });\nsst.aws.Bucket.get("OtherBucket", "their-bucket").subscribeEventBridge("Other", "o.handler");`,
     );
     expect(out.notes).toEqual([]);
   });
@@ -556,7 +548,7 @@ describe("a site's server.edge", () => {
         `new sst.aws.Nextjs("Web", { server: { memory: "1 GB", edge: { viewerRequest: { injection: "x" } } } });\nnew sst.aws.Astro("A", { server: { edge: e } });`,
       ).text,
     ).toBe(
-      `new sst.aws.v5.Nextjs("Web", { edge: { viewerRequest: { injection: "x" } }, server: { memory: "1 GB" } });\nnew sst.aws.v5.Astro("A", { edge: e, });`,
+      `new sst.aws.Nextjs("Web", { edge: { viewerRequest: { injection: "x" } }, server: { memory: "1 GB" } });\nnew sst.aws.Astro("A", { edge: e, });`,
     );
   });
 });
@@ -567,7 +559,7 @@ describe("subscribers without a name", () => {
       `const topic = new sst.aws.SnsTopic("T");\ntopic.subscribe("a.handler", { filter: {} });\ntopic.subscribe("Named", "a.handler");\ntopic.subscribeQueue("Q", queue);\nsst.aws.SnsTopic.subscribe(arn, "b.handler");\nsst.aws.SnsTopic.subscribe("Other", arn, "b.handler");`,
     );
     expect(out.text).toBe(
-      `const topic = new sst.aws.v5.SnsTopic("T");\ntopic.subscribe("a.handler", { filter: {} });\ntopic.subscribe("Named", "a.handler");\ntopic.subscribeQueue("Q", queue);\nsst.aws.v5.SnsTopic.subscribe(arn, "b.handler");\nsst.aws.v5.SnsTopic.get("OtherTopic", arn).subscribe("Other", "b.handler");`,
+      `const topic = new sst.aws.SnsTopic("T");\ntopic.subscribe("a.handler", { filter: {} });\ntopic.subscribe("Named", "a.handler");\ntopic.subscribeQueue("Q", queue);\nsst.aws.SnsTopic.subscribe(arn, "b.handler");\nsst.aws.SnsTopic.get("OtherTopic", arn).subscribe("Other", "b.handler");`,
     );
     // The first and the static one with no name; `queue` can't be told apart
     expect(out.notes).toHaveLength(3);
@@ -579,7 +571,7 @@ describe("subscribers without a name", () => {
         `sst.aws.Queue.subscribe(arn, "a.handler", { batch: { size: 1 } }, { provider: east });`,
       ).text,
     ).toBe(
-      `sst.aws.v5.Queue.get("SubscribedQueue", arn, { provider: east }).subscribe("a.handler", { batch: { size: 1 } });`,
+      `sst.aws.Queue.get("SubscribedQueue", arn, { provider: east }).subscribe("a.handler", { batch: { size: 1 } });`,
     );
   });
 });

@@ -19,10 +19,6 @@ import (
 	"github.com/sst/sst/v3/pkg/process"
 )
 
-// codemodNamespace is where the 5.0 components are, as the codemod writes
-// them: `sst.aws.v5` until they take the 4.x components' place, then "".
-const codemodNamespace = "v5"
-
 type codemodFinding struct {
 	File    string `json:"file"`
 	Line    int    `json:"line"`
@@ -51,9 +47,8 @@ func runCodemod(c *cli.Cli) error {
 	defer p.Cleanup()
 	root := p.PathRoot()
 	input, err := json.Marshal(map[string]string{
-		"root":      root,
-		"config":    p.PathConfig(),
-		"namespace": codemodNamespace,
+		"root":   root,
+		"config": p.PathConfig(),
 	})
 	if err != nil {
 		return err

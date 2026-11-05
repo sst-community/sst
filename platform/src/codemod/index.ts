@@ -1,16 +1,14 @@
 import fs from "fs";
 import path from "path";
 import ts from "typescript";
-import { FileContext, type Finding, type Namespace } from "./engine";
+import { FileContext, type Finding } from "./engine";
 import { rules } from "./rules";
 
-export type { Finding, Namespace };
+export type { Finding };
 
 export interface CodemodInput {
   /** The app's folder, where `sst.config.ts` is. */
   root: string;
-  /** Where the 5.0 components are: `"v5"` until the swap, `""` after. */
-  namespace: Namespace;
   /** The config, by default `sst.config.ts` in `root`. */
   config?: string;
   /** Reads a file, for tests: by default the disk. */
@@ -76,7 +74,7 @@ export function codemod(input: CodemodInput): CodemodResult {
   for (const sf of program.getSourceFiles()) {
     if (sf.isDeclarationFile || !own(sf.fileName)) continue;
     const file = path.relative(root, sf.fileName);
-    const ctx = new FileContext(sf, checker, input.namespace, file);
+    const ctx = new FileContext(sf, checker, file);
     const visit = (node: ts.Node) => {
       for (const rule of rules) {
         try {

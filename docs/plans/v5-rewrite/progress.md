@@ -15,7 +15,9 @@ The first part of [the swap](plan.md#5-moving-an-app): the files move, and what 
 
 **Checked:** `tsc`; the platform's suite, 102 files and 4057 tests, against 126 and 4258 before; the Go tests; the CLI builds.
 
-**Left for the swap:** the codemod still writes `sst.aws.v5.X`, which this branch no longer has; the docs site's paths and links under `v5/`, and the components' prose that says "V5"; the rulebook and `PORTING.md`; `registerVersion`, `V5Args` and the `Any…` names.
+**Left for the swap:** the docs site's paths and links under `v5/`, and the components' prose that says "V5"; the rulebook and `PORTING.md`; `registerVersion`, `V5Args` and the `Any…` names.
+
+**Then the codemod** writes SST 5's names, `sst.aws.X`: its switch for where the 5.0 components were (`sst.aws.v5` until the swap) goes, and a config the v5 alphas wrote, as `sst.aws.v5.X`, has `v5` taken out and nothing else changed. A second run changes nothing: `Workflow`'s rule leaves a `transform.function` that's already 5.0's, with only `transform` and `existing`, as it is. Its tests' expectations are SST 5's names; what they're given is as it was.
 
 ## 2026-11-05: step 5, the core stops running 4.x components
 

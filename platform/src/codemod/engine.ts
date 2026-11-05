@@ -1,9 +1,6 @@
 import ts from "typescript";
 import { exports, fiveName, leftOut, type Group } from "./names";
 
-/** Where the 5.0 components are: `sst.aws.v5` until the swap, `sst.aws` after. */
-export type Namespace = "v5" | "";
-
 /** A change the codemod made, or something it couldn't do, with what to write. */
 export interface Finding {
   file: string;
@@ -56,7 +53,6 @@ export class FileContext {
   constructor(
     readonly sf: ts.SourceFile,
     readonly checker: ts.TypeChecker,
-    readonly namespace: Namespace,
     readonly file: string,
   ) {}
 
@@ -91,11 +87,9 @@ export class FileContext {
     this.notes.push({ file: this.file, line: this.line(node), rule, message });
   }
 
-  /** The 5.0 way to write a component: `sst.aws.v5.X` until the swap. */
+  /** The 5.0 way to write a component: `sst.aws.X`, by its 5.0 name. */
   qualified(ref: { group: Group; five: string }) {
-    return `sst.${ref.group}.${this.namespace ? `${this.namespace}.` : ""}${
-      ref.five
-    }`;
+    return `sst.${ref.group}.${ref.five}`;
   }
 
   // Props to remove, by their object, removed together at the end
@@ -488,9 +482,7 @@ export function componentOf(
     if (decl && ts.isVariableDeclaration(decl) && decl.initializer) {
       const sf = decl.getSourceFile();
       const inner =
-        sf === ctx.sf
-          ? ctx
-          : new FileContext(sf, ctx.checker, ctx.namespace, sf.fileName);
+        sf === ctx.sf ? ctx : new FileContext(sf, ctx.checker, sf.fileName);
       return componentOf(inner, decl.initializer, depth + 1);
     }
   }
