@@ -75,7 +75,7 @@ A home that finds no state for a stage that was deployed refuses to deploy. The 
 - A home pointed at the wrong place, for a stage with history, refuses to deploy.
 - After a move, a 4.x CLI is refused.
 
-**Where it stands (2026-10-31):** checked for the new core in step 2, not committed. In the lab: 4.x and the new core refuse each other's deploys both ways, and two new cores racing for the lock in a real bucket leave one winner. No second passphrase was made, and the home holds only what 4.x writes. With the state hidden, a deploy is refused and nothing is created. Left: the tombstone (step 5).
+**Where it stands (2026-10-31):** checked for the new core in step 2, not committed. In the lab: 4.x and the new core refuse each other's deploys both ways, and two new cores racing for the lock in a real bucket leave one winner. No second passphrase was made, and the home holds only what 4.x writes. With the state hidden, a deploy is refused and nothing is created. The tombstone (2026-11-05): 5.0 takes its own lock, `lock5`, and leaves a tombstone at SST 4's on a stage that has moved, so the home holds those beside what 4.x writes. SST 4's own build was refused on a moved stage, its deploy, refresh and remove, against a local home.
 
 ## 5. Deployed code keeps working
 

@@ -207,6 +207,8 @@ From then on, the stage deploys with `sst deploy` and `sst dev` as before. Move 
 
 :::danger
 Don't deploy a stage that has moved with SST 4, like from an old branch or in CI. It would try to put back SST 4's resources in place of what moved.
+
+SST 5 keeps a lock on a stage that has moved, where SST 4 looks for one, so SST 4's `sst deploy`, `sst dev`, `sst refresh` and `sst remove` stop with "A concurrent update was detected". **Don't run SST 4's `sst unlock` on it**: that takes the lock out, and SST 4 would then deploy. SST 5's `sst unlock` leaves it. SST 4's `sst state` commands don't take the lock, so don't run them on a stage that has moved either.
 :::
 
 Set a `version` rule, so that anyone on SST 4 is told their version doesn't match, before the config runs:
@@ -244,6 +246,6 @@ From 5.0 on, what a package builds on changes only in a major version.
 
 ## Going back
 
-**Before you deploy anything else to a stage that has moved,** you can put it back on SST 4 with the copy the move saved. In your app's home, the copy is at `migrate/<app>/<stage>/<id>.json`, next to the stage's state at `app/<app>/<stage>.json`; on AWS, the home is your account's SST state bucket. Copy it over the stage's state, then deploy with SST 4 and the config from before the codemod. Going back this way hasn't been tried in AWS yet.
+**Before you deploy anything else to a stage that has moved,** you can put it back on SST 4 with the copy the move saved. In your app's home, the copy is at `migrate/<app>/<stage>/<id>.json`, next to the stage's state at `app/<app>/<stage>.json`; on AWS, the home is your account's SST state bucket. Copy it over the stage's state, take out the lock SST 5 keeps for SST 4 with SST 4's `sst unlock`, then deploy with SST 4 and the config from before the codemod. Going back this way hasn't been tried in AWS yet.
 
 Once the stage has been deployed again with SST 5, the copy no longer matches what's deployed. Fix forward instead.

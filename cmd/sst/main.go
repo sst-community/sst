@@ -887,6 +887,8 @@ var root = &cli.Command{
 					"However, if something unexpectedly kills the `sst deploy` process, or if you manage to run `sst deploy` concurrently, the lock might not be released.",
 					"",
 					"This should not usually happen, but it can prevent you from deploying. You can run `sst unlock` to release the lock.",
+					"",
+					"A stage on SST 5's components also keeps a lock where SST 4 looks for one, so that SST 4 can't deploy, remove or refresh it. `sst unlock` leaves that one. Don't remove it with SST 4's `sst unlock`: SST 4 would then deploy over what SST 5 created.",
 				}, "\n"),
 			},
 			Run: func(c *cli.Cli) error {
@@ -896,13 +898,16 @@ var root = &cli.Command{
 				}
 				defer p.Cleanup()
 
-				err = p.ForceUnlock()
+				tombstone, err := p.ForceUnlock()
 				if err != nil {
 					return err
 				}
 				color.New(color.FgGreen, color.Bold).Print("✓ ")
 				color.New(color.FgWhite).Print(" Unlocked the app state for: ")
 				color.New(color.FgWhite, color.Bold).Println(p.App().Name, "/", p.App().Stage)
+				if tombstone {
+					color.New(color.FgWhite).Println("   The lock SST 4 looks for stays, so SST 4 can't deploy this stage. Don't remove it with SST 4's `sst unlock`.")
+				}
 				return nil
 			},
 		},

@@ -63,6 +63,12 @@ func runHomeSuite(t *testing.T, newHome func() Home) {
 		{"a held lock is reported", testLockHeld},
 		{"a lock whose response was lost is still taken", testLockLostResponse},
 		{"force unlock records the update", testForceUnlock},
+		{"a stage on SST 5's components keeps a tombstone SST 4 takes as held", testTombstone},
+		{"a stage that hasn't moved keeps no tombstone", testNoTombstone},
+		{"SST 4's lock refuses SST 5, which leaves nothing", testSst4LockRefuses},
+		{"a remove that leaves nothing takes the tombstone out", testTombstoneRemoved},
+		{"force unlock leaves the tombstone", testForceUnlockKeepsTombstone},
+		{"a tombstone SST 4 unlocked is written again", testTombstoneWrittenAgain},
 		{"state round trips byte for byte", testStateRoundTrip},
 		{"the passphrase stays the same", testPassphraseStays},
 		{"secrets round trip", testSecretsRoundTrip},
@@ -84,7 +90,7 @@ func runHomeSuite(t *testing.T, newHome func() Home) {
 						t.Errorf("purging %s/%s: %v", app, stage, err)
 					}
 				}
-				for _, kind := range []string{"lock", "app"} {
+				for _, kind := range []string{"lock", "lock5", "app"} {
 					if versioned, ok := home.(VersionedHome); ok {
 						versioned.RemoveVersions(context.Background(), Key{Kind: kind, App: app, Stage: "dev"}, false)
 					} else {
@@ -131,19 +137,21 @@ func testLockRace(t *testing.T, home Home, app string) {
 }
 
 func testLockHeld(t *testing.T, home Home, app string) {
-	if _, err := Lock(home, "test", "deploy", app, "dev"); err != nil {
+	update, err := Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
 		t.Fatalf("first lock: %v", err)
 	}
 	if _, err := Lock(home, "test", "deploy", app, "dev"); !errors.Is(err, ErrLockExists) {
 		t.Fatalf("expected ErrLockExists, got %v", err)
 	}
-	if err := Unlock(home, "test", app, "dev"); err != nil {
+	if err := Unlock(home, app, "dev", update, StageAfter{}); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
-	if _, err := Lock(home, "test", "deploy", app, "dev"); err != nil {
+	update, err = Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
 		t.Fatalf("lock after unlock: %v", err)
 	}
-	if err := Unlock(home, "test", app, "dev"); err != nil {
+	if err := Unlock(home, app, "dev", update, StageAfter{}); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
 }
@@ -152,20 +160,21 @@ func testLockHeld(t *testing.T, home Home, app string) {
 // and the retry finds the lock that write took.
 func testLockLostResponse(t *testing.T, home Home, app string) {
 	lost := &lostResponseHome{Home: home}
-	if _, err := Lock(lost, "test", "deploy", app, "dev"); err != nil {
+	update, err := Lock(lost, "test", "deploy", app, "dev")
+	if err != nil {
 		t.Fatalf("expected the lock to be taken, got %v", err)
 	}
 	if _, err := Lock(home, "test", "deploy", app, "dev"); !errors.Is(err, ErrLockExists) {
 		t.Fatalf("expected another CLI to be refused, got %v", err)
 	}
-	Unlock(home, "test", app, "dev")
+	Unlock(home, app, "dev", update, StageAfter{})
 }
 
-// lostResponseHome writes the lock, then answers as if it were already there.
+// lostResponseHome writes a lock, then answers as if it were already there.
 type lostResponseHome struct{ Home }
 
 func (l *lostResponseHome) Put(ctx context.Context, key Key, data []byte, opts PutOptions) error {
-	if err := l.Home.Put(ctx, key, data, opts); err != nil || key.Kind != "lock" {
+	if err := l.Home.Put(ctx, key, data, opts); err != nil || (key.Kind != "lock" && key.Kind != "lock5") {
 		return err
 	}
 	return ErrExists
@@ -176,9 +185,14 @@ func testForceUnlock(t *testing.T, home Home, app string) {
 	if err != nil {
 		t.Fatalf("lock: %v", err)
 	}
-	if err := ForceUnlock(home, "test", app, "dev"); err != nil {
+	tombstone, err := ForceUnlock(home, "test", app, "dev")
+	if err != nil {
 		t.Fatalf("force unlock: %v", err)
 	}
+	if tombstone {
+		t.Fatalf("expected no tombstone on a stage that hasn't moved")
+	}
+	// Recorded once, though the run held both locks
 	var recorded Update
 	if err := getJSON(home, historyKey("update", app, "dev", update.ID), false, &recorded); err != nil {
 		t.Fatalf("reading the update: %v", err)
@@ -186,10 +200,192 @@ func testForceUnlock(t *testing.T, home Home, app string) {
 	if recorded.TimeCompleted == "" || len(recorded.Errors) != 1 {
 		t.Fatalf("expected the update to be completed with one error, got %+v", recorded)
 	}
-	if _, err := Lock(home, "test", "deploy", app, "dev"); err != nil {
+	update, err = Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
 		t.Fatalf("lock after force unlock: %v", err)
 	}
-	Unlock(home, "test", app, "dev")
+	Unlock(home, app, "dev", update, StageAfter{})
+}
+
+// sst4Lock is what every SST 4 CLI does to take the lock, from v4.23.2's
+// pkg/project/provider/provider.go: a lock whose time is set is held.
+func sst4Lock(home Home, app, stage string) error {
+	var held lockData
+	if err := getJSON(home, sst4LockKey(app, stage), false, &held); err != nil {
+		return err
+	}
+	if !held.Created.IsZero() {
+		return ErrLockExists
+	}
+	return putJSON(home, sst4LockKey(app, stage), false, lockData{Created: time.Now(), UpdateID: "sst4", Command: "deploy", Ignore: true})
+}
+
+// sst4Unlock is SST 4's `sst unlock`: it removes the lock, whatever it is
+func sst4Unlock(home Home, app, stage string) {
+	home.Remove(context.Background(), sst4LockKey(app, stage))
+}
+
+func tombstoneOf(t *testing.T, home Home, app, stage string) bool {
+	t.Helper()
+	var held lockData
+	if err := getJSON(home, sst4LockKey(app, stage), false, &held); err != nil {
+		t.Fatalf("reading the lock SST 4 reads: %v", err)
+	}
+	return held.Tombstone
+}
+
+// moveStage is a run that leaves the stage on SST 5's components: a move, or
+// a new stage's first deploy
+func moveStage(t *testing.T, home Home, app, stage string) {
+	t.Helper()
+	update, err := Lock(home, "test", "deploy", app, stage)
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if err := sst4Lock(home, app, stage); !errors.Is(err, ErrLockExists) {
+		t.Fatalf("expected SST 4 to be refused during the run, got %v", err)
+	}
+	if err := Unlock(home, app, stage, update, StageAfter{Moved: true}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+}
+
+func testTombstone(t *testing.T, home Home, app string) {
+	moveStage(t, home, app, "dev")
+	if !tombstoneOf(t, home, app, "dev") {
+		t.Fatalf("expected a tombstone after the stage moved")
+	}
+	if err := sst4Lock(home, app, "dev"); !errors.Is(err, ErrLockExists) {
+		t.Fatalf("expected SST 4 to be refused, got %v", err)
+	}
+	// SST 5 runs on it, under its own lock alone
+	update, err := Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
+		t.Fatalf("SST 5's lock on a stage with a tombstone: %v", err)
+	}
+	if _, err := Lock(home, "test", "deploy", app, "dev"); !errors.Is(err, ErrLockExists) {
+		t.Fatalf("expected a second SST 5 run to be refused, got %v", err)
+	}
+	if err := Unlock(home, app, "dev", update, StageAfter{Moved: true}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	if !tombstoneOf(t, home, app, "dev") {
+		t.Fatalf("expected the tombstone to stay")
+	}
+	if err := sst4Lock(home, app, "dev"); !errors.Is(err, ErrLockExists) {
+		t.Fatalf("expected SST 4 to be refused after another run, got %v", err)
+	}
+}
+
+func testNoTombstone(t *testing.T, home Home, app string) {
+	update, err := Lock(home, "test", "refresh", app, "dev")
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if err := Unlock(home, app, "dev", update, StageAfter{}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	if err := sst4Lock(home, app, "dev"); err != nil {
+		t.Fatalf("expected SST 4 to take the lock of a stage that hasn't moved, got %v", err)
+	}
+	sst4Unlock(home, app, "dev")
+}
+
+func testSst4LockRefuses(t *testing.T, home Home, app string) {
+	if err := sst4Lock(home, app, "dev"); err != nil {
+		t.Fatalf("SST 4's lock: %v", err)
+	}
+	if _, err := Lock(home, "test", "deploy", app, "dev"); !errors.Is(err, ErrLockExists) {
+		t.Fatalf("expected SST 5 to be refused, got %v", err)
+	}
+	if data, err := home.Get(context.Background(), lockKey(app, "dev")); err != nil || data != nil {
+		t.Fatalf("expected SST 5 to let go of its own lock, got %q, %v", data, err)
+	}
+	sst4Unlock(home, app, "dev")
+}
+
+func testTombstoneRemoved(t *testing.T, home Home, app string) {
+	moveStage(t, home, app, "dev")
+	update, err := Lock(home, "test", "remove", app, "dev")
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if err := Unlock(home, app, "dev", update, StageAfter{Removed: true}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	for _, key := range []Key{lockKey(app, "dev"), sst4LockKey(app, "dev")} {
+		if data, err := home.Get(context.Background(), key); err != nil || data != nil {
+			t.Fatalf("expected nothing at %v, got %q, %v", key, data, err)
+		}
+	}
+}
+
+func testForceUnlockKeepsTombstone(t *testing.T, home Home, app string) {
+	moveStage(t, home, app, "dev")
+	update, err := Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	tombstone, err := ForceUnlock(home, "test", app, "dev")
+	if err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+	if !tombstone || !tombstoneOf(t, home, app, "dev") {
+		t.Fatalf("expected force unlock to leave the tombstone, and say so")
+	}
+	var recorded Update
+	if err := getJSON(home, historyKey("update", app, "dev", update.ID), false, &recorded); err != nil || len(recorded.Errors) != 1 {
+		t.Fatalf("expected the update to be recorded as not finished, got %+v, %v", recorded, err)
+	}
+	if err := sst4Lock(home, app, "dev"); !errors.Is(err, ErrLockExists) {
+		t.Fatalf("expected SST 4 to be refused after a force unlock, got %v", err)
+	}
+	update, err = Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
+		t.Fatalf("SST 5's lock after a force unlock: %v", err)
+	}
+	Unlock(home, app, "dev", update, StageAfter{Moved: true})
+}
+
+// SST 4's `sst unlock` removes the tombstone, which the guide says not to do.
+// The next run of SST 5 on the stage writes it again, and so does one that
+// held its own lock alone when it was removed.
+func testTombstoneWrittenAgain(t *testing.T, home Home, app string) {
+	moveStage(t, home, app, "dev")
+	sst4Unlock(home, app, "dev")
+	moveStage(t, home, app, "dev")
+	if !tombstoneOf(t, home, app, "dev") {
+		t.Fatalf("expected the tombstone to be written again")
+	}
+
+	update, err := Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	sst4Unlock(home, app, "dev")
+	if err := Unlock(home, app, "dev", update, StageAfter{Moved: true}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	if !tombstoneOf(t, home, app, "dev") {
+		t.Fatalf("expected the run's unlock to write the tombstone again")
+	}
+
+	// One SST 4 took in between is left to it
+	update, err = Lock(home, "test", "deploy", app, "dev")
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	sst4Unlock(home, app, "dev")
+	if err := sst4Lock(home, app, "dev"); err != nil {
+		t.Fatalf("SST 4's lock: %v", err)
+	}
+	if err := Unlock(home, app, "dev", update, StageAfter{Moved: true}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	if tombstoneOf(t, home, app, "dev") {
+		t.Fatalf("expected SST 4's lock to be left as it was")
+	}
+	sst4Unlock(home, app, "dev")
 }
 
 func testStateRoundTrip(t *testing.T, home Home, app string) {
@@ -314,7 +510,7 @@ func deployN(t *testing.T, home Home, app, stage string, n int) []string {
 		if err := PutUpdate(home, app, stage, update); err != nil {
 			t.Fatal(err)
 		}
-		if err := Unlock(home, "test", app, stage); err != nil {
+		if err := Unlock(home, app, stage, update, StageAfter{}); err != nil {
 			t.Fatal(err)
 		}
 		ids = append([]string{update.ID}, ids...)
@@ -399,8 +595,8 @@ func testPurge(t *testing.T, home Home, app string) {
 	if p, err := home.Passphrase(ctx, app, "dev"); err != nil || p != "" {
 		t.Fatalf("expected the passphrase to be removed, got %q, %v", p, err)
 	}
-	// Purge runs while the remove still holds the lock, so the lock's versions
-	// stay, as they did in 4.x. Nothing else may.
+	// Purge runs while the remove still holds the lock, so the locks' versions
+	// stay, as SST 4's did in 4.x. Nothing else may.
 	if memory, ok := home.(*memoryHome); ok && memory.versionsUnder(app) != 0 {
 		t.Fatalf("expected no versions left but the lock's, %d are", memory.versionsUnder(app))
 	}
@@ -464,7 +660,7 @@ func testDeployHistory(t *testing.T, home Home, app string) {
 	if err := PutUpdate(home, app, "dev", failed); err != nil {
 		t.Fatal(err)
 	}
-	Unlock(home, "test", app, "dev")
+	Unlock(home, app, "dev", failed, StageAfter{})
 	check(false, "a stage whose first deploy failed")
 
 	deployN(t, home, app, "dev", 1)
@@ -493,7 +689,7 @@ func testDeployHistory(t *testing.T, home Home, app string) {
 	if err := PutUpdate(home, app, "dev", removed); err != nil {
 		t.Fatal(err)
 	}
-	Unlock(home, "test", app, "dev")
+	Unlock(home, app, "dev", removed, StageAfter{Removed: true})
 	check(false, "a removed stage")
 }
 
@@ -615,7 +811,7 @@ func (m *memoryHome) versionsUnder(app string) int {
 	n := 0
 	for k, versions := range m.objects {
 		parts := strings.Split(k, "/")
-		if parts[0] != "lock" && parts[1] == app {
+		if parts[0] != "lock" && parts[0] != "lock5" && parts[1] == app {
 			n += len(versions)
 		}
 	}

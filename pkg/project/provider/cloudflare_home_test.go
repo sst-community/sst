@@ -99,7 +99,8 @@ func TestCloudflareHomeSuite(t *testing.T) {
 	}
 }
 
-// The keys are the ones 4.x wrote: <kind>/<app>/<stage>, with no extension.
+// The keys are the ones 4.x wrote: <kind>/<app>/<stage>, with no extension,
+// and SST 5's own lock, `lock5`, beside SST 4's.
 func TestCloudflareHomeKeys(t *testing.T) {
 	t.Parallel()
 	fake := &fakeR2{objects: map[string][]byte{}}
@@ -119,7 +120,7 @@ func TestCloudflareHomeKeys(t *testing.T) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	want := []string{"app/app/dev", "lock/app/dev", "passphrase/app/dev", "secret/app/dev", "update/app/dev/" + update.ID}
+	want := []string{"app/app/dev", "lock/app/dev", "lock5/app/dev", "passphrase/app/dev", "secret/app/dev", "update/app/dev/" + update.ID}
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Fatalf("expected %v, got %v", want, keys)
 	}

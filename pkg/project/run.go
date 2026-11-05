@@ -201,6 +201,8 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	log.Info("got previous deployment")
 
 	state := stageState(completed)
+	// Until the run ends, the stage is as its state has it
+	p.stageAfter = provider.StageAfter{Moved: state.Moved}
 	if err := p.refuseUnmoved(input, state); err != nil {
 		// Locking the stage put this run in its history
 		if input.Locked == nil {
@@ -809,6 +811,13 @@ loop:
 			if err := p.keepMarker(workdir, marker); err != nil {
 				log.Error("keeping the marker of a stage on SST 5's components", "err", err)
 			}
+		}
+		// What the run left the stage as, for the lock SST 4 reads: a stage
+		// with the marker keeps a tombstone there, and one with nothing left
+		// doesn't
+		p.stageAfter = provider.StageAfter{
+			Moved:   complete.Moved || (marker != nil && holdsResources(complete.Resources)),
+			Removed: input.Command == "remove" && len(complete.Resources) == 0,
 		}
 
 		err = workdir.Push(update.ID)

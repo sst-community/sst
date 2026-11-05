@@ -209,8 +209,13 @@ func Prune(backend Home, app, stage string, retention int) error {
 	if err := versioned.PruneVersions(ctx, Key{Kind: "app", App: app, Stage: stage}); err != nil {
 		return err
 	}
-	// The current lock, if there is one, stays.
-	return versioned.PruneVersions(ctx, Key{Kind: "lock", App: app, Stage: stage})
+	// The current locks, and the tombstone, stay.
+	for _, key := range []Key{lockKey(app, stage), sst4LockKey(app, stage)} {
+		if err := versioned.PruneVersions(ctx, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Purge removes everything kept for a stage: its history, state, secrets and
@@ -367,11 +372,28 @@ type lockData struct {
 	RunID    string    `json:"runID"`
 	Command  string    `json:"command"`
 	Ignore   bool      `json:"ignore"`
+	// Tombstone marks the lock a stage on SST 5's components keeps at the key
+	// SST 4 reads, for good: SST 4 takes it as held, as its time is set.
+	Tombstone bool   `json:"tombstone,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
+
+// The lock SST 5 takes, and the one SST 4 takes. Every CLI since v3.0.43
+// refuses to deploy, remove or refresh a stage whose `lock` is held, so a
+// stage on SST 5's components keeps a tombstone there, and SST 5 takes `lock5`
+// for its own runs: an SST 4 CLI deploying an old branch's config can't delete
+// what moved. On a stage that hasn't moved, SST 5 takes both, so it and SST 4
+// refuse each other.
+func lockKey(app, stage string) Key     { return Key{Kind: "lock5", App: app, Stage: stage} }
+func sst4LockKey(app, stage string) Key { return Key{Kind: "lock", App: app, Stage: stage} }
+
+// tombstoneMessage is for whoever finds the tombstone in a home
+const tombstoneMessage = "This stage is on SST 5's components. This lock keeps SST 4's CLI from deploying, removing or refreshing it, which would delete what SST 5 created. Don't remove it with SST 4's `sst unlock`. SST 5 takes its own lock, in the lock5 folder beside this one."
 
 // Lock takes the stage's lock, and records the update it starts. The lock is
 // written only if there's none, in one step where the home can, so two CLIs
-// that start together can't both take it.
+// that start together can't both take it. On a stage that keeps a tombstone
+// it's `lock5` alone; on any other, `lock` too, which SST 4 takes.
 func Lock(backend Home, version, command, app, stage string) (*Update, error) {
 	updateID := id.Descending()
 	slog.Info("locking", "app", app, "stage", stage)
@@ -385,18 +407,16 @@ func Lock(backend Home, version, command, app, stage string) (*Update, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := Key{Kind: "lock", App: app, Stage: stage}
-	err = backend.Put(context.TODO(), key, data, PutOptions{IfAbsent: true})
-	if errors.Is(err, ErrExists) {
-		// A write that succeeded but lost its response is retried, and the
-		// retry finds the lock. If it's this one, it's taken.
-		var existing lockData
-		if getJSON(backend, key, false, &existing) != nil || existing.UpdateID != updateID {
-			return nil, ErrLockExists
-		}
-		err = nil
+	if err := takeLock(backend, lockKey(app, stage), data, updateID); err != nil {
+		return nil, err
+	}
+	var sst4 lockData
+	err = getJSON(backend, sst4LockKey(app, stage), false, &sst4)
+	if err == nil && !sst4.Tombstone {
+		err = takeLock(backend, sst4LockKey(app, stage), data, updateID)
 	}
 	if err != nil {
+		backend.Remove(context.TODO(), lockKey(app, stage))
 		return nil, err
 	}
 
@@ -415,36 +435,113 @@ func Lock(backend Home, version, command, app, stage string) (*Update, error) {
 	return update, nil
 }
 
-func Unlock(backend Home, version, app, stage string) error {
-	slog.Info("unlocking", "app", app, "stage", stage)
-	return backend.Remove(context.TODO(), Key{Kind: "lock", App: app, Stage: stage})
+// takeLock writes the lock at key if nothing is there
+func takeLock(backend Home, key Key, data []byte, updateID string) error {
+	err := backend.Put(context.TODO(), key, data, PutOptions{IfAbsent: true})
+	if errors.Is(err, ErrExists) {
+		// A write that succeeded but lost its response is retried, and the
+		// retry finds the lock. If it's this one, it's taken.
+		var existing lockData
+		if getJSON(backend, key, false, &existing) != nil || existing.UpdateID != updateID {
+			return ErrLockExists
+		}
+		return nil
+	}
+	return err
 }
 
-func ForceUnlock(backend Home, version, app, stage string) error {
-	slog.Info("force unlocking", "app", app, "stage", stage)
-	var lockData lockData
-	err := getJSON(backend, Key{Kind: "lock", App: app, Stage: stage}, false, &lockData)
+// StageAfter is what a run left the stage as, which its unlock keeps in the
+// lock SST 4 reads. The zero value is a run that didn't get to read the
+// state: the stage is as it was.
+type StageAfter struct {
+	// Moved is a stage whose state has the marker of SST 5's components
+	Moved bool
+	// Removed is a stage with nothing deployed on it any more
+	Removed bool
+}
+
+// Unlock releases the lock the update took. On a stage that's on SST 5's
+// components after the run, as a new stage is after its first deploy or one
+// that moved after `sst migrate`, it leaves the tombstone at SST 4's lock: in
+// place of SST 4's, where the run took it too, or where nothing is. A remove
+// that leaves nothing takes the tombstone out.
+func Unlock(backend Home, app, stage string, update *Update, after StageAfter) error {
+	slog.Info("unlocking", "app", app, "stage", stage)
+	ctx := context.TODO()
+	var sst4 lockData
+	err := getJSON(backend, sst4LockKey(app, stage), false, &sst4)
+	if err == nil {
+		switch {
+		case sst4.Tombstone && after.Removed:
+			err = backend.Remove(ctx, sst4LockKey(app, stage))
+		case !sst4.Tombstone && update != nil && sst4.UpdateID == update.ID:
+			if after.Moved {
+				err = putTombstone(backend, app, stage, PutOptions{})
+			} else {
+				err = backend.Remove(ctx, sst4LockKey(app, stage))
+			}
+		case sst4.Created.IsZero() && after.Moved:
+			// Taken out while the run held its own lock alone, as by SST 4's
+			// `sst unlock`. Written only if SST 4 hasn't taken it since.
+			if err = putTombstone(backend, app, stage, PutOptions{IfAbsent: true}); errors.Is(err, ErrExists) {
+				err = nil
+			}
+		}
+	}
+	return errors.Join(err, backend.Remove(ctx, lockKey(app, stage)))
+}
+
+func putTombstone(backend Home, app, stage string, opts PutOptions) error {
+	data, err := json.Marshal(lockData{
+		Created:   time.Now(),
+		Ignore:    true,
+		Tombstone: true,
+		Message:   tombstoneMessage,
+	})
 	if err != nil {
 		return err
 	}
-	if lockData.UpdateID != "" {
-		err = PutUpdate(backend, app, stage, &Update{
-			ID:            lockData.UpdateID,
-			Command:       lockData.Command,
-			RunID:         lockData.RunID,
-			Version:       version,
-			TimeCompleted: time.Now().Format(time.RFC3339),
-			Errors: []SummaryError{
-				{
-					Message: "Update did not complete and was force unlocked with the `sst unlock` command",
+	return backend.Put(context.TODO(), sst4LockKey(app, stage), data, opts)
+}
+
+// ForceUnlock takes out a lock a run left, recording its update as one that
+// didn't finish. It leaves the tombstone, and says whether there is one.
+func ForceUnlock(backend Home, version, app, stage string) (bool, error) {
+	slog.Info("force unlocking", "app", app, "stage", stage)
+	tombstone := false
+	recorded := map[string]bool{}
+	for _, key := range []Key{lockKey(app, stage), sst4LockKey(app, stage)} {
+		var lockData lockData
+		if err := getJSON(backend, key, false, &lockData); err != nil {
+			return tombstone, err
+		}
+		if lockData.Tombstone {
+			tombstone = true
+			continue
+		}
+		if lockData.UpdateID != "" && !recorded[lockData.UpdateID] {
+			recorded[lockData.UpdateID] = true
+			err := PutUpdate(backend, app, stage, &Update{
+				ID:            lockData.UpdateID,
+				Command:       lockData.Command,
+				RunID:         lockData.RunID,
+				Version:       version,
+				TimeCompleted: time.Now().Format(time.RFC3339),
+				Errors: []SummaryError{
+					{
+						Message: "Update did not complete and was force unlocked with the `sst unlock` command",
+					},
 				},
-			},
-		})
-		if err != nil {
-			return err
+			})
+			if err != nil {
+				return tombstone, err
+			}
+		}
+		if err := backend.Remove(context.TODO(), key); err != nil {
+			return tombstone, err
 		}
 	}
-	return backend.Remove(context.TODO(), Key{Kind: "lock", App: app, Stage: stage})
+	return tombstone, nil
 }
 
 // ListStages returns the app's stages that have resources.

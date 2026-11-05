@@ -172,6 +172,10 @@ type Project struct {
 	loadedProviders map[string]provider.Provider
 	nodeVersion     string
 	Runtime         *runtime.Collection
+	// The stage's lock this CLI holds, and what the run under it left the
+	// stage as, which its unlock keeps in the lock SST 4 reads
+	locked     *provider.Update
+	stageAfter provider.StageAfter
 }
 
 func Discover() (string, error) {

@@ -66,6 +66,8 @@ func TestLocalHomeFiles(t *testing.T) {
 	want := []string{
 		"state/app/my-app/dev.json",
 		"state/lock/my-app/dev.json",
+		// SST 5's own lock, beside SST 4's
+		"state/lock5/my-app/dev.json",
 		"state/passphrase/my-app/dev.json",
 		"state/secret/my-app/dev.json",
 		"state/snapshot/my-app/dev/" + update.ID + ".json",

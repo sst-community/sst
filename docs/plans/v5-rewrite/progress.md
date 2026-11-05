@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-05: step 5, the tombstone
+
+A stage on SST 5's components keeps SST 4's CLI off it ([The move](plan.md#the-move)).
+
+- **SST 5 takes a lock of its own, `lock5/<app>/<stage>.json`, on every stage.** On a stage with no tombstone it takes SST 4's, `lock/<app>/<stage>.json`, too, so until a stage moves SST 4 and SST 5 refuse each other, and two SST 5 CLIs always meet at `lock5`. It lets go of `lock5` when SST 4's is held.
+- **A run that leaves the marker leaves the tombstone** in place of SST 4's lock: a move, a new stage's first deploy, or any run on a stage that has moved whose tombstone is gone, as after SST 4's `sst unlock`. It's a lock SST 4 takes as held, as its time is set, with `tombstone` and a message for whoever finds it. A remove that leaves nothing takes it out. The run tells the unlock what it left (`provider.StageAfter`): what the state had before, and once it's done what the state has after, with a remove that didn't finish counted by the marker it puts back.
+- **SST 5's `sst unlock` leaves the tombstone** and says so; its help says not to remove it with SST 4's. The migration guide's warning says what SST 4 shows on a moved stage, not to run SST 4's `sst unlock` on it, and that SST 4's `sst state` commands take no lock. "Going back" takes it out with SST 4's `sst unlock` before SST 4 deploys.
+- **Tested** on each home, local, memory, and the Cloudflare home plain and compressed: against SST 4's own lock code, from v4.23.2, a stage that has moved refuses SST 4 while SST 5 runs on it alone; a stage that hasn't keeps no tombstone; SST 4's lock refuses SST 5, which leaves nothing; a remove takes the tombstone out; a force unlock leaves it; one SST 4 unlocked is written again.
+
+**Checked with SST 4's own CLI**, a 4.x build of `main`, and this branch's, on a local home with no cloud account (a `random` provider's string, with `HOME` set to a scratch folder and no AWS credentials): SST 4 deployed; SST 5's `sst migrate` left the tombstone; SST 4's `deploy`, `refresh` and `remove` were refused with "A concurrent update was detected", and the state kept the marker; SST 5 deployed under `lock5` alone; SST 5's `sst unlock` left the tombstone; after SST 4's `sst unlock` took it out, SST 5's next deploy wrote it again; SST 5's remove took it out, and SST 4 then deployed and removed a new stage of the same name. A new stage's first deploy with SST 5 left the tombstone too, and SST 4 was refused there. The scratch folder was deleted after. Also: the Go tests, `tsc`.
+
 ## 2026-11-05: step 5, the API reports
 
 What a package builds on, reported for each entry point, as [goal 8](goals.md#8-what-a-package-builds-on-holds-still-within-5x) asks, now that the swap has made the names final ([decision](plan.md#decisions)).

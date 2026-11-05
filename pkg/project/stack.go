@@ -160,7 +160,13 @@ func (p *Project) ResolvePolicyPackPath(policyPath string) (string, error) {
 }
 
 func (p *Project) Lock(command string) (*provider.Update, error) {
-	return provider.Lock(p.home, p.Version(), command, p.app.Name, p.app.Stage)
+	update, err := provider.Lock(p.home, p.Version(), command, p.app.Name, p.app.Stage)
+	if err != nil {
+		return nil, err
+	}
+	p.locked = update
+	p.stageAfter = provider.StageAfter{}
+	return update, nil
 }
 
 // DropUpdate takes an update out of the stage's history: one whose lock was
@@ -169,11 +175,17 @@ func (p *Project) DropUpdate(update *provider.Update) error {
 	return provider.RemoveUpdate(p.home, p.app.Name, p.app.Stage, update.ID)
 }
 
+// Unlock releases the lock this CLI took. On a stage that's on SST 5's
+// components after the run, the lock SST 4 reads stays as its tombstone.
 func (s *Project) Unlock() error {
-	return provider.Unlock(s.home, s.version, s.app.Name, s.app.Stage)
+	update := s.locked
+	s.locked = nil
+	return provider.Unlock(s.home, s.app.Name, s.app.Stage, update, s.stageAfter)
 }
 
-func (s *Project) ForceUnlock() error {
+// ForceUnlock takes out a lock a run left. It says whether the stage keeps a
+// tombstone at the lock SST 4 reads, which it leaves.
+func (s *Project) ForceUnlock() (bool, error) {
 	return provider.ForceUnlock(s.home, s.version, s.app.Name, s.app.Stage)
 }
 
