@@ -335,7 +335,7 @@ export interface MicroVmArgs extends ComponentArgs<typeof parts> {
  * 8 hours. For example, to run code that an AI agent wrote.
  *
  * The component creates the image. Your app then starts MicroVMs from it, and sends them
- * requests, with the [SDK](/docs/component/aws/v5/microvm#sdk).
+ * requests, with the [SDK](/docs/component/aws/microvm#sdk).
  *
  * :::note
  * Lambda MicroVMs run on ARM64 only, and are available in `us-east-1`, `us-east-2`,
@@ -927,7 +927,7 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
 
   /**
    * Linking a `MicroVm` gives the linked resource what the
-   * [SDK](/docs/component/aws/v5/microvm#sdk) needs to run MicroVMs from the image, and
+   * [SDK](/docs/component/aws/microvm#sdk) needs to run MicroVMs from the image, and
    * lets it run, suspend, resume and terminate them.
    */
   public link() {

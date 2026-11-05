@@ -138,7 +138,7 @@ export interface ClusterGetArgs {
  *
  * #### Add a service
  *
- * A [`Service`](/docs/component/aws/v5/service) is a set of containers that are always
+ * A [`Service`](/docs/component/aws/service) is a set of containers that are always
  * running, like a web or application server. They're restarted if they fail.
  *
  * ```ts title="sst.config.ts"
@@ -147,7 +147,7 @@ export interface ClusterGetArgs {
  *
  * #### Add a task
  *
- * A [`Task`](/docs/component/aws/v5/task) is a set of containers that's started for long
+ * A [`Task`](/docs/component/aws/task) is a set of containers that's started for long
  * running asynchronous work, like data processing.
  *
  * ```ts title="sst.config.ts"

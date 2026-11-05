@@ -31,7 +31,7 @@ export interface DurableObjectArgs extends ComponentArgs<typeof parts> {
  * for a worker.
  *
  * Create the Durable Object and then link it to a
- * [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker). SST adds
+ * [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker). SST adds
  * the Durable Object binding automatically. The `className` must match the
  * exported Durable Object class name in your worker code.
  *

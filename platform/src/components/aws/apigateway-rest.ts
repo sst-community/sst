@@ -668,11 +668,11 @@ export interface ApiGatewayRestIntegrationArgs {
  *   function is created is decided from them. A function you have, or its ARN, can be an
  *   output.
  * - A function's args are typed as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - Next to `existing.domainName`, a domain's `name`, `dns` and `cert` are refused: the
  *   domain name is used the way it is.
  * - API Gateway's account settings, which give the API a role to write its access log

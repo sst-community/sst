@@ -262,7 +262,7 @@ export interface BucketArgs extends ComponentArgs<typeof parts> {
    * granted.
    *
    * :::tip
-   * If you are using the [`Router`](/docs/component/aws/v5/router) to serve files from this
+   * If you are using the [`Router`](/docs/component/aws/router) to serve files from this
    * bucket, you need to allow `cloudfront` access the bucket.
    * :::
    *
@@ -1009,11 +1009,11 @@ export interface BucketEventBridgeSubscriberArgs {
  *   takes, can't be a handler or a function's args in an output: they decide what's
  *   created. A function you already have, or its ARN, can still be an output.
  * - A function's args are typed as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - A `transform` function for `cors` or `lifecycle` is given outputs where
  *   `sst.aws.Bucket` gave it plain values, like `corsRules[0].allowedOrigins` and
  *   `rules`. Change them with `apply`, or set them with an object.

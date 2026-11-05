@@ -137,7 +137,7 @@ export interface WorkflowArgs
  * The `Workflow` component lets you add serverless workflows to your app using
  * [AWS Lambda Durable Functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
  *
- * It's a thin wrapper around the [`Function`](/docs/component/aws/v5/function) component
+ * It's a thin wrapper around the [`Function`](/docs/component/aws/function) component
  * with durable execution enabled.
  * It includes an [SDK](#sdk) that wraps the AWS SDK with a simpler interface, adds helper methods, and makes it easier to integrate with other SST components.
  *
@@ -278,7 +278,7 @@ export interface WorkflowArgs
  *   does. What `sst.aws.Workflow` took there, the function's own `transform`, goes in
  *   `transform.function.transform`.
  * - What the function is built from, like `handler`, `runtime` or `bundle`, has to be a
- *   plain value, not an output, as [`sst.aws.Function`](/docs/component/aws/v5/function)
+ *   plain value, not an output, as [`sst.aws.Function`](/docs/component/aws/function)
  *   takes it. So does `logging`, since whether there are logs decides whether a log group
  *   is created. What's in `logging` can be an output.
  * - A workflow can be given to the V5 `Cron`, `Bus` and the other V5 components that take

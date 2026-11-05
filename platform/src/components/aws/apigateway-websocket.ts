@@ -312,7 +312,7 @@ export interface ApiGatewayWebSocketRouteArgs {
  *   its name, or the route itself, like `sendMessage`; `route` and `addAuthorizer` return
  *   the API and the authorizer, not those components.
  * - `addAuthorizer` takes one object, with the authorizer's name in it, as
- *   [`sst.aws.ApiGatewayHttp`](/docs/component/aws/v5/apigateway-http)'s does. The
+ *   [`sst.aws.ApiGatewayHttp`](/docs/component/aws/apigateway-http)'s does. The
  *   authorizer is kept by that name. The call with the name first is refused with what to
  *   write.
  *
@@ -344,11 +344,11 @@ export interface ApiGatewayWebSocketRouteArgs {
  *   function is created is decided from them. A function you have, or its ARN, can be an
  *   output.
  * - A function's args are typed as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - Next to `existing.domainName`, a domain's `name`, `dns` and `cert` are refused: the
  *   domain name is used the way it is.
  * - API Gateway's account settings, which give the API a role to write its access log

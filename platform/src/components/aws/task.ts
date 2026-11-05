@@ -280,7 +280,7 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
  *
  * #### Task SDK
  *
- * With the [Task JS SDK](/docs/component/aws/v5/task#sdk), you can run your tasks, stop your
+ * With the [Task JS SDK](/docs/component/aws/task#sdk), you can run your tasks, stop your
  * tasks, and get the status of your tasks.
  *
  * For example, you can link the task to a function in your app.
@@ -586,7 +586,7 @@ export class Task extends component("sst:aws:Task", parts) {
 
   /**
    * Linking a task gives the linked resource what it needs to run it with the
-   * [Task SDK](/docs/component/aws/v5/task#sdk), and lets it run, describe and stop the task.
+   * [Task SDK](/docs/component/aws/task#sdk), and lets it run, describe and stop the task.
    */
   public link() {
     return {

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as TypeDoc from "typedoc";
 import ts from "typescript";
 import config from "./config";
-import { v5Components } from "./src/v5-components.mjs";
+import { componentFiles } from "./src/component-files.mjs";
 
 process.on("uncaughtException", (err) => {
   restoreCode();
@@ -61,6 +61,8 @@ const v5Classes = new Map<string, string>();
 const originals = new Map<string, string>();
 // What `pulumiTypeOf()` has read, by source file
 const pulumiTypes = new Map<string, string | undefined>();
+// What `isV5Source()` has read, by source file
+const fiveSources = new Map<string, boolean>();
 let currentPage = "";
 // The interfaces from helper files that each page shows
 const sharedInterfaces = new Map<
@@ -103,11 +105,11 @@ if (!cmd || cmd === "components") {
     if (!isV5Source(sourceFile)) continue;
     const name = useClassName(component);
     const group = sourceFile.split("/")[3];
-    // An SST 4 component without a page of its own, like Cloudflare's
-    // `DurableObject`, isn't among what's documented: find it on disk
+    // SST 4's component of its type, which has no page now: find it in the
+    // fixtures, where SST 4's components are frozen
     const type = pulumiTypeOf(sourceFile)!;
     if (!originals.has(type)) {
-      const dir = path.join("..", "platform/src/components", group);
+      const dir = path.join("..", "platform/test/fixtures/v4/components", group);
       for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".ts"))) {
         const code = fs.readFileSync(path.join(dir, file), "utf8");
         const declared = code.match(/\b(?:__)?pulumiType = "(sst:[\w:]+)"/)?.[1];
@@ -143,8 +145,7 @@ if (!cmd || cmd === "components") {
       await generateLinkableDoc(component);
     } else {
       const componentProvider = component.name.split("/")[1];
-      // The file's name: `components/aws/task`, or `components/aws/v5/task`
-      // for a V5 component, which has the same SDK
+      // The file's name: `components/aws/task`
       const sdkName = component.name.split("/").at(-1);
       const sdk = sdks.find(
         (s) =>
@@ -997,7 +998,8 @@ async function generateComponentDoc(
       .flat()
       .join("\n")
   );
-  if (original)
+  // SST 4's name, when it isn't this one's, like `sst.aws.CronV2`
+  if (original && `${originalNamespace(fullClassName)}.${original}` !== fullClassName)
     checkOriginalNotNamed(
       outputFilePath,
       `${originalNamespace(fullClassName)}.${original}`
@@ -1410,20 +1412,9 @@ function renderType(
         /platform\/src\/components\/(.*)\.ts/,
         "/docs/component/$1"
       );
-      // On a V5 page, a type of the component a V5 one replaces is written
-      // out in full: `sst.aws.Queue` next to this page's `Queue`
-      const replaced =
-        isV5Source(moduleFile) &&
-        !isV5Source(fileName) &&
-        documentedSources.has(
-          fileName.replace(/\/([\w-]+\.ts)$/, "/v5/$1")
-        );
       // The type's own name: a helper file may import it under another
-      const declared =
+      const name =
         (type.reflection as TypeDoc.DeclarationReflection)?.name ?? type.name;
-      const name = replaced
-        ? `sst.${fileName.split("/").slice(3, -1).join(".")}.${declared}`
-        : declared;
       return `[<code class="type">${name}</code>](${docLink}${docHash})`;
     }
 
@@ -1850,8 +1841,8 @@ function renderConstructor(module: TypeDoc.DeclarationReflection) {
 /** V5 components: switching to one   **/
 /***************************************/
 
-// A V5 component is in its provider's `v5` folder, and is `sst.aws.v5.Queue`
-// next to the `sst.aws.Queue` it replaces
+// An SST 5 component takes the place of SST 4's of its Pulumi type, which is
+// frozen in the platform's test fixtures
 function isHelperSource(fileName: string) {
   return fileName.startsWith(HELPERS);
 }
@@ -1870,11 +1861,23 @@ function pulumiTypeOf(sourceFile: string) {
   }
   return pulumiTypes.get(sourceFile);
 }
+// An SST 5 component's file: one in a provider's folder that declares it with
+// `component()`
 function isV5Source(fileName: string) {
-  return /^platform\/src\/components\/\w+\/v5\//.test(fileName);
+  if (!/^platform\/src\/components\/(aws|cloudflare|experimental)\/[\w-]+\.ts$/.test(fileName))
+    return false;
+  if (!fiveSources.has(fileName))
+    fiveSources.set(
+      fileName,
+      /^export class \w+ extends component\(/m.test(
+        fs.readFileSync(path.join("..", fileName), "utf8")
+      )
+    );
+  return fiveSources.get(fileName)!;
 }
+// SST 4's components were in the same namespace: `sst.aws`
 function originalNamespace(fullClassName: string) {
-  return fullClassName.split(".").slice(0, -2).join(".");
+  return fullClassName.split(".").slice(0, -1).join(".");
 }
 
 // Where a page's "Switch from" section starts and ends, in lines
@@ -1945,8 +1948,8 @@ function renderSwitchNotes(
           `- An object in \`transform\` is merged into the defaults, nested objects included, where \`${originalName}\` replaced a nested object whole. To replace one, use a function.`,
         ]
       : []),
-    `- \`$transform(${originalName}, ...)\` applies to it too, and one for \`${fullClassName}\` applies to \`${originalName}\`. The two have the same type.`,
   ];
+  if (notes.length === 0) return lines;
 
   // The section's list: from its first item to the last line that's an item
   // or indented under one
@@ -1957,7 +1960,7 @@ function renderSwitchNotes(
     let end = section.end;
     while (lines[end - 1].trim() === "") end--;
     const intro =
-      notes.length === 1 ? "One thing to know:" : "Two things to know:";
+      notes.length === 1 ? "One thing to know:" : "A few things to know:";
     lines.splice(end, 0, "", intro, "", ...notes);
     return lines;
   }
@@ -2894,10 +2897,11 @@ function renderExamples(
     .flatMap((tag) => useV5Names(prop, renderTdComment(tag.content)));
 }
 
-// On a V5 page, an arg the component takes from the original comes with the
-// original's docs. Where those create a component that has a V5 form, the
-// page shows the V5 one: `new sst.aws.v5.Bucket(...)`. Docs written for the
-// V5 component, in its file or a helper, are left as they are.
+// On a component's page, an arg it takes from a module that isn't a
+// component's comes with that module's docs. Where those name an SST 4
+// component by a name SST 5 changed, the page shows SST 5's:
+// `sst.aws.CronV2` is `sst.aws.Cron`. Docs written for the component, in its
+// file or a helper, are left as they are.
 function useV5Names(prop: TypeDoc.Reflection, text: string) {
   const file = (prop as TypeDoc.DeclarationReflection).sources?.[0]?.fileName;
   if (!isV5Source(currentPage) || !file || isV5Source(file) || isHelperSource(file))
@@ -2908,7 +2912,7 @@ function useV5Names(prop: TypeDoc.Reflection, text: string) {
     /\bsst\.(aws|cloudflare)\.(\w+)(?=\(|\.\w+\(|`)/g,
     (match, group, name) => {
       const v5 = v5Classes.get(`${group}:${name}`);
-      return v5 ? `sst.${group}.v5.${v5}` : match;
+      return v5 ? `sst.${group}.${v5}` : match;
     }
   );
 }
@@ -3088,16 +3092,10 @@ function useClassProviderNamespace(module: TypeDoc.DeclarationReflection) {
     );
   }
 
-  // ie. `aws`, or `aws/v5` for a V5 component. The experimental components
-  // are `sst.x`, so a V5 one is `sst.x.v5`.
-  if (isV5Source(fileName))
-    return `sst.${fileName
-      .split("/")
-      .slice(-3, -1)
-      .map((part) => (part === "experimental" ? "x" : part))
-      .join(".")}`;
+  // ie. `aws`. The experimental components are `sst.x`.
   const namespace = fileName.split("/").slice(-2, -1)[0];
-  return namespace === "components" ? "sst" : `sst.${namespace}`;
+  if (namespace === "components") return "sst";
+  return `sst.${namespace === "experimental" ? "x" : namespace}`;
 }
 function useClassComment(module: TypeDoc.DeclarationReflection) {
   const comment = useClass(module).comment;
@@ -3420,112 +3418,18 @@ async function buildComponents() {
       "../platform/src/config.ts",
       "../platform/src/global-config.d.ts",
       "../platform/src/components/experimental/dev-command.ts",
-      "../platform/src/components/experimental/v5/dev-command.ts",
       "../platform/src/components/linkable.ts",
       "../platform/src/components/secret.ts",
-      "../platform/src/components/aws/analog.ts",
-      "../platform/src/components/aws/apigateway-websocket.ts",
-      "../platform/src/components/aws/apigateway-websocket-route.ts",
-      "../platform/src/components/aws/apigatewayv1.ts",
-      "../platform/src/components/aws/apigatewayv1-api-key.ts",
-      "../platform/src/components/aws/apigatewayv1-authorizer.ts",
-      "../platform/src/components/aws/apigatewayv1-integration-route.ts",
-      "../platform/src/components/aws/apigatewayv1-lambda-route.ts",
-      "../platform/src/components/aws/apigatewayv1-usage-plan.ts",
-      "../platform/src/components/aws/apigatewayv2.ts",
-      "../platform/src/components/aws/apigatewayv2-authorizer.ts",
-      "../platform/src/components/aws/apigatewayv2-lambda-route.ts",
-      "../platform/src/components/aws/apigatewayv2-private-route.ts",
-      "../platform/src/components/aws/apigatewayv2-url-route.ts",
-      "../platform/src/components/aws/app-sync.ts",
-      "../platform/src/components/aws/app-sync-data-source.ts",
-      "../platform/src/components/aws/app-sync-function.ts",
-      "../platform/src/components/aws/app-sync-resolver.ts",
-      "../platform/src/components/aws/auth.ts",
-      "../platform/src/components/aws/aurora.ts",
-      "../platform/src/components/aws/bucket.ts",
-      "../platform/src/components/aws/bucket-notification.ts",
-      "../platform/src/components/aws/bus.ts",
-      "../platform/src/components/aws/bus-lambda-subscriber.ts",
-      "../platform/src/components/aws/bus-queue-subscriber.ts",
-      "../platform/src/components/aws/cluster.ts",
-      "../platform/src/components/aws/cluster-v1.ts",
-      "../platform/src/components/aws/cognito-identity-pool.ts",
-      "../platform/src/components/aws/cognito-identity-provider.ts",
-      "../platform/src/components/aws/cognito-user-pool.ts",
-      "../platform/src/components/aws/cognito-user-pool-client.ts",
-      "../platform/src/components/aws/cron.ts",
-      "../platform/src/components/aws/cron-v2.ts",
-      "../platform/src/components/aws/dynamo.ts",
-      "../platform/src/components/aws/dynamo-lambda-subscriber.ts",
-      "../platform/src/components/aws/efs.ts",
-      "../platform/src/components/aws/email.ts",
-      "../platform/src/components/aws/function.ts",
-      "../platform/src/components/aws/mysql.ts",
-      "../platform/src/components/aws/postgres.ts",
-      "../platform/src/components/aws/postgres-v1.ts",
-      "../platform/src/components/aws/step-functions.ts",
-      "../platform/src/components/aws/vector.ts",
-      "../platform/src/components/aws/astro.ts",
-      "../platform/src/components/aws/nextjs.ts",
-      "../platform/src/components/aws/nuxt.ts",
-      "../platform/src/components/aws/dsql.ts",
-      "../platform/src/components/aws/realtime.ts",
-      "../platform/src/components/aws/realtime-lambda-subscriber.ts",
-      "../platform/src/components/aws/react.ts",
-      "../platform/src/components/aws/redis.ts",
-      "../platform/src/components/aws/redis-v1.ts",
-      "../platform/src/components/aws/remix.ts",
-      "../platform/src/components/aws/queue.ts",
-      "../platform/src/components/aws/queue-lambda-subscriber.ts",
-      "../platform/src/components/aws/kinesis-stream.ts",
-      "../platform/src/components/aws/kinesis-stream-lambda-subscriber.ts",
-      "../platform/src/components/aws/microvm.ts",
-      "../platform/src/components/aws/opencontrol.ts",
-      "../platform/src/components/aws/open-search.ts",
-      "../platform/src/components/aws/router.ts",
-      "../platform/src/components/aws/service.ts",
-      "../platform/src/components/aws/service-v1.ts",
-      "../platform/src/components/aws/sns-topic.ts",
-      "../platform/src/components/aws/sns-topic-lambda-subscriber.ts",
-      "../platform/src/components/aws/sns-topic-queue-subscriber.ts",
-      "../platform/src/components/aws/solid-start.ts",
-      "../platform/src/components/aws/static-site.ts",
-      "../platform/src/components/aws/svelte-kit.ts",
-      "../platform/src/components/aws/tan-stack-start.ts",
-      "../platform/src/components/aws/task.ts",
-      "../platform/src/components/aws/vpc.ts",
-      "../platform/src/components/aws/vpc-v1.ts",
-      "../platform/src/components/aws/workflow.ts",
-      ...v5Components().map(
+      ...componentFiles().map(
         (name) => `../platform/src/components/aws/${name}.ts`,
       ),
-      ...v5Components("cloudflare").map(
+      ...componentFiles("cloudflare").map(
         (name) => `../platform/src/components/cloudflare/${name}.ts`,
       ),
-      "../platform/src/components/cloudflare/ai.ts",
-      "../platform/src/components/cloudflare/astro.ts",
-      "../platform/src/components/cloudflare/bucket.ts",
-      "../platform/src/components/cloudflare/cron.ts",
-      "../platform/src/components/cloudflare/d1.ts",
-      "../platform/src/components/cloudflare/hyperdrive.ts",
-      "../platform/src/components/cloudflare/kv.ts",
-      "../platform/src/components/cloudflare/queue.ts",
-      "../platform/src/components/cloudflare/queue-worker-subscriber.ts",
-      "../platform/src/components/cloudflare/react-router.ts",
-      "../platform/src/components/cloudflare/worker.ts",
-      "../platform/src/components/cloudflare/workflow.ts",
-      "../platform/src/components/cloudflare/rate-limit.ts",
-      "../platform/src/components/cloudflare/static-site.ts",
-      "../platform/src/components/cloudflare/static-site-v2.ts",
-      "../platform/src/components/cloudflare/tan-stack-start.ts",
       // internal
-      "../platform/src/components/aws/alb.ts",
-      "../platform/src/components/aws/cdn.ts",
       "../platform/src/components/aws/dns.ts",
       "../platform/src/components/aws/iam-edit.ts",
       "../platform/src/components/aws/permission.ts",
-      "../platform/src/components/aws/providers/function-environment-update.ts",
       "../platform/src/components/aws/resources/function-environment-update.ts",
       "../platform/src/components/aws/step-functions/choice.ts",
       "../platform/src/components/aws/step-functions/fail.ts",
@@ -3539,7 +3443,7 @@ async function buildComponents() {
       "../platform/src/components/cloudflare/binding.ts",
       "../platform/src/components/cloudflare/dns.ts",
       "../platform/src/components/vercel/dns.ts",
-      // The arg types V5 components share. Last, so that reading them
+      // The arg types components share. Last, so that reading them
       // doesn't change the order the types of the pages above are read in.
       ...fs
         .readdirSync(`../${HELPERS}`)

@@ -681,11 +681,11 @@ export interface ApiGatewayHttpAuthorizerArgs {
  *   route's handler and an authorizer's `lambda` with its `function`: they decide what's
  *   created. A function you already have, or its ARN, can still be an output.
  * - A function's args are typed as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
  *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
  *   doesn't work.

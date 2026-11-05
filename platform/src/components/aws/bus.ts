@@ -275,11 +275,11 @@ export interface BusSubscriberArgs {
  *   they decide what's created. A function you already have, or its ARN, can still be an
  *   output.
  * - A function's args are typed as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - `subscribe` and `subscribeQueue` return the bus, where they returned the subscriber:
  *   what each one created is in the bus's `nodes`, by the subscriber's name, like
  *   `bus.nodes.rule.MySubscriber`.

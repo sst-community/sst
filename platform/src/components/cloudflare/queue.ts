@@ -193,12 +193,12 @@ export interface QueueSubscriberArgs {
  *   refused: what it creates is the queue's, with the queue's options.
  * - The subscriber's handler or Worker args are a plain value, not an output:
  *   they decide what's created. Inside the args, `link` and `domain` are plain
- *   values too, as [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker)
+ *   values too, as [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker)
  *   takes them, and what else is in them can be an output.
  * - The subscriber's Worker is
- *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker), inside
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker), inside
  *   the queue, with the name it had. `transform.subscriber` takes its args, as
- *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker) takes
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker) takes
  *   them.
  * - `dlq.retryDelay` is sent to Cloudflare in seconds, as Cloudflare reads it.
  *   SST 4 sent it in milliseconds, so a retry set to wait 30 seconds waited

@@ -229,11 +229,11 @@ export interface RealtimeSubscriberArgs {
  *   subscriber that was given as an output, like a function's `arn`, is kept when it's
  *   given its ARN as a string.
  * - A function's args are typed as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - `nodes.authHandler` is an output, as it was, and `nodes` has the authorizer's
  *   permission too.
  * - A subscriber is created with the provider the server has. `sst.aws.Realtime` gave it

@@ -210,7 +210,7 @@ export interface RouterUrlRouteArgs extends RouteArgs {
    */
   keepAliveTimeout?: Input<DurationSeconds>;
   /**
-   * Sign the requests to this route with the Router's [`protection`](/docs/component/aws/v5/router/#protection).
+   * Sign the requests to this route with the Router's [`protection`](/docs/component/aws/router/#protection).
    *
    * This only applies when the destination is a Lambda function URL (a host like
    * `<id>.lambda-url.<region>.on.aws`) and the Router has `protection` set. For any
@@ -223,7 +223,7 @@ export interface RouterUrlRouteArgs extends RouteArgs {
    * The signature replaces the `Authorization` header of the viewer's request.
    * Signing is meant for function URLs with `"iam"` authorization. A public one is
    * signed too, but gains nothing. CloudFront needs permission to invoke the
-   * function. [Read more](/docs/component/aws/v5/router/#protection).
+   * function. [Read more](/docs/component/aws/router/#protection).
    *
    * @default `false`
    * @example
@@ -922,7 +922,7 @@ interface Routing {
  * ```
  *
  * If you are routing to a path, you'll need to configure the base path in your
- * frontend app as well. [Learn more](/docs/component/aws/v5/nextjs/#router).
+ * frontend app as well. [Learn more](/docs/component/aws/nextjs/#router).
  *
  * #### Route to a frontend on a subdomain
  *

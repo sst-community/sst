@@ -873,7 +873,7 @@ export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
   }
 
   /**
-   * Create a `Task` state that runs an ECS task using the [`Task`](/docs/component/aws/v5/task) component. [Learn more](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html).
+   * Create a `Task` state that runs an ECS task using the [`Task`](/docs/component/aws/task) component. [Learn more](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html).
    *
    * @example
    * ```ts title="sst.config.ts"
@@ -934,7 +934,7 @@ export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
 
   /**
    * Create a `Task` state that sends custom events to one or more EventBridge buses
-   * using the [`Bus`](/docs/component/aws/v5/bus) component. [Learn more](https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_PutEvents.html).
+   * using the [`Bus`](/docs/component/aws/bus) component. [Learn more](https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_PutEvents.html).
    *
    * @example
    * ```ts title="sst.config.ts"

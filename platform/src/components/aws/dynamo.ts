@@ -478,11 +478,11 @@ type IndexKey = string | string[];
  *   they decide what's created. A function you already have, or its ARN, can still be an
  *   output.
  * - A function's args are typed as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   [`sst.aws.Function`](/docs/component/aws/function)'s; args written the way
  *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
- *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - A subscriber's function is described after the component, `Subscribed to MyTable`,
  *   where `sst.aws.Dynamo` named the component it kept the subscriber in: an update in
  *   place.

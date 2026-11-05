@@ -194,9 +194,9 @@ export interface WorkflowArgs extends ComponentArgs<typeof parts> {
  *
  * - `link` is a plain value, not an output: a link to something in AWS gives
  *   the Worker an IAM user. Each link's values can still be outputs.
- * - The Worker is [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker).
+ * - The Worker is [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker).
  *   `transform.worker` takes its args, as
- *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker) takes
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker) takes
  *   them.
  */
 export class Workflow extends component("sst:cloudflare:Workflow", parts) {

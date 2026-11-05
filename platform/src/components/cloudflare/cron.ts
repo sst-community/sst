@@ -126,9 +126,9 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  * - `worker` is a plain value, not an output: whether it's a handler or the
  *   Worker's args decides how the Worker is created. Inside the args, `link`
  *   and `domain` are plain values too, as
- *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker) takes
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker) takes
  *   them, and what else is in them can be an output.
- * - The Worker is [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker),
+ * - The Worker is [`sst.cloudflare.Worker`](/docs/component/cloudflare/worker),
  *   inside the cron job, where SST 4 created it at the top of your app. It
  *   keeps its name. You can change it in `transform.worker` now.
  * - `nodes.worker` is the Worker component, where it was the Worker's script:
