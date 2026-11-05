@@ -8,26 +8,26 @@ const migrations = [{ tag: "v1", newSqliteClasses: ["Counter"] }];
 const pulumi = mockPulumi();
 
 type DurableObjectClass =
-  | typeof import("../../../../src/components/cloudflare/durable-object").DurableObject
-  | typeof import("../../../../src/components/cloudflare/v5/durable-object").DurableObject;
+  | typeof import("../../../fixtures/v4/components/cloudflare/durable-object").DurableObject
+  | typeof import("../../../../src/components/cloudflare/durable-object").DurableObject;
 
 describe("DurableObject", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/durable-object").DurableObject;
-  let DurableObject: typeof import("../../../../src/components/cloudflare/v5/durable-object").DurableObject;
-  let OriginalWorker: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/durable-object").DurableObject;
+  let DurableObject: typeof import("../../../../src/components/cloudflare/durable-object").DurableObject;
+  let OriginalWorker: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
 
   beforeAll(async () => {
     Original = (
-      await import("../../../../src/components/cloudflare/durable-object")
+      await import("../../../fixtures/v4/components/cloudflare/durable-object")
     ).DurableObject;
     DurableObject = (
-      await import("../../../../src/components/cloudflare/v5/durable-object")
+      await import("../../../../src/components/cloudflare/durable-object")
     ).DurableObject;
     OriginalWorker = (
-      await import("../../../../src/components/cloudflare/worker")
+      await import("../../../fixtures/v4/components/cloudflare/worker")
     ).Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
     await import("../../../../src/components/cloudflare/takeover/index");
   });

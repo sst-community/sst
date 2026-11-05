@@ -41,24 +41,24 @@ const pulumi = mockPulumi({
 });
 
 describe("Router", () => {
-  let OriginalRouter: typeof import("../../../src/components/aws/router").Router;
-  let Router: typeof import("../../../src/components/aws/v5/router").Router;
-  let OriginalBucket: typeof import("../../../src/components/aws/bucket").Bucket;
-  let Bucket: typeof import("../../../src/components/aws/v5/bucket").Bucket;
-  let OriginalFunction: typeof import("../../../src/components/aws/function").Function;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
+  let OriginalRouter: typeof import("../../fixtures/v4/components/aws/router").Router;
+  let Router: typeof import("../../../src/components/aws/router").Router;
+  let OriginalBucket: typeof import("../../fixtures/v4/components/aws/bucket").Bucket;
+  let Bucket: typeof import("../../../src/components/aws/bucket").Bucket;
+  let OriginalFunction: typeof import("../../fixtures/v4/components/aws/function").Function;
+  let Function: typeof import("../../../src/components/aws/function").Function;
 
   beforeAll(async () => {
-    OriginalRouter = (await import("../../../src/components/aws/router"))
+    OriginalRouter = (await import("../../fixtures/v4/components/aws/router"))
       .Router;
-    Router = (await import("../../../src/components/aws/v5/router")).Router;
-    OriginalBucket = (await import("../../../src/components/aws/bucket"))
+    Router = (await import("../../../src/components/aws/router")).Router;
+    OriginalBucket = (await import("../../fixtures/v4/components/aws/bucket"))
       .Bucket;
-    Bucket = (await import("../../../src/components/aws/v5/bucket")).Bucket;
-    OriginalFunction = (await import("../../../src/components/aws/function"))
-      .Function;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
+    Bucket = (await import("../../../src/components/aws/bucket")).Bucket;
+    OriginalFunction = (
+      await import("../../fixtures/v4/components/aws/function")
+    ).Function;
+    Function = (await import("../../../src/components/aws/function")).Function;
     await import("../../../src/components/aws/takeover/router");
     await import("../../../src/components/aws/takeover/cdn");
     await import("../../../src/components/aws/takeover/function");

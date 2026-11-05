@@ -23,9 +23,9 @@ const classes = (mod: Record<string, unknown>) =>
 describe("the codemod's names", () => {
   it("list what each group's 5.0 components export, classes and types", () => {
     const files = {
-      aws: "aws/v5/index.ts",
-      cloudflare: "cloudflare/v5/index.ts",
-      x: "experimental/v5/index.ts",
+      aws: "aws/index.ts",
+      cloudflare: "cloudflare/index.ts",
+      x: "experimental/index.ts",
     } as const;
     const program = ts.createProgram(
       Object.values(files).map((f) => path.join(components, f)),
@@ -58,18 +58,18 @@ describe("the codemod's names", () => {
   it.each([
     [
       "aws",
-      () => import("../../src/components/aws/v5"),
       () => import("../../src/components/aws"),
+      () => import("../fixtures/v4/components/aws"),
     ],
     [
       "cloudflare",
-      () => import("../../src/components/cloudflare/v5"),
       () => import("../../src/components/cloudflare"),
+      () => import("../fixtures/v4/components/cloudflare"),
     ],
     [
       "x",
-      () => import("../../src/components/experimental/v5"),
       () => import("../../src/components/experimental"),
+      () => import("../fixtures/v4/components/experimental/dev-command"),
     ],
   ] as const)(
     "give each of SST 4's %s components a 5.0 form or none",
@@ -101,7 +101,7 @@ describe("the codemod's names", () => {
 
   it("give Cloudflare's experimental names their forms", async () => {
     const x = classes(
-      await import("../../src/components/cloudflare/experimental"),
+      await import("../fixtures/v4/components/cloudflare/experimental"),
     );
     for (const name of x)
       expect(

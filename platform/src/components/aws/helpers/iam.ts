@@ -2,7 +2,7 @@ import { all } from "@pulumi/pulumi";
 import { iam } from "@pulumi/aws";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
-import type { FunctionPermissionArgs } from "../v5/function";
+import type { FunctionPermissionArgs } from "../function";
 
 /**
  * The inline policies of a role that's granted the given permissions: one,

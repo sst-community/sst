@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
-import type { AlbArgs } from "../../../src/components/aws/v5/alb";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
+import type { AlbArgs } from "../../../src/components/aws/alb";
 
 const LOAD_BALANCER = "aws:lb/loadBalancer:LoadBalancer";
 const LISTENER = "aws:lb/listener:Listener";
@@ -41,22 +41,38 @@ const pulumi = mockPulumi({
 });
 
 describe("Alb", () => {
-  let OriginalAlb: typeof import("../../../src/components/aws/alb").Alb;
-  let Alb: typeof import("../../../src/components/aws/v5/alb").Alb;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let VpcV5: typeof import("../../../src/components/aws/v5/vpc").Vpc;
-  let Cluster: typeof import("../../../src/components/aws/v5/cluster").Cluster;
-  let Service: typeof import("../../../src/components/aws/v5/service").Service;
+  let OriginalAlb: typeof import("../../fixtures/v4/components/aws/alb").Alb;
+  let Alb: typeof import("../../../src/components/aws/alb").Alb;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Vpc: any;
+  let VpcV5: typeof import("../../../src/components/aws/vpc").Vpc;
+  let Cluster: any;
+  let Service: any;
   let aws: typeof import("@pulumi/aws");
 
   beforeAll(async () => {
-    OriginalAlb = (await import("../../../src/components/aws/alb")).Alb;
-    Alb = (await import("../../../src/components/aws/v5/alb")).Alb;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    VpcV5 = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    OriginalAlb = (await import("../../fixtures/v4/components/aws/alb")).Alb;
+    Alb = (await import("../../../src/components/aws/alb")).Alb;
+    Vpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    VpcV5 = (await import("../../../src/components/aws/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/vpc");
-    Cluster = (await import("../../../src/components/aws/v5/cluster")).Cluster;
-    Service = (await import("../../../src/components/aws/v5/service")).Service;
+    Cluster = await sidedClass(
+      "Cluster",
+      import("../../fixtures/v4/components/aws/cluster"),
+      import("../../../src/components/aws/cluster"),
+      import("../../../src/components/aws/takeover/cluster"),
+    );
+    Service = await sidedClass(
+      "Service",
+      import("../../fixtures/v4/components/aws/service"),
+      import("../../../src/components/aws/service"),
+      import("../../../src/components/aws/takeover/service"),
+    );
     aws = await import("@pulumi/aws");
     await import("../../../src/components/aws/takeover/alb");
     // What the V5 one creates for a domain takes over 4.x's by this
@@ -132,8 +148,6 @@ describe("Alb", () => {
               { vpc: new VpcV5("MyVpc"), listeners: http },
               opts,
             ),
-          // The 4.x Vpc's version marker, with nothing in AWS behind it
-          unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
         "internal, in a VPC given by its ids": (Alb, opts) => {
           new Alb(
@@ -270,6 +284,8 @@ describe("Alb", () => {
               },
             });
           },
+          // SST 4's Service's dev command, which SST 5's reports itself
+          unclaimed: ["sst:sst:DevCommand::MyServiceDev"],
           check: () =>
             expect(
               resource("MyServiceListenerRuleHTTP80P100").inputs.listenerArn,
@@ -294,6 +310,8 @@ describe("Alb", () => {
               },
             });
           },
+          // SST 4's Service's dev command, which SST 5's reports itself
+          unclaimed: ["sst:sst:DevCommand::MyServiceDev"],
           check: () =>
             // The listener is looked up on the load balancer
             expect(resource("MyAlbListenerHTTPS443")).toMatchObject({

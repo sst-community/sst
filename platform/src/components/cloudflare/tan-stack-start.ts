@@ -1,15 +1,25 @@
-import fs from "fs/promises";
+import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output } from "@pulumi/pulumi";
-import { VisibleError } from "../error.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
-import { existsAsync } from "../../util/fs.js";
+import type { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import { VisibleError } from "../error";
 import {
   validateFrameworkConfig,
   validateNoWranglerFile,
-} from "./helpers/validation.js";
+} from "./helpers/validation";
+import {
+  type SsrFramework,
+  type SsrSiteArgs,
+  ssrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { WorkerArgs } from "./worker";
 
-export interface TanStackStartArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface TanStackStartArgs
+  extends SsrSiteArgs,
+    ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -23,7 +33,39 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
   /**
    * Path to the directory where your TanStack Start app is located. This path is relative to your `sst.config.ts`.
    *
@@ -40,7 +82,7 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
+  path?: string;
   /**
    * [Link resources](/docs/linking/) to your TanStack Start app. This will:
    *
@@ -65,7 +107,7 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * console.log(Resource.MyBucket.name);
    * ```
    */
-  link?: SsrSiteArgs["link"];
+  link?: any[];
   /**
    * Set environment variables in your TanStack Start app. These are made available:
    *
@@ -95,9 +137,13 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * const apiUrl = env.API_URL;
    * ```
    */
-  environment?: SsrSiteArgs["environment"];
+  environment?: Input<Record<string, Input<string>>>;
   /**
-   * Set a custom domain for your TanStack Start app.
+   * Set a custom domain for your TanStack Start app. Supports domains hosted on Cloudflare.
+   *
+   * A domain given as an object is a plain value, not an output: each of
+   * its `aliases` and `redirects` creates resources of its own. Its `name`
+   * can be an output, and so can a domain given as a string.
    *
    * @example
    *
@@ -129,11 +175,11 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: WorkerArgs["domain"];
   /**
    * The command used internally to build your TanStack Start app.
    *
-   * @default `"npm run build"`
+   * @default The `build` script in your `package.json`, run with the package manager whose lockfile is there, like `"npm run build"`.
    *
    * @example
    *
@@ -144,8 +190,86 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  buildCommand?: SsrSiteArgs["buildCommand"];
+  buildCommand?: string;
 }
+
+// TanStack Start's build, as Cloudflare's Vite plugin or Nitro's Cloudflare
+// preset writes it
+const tanStackStart: SsrFramework = {
+  label: "TanStack Start",
+  check(site, owner) {
+    validateFrameworkConfig({
+      sitePath: site,
+      configName: "vite.config",
+      componentName: owner,
+    });
+    validateNoWranglerFile(site, owner);
+  },
+  // The Worker's entry, which the Vite plugin builds from
+  wrangler: () => ({ main: "@tanstack/react-start/server-entry" }),
+  async load(site, owner) {
+    const relative = (file: string) => path.relative(site, file);
+    const has = (file: string) => fs.existsSync(file);
+    const noFiles = (assets: string) =>
+      new VisibleError(
+        `The build of ${owner} has no files to serve at "${assets}".`,
+      );
+
+    // The Vite plugin writes a Wrangler config next to the Worker
+    const serverDir = path.join(site, "dist", "server");
+    const wranglerFile = path.join(serverDir, "wrangler.json");
+    if (has(wranglerFile)) {
+      const wrangler = JSON.parse(fs.readFileSync(wranglerFile, "utf-8")) as {
+        main?: string;
+        assets?: { directory?: string };
+      };
+      if (!wrangler.main)
+        throw new VisibleError(
+          `The build of ${owner} has no Worker: "${wranglerFile}" has no \`main\`.`,
+        );
+      const server = path.resolve(serverDir, wrangler.main);
+      const assets = path.resolve(
+        serverDir,
+        wrangler.assets?.directory ?? "../client",
+      );
+      if (!has(server))
+        throw new VisibleError(
+          `The build of ${owner} has no Worker at "${server}", the \`main\` of "${wranglerFile}".`,
+        );
+      if (!has(assets)) throw noFiles(assets);
+      return { server: relative(server), assets: relative(assets) };
+    }
+
+    // Or the Worker and its files without one
+    const client = path.join(site, "dist", "client");
+    for (const file of ["index.js", "index.mjs"]) {
+      const server = path.join(serverDir, file);
+      if (has(server) && has(client))
+        return { server: relative(server), assets: relative(client) };
+    }
+
+    // Nitro's Cloudflare preset
+    const nitro = path.join(site, ".output", "server", "index.mjs");
+    if (has(nitro)) {
+      const assets = path.join(site, ".output", "public");
+      if (!has(assets)) throw noFiles(assets);
+      return { server: relative(nitro), assets: relative(assets) };
+    }
+
+    throw new VisibleError(
+      [
+        `The build of ${owner} has no Worker in "${site}".`,
+        "",
+        "Expected one of:",
+        "  - dist/server/wrangler.json and dist/client",
+        "  - dist/server/index.js and dist/client",
+        "  - .output/server/index.mjs and .output/public",
+        "",
+        "Use the Cloudflare deployment adapter in TanStack Start, or if your app is entirely pre-rendered, use `sst.cloudflare.StaticSite` instead.",
+      ].join("\n"),
+    );
+  },
+};
 
 /**
  * The `TanStackStart` component lets you deploy a [TanStack Start](https://tanstack.com/start/latest) app to Cloudflare.
@@ -250,146 +374,44 @@ export interface TanStackStartArgs extends SsrSiteArgs {
  * ```
  *
  * [Check out the full example](/docs/examples/#cloudflare-tanstack-start).
+ *
+ * #### Switch from SST 4's `sst.cloudflare.TanStackStart`
+ *
+ * Keep the name, and `sst migrate` moves it. The app's Worker, its URL and its custom domains are kept. A few things are written
+ * differently:
+ *
+ * - The app is built in the deploy itself, once, with the values of what it's linked to.
+ *   `sst.cloudflare.TanStackStart` built it with a command it kept in the state, which goes.
+ * - `sst diff` builds the app too, and writes the Wrangler config its build reads. Values
+ *   that aren't known until the deploy, like those of what the same deploy creates on a new
+ *   stage, are left out of that build and of that config, and so is the binding to something
+ *   that isn't created yet, like a new KV namespace. `sst.cloudflare.TanStackStart` skipped
+ *   its build in `sst diff` then.
+ * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
+ *   pack, build the app twice: in the preview, and in the deploy.
+ * - `sst refresh` doesn't build the app, where `sst.cloudflare.TanStackStart` did. Its Worker
+ *   stays as it is, and isn't listed while it runs.
+ * - `path`, `buildCommand` and `link` have to be plain values, not outputs: the build reads
+ *   them, or they decide what's created. A `domain` given as an object is a plain value
+ *   too. Its `name` can be an output, and so can a domain given as a string.
+ * - `compatibility` sets the Worker's compatibility date and flags, and the Wrangler config's.
+ *   One set in `transform.server` still reaches both.
+ * - In `sst dev`, reading `nodes.server` says the app runs on your machine, where
+ *   `sst.cloudflare.TanStackStart` gave `undefined`.
  */
-export class TanStackStart extends SsrSite {
+export class TanStackStart extends component(
+  "sst:cloudflare:TanStackStart",
+  parts,
+) {
+  private readonly siteUrl: Output<string | undefined>;
+
   constructor(
     name: string,
     args: TanStackStartArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected validate(sitePath: string): void {
-    validateFrameworkConfig({
-      sitePath,
-      configName: "vite.config",
-      componentName: "TanStackStart",
-    });
-    validateNoWranglerFile(sitePath, "TanStackStart");
-  }
-
-  protected buildPlan(outputPath: Output<string>): Output<Plan> {
-    return outputPath.apply(async (outputPath) => {
-      const distPlan = await resolveDistPlan();
-      if (distPlan) return distPlan;
-
-      const legacyPlan = await resolveLegacyPlan();
-      if (legacyPlan) return legacyPlan;
-
-      throw new VisibleError(
-        [
-          `TanStack Start build output not found in "${path.resolve(outputPath)}".`,
-          "",
-          "Expected one of:",
-          "  - dist/server/wrangler.json and dist/client",
-          "  - dist/server/index.js and dist/client",
-          "  - .output/server/index.mjs and .output/public",
-          "",
-          "Use the Cloudflare deployment adapter in TanStack Start, or if your project is entirely pre-rendered, use `sst.cloudflare.StaticSite` instead.",
-        ].join("\n"),
-      );
-
-      async function resolveDistPlan() {
-        const wranglerPath = path.join(
-          outputPath,
-          "dist",
-          "server",
-          "wrangler.json",
-        );
-        if (await existsAsync(wranglerPath)) {
-          const wrangler = JSON.parse(await fs.readFile(wranglerPath, "utf-8")) as {
-            main?: string;
-            assets?: {
-              directory?: string;
-            };
-          };
-          if (!wrangler.main) {
-            throw new VisibleError(
-              `TanStack Start build output at "${path.resolve(wranglerPath)}" is missing the Worker entry in \`main\`.`,
-            );
-          }
-
-          const serverPath = path.resolve(outputPath, "dist", "server", wrangler.main);
-          const assetsPath = path.resolve(
-            outputPath,
-            "dist",
-            "server",
-            wrangler.assets?.directory ?? "../client",
-          );
-
-          if (!(await existsAsync(serverPath))) {
-            throw new VisibleError(
-              `TanStack Start server bundle not found at:\n  "${serverPath}".`,
-            );
-          }
-          if (!(await existsAsync(assetsPath))) {
-            throw new VisibleError(
-              `TanStack Start assets directory not found at:\n  "${assetsPath}".`,
-            );
-          }
-
-          return {
-            server: toPlanPath(serverPath),
-            assets: toPlanPath(assetsPath),
-          };
-        }
-
-        for (const serverFile of ["index.js", "index.mjs"]) {
-          const serverPath = path.join(
-            outputPath,
-            "dist",
-            "server",
-            serverFile,
-          );
-          const assetsPath = path.join(outputPath, "dist", "client");
-          if (
-            (await existsAsync(serverPath)) &&
-            (await existsAsync(assetsPath))
-          ) {
-            return {
-              server: toPlanPath(serverPath),
-              assets: toPlanPath(assetsPath),
-            };
-          }
-        }
-      }
-
-      async function resolveLegacyPlan() {
-        const serverPath = path.join(
-          outputPath,
-          ".output",
-          "server",
-          "index.mjs",
-        );
-        const assetsPath = path.join(outputPath, ".output", "public");
-
-        if (!(await existsAsync(serverPath))) return;
-        if (!(await existsAsync(assetsPath))) {
-          throw new VisibleError(
-            `TanStack Start assets directory not found at:\n  "${path.resolve(
-              assetsPath,
-            )}".`,
-          );
-        }
-
-        return {
-          server: toPlanPath(serverPath),
-          assets: toPlanPath(assetsPath),
-        };
-      }
-
-      function toPlanPath(filePath: string) {
-        const relativePath = path.relative(outputPath, filePath);
-        return `./${relativePath.split(path.sep).join("/")}`;
-      }
-    });
-  }
-
-  protected buildWrangler() {
-    return {
-      main: "@tanstack/react-start/server-entry",
-    };
+    super(name, args, opts);
+    this.siteUrl = ssrSite(this.builder(), name, args, tanStackStart).url;
   }
 
   /**
@@ -399,10 +421,14 @@ export class TanStackStart extends SsrSite {
    * Otherwise, it's the auto-generated Worker URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
-
-const __pulumiType = "sst:cloudflare:TanStackStart";
-// @ts-expect-error
-TanStackStart.__pulumiType = __pulumiType;

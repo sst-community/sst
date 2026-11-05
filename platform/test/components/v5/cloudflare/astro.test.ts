@@ -14,10 +14,10 @@ ssrSiteSuite(
   {
     label: "Astro",
     load: async () => ({
-      original: (await import("../../../../src/components/cloudflare/astro"))
-        .Astro,
-      v5: (await import("../../../../src/components/cloudflare/v5/astro"))
-        .Astro,
+      original: (
+        await import("../../../fixtures/v4/components/cloudflare/astro")
+      ).Astro,
+      v5: (await import("../../../../src/components/cloudflare/astro")).Astro,
     }),
     write: (dir) => {
       write(

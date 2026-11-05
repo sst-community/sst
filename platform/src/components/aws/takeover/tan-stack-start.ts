@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { TanStackStart } from "../v5/tan-stack-start";
+import { TanStackStart } from "../tan-stack-start";
 import { ssrSiteTakeover } from "./ssr-site";
 
 takeover(

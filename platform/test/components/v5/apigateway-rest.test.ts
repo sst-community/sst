@@ -62,22 +62,21 @@ const authorizerWrapper = (api: string, name: string) =>
 const redeployed: [string, string[]][] = [["MyApiDeployment", ["triggers"]]];
 
 type ApiClass =
-  | typeof import("../../../src/components/aws/apigatewayv1").ApiGatewayV1
-  | typeof import("../../../src/components/aws/v5/apigateway-rest").ApiGatewayRest;
+  | typeof import("../../fixtures/v4/components/aws/apigatewayv1").ApiGatewayV1
+  | typeof import("../../../src/components/aws/apigateway-rest").ApiGatewayRest;
 
 describe("ApiGatewayRest", () => {
-  let Original: typeof import("../../../src/components/aws/apigatewayv1").ApiGatewayV1;
-  let ApiGatewayRest: typeof import("../../../src/components/aws/v5/apigateway-rest").ApiGatewayRest;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
+  let Original: typeof import("../../fixtures/v4/components/aws/apigatewayv1").ApiGatewayV1;
+  let ApiGatewayRest: typeof import("../../../src/components/aws/apigateway-rest").ApiGatewayRest;
+  let Function: typeof import("../../../src/components/aws/function").Function;
 
   beforeAll(async () => {
-    Original = (await import("../../../src/components/aws/apigatewayv1"))
+    Original = (await import("../../fixtures/v4/components/aws/apigatewayv1"))
       .ApiGatewayV1;
     ApiGatewayRest = (
-      await import("../../../src/components/aws/v5/apigateway-rest")
+      await import("../../../src/components/aws/apigateway-rest")
     ).ApiGatewayRest;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
+    Function = (await import("../../../src/components/aws/function")).Function;
     await import("../../../src/components/aws/takeover/index");
   });
 
@@ -147,7 +146,7 @@ describe("ApiGatewayRest", () => {
         "with a route whose function is linked to a bucket": {
           create: async (Api, opts) => {
             const { Bucket } = await import(
-              "../../../src/components/aws/v5/bucket"
+              "../../../src/components/aws/bucket"
             );
             const bucket = new Bucket("MyBucket");
             const api = new Api("MyApi", {}, opts);

@@ -8,8 +8,8 @@ const handler = "src/worker.mjs";
 const pulumi = mockPulumi();
 
 type RateLimitClass =
-  | typeof import("../../../../src/components/cloudflare/rate-limit").RateLimit
-  | typeof import("../../../../src/components/cloudflare/v5/rate-limit").RateLimit;
+  | typeof import("../../../fixtures/v4/components/cloudflare/rate-limit").RateLimit
+  | typeof import("../../../../src/components/cloudflare/rate-limit").RateLimit;
 
 const args = {
   namespaceId: 1001,
@@ -18,22 +18,22 @@ const args = {
 };
 
 describe("RateLimit", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/rate-limit").RateLimit;
-  let RateLimit: typeof import("../../../../src/components/cloudflare/v5/rate-limit").RateLimit;
-  let OriginalWorker: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/rate-limit").RateLimit;
+  let RateLimit: typeof import("../../../../src/components/cloudflare/rate-limit").RateLimit;
+  let OriginalWorker: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
 
   beforeAll(async () => {
     Original = (
-      await import("../../../../src/components/cloudflare/rate-limit")
+      await import("../../../fixtures/v4/components/cloudflare/rate-limit")
     ).RateLimit;
     RateLimit = (
-      await import("../../../../src/components/cloudflare/v5/rate-limit")
+      await import("../../../../src/components/cloudflare/rate-limit")
     ).RateLimit;
     OriginalWorker = (
-      await import("../../../../src/components/cloudflare/worker")
+      await import("../../../fixtures/v4/components/cloudflare/worker")
     ).Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
     await import("../../../../src/components/cloudflare/takeover/index");
   });

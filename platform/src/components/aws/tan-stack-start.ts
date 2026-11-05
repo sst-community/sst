@@ -1,14 +1,31 @@
 import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output } from "@pulumi/pulumi";
-import { VisibleError } from "../error.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
-import { RouterRouteArgs } from "./router.js";
-import { Prettify } from "../component.js";
+import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import type { Prettify } from "../component";
+import { nitroSite } from "./helpers/nitro";
+import { configText } from "./helpers/site-build";
+import type { SiteRouteArgs } from "./helpers/router";
+import {
+  type SsrFramework,
+  type SsrSiteArgs,
+  createSsrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { CdnDomainArgs } from "./cdn";
+import type { FunctionArgs } from "./function";
 
-export interface TanStackStartArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface TanStackStartArgs
+  extends SsrSiteArgs,
+    ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
+   *
+   * :::note
+   * In `sst dev` your TanStack Start app is run in dev mode; it's not deployed.
+   * :::
    *
    * Instead of deploying your TanStack Start app, this starts it in dev mode. It's run
    * as a separate process in the `sst dev` multiplexer. Read more about
@@ -16,7 +33,100 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
+  /**
+   * Path to the directory where your TanStack Start app is located.  This path is relative to your `sst.config.ts`.
+   *
+   * By default it assumes your TanStack Start app is in the root of your SST app.
+   * @default `"."`
+   *
+   * @example
+   *
+   * If your TanStack Start app is in a package in your monorepo.
+   *
+   * ```js
+   * {
+   *   path: "packages/web"
+   * }
+   * ```
+   */
+  path?: string;
+  /**
+   * [Link resources](/docs/linking/) to your TanStack Start app. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of resources to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: FunctionArgs["link"];
+  /**
+   * Set environment variables in your TanStack Start app. These are made available:
+   *
+   * 1. In `vite build`, they are loaded into `process.env`.
+   * 2. Locally while running `sst dev`.
+   *
+   * Commands started by the build command inherit these variables. A standalone
+   * `vite preview` command runs outside SST; use
+   * `sst shell --target MyWeb -- vite preview` to expose them to the preview
+   * process. Client values in `import.meta.env` remain the values embedded by
+   * the build.
+   *
+   * :::tip
+   * You can also `link` resources to your TanStack Start app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
+   * :::
+   *
+   * @example
+   * ```js
+   * {
+   *   environment: {
+   *     API_URL: api.url,
+   *     STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   *   }
+   * }
+   * ```
+   */
+  environment?: FunctionArgs["environment"];
   /**
    * Permissions and the resources that the [server function](#nodes-server) in your TanStack Start app needs to access. These permissions are used to create the function's IAM role.
    *
@@ -64,86 +174,22 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  permissions?: SsrSiteArgs["permissions"];
+  permissions?: FunctionArgs["permissions"];
   /**
-   * Path to the directory where your TanStack Start app is located.  This path is relative to your `sst.config.ts`.
+   * The command used internally to build your TanStack Start app.
    *
-   * By default it assumes your TanStack Start app is in the root of your SST app.
-   * @default `"."`
+   * @default The `build` script in your `package.json`: `"npm run build"`, or with `yarn`, `pnpm` or `bun` when its lockfile is in the site's folder or the app's.
    *
    * @example
    *
-   * If your TanStack Start app is in a package in your monorepo.
-   *
+   * If you want to use a different build command.
    * ```js
    * {
-   *   path: "packages/web"
+   *   buildCommand: "yarn build"
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
-  /**
-   * [Link resources](/docs/linking/) to your TanStack Start app. This will:
-   *
-   * 1. Grant the permissions needed to access the resources.
-   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
-   *
-   * @example
-   *
-   * Takes a list of resources to link to the function.
-   *
-   * ```js
-   * {
-   *   link: [bucket, stripeKey]
-   * }
-   * ```
-   */
-  link?: SsrSiteArgs["link"];
-  /**
-   * Configure how the CloudFront cache invalidations are handled. This is run after your TanStack Start app has been deployed.
-   * :::tip
-   * You get 1000 free invalidations per month. After that you pay $0.005 per invalidation path. [Read more here](https://aws.amazon.com/cloudfront/pricing/).
-   * :::
-   * @default `{paths: "all", wait: false}`
-   * @example
-   * Wait for all paths to be invalidated.
-   * ```js
-   * {
-   *   invalidation: {
-   *     paths: "all",
-   *     wait: true
-   *   }
-   * }
-   * ```
-   */
-  invalidation?: SsrSiteArgs["invalidation"];
-  /**
-   * Set in your TanStack Start app. These are made available:
-   *
-   * 1. In `vite build`, they are loaded into `process.env`.
-   * 2. Locally while running `sst dev`.
-   *
-   * Commands started by the build command inherit these variables. A standalone
-   * `vite preview` command runs outside SST; use
-   * `sst shell --target MyWeb -- vite preview` to expose them to the preview
-   * process. Client values in `import.meta.env` remain the values embedded by
-   * the build.
-   *
-   * :::tip
-   * You can also `link` resources to your TanStack Start app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
-   * :::
-   *
-   * @example
-   * ```js
-   * {
-   *   environment: {
-   *     API_URL: api.url,
-   *     STRIPE_PUBLISHABLE_KEY: "pk_test_123"
-   *   }
-   * }
-   * ```
-   */
-  environment?: SsrSiteArgs["environment"];
+  buildCommand?: string;
   /**
    * Set a custom domain for your TanStack Start app.
    *
@@ -188,18 +234,13 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Serve your TanStack Start app through a `Router` instead of a standalone CloudFront
    * distribution.
    *
    * By default, this component creates a new CloudFront distribution. But you might
    * want to serve it through the distribution of your `Router`.
-   *
-   * :::note
-   * TanStack Start does not currently support base paths and can only be routed
-   * from the root `/` path.
-   * :::
    *
    * To serve your TanStack Start app **from a subdomain**, you'll need to
    * configure the domain in your `Router` component to match both the root and the
@@ -225,9 +266,8 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * }
    * ```
    *
-   * Finally, to serve your TanStack Start app **from a combined pattern** like
-   * `dev.example.com/docs`, you'll need to configure the domain in your `Router` to
-   * match the subdomain, and set the `domain` and the `path`.
+   * To serve your TanStack Start app **from a path**, like `/docs` or
+   * `dev.example.com/docs`, set the `path` too.
    *
    * ```ts {4,5}
    * {
@@ -239,44 +279,11 @@ export interface TanStackStartArgs extends SsrSiteArgs {
    * }
    * ```
    *
-   * Also, make sure to set this as the `base` in your `vite.config.ts`, and in your Nitro plugin config.
+   * Also set it as the `base` in your `vite.config.ts`, and as the `basepath` of your
+   * TanStack router. The site reads the base path from the router's `basepath` in the
+   * build, and fails the deploy when it's missing or doesn't start with the `path`.
    */
-  router?: SsrSiteArgs["router"];
-  /**
-   * The command used internally to build your TanStack Start app.
-   *
-   * @default `"npm run build"`
-   *
-   * @example
-   *
-   * If you want to use a different build command.
-   * ```js
-   * {
-   *   buildCommand: "yarn build"
-   * }
-   * ```
-   */
-  buildCommand?: SsrSiteArgs["buildCommand"];
-  /**
-   * Configure the TanStack Start app to use an existing CloudFront cache policy.
-   *
-   * :::note
-   * CloudFront has a limit of 20 cache policies per account, though you can request a limit
-   * increase.
-   * :::
-   *
-   * By default, a new cache policy is created for it. This allows you to reuse an existing
-   * policy instead of creating a new one.
-   *
-   * @default A new cache policy is created
-   * @example
-   * ```js
-   * {
-   *   cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6"
-   * }
-   * ```
-   */
-  cachePolicy?: SsrSiteArgs["cachePolicy"];
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -350,117 +357,40 @@ export interface TanStackStartArgs extends SsrSiteArgs {
  *
  * console.log(Resource.MyBucket.name);
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.TanStackStart`
+ *
+ * Keep the name, and `sst migrate` moves it. The
+ * site's bucket, its server functions, and its CloudFront distribution or its entry in the
+ * router are kept. Its files, its entries in the key-value store and its route in the
+ * router's list are written again by resources of a new type, which the `sst` binary
+ * serves, and `sst migrate` takes the old ones out of the state without deleting what they
+ * wrote. Its CloudFront invalidation runs once more. A few things are written differently:
+ *
+ * - `nodes.server` holds the server of each region, by region, each an output:
+ *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
+ *   is given an AWS provider of its own, the server is listed once it's created; set
+ *   `regions` to have it from the start.
+ * - With `warm`, the server is warmed again when its code changes. `sst.aws.TanStackStart`
+ *   warmed it on every deploy. The switch warms it once.
+ * - The base path is read from the server's code where TanStack Start's builds with Nitro 3
+ *   put it, `.output/server/_ssr/ssr.mjs`, as well as where earlier ones did.
+ *   `sst.aws.TanStackStart` read only the earlier place, so a site under a router's `path`
+ *   failed to deploy with a current TanStack Start.
+ * - A build whose Nitro preset isn't found is refused with where to set it for the site's
+ *   own setup: `vite.config.ts` in the site's folder, or `app.config.ts`.
+ *   `sst.aws.TanStackStart` looked for `vite.config.ts` in the folder above the site's.
  */
-export class TanStackStart extends SsrSite {
+export class TanStackStart extends component("sst:aws:TanstackStart", parts) {
+  private readonly siteUrl: Output<string>;
+
   constructor(
     name: string,
     args: TanStackStartArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected normalizeBuildCommand() { }
-
-  protected buildPlan(outputPath: Output<string>): Output<Plan> {
-    return outputPath.apply((outputPath) => {
-      const nitro = JSON.parse(
-        fs.readFileSync(
-          path.join(outputPath, ".output", "nitro.json"),
-          "utf-8",
-        ),
-      );
-
-      if (!["aws-lambda"].includes(nitro.preset)) {
-        const projectRoot = path.dirname(outputPath);
-        const isViteProject =
-          fs.existsSync(path.join(projectRoot, "vite.config.ts")) ||
-          fs.existsSync(path.join(projectRoot, "vite.config.js"));
-
-        if (isViteProject) {
-          throw new VisibleError(
-            [
-              "No AWS-Lambda preset detected for TanStack Start.",
-              "",
-              "Add the nitro preset to your `vite.config.ts`:",
-              "  // vite.config.ts",
-              '  import { nitro } from "nitro/vite"',
-              "",
-              "  export default defineConfig({",
-              "    plugins: [nitro(), tanstackStart(), ...],",
-              "    nitro: {",
-              '      preset: "aws-lambda",',
-              "      awsLambda: { streaming: true }, // optional",
-              "    },",
-              "  });",
-              "",
-              `Detected preset: "${nitro.preset ?? "undefined"}"`,
-            ].join("\n"),
-          );
-        }
-
-        // Vinxi project
-        throw new VisibleError(
-          [
-            "No AWS-Lambda preset detected for TanStack Start.",
-            "",
-            "Update your `app.config.ts`:",
-            "  // app.config.ts",
-            "  export default defineConfig({",
-            "    server: {",
-            '      preset: "aws-lambda",',
-            "      awsLambda: { streaming: true }, // optional",
-            "    },",
-            "  });",
-            "",
-            `Detected preset: "${nitro.preset ?? "undefined"}"`,
-          ].join("\n"),
-        );
-      }
-
-      const serverOutputPath = path.resolve(outputPath, ".output", "server");
-
-      // If basepath is configured, nitro.mjs will have a line that looks like this:
-      // return createRouter$2({ routeTree: Nr, defaultPreload: "intent", defaultErrorComponent: ce, defaultNotFoundComponent: () => jsx(de, {}), scrollRestoration: true, basepath: "/tan" });
-      let basepath;
-
-      try {
-        const serverNitroChunk = fs.readFileSync(
-          path.join(serverOutputPath, "chunks", "_", "server.mjs"),
-          "utf-8",
-        );
-        basepath = serverNitroChunk.match(/ROUTER_BASEPATH = "(.*)"/)?.[1];
-      } catch (e) {}
-
-      // Remove the .output/public/_server directory from the assets
-      // b/c all `_server` requests should go to the server function. If this folder is
-      // not removed, it will create an s3 route that conflicts with the `_server` route.
-      fs.rmSync(path.join(outputPath, ".output", "public", "_server"), {
-        recursive: true,
-        force: true,
-      });
-      fs.rmSync(path.join(outputPath, ".output", "public", "api"), {
-        recursive: true,
-        force: true,
-      });
-
-      return {
-        base: basepath,
-        server: {
-          description: "Server handler for TanStack",
-          handler: "index.handler",
-          bundle: serverOutputPath,
-          streaming: nitro?.config?.awsLambda?.streaming === true,
-        },
-        assets: [
-          {
-            from: path.join(".output", "public"),
-            to: "",
-            cached: true,
-          },
-        ],
-      };
-    });
+    super(name, args, opts);
+    this.siteUrl = createSsrSite(this.builder(), name, args, tanStackStart).url;
   }
 
   /**
@@ -470,10 +400,89 @@ export class TanStackStart extends SsrSite {
    * Otherwise, it's the auto-generated CloudFront URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
 
-const __pulumiType = "sst:aws:TanstackStart";
-// @ts-expect-error
-TanStackStart.__pulumiType = __pulumiType;
+// How a TanStack Start app is built, with its package manager and Nitro's
+// "aws-lambda" preset, and what its server is
+const tanStackStart: SsrFramework = {
+  label: "TanStackStart",
+  alwaysServes: true,
+  // Nitro's client files aren't in a versioned folder
+  versionedFiles: false,
+  load(builtPath) {
+    const build = nitroSite(builtPath, {
+      framework: "TanStack Start",
+      howToSet: howToSetPreset,
+      description: "Server handler for TanStack",
+      base: baseOf,
+      // Requests to `_server` and `api` go to the server
+      serverPaths: ["_server", "api"],
+    });
+    // The server's folder on this machine, as SST 4 gave it, so the server
+    // is built from the same args
+    return {
+      ...build,
+      server: {
+        ...build.server!,
+        bundle: path.join(build.outputPath, ".output", "server"),
+      },
+    };
+  },
+};
+
+// The server's code sets the router's base path, `ROUTER_BASEPATH =
+// "/docs"`: in `_ssr/ssr.mjs`, or before Nitro 3 in `chunks/_/server.mjs`
+function baseOf(outputPath: string) {
+  const serverPath = path.join(outputPath, ".output", "server");
+  for (const file of [
+    path.join("chunks", "_", "server.mjs"),
+    path.join("_ssr", "ssr.mjs"),
+  ]) {
+    try {
+      const base = fs
+        .readFileSync(path.join(serverPath, file), "utf-8")
+        .match(/ROUTER_BASEPATH = "(.*)"/)?.[1];
+      if (base !== undefined) return base;
+    } catch (e) {}
+  }
+}
+
+// Where the "aws-lambda" preset is set: in `vite.config.ts`, or with Vinxi,
+// in `app.config.ts`
+function howToSetPreset(outputPath: string) {
+  const isVite = configText(outputPath, "vite.config") !== undefined;
+  return isVite
+    ? [
+        "Add the nitro preset to your `vite.config.ts`:",
+        "  // vite.config.ts",
+        '  import { nitro } from "nitro/vite"',
+        "",
+        "  export default defineConfig({",
+        "    plugins: [nitro(), tanstackStart(), ...],",
+        "    nitro: {",
+        '      preset: "aws-lambda",',
+        "      awsLambda: { streaming: true }, // optional",
+        "    },",
+        "  });",
+      ]
+    : [
+        "Update your `app.config.ts`:",
+        "  // app.config.ts",
+        "  export default defineConfig({",
+        "    server: {",
+        '      preset: "aws-lambda",',
+        "      awsLambda: { streaming: true }, // optional",
+        "    },",
+        "  });",
+      ];
+}

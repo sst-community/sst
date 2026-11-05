@@ -47,12 +47,11 @@ const pulumi = mockPulumi({
 });
 
 type FunctionClass =
-  | typeof import("../../../src/components/aws/function").Function
-  | typeof import("../../../src/components/aws/v5/function").Function;
-type OriginalFunctionArgs = import("../../../src/components/aws/function").FunctionArgs;
+  | typeof import("../../fixtures/v4/components/aws/function").Function
+  | typeof import("../../../src/components/aws/function").Function;
+type OriginalFunctionArgs = import("../../fixtures/v4/components/aws/function").FunctionArgs;
 type FunctionArgs =
-  import("../../../src/components/aws/v5/function").FunctionArgs;
-type Router = import("../../../src/components/aws/router").Router;
+  import("../../../src/components/aws/function").FunctionArgs;
 
 // What a function reads from the router its URL is behind
 class FakeRouter extends ComponentResource {
@@ -62,26 +61,29 @@ class FakeRouter extends ComponentResource {
   _distributionArn = output(DISTRIBUTION_ARN);
   url = output("https://router.example.com");
   nodes = { cdn: { nodes: { distribution: { id: output("E123") } } } };
+  // SST 4's Router says whether it signs as an output, SST 5's as a value
   _protection;
+  _signs;
 
   constructor(mode: "none" | "oac") {
     super("test:Router", "MyRouter");
     this._protection = output({ mode });
+    this._signs = mode === "oac";
   }
 }
-const router = (mode: "none" | "oac") =>
-  new FakeRouter(mode) as unknown as Router;
+// It's given to SST 4's Function and SST 5's
+const router = (mode: "none" | "oac") => new FakeRouter(mode) as any;
 
 describe("Function", () => {
-  let OriginalFunction: typeof import("../../../src/components/aws/function").Function;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
+  let OriginalFunction: typeof import("../../fixtures/v4/components/aws/function").Function;
+  let Function: typeof import("../../../src/components/aws/function").Function;
   let permission: typeof import("../../../src/components/aws/permission").permission;
   let Linkable: typeof import("../../../src/components/linkable").Linkable;
 
   beforeAll(async () => {
     ({ Linkable } = await import("../../../src/components/linkable"));
-    OriginalFunction = (await import("../../../src/components/aws/function")).Function;
-    Function = (await import("../../../src/components/aws/v5/function"))
+    OriginalFunction = (await import("../../fixtures/v4/components/aws/function")).Function;
+    Function = (await import("../../../src/components/aws/function"))
       .Function;
     permission = (await import("../../../src/components/aws/permission")).permission;
     await import("../../../src/components/aws/takeover/function");
@@ -461,7 +463,7 @@ describe("Function", () => {
     });
 
     it("transforms every part", async () => {
-      const router = new FakeRouter("oac") as unknown as Router;
+      const router = new FakeRouter("oac") as any;
       new Function("MyFunction", {
         handler,
         durable: true,
@@ -549,12 +551,12 @@ describe("Function", () => {
   // `functionPart()`.
   describe("as a part of another component", () => {
     const handler = "src/subscriber.handler";
-    let OriginalQueue: typeof import("../../../src/components/aws/queue").Queue;
-    let Queue: typeof import("../../../src/components/aws/v5/queue").Queue;
+    let OriginalQueue: typeof import("../../fixtures/v4/components/aws/queue").Queue;
+    let Queue: typeof import("../../../src/components/aws/queue").Queue;
 
     beforeAll(async () => {
-      OriginalQueue = (await import("../../../src/components/aws/queue")).Queue;
-      Queue = (await import("../../../src/components/aws/v5/queue")).Queue;
+      OriginalQueue = (await import("../../fixtures/v4/components/aws/queue")).Queue;
+      Queue = (await import("../../../src/components/aws/queue")).Queue;
       await import("../../../src/components/aws/takeover/queue");
     });
 
@@ -643,7 +645,7 @@ describe("Function", () => {
     // value, so a preview knows the function is created
     it("is built by a runtime made of commands, given in a function part's args", async () => {
       const { runtime } = await import("../../../src/components/runtime");
-      const { Queue } = await import("../../../src/components/aws/v5/queue");
+      const { Queue } = await import("../../../src/components/aws/queue");
       const ruby = runtime({ lambda: "ruby3.4", dev: { command: "ruby x.rb" } });
       new Queue("MyQueue").subscribe({
         handler: "functions/ruby/app.handler",
@@ -672,10 +674,6 @@ describe("Function", () => {
             injections: ["console.log(1)"],
           }),
       ).toThrow(/"injections", which are for a Node.js function SST builds/);
-      // a $transform written for the V5 Function runs on the 4.x one too
-      expect(() => new OriginalFunction("Old", { handler, runtime: ruby as any })).toThrow(
-        /A runtime from sst.runtime is for sst.aws.v5.Function/,
-      );
       await pulumi.settle();
     });
 
@@ -865,7 +863,7 @@ describe("Function", () => {
       new OriginalFunction("TransformedOriginal", { handler });
       new Function("Transformed", { handler });
       // A function a V5 component creates
-      const { Queue } = await import("../../../src/components/aws/v5/queue");
+      const { Queue } = await import("../../../src/components/aws/queue");
       new Queue("TransformedQueue").subscribe(handler);
       await pulumi.settle();
 
@@ -897,9 +895,9 @@ describe("Function", () => {
         args.link = [...((args.link as unknown[]) ?? [])];
       });
 
-      const { Queue } = await import("../../../src/components/aws/v5/queue");
-      const { Cron } = await import("../../../src/components/aws/v5/cron");
-      const { Bus } = await import("../../../src/components/aws/v5/bus");
+      const { Queue } = await import("../../../src/components/aws/queue");
+      const { Cron } = await import("../../../src/components/aws/cron");
+      const { Bus } = await import("../../../src/components/aws/bus");
       new Queue("SpreadQueue").subscribe(handler);
       new Cron("SpreadCron", { function: handler, schedule: "rate(1 hour)" });
       new Bus("SpreadBus").subscribe("Logger", {

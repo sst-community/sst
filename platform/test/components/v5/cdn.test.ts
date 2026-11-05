@@ -26,14 +26,14 @@ const pulumi = mockPulumi({
 });
 
 describe("Cdn", () => {
-  let OriginalCdn: typeof import("../../../src/components/aws/cdn").Cdn;
-  let Cdn: typeof import("../../../src/components/aws/v5/cdn").Cdn;
+  let OriginalCdn: typeof import("../../fixtures/v4/components/aws/cdn").Cdn;
+  let Cdn: typeof import("../../../src/components/aws/cdn").Cdn;
   let cloudflare: typeof import("../../../src/components/cloudflare/dns");
   let vercel: typeof import("../../../src/components/vercel/dns");
 
   beforeAll(async () => {
-    OriginalCdn = (await import("../../../src/components/aws/cdn")).Cdn;
-    Cdn = (await import("../../../src/components/aws/v5/cdn")).Cdn;
+    OriginalCdn = (await import("../../fixtures/v4/components/aws/cdn")).Cdn;
+    Cdn = (await import("../../../src/components/aws/cdn")).Cdn;
     cloudflare = await import("../../../src/components/cloudflare/dns");
     vercel = await import("../../../src/components/vercel/dns");
     // What the V5 Cdn creates for a domain takes over 4.x's by these

@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output, secret } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 // The tests every database on an RDS instance passes, the `Postgres` and the
@@ -8,10 +8,9 @@ import { applyErrors } from "../../helpers/apply-errors";
 // what's its own. Inside, the V5 component is called `Postgres` and its 4.x
 // form `OriginalPostgres` whatever the engine: the two have the same shape.
 
-type V5Class =
-  typeof import("../../../src/components/aws/v5/postgres").Postgres;
+type V5Class = typeof import("../../../src/components/aws/postgres").Postgres;
 type OriginalClass =
-  typeof import("../../../src/components/aws/postgres").Postgres;
+  typeof import("../../fixtures/v4/components/aws/postgres").Postgres;
 type AnyClass = V5Class | OriginalClass;
 
 /** One engine, as the shared tests see it: what differs from the other. */
@@ -107,12 +106,20 @@ export function rdsInstanceSuite(
   describe(e.name, () => {
     let OriginalPostgres: OriginalClass;
     let Postgres: V5Class;
-    let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
-    let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
+    let OriginalVpc: typeof import("../../fixtures/v4/components/aws/vpc").Vpc;
+    let SidedVpc: any;
+    let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
 
     beforeAll(async () => {
-      OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
-      Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+      OriginalVpc = (await import("../../fixtures/v4/components/aws/vpc")).Vpc;
+      // SST 4's for SST 4's side, SST 5's for SST 5's
+      SidedVpc = await sidedClass(
+        "Vpc",
+        import("../../fixtures/v4/components/aws/vpc"),
+        import("../../../src/components/aws/vpc"),
+        import("../../../src/components/aws/takeover/vpc"),
+      );
+      Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
       ({ original: OriginalPostgres, v5: Postgres } = await e.load());
       await import("../../../src/components/aws/takeover/vpc");
     });
@@ -308,7 +315,7 @@ export function rdsInstanceSuite(
             create: (Postgres, opts) => {
               new Postgres(
                 "MyDatabase",
-                { vpc: new OriginalVpc("MyVpc"), proxy: true },
+                { vpc: new SidedVpc("MyVpc"), proxy: true },
                 opts,
               );
             },
@@ -972,8 +979,8 @@ export function rdsInstanceSuite(
     });
 
     describe("in a Vpc", () => {
-      it("is in the private subnets of either kind", async () => {
-        for (const [i, VpcClass] of [OriginalVpc, Vpc].entries()) {
+      it("is in the private subnets of a Vpc", async () => {
+        for (const [i, VpcClass] of [Vpc].entries()) {
           pulumi.reset();
           const net = new VpcClass(`Net${i}`);
           new Postgres("MyDatabase", { vpc: net, proxy: true });
@@ -992,7 +999,7 @@ export function rdsInstanceSuite(
       it("turns down another resource in its place", async () => {
         const aws = await import("@pulumi/aws");
         const { Vpc: VpcV1 } = await import(
-          "../../../src/components/aws/vpc-v1"
+          "../../fixtures/v4/components/aws/vpc-v1"
         );
         for (const [i, net] of [
           new aws.ec2.Vpc("Net", { cidrBlock: "10.0.0.0/16" }),

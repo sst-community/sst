@@ -36,10 +36,8 @@ const pulumi = mockPulumi({
 
 describe("a function in a new stage's preview", () => {
   it("plans everything a deploy creates", async () => {
-    const { Function } = await import(
-      "../../../src/components/aws/v5/function"
-    );
-    const { Bucket } = await import("../../../src/components/aws/v5/bucket");
+    const { Function } = await import("../../../src/components/aws/function");
+    const { Bucket } = await import("../../../src/components/aws/bucket");
     const files = new Bucket("Files");
     new Function("Api", { handler: "src/api.handler", link: [files] });
     await pulumi.settle();
@@ -67,11 +65,9 @@ describe("a function in a new stage's preview", () => {
   // which its settings say. Its distribution isn't created yet.
   it("plans who may call its URL behind a router", async () => {
     pulumi.reset();
-    const { Function } = await import(
-      "../../../src/components/aws/v5/function"
-    );
+    const { Function } = await import("../../../src/components/aws/function");
     const { Router } = await import("../../../src/components/aws/router");
-    const { Bucket } = await import("../../../src/components/aws/v5/bucket");
+    const { Bucket } = await import("../../../src/components/aws/bucket");
     const signs = new Router("Signs", { protection: "oac" });
     const open = new Router("Open");
     // A route field that's only known once something else is created
@@ -106,10 +102,8 @@ describe("a function in a new stage's preview", () => {
 
   it("plans who may call its URL behind a V5 router, which says plainly whether it signs", async () => {
     pulumi.reset();
-    const { Function } = await import(
-      "../../../src/components/aws/v5/function"
-    );
-    const { Router } = await import("../../../src/components/aws/v5/router");
+    const { Function } = await import("../../../src/components/aws/function");
+    const { Router } = await import("../../../src/components/aws/router");
     const signs = new Router("Signs", { protection: "oac-with-edge-signing" });
     const open = new Router("Open", { domain: "example.com" });
     new Function("Signed", {

@@ -28,18 +28,18 @@ const STATIC_WRAPPER = `${logicalName("orders-prod.fifo")}Subscriber${logicalNam
 )}`;
 
 type QueueClass =
-  | typeof import("../../../src/components/aws/queue").Queue
-  | typeof import("../../../src/components/aws/v5/queue").Queue;
-type OriginalQueueArgs = import("../../../src/components/aws/queue").QueueArgs;
-type QueueArgs = import("../../../src/components/aws/v5/queue").QueueArgs;
+  | typeof import("../../fixtures/v4/components/aws/queue").Queue
+  | typeof import("../../../src/components/aws/queue").Queue;
+type OriginalQueueArgs = import("../../fixtures/v4/components/aws/queue").QueueArgs;
+type QueueArgs = import("../../../src/components/aws/queue").QueueArgs;
 
 describe("Queue", () => {
-  let OriginalQueue: typeof import("../../../src/components/aws/queue").Queue;
-  let Queue: typeof import("../../../src/components/aws/v5/queue").Queue;
+  let OriginalQueue: typeof import("../../fixtures/v4/components/aws/queue").Queue;
+  let Queue: typeof import("../../../src/components/aws/queue").Queue;
 
   beforeAll(async () => {
-    OriginalQueue = (await import("../../../src/components/aws/queue")).Queue;
-    Queue = (await import("../../../src/components/aws/v5/queue")).Queue;
+    OriginalQueue = (await import("../../fixtures/v4/components/aws/queue")).Queue;
+    Queue = (await import("../../../src/components/aws/queue")).Queue;
     await import("../../../src/components/aws/takeover/queue");
     await import("../../../src/components/aws/takeover/function");
   });
@@ -242,7 +242,7 @@ describe("Queue", () => {
       queue.nodes.subscriber.apply(done),
     );
     expect(fn).toBeInstanceOf(
-      (await import("../../../src/components/aws/v5/function")).Function,
+      (await import("../../../src/components/aws/function")).Function,
     );
   });
 
@@ -345,7 +345,7 @@ describe("Queue", () => {
     expect(() =>
       (Queue as any).subscribe(SHARED_ARN, "src/subscriber.handler"),
     ).toThrow(
-      /reference it with "get" and subscribe to that: sst\.aws\.v5\.Queue\.get\(/,
+      /reference it with "get" and subscribe to that: sst\.aws\.Queue\.get\(/,
     );
   });
 

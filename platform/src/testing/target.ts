@@ -364,7 +364,7 @@ export default $config({
     }
     const bucket = new aws.s3.Bucket("Suite", { forceDestroy: true });
     const report = ${functions}
-      ? new sst.aws.v5.Function("Report", { handler: "report.handler" })
+      ? new sst.aws.Function("Report", { handler: "report.handler" })
       : undefined;
     return {
       bucket: bucket.bucket,

@@ -47,10 +47,10 @@ afterAll(() => fs.rmSync(app, { recursive: true, force: true }));
 describe("a StaticSite in a new stage's preview", () => {
   it("is built without what isn't known, and plans everything a deploy creates", async () => {
     const { StaticSite } = await import(
-      "../../../src/components/aws/v5/static-site"
+      "../../../src/components/aws/static-site"
     );
-    const { Queue } = await import("../../../src/components/aws/v5/queue");
-    const { Router } = await import("../../../src/components/aws/v5/router");
+    const { Queue } = await import("../../../src/components/aws/queue");
+    const { Router } = await import("../../../src/components/aws/router");
     const jobs = new Queue("Jobs");
     const router = new Router("Router");
     new StaticSite("Built", {

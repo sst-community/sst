@@ -22,10 +22,10 @@ const pulumi = mockPulumi({
 });
 
 type DynamoClass =
-  | typeof import("../../../src/components/aws/dynamo").Dynamo
-  | typeof import("../../../src/components/aws/v5/dynamo").Dynamo;
-type OriginalDynamoArgs = import("../../../src/components/aws/dynamo").DynamoArgs;
-type DynamoArgs = import("../../../src/components/aws/v5/dynamo").DynamoArgs;
+  | typeof import("../../fixtures/v4/components/aws/dynamo").Dynamo
+  | typeof import("../../../src/components/aws/dynamo").Dynamo;
+type OriginalDynamoArgs = import("../../fixtures/v4/components/aws/dynamo").DynamoArgs;
+type DynamoArgs = import("../../../src/components/aws/dynamo").DynamoArgs;
 
 const keys = {
   fields: { userId: "string", noteId: "string" },
@@ -34,12 +34,12 @@ const keys = {
 const streaming = { ...keys, stream: "new-and-old-images" } satisfies OriginalDynamoArgs;
 
 describe("Dynamo", () => {
-  let OriginalDynamo: typeof import("../../../src/components/aws/dynamo").Dynamo;
-  let Dynamo: typeof import("../../../src/components/aws/v5/dynamo").Dynamo;
+  let OriginalDynamo: typeof import("../../fixtures/v4/components/aws/dynamo").Dynamo;
+  let Dynamo: typeof import("../../../src/components/aws/dynamo").Dynamo;
 
   beforeAll(async () => {
-    OriginalDynamo = (await import("../../../src/components/aws/dynamo")).Dynamo;
-    Dynamo = (await import("../../../src/components/aws/v5/dynamo")).Dynamo;
+    OriginalDynamo = (await import("../../fixtures/v4/components/aws/dynamo")).Dynamo;
+    Dynamo = (await import("../../../src/components/aws/dynamo")).Dynamo;
     await import("../../../src/components/aws/takeover/dynamo");
     await import("../../../src/components/aws/takeover/function");
   });
@@ -440,7 +440,7 @@ describe("Dynamo", () => {
     ]);
     const fn = await pulumi.resolve(table.nodes.subscriber.Indexer);
     expect(fn).toBeInstanceOf(
-      (await import("../../../src/components/aws/v5/function")).Function,
+      (await import("../../../src/components/aws/function")).Function,
     );
   });
 
@@ -551,7 +551,7 @@ describe("Dynamo", () => {
         "src/indexer.handler",
       ),
     ).toThrow(
-      /reference the table with "get" and subscribe to that: sst\.aws\.v5\.Dynamo\.get\("MyTable", streamArn\)/,
+      /reference the table with "get" and subscribe to that: sst\.aws\.Dynamo\.get\("MyTable", streamArn\)/,
     );
   });
 
@@ -644,7 +644,7 @@ describe("Dynamo", () => {
 
   it("takes a subscriber written any way that has a name", async () => {
     const { Function } = await import(
-      "../../../src/components/aws/v5/function"
+      "../../../src/components/aws/function"
     );
     const table = new Dynamo("MyTable", streaming)
       .subscribe("Handler", "src/indexer.handler")

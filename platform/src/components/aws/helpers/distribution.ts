@@ -14,7 +14,7 @@ import { physicalName } from "../../naming";
 import { type Size, toMBs } from "../../size";
 import { type DurationSeconds, toSeconds } from "../../duration";
 import type { ProtectionConfig } from "../router-code";
-import type { Cdn, CdnArgs } from "../v5/cdn";
+import type { Cdn, CdnArgs } from "../cdn";
 import { parseLambdaEdgeArn } from "./arn";
 import { useProvider } from "./provider";
 

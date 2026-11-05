@@ -9,23 +9,24 @@ const handler = "src/worker.mjs";
 const pulumi = mockPulumi();
 
 type KvClass =
-  | typeof import("../../../../src/components/cloudflare/kv").Kv
-  | typeof import("../../../../src/components/cloudflare/v5/kv").Kv;
+  | typeof import("../../../fixtures/v4/components/cloudflare/kv").Kv
+  | typeof import("../../../../src/components/cloudflare/kv").Kv;
 
 describe("Kv", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/kv").Kv;
-  let Kv: typeof import("../../../../src/components/cloudflare/v5/kv").Kv;
-  let OriginalWorker: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/kv").Kv;
+  let Kv: typeof import("../../../../src/components/cloudflare/kv").Kv;
+  let OriginalWorker: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
   let lookup: typeof import("../../../../src/components/cloudflare/helpers/lookup");
 
   beforeAll(async () => {
-    Original = (await import("../../../../src/components/cloudflare/kv")).Kv;
-    Kv = (await import("../../../../src/components/cloudflare/v5/kv")).Kv;
+    Original = (await import("../../../fixtures/v4/components/cloudflare/kv"))
+      .Kv;
+    Kv = (await import("../../../../src/components/cloudflare/kv")).Kv;
     OriginalWorker = (
-      await import("../../../../src/components/cloudflare/worker")
+      await import("../../../fixtures/v4/components/cloudflare/worker")
     ).Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
     lookup = await import(
       "../../../../src/components/cloudflare/helpers/lookup"

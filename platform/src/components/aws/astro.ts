@@ -1,12 +1,27 @@
 import fs from "fs";
-import { createRequire } from "module";
 import path from "path";
-import { ComponentResourceOptions, Output, all } from "@pulumi/pulumi";
-import { isALtB } from "../../util/compare-semver.js";
-import { VisibleError } from "../error.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
+import { createRequire } from "module";
+import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import type { Prettify } from "../component";
+import { context } from "../contract";
+import { VisibleError } from "../error";
+import { isALtB } from "../../util/compare-semver";
+import type { SiteRouteArgs } from "./helpers/router";
+import {
+  type SiteBuild,
+  type SsrFramework,
+  type SsrSiteArgs,
+  createSsrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { SitePlan } from "./site-code";
+import type { CdnDomainArgs } from "./cdn";
+import type { FunctionArgs } from "./function";
 
-export interface AstroArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -20,7 +35,94 @@ export interface AstroArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
+  /**
+   * Path to the directory where your Astro site is located. This path is relative to your `sst.config.ts`.
+   *
+   * By default it assumes your Astro site is in the root of your SST app.
+   * @default `"."`
+   *
+   * @example
+   *
+   * If your Astro site is in a package in your monorepo.
+   *
+   * ```js
+   * {
+   *   path: "packages/web"
+   * }
+   * ```
+   */
+  path?: string;
+  /**
+   * [Link resources](/docs/linking/) to your Astro site. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of resources to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: FunctionArgs["link"];
+  /**
+   * Set [environment variables](https://docs.astro.build/en/guides/environment-variables/) in your Astro site.
+   *
+   * :::tip
+   * You can also `link` resources to your Astro site and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
+   * :::
+   *
+   * Recall that in Astro, you need to prefix your environment variables with `PUBLIC_` to access them on the client-side. [Read more here](https://docs.astro.build/en/guides/environment-variables/).
+   *
+   * @example
+   * ```js
+   * {
+   *   environment: {
+   *     API_URL: api.url,
+   *     // Accessible on the client-side
+   *     PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   *   }
+   * }
+   * ```
+   */
+  environment?: FunctionArgs["environment"];
   /**
    * Permissions and the resources that the [server function](#nodes-server) in your Astro site needs to access. These permissions are used to create the function's IAM role.
    *
@@ -68,80 +170,22 @@ export interface AstroArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  permissions?: SsrSiteArgs["permissions"];
+  permissions?: FunctionArgs["permissions"];
   /**
-   * Path to the directory where your Astro site is located.  This path is relative to your `sst.config.ts`.
+   * The command used internally to build your Astro site.
    *
-   * By default it assumes your Astro site is in the root of your SST app.
-   * @default `"."`
+   * @default The `build` script in your `package.json`: `"npm run build"`, or with `yarn`, `pnpm` or `bun` when its lockfile is in the site's folder or the app's.
    *
    * @example
    *
-   * If your Astro site is in a package in your monorepo.
-   *
+   * If you want to use a different build command.
    * ```js
    * {
-   *   path: "packages/web"
+   *   buildCommand: "yarn build"
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
-  /**
-   * [Link resources](/docs/linking/) to your Astro site. This will:
-   *
-   * 1. Grant the permissions needed to access the resources.
-   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
-   *
-   * @example
-   *
-   * Takes a list of resources to link to the function.
-   *
-   * ```js
-   * {
-   *   link: [bucket, stripeKey]
-   * }
-   * ```
-   */
-  link?: SsrSiteArgs["link"];
-  /**
-   * Configure how the CloudFront cache invalidations are handled. This is run after your Astro site has been deployed.
-   * :::tip
-   * You get 1000 free invalidations per month. After that you pay $0.005 per invalidation path. [Read more here](https://aws.amazon.com/cloudfront/pricing/).
-   * :::
-   * @default `{paths: "all", wait: false}`
-   * @example
-   * Wait for all paths to be invalidated.
-   * ```js
-   * {
-   *   invalidation: {
-   *     paths: "all",
-   *     wait: true
-   *   }
-   * }
-   * ```
-   */
-  invalidation?: SsrSiteArgs["invalidation"];
-  /**
-   * Set [environment variables](https://docs.astro.build/en/guides/environment-variables/) in your Astro site.
-   *
-   * :::tip
-   * You can also `link` resources to your Astro site and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
-   * :::
-   *
-   * Recall that in Astro, you need to prefix your environment variables with `PUBLIC_` to access them on the client-side. [Read more here](https://docs.astro.build/en/guides/environment-variables/).
-   *
-   * @example
-   * ```js
-   * {
-   *   environment: {
-   *     API_URL: api.url,
-   *     // Accessible on the client-side
-   *     PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_123"
-   *   }
-   * }
-   * ```
-   */
-  environment?: SsrSiteArgs["environment"];
+  buildCommand?: string;
   /**
    * Set a custom domain for your Astro site.
    *
@@ -186,7 +230,7 @@ export interface AstroArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Serve your Astro site through a `Router` instead of a standalone CloudFront
    * distribution.
@@ -287,42 +331,7 @@ export interface AstroArgs extends SsrSiteArgs {
    * Also, make sure to set this as the `base` in your `astro.config.mjs`, like
    * above.
    */
-  router?: SsrSiteArgs["router"];
-  /**
-   * The command used internally to build your Astro site.
-   *
-   * @default `"npm run build"`
-   *
-   * @example
-   *
-   * If you want to use a different build command.
-   * ```js
-   * {
-   *   buildCommand: "yarn build"
-   * }
-   * ```
-   */
-  buildCommand?: SsrSiteArgs["buildCommand"];
-  /**
-   * Configure the Astro site to use an existing CloudFront cache policy.
-   *
-   * :::note
-   * CloudFront has a limit of 20 cache policies per account, though you can request a limit
-   * increase.
-   * :::
-   *
-   * By default, a new cache policy is created for it. This allows you to reuse an existing
-   * policy instead of creating a new one.
-   *
-   * @default A new cache policy is created
-   * @example
-   * ```js
-   * {
-   *   cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6"
-   * }
-   * ```
-   */
-  cachePolicy?: SsrSiteArgs["cachePolicy"];
+  router?: SiteRouteArgs;
 }
 
 /**
@@ -400,122 +409,32 @@ export interface AstroArgs extends SsrSiteArgs {
  * console.log(Resource.MyBucket.name);
  * ---
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Astro`
+ *
+ * Keep the name, and `sst migrate` moves it. The site's bucket, its
+ * server functions, and its CloudFront distribution or its entry in the router are kept.
+ * Its files, its entries in the key-value store and its route in the router's list are
+ * written again by resources of a new type, which the `sst` binary serves, and `sst
+ * migrate` takes the old ones out of the state without deleting what they wrote. Its
+ * CloudFront invalidation runs once more. A few things are written differently:
+ *
+ * - `nodes.server` holds the server of each region, by region, each an output:
+ *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. A static site
+ *   has none, so a server is listed once the build says there is one.
+ * - With `warm`, the server is warmed again when its code changes. `sst.aws.Astro` warmed
+ *   it on every deploy. The switch warms it once.
  */
-export class Astro extends SsrSite {
+export class Astro extends component("sst:aws:Astro", parts) {
+  private readonly siteUrl: Output<string>;
+
   constructor(
     name: string,
     args: AstroArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected normalizeBuildCommand(args: AstroArgs) {
-    // `sst dev` runs Astro's dev server instead of building.
-    if ($dev && args.dev !== false) return;
-    // Chained to the build command so the check runs before the build. An
-    // undefined command lets the build pick the package manager, as when this
-    // returns nothing.
-    return all([args.buildCommand, args.path]).apply(
-      ([buildCommand, sitePath]) => {
-        checkAdapter(sitePath ?? ".");
-        return buildCommand;
-      },
-    ) as Output<string>;
-  }
-
-  protected buildPlan(outputPath: Output<string>): Output<Plan> {
-    return outputPath.apply((outputPath) => {
-      const BUILD_META_FILE_NAME = "sst.buildMeta.json";
-      const filePath = path.join(outputPath, "dist", BUILD_META_FILE_NAME);
-      if (!fs.existsSync(filePath)) {
-        throw new VisibleError(
-          `Build metadata file not found at "${filePath}". Update your "astro-sst" adapter and rebuild your Astro site.`,
-        );
-      }
-      const buildMeta = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
-        base: string;
-        pluginVersion: string;
-        outputMode: "server" | "static";
-        responseMode: "stream" | "buffer";
-        clientBuildOutputDir: string;
-        clientBuildVersionedSubDir: string;
-        routes?: { route: string; prerender?: boolean }[];
-      };
-      const serverOutputPath = path.join(outputPath, "dist", "server");
-
-      if (
-        buildMeta.pluginVersion === undefined ||
-        isALtB(buildMeta.pluginVersion, "3.1.2")
-      ) {
-        throw new VisibleError(
-          `Incompatible "astro-sst" adapter version detected. The Astro component requires "astro-sst" adapter version 3.1.2 or later.`,
-        );
-      }
-
-      // Note about handling 404 pages. Here is Astro's behavior:
-      // - when static/prerendered, Astro builds a /404.html file in the client build output dir
-      // - when SSR, Astro server handles /404 route
-      //
-      // We could handle the /404.html with CloudFront's custom error response feature, but that will not work when routing the Astro through the `Router` component. It does not make sense for `Router` to have a custom error response shared across all routes (ie. API). Each route's 404 behavior are different.
-      //
-      // So here is what we do when a request comes in for ie. /garbage:
-      //
-      // - Case 1: static (no server) => In CF function S3 look up will fail, and uri will rewrite to /404.html
-      //   x that's why we set `plan.custom404` to `/404.html`
-      //
-      // - Case 2: prerendered (has server) => In CF function S3 look up will fail, and request will be sent to the server function. Server fails to serve /garbage, and cannot find the route. Server tries to serve /404, and cannot find the route. Server finally serves the 404.html file manually bundled into it.
-      //   x that's why we configure `plan.server.copyFiles` include /404.html
-      //
-      // - Case 3: SSR (has server) => In CF function S3 look up will fail, and request is sent to the server function. Server fails to serve /garbage, and cannot find the route. Server tries to serve /404.
-      const isStatic = buildMeta.outputMode === "static";
-      const base = buildMeta.base === "/" ? undefined : buildMeta.base;
-      return {
-        base,
-        server: isStatic
-          ? undefined
-          : {
-            handler: path.join(serverOutputPath, "entry.handler"),
-            nodejs: { install: ["sharp"] },
-            streaming: buildMeta.responseMode === "stream",
-            copyFiles: fs.existsSync(path.join(serverOutputPath, "404.html"))
-              ? [
-                {
-                  from: path.join(serverOutputPath, "404.html"),
-                  to: "404.html",
-                },
-              ]
-              : [],
-          },
-        assets: [
-          {
-            from: buildMeta.clientBuildOutputDir,
-            to: "",
-            cached: true,
-            versionedSubDir: buildMeta.clientBuildVersionedSubDir,
-          },
-        ],
-        custom404:
-          isStatic &&
-            fs.existsSync(
-              path.join(outputPath, buildMeta.clientBuildOutputDir, "404.html"),
-            )
-            ? "/404.html"
-            : undefined,
-        // With a server, keep prerendered routes from shadowing server routes
-        //   in the same folder, ie. /api/list.json and /api/[id].
-        ...(isStatic
-          ? {}
-          : {
-              hasStaticRoutes: true,
-              // Route patterns don't include the base path.
-              prerenderedDirs: (buildMeta.routes ?? [])
-                .filter((r) => r.prerender)
-                .map((r) => r.route.replace(/^\/+/, "").split("/")[0])
-                .filter(Boolean),
-            }),
-      };
-    });
+    super(name, args, opts);
+    this.siteUrl = createSsrSite(this.builder(), name, args, astro).url;
   }
 
   /**
@@ -525,12 +444,124 @@ export class Astro extends SsrSite {
    * Otherwise, it's the auto-generated CloudFront URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
-const __pulumiType = "sst:aws:Astro";
-// @ts-expect-error
-Astro.__pulumiType = __pulumiType;
+
+// What the "astro-sst" adapter says about the build, in
+// `dist/sst.buildMeta.json`
+interface BuildMeta {
+  base: string;
+  pluginVersion: string;
+  outputMode: "server" | "static";
+  responseMode: "stream" | "buffer";
+  clientBuildOutputDir: string;
+  clientBuildVersionedSubDir: string;
+  routes?: { route: string; prerender?: boolean }[];
+}
+
+// How an Astro site is built, with its package manager and the "astro-sst"
+// adapter, and what its server is
+const astro: SsrFramework = {
+  label: "Astro",
+  // A static site has no server
+  alwaysServes: false,
+  beforeBuild: (sitePath) =>
+    checkAdapter(path.resolve(context().paths.root, sitePath)),
+  load: loadBuild,
+};
+
+// Reads what the adapter built
+function loadBuild(builtPath: string): SiteBuild {
+  const outputPath = path.resolve(context().paths.root, builtPath);
+  const metaPath = path.join(outputPath, "dist", "sst.buildMeta.json");
+  if (!fs.existsSync(metaPath))
+    throw new VisibleError(
+      `Build metadata file not found at "${metaPath}". Update your "astro-sst" adapter and rebuild your Astro site.`,
+    );
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as BuildMeta;
+  if (meta.pluginVersion === undefined || isALtB(meta.pluginVersion, "3.1.2"))
+    throw new VisibleError(
+      `Incompatible "astro-sst" adapter version detected. The Astro component requires "astro-sst" adapter version 3.1.2 or later.`,
+    );
+
+  // How a request for a page that isn't there, like /garbage, gets a 404:
+  //
+  // - A static site has no server. The router's lookup in S3 fails, and it
+  //   serves /404.html, the plan's `custom404`.
+  // - A site with a server sends the request on to it. When the 404 page is
+  //   prerendered, the server can't render /404 either, so it serves the
+  //   404.html file bundled into it, from `copyFiles`.
+  //
+  // CloudFront's custom error responses can't do it: behind a `Router`, they'd
+  // apply to every route, not just the site's.
+  const isStatic = meta.outputMode === "static";
+  // The server's files, from the site's folder as it was given
+  const serverPath = path.join(builtPath, "dist", "server");
+  const notFound = path.join(outputPath, "dist", "server", "404.html");
+  const plan: SitePlan = {
+    base: meta.base === "/" ? undefined : meta.base,
+    assets: [
+      {
+        from: meta.clientBuildOutputDir,
+        to: "",
+        cached: true,
+        versionedSubDir: meta.clientBuildVersionedSubDir,
+      },
+    ],
+    custom404:
+      isStatic &&
+      fs.existsSync(
+        path.join(outputPath, meta.clientBuildOutputDir, "404.html"),
+      )
+        ? "/404.html"
+        : undefined,
+    // With a server, prerendered routes can't shadow server routes in the same
+    // folder, like /api/list.json and /api/[id]
+    ...(isStatic
+      ? {}
+      : {
+          hasStaticRoutes: true,
+          // Route patterns don't include the base path
+          prerenderedDirs: (meta.routes ?? [])
+            .filter((r) => r.prerender)
+            .map((r) => r.route.replace(/^\/+/, "").split("/")[0])
+            .filter(Boolean),
+        }),
+  };
+
+  return {
+    sitePath: builtPath,
+    outputPath,
+    plan,
+    serves: !isStatic,
+    server: isStatic
+      ? undefined
+      : {
+          handler: path.join(serverPath, "entry.handler"),
+          nodejs: { install: ["sharp"] },
+          streaming: meta.responseMode === "stream",
+          // A file to copy is found from the app's folder. For a site's
+          // folder given from there, this is the path SST 4 gave.
+          copyFiles: fs.existsSync(notFound)
+            ? [
+                {
+                  from: path.relative(context().paths.root, notFound),
+                  to: "404.html",
+                },
+              ]
+            : [],
+        },
+  };
+}
 
 /**
  * SST's own "astro-sst" adapter, 2.x and 3.x, imports applyPolyfills, which

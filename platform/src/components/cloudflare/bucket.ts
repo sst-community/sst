@@ -1,28 +1,25 @@
-import { ComponentResourceOptions } from "@pulumi/pulumi";
-import * as cloudflare from "@pulumi/cloudflare";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link.js";
-import { binding } from "./binding.js";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import type { ComponentResourceOptions, Output } from "@pulumi/pulumi";
+import * as cf from "@pulumi/cloudflare";
+import { type ComponentArgs, component } from "../parts-component";
 import type { Input } from "../input";
+import { binding } from "./binding";
+import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { useExisting } from "./helpers/lookup";
 
-export interface BucketArgs {
+const parts = {
+  /**
+   * The Cloudflare R2 Bucket. Pass one you have in `existing`, or its name.
+   */
+  bucket: cf.R2Bucket,
+};
+
+export interface BucketArgs extends ComponentArgs<typeof parts> {
   /**
    * The Cloudflare account ID to use for this R2 Bucket.
    * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
    * @internal
    */
   accountId?: Input<string>;
-  /**
-   * [Transform](/docs/components/#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the R2 Bucket resource.
-     */
-    bucket?: Transform<cloudflare.R2BucketArgs>;
-  };
 }
 
 /**
@@ -56,36 +53,76 @@ export interface BucketArgs {
  *
  * await Resource.MyBucket.list();
  * ```
+ *
+ * #### Use an existing bucket
+ *
+ * Pass the name of a bucket you already have in `existing`. It's used the way
+ * it is.
+ *
+ * ```ts title="sst.config.ts"
+ * const bucket = new sst.cloudflare.Bucket("MyBucket", {
+ *   existing: { bucket: "my-bucket" }
+ * });
+ * ```
+ *
+ * It's looked up in the app's account. For a bucket in another account, give
+ * the account ID in front of the name, as `"<account_id>/my-bucket"`. For a
+ * bucket in a [jurisdiction](https://developers.cloudflare.com/r2/reference/data-location/#jurisdictional-restrictions),
+ * give the account ID, the name and the jurisdiction, as
+ * `"<account_id>/my-bucket/eu"`.
+ *
+ * #### Switch from SST 4's `sst.cloudflare.Bucket`
+ *
+ * Keep the name, and `sst migrate` moves it. The bucket and what's in it are kept.
+ *
+ * A few things are different:
+ *
+ * - A Worker it's linked to is given the bucket's jurisdiction, for a bucket
+ *   that has one, like `eu`. `sst.cloudflare.Bucket` left it out of the
+ *   binding, and a Worker can't reach such a bucket without it. If you set
+ *   `jurisdiction` in `transform`, the Worker is updated on the switch. A
+ *   site it's linked to has it in the Wrangler config its build and
+ *   `sst dev` read too.
+ * - You can pass a bucket you already have in `existing`, or its name. The
+ *   name can have the account ID in front, `"<account_id>/my-bucket"`, and
+ *   the jurisdiction after it, `"<account_id>/my-bucket/eu"`.
  */
-export class Bucket extends Component implements Link.Linkable {
-  private bucket: cloudflare.R2Bucket;
-
+export class Bucket extends component("sst:cloudflare:Bucket", parts) {
   constructor(
     name: string,
-    args?: BucketArgs,
-    opts?: ComponentResourceOptions,
+    args: BucketArgs = {},
+    opts: ComponentResourceOptions = {},
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    const parent = this;
+    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
 
-    const bucket = createBucket();
-
-    this.bucket = bucket;
-
-    function createBucket() {
-      return new cloudflare.R2Bucket(
-        ...transform(
-          args?.transform?.bucket,
-          `${name}Bucket`,
-          {
-            name: "",
-            accountId: args?.accountId ?? DEFAULT_ACCOUNT_ID,
-          },
-          { parent },
-        ),
+    // A bucket that's already deployed is used as it is. Cloudflare's
+    // provider looks it up by its account, name and jurisdiction, which is
+    // "default" for a bucket outside one.
+    const existing = args.existing?.bucket;
+    if (existing !== undefined) {
+      useExisting(
+        existing,
+        accountId,
+        (id) => this.lookupPart("bucket", id),
+        "default",
       );
+      return;
     }
+
+    this.part("bucket", {
+      // Named by SST, as the 4.x `Bucket` names it
+      name: "",
+      accountId,
+    });
+  }
+
+  /**
+   * The generated name of the R2 Bucket.
+   */
+  public get name() {
+    return this.nodes.bucket.name;
   }
 
   /**
@@ -101,42 +138,25 @@ export class Bucket extends Component implements Link.Linkable {
    *
    * @internal
    */
-  getSSTLink() {
+  public link() {
     return {
-      properties: {
-        name: this.bucket.name,
-      },
+      properties: { name: this.name },
       include: [
         binding({
           type: "r2BucketBindings",
           properties: {
-            bucketName: this.bucket.name,
+            bucketName: this.name,
+            // Cloudflare gives a bucket outside any jurisdiction "default",
+            // which a binding doesn't take. Left out, it isn't in the binding.
+            jurisdiction: this.nodes.bucket.jurisdiction.apply(
+              (jurisdiction) =>
+                jurisdiction && jurisdiction !== "default"
+                  ? jurisdiction
+                  : undefined,
+            ) as Output<string>,
           },
         }),
       ],
     };
   }
-
-  /**
-   * The generated name of the R2 Bucket.
-   */
-  public get name() {
-    return this.bucket.name;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Cloudflare R2 Bucket.
-       */
-      bucket: this.bucket,
-    };
-  }
 }
-
-const __pulumiType = "sst:cloudflare:Bucket";
-// @ts-expect-error
-Bucket.__pulumiType = __pulumiType;

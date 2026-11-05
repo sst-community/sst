@@ -3,37 +3,40 @@ import {
   jsonStringify,
   Output,
 } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
-import { FunctionArgs, Function, Dynamo, CdnArgs, Router, RouterArgs } from ".";
-import { functionBuilder } from "./helpers/function-builder";
-import { env } from "../linkable";
-import { Auth as AuthV1 } from "./auth-v1";
-import { Input } from "../input";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  named,
+  optional,
+} from "../parts-component";
+import { notAnExistingPart, notAnOption, plain } from "../args";
+import { VisibleError } from "../error";
+import type { Prettify } from "../component";
+import { functionPart } from "./helpers/function-part";
+import type { CdnDomainArgs } from "./cdn";
+import { Dynamo } from "./dynamo";
+import { Function, type FunctionArgs } from "./function";
+import { Router } from "./router";
 
-export interface AuthArgs {
+const parts = () => ({
   /**
-   * The issuer function.
-   * @deprecated renamed to `issuer`
-   * @example
-   * ```js
-   * {
-   *   authorizer: "src/auth.handler"
-   * }
-   * ```
-   *
-   * You can also pass in the full `FunctionArgs`.
-   *
-   * ```js
-   * {
-   *   authorizer: {
-   *     handler: "src/auth.handler",
-   *     link: [table]
-   *   }
-   * }
-   * ```
+   * The DynamoDB table OpenAuth keeps its data in.
    */
-  authorizer?: Input<string | FunctionArgs>;
+  table: named(Dynamo, "Storage"),
+  /**
+   * The AWS Lambda function that runs the OpenAuth issuer. An output, as it's created
+   * once its args are known.
+   */
+  issuer: deferred(Function),
+  /**
+   * With `domain`, the `Router` that serves the issuer at the domain. It's the auth
+   * server's own: one you have isn't taken in `existing`.
+   */
+  router: optional(Router),
+});
+
+export interface AuthArgs extends ComponentArgs<typeof parts> {
   /**
    * The function that's running your OpenAuth server.
    *
@@ -75,10 +78,14 @@ export interface AuthArgs {
    * This will always use the `DynamoStorage` storage provider.
    * :::
    *
+   * The function always has a URL, without CORS: the issuer is reached through it. A
+   * handler or the function's args have to be plain values, not outputs; what's in the
+   * args can be an output.
+   *
    * Learn more on the [OpenAuth docs](https://openauth.js.org/docs/issuer/) on how to configure
    * the `issuer` function.
    */
-  issuer?: Input<string | FunctionArgs>;
+  issuer: string | FunctionArgs;
   /**
    * Set a custom domain for your Auth server.
    *
@@ -90,6 +97,9 @@ export interface AuthArgs {
    * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
    * providers.
    * :::
+   *
+   * Whether there's a domain decides whether the `Router` is created, so `domain` has to
+   * be a plain value, not an output. So do its `name`, `aliases` and `redirects`.
    *
    * @example
    *
@@ -112,66 +122,7 @@ export interface AuthArgs {
    * }
    * ```
    */
-  domain?: CdnArgs["domain"];
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Router resource created for the custom domain.
-     *
-     * @example
-     *
-     * Attach a WAF to the CloudFront distribution.
-     *
-     * ```ts
-     * new sst.aws.Auth("MyAuth", {
-     *   issuer: "src/auth.handler",
-     *   domain: "auth.example.com",
-     *   transform: {
-     *     router: (args) => {
-     *       args.transform = {
-     *         cdn: {
-     *           transform: {
-     *             distribution: {
-     *               webAclId: "arn:aws:wafv2:...",
-     *             },
-     *           },
-     *         },
-     *       };
-     *     },
-     *   },
-     * });
-     * ```
-     */
-    router?: Transform<RouterArgs>;
-  };
-  /**
-   * Force upgrade from `Auth.v1` to the latest `Auth` version. The only valid value
-   * is `v2`, which is the version of the new `Auth`.
-   *
-   * The latest `Auth` is powered by [OpenAuth](https://openauth.js.org). To
-   * upgrade, add the prop.
-   *
-   * ```ts
-   * {
-   *   forceUpgrade: "v2"
-   * }
-   * ```
-   *
-   * Run `sst deploy`.
-   *
-   * :::tip
-   * You can remove this prop after you upgrade.
-   * :::
-   *
-   * This upgrades your component and the resources it created. You can now optionally
-   * remove the prop.
-   *
-   * @internal
-   */
-  forceUpgrade?: "v2";
+  domain?: string | Prettify<CdnDomainArgs>;
 }
 
 /**
@@ -229,6 +180,28 @@ export interface AuthArgs {
  * });
  * ```
  *
+ * To attach a WAF to the domain's CloudFront distribution, transform the router.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Auth("MyAuth", {
+ *   issuer: "src/auth.handler",
+ *   domain: "auth.example.com",
+ *   transform: {
+ *     router: {
+ *       transform: {
+ *         cdn: {
+ *           transform: {
+ *             distribution: {
+ *               webAclId: "arn:aws:wafv2:..."
+ *             }
+ *           }
+ *         }
+ *       }
+ *     }
+ *   }
+ * });
+ * ```
+ *
  * #### Link to a resource
  *
  * You can link the auth server to other resources, like a function or your Next.js app,
@@ -252,166 +225,149 @@ export interface AuthArgs {
  *   issuer: Resource.MyAuth.url
  * });
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Auth`
+ *
+ * Keep the name, and `sst migrate` moves it. The table, the issuer
+ * function and the router are kept: each becomes its V5 form, the `Dynamo`, the
+ * `Function` and the `Router`, as each one's own "Switch from" says. A few things are
+ * written differently:
+ *
+ * - `authorizer` is gone. Use `issuer`, which is required.
+ * - `forceUpgrade` is gone. The 5.0 `Auth` is the one OpenAuth runs on, and SST 4's
+ *   record of its version goes with the switch.
+ * - `nodes.authorizer` is gone. Use `nodes.issuer`.
+ * - `domain` has to be a plain value, not an output: it decides whether the router is
+ *   created. A handler or the issuer's args have to be plain values too; what's in the
+ *   args can be an output.
+ * - `transform.router` transforms the V5 `Router`, whose own `transform` is shaped by its
+ *   parts.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - `sst.aws.Auth.v1`, the auth server before OpenAuth, has no 5.0 form.
  */
-export class Auth extends Component implements Link.Linkable {
-  private readonly _table: Dynamo;
-  private readonly _issuer: Output<Function>;
-  private readonly _router?: Router;
-  public static v1 = AuthV1;
+export class Auth extends component("sst:aws:Auth", parts) {
+  private readonly issuerUrl: Output<string>;
 
   constructor(name: string, args: AuthArgs, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
-    const _version = 2;
-    const self = this;
+    super(name, args, opts);
+    const owner = `the "${name}" auth server`;
+    notAnOption(args, "authorizer", `Use "issuer".`, owner);
+    notAnOption(
+      args,
+      "forceUpgrade",
+      `Remove it: the 5.0 "Auth" is the one OpenAuth runs on.`,
+      owner,
+    );
 
-    self.registerVersion({
-      new: _version,
-      old: $cli.state.version[name],
-      message: [
-        `There is a new version of "Auth" that has breaking changes.`,
-        ``,
-        `What changed:`,
-        `  - The latest version is now powered by OpenAuth - https://openauth.js.org`,
-        ``,
-        `To upgrade:`,
-        `  - Set \`forceUpgrade: "v${_version}"\` on the "Auth" component. Learn more https://sst-community.github.io/sst/docs/component/aws/auth#forceupgrade`,
-        ``,
-        `To continue using v${$cli.state.version[name]}:`,
-        `  - Rename "Auth" to "Auth.v${$cli.state.version[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
-      ].join("\n"),
-      forceUpgrade: args.forceUpgrade,
+    // The issuer is a function the auth server creates, with its table linked
+    // and a URL it's reached through
+    notAnExistingPart(
+      args.existing,
+      "issuer",
+      owner,
+      `Pass the handler or the function's args in "issuer": the auth server creates its function, links its table and gives it a URL.`,
+    );
+    // The router serves the issuer at the auth server's domain
+    notAnExistingPart(
+      args.existing,
+      "router",
+      owner,
+      `Its router serves the issuer at its "domain". To serve the issuer through a router you have, route that router to the issuer's URL: router.route("/", auth.url).`,
+    );
+    const domain = plain(
+      args.domain,
+      `The "domain" of the "${name}" auth server`,
+    );
+
+    const table = this.part("table", {
+      fields: { pk: "string", sk: "string" },
+      primaryIndex: { hashKey: "pk", rangeKey: "sk" },
+      ttl: "expiry",
     });
 
-    const table = createTable();
-    const issuer = createIssuer();
-    const router = createRouter();
+    const issuer = functionPart(this, "issuer", withUrl(issuerOf()), {
+      link: [table],
+      environment: {
+        OPENAUTH_STORAGE: jsonStringify({
+          type: "dynamo",
+          options: { table: table.name },
+        }),
+      },
+      _skipHint: true,
+    }).apply((fn) => fn.getFunction());
 
-    this._table = table;
-    this._issuer = issuer;
-    this._router = router;
-    registerOutputs();
+    const router = domain
+      ? this.part("router", { domain, _skipHint: true })
+      : undefined;
+    router?.route(
+      "/",
+      issuer.url.apply((url) => url!),
+    );
 
-    function registerOutputs() {
-      self.registerOutputs({
-        _hint: self.url,
-      });
+    this.issuerUrl =
+      router?.url ??
+      issuer.url.apply((url) => (url?.endsWith("/") ? url.slice(0, -1) : url));
+    this.report({ hint: this.issuerUrl });
+
+    // The issuer is a function the component creates: it's reached through
+    // its URL
+    function issuerOf() {
+      const issuer = plain(
+        args.issuer,
+        `The "issuer" of the "${name}" auth server`,
+      );
+      if (!issuer)
+        throw new VisibleError(
+          `The "${name}" auth server needs an "issuer": the handler of the function that runs OpenAuth, or the function's args.`,
+        );
+      if (typeof issuer === "string" && issuer.startsWith("arn:"))
+        throw new VisibleError(
+          `The "issuer" of the "${name}" auth server is the ARN of a function. Pass the handler or the function's args: the issuer is reached through the URL of a function the auth server creates.`,
+        );
+      return issuer;
     }
 
-    function createTable() {
-      return new Dynamo(
-        `${name}Storage`,
-        {
-          fields: { pk: "string", sk: "string" },
-          primaryIndex: { hashKey: "pk", rangeKey: "sk" },
-          ttl: "expiry",
+    // Through its URL, without CORS, whatever the function's own `url` says
+    function withUrl(issuer: string | FunctionArgs): FunctionArgs {
+      if (typeof issuer === "string")
+        return { handler: issuer, url: { cors: false } };
+      return {
+        ...issuer,
+        url: {
+          ...(typeof issuer.url === "object" ? issuer.url : {}),
+          cors: false,
         },
-        { parent: self },
-      );
-    }
-
-    function createIssuer() {
-      const fn = args.authorizer || args.issuer;
-      if (!fn) throw new Error("Auth: issuer field must be set");
-      return functionBuilder(
-        `${name}Issuer`,
-        fn,
-        {
-          link: [table],
-          environment: {
-            OPENAUTH_STORAGE: jsonStringify({
-              type: "dynamo",
-              options: { table: table.name },
-            }),
-          },
-          _skipHint: true,
-        },
-        (args) => {
-          args.url = {
-            ...(typeof args.url === "object" ? args.url : {}),
-            cors: false,
-          };
-        },
-        { parent: self },
-      ).apply((v) => v.getFunction());
-    }
-
-    function createRouter() {
-      if (!args.domain) return;
-
-      const router = new Router(
-        ...transform(
-          args.transform?.router,
-          `${name}Router`,
-          {
-            domain: args.domain,
-            _skipHint: true,
-          },
-          { parent: self },
-        ),
-      );
-      router.route(
-        "/",
-        issuer.url.apply((url) => url!),
-      );
-
-      return router;
+      };
     }
   }
 
   /**
    * The URL of the Auth component.
    *
-   * If the `domain` is set, this is the URL of the Router created for the custom domain.
-   * If the `issuer` function is linked to a custom domain, this is the URL of the issuer.
+   * If the `domain` is set, this is the URL with the custom domain.
    * Otherwise, it's the auto-generated function URL for the issuer.
    */
   public get url() {
-    return (
-      this._router?.url ??
-      this._issuer.url.apply((v) => (v?.endsWith("/") ? v.slice(0, -1) : v))
-    );
+    return this.issuerUrl;
   }
 
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The DynamoDB component.
-       */
-      table: this._table,
-      /**
-       * The Function component for the issuer.
-       */
-      issuer: this._issuer,
-      /**
-       * @deprecated Use `issuer` instead.
-       * The Function component for the issuer.
-       */
-      authorizer: this._issuer,
-      /**
-       * The Router component for the custom domain.
-       */
-      router: this._router,
-    };
-  }
-
-  /** @internal */
-  public getSSTLink() {
+  link() {
     return {
       properties: {
         url: this.url,
       },
       include: [
-        env({
-          OPENAUTH_ISSUER: this.url.apply((url) => url!),
-        }),
+        // What a linked function is given in its environment
+        {
+          type: "environment" as const,
+          env: { OPENAUTH_ISSUER: this.url.apply((url) => url!) },
+        },
       ],
     };
   }
 }
-
-const __pulumiType = "sst:aws:Auth";
-// @ts-expect-error
-Auth.__pulumiType = __pulumiType;

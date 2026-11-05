@@ -21,12 +21,12 @@ const resource = (name: string) =>
   pulumi.resources.find((r) => r.name === name)!;
 
 describe("Bus", () => {
-  let OriginalBus: typeof import("../../../src/components/aws/bus").Bus;
-  let Bus: typeof import("../../../src/components/aws/v5/bus").Bus;
+  let OriginalBus: typeof import("../../fixtures/v4/components/aws/bus").Bus;
+  let Bus: typeof import("../../../src/components/aws/bus").Bus;
 
   beforeAll(async () => {
-    OriginalBus = (await import("../../../src/components/aws/bus")).Bus;
-    Bus = (await import("../../../src/components/aws/v5/bus")).Bus;
+    OriginalBus = (await import("../../fixtures/v4/components/aws/bus")).Bus;
+    Bus = (await import("../../../src/components/aws/bus")).Bus;
     await import("../../../src/components/aws/takeover/bus");
     await import("../../../src/components/aws/takeover/function");
   });
@@ -299,9 +299,9 @@ describe("Bus", () => {
     const Static = Bus as any;
     expect(() =>
       Static.subscribe("Emailer", BUS_ARN, "src/email.handler"),
-    ).toThrow(/sst\.aws\.v5\.Bus\.get\("MyBus", busArn\)\.subscribe\(/);
+    ).toThrow(/sst\.aws\.Bus\.get\("MyBus", busArn\)\.subscribe\(/);
     expect(() => Static.subscribeQueue("Orders", BUS_ARN, QUEUE_ARN)).toThrow(
-      /sst\.aws\.v5\.Bus\.get\("MyBus", busArn\)\.subscribeQueue\(/,
+      /sst\.aws\.Bus\.get\("MyBus", busArn\)\.subscribeQueue\(/,
     );
   });
 

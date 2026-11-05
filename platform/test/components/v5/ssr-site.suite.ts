@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi, type TakeoverCase } from "../../helpers/graph";
+import { mockPulumi, type TakeoverCase, sidedClass } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
 // The tests every site with a server passes, the `Nextjs`, the `Astro` and
@@ -10,8 +10,9 @@ import { rejectionsOf } from "../../helpers/rejections";
 // with what's its own. Inside, the V5 component is called `Site` and its 4.x
 // form `OriginalSite` whatever the framework: the two have the same shape.
 
-type V5Class = typeof import("../../../src/components/aws/v5/astro").Astro;
-type OriginalClass = typeof import("../../../src/components/aws/astro").Astro;
+type V5Class = typeof import("../../../src/components/aws/astro").Astro;
+type OriginalClass =
+  typeof import("../../fixtures/v4/components/aws/astro").Astro;
 type AnyClass = V5Class | OriginalClass;
 type Changed = [name: string, fields: string[]][];
 
@@ -54,8 +55,8 @@ export interface SsrSiteContext {
   pulumi: ReturnType<typeof mockPulumi>;
   Site: () => V5Class;
   OriginalSite: () => OriginalClass;
-  Router: () => typeof import("../../../src/components/aws/v5/router").Router;
-  Bucket: () => typeof import("../../../src/components/aws/v5/bucket").Bucket;
+  Router: () => typeof import("../../../src/components/aws/router").Router;
+  Bucket: () => typeof import("../../../src/components/aws/bucket").Bucket;
   resource: (name: string) => any;
   names: () => string[];
   /** What every takeover case expects, with what's its own added. */
@@ -107,16 +108,24 @@ export function ssrSiteSuite(
   describe(c.name, () => {
     let Site: V5Class;
     let OriginalSite: OriginalClass;
-    let OriginalRouter: typeof import("../../../src/components/aws/router").Router;
-    let Router: typeof import("../../../src/components/aws/v5/router").Router;
-    let Bucket: typeof import("../../../src/components/aws/v5/bucket").Bucket;
+    let OriginalRouter: typeof import("../../fixtures/v4/components/aws/router").Router;
+    let Router: typeof import("../../../src/components/aws/router").Router;
+    let SidedRouter: any;
+    let Bucket: typeof import("../../../src/components/aws/bucket").Bucket;
 
     beforeAll(async () => {
       ({ original: OriginalSite, v5: Site } = await c.load());
-      OriginalRouter = (await import("../../../src/components/aws/router"))
+      OriginalRouter = (await import("../../fixtures/v4/components/aws/router"))
         .Router;
-      Router = (await import("../../../src/components/aws/v5/router")).Router;
-      Bucket = (await import("../../../src/components/aws/v5/bucket")).Bucket;
+      Router = (await import("../../../src/components/aws/router")).Router;
+      // SST 4's for SST 4's site, SST 5's for SST 5's
+      SidedRouter = await sidedClass(
+        "Router",
+        import("../../fixtures/v4/components/aws/router"),
+        import("../../../src/components/aws/router"),
+        import("../../../src/components/aws/takeover/router"),
+      );
+      Bucket = (await import("../../../src/components/aws/bucket")).Bucket;
       await import("../../../src/components/aws/takeover/index");
     });
 
@@ -174,9 +183,9 @@ export function ssrSiteSuite(
               new Site(S, { path: site, buildCommand: "true" }, opts),
             ...expected(),
           },
-          "behind a 4.x Router": {
+          "behind a Router": {
             create: (Site, opts) => {
-              const router = new OriginalRouter("Router");
+              const router = new SidedRouter("Router");
               return new Site(
                 S,
                 {
@@ -191,7 +200,7 @@ export function ssrSiteSuite(
           },
           "behind a V5 Router that signs, under a path": {
             create: (Site, opts) => {
-              const router = new Router("Router", { protection: "oac" });
+              const router = new SidedRouter("Router", { protection: "oac" });
               return new Site(
                 S,
                 {
@@ -427,7 +436,7 @@ export function ssrSiteSuite(
           },
           "in two regions behind a Router that signs": {
             create: (Site, opts) => {
-              const router = new Router("Router", { protection: "oac" });
+              const router = new SidedRouter("Router", { protection: "oac" });
               return new Site(
                 S,
                 {
@@ -566,9 +575,7 @@ export function ssrSiteSuite(
     });
 
     it("can be linked by a function", async () => {
-      const { Function } = await import(
-        "../../../src/components/aws/v5/function"
-      );
+      const { Function } = await import("../../../src/components/aws/function");
       const web = new Site(S, { path: site, buildCommand: "true" });
       new Function("Api", { handler: "src/api.handler", link: [web] });
       await pulumi.settle();

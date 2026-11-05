@@ -12,7 +12,7 @@ import { physicalName } from "../../naming";
 import type { OptionalPart } from "../../parts";
 import type { PartsBuilder } from "../../parts-component";
 import { RETENTION } from "../logging";
-import type { DnsValidatedCertificate } from "../v5/dns-validated-certificate";
+import type { DnsValidatedCertificate } from "../dns-validated-certificate";
 import { type DomainArgs, domainOf } from "./domain";
 import type { FunctionPart } from "./function-part";
 import { invokePermissionArgs } from "./function-permission";

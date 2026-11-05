@@ -68,9 +68,9 @@ ssrSiteSuite(
     name: "SvelteKit",
     site: "Web",
     load: async () => ({
-      original: (await import("../../../src/components/aws/svelte-kit"))
+      original: (await import("../../fixtures/v4/components/aws/svelte-kit"))
         .SvelteKit as any,
-      v5: (await import("../../../src/components/aws/v5/svelte-kit"))
+      v5: (await import("../../../src/components/aws/svelte-kit"))
         .SvelteKit as any,
     }),
     paths: { site, based, app },

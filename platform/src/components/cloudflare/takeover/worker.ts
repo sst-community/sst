@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { Worker } from "../v5/worker";
+import { Worker } from "../worker";
 
 // The 4.x `Worker` named each of the domain's aliases and redirects after its
 // place in the list. The V5 one keeps each by its domain.

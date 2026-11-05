@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { logicalName } from "../../naming";
-import { AppSync } from "../v5/app-sync";
+import { AppSync } from "../app-sync";
 import { childOf } from "./helpers";
 
 // The 4.x `AppSync` keeps each data source, AppSync function and resolver in a

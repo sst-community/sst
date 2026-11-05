@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { HttpsRedirect } from "../v5/https-redirect";
+import { HttpsRedirect } from "../https-redirect";
 
 // 4.x created the redirect's CloudFront function at the top of the app, with
 // no parent, so with the app's provider whatever the redirect's was. The V5

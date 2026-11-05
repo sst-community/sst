@@ -82,8 +82,8 @@ afterAll(() => fs.rmSync(app, { recursive: true, force: true }));
 
 describe("a Nextjs site in a new stage's preview", () => {
   it("is built without what isn't known, and plans everything a deploy creates", async () => {
-    const { Nextjs } = await import("../../../src/components/aws/v5/nextjs");
-    const { Queue } = await import("../../../src/components/aws/v5/queue");
+    const { Nextjs } = await import("../../../src/components/aws/nextjs");
+    const { Queue } = await import("../../../src/components/aws/queue");
     const { Linkable } = await import("../../../src/components/linkable");
     const jobs = new Queue("Jobs");
     // A link none of whose properties are known: they come from an output

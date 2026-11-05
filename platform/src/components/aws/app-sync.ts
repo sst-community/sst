@@ -1,21 +1,103 @@
 import fs from "fs/promises";
 import { ComponentResourceOptions, interpolate, output } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
-import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
-import { logicalName } from "../naming";
-import { VisibleError } from "../error";
-import { AppSyncDataSource } from "./app-sync-data-source";
-import { AppSyncResolver } from "./app-sync-resolver";
-import { AppSyncFunction } from "./app-sync-function";
-import { dns as awsDns } from "./dns.js";
-import { Dns } from "../dns";
-import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import { useProvider } from "./helpers/provider";
 import { appsync, iam } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import { notAnExistingPart, plain, withDefault } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import { Function } from "./function";
+import { parseDynamoArn } from "./helpers/arn";
+import { type DomainArgs, domainOf } from "./helpers/domain";
+import {
+  type FunctionInput,
+  type FunctionPart,
+  functionPart,
+  plainFunction,
+} from "./helpers/function-part";
+import { useProvider } from "./helpers/provider";
 
-export interface AppSyncArgs {
+const parts = () => ({
+  /**
+   * The Amazon AppSync GraphQL API.
+   */
+  api: appsync.GraphQLApi,
+  /**
+   * The certificate for the custom domain, created when `domain` is set
+   * without a `cert`.
+   */
+  certificate: optional(DnsValidatedCertificate),
+  /**
+   * The AppSync custom domain name, when `domain` is set.
+   */
+  domainName: optional(appsync.DomainName),
+  /**
+   * The association between the custom domain name and the API.
+   */
+  domainAssociation: optional(appsync.DomainNameApiAssociation),
+  /**
+   * The API's data sources, by data source name.
+   */
+  dataSource: many(appsync.DataSource),
+  /**
+   * The function behind each Lambda data source, by data source name.
+   */
+  dataSourceFunction: many(deferred(Function)),
+  /**
+   * The IAM role AppSync assumes to reach each data source, by data source
+   * name. HTTP, RDS and empty data sources don't have one.
+   */
+  serviceRole: many(iam.Role),
+  /**
+   * The API's AppSync functions, by function name.
+   */
+  function: many(appsync.Function),
+  /**
+   * The API's resolvers, by operation, like `Query user`.
+   */
+  resolver: many(appsync.Resolver),
+});
+
+export interface AppSyncDomainArgs extends DomainArgs {
+  /**
+   * The ARN of an ACM (AWS Certificate Manager) certificate that proves ownership of the
+   * domain. By default, a certificate is created and validated automatically.
+   *
+   * AppSync takes its certificate from the `us-east-1` region. The one that's created for
+   * you is created there, and one you pass in has to be there too.
+   *
+   * :::tip
+   * You need to pass in a `cert` for domains that are not hosted on supported `dns` providers.
+   * :::
+   *
+   * To manually set up a domain on an unsupported provider, you'll need to:
+   *
+   * 1. [Validate that you own the domain](https://docs.aws.amazon.com/acm/latest/userguide/domain-ownership-validation.html) by creating an ACM certificate. You can either validate it by setting a DNS record or by verifying an email sent to the domain owner.
+   * 2. Once validated, set the certificate ARN as the `cert` and set `dns` to `false`.
+   * 3. Add the DNS records in your provider to point to the AppSync domain.
+   *
+   * @example
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com",
+   *     dns: false,
+   *     cert: "arn:aws:acm:us-east-1:112233445566:certificate/3a958790-8878-4cdc-a396-06d95064cf63"
+   *   }
+   * }
+   * ```
+   */
+  cert?: Input<string>;
+}
+
+export interface AppSyncArgs extends ComponentArgs<typeof parts> {
   /**
    * Path to the GraphQL schema file. This path is relative to your `sst.config.ts`.
    * @example
@@ -32,6 +114,9 @@ export interface AppSyncArgs {
    * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
    * providers, you'll need to pass in a `cert` that validates domain ownership and add the
    * DNS records.
+   *
+   * The domain has to be a plain value, and so do its `name` and `dns`: they decide the
+   * certificate and the DNS records.
    *
    * :::tip
    * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
@@ -59,126 +144,7 @@ export interface AppSyncArgs {
    * }
    * ```
    */
-  domain?: Input<
-    | string
-    | {
-        /**
-         * The custom domain you want to use.
-         *
-         * @example
-         * ```js
-         * {
-         *   domain: {
-         *     name: "example.com"
-         *   }
-         * }
-         * ```
-         *
-         * Can also include subdomains based on the current stage.
-         *
-         * ```js
-         * {
-         *   domain: {
-         *     name: `${$app.stage}.example.com`
-         *   }
-         * }
-         * ```
-         */
-        name: Input<string>;
-        /**
-         * The ARN of an ACM (AWS Certificate Manager) certificate that proves ownership of the
-         * domain. By default, a certificate is created and validated automatically.
-         *
-         * The certificate will be created in the `us-east-1` region as required by AWS AppSync.
-         * If you are creating your own certificate, you must also create it in `us-east-1`.
-         *
-         * :::tip
-         * You need to pass in a `cert` for domains that are not hosted on supported `dns` providers.
-         * :::
-         *
-         * To manually set up a domain on an unsupported provider, you'll need to:
-         *
-         * 1. [Validate that you own the domain](https://docs.aws.amazon.com/acm/latest/userguide/domain-ownership-validation.html) by creating an ACM certificate. You can either validate it by setting a DNS record or by verifying an email sent to the domain owner.
-         * 2. Once validated, set the certificate ARN as the `cert` and set `dns` to `false`.
-         * 3. Add the DNS records in your provider to point to the API Gateway URL.
-         *
-         * @example
-         * ```js
-         * {
-         *   domain: {
-         *     name: "example.com",
-         *     dns: false,
-         *     cert: "arn:aws:acm:us-east-1:112233445566:certificate/3a958790-8878-4cdc-a396-06d95064cf63"
-         *   }
-         * }
-         * ```
-         */
-        cert?: Input<string>;
-        /**
-         * The DNS provider to use for the domain. Defaults to the AWS.
-         *
-         * Takes an adapter that can create the DNS records on the provider. This can automate
-         * validating the domain and setting up the DNS routing.
-         *
-         * Supports Route 53, Cloudflare, and Vercel adapters. For other providers, you'll need
-         * to set `dns` to `false` and pass in a certificate validating ownership via `cert`.
-         *
-         * @default `sst.aws.dns`
-         *
-         * @example
-         *
-         * Specify the hosted zone ID for the Route 53 domain.
-         *
-         * ```js
-         * {
-         *   domain: {
-         *     name: "example.com",
-         *     dns: sst.aws.dns({
-         *       zone: "Z2FDTNDATAQYW2"
-         *     })
-         *   }
-         * }
-         * ```
-         *
-         * Use a domain hosted on Cloudflare, needs the Cloudflare provider.
-         *
-         * ```js
-         * {
-         *   domain: {
-         *     name: "example.com",
-         *     dns: sst.cloudflare.dns()
-         *   }
-         * }
-         * ```
-         *
-         * Use a domain hosted on Vercel, needs the Vercel provider.
-         *
-         * ```js
-         * {
-         *   domain: {
-         *     name: "example.com",
-         *     dns: sst.vercel.dns()
-         *   }
-         * }
-         * ```
-         */
-        dns?: Input<false | (Dns & {})>;
-      }
-  >;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the AppSync GraphQL API resource.
-     */
-    api?: Transform<appsync.GraphQLApiArgs>;
-    /**
-     * Transform the AppSync domain name resource.
-     */
-    domainName?: Transform<appsync.DomainNameArgs>;
-  };
+  domain?: string | Prettify<AppSyncDomainArgs>;
 }
 
 export interface AppSyncDataSourceArgs {
@@ -193,7 +159,8 @@ export interface AppSyncDataSourceArgs {
    */
   name: string;
   /**
-   * The handler for the Lambda function.
+   * The function behind a Lambda data source: its handler or its args, which are plain
+   * values, or a function you already have, or its ARN.
    * @example
    * ```js
    * {
@@ -220,7 +187,7 @@ export interface AppSyncDataSourceArgs {
    * }
    * ```
    */
-  lambda?: Input<string | FunctionArgs | FunctionArn>;
+  lambda?: FunctionInput;
   /**
    * The ARN for the DynamoDB table.
    * @example
@@ -293,20 +260,6 @@ export interface AppSyncDataSourceArgs {
      */
     credentials: Input<string>;
   }>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the AppSync DataSource resource.
-     */
-    dataSource?: Transform<appsync.DataSourceArgs>;
-    /**
-     * Transform the AppSync DataSource service role resource.
-     */
-    serviceRole?: Transform<iam.RoleArgs>;
-  };
 }
 
 export interface AppSyncResolverArgs {
@@ -336,7 +289,7 @@ export interface AppSyncResolverArgs {
    * @example
    * ```js
    * {
-   *  functions: ["myFunction1", "myFunction2"]
+   *   functions: ["myFunction1", "myFunction2"]
    * }
    * ```
    */
@@ -378,16 +331,6 @@ export interface AppSyncResolverArgs {
    * ```
    */
   responseTemplate?: Input<string>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the AppSync Resolver resource.
-     */
-    resolver?: Transform<appsync.ResolverArgs>;
-  };
 }
 
 export interface AppSyncFunctionArgs {
@@ -402,7 +345,7 @@ export interface AppSyncFunctionArgs {
    */
   name: string;
   /**
-   * The data source this resolver is using.
+   * The data source this function is using.
    * @example
    * ```js
    * {
@@ -426,7 +369,7 @@ export interface AppSyncFunctionArgs {
    * @example
    * ```js
    * {
-   *   requestTemplate: `{
+   *   requestMappingTemplate: `{
    *     "version": "2018-05-29",
    *     "operation": "Scan",
    *   }`,
@@ -439,27 +382,21 @@ export interface AppSyncFunctionArgs {
    * @example
    * ```js
    * {
-   *   responseTemplate: `{
+   *   responseMappingTemplate: `{
    *     "users": $utils.toJson($context.result.items)
    *   }`,
    * }
    * ```
    */
   responseMappingTemplate?: Input<string>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the AppSync Function resource.
-     */
-    function?: Transform<appsync.FunctionArgs>;
-  };
 }
 
 /**
  * The `AppSync` component lets you add an [Amazon AppSync GraphQL API](https://docs.aws.amazon.com/appsync/latest/devguide/what-is-appsync.html) to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have. That includes the resources of each
+ * data source, function and resolver.
  *
  * @example
  *
@@ -467,7 +404,7 @@ export interface AppSyncFunctionArgs {
  *
  * ```ts title="sst.config.ts"
  * const api = new sst.aws.AppSync("MyApi", {
- *   schema: "schema.graphql",
+ *   schema: "schema.graphql"
  * });
  * ```
  *
@@ -476,7 +413,7 @@ export interface AppSyncFunctionArgs {
  * ```ts title="sst.config.ts"
  * const lambdaDS = api.addDataSource({
  *   name: "lambdaDS",
- *   lambda: "src/lambda.handler",
+ *   lambda: "src/lambda.handler"
  * });
  * ```
  *
@@ -484,176 +421,208 @@ export interface AppSyncFunctionArgs {
  *
  * ```ts title="sst.config.ts"
  * api.addResolver("Query user", {
- *   dataSource: lambdaDS.name,
+ *   dataSource: lambdaDS.name
  * });
  * ```
+ *
+ * #### Add a pipeline resolver
+ *
+ * ```ts title="sst.config.ts"
+ * api.addFunction({
+ *   name: "getUser",
+ *   dataSource: "lambdaDS"
+ * });
+ * api.addResolver("Query user", {
+ *   kind: "pipeline",
+ *   functions: ["getUser"],
+ *   code: `
+ *     export function request(ctx) { return {}; }
+ *     export function response(ctx) { return ctx.prev.result; }
+ *   `
+ * });
+ * ```
+ *
+ * #### Add a custom domain
+ *
+ * ```js {3} title="sst.config.ts"
+ * new sst.aws.AppSync("MyApi", {
+ *   schema: "schema.graphql",
+ *   domain: "api.example.com"
+ * });
+ * ```
+ *
+ * #### Default props for all data sources
+ *
+ * Use the `transform` to change every data source, its function or its role. An object is
+ * merged into each one.
+ *
+ * ```ts title="sst.config.ts" {4}
+ * const api = new sst.aws.AppSync("MyApi", {
+ *   schema: "schema.graphql",
+ *   transform: {
+ *     dataSourceFunction: { memory: "2048 MB" }
+ *   }
+ * });
+ * ```
+ *
+ * A function is also given the data source's name, so it can change one of them. The same
+ * goes for `function`, by function name, and `resolver`, by operation.
+ *
+ * ```ts title="sst.config.ts"
+ * const api = new sst.aws.AppSync("MyApi", {
+ *   schema: "schema.graphql",
+ *   transform: {
+ *     dataSourceFunction: (args, opts, name, dataSource) => {
+ *       if (dataSource === "lambdaDS") args.timeout = "60 seconds";
+ *     }
+ *   }
+ * });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.AppSync`
+ *
+ * Keep the name, and `sst migrate` moves it. The API, its data
+ * sources, their roles and functions, its AppSync functions, its resolvers and its custom
+ * domain are kept.
+ *
+ * A few things work differently:
+ *
+ * - `addDataSource` returns the AppSync data source and `addFunction` the AppSync function,
+ *   so `lambdaDS.name` reads the same. Their other resources are in the API's `nodes`, by
+ *   name: `lambdaDS.nodes.function` becomes `api.nodes.dataSourceFunction.lambdaDS`.
+ *   `addResolver` returns the API, so calls chain, and the resolver is
+ *   `api.nodes.resolver["Query user"]`.
+ * - The `transform` of a data source, function or resolver becomes the API's `transform`
+ *   for `dataSource`, `serviceRole`, `dataSourceFunction`, `function` and `resolver`.
+ * - `domain`, with its `name` and `dns`, has to be a plain value, not an output. So does a
+ *   Lambda data source's handler or function args: they decide whether a function is
+ *   created. A function you already have, or its ARN, can still be an output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domain they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - What a data source, an AppSync function, a resolver or a custom domain creates is
+ *   created inside the API, with the provider the API has. `sst.aws.AppSync` created it
+ *   beside the API: a Lambda data source's function and the domain's association with
+ *   your app's provider, and the rest with only a `provider` passed to the API itself. The
+ *   switch gives each of them the API's provider and keeps them, with the provider's
+ *   default tags.
+ * - `nodes` has every resource, the certificate included.
  */
-export class AppSync extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorOpts: ComponentResourceOptions;
-  private api: appsync.GraphQLApi;
-  private domainName?: appsync.DomainName;
-
+export class AppSync extends component("sst:aws:AppSync", parts) {
   constructor(
     name: string,
     args: AppSyncArgs,
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    const parent = this;
-
-    const domain = normalizeDomain();
-
-    const schema = loadSchema();
-    const api = createGraphQLApi();
-    const certificateArn = createSsl();
-    const domainName = createDomainName();
-    createDnsRecords();
-
-    this.constructorName = name;
-    this.constructorOpts = opts;
-    this.api = api;
-    this.domainName = domainName;
-
-    this.registerOutputs({ _hint: this.url });
-
-    function normalizeDomain() {
-      if (!args.domain) return;
-
-      // validate
-      output(args.domain).apply((domain) => {
-        if (typeof domain === "string") return;
-
-        if (!domain.name) throw new Error(`Missing "name" for domain.`);
-        if (domain.dns === false && !domain.cert)
-          throw new Error(
-            `Need to provide a validated certificate via "cert" when DNS is disabled`,
-          );
-      });
-
-      // normalize
-      return output(args.domain).apply((domain) => {
-        const norm = typeof domain === "string" ? { name: domain } : domain;
-
-        return {
-          name: norm.name,
-          dns: norm.dns === false ? undefined : norm.dns ?? awsDns(),
-          cert: norm.cert,
-        };
-      });
-    }
-
-    function loadSchema() {
-      return output(args.schema).apply(async (schema) =>
+    const api = this.part("api", {
+      schema: output(args.schema).apply((schema) =>
         fs.readFile(schema, { encoding: "utf-8" }),
+      ),
+      authenticationType: "API_KEY",
+    });
+
+    const owner = `the "${name}" API`;
+    const existingDomainName = this.existingPart("domainName");
+    const domain = plain(args.domain, `The "domain" of ${owner}`);
+    if (existingDomainName && domain)
+      throw new VisibleError(
+        `The "${name}" API is given an existing "domainName", so it doesn't create one. Remove its "domain".`,
       );
-    }
-
-    function createGraphQLApi() {
-      return new appsync.GraphQLApi(
-        ...transform(
-          args.transform?.api,
-          `${name}Api`,
-          {
-            schema,
-            authenticationType: "API_KEY",
-          },
-          { parent },
-        ),
+    // What's only used with a custom domain: its certificate, when the API
+    // creates the domain name without a `cert`, and its association
+    if (!domain || (typeof domain !== "string" && domain.cert))
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        owner,
+        `It's the certificate of a custom domain the API creates: give "domain" a "name" and no "cert".`,
       );
-    }
-
-    function createSsl() {
-      if (!domain) return;
-
-      return domain.apply((domain) => {
-        if (domain.cert) return output(domain.cert);
-
-        // Certificates used for AppSync are required to be created in the us-east-1 region
-        return new DnsValidatedCertificate(
-          `${name}Ssl`,
-          {
-            domainName: domain.name,
-            dns: domain.dns!,
-          },
-          { parent, provider: useProvider("us-east-1") },
-        ).arn;
-      });
-    }
-
-    function createDomainName() {
-      if (!domain || !certificateArn) return;
-
-      const domainName = new appsync.DomainName(
-        ...transform(
-          args.transform?.domainName,
-          `${name}DomainName`,
-          {
-            domainName: domain?.name,
-            certificateArn,
-          },
-          { parent },
-        ),
+    if (!domain && !existingDomainName)
+      notAnExistingPart(
+        args.existing,
+        "domainAssociation",
+        owner,
+        `It associates the API with a custom domain: give the API a "domain", or a domain name in "existing.domainName".`,
       );
 
-      new appsync.DomainNameApiAssociation(`${name}DomainAssociation`, {
+    const domainName =
+      existingDomainName ?? (domain && this.createDomainName(domain));
+    if (domainName)
+      this.part("domainAssociation", {
         apiId: api.id,
         domainName: domainName.domainName,
       });
 
-      return domainName;
-    }
+    this.report({ hint: this.url });
+  }
 
-    function createDnsRecords() {
-      if (!domain || !domainName) return;
+  // The custom domain: its certificate, the domain name, and the DNS records
+  // that point at it.
+  private createDomainName(args: string | AppSyncDomainArgs) {
+    const name = this.componentName;
+    const domain = domainOf(args, `the "${name}" API`);
 
-      domain.apply((domain) => {
-        if (!domain.dns) return;
-
-        domain.dns.createAlias(
-          name,
-          {
-            name: domain.name,
-            aliasName: domainName.appsyncDomainName,
-            aliasZone: domainName.hostedZoneId,
-          },
-          { parent },
-        );
-      });
-    }
+    // AppSync takes its certificate from us-east-1, whatever region the API
+    // is in.
+    const certificateArn =
+      domain.cert ??
+      this.part(
+        "certificate",
+        { domainName: domain.name, dns: domain.dns! },
+        { provider: useProvider("us-east-1") },
+      ).arn;
+    const domainName = this.part("domainName", {
+      domainName: domain.name,
+      certificateArn,
+    });
+    domain.dns?.alias(
+      name,
+      {
+        name: domain.name,
+        aliasName: domainName.appsyncDomainName,
+        aliasZone: domainName.hostedZoneId,
+      },
+      this.delegateOpts(),
+    );
+    return domainName;
   }
 
   /**
    * The GraphQL API ID.
    */
   public get id() {
-    return this.api.id;
+    return this.nodes.api.id;
   }
 
   /**
    * The URL of the GraphQL API.
+   *
+   * If the `domain` is set, this is the URL with the custom domain.
+   * Otherwise, it's the auto-generated AppSync URL.
    */
   public get url() {
-    return this.domainName
-      ? interpolate`https://${this.domainName.domainName}/graphql`
-      : this.api.uris["GRAPHQL"];
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon AppSync GraphQL API.
-       */
-      api: this.api,
-    };
+    const { api, domainName } = this.nodes;
+    return domainName
+      ? interpolate`https://${domainName.domainName}/graphql`
+      : api.uris["GRAPHQL"];
   }
 
   /**
    * Add a data source to this AppSync API.
+   *
+   * Returns the AppSync data source. Its `name` is what a resolver or a
+   * function takes as its `dataSource`.
    *
    * @param args Configure the data source.
    *
@@ -686,7 +655,7 @@ export class AppSync extends Component implements Link.Linkable {
    * api.addDataSource({
    *   name: "lambdaDS",
    *   lambda: "arn:aws:lambda:us-east-1:123456789012:function:my-function"
-   * })
+   * });
    * ```
    *
    * Add a DynamoDB table as a data source.
@@ -695,27 +664,83 @@ export class AppSync extends Component implements Link.Linkable {
    * api.addDataSource({
    *   name: "dynamoDS",
    *   dynamodb: "arn:aws:dynamodb:us-east-1:123456789012:table/my-table"
-   * })
+   * });
+   * ```
+   *
+   * The data source's resources are in the API's `nodes`, by name.
+   *
+   * ```js title="sst.config.ts"
+   * api.nodes.dataSourceFunction.lambdaDS;
+   * api.nodes.serviceRole.dynamoDS;
    * ```
    */
   public addDataSource(args: AppSyncDataSourceArgs) {
-    const self = this;
-    const selfName = this.constructorName;
-    const nameSuffix = logicalName(args.name);
+    const { name } = args;
+    this.assertNew("data source", "dataSource", name, args, [
+      "dataSource",
+      "serviceRole",
+      "dataSourceFunction",
+    ]);
+    const given = SOURCES.filter((kind) => args[kind]);
+    if (given.length > 1)
+      throw new VisibleError(
+        `The "${name}" data source of the "${
+          this.componentName
+        }" API is given ${given
+          .map((kind) => `"${kind}"`)
+          .join(" and ")}. A data source has one source.`,
+      );
 
-    return new AppSyncDataSource(
-      `${selfName}DataSource${nameSuffix}`,
-      {
-        apiId: self.api.id,
-        apiComponentName: selfName,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider },
-    );
+    const fn = args.lambda
+      ? functionPart(
+          this,
+          "dataSourceFunction",
+          name,
+          plainFunction(
+            args.lambda,
+            `The "lambda" of the "${name}" data source of the "${this.componentName}" API`,
+          ),
+          { description: `${this.componentName} data source` },
+        )
+      : undefined;
+    const source = sourceOf(args, fn);
+
+    const serviceRole =
+      source.access &&
+      this.part("serviceRole", name, {
+        assumeRolePolicy: iam.getPolicyDocumentOutput({
+          statements: [
+            {
+              actions: ["sts:AssumeRole"],
+              principals: [
+                { type: "Service", identifiers: ["appsync.amazonaws.com"] },
+              ],
+            },
+          ],
+        }).json,
+        inlinePolicies: [
+          {
+            name: "inline",
+            policy: iam.getPolicyDocumentOutput({
+              statements: [source.access],
+            }).json,
+          },
+        ],
+      });
+
+    return this.part("dataSource", name, {
+      apiId: this.nodes.api.id,
+      type: source.type,
+      name,
+      serviceRoleArn: serviceRole?.arn,
+      ...source.config,
+    });
   }
 
   /**
-   * Add a function to this AppSync API.
+   * Add a function to this AppSync API, for use in pipeline resolvers.
+   *
+   * Returns the AppSync function.
    *
    * @param args Configure the function.
    *
@@ -726,39 +751,39 @@ export class AppSync extends Component implements Link.Linkable {
    * ```js title="sst.config.ts"
    * api.addFunction({
    *   name: "myFunction",
-   *   dataSource: "lambdaDS",
+   *   dataSource: "lambdaDS"
    * });
    * ```
    *
    * Add a function using a DynamoDB data source.
    *
    * ```js title="sst.config.ts"
-   * api.addResolver("Query user", {
+   * api.addFunction({
    *   name: "myFunction",
    *   dataSource: "dynamoDS",
-   *   requestTemplate: `{
-   *     "version": "2017-02-28",
-   *     "operation": "Scan",
+   *   requestMappingTemplate: `{
+   *     "version": "2018-05-29",
+   *     "operation": "Scan"
    *   }`,
-   *   responseTemplate: `{
+   *   responseMappingTemplate: `{
    *     "users": $utils.toJson($context.result.items)
-   *   }`,
+   *   }`
    * });
    * ```
    */
   public addFunction(args: AppSyncFunctionArgs) {
-    const self = this;
-    const selfName = this.constructorName;
-    const nameSuffix = logicalName(args.name);
+    const { name } = args;
+    this.assertNew("function", "function", name, args);
 
-    return new AppSyncFunction(
-      `${selfName}Function${nameSuffix}`,
-      {
-        apiId: self.api.id,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider },
-    );
+    return this.part("function", name, {
+      apiId: this.nodes.api.id,
+      name,
+      dataSource: this.dataSourceName(args.dataSource),
+      requestMappingTemplate: args.requestMappingTemplate,
+      responseMappingTemplate: args.responseMappingTemplate,
+      code: args.code,
+      runtime: args.code ? APPSYNC_JS : undefined,
+    });
   }
 
   /**
@@ -773,7 +798,7 @@ export class AppSync extends Component implements Link.Linkable {
    *
    * ```js title="sst.config.ts"
    * api.addResolver("Query user", {
-   *   dataSource: "lambdaDS",
+   *   dataSource: "lambdaDS"
    * });
    * ```
    *
@@ -784,22 +809,21 @@ export class AppSync extends Component implements Link.Linkable {
    *   dataSource: "dynamoDS",
    *   requestTemplate: `{
    *     "version": "2017-02-28",
-   *     "operation": "Scan",
+   *     "operation": "Scan"
    *   }`,
    *   responseTemplate: `{
    *     "users": $utils.toJson($context.result.items)
-   *   }`,
+   *   }`
    * });
    * ```
    *
-   * Add a pipeline resolver.
+   * Add a pipeline resolver. Its `functions` are the names of functions added
+   * with `addFunction`, or the ids of AppSync functions.
    *
    * ```js title="sst.config.ts"
    * api.addResolver("Query user", {
-   *   functions: [
-   *     "MyFunction1",
-   *     "MyFunction2"
-   *   ]
+   *   kind: "pipeline",
+   *   functions: ["myFunction1", "myFunction2"],
    *   code: `
    *     export function request(ctx) {
    *       return {};
@@ -807,43 +831,155 @@ export class AppSync extends Component implements Link.Linkable {
    *     export function response(ctx) {
    *       return ctx.result;
    *     }
-   *   `,
+   *   `
    * });
    * ```
+   *
+   * The resolver is in the API's `nodes`, by operation.
+   *
+   * ```js title="sst.config.ts"
+   * api.nodes.resolver["Query user"];
+   * ```
    */
-  public addResolver(operation: string, args: AppSyncResolverArgs) {
-    const self = this;
-    const selfName = this.constructorName;
+  public addResolver(operation: string, args: AppSyncResolverArgs = {}) {
+    const [type, field, ...rest] = operation.trim().split(/\s+/);
+    if (!type || !field || rest.length > 0)
+      throw new VisibleError(
+        `The "${operation}" resolver of the "${this.componentName}" API isn't a type and a field. Write it like "Query user".`,
+      );
+    const id = `${type} ${field}`;
+    this.assertNew("resolver", "resolver", id, args);
 
-    // Parse field and type
-    const parts = operation.trim().split(/\s+/);
-    if (parts.length !== 2)
-      throw new VisibleError(`Invalid resolver ${operation}`);
-    const [type, field] = parts;
+    this.part("resolver", id, {
+      apiId: this.nodes.api.id,
+      kind: withDefault(args.kind, "unit", (kind) => {
+        if (kind === "unit" && args.functions)
+          throw new VisibleError(
+            `The "${id}" resolver of the "${this.componentName}" API is a "unit" resolver, which takes no "functions". Give it a "dataSource", or make it a "pipeline" resolver.`,
+          );
+        if (kind === "pipeline" && args.dataSource)
+          throw new VisibleError(
+            `The "${id}" resolver of the "${this.componentName}" API is a "pipeline" resolver, which takes no "dataSource". Give its "functions" their data sources.`,
+          );
+        return kind.toUpperCase();
+      }),
+      type,
+      field,
+      dataSource: this.dataSourceName(args.dataSource),
+      requestTemplate: args.requestTemplate,
+      responseTemplate: args.responseTemplate,
+      code: args.code,
+      runtime: args.code ? APPSYNC_JS : undefined,
+      pipelineConfig: args.functions
+        ? { functions: this.functionIds(args.functions) }
+        : undefined,
+    });
 
-    const nameSuffix = `${logicalName(type)}` + `${logicalName(field)}`;
-    return new AppSyncResolver(
-      `${selfName}Resolver${nameSuffix}`,
-      {
-        apiId: self.api.id,
-        type,
-        field,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider },
+    return this;
+  }
+
+  // A data source's name, read off the data source when it's one of this
+  // API's, so that what uses it is created after it.
+  private dataSourceName<T extends Input<string> | undefined>(name: T) {
+    const dataSources = this.nodes.dataSource;
+    return typeof name === "string" && name in dataSources
+      ? dataSources[name].name
+      : name;
+  }
+
+  // The ids of a pipeline's functions. One of this API's functions can be
+  // given by its name.
+  private functionIds(functions: Input<Input<string>[]>) {
+    if (!Array.isArray(functions)) return functions;
+    const added = this.nodes.function;
+    return functions.map((fn) =>
+      typeof fn === "string" && fn in added ? added[fn].functionId : fn,
     );
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking an API gives the linked resource its URL.
+   */
+  public link() {
     return {
-      properties: {
-        url: this.url,
-      },
+      properties: { url: this.url },
     };
   }
 }
 
-const __pulumiType = "sst:aws:AppSync";
-// @ts-expect-error
-AppSync.__pulumiType = __pulumiType;
+const APPSYNC_JS = { name: "APPSYNC_JS", runtimeVersion: "1.0.0" };
+
+// What a data source can be backed by. It has one of them, or none.
+const SOURCES = [
+  "lambda",
+  "dynamodb",
+  "elasticSearch",
+  "eventBridge",
+  "http",
+  "openSearch",
+  "rds",
+] as const;
+
+// What a data source is backed by, in the terms AppSync takes: its type, its
+// settings, and what its service role has to be allowed to do. A source
+// without `access` needs no role.
+function sourceOf(
+  args: AppSyncDataSourceArgs,
+  fn: FunctionPart | undefined,
+): {
+  type: string;
+  access?: { actions: string[]; resources: Input<string>[] };
+  config: Partial<appsync.DataSourceArgs>;
+} {
+  if (fn)
+    return {
+      type: "AWS_LAMBDA",
+      access: { actions: ["lambda:*"], resources: [fn.targetArn] },
+      config: { lambdaConfig: { functionArn: fn.targetArn } },
+    };
+  if (args.dynamodb)
+    return {
+      type: "AMAZON_DYNAMODB",
+      access: { actions: ["dynamodb:*"], resources: [args.dynamodb] },
+      config: {
+        dynamodbConfig: {
+          tableName: output(args.dynamodb).apply(
+            (arn) => parseDynamoArn(arn).tableName,
+          ),
+        },
+      },
+    };
+  if (args.elasticSearch)
+    return {
+      type: "AMAZON_ELASTICSEARCH",
+      access: { actions: ["es:*"], resources: [args.elasticSearch] },
+      config: { elasticsearchConfig: { endpoint: args.elasticSearch } },
+    };
+  if (args.eventBridge)
+    return {
+      type: "AMAZON_EVENTBRIDGE",
+      access: { actions: ["events:*"], resources: [args.eventBridge] },
+      config: { eventBridgeConfig: { eventBusArn: args.eventBridge } },
+    };
+  if (args.http)
+    return { type: "HTTP", config: { httpConfig: { endpoint: args.http } } };
+  if (args.openSearch)
+    return {
+      type: "AMAZON_OPENSEARCH_SERVICE",
+      access: { actions: ["opensearch:*"], resources: [args.openSearch] },
+      config: { opensearchserviceConfig: { endpoint: args.openSearch } },
+    };
+  if (args.rds)
+    return {
+      type: "RELATIONAL_DATABASE",
+      config: {
+        relationalDatabaseConfig: {
+          httpEndpointConfig: {
+            dbClusterIdentifier: output(args.rds).cluster,
+            awsSecretStoreArn: output(args.rds).credentials,
+          },
+        },
+      },
+    };
+  return { type: "NONE", config: {} };
+}

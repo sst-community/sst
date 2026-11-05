@@ -93,7 +93,7 @@ export interface Runtime extends Readonly<RuntimeSettings> {
  *   watch: ["*.rb", "lib/**", "Gemfile.lock"],
  * });
  *
- * new sst.aws.v5.Function("Api", {
+ * new sst.aws.Function("Api", {
  *   runtime: ruby,
  *   handler: "functions/ruby/app.handler",
  * });

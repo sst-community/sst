@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { childOf } from "../../aws/takeover/helpers";
-import { Queue } from "../v5/queue";
+import { Queue } from "../queue";
 
 // The 4.x `Queue` keeps its consumer in a component of its own, a
 // `QueueWorkerSubscriber` named after the queue, at the top of the app. The

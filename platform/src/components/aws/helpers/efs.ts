@@ -1,14 +1,12 @@
-import { Efs as OriginalEfs } from "../efs";
-import { Efs } from "../v5/efs";
+import { Efs } from "../efs";
 
 /**
- * An `Efs` component: the 4.x one or the V5 one. Every V5 component that
- * mounts a file system takes either, and reads its `nodes.accessPoint`, which
- * the two give alike.
+ * An `Efs` component. Every component that mounts a file system reads its
+ * `nodes.accessPoint`.
  */
-export type AnyEfs = OriginalEfs | Efs;
+export type AnyEfs = Efs;
 
 /** Whether a `volume.efs` arg is an `Efs` component, and not an access point's ARN. */
 export function isEfs(value: unknown): value is AnyEfs {
-  return value instanceof OriginalEfs || value instanceof Efs;
+  return value instanceof Efs;
 }

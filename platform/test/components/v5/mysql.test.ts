@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
 import { rdsInstanceSuite } from "./rds-instance.suite";
 
-type V5Postgres = typeof import("../../../src/components/aws/v5/postgres").Postgres;
-type OriginalPostgres = typeof import("../../../src/components/aws/postgres").Postgres;
+type V5Postgres = typeof import("../../../src/components/aws/postgres").Postgres;
+type OriginalPostgres = typeof import("../../fixtures/v4/components/aws/postgres").Postgres;
 
 // What every database on an RDS instance passes, with MySQL's values
 rdsInstanceSuite(
@@ -15,9 +15,9 @@ rdsInstanceSuite(
       await import("../../../src/components/aws/takeover/mysql");
       return {
         // The same shape as the `Postgres` the suite is written with
-        original: (await import("../../../src/components/aws/mysql"))
+        original: (await import("../../fixtures/v4/components/aws/mysql"))
           .Mysql as unknown as OriginalPostgres,
-        v5: (await import("../../../src/components/aws/v5/mysql"))
+        v5: (await import("../../../src/components/aws/mysql"))
           .Mysql as unknown as V5Postgres,
       };
     },

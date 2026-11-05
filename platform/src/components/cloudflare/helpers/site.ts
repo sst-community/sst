@@ -8,7 +8,7 @@ import {
   URL_UNAVAILABLE,
   refreshing,
 } from "../../aws/helpers/site";
-import type { Worker, WorkerArgs } from "../v5/worker";
+import type { Worker, WorkerArgs } from "../worker";
 
 // What every Cloudflare site shares, with a server or without: the sites
 // with a server (`ssr-site.ts`) and the `StaticSite`. Each is served by a

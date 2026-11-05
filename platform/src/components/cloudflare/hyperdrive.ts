@@ -1,30 +1,22 @@
-import { ComponentResourceOptions, Input, output } from "@pulumi/pulumi";
-import * as cloudflare from "@pulumi/cloudflare";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
+import { type ComponentResourceOptions, output, secret } from "@pulumi/pulumi";
+import * as cf from "@pulumi/cloudflare";
+import { type ComponentArgs, component } from "../parts-component";
+import { getArgs, usedAsItIs } from "../args";
+import type { Input } from "../input";
+import { type DurationHours, toSeconds } from "../duration";
 import { binding } from "./binding";
 import { DEFAULT_ACCOUNT_ID } from "./account-id";
-import { DurationHours, toSeconds } from "../duration";
+import { ownId, useExisting } from "./helpers/lookup";
 
-export interface HyperdriveGetArgs {
+const parts = {
   /**
-   * The ID of the existing Hyperdrive config.
+   * The Cloudflare Hyperdrive config. To use one you have, reference it with
+   * `get`.
    */
-  hyperdriveId: string;
-  /**
-   * The Cloudflare account ID the Hyperdrive config belongs to.
-   * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
-   * @internal
-   */
-  accountId?: string;
-}
+  hyperdrive: cf.HyperdriveConfig,
+};
 
-interface HyperdriveRef {
-  ref: true;
-  hyperdrive: cloudflare.HyperdriveConfig;
-}
-
-export interface HyperdriveArgs {
+export interface HyperdriveArgs extends ComponentArgs<typeof parts> {
   /**
    * Configure caching for SQL queries sent through Hyperdrive.
    *
@@ -108,6 +100,22 @@ export interface HyperdriveArgs {
   connectionLimit?: Input<number>;
   /**
    * The connection details for the origin database Hyperdrive connects to.
+   *
+   * They're kept secret in the state, the password with the rest, whether or
+   * not the password is a secret.
+   *
+   * @example
+   * ```js
+   * {
+   *   origin: {
+   *     database: "app",
+   *     host: "db.example.com",
+   *     password: new sst.Secret("DatabasePassword").value,
+   *     scheme: "postgres",
+   *     user: "postgres"
+   *   }
+   * }
+   * ```
    */
   origin: Input<{
     /**
@@ -143,23 +151,25 @@ export interface HyperdriveArgs {
      */
     user: Input<string>;
   }>;
-
   /**
    * The Cloudflare account ID to use for this Hyperdrive.
    * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
    * @internal
    */
   accountId?: Input<string>;
+}
+
+export interface HyperdriveGetArgs {
   /**
-   * [Transform](/docs/components/#transform) how this component creates its underlying
-   * resources.
+   * The ID of the existing Hyperdrive config.
    */
-  transform?: {
-    /**
-     * Transform the Hyperdrive config resource.
-     */
-    hyperdrive?: Transform<cloudflare.HyperdriveConfigArgs>;
-  };
+  hyperdriveId: Input<string>;
+  /**
+   * The Cloudflare account ID the Hyperdrive config belongs to.
+   * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
+   * @internal
+   */
+  accountId?: Input<string>;
 }
 
 /**
@@ -178,7 +188,7 @@ export interface HyperdriveArgs {
  *   origin: {
  *     database: "app",
  *     host: "db.example.com",
- *     password: "secret",
+ *     password: new sst.Secret("PostgresPassword").value,
  *     scheme: "postgres",
  *     user: "postgres",
  *   },
@@ -195,7 +205,7 @@ export interface HyperdriveArgs {
  *   origin: {
  *     database: "app",
  *     host: "db.example.com",
- *     password: "secret",
+ *     password: new sst.Secret("MySQLPassword").value,
  *     scheme: "mysql",
  *     user: "root",
  *   },
@@ -231,56 +241,78 @@ export interface HyperdriveArgs {
  *
  * const db = await mysql.createConnection(Resource.MySQLDatabase.connectionString)
  * ```
+ *
+ * #### Switch from SST 4's `sst.cloudflare.Hyperdrive`
+ *
+ * Keep the name, and `sst migrate` moves it. The Hyperdrive config is kept.
+ *
+ * A few things are different:
+ *
+ * - `origin` is kept secret in the state, whether or not its `password` is a
+ *   secret. `sst.cloudflare.Hyperdrive` kept it in plain text when the
+ *   password was a plain string; the switch marks it secret, which changes
+ *   nothing in Cloudflare.
+ * - `get` takes the same args. The config it references is looked up inside
+ *   the component, where `sst.cloudflare.Hyperdrive.get` looked it up beside
+ *   it. A switch takes the old lookup out of the state and looks the config
+ *   up again, which changes nothing in Cloudflare. Its `hyperdriveId` can be
+ *   an output.
+ * - A config you already have, or its ID, can also be given in `existing`.
+ *   `origin`, `caching`, `mtls` and `connectionLimit` are refused next to it,
+ *   since it's used the way it is, but `origin` is required, so the args need
+ *   a cast. Reference one with `get` instead, which needs none.
  */
-export class Hyperdrive extends Component implements Link.Linkable {
-  private hyperdrive: cloudflare.HyperdriveConfig;
-
+export class Hyperdrive extends component("sst:cloudflare:Hyperdrive", parts) {
   constructor(
     name: string,
     args: HyperdriveArgs,
-    opts?: ComponentResourceOptions,
+    opts: ComponentResourceOptions = {},
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = args as unknown as HyperdriveRef;
-      this.hyperdrive = ref.hyperdrive;
+    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
+
+    // A config that's already deployed is used as it is. Its ID is looked up
+    // in the account, as Cloudflare's provider takes it.
+    const existing = args.existing?.hyperdrive;
+    if (existing !== undefined) {
+      usedAsItIs(
+        args,
+        ["origin", "caching", "mtls", "connectionLimit"],
+        "hyperdrive",
+        `the "${name}" Hyperdrive`,
+      );
+      useExisting(existing, accountId, (id) =>
+        this.lookupPart("hyperdrive", id),
+      );
       return;
     }
 
-    const parent = this;
+    this.part("hyperdrive", {
+      accountId,
+      caching: cachingOf(args.caching),
+      mtls: args.mtls,
+      // Named by SST, as the 4.x `Hyperdrive` names it
+      name: "",
+      // The whole of it, as the 4.x `Hyperdrive` kept it when the password
+      // was a secret
+      origin: secret(output(args.origin)),
+      originConnectionLimit: args.connectionLimit,
+    });
+  }
 
-    const origin = output(args.origin);
-    const caching = normalizeCaching();
+  /**
+   * The generated ID of the Hyperdrive config.
+   */
+  public get id() {
+    return ownId(this.nodes.hyperdrive.id);
+  }
 
-    this.hyperdrive = new cloudflare.HyperdriveConfig(
-      ...transform(
-        args.transform?.hyperdrive,
-        `${name}Hyperdrive`,
-        {
-          accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
-          caching,
-          mtls: args.mtls,
-          name: "",
-          origin,
-          originConnectionLimit: args.connectionLimit,
-        },
-        { parent },
-      ),
-    );
-
-    function normalizeCaching() {
-      if (args.caching === undefined) return undefined;
-      return output(args.caching).apply((c) => {
-        if (c === false) return { disabled: true };
-        return {
-          maxAge: c.maxAge ? toSeconds(c.maxAge) : undefined,
-          staleWhileRevalidate: c.staleWhileRevalidate
-            ? toSeconds(c.staleWhileRevalidate)
-            : undefined,
-        };
-      });
-    }
+  /**
+   * The generated name of the Hyperdrive config.
+   */
+  public get name() {
+    return this.nodes.hyperdrive.name;
   }
 
   /**
@@ -306,48 +338,15 @@ export class Hyperdrive extends Component implements Link.Linkable {
    *
    * @internal
    */
-  public getSSTLink() {
+  public link() {
     return {
-      properties: {
-        id: this.id,
-      },
+      properties: { id: this.id },
       include: [
         binding({
           type: "hyperdriveBindings",
-          properties: {
-            id: this.id,
-          },
+          properties: { id: this.id },
         }),
       ],
-    };
-  }
-
-  /**
-   * The generated ID of the Hyperdrive config.
-   */
-  public get id() {
-    // Pulumi returns "accountId/hyperdriveId" for imported resources.
-    return this.hyperdrive.id.apply((id) =>
-      id.includes("/") ? id.split("/")[1] : id,
-    );
-  }
-
-  /**
-   * The generated name of the Hyperdrive config.
-   */
-  public get name() {
-    return this.hyperdrive.name;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Cloudflare Hyperdrive config.
-       */
-      hyperdrive: this.hyperdrive,
     };
   }
 
@@ -380,23 +379,28 @@ export class Hyperdrive extends Component implements Link.Linkable {
     args: HyperdriveGetArgs,
     opts?: ComponentResourceOptions,
   ) {
-    const hyperdrive = cloudflare.HyperdriveConfig.get(
-      `${name}Hyperdrive`,
-      `${args.accountId ?? DEFAULT_ACCOUNT_ID}/${args.hyperdriveId}`,
-      undefined,
-      opts,
-    );
     return new Hyperdrive(
       name,
-      {
-        ref: true,
-        hyperdrive,
-      } as unknown as HyperdriveArgs,
+      getArgs({
+        accountId: args.accountId,
+        existing: { hyperdrive: args.hyperdriveId },
+      } as HyperdriveArgs),
       opts,
     );
   }
 }
 
-const __pulumiType = "sst:cloudflare:Hyperdrive";
-// @ts-expect-error
-Hyperdrive.__pulumiType = __pulumiType;
+// What Cloudflare takes for `caching`: nothing when it's left out, so
+// Hyperdrive's defaults apply
+function cachingOf(caching: HyperdriveArgs["caching"]) {
+  if (caching === undefined) return undefined;
+  return output(caching).apply((caching) => {
+    if (caching === false) return { disabled: true };
+    return {
+      maxAge: caching.maxAge ? toSeconds(caching.maxAge) : undefined,
+      staleWhileRevalidate: caching.staleWhileRevalidate
+        ? toSeconds(caching.staleWhileRevalidate)
+        : undefined,
+    };
+  });
+}

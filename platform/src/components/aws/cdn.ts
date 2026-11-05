@@ -1,48 +1,53 @@
 import {
-  Output,
   ComponentResourceOptions,
-  output,
+  Input,
+  Output,
   interpolate,
-  all,
+  output,
 } from "@pulumi/pulumi";
-import { DnsValidatedCertificate } from "./dns-validated-certificate.js";
-import { HttpsRedirect } from "./https-redirect.js";
-import { useProvider } from "./helpers/provider.js";
-import { Component, Prettify, Transform, transform } from "../component.js";
-import { Input } from "../input.js";
-import { DistributionDeploymentWaiter } from "./providers/distribution-deployment-waiter.js";
-import { Dns } from "../dns.js";
-import { dns as awsDns } from "./dns.js";
 import { cloudfront } from "@pulumi/aws";
-import { logicalName } from "../naming.js";
+import {
+  type ComponentArgs,
+  component,
+  named,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import { plain, usedAsItIs, getArgs } from "../args";
+import { logicalName } from "../naming";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import { HttpsRedirect } from "./https-redirect";
+import { DistributionDeploymentWaiter } from "./resources/distribution-deployment-waiter";
+import { useProvider } from "./helpers/provider";
+import { type DomainArgs, domainOf } from "./helpers/domain";
 
-export interface CdnDomainArgs {
+const parts = {
   /**
-   * The custom domain you want to use.
-   *
-   * @example
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com"
-   *   }
-   * }
-   * ```
-   *
-   * Can also include subdomains based on the current stage.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: `${$app.stage}.example.com`
-   *   }
-   * }
-   * ```
+   * The Amazon CloudFront distribution.
    */
-  name: Input<string>;
+  distribution: cloudfront.Distribution,
+  /**
+   * What waits for the distribution to be deployed: when it's created, and with
+   * `wait: true` after each change too. With `wait: false` it doesn't wait. Not created
+   * for a distribution that's passed in `existing`.
+   */
+  waiter: optional(DistributionDeploymentWaiter),
+  /**
+   * The certificate for the custom domain, in `us-east-1` as CloudFront needs. Created
+   * when `domain` is set without a `cert`.
+   */
+  certificate: named(optional(DnsValidatedCertificate), "Ssl"),
+  /**
+   * What sends visitors of the `domain.redirects` to the main domain. Created when
+   * there are any.
+   */
+  redirect: optional(HttpsRedirect),
+};
+
+export interface CdnDomainArgs extends DomainArgs {
   /**
    * Alternate domains to be used. Visitors to the alternate domains will be redirected to the
-   * main `name`.
+   * main `name`. A plain list: each one has DNS records of its own.
    *
    * :::note
    * Unlike the `aliases` option, this will redirect visitors back to the main `name`.
@@ -59,10 +64,11 @@ export interface CdnDomainArgs {
    * }
    * ```
    */
-  redirects?: Input<string[]>;
+  redirects?: string[];
   /**
    * Alias domains that should be used. Unlike the `redirect` option, this keeps your visitors
-   * on this alias domain.
+   * on this alias domain. A plain list: each one has DNS records of its own, and is on the
+   * certificate.
    *
    * @example
    * So if your users visit `app2.domain.com`, they will stay on `app2.domain.com` in their
@@ -76,13 +82,13 @@ export interface CdnDomainArgs {
    * }
    * ```
    */
-  aliases?: Input<string[]>;
+  aliases?: string[];
   /**
    * The ARN of an ACM (AWS Certificate Manager) certificate that proves ownership of the
    * domain. By default, a certificate is created and validated automatically.
    *
-   * The certificate will be created in the `us-east-1` region as required by AWS CloudFront.
-   * If you are creating your own certificate, you must also create it in `us-east-1`.
+   * CloudFront takes its certificate from the `us-east-1` region. The one that's created
+   * for you is created there, and one you pass in has to be there too.
    *
    * :::tip
    * You need to pass in a `cert` for domains that are not hosted on supported `dns` providers.
@@ -106,58 +112,9 @@ export interface CdnDomainArgs {
    * ```
    */
   cert?: Input<string>;
-  /**
-   * The DNS provider to use for the domain. Defaults to the AWS.
-   *
-   * Takes an adapter that can create the DNS records on the provider. This can automate
-   * validating the domain and setting up the DNS routing.
-   *
-   * Supports Route 53, Cloudflare, and Vercel adapters. For other providers, you'll need
-   * to set `dns` to `false` and pass in a certificate validating ownership via `cert`.
-   *
-   * @default `sst.aws.dns`
-   *
-   * @example
-   *
-   * Specify the hosted zone ID for the Route 53 domain.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com",
-   *     dns: sst.aws.dns({
-   *       zone: "Z2FDTNDATAQYW2"
-   *     })
-   *   }
-   * }
-   * ```
-   *
-   * Use a domain hosted on Cloudflare, needs the Cloudflare provider.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com",
-   *     dns: sst.cloudflare.dns()
-   *   }
-   * }
-   * ```
-   *
-   * Use a domain hosted on Vercel, needs the Vercel provider.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com",
-   *     dns: sst.vercel.dns()
-   *   }
-   * }
-   * ```
-   */
-  dns?: Input<false | (Dns & {})>;
 }
 
-export interface CdnArgs {
+export interface CdnArgs extends ComponentArgs<typeof parts> {
   /**
    * A comment to describe the distribution. It cannot be longer than 128 characters.
    */
@@ -187,7 +144,9 @@ export interface CdnArgs {
    */
   customErrorResponses?: cloudfront.DistributionArgs["customErrorResponses"];
   /**
-   * Set a custom domain for your distribution.
+   * Set a custom domain for your distribution. It has to be a plain value, and so do its
+   * `name`, `aliases` and `redirects`: they decide the certificate, the redirect and the
+   * DNS records that are created, and what they're named.
    *
    * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
    * providers, you'll need to pass in a `cert` that validates domain ownership and add the
@@ -230,14 +189,15 @@ export interface CdnArgs {
    * }
    * ```
    */
-  domain?: Input<string | Prettify<CdnDomainArgs>>;
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Whether to wait for the CloudFront distribution to be deployed before
-   * completing the deployment of the app. This is necessary if you need to use the
-   * distribution URL in other resources.
+   * completing the deployment of the app. What uses its URL doesn't wait for it: to
+   * have something wait, give it `dependsOn: [cdn.nodes.waiter]`. It has to be a plain
+   * value.
    * @default `true`
    */
-  wait?: Input<boolean>;
+  wait?: boolean;
   /**
    * Tags to apply to the distribution.
    */
@@ -253,20 +213,39 @@ export interface CdnArgs {
    * ```
    */
   webAclArn?: Input<string>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying resources.
-   */
-  transform?: {
-    /**
-     * Transform the CloudFront distribution resource.
-     */
-    distribution: Transform<cloudfront.DistributionArgs>;
-  };
 }
 
-interface CdnRef {
-  ref: boolean;
-  distributionID: Input<string>;
+/**
+ * A CDN's custom domain, checked: the domain's name, its aliases and its
+ * redirects are plain values, since the DNS records are named after them.
+ * Undefined when there's no domain. A component that gives its domain to a
+ * `Cdn` checks it first, so that a message names that component.
+ *
+ * @param owner What the domain belongs to, for error messages: `the "MyRouter" Router`.
+ * @internal
+ */
+export function cdnDomain(
+  domain: string | CdnDomainArgs | undefined,
+  owner: string,
+) {
+  if (!domain) return;
+  const { name, dns, cert } = domainOf(domain, owner);
+  const given: CdnDomainArgs =
+    typeof domain === "string" ? { name: domain } : domain;
+  const named = "Its DNS records are named after it.";
+  const plainList = (list: string[], what: string) => {
+    plain(list, what);
+    return list.map((item) => plain(item, what, named));
+  };
+  const aliases = plainList(
+    given.aliases ?? [],
+    `The domain "aliases" of ${owner}`,
+  );
+  const redirects = plainList(
+    given.redirects ?? [],
+    `The domain "redirects" of ${owner}`,
+  );
+  return { name, aliases, redirects, dns, cert };
 }
 
 /**
@@ -281,7 +260,7 @@ interface CdnRef {
  * You'll find this component exposed in the `transform` of other components. And you can customize the args listed here. For example:
  *
  * ```ts title="sst.config.ts"
- * new sst.aws.Nextjs("MyWeb", {
+ * new sst.aws.Router("MyRouter", {
  *   transform: {
  *     cdn: (args) => {
  *       args.wait = false;
@@ -289,222 +268,164 @@ interface CdnRef {
  *   }
  * });
  * ```
+ *
+ * ---
+ *
+ * #### Switch from SST 4's `sst.aws.Cdn`
+ *
+ * The components that create a `Cdn` create this one once they're switched. The
+ * distribution, its certificate, its DNS records and its redirect are kept. What waits
+ * for the distribution to deploy is a resource of a new type, which the `sst` binary
+ * serves: `sst migrate` takes SST 4's out of the state, and the new one waits once. A
+ * few things are written differently:
+ *
+ * - `domain`, with its `name`, `aliases` and `redirects`, and `wait` have to be plain
+ *   values, not outputs.
+ * - `nodes.distribution` is the distribution itself. In `sst.aws.Cdn` it was an output
+ *   of it.
+ * - `transform` also takes the `waiter`, the `certificate` and the `redirect`.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for
+ *   SST 4's adapters doesn't work.
+ * - The DNS records that validate the certificate are named after the domains they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup` and `ZoneLookup` leave the state.
+ * - A CDN with `domain.redirects`, created with a provider of its own, gives its
+ *   redirect's CloudFront function that provider, and keeps it: SST 4 created it with
+ *   the app's provider.
  */
-export class Cdn extends Component {
-  private distribution: Output<cloudfront.Distribution>;
-  private _domainUrl: Output<string | undefined>;
+export class Cdn extends component("sst:aws:CDN", parts) {
+  private readonly _domainUrl: Output<string | undefined>;
 
   constructor(name: string, args: CdnArgs, opts?: ComponentResourceOptions) {
-    super(pulumiType, name, args, opts);
-    const parent = this;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this.distribution = output(ref.distribution);
-      this._domainUrl = ref.distribution.aliases.apply((aliases) =>
+    const existing = this.existingPart("distribution");
+    if (existing) {
+      // A distribution that's deployed is used the way it is
+      usedAsItIs(
+        args,
+        [
+          "comment",
+          "origins",
+          "originGroups",
+          "defaultCacheBehavior",
+          "orderedCacheBehaviors",
+          "defaultRootObject",
+          "customErrorResponses",
+          "domain",
+          "wait",
+          "tags",
+          "webAclArn",
+        ],
+        "distribution",
+        `the "${name}" CDN`,
+      );
+      this._domainUrl = existing.aliases.apply((aliases) =>
         aliases?.length ? `https://${aliases[0]}` : undefined,
       );
       return;
     }
 
-    const domain = normalizeDomain();
+    const domain = cdnDomain(args.domain, `the "${name}" CDN`);
+    const wait = plain(args.wait, `The "wait" of the "${name}" CDN`);
 
-    const certificateArn = createSsl();
-    const distribution = createDistribution();
-    const waiter = createDistributionDeploymentWaiter();
-    createDnsRecords();
-    createRedirects();
-
-    this.distribution = waiter.isDone.apply(() => distribution);
-    this._domainUrl = domain?.name
-      ? interpolate`https://${domain.name}`
-      : output(undefined);
-
-    function reference() {
-      const ref = args as unknown as CdnRef;
-      const distribution = cloudfront.Distribution.get(
-        `${name}Distribution`,
-        ref.distributionID,
-        undefined,
-        { parent },
-      );
-
-      return { distribution };
-    }
-
-    function normalizeDomain() {
-      if (!args.domain) return;
-
-      return output(args.domain).apply((domain) => {
-        const norm = typeof domain === "string" ? { name: domain } : domain;
-
-        // validate
-        if (!norm.name) throw new Error(`Missing "name" for domain.`);
-        if (norm.dns === false && !norm.cert)
-          throw new Error(
-            `Need to provide a validated certificate via "cert" when DNS is disabled`,
-          );
-
-        return {
-          name: norm.name,
-          aliases: norm.aliases ?? [],
-          redirects: norm.redirects ?? [],
-          dns: norm.dns === false ? undefined : norm.dns ?? awsDns(),
-          cert: norm.cert,
-        };
-      });
-    }
-
-    function createSsl() {
-      if (!domain) return output(undefined);
-
-      return domain.cert.apply((cert) => {
-        if (cert) return domain.cert;
-
-        // Certificates used for CloudFront distributions are required to be
-        // created in the us-east-1 region
-        return new DnsValidatedCertificate(
-          `${name}Ssl`,
+    const certificateArn = domain
+      ? domain.cert ??
+        this.part(
+          "certificate",
           {
             domainName: domain.name,
             alternativeNames: domain.aliases,
-            dns: domain.dns.apply((dns) => dns!),
+            dns: domain.dns!,
           },
-          { parent, provider: useProvider("us-east-1") },
-        ).arn;
-      });
-    }
+          // CloudFront only takes certificates from us-east-1
+          { provider: useProvider("us-east-1") },
+        ).arn
+      : undefined;
 
-    function createDistribution() {
-      return new cloudfront.Distribution(
-        ...transform(
-          args.transform?.distribution,
-          `${name}Distribution`,
-          {
-            comment: args.comment,
-            enabled: true,
-            origins: args.origins,
-            originGroups: args.originGroups,
-            defaultCacheBehavior: args.defaultCacheBehavior,
-            orderedCacheBehaviors: args.orderedCacheBehaviors,
-            defaultRootObject: args.defaultRootObject,
-            customErrorResponses: args.customErrorResponses,
-            restrictions: {
-              geoRestriction: {
-                restrictionType: "none",
-              },
-            },
-            aliases: domain
-              ? output(domain).apply((domain) => [
-                  domain.name,
-                  ...domain.aliases,
-                ])
-              : [],
-            viewerCertificate: certificateArn.apply((arn) =>
-              arn
-                ? {
-                    acmCertificateArn: arn,
-                    sslSupportMethod: "sni-only",
-                    minimumProtocolVersion: "TLSv1.2_2021",
-                  }
-                : {
-                    cloudfrontDefaultCertificate: true,
-                  },
-            ),
-            waitForDeployment: false,
-            tags: args.tags,
-            // CloudFront API confusingly names the WAF ARN field "webAclId"
-            webAclId: args.webAclArn,
-          },
-          { parent },
-        ),
-      );
-    }
-
-    function createDistributionDeploymentWaiter() {
-      return output(args.wait).apply((wait) => {
-        return new DistributionDeploymentWaiter(
-          `${name}Waiter`,
-          {
-            distributionId: distribution.id,
-            etag: distribution.etag,
-            wait: wait ?? true,
-          },
-          { parent, ignoreChanges: wait ? undefined : ["*"] },
-        );
-      });
-    }
-
-    function createDnsRecords() {
-      if (!domain) return;
-
-      domain.apply((domain) => {
-        if (!domain.dns) return;
-
-        const existing: string[] = [];
-        for (const [i, recordName] of [
-          domain.name,
-          ...domain.aliases,
-        ].entries()) {
-          // Note: The way `dns` is implemented, the logical name for the DNS record is
-          // based on the sanitized version of the record name (ie. logicalName()). This
-          // means the logical name for `*.sst.sh` and `sst.sh` will trash b/c `*.` is
-          // stripped out.
-          // ```
-          // domain: {
-          //   name: "*.sst.sh",
-          //   aliases: ['sst.sh'],
-          // },
-          // ```
-          //
-          // Ideally, we don't sanitize the logical name. But that's a breaking change.
-          //
-          // As a workaround, starting v3.0.79, we prefix the logical name with a unique
-          // index for records with logical names that will trash.
-          const key = logicalName(recordName);
-          const namePrefix = existing.includes(key) ? `${name}${i}` : name;
-          existing.push(key);
-
-          domain.dns.createAlias(
-            namePrefix,
-            {
-              name: recordName,
-              aliasName: distribution.domainName,
-              aliasZone: distribution.hostedZoneId,
-            },
-            { parent },
-          );
-        }
-      });
-    }
-
-    function createRedirects(): void {
-      if (!domain) return;
-
-      all([domain.cert, domain.redirects, domain.dns]).apply(
-        ([cert, redirects, dns]) => {
-          if (!redirects.length) return;
-
-          new HttpsRedirect(
-            `${name}Redirect`,
-            {
-              sourceDomains: redirects,
-              targetDomain: domain.name,
-              cert: cert ? domain.cert.apply((cert) => cert!) : undefined,
-              dns: dns ? domain.dns.apply((dns) => dns!) : undefined,
-            },
-            { parent },
-          );
+    // The domains the distribution answers to
+    const aliases = domain ? [domain.name, ...domain.aliases] : [];
+    const distribution = this.part("distribution", {
+      comment: args.comment,
+      enabled: true,
+      origins: args.origins,
+      originGroups: args.originGroups,
+      defaultCacheBehavior: args.defaultCacheBehavior,
+      orderedCacheBehaviors: args.orderedCacheBehaviors,
+      defaultRootObject: args.defaultRootObject,
+      customErrorResponses: args.customErrorResponses,
+      restrictions: {
+        geoRestriction: {
+          restrictionType: "none",
         },
-      );
+      },
+      aliases,
+      viewerCertificate: certificateArn
+        ? {
+            acmCertificateArn: certificateArn,
+            sslSupportMethod: "sni-only",
+            minimumProtocolVersion: "TLSv1.2_2021",
+          }
+        : { cloudfrontDefaultCertificate: true },
+      waitForDeployment: false,
+      tags: args.tags,
+      // CloudFront API confusingly names the WAF ARN field "webAclId"
+      webAclId: args.webAclArn,
+    });
+
+    // As the 4.x `Cdn` deploys it: unless `wait` is set to `true`, a change to
+    // the distribution after it's created isn't waited for. The deploy waits
+    // for it at its end; what reads the distribution doesn't, as in SST 4,
+    // whose waiter was created inside an `apply`, so reading it waited for
+    // nothing. Something that needs it deployed depends on the waiter.
+    this.part(
+      "waiter",
+      {
+        distributionId: distribution.id,
+        etag: distribution.etag,
+        wait: wait ?? true,
+      },
+      { ignoreChanges: wait ? undefined : ["*"] },
+    );
+    this._domainUrl = domain
+      ? output(`https://${domain.name}`)
+      : output(undefined);
+
+    if (domain?.dns) {
+      // The DNS adapters name a record after its domain, with `*.` left out, so
+      // `*.example.com` and `example.com` would have one name. The second one
+      // has its place in the list added to its name.
+      const seen: string[] = [];
+      [domain.name, ...domain.aliases].forEach((recordName, i) => {
+        const key = logicalName(recordName);
+        domain.dns!.alias(
+          seen.includes(key) ? `${name}${i}` : name,
+          {
+            name: recordName,
+            aliasName: distribution.domainName,
+            aliasZone: distribution.hostedZoneId,
+          },
+          this.delegateOpts(),
+        );
+        seen.push(key);
+      });
     }
+
+    if (domain?.redirects.length)
+      this.part("redirect", {
+        sourceDomains: domain.redirects,
+        targetDomain: domain.name,
+        cert: domain.cert,
+        dns: domain.dns,
+      });
   }
 
   /**
    * The CloudFront URL of the distribution.
    */
   public get url() {
-    return interpolate`https://${this.distribution.domainName}`;
+    return interpolate`https://${this.nodes.distribution.domainName}`;
   }
 
   /**
@@ -516,25 +437,10 @@ export class Cdn extends Component {
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon CloudFront distribution.
-       */
-      distribution: this.distribution,
-    };
-  }
-
-  /**
-   * Reference an existing CDN with the given distribution ID. This is useful when
-   * you create a Router in one stage and want to share it in another. It avoids having to
-   * create a new Router in the other stage.
-   *
-   * :::tip
-   * You can use the `static get` method to share Routers across stages.
-   * :::
+   * Reference an existing CDN with the given distribution ID: one that's deployed, like
+   * one another stage created. Its distribution is used as it is. A `Router` that's
+   * referenced with its own `get` is served through one, which is how a router is
+   * shared across stages.
    *
    * @param name The name of the component.
    * @param distributionID The id of the existing CDN distribution.
@@ -547,15 +453,8 @@ export class Cdn extends Component {
   ) {
     return new Cdn(
       name,
-      {
-        ref: true,
-        distributionID,
-      } satisfies CdnRef as unknown as CdnArgs,
+      getArgs({ existing: { distribution: distributionID } }) as CdnArgs,
       opts,
     );
   }
 }
-
-const pulumiType = "sst:aws:CDN";
-// @ts-expect-error
-Cdn.__pulumiType = pulumiType;

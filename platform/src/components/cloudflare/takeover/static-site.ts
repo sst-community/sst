@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { StaticSite } from "../v5/static-site";
+import { StaticSite } from "../static-site";
 
 // SST 4's `StaticSiteV2` created its Worker inside the site, as `<Name>Router`,
 // which the part is named, so nothing moved. The command that built the site

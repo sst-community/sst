@@ -36,7 +36,7 @@ const pulumi = mockPulumi({
 
 describe("a VPC in a new stage's preview", () => {
   it("plans everything a deploy creates", async () => {
-    const { Vpc } = await import("../../../src/components/aws/v5/vpc");
+    const { Vpc } = await import("../../../src/components/aws/vpc");
     new Vpc("Net", { az: 3, nat: "ec2", bastion: true });
     new Vpc("Gateways", { nat: "managed", bastion: true });
     await pulumi.settle();

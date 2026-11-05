@@ -14,7 +14,7 @@ import { ssrSiteSuite } from "./ssr-site.suite";
 export interface NitroFramework {
   /** The component: `Nuxt`. */
   name: string;
-  /** The component's file, in `aws/` and `aws/v5/`: `nuxt`. */
+  /** The component's file, in `aws/` and SST 4's fixtures: `nuxt`. */
   file: string;
   /** Where Nitro builds to, in the site's folder: `.output`. */
   output: string;
@@ -90,12 +90,10 @@ export function nitroSiteTests(f: NitroFramework) {
       name: f.name,
       site: "Web",
       load: async () => ({
-        original: (await import(`../../../src/components/aws/${f.file}.ts`))[
-          f.name
-        ],
-        v5: (await import(`../../../src/components/aws/v5/${f.file}.ts`))[
-          f.name
-        ],
+        original: (
+          await import(`../../fixtures/v4/components/aws/${f.file}.ts`)
+        )[f.name],
+        v5: (await import(`../../../src/components/aws/${f.file}.ts`))[f.name],
       }),
       paths: { site: "web", based: "docs", app },
       alwaysServes: true,
@@ -168,9 +166,7 @@ export function nitroSiteTests(f: NitroFramework) {
             base: "/docs",
             config: f.config.replace(/\.ts$/, ".mjs"),
           });
-          const { Router } = await import(
-            "../../../src/components/aws/v5/router"
-          );
+          const { Router } = await import("../../../src/components/aws/router");
           const failures = await rejectionsOf(async () => {
             new (Site())("Web", {
               path: "mjs",

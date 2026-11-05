@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Vpc } from "../v5/vpc";
+import { Vpc } from "../vpc";
 
 takeover(Vpc, {
   moved: {

@@ -166,7 +166,7 @@ describe("SST's components, while the stage moves", () => {
   beforeEach(() => pulumi.reset());
 
   it("a Vpc's bastion may be replaced, for its image", async () => {
-    const { Vpc } = await import("../../src/components/aws/v5/vpc");
+    const { Vpc } = await import("../../src/components/aws/vpc");
     await import("../../src/components/aws/takeover/vpc");
     new Vpc("Net", { az: ["us-east-1a"], bastion: true });
     await pulumi.settle();

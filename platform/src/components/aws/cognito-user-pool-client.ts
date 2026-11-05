@@ -1,114 +1,148 @@
-import { ComponentResourceOptions, output } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component";
-import { Input } from "../input";
-import { CognitoUserPoolClientArgs } from "./cognito-user-pool.js";
-import { Link } from "../link";
+import { ComponentResourceOptions } from "@pulumi/pulumi";
 import { cognito } from "@pulumi/aws";
+import { type ComponentArgs, component } from "../parts-component";
+import { usedAsItIs, withDefault } from "../args";
+import type { Input } from "../input";
 
-export interface Args extends CognitoUserPoolClientArgs {
+const parts = {
+  /**
+   * The Cognito User Pool client.
+   */
+  client: cognito.UserPoolClient,
+};
+
+export interface CognitoUserPoolClientArgs extends ComponentArgs<typeof parts> {
   /**
    * The Cognito user pool ID.
    */
   userPool: Input<string>;
+  /**
+   * A list of identity providers that are supported for this client.
+   * @default `["COGNITO"]`
+   * @example
+   *
+   * :::tip
+   * Reference federated identity providers using their `providerName` property.
+   * :::
+   *
+   * If you are using a federated identity provider.
+   *
+   * ```js title="sst.config.ts"
+   * const provider = userPool.addIdentityProvider("MyProvider", {
+   *   type: "oidc",
+   *   details: {
+   *     authorize_scopes: "email profile",
+   *     client_id: "your-client-id",
+   *     client_secret: "your-client-secret"
+   *   },
+   * });
+   * ```
+   *
+   * Make sure to pass in `provider.providerName` instead of hardcoding it to `"MyProvider"`.
+   *
+   * ```ts title="sst.config.ts" {2}
+   * userPool.addClient("Web", {
+   *   providers: [provider.providerName]
+   * });
+   * ```
+   *
+   * This ensures the client is created after the provider.
+   */
+  providers?: Input<Input<string>[]>;
+  /**
+   * List of allowed callback URLs for the identity providers.
+   * @default `["https://example.com"]`
+   */
+  callbackUrls?: Input<Input<string>[]>;
 }
 
 /**
- * The `CognitoUserPoolClient` component is internally used by the `CognitoUserPool`
- * component to add clients to your [Amazon Cognito user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-identity-pools.html).
+ * The `CognitoUserPoolClient` component is a client of an [Amazon Cognito user pool](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-identity-pools.html).
  *
  * :::note
  * This component is not intended to be created directly.
  * :::
  *
- * You'll find this component returned by the `addClient` method of the `CognitoUserPool` component.
+ * It's what the `addClient` method of the `CognitoUserPool` component returns. A client is
+ * a component of its own, under the name you add it with, so you can link it.
+ *
+ * @example
+ *
+ * #### Link the client to a resource
+ *
+ * ```ts title="sst.config.ts"
+ * const client = userPool.addClient("Web");
+ *
+ * new sst.aws.Nextjs("MyWeb", {
+ *   link: [client]
+ * });
+ * ```
+ *
+ * The client's ID and secret are then available as `Resource.Web.id` and
+ * `Resource.Web.secret`.
+ *
+ * #### Switch from SST 4's `sst.aws.CognitoUserPoolClient`
+ *
+ * Nothing changes: switching the user pool to `sst.aws.CognitoUserPool` switches its
+ * clients, and keeps them. A function linked to a client reads its `id` and `secret` as
+ * before.
  */
-export class CognitoUserPoolClient extends Component implements Link.Linkable {
-  private client: cognito.UserPoolClient;
-
-  constructor(name: string, args: Args, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
-
-    const parent = this;
-
-    const providers = normalizeProviders();
-    const callbackUrls = normalizeCallbackUrls();
-    const client = createClient();
-
-    this.client = client;
-
-    function normalizeProviders() {
-      if (!args.providers) return ["COGNITO"];
-      return output(args.providers);
-    }
-
-    function normalizeCallbackUrls() {
-      if (!args.callbackUrls) return ["https://example.com"];
-      return output(args.callbackUrls);
-    }
-
-    function createClient() {
-      return new cognito.UserPoolClient(
-        ...transform(
-          args.transform?.client,
-          `${name}Client`,
-          {
-            name,
-            userPoolId: args.userPool,
-            allowedOauthFlows: ["implicit", "code"],
-            allowedOauthFlowsUserPoolClient: true,
-            allowedOauthScopes: [
-              "profile",
-              "phone",
-              "email",
-              "openid",
-              "aws.cognito.signin.user.admin",
-            ],
-            callbackUrls: callbackUrls,
-            supportedIdentityProviders: providers,
-          },
-          { parent },
-        ),
+export class CognitoUserPoolClient extends component(
+  "sst:aws:CognitoUserPoolClient",
+  parts,
+) {
+  constructor(
+    name: string,
+    args: CognitoUserPoolClientArgs,
+    opts?: ComponentResourceOptions,
+  ) {
+    super(name, args, opts);
+    // A client that's already deployed keeps the settings it has
+    if (this.existingPart("client"))
+      usedAsItIs(
+        args,
+        ["providers", "callbackUrls"],
+        "client",
+        `the "${name}" user pool client`,
       );
-    }
+
+    this.part("client", {
+      name,
+      userPoolId: args.userPool,
+      allowedOauthFlows: ["implicit", "code"],
+      allowedOauthFlowsUserPoolClient: true,
+      allowedOauthScopes: [
+        "profile",
+        "phone",
+        "email",
+        "openid",
+        "aws.cognito.signin.user.admin",
+      ],
+      callbackUrls: withDefault(args.callbackUrls, ["https://example.com"]),
+      supportedIdentityProviders: withDefault(args.providers, ["COGNITO"]),
+    });
   }
 
   /**
    * The Cognito User Pool client ID.
    */
   public get id() {
-    return this.client.id;
+    return this.nodes.client.id;
   }
 
   /**
    * The Cognito User Pool client secret.
    */
   public get secret() {
-    return this.client.clientSecret;
+    return this.nodes.client.clientSecret;
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
+   * Linking a client gives the linked resource its ID and its secret.
    */
-  public get nodes() {
+  public link() {
     return {
-      /**
-       * The Cognito User Pool client.
-       */
-      client: this.client,
-    };
-  }
-
-  /** @internal */
-  public getSSTLink() {
-    return {
-      properties: {
-        id: this.id,
-        secret: this.secret,
-      },
+      properties: { id: this.id, secret: this.secret },
     };
   }
 }
-
-const __pulumiType = "sst:aws:CognitoUserPoolClient";
-// @ts-expect-error
-CognitoUserPoolClient.__pulumiType = __pulumiType;

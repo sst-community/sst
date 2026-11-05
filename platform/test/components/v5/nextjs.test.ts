@@ -97,9 +97,9 @@ ssrSiteSuite(
     name: "Nextjs",
     site: "Next",
     load: async () => ({
-      original: (await import("../../../src/components/aws/nextjs"))
+      original: (await import("../../fixtures/v4/components/aws/nextjs"))
         .Nextjs as any,
-      v5: (await import("../../../src/components/aws/v5/nextjs")).Nextjs as any,
+      v5: (await import("../../../src/components/aws/nextjs")).Nextjs as any,
     }),
     paths: { site, based, app },
     alwaysServes: true,

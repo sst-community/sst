@@ -1,10 +1,8 @@
 /**
- * How each V5 component takes over from the 4.x component it replaces, so
- * that changing `sst.aws.Queue` to `sst.aws.v5.Queue` keeps what's already
- * deployed.
+ * How each of SST 5's components takes over from SST 4's form of it, so that
+ * a stage SST 4 deployed moves with `sst migrate` and keeps what's deployed.
  *
- * The V5 components don't know about any of this. When the 4.x components are
- * removed, this folder goes with them.
+ * The components don't know about any of this.
  */
 import "./alb";
 import "./analog";

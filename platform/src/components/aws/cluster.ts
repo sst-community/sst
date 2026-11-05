@@ -1,61 +1,27 @@
 import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
-import {
-  Component,
-  ComponentVersion,
-  parseComponentVersion,
-  Prettify,
-  Transform,
-  transform,
-} from "../component";
-import { Input } from "../input";
-import { Service, ServiceArgs } from "./service";
 import { ecs } from "@pulumi/aws";
-import { Cluster as ClusterV1 } from "./cluster-v1";
-import { Vpc } from "./vpc";
-import { Vpc as VpcV1 } from "./vpc-v1.js";
-import { Task, TaskArgs } from "./task";
+import { type ComponentArgs, component } from "../parts-component";
+import { notAnExistingPart, getArgs } from "../args";
 import { VisibleError } from "../error";
-export type { ClusterArgs as ClusterV1Args } from "./cluster-v1";
+import type { Input } from "../input";
+import { type AnyVpc, assertVpcIds, isVpc } from "./helpers/vpc";
 
-type ClusterVpcArgs = {
+const parts = {
   /**
-   * The ID of the VPC.
+   * The Amazon ECS Cluster.
    */
-  id: Input<string>;
+  cluster: ecs.Cluster,
   /**
-   * A list of VPC security group IDs for the service.
+   * The capacity providers the cluster's services and tasks can run on: Fargate and
+   * Fargate Spot. A cluster passed in `existing` keeps the ones it has, and this isn't
+   * created.
    */
-  securityGroups: Input<Input<string>[]>;
-  /**
-   * A list of subnet IDs in the VPC to place the services in.
-   * @deprecated Use `containerSubnets` instead.
-   */
-  serviceSubnets?: Input<Input<string>[]>;
-  /**
-   * A list of subnet IDs in the VPC to place the containers in.
-   */
-  containerSubnets?: Input<Input<string>[]>;
-  /**
-   * A list of public subnet IDs in the VPC.
-   */
-  publicSubnets?: Input<Input<string>[]>;
-  /**
-   * A list of subnet IDs in the VPC to place the load balancer in.
-   */
-  loadBalancerSubnets: Input<Input<string>[]>;
-  /**
-   * The ID of the Cloud Map namespace to use for the service.
-   */
-  cloudmapNamespaceId?: Input<string>;
-  /**
-   * The name of the Cloud Map namespace to use for the service.
-   */
-  cloudmapNamespaceName?: Input<string>;
+  capacityProviders: ecs.ClusterCapacityProviders,
 };
 
-export interface ClusterArgs {
+export interface ClusterArgs extends ComponentArgs<typeof parts> {
   /**
-   * The VPC to use for the cluster.
+   * The VPC the cluster's services and tasks run in.
    *
    * @example
    * Create a `Vpc` component.
@@ -78,89 +44,69 @@ export interface ClusterArgs {
    * }
    * ```
    *
-   * By default, both the load balancer and the services are deployed in public subnets.
-   * The above is equivalent to:
+   * In a `Vpc`, the containers and a public load balancer are in its public subnets, and
+   * the containers get a public IP to reach the internet. An internal load balancer is in
+   * its private subnets.
+   *
+   * You can also pass the ids of a VPC. Every load balancer is then in
+   * `loadBalancerSubnets`, and the containers don't get a public IP, so put them in
+   * subnets that reach the internet through a NAT. For example, a `Vpc`'s private
+   * subnets:
+   *
+   * ```js
+   * const myVpc = new sst.aws.Vpc("MyVpc", { nat: "managed" });
+   * ```
    *
    * ```js
    * {
    *   vpc: {
    *     id: myVpc.id,
    *     securityGroups: myVpc.securityGroups,
-   *     containerSubnets: myVpc.publicSubnets,
+   *     containerSubnets: myVpc.privateSubnets,
    *     loadBalancerSubnets: myVpc.publicSubnets,
    *     cloudmapNamespaceId: myVpc.nodes.cloudmapNamespace.id,
    *     cloudmapNamespaceName: myVpc.nodes.cloudmapNamespace.name
    *   }
    * }
    * ```
+   *
+   * A `Task` can be given a public IP with its `publicIp` instead.
    */
-  vpc: Vpc | Input<Prettify<ClusterVpcArgs>>;
-  /**
-   * Force upgrade from `Cluster.v1` to the latest `Cluster` version. The only valid value
-   * is `v2`, which is the version of the new `Cluster`.
-   *
-   * In `Cluster.v1`, load balancers are deployed in public subnets, and services are
-   * deployed in private subnets. The VPC is required to have NAT gateways.
-   *
-   * In the latest `Cluster`, both the load balancer and the services are deployed in
-   * public subnets. The VPC is not required to have NAT gateways. So the new default makes
-   * this cheaper to run.
-   *
-   * To upgrade, add the prop.
-   *
-   * ```ts
-   * {
-   *   forceUpgrade: "v2"
-   * }
-   * ```
-   *
-   * Run `sst deploy`.
-   *
-   * :::tip
-   * You can remove this prop after you upgrade.
-   * :::
-   *
-   * This upgrades your component and the resources it created. You can now optionally
-   * remove the prop.
-   *
-   * After the upgrade, new services will be deployed in public subnets.
-   *
-   * :::caution
-   * New service will be deployed in public subnets.
-   * :::
-   *
-   * To continue deploying in private subnets, set `vpc.serviceSubnets` to a list of
-   * private subnets.
-   *
-   * ```js title="sst.config.ts" {4,8}
-   * const myVpc = new sst.aws.Vpc("MyVpc", { nat: "managed" });
-   *
-   * const cluster = new sst.aws.Cluster("MyCluster", {
-   *   forceUpgrade: "v2",
-   *   vpc: {
-   *     id: myVpc.id,
-   *     loadBalancerSubnets: myVpc.publicSubnets,
-   *     serviceSubnets: myVpc.privateSubnets,
-   *     securityGroups: myVpc.securityGroups,
-   *     cloudmapNamespaceId: myVpc.nodes.cloudmapNamespace.id,
-   *     cloudmapNamespaceName: myVpc.nodes.cloudmapNamespace.name,
-   *   }
-   * });
-   * ```
-   *
-   * @internal
-   */
-  forceUpgrade?: "v2";
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the ECS Cluster resource.
-     */
-    cluster?: Transform<ecs.ClusterArgs>;
-  };
+  vpc:
+    | AnyVpc
+    | Input<{
+        /**
+         * The ID of the VPC.
+         */
+        id: Input<string>;
+        /**
+         * A list of VPC security group IDs for the services and tasks.
+         */
+        securityGroups: Input<Input<string>[]>;
+        /**
+         * A list of subnet IDs in the VPC to place the containers in.
+         */
+        containerSubnets: Input<Input<string>[]>;
+        /**
+         * A list of public subnet IDs in the VPC. A `Task` with `public` set runs in
+         * these.
+         */
+        publicSubnets?: Input<Input<string>[]>;
+        /**
+         * A list of subnet IDs in the VPC to place the load balancer in.
+         */
+        loadBalancerSubnets: Input<Input<string>[]>;
+        /**
+         * The ID of the Cloud Map namespace the services are registered in. Given with
+         * `cloudmapNamespaceName`.
+         */
+        cloudmapNamespaceId?: Input<string>;
+        /**
+         * The name of the Cloud Map namespace the services are registered in. Given with
+         * `cloudmapNamespaceId`.
+         */
+        cloudmapNamespaceName?: Input<string>;
+      }>;
 }
 
 export interface ClusterGetArgs {
@@ -169,364 +115,132 @@ export interface ClusterGetArgs {
    */
   id: Input<string>;
   /**
-   * The VPC used for the cluster.
+   * The VPC the cluster's services and tasks run in.
    */
   vpc: ClusterArgs["vpc"];
 }
 
-interface ClusterRef {
-  ref: true;
-  id: Input<string>;
-  vpc: ClusterArgs["vpc"];
-}
-
 /**
- * The `Cluster` component lets you create an [ECS cluster](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/clusters.html) for your app.
- * add `Service` and `Task` components to it.
+ * The `Cluster` component lets you create an [ECS cluster](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/clusters.html)
+ * for your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
+ *
+ * #### Create the cluster
  *
  * ```ts title="sst.config.ts"
  * const vpc = new sst.aws.Vpc("MyVpc");
  * const cluster = new sst.aws.Cluster("MyCluster", { vpc });
  * ```
  *
- * Once created, you can add the following to it:
+ * #### Add a service
  *
- * 1. `Service`: These are containers that are always running, like web or
- *   application servers. They automatically restart if they fail.
- * 2. `Task`: These are containers that are used for long running asynchronous work,
- *   like data processing.
+ * A [`Service`](/docs/component/aws/v5/service) is a set of containers that are always
+ * running, like a web or application server. They're restarted if they fail.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Service("MyService", { cluster });
+ * ```
+ *
+ * #### Add a task
+ *
+ * A [`Task`](/docs/component/aws/v5/task) is a set of containers that's started for long
+ * running asynchronous work, like data processing.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Task("MyTask", { cluster });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Cluster`
+ *
+ * Keep the name, and `sst migrate` moves it. The cluster you've
+ * deployed is kept, and so is everything that runs in it.
+ *
+ * A few things work differently:
+ *
+ * - Switch the services and tasks in the cluster first, or along with it. A
+ *   `sst.aws.Service` and a `sst.aws.Task` take either cluster. A
+ *   [`sst.aws.Service`](/docs/component/aws/service) and a
+ *   [`sst.aws.Task`](/docs/component/aws/task) are typed for `sst.aws.Cluster` alone.
+ * - The deprecated `addService` and `addTask` are gone. Create the service or the task,
+ *   and pass it the cluster. Those methods also gave it the cluster's `provider`, so pass
+ *   that along if the cluster has one.
+ * - The deprecated `vpc.serviceSubnets` is gone. Pass the same subnets as
+ *   `vpc.containerSubnets`; nothing in AWS changes.
+ * - `forceUpgrade` isn't taken: remove it. It upgraded a cluster from `Cluster.v1`, and
+ *   `sst.aws.Cluster.v1` has no V5 form.
+ * - `get` takes any ECS cluster. `sst.aws.Cluster.get` refused one without the version
+ *   tag SST puts on the clusters it creates.
+ * - `nodes.cluster` is the cluster, not an output of it. `nodes` also has the capacity
+ *   providers.
+ * - If you set `tags` on the cluster with an object in `transform`, it keeps the tag SST
+ *   sets next to yours. It's added back when you switch.
  */
-export class Cluster extends Component {
-  private constructorOpts: ComponentResourceOptions;
-  private cluster: Output<ecs.Cluster>;
-  private _vpc:
-    | Vpc
-    | Output<
-        Required<Pick<ClusterVpcArgs, "containerSubnets">> &
-          Omit<ClusterVpcArgs, "containerSubnets" | "serviceSubnets">
-      >;
-  public static v1 = ClusterV1;
+export class Cluster extends component("sst:aws:Cluster", parts) {
+  private network: ReturnType<typeof vpcOf>;
 
   constructor(
     name: string,
     args: ClusterArgs,
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    const _version = { major: 2, minor: 0 };
-    const self = this;
-    this.constructorOpts = opts;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      const vpc = normalizeVpc();
-      this.cluster = ref.cluster;
-      this._vpc = vpc;
+    this.network = vpcOf(name, args.vpc);
+
+    // A cluster that's already deployed is used as it is
+    if (this.existingPart("cluster")) {
+      notAnExistingPart(
+        args.existing,
+        "capacityProviders",
+        `the "${name}" cluster`,
+        `The "cluster" it's given keeps the capacity providers it has.`,
+      );
       return;
     }
 
-    registerVersion();
-    const vpc = normalizeVpc();
-    const cluster = createCluster();
-    createCapacityProviders();
+    const cluster = this.part("cluster", {
+      // The same value the 4.x `Cluster` writes. Its `get` reads this tag,
+      // and refuses a cluster that doesn't have it.
+      tags: { "sst:ref:version": "2.0" },
+    });
 
-    this.cluster = output(cluster);
-    this._vpc = vpc;
-
-    function reference() {
-      const ref = args as ClusterRef;
-      const cluster = ecs.Cluster.get(`${name}Cluster`, ref.id, undefined, {
-        parent: self,
-      });
-      const clusterValidated = cluster.tagsAll.apply((tags) => {
-        const refVersion = tags?.["sst:ref:version"]
-          ? parseComponentVersion(tags["sst:ref:version"])
-          : undefined;
-
-        if (refVersion?.minor !== _version.minor) {
-          throw new VisibleError(
-            [
-              `There have been some minor changes to the "Cluster" component that's being referenced by "${name}".\n`,
-              `To update, you'll need to redeploy the stage where the cluster was created. And then redeploy this stage.`,
-            ].join("\n"),
-          );
-        }
-
-        registerVersion(refVersion);
-
-        return cluster;
-      });
-
-      return { cluster: clusterValidated };
-    }
-
-    function normalizeVpc() {
-      // "vpc" is a Vpc.v1 component
-      if (args.vpc instanceof VpcV1) {
-        throw new VisibleError(
-          `You are using the "Vpc.v1" component. Please migrate to the latest "Vpc" component.`,
-        );
-      }
-
-      // "vpc" is a Vpc component
-      if (args.vpc instanceof Vpc) {
-        return args.vpc;
-      }
-
-      // "vpc" is object
-      return output(args.vpc).apply((vpc) => {
-        if (vpc.containerSubnets && vpc.serviceSubnets)
-          throw new VisibleError(
-            `You cannot provide both "vpc.containerSubnets" and "vpc.serviceSubnets" in the "${name}" Cluster component. The "serviceSubnets" property has been deprecated. Use "containerSubnets" instead.`,
-          );
-        if (!vpc.containerSubnets && !vpc.serviceSubnets)
-          throw new VisibleError(
-            `Missing "vpc.containerSubnets" for the "${name}" Cluster component.`,
-          );
-
-        if (
-          (vpc.cloudmapNamespaceId && !vpc.cloudmapNamespaceName) ||
-          (!vpc.cloudmapNamespaceId && vpc.cloudmapNamespaceName)
-        )
-          throw new VisibleError(
-            `You must provide both "vpc.cloudmapNamespaceId" and "vpc.cloudmapNamespaceName" for the "${name}" Cluster component.`,
-          );
-
-        return {
-          ...vpc,
-          containerSubnets: (vpc.containerSubnets ?? vpc.serviceSubnets)!,
-          serviceSubnets: undefined,
-        };
-      });
-    }
-
-    function createCluster() {
-      return new ecs.Cluster(
-        ...transform(
-          args.transform?.cluster,
-          `${name}Cluster`,
-          {
-            tags: {
-              "sst:ref:version": `${_version.major}.${_version.minor}`,
-            },
-          },
-          { parent: self },
-        ),
-      );
-    }
-
-    function registerVersion(overrideVersion?: ComponentVersion) {
-      const newMajorVersion = _version.major;
-      const oldMajorVersion =
-        overrideVersion?.major ?? $cli.state.version[name];
-      self.registerVersion({
-        new: newMajorVersion,
-        old: oldMajorVersion,
-        message: [
-          `There is a new version of "Cluster" that has breaking changes.`,
-          ``,
-          `What changed:`,
-          `  - In the old version, load balancers were deployed in public subnets, and services were deployed in private subnets. The VPC was required to have NAT gateways.`,
-          `  - In the latest version, both the load balancer and the services are deployed in public subnets. The VPC is not required to have NAT gateways. So the new default makes this cheaper to run.`,
-          ``,
-          `To upgrade:`,
-          `  - Set \`forceUpgrade: "v${newMajorVersion}"\` on the "Cluster" component. Learn more https://sst-community.github.io/sst/docs/component/aws/cluster#forceupgrade`,
-          ``,
-          `To continue using v${$cli.state.version[name]}:`,
-          `  - Rename "Cluster" to "Cluster.v${$cli.state.version[name]}". Learn more about versioning - https://sst-community.github.io/sst/docs/components/#versioning`,
-        ].join("\n"),
-        forceUpgrade: args.forceUpgrade,
-      });
-    }
-
-    function createCapacityProviders() {
-      return new ecs.ClusterCapacityProviders(
-        `${name}CapacityProviders`,
-        {
-          clusterName: cluster.name,
-          capacityProviders: ["FARGATE", "FARGATE_SPOT"],
-        },
-        { parent: self },
-      );
-    }
+    this.part("capacityProviders", {
+      clusterName: cluster.name,
+      capacityProviders: ["FARGATE", "FARGATE_SPOT"],
+    });
   }
 
   /**
    * The cluster ID.
    */
   public get id() {
-    return this.cluster.id;
+    return this.nodes.cluster.id;
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon ECS Cluster.
-       */
-      cluster: this.cluster,
-    };
-  }
-
-  /**
-   * The VPC configuration for the cluster.
+   * Where the cluster's services and tasks run: the `Vpc`, or the ids it was
+   * given in its place.
    * @internal
    */
   public get vpc() {
-    return this._vpc;
+    return this.network;
   }
 
-  /**
-   * Add a service to the cluster.
-   *
-   * @deprecated Use the `Service` component directly to create services. To migrate, change
-   *
-   * ```ts
-   * cluster.addService("MyService", { ...args });
-   * ```
-   *
-   * to
-   *
-   * ```ts
-   * new sst.aws.Service("MyService", { cluster, ...args });
-   * ```
-   *
-   * @param name Name of the service.
-   * @param args Configure the service.
-   * @param opts Resource options.
-   *
-   * @example
-   *
-   * ```ts title="sst.config.ts"
-   * cluster.addService("MyService");
-   * ```
-   *
-   * You can also configure the service. For example, set a custom domain.
-   *
-   * ```js {2} title="sst.config.ts"
-   * cluster.addService("MyService", {
-   *   domain: "example.com"
-   * });
-   * ```
-   *
-   * Enable auto-scaling.
-   *
-   * ```ts title="sst.config.ts"
-   * cluster.addService("MyService", {
-   *   scaling: {
-   *     min: 4,
-   *     max: 16,
-   *     cpuUtilization: 50,
-   *     memoryUtilization: 50,
-   *   }
-   * });
-   * ```
-   *
-   * By default this starts a single container. To add multiple containers in the service, pass in an array of containers args.
-   *
-   * ```ts title="sst.config.ts"
-   * cluster.addService("MyService", {
-   *   architecture: "arm64",
-   *   containers: [
-   *     {
-   *       name: "app",
-   *       image: "nginxdemos/hello:plain-text"
-   *     },
-   *     {
-   *       name: "admin",
-   *       image: {
-   *         context: "./admin",
-   *         dockerfile: "Dockerfile"
-   *       }
-   *     }
-   *   ]
-   * });
-   * ```
-   *
-   * This is useful for running sidecar containers.
-   */
-  public addService(
-    name: string,
-    args?: Omit<ServiceArgs, "cluster">,
-    opts?: ComponentResourceOptions,
-  ) {
-    // Do not prefix the service to allow `Resource.MyService` to work.
-    return new Service(
-      name,
-      {
-        cluster: this,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider, ...opts },
+  /** @internal */
+  public addService(name: string): never {
+    throw new VisibleError(
+      `"addService" isn't a method of the "${this.componentName}" cluster. Create the service and pass it the cluster: new sst.aws.Service("${name}", { cluster, ...args })`,
     );
   }
 
-  /**
-   * Add a task to the cluster.
-   *
-   * @deprecated Use the `Task` component directly to create tasks. To migrate, change
-   *
-   * ```ts
-   * cluster.addTask("MyTask", { ...args });
-   * ```
-   *
-   * to
-   *
-   * ```ts
-   * new sst.aws.Task("MyTask", { cluster, ...args });
-   * ```
-   *
-   * @param name Name of the task.
-   * @param args Configure the task.
-   * @param opts Resource options.
-   *
-   * @example
-   *
-   * ```ts title="sst.config.ts"
-   * cluster.addTask("MyTask");
-   * ```
-   *
-   * You can also configure the task. By default this starts a single container.
-   * To add multiple containers in the task, pass in an array of containers args.
-   *
-   * ```ts title="sst.config.ts"
-   * cluster.addTask("MyTask", {
-   *   architecture: "arm64",
-   *   containers: [
-   *     {
-   *       name: "app",
-   *       image: "nginxdemos/hello:plain-text"
-   *     },
-   *     {
-   *       name: "admin",
-   *       image: {
-   *         context: "./admin",
-   *         dockerfile: "Dockerfile"
-   *       }
-   *     }
-   *   ]
-   * });
-   * ```
-   *
-   * This is useful for running sidecar containers.
-   */
-  public addTask(
-    name: string,
-    args?: Omit<TaskArgs, "cluster">,
-    opts?: ComponentResourceOptions,
-  ) {
-    // Do not prefix the task to allow `Resource.MyTask` to work.
-    return new Task(
-      name,
-      {
-        cluster: this,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider, ...opts },
+  /** @internal */
+  public addTask(name: string): never {
+    throw new VisibleError(
+      `"addTask" isn't a method of the "${this.componentName}" cluster. Create the task and pass it the cluster: new sst.aws.Task("${name}", { cluster, ...args })`,
     );
   }
 
@@ -573,12 +287,47 @@ export class Cluster extends Component {
   ) {
     return new Cluster(
       name,
-      { ref: true, id: args.id, vpc: args.vpc } as ClusterArgs,
+      getArgs({ vpc: args.vpc, existing: { cluster: args.id } }),
       opts,
     );
   }
 }
 
-const __pulumiType = "sst:aws:Cluster";
-// @ts-expect-error
-Cluster.__pulumiType = __pulumiType;
+// The VPC as the services and tasks in the cluster read it: the component, or
+// the ids it was given
+function vpcOf(name: string, vpc: ClusterArgs["vpc"]) {
+  if (isVpc(vpc)) return vpc;
+
+  assertVpcIds(vpc, `the "${name}" cluster`);
+
+  // The ids are checked as they're given, so what's missing fails a preview
+  // even where their values aren't known yet, and once more when they are
+  if (!Output.isInstance(vpc) && !(vpc instanceof Promise)) checkIds(name, vpc);
+  return output(vpc).apply((vpc) => {
+    checkIds(name, vpc);
+    return vpc;
+  });
+}
+
+function checkIds(
+  name: string,
+  vpc: {
+    containerSubnets?: unknown;
+    cloudmapNamespaceId?: unknown;
+    cloudmapNamespaceName?: unknown;
+  },
+) {
+  // 4.x also took the subnets of the containers as `serviceSubnets`
+  if ((vpc as { serviceSubnets?: unknown }).serviceSubnets)
+    throw new VisibleError(
+      `"vpc.serviceSubnets" isn't an option for the "${name}" cluster. It's "vpc.containerSubnets" now.`,
+    );
+  if (!vpc.containerSubnets)
+    throw new VisibleError(
+      `The "vpc" of the "${name}" cluster has no "containerSubnets". Give the subnets its containers run in.`,
+    );
+  if (!vpc.cloudmapNamespaceId !== !vpc.cloudmapNamespaceName)
+    throw new VisibleError(
+      `The "vpc" of the "${name}" cluster has one of "cloudmapNamespaceId" and "cloudmapNamespaceName". Give both, or neither.`,
+    );
+}

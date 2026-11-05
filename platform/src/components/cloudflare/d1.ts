@@ -1,33 +1,40 @@
-import { ComponentResourceOptions } from "@pulumi/pulumi";
-import * as cloudflare from "@pulumi/cloudflare";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
-import { binding } from "./binding";
-import { DEFAULT_ACCOUNT_ID } from ".";
+import type { ComponentResourceOptions } from "@pulumi/pulumi";
+import * as cf from "@pulumi/cloudflare";
+import { type ComponentArgs, component } from "../parts-component";
+import { getArgs } from "../args";
+import { VisibleError } from "../error";
 import type { Input } from "../input";
+import { binding } from "./binding";
+import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { ownId, useExisting } from "./helpers/lookup";
 
-export interface D1Args {
+const parts = {
+  /**
+   * The Cloudflare D1 database. Pass one you have in `existing`, or its ID.
+   */
+  database: cf.D1Database,
+};
+
+export interface D1Args extends ComponentArgs<typeof parts> {
   /**
    * The Cloudflare account ID to use for this D1 database.
    * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
    * @internal
    */
   accountId?: Input<string>;
-  /**
-   * [Transform](/docs/components/#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the D1 resource.
-     */
-    database?: Transform<cloudflare.D1DatabaseArgs>;
-  };
 }
 
-interface D1Ref {
-  ref: boolean;
-  database: cloudflare.D1Database;
+export interface D1GetArgs {
+  /**
+   * The ID of the existing D1 database.
+   */
+  databaseId: Input<string>;
+  /**
+   * The Cloudflare account ID the database belongs to.
+   * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
+   * @internal
+   */
+  accountId?: Input<string>;
 }
 
 /**
@@ -63,37 +70,56 @@ interface D1Ref {
  *   "SELECT id FROM todo ORDER BY id DESC LIMIT 1",
  * ).first();
  * ```
+ *
+ * #### Switch from SST 4's `sst.cloudflare.D1`
+ *
+ * Keep the name, and `sst migrate` moves it. The
+ * database and what's in it are kept.
+ *
+ * A few things are different:
+ *
+ * - `get` takes the database's ID in an object, `get(name, { databaseId })`.
+ *   The deprecated form with the ID as the second argument is gone.
+ * - `get` gives the component the options it's passed, `parent` and
+ *   `provider` included, where `sst.cloudflare.D1.get` gave them to the
+ *   lookup alone. A D1 referenced inside another component is now inside it.
+ * - The database `get` references is looked up inside the component, where
+ *   `sst.cloudflare.D1.get` looked it up beside it. A switch takes the old
+ *   lookup out of the state and looks the database up again, which changes
+ *   nothing in Cloudflare. Its `databaseId` can be an output.
+ * - You can pass a database you already have in `existing`, or its ID, in
+ *   place of `get`.
  */
-export class D1 extends Component implements Link.Linkable {
-  private database: cloudflare.D1Database;
+export class D1 extends component("sst:cloudflare:D1", parts) {
+  constructor(
+    name: string,
+    args: D1Args = {},
+    opts: ComponentResourceOptions = {},
+  ) {
+    super(name, args, opts);
 
-  constructor(name: string, args?: D1Args, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
+    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
 
-    if (args && "ref" in args) {
-      const ref = args as D1Ref;
-      this.database = ref.database;
+    // A database that's already deployed is used as it is. Its ID is looked
+    // up in the account, as Cloudflare's provider takes it.
+    const existing = args.existing?.database;
+    if (existing !== undefined) {
+      useExisting(existing, accountId, (id) => this.lookupPart("database", id));
       return;
     }
 
-    const parent = this;
-    const db = createDB();
+    this.part("database", {
+      // Named by SST, as the 4.x `D1` names it
+      name: "",
+      accountId,
+    });
+  }
 
-    this.database = db;
-
-    function createDB() {
-      return new cloudflare.D1Database(
-        ...transform(
-          args?.transform?.database,
-          `${name}Database`,
-          {
-            name: "",
-            accountId: args?.accountId ?? DEFAULT_ACCOUNT_ID,
-          },
-          { parent },
-        ),
-      );
-    }
+  /**
+   * The generated ID of the D1 database.
+   */
+  public get databaseId() {
+    return ownId(this.nodes.database.id);
   }
 
   /**
@@ -111,41 +137,15 @@ export class D1 extends Component implements Link.Linkable {
    *
    * @internal
    */
-  getSSTLink() {
+  public link() {
     return {
-      properties: {
-        databaseId: this.databaseId,
-      },
+      properties: { databaseId: this.databaseId },
       include: [
         binding({
           type: "d1DatabaseBindings",
-          properties: {
-            id: this.databaseId,
-          },
+          properties: { id: this.databaseId },
         }),
       ],
-    };
-  }
-
-  /**
-   * The generated ID of the D1 database.
-   */
-  public get databaseId() {
-    // Pulumi returns "accountId/databaseId" for imported databases
-    return this.database.id.apply((id) =>
-      id.includes("/") ? id.split("/")[1] : id,
-    );
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Cloudflare D1 database.
-       */
-      database: this.database,
     };
   }
 
@@ -159,7 +159,8 @@ export class D1 extends Component implements Link.Linkable {
    * :::
    *
    * @param name The name of the component.
-   * @param args The database ID and optional account ID of the existing D1 Database.
+   * @param args The database ID of the existing D1 Database.
+   * @param opts Resource options.
    *
    * @example
    * Imagine you create a D1 Database in the `dev` stage. And in your personal
@@ -177,54 +178,29 @@ export class D1 extends Component implements Link.Linkable {
    *
    * ```ts title="sst.config.ts"
    * return {
-   *   d1
+   *   d1: d1.databaseId
    * };
    * ```
    */
   public static get(
     name: string,
-    args: { databaseId: string; accountId?: string },
-    opts?: ComponentResourceOptions,
-  ): D1;
-  /**
-   * @deprecated Use the object-based `args` signature instead: `get(name, { databaseId }, opts)`.
-   */
-  public static get(
-    name: string,
-    databaseId: string,
-    opts?: ComponentResourceOptions,
-  ): D1;
-
-  public static get(
-    name: string,
-    argsOrDatabaseId: { databaseId: string; accountId?: string } | string,
+    args: D1GetArgs,
     opts?: ComponentResourceOptions,
   ) {
-    if (typeof argsOrDatabaseId === "string") {
-    const database = cloudflare.D1Database.get(
-      `${name}Database`,
-      `${DEFAULT_ACCOUNT_ID}/${argsOrDatabaseId}`,
-      undefined,
+    // The 4.x `D1` also took the ID as the second argument, deprecated
+    if (typeof args !== "object" || args === null || !("databaseId" in args))
+      throw new VisibleError(
+        `D1.get("${name}", ...) takes the database's ID in an object: sst.cloudflare.D1.get("${name}", { databaseId: ${JSON.stringify(
+          typeof args === "string" ? args : "<id>",
+        )} }).`,
+      );
+    return new D1(
+      name,
+      getArgs({
+        accountId: args.accountId,
+        existing: { database: args.databaseId },
+      }),
       opts,
     );
-    return new D1(name, {
-      ref: true,
-      database,
-    } as D1Args);
-    }
-    const database = cloudflare.D1Database.get(
-      `${name}Database`,
-      `${argsOrDatabaseId.accountId ?? DEFAULT_ACCOUNT_ID}/${argsOrDatabaseId.databaseId}`,
-      undefined,
-      opts,
-    );
-    return new D1(name, {
-      ref: true,
-      database,
-    } as D1Args);
   }
 }
-
-const __pulumiType = "sst:cloudflare:D1";
-// @ts-expect-error
-D1.__pulumiType = __pulumiType;

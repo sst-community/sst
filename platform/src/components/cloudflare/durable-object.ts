@@ -1,10 +1,17 @@
-import { ComponentResourceOptions, output, type Output } from "@pulumi/pulumi";
-import { Component } from "../component.js";
-import { Link } from "../link.js";
-import type { Input } from "../input.js";
-import { binding } from "./binding.js";
+import {
+  type ComponentResourceOptions,
+  type Output,
+  output,
+} from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import type { Input } from "../input";
+import { binding } from "./binding";
 
-export interface DurableObjectArgs {
+// A Durable Object is a class in the code of the worker it's linked to:
+// nothing is created for it
+const parts = {};
+
+export interface DurableObjectArgs extends ComponentArgs<typeof parts> {
   /**
    * The name of the class in your worker handler file that extends `DurableObject`.
    *
@@ -23,8 +30,9 @@ export interface DurableObjectArgs {
  * [Cloudflare Durable Object](https://developers.cloudflare.com/durable-objects/)
  * for a worker.
  *
- * Create the Durable Object and then link it to a `sst.cloudflare.Worker`. SST
- * adds the Durable Object binding automatically. The `className` must match the
+ * Create the Durable Object and then link it to a
+ * [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker). SST adds
+ * the Durable Object binding automatically. The `className` must match the
  * exported Durable Object class name in your worker code.
  *
  * Durable Objects require migrations on the worker. Use the Worker's
@@ -96,20 +104,32 @@ export interface DurableObjectArgs {
  *   }
  * }
  * ```
+ *
+ * #### Switch from SST 4's `sst.cloudflare.DurableObject`
+ *
+ * Keep the name, and `sst migrate` moves it. It creates nothing in Cloudflare, and a worker linked to
+ * it gets the same binding.
  */
-export class DurableObject extends Component implements Link.Linkable {
-  /**
-   * The exported Durable Object class name.
-   */
-  public readonly className: Output<string>;
-
+export class DurableObject extends component(
+  "sst:cloudflare:DurableObject",
+  parts,
+) {
   constructor(
     name: string,
     args: DurableObjectArgs,
     opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    this.className = output(args.className);
+    super(name, args, opts);
+    this.exportedClass = output(args.className);
+  }
+
+  private exportedClass!: Output<string>;
+
+  /**
+   * The exported Durable Object class name.
+   */
+  public get className() {
+    return this.exportedClass;
   }
 
   /**
@@ -118,27 +138,13 @@ export class DurableObject extends Component implements Link.Linkable {
    *
    * @internal
    */
-  public getSSTLink() {
-    const properties = {
-      className: this.className,
-    };
-
+  public link() {
+    const properties = { className: this.className };
     return {
       properties,
       include: [
-        binding({
-          type: "durableObjectNamespaceBindings",
-          properties,
-        }),
-        {
-          type: "cloudflare.durableObject",
-          ...properties,
-        },
+        binding({ type: "durableObjectNamespaceBindings", properties }),
       ],
     };
   }
 }
-
-const __pulumiType = "sst:cloudflare:DurableObject";
-// @ts-expect-error
-DurableObject.__pulumiType = __pulumiType;

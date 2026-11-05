@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Alb } from "../v5/alb";
+import { Alb } from "../alb";
 
 takeover(Alb, {
   moved: {

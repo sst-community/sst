@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sided, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 const SCHEDULE = "aws:scheduler/schedule:Schedule";
@@ -31,30 +31,59 @@ const pulumi = mockPulumi({
 });
 
 type CronClass =
-  | typeof import("../../../src/components/aws/cron-v2").CronV2
-  | typeof import("../../../src/components/aws/v5/cron").Cron;
+  | typeof import("../../fixtures/v4/components/aws/cron-v2").CronV2
+  | typeof import("../../../src/components/aws/cron").Cron;
 
 describe("Cron", () => {
-  let OriginalCronV2: typeof import("../../../src/components/aws/cron-v2").CronV2;
-  let Cron: typeof import("../../../src/components/aws/v5/cron").Cron;
-  let OriginalFunction: typeof import("../../../src/components/aws/function").Function;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
-  let Workflow: typeof import("../../../src/components/aws/workflow").Workflow;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let Cluster: typeof import("../../../src/components/aws/cluster").Cluster;
-  let OriginalTask: typeof import("../../../src/components/aws/task").Task;
+  let OriginalCronV2: typeof import("../../fixtures/v4/components/aws/cron-v2").CronV2;
+  let Cron: typeof import("../../../src/components/aws/cron").Cron;
+  let OriginalFunction: typeof import("../../fixtures/v4/components/aws/function").Function;
+  let Function: typeof import("../../../src/components/aws/function").Function;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Workflow: any;
+  let Vpc: any;
+  let Cluster: any;
+  let OriginalTask: typeof import("../../fixtures/v4/components/aws/task").Task;
+  let SidedTask: any;
+  let SidedFunction: any;
 
   beforeAll(async () => {
-    OriginalCronV2 = (await import("../../../src/components/aws/cron-v2")).CronV2;
-    Cron = (await import("../../../src/components/aws/v5/cron")).Cron;
-    OriginalFunction = (await import("../../../src/components/aws/function")).Function;
-    Function = (await import("../../../src/components/aws/v5/function")).Function;
-    Workflow = (await import("../../../src/components/aws/workflow")).Workflow;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    Cluster = (await import("../../../src/components/aws/cluster")).Cluster;
-    OriginalTask = (await import("../../../src/components/aws/task")).Task;
+    OriginalCronV2 = (await import("../../fixtures/v4/components/aws/cron-v2")).CronV2;
+    Cron = (await import("../../../src/components/aws/cron")).Cron;
+    OriginalFunction = (await import("../../fixtures/v4/components/aws/function")).Function;
+    Function = (await import("../../../src/components/aws/function")).Function;
+    Workflow = await sidedClass(
+      "Workflow",
+      import("../../fixtures/v4/components/aws/workflow"),
+      import("../../../src/components/aws/workflow"),
+      import("../../../src/components/aws/takeover/workflow"),
+    );
+    Vpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    Cluster = await sidedClass(
+      "Cluster",
+      import("../../fixtures/v4/components/aws/cluster"),
+      import("../../../src/components/aws/cluster"),
+      import("../../../src/components/aws/takeover/cluster"),
+    );
+    OriginalTask = (await import("../../fixtures/v4/components/aws/task")).Task;
     await import("../../../src/components/aws/takeover/cron");
     await import("../../../src/components/aws/takeover/function");
+    // SST 4's for SST 4's CronV2, SST 5's for SST 5's Cron
+    SidedTask = await sidedClass(
+      "Task",
+      import("../../fixtures/v4/components/aws/task"),
+      import("../../../src/components/aws/task"),
+      import("../../../src/components/aws/takeover/task"),
+    );
+    SidedFunction = sided(
+      () => OriginalFunction,
+      () => Function,
+    );
   });
 
   beforeEach(() => {
@@ -71,7 +100,7 @@ describe("Cron", () => {
       .map((r) => r.name)
       .sort();
   const task = () =>
-    new OriginalTask("MyTask", {
+    new SidedTask("MyTask", {
       cluster: new Cluster("MyCluster", { vpc: new Vpc("MyVpc") }),
       image: "nginx:latest",
     });
@@ -165,7 +194,7 @@ describe("Cron", () => {
           new Cron(
             "MyCronJob",
             {
-              function: new OriginalFunction("MyFunction", {
+              function: new SidedFunction("MyFunction", {
                 handler: "src/cron.handler",
               }),
               schedule: "rate(1 minute)",
@@ -456,7 +485,7 @@ describe("Cron", () => {
         ],
       }),
       ecsParameters: {
-        taskDefinitionArn: "arn:aws:mock:us-east-1:123456789012:MyTaskTask",
+        taskDefinitionArn: "arn:aws:mock:us-east-1:123456789012:MyTaskTaskDefinition",
         launchType: "FARGATE",
         networkConfiguration: {
           subnets: ["MyVpcPublicSubnet1_id", "MyVpcPublicSubnet2_id"],
@@ -472,7 +501,7 @@ describe("Cron", () => {
     ).toEqual([
       {
         actions: ["ecs:RunTask"],
-        resources: ["arn:aws:mock:us-east-1:123456789012:MyTaskTask"],
+        resources: ["arn:aws:mock:us-east-1:123456789012:MyTaskTaskDefinition"],
       },
       {
         actions: ["iam:PassRole"],

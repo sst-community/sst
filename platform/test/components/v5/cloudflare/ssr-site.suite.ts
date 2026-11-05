@@ -3,7 +3,11 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi, type TakeoverCase } from "../../../helpers/graph";
+import {
+  mockPulumi,
+  sidedClass,
+  type TakeoverCase,
+} from "../../../helpers/graph";
 import { rejectionsOf } from "../../../helpers/rejections";
 
 // The tests every Cloudflare site with a server passes, the `Astro`, the
@@ -13,9 +17,9 @@ import { rejectionsOf } from "../../../helpers/rejections";
 // framework: the two have the same shape.
 
 type V5Class =
-  typeof import("../../../../src/components/cloudflare/v5/astro").Astro;
-type OriginalClass =
   typeof import("../../../../src/components/cloudflare/astro").Astro;
+type OriginalClass =
+  typeof import("../../../fixtures/v4/components/cloudflare/astro").Astro;
 type AnyClass = V5Class | OriginalClass;
 
 const SCRIPT = "cloudflare:index/workersScript:WorkersScript";
@@ -117,16 +121,21 @@ export function ssrSiteSuite(
   describe(c.label, () => {
     let Site: V5Class;
     let OriginalSite: OriginalClass;
-    let Kv: typeof import("../../../../src/components/cloudflare/kv").Kv;
+    // SST 4's for SST 4's side, SST 5's for SST 5's
+    let Kv: any;
     let Secret: typeof import("../../../../src/components/secret").Secret;
-    let Bucket: typeof import("../../../../src/components/aws/v5/bucket").Bucket;
+    let Bucket: typeof import("../../../../src/components/aws/bucket").Bucket;
 
     beforeAll(async () => {
       ({ original: OriginalSite, v5: Site } = await c.load());
-      Kv = (await import("../../../../src/components/cloudflare/kv")).Kv;
+      Kv = await sidedClass(
+        "Kv",
+        import("../../../fixtures/v4/components/cloudflare/kv"),
+        import("../../../../src/components/cloudflare/kv"),
+        import("../../../../src/components/cloudflare/takeover/kv"),
+      );
       Secret = (await import("../../../../src/components/secret")).Secret;
-      Bucket = (await import("../../../../src/components/aws/v5/bucket"))
-        .Bucket;
+      Bucket = (await import("../../../../src/components/aws/bucket")).Bucket;
       await import("../../../../src/components/cloudflare/takeover/index");
     });
 
@@ -310,7 +319,7 @@ export function ssrSiteSuite(
     // A Worker can't reach a bucket in a jurisdiction without it
     it("binds a bucket it's linked to in the Wrangler config, with its jurisdiction", async () => {
       const { Bucket: R2Bucket } = await import(
-        "../../../../src/components/cloudflare/v5/bucket"
+        "../../../../src/components/cloudflare/bucket"
       );
       const files = new R2Bucket("Files");
       const records = new R2Bucket("Records", {

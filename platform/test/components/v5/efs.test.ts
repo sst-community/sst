@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 const FILE_SYSTEM = "aws:efs/fileSystem:FileSystem";
@@ -84,32 +84,63 @@ const pulumi = mockPulumi({
 });
 
 describe("Efs", () => {
-  let OriginalEfs: typeof import("../../../src/components/aws/efs").Efs;
-  let Efs: typeof import("../../../src/components/aws/v5/efs").Efs;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let V5Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
-  let Cluster: typeof import("../../../src/components/aws/v5/cluster").Cluster;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
-  let Service: typeof import("../../../src/components/aws/v5/service").Service;
-  let Task: typeof import("../../../src/components/aws/v5/task").Task;
+  let OriginalEfs: typeof import("../../fixtures/v4/components/aws/efs").Efs;
+  let Efs: typeof import("../../../src/components/aws/efs").Efs;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Vpc: any;
+  let V5Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
+  let Cluster: typeof import("../../../src/components/aws/cluster").Cluster;
+  let Function: typeof import("../../../src/components/aws/function").Function;
+  let Service: typeof import("../../../src/components/aws/service").Service;
+  let Task: typeof import("../../../src/components/aws/task").Task;
+  let SidedCluster: any;
+  let SidedFunction: any;
+  let SidedService: any;
+  let SidedTask: any;
   let aws: typeof import("@pulumi/aws");
 
   beforeAll(async () => {
-    OriginalEfs = (await import("../../../src/components/aws/efs")).Efs;
-    Efs = (await import("../../../src/components/aws/v5/efs")).Efs;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    V5Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
-    Cluster = (await import("../../../src/components/aws/v5/cluster")).Cluster;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
-    Service = (await import("../../../src/components/aws/v5/service")).Service;
-    Task = (await import("../../../src/components/aws/v5/task")).Task;
+    OriginalEfs = (await import("../../fixtures/v4/components/aws/efs")).Efs;
+    Efs = (await import("../../../src/components/aws/efs")).Efs;
+    Vpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    V5Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    Cluster = (await import("../../../src/components/aws/cluster")).Cluster;
+    Function = (await import("../../../src/components/aws/function")).Function;
+    Service = (await import("../../../src/components/aws/service")).Service;
+    Task = (await import("../../../src/components/aws/task")).Task;
     aws = await import("@pulumi/aws");
     await import("../../../src/components/aws/takeover/efs");
     await import("../../../src/components/aws/takeover/vpc");
     await import("../../../src/components/aws/takeover/function");
     await import("../../../src/components/aws/takeover/service");
     await import("../../../src/components/aws/takeover/task");
+    // SST 4's for the file system SST 4's, SST 5's for SST 5's
+    SidedCluster = await sidedClass(
+      "Cluster",
+      import("../../fixtures/v4/components/aws/cluster"),
+      import("../../../src/components/aws/cluster"),
+      import("../../../src/components/aws/takeover/cluster"),
+    );
+    SidedFunction = await sidedClass(
+      "Function",
+      import("../../fixtures/v4/components/aws/function"),
+      import("../../../src/components/aws/function"),
+    );
+    SidedService = await sidedClass(
+      "Service",
+      import("../../fixtures/v4/components/aws/service"),
+      import("../../../src/components/aws/service"),
+    );
+    SidedTask = await sidedClass(
+      "Task",
+      import("../../fixtures/v4/components/aws/task"),
+      import("../../../src/components/aws/task"),
+    );
   });
 
   beforeEach(() => {
@@ -245,21 +276,23 @@ describe("Efs", () => {
         },
         "mounted by a function, a service and a task": {
           changed: inVpc,
+          // SST 4's Service's dev command, which SST 5's reports itself
+          unclaimed: ["sst:sst:DevCommand::MyServiceDev"],
           create: (Efs, opts) => {
             const vpc = new Vpc("MyVpc");
             const efs = new Efs("MyEfs", { vpc }, opts);
-            const cluster = new Cluster("MyCluster", { vpc });
-            new Function("MyFunction", {
+            const cluster = new SidedCluster("MyCluster", { vpc });
+            new SidedFunction("MyFunction", {
               handler: "src/index.handler",
               vpc,
               volume: { efs },
             });
-            new Service("MyService", {
+            new SidedService("MyService", {
               cluster,
               image: "nginx:latest",
               volumes: [{ efs, path: "/mnt/efs" }],
             });
-            new Task("MyTask", {
+            new SidedTask("MyTask", {
               cluster,
               containers: [
                 {
@@ -326,13 +359,13 @@ describe("Efs", () => {
         "mounted by a function and a task": (Efs, opts) => {
           const vpc = new Vpc("MyVpc");
           const efs = Efs.get("MyEfs", "fs-123", opts);
-          new Function("MyFunction", {
+          new SidedFunction("MyFunction", {
             handler: "src/index.handler",
             vpc,
             volume: { efs, path: "/mnt/files" },
           });
-          new Task("MyTask", {
-            cluster: new Cluster("MyCluster", { vpc }),
+          new SidedTask("MyTask", {
+            cluster: new SidedCluster("MyCluster", { vpc }),
             image: "nginx:latest",
             volumes: [{ efs, path: "/data" }],
           });
@@ -704,16 +737,9 @@ describe("Efs", () => {
     });
   });
 
-  // The V5 Function, Service and Task take the 4.x Efs and the V5 one, and
-  // read the same things off both.
   describe("what mounts it", () => {
     it("gives a function the access point's ARN", async () => {
       const vpc = { privateSubnets: ["subnet-0a1b"], securityGroups: ["sg-1"] };
-      new Function("Original", {
-        handler: "src/index.handler",
-        vpc,
-        volume: { efs: new OriginalEfs("Theirs", { vpc: customVpc }) },
-      });
       new Function("New", {
         handler: "src/index.handler",
         vpc,
@@ -724,10 +750,6 @@ describe("Efs", () => {
       });
       await pulumi.settle();
 
-      expect(resource("OriginalFunction").inputs.fileSystemConfig).toEqual({
-        arn: mockArn("TheirsAccessPoint"),
-        localMountPath: "/mnt/efs",
-      });
       expect(resource("NewFunction").inputs.fileSystemConfig).toEqual({
         arn: mockArn("MyEfsAccessPoint"),
         localMountPath: "/mnt/files",
@@ -747,10 +769,6 @@ describe("Efs", () => {
         cluster,
         image: "nginx:latest",
         volumes: [
-          {
-            efs: new OriginalEfs("Theirs", { vpc: customVpc }),
-            path: "/theirs",
-          },
           { efs: new Efs("MyEfs", { vpc: customVpc }), path: "/mine" },
           { efs: { fileSystem: "fs-9", accessPoint: "fsap-9" }, path: "/ids" },
         ],
@@ -762,10 +780,6 @@ describe("Efs", () => {
           (volume: any) => volume.efsVolumeConfiguration,
         ),
       ).toMatchObject([
-        {
-          fileSystemId: "TheirsFileSystem_id",
-          authorizationConfig: { accessPointId: "TheirsAccessPoint_id" },
-        },
         {
           fileSystemId: "MyEfsFileSystem_id",
           authorizationConfig: { accessPointId: "MyEfsAccessPoint_id" },

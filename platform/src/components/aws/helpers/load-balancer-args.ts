@@ -9,7 +9,7 @@ import type { Input } from "../../input";
 import type {
   DnsValidatedCertificate,
   DnsValidatedCertificateArgs,
-} from "../v5/dns-validated-certificate";
+} from "../dns-validated-certificate";
 import { type DomainArgs, domainOf } from "./domain";
 
 /**

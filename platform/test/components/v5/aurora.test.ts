@@ -4,7 +4,7 @@ import {
   output,
   secret,
 } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 const CLUSTER = "aws:rds/cluster:Cluster";
@@ -62,20 +62,28 @@ const pulumi = mockPulumi({
 const vpc = { subnets: ["subnet-1", "subnet-2"], securityGroups: ["sg-1"] };
 
 type AuroraClass =
-  | typeof import("../../../src/components/aws/aurora").Aurora
-  | typeof import("../../../src/components/aws/v5/aurora").Aurora;
+  | typeof import("../../fixtures/v4/components/aws/aurora").Aurora
+  | typeof import("../../../src/components/aws/aurora").Aurora;
 
 describe("Aurora", () => {
-  let OriginalAurora: typeof import("../../../src/components/aws/aurora").Aurora;
-  let Aurora: typeof import("../../../src/components/aws/v5/aurora").Aurora;
-  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
+  let OriginalAurora: typeof import("../../fixtures/v4/components/aws/aurora").Aurora;
+  let Aurora: typeof import("../../../src/components/aws/aurora").Aurora;
+  let OriginalVpc: typeof import("../../fixtures/v4/components/aws/vpc").Vpc;
+  let SidedVpc: any;
+  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
-    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
-    OriginalAurora = (await import("../../../src/components/aws/aurora")).Aurora;
-    Aurora = (await import("../../../src/components/aws/v5/aurora")).Aurora;
+    OriginalVpc = (await import("../../fixtures/v4/components/aws/vpc")).Vpc;
+    // SST 4's for SST 4's side, SST 5's for SST 5's
+    SidedVpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
+    OriginalAurora = (await import("../../fixtures/v4/components/aws/aurora")).Aurora;
+    Aurora = (await import("../../../src/components/aws/aurora")).Aurora;
     await import("../../../src/components/aws/takeover/aurora");
     await import("../../../src/components/aws/takeover/vpc");
   });
@@ -352,7 +360,7 @@ describe("Aurora", () => {
               "MyDatabase",
               {
                 engine: "postgres",
-                vpc: new OriginalVpc("MyVpc"),
+                vpc: new SidedVpc("MyVpc"),
                 proxy: true,
               },
               opts,
@@ -664,8 +672,8 @@ describe("Aurora", () => {
   });
 
   describe("in a Vpc", () => {
-    it("is in the private subnets and security groups of either kind", async () => {
-      for (const [i, VpcClass] of [OriginalVpc, Vpc].entries()) {
+    it("is in the private subnets and security groups of a Vpc", async () => {
+      for (const [i, VpcClass] of [Vpc].entries()) {
         pulumi.reset();
         const net = new VpcClass(`Net${i}`);
         new Aurora("MyDatabase", { engine: "postgres", vpc: net, proxy: true });

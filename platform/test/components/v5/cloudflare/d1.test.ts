@@ -9,22 +9,23 @@ const handler = "src/worker.mjs";
 const pulumi = mockPulumi();
 
 type D1Class =
-  | typeof import("../../../../src/components/cloudflare/d1").D1
-  | typeof import("../../../../src/components/cloudflare/v5/d1").D1;
+  | typeof import("../../../fixtures/v4/components/cloudflare/d1").D1
+  | typeof import("../../../../src/components/cloudflare/d1").D1;
 
 describe("D1", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/d1").D1;
-  let D1: typeof import("../../../../src/components/cloudflare/v5/d1").D1;
-  let OriginalWorker: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/d1").D1;
+  let D1: typeof import("../../../../src/components/cloudflare/d1").D1;
+  let OriginalWorker: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
 
   beforeAll(async () => {
-    Original = (await import("../../../../src/components/cloudflare/d1")).D1;
-    D1 = (await import("../../../../src/components/cloudflare/v5/d1")).D1;
+    Original = (await import("../../../fixtures/v4/components/cloudflare/d1"))
+      .D1;
+    D1 = (await import("../../../../src/components/cloudflare/d1")).D1;
     OriginalWorker = (
-      await import("../../../../src/components/cloudflare/worker")
+      await import("../../../fixtures/v4/components/cloudflare/worker")
     ).Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
     await import("../../../../src/components/cloudflare/takeover/index");
   });
@@ -203,7 +204,7 @@ describe("D1", () => {
 
     it("refuses the deprecated get with the id alone, showing the call to write", () => {
       expect(() => (D1.get as any)("MyD1", "a1b2c3")).toThrow(
-        `D1.get("MyD1", ...) takes the database's ID in an object: sst.cloudflare.v5.D1.get("MyD1", { databaseId: "a1b2c3" }).`,
+        `D1.get("MyD1", ...) takes the database's ID in an object: sst.cloudflare.D1.get("MyD1", { databaseId: "a1b2c3" }).`,
       );
     });
   });

@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../../helpers/graph";
 import { applyErrors } from "../../../helpers/apply-errors";
 
 const SCRIPT = "cloudflare:index/workersScript:WorkersScript";
@@ -11,23 +11,30 @@ const handler = "src/worker.mjs";
 const pulumi = mockPulumi();
 
 type WorkerClass =
-  | typeof import("../../../../src/components/cloudflare/worker").Worker
-  | typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  | typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker
+  | typeof import("../../../../src/components/cloudflare/worker").Worker;
 
 describe("Worker", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
-  let Kv: typeof import("../../../../src/components/cloudflare/kv").Kv;
-  let Bucket: typeof import("../../../../src/components/aws/v5/bucket").Bucket;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Kv: any;
+  let Bucket: typeof import("../../../../src/components/aws/bucket").Bucket;
   let Secret: typeof import("../../../../src/components/secret").Secret;
 
   beforeAll(async () => {
-    Original = (await import("../../../../src/components/cloudflare/worker"))
+    Original = (
+      await import("../../../fixtures/v4/components/cloudflare/worker")
+    ).Worker;
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
-      .Worker;
-    Kv = (await import("../../../../src/components/cloudflare/kv")).Kv;
-    Bucket = (await import("../../../../src/components/aws/v5/bucket")).Bucket;
+    Kv = await sidedClass(
+      "Kv",
+      import("../../../fixtures/v4/components/cloudflare/kv"),
+      import("../../../../src/components/cloudflare/kv"),
+      import("../../../../src/components/cloudflare/takeover/kv"),
+    );
+    Bucket = (await import("../../../../src/components/aws/bucket")).Bucket;
     Secret = (await import("../../../../src/components/secret")).Secret;
     await import("../../../../src/components/cloudflare/takeover/index");
   });

@@ -183,7 +183,7 @@ describe("Component parts", () => {
   // "DocsKeys.sst.aws.KvKeys"
   it("takes one of SST's provider resources as a part", async () => {
     const { KvKeys } = await import(
-      "../../src/components/aws/providers/kv-keys"
+      "../fixtures/v4/components/aws/providers/kv-keys"
     );
     const parts = { keys: KvKeys };
     class Routed extends component("acme:index:Routed", parts) {
@@ -1160,7 +1160,7 @@ describe("Component parts", () => {
     });
 
     it("takes another component as a part", async () => {
-      const { Cron } = await import("../../src/components/aws/v5/cron");
+      const { Cron } = await import("../../src/components/aws/cron");
       const parts = { table: aws.dynamodb.Table, cleanup: Cron };
       class Sessions extends component("docs:index:Sessions", parts) {
         constructor(name: string, args: ComponentArgs<typeof parts> = {}) {

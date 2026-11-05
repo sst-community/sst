@@ -1,12 +1,11 @@
 import { type Input, output } from "@pulumi/pulumi";
-import type { Queue as OriginalQueue } from "../queue";
-import type { Queue } from "../v5/queue";
+import type { Queue } from "../queue";
 
 /**
- * A `Queue` component: the 4.x one or the V5 one. Each gives the queue's ARN
+ * A `Queue` component. Each gives the queue's ARN
  * in `arn`.
  */
-export type AnyQueue = OriginalQueue | Queue;
+export type AnyQueue = Queue;
 
 /** The ARN of a queue that's given as a `Queue` component, or as its ARN. */
 export function queueArnOf(queue: Input<string | AnyQueue>) {

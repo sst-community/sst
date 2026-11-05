@@ -10,26 +10,26 @@ const className = "OrderProcessor";
 const pulumi = mockPulumi();
 
 type WorkflowClass =
-  | typeof import("../../../../src/components/cloudflare/workflow").Workflow
-  | typeof import("../../../../src/components/cloudflare/v5/workflow").Workflow;
+  | typeof import("../../../fixtures/v4/components/cloudflare/workflow").Workflow
+  | typeof import("../../../../src/components/cloudflare/workflow").Workflow;
 
 describe("Workflow", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/workflow").Workflow;
-  let Workflow: typeof import("../../../../src/components/cloudflare/v5/workflow").Workflow;
-  let OriginalWorker: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/workflow").Workflow;
+  let Workflow: typeof import("../../../../src/components/cloudflare/workflow").Workflow;
+  let OriginalWorker: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
   let Secret: typeof import("../../../../src/components/secret").Secret;
 
   beforeAll(async () => {
-    Original = (await import("../../../../src/components/cloudflare/workflow"))
-      .Workflow;
-    Workflow = (
-      await import("../../../../src/components/cloudflare/v5/workflow")
+    Original = (
+      await import("../../../fixtures/v4/components/cloudflare/workflow")
     ).Workflow;
+    Workflow = (await import("../../../../src/components/cloudflare/workflow"))
+      .Workflow;
     OriginalWorker = (
-      await import("../../../../src/components/cloudflare/worker")
+      await import("../../../fixtures/v4/components/cloudflare/worker")
     ).Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
     Secret = (await import("../../../../src/components/secret")).Secret;
     await import("../../../../src/components/cloudflare/takeover/index");

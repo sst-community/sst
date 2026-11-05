@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { CognitoUserPool } from "../v5/cognito-user-pool";
+import { CognitoUserPool } from "../cognito-user-pool";
 import { childOf } from "./helpers";
 
 // The 4.x `CognitoUserPool` keeps each identity provider in a component of its

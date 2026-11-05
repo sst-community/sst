@@ -1,20 +1,57 @@
 import {
   ComponentResourceOptions,
+  type Output,
   interpolate,
   jsonStringify,
-  Output,
   output,
 } from "@pulumi/pulumi";
-import { $print, Component, Transform, transform } from "../component";
-import { Link } from "../link";
-import { Input } from "../input.js";
-import { iam, opensearch, secretsmanager } from "@pulumi/aws";
 import { RandomPassword } from "@pulumi/random";
+import { iam, opensearch, secretsmanager } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  named,
+  optional,
+} from "../parts-component";
+import { plain, onlyExisting, getArgs } from "../args";
+import { context } from "../contract";
+import type { Input } from "../input";
 import { VisibleError } from "../error";
-import { SizeGbTb, toGBs } from "../size";
-import { DevCommand } from "../experimental/dev-command.js";
+import { type SizeGbTb, toGBs } from "../size";
+import {
+  devValue,
+  localPassword,
+  localServerPane,
+} from "./helpers/local-server";
+import { secretField, tagOf } from "./helpers/secret";
+import { parseOpenSearch } from "./helpers/arn";
 
-export interface OpenSearchArgs {
+const parts = {
+  /**
+   * The master user's password, generated when `password` isn't set.
+   */
+  password: optional(RandomPassword),
+  /**
+   * The Secrets Manager secret the master user's username and password are kept in. Not
+   * created by `get`, which reads the password from the one the domain is tagged with, or
+   * from the one given here.
+   */
+  secret: optional(secretsmanager.Secret),
+  /**
+   * The secret's value. Not created by `get`.
+   */
+  secretVersion: optional(secretsmanager.SecretVersion),
+  /**
+   * The OpenSearch domain.
+   */
+  domain: opensearch.Domain,
+  /**
+   * The OpenSearch domain policy. Not created by `get`.
+   */
+  policy: named(optional(opensearch.DomainPolicy), "DomainPolicy"),
+};
+
+export interface OpenSearchArgs extends ComponentArgs<typeof parts> {
   /**
    * The OpenSearch engine version. Check out the [available versions](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html#choosing-version).
    *
@@ -64,6 +101,9 @@ export interface OpenSearchArgs {
    *   password: new sst.Secret("MyDomainPassword").value
    * }
    * ```
+   *
+   * Whether it's set decides whether a password is generated, so it has to be set or left
+   * out, not given as an output that may be `undefined`.
    */
   password?: Input<string>;
   /**
@@ -106,7 +146,7 @@ export interface OpenSearchArgs {
    * :::
    *
    * This will skip deploying an OpenSearch domain and link to the locally running
-   * OpenSearch process instead.
+   * OpenSearch process instead. It has to be a plain value: it decides what's deployed.
    *
    * @example
    *
@@ -140,30 +180,14 @@ export interface OpenSearchArgs {
      */
     password?: Input<string>;
   };
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the OpenSearch domain.
-     */
-    domain?: Transform<opensearch.DomainArgs>;
-    /**
-     * Transform the OpenSearch domain policy.
-     */
-    policy?: Transform<opensearch.DomainPolicyArgs>;
-  };
-}
-
-interface OpenSearchRef {
-  ref: boolean;
-  id: Input<string>;
 }
 
 /**
  * The `OpenSearch` component lets you add a deployed instance of OpenSearch, or an
  * OpenSearch _domain_ to your app using [Amazon OpenSearch Service](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html).
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -241,6 +265,37 @@ interface OpenSearchRef {
  * This will skip deploying an OpenSearch domain and link to the locally running
  * OpenSearch process instead.
  *
+ * #### Switch from SST 4's `sst.aws.OpenSearch`
+ *
+ * Keep the name, and `sst migrate` moves it. The domain,
+ * its policy, its password and the secret it's kept in are kept.
+ *
+ * A few things work differently:
+ *
+ * - With `dev` set, `sst.aws.OpenSearch` created a component for the pane `sst dev`
+ *   shows, in every deploy. The V5 one tells `sst dev` itself, so a deploy drops that
+ *   component. It has nothing in AWS behind it. An empty local password is shown as
+ *   "[no password]" in the pane.
+ * - `nodes` has every resource. Reading one that isn't created in `sst dev` with `dev`
+ *   set throws an error that says why, where `sst.aws.OpenSearch` gave `undefined`.
+ * - If you set `tags` on the domain with an object in `transform`, it keeps the tags SST
+ *   sets next to yours. They're added back when you switch. `sst.aws.OpenSearch`
+ *   replaced them, which left `get` unable to find the domain's username and password.
+ * - The same goes for the domain's other settings SST sets as objects: `clusterConfig`,
+ *   `ebsOptions`, `advancedSecurityOptions`, `nodeToNodeEncryption`, `encryptAtRest` and
+ *   `domainEndpointOptions`. One you set with an object in `transform` keeps what SST
+ *   sets in it that you don't, where `sst.aws.OpenSearch` replaced it whole. So a master
+ *   user given by its ARN would get SST's username and password next to it: replace
+ *   `advancedSecurityOptions` in a function, as
+ *   `domain: (args) => { args.advancedSecurityOptions = { ... } }`.
+ * - `get` takes the domain's name, or its ARN, which is the component's `id`.
+ *   `sst.aws.OpenSearch.get` was documented to take the `id`, but couldn't look a domain
+ *   up by its ARN.
+ * - `get` looks the domain up inside the component, with the component's `provider`.
+ *   `sst.aws.OpenSearch.get` looked it up at the top of your app, with your app's
+ *   provider, so a switch takes that lookup out of the state, which changes nothing in
+ *   AWS.
+ *
  * ---
  *
  * ### Cost
@@ -255,15 +310,12 @@ interface OpenSearchRef {
  * The above are rough estimates for _us-east-1_, check out the [OpenSearch Service pricing](https://aws.amazon.com/opensearch-service/pricing/)
  * for more details.
  */
-export class OpenSearch extends Component implements Link.Linkable {
-  private domain?: opensearch.Domain;
-  private _username?: Output<string>;
-  private _password?: Output<string>;
-  private dev?: {
-    enabled: boolean;
-    url: Output<string>;
+export class OpenSearch extends component("sst:aws:OpenSearch", parts) {
+  private readonly connection: {
+    id: Output<string>;
     username: Output<string>;
     password: Output<string>;
+    url: Output<string>;
   };
 
   constructor(
@@ -271,77 +323,108 @@ export class OpenSearch extends Component implements Link.Linkable {
     args: OpenSearchArgs = {},
     opts: ComponentResourceOptions = {},
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
     const self = this;
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this.domain = ref.domain;
-      this._username = ref.username;
-      this._password = ref.password;
+    const owner = `the "${name}" OpenSearch domain`;
+    const username = output(args.username).apply((v) => v ?? "admin");
+
+    // Given a domain that's already deployed, it uses the secret with its
+    // password, and creates nothing else
+    if (args.existing?.domain !== undefined)
+      onlyExisting(args.existing, ["domain", "secret"], owner);
+
+    // In `sst dev`, an OpenSearch on the user's machine stands in for the
+    // domain. This is the only place the component handles dev mode.
+    const dev = plain(args.dev, `The "dev" of ${owner}`);
+    if (dev && context().dev) {
+      this.runsLocally();
+      this.connection = runLocally(dev);
       return;
     }
 
-    const engineVersion = output(args.version).apply(
-      (v) => v ?? "OpenSearch_2.17",
-    );
-    const instanceType = output(args.instance).apply((v) => v ?? "t3.small");
-    const username = output(args.username).apply((v) => v ?? "admin");
-    const storage = normalizeStorage();
-
-    const dev = registerDev();
-    if (dev?.enabled) {
-      this.dev = dev;
+    // A domain that's already deployed
+    const existing = this.existingPart("domain");
+    if (existing) {
+      this.connection = reference(existing);
       return;
     }
 
     const password = createPassword();
-    const secret = createSecret();
-    const domain = createDomain();
-    const policy = createPolicy();
-
-    this.domain = domain;
-    this._username = username;
-    this._password = password;
-    this.registerOutputs({
-      _hint: this.url,
+    const secret = this.part("secret", { recoveryWindowInDays: 0 });
+    this.part("secretVersion", {
+      secretId: secret.id,
+      secretString: jsonStringify({ username, password }),
     });
 
-    function reference() {
-      const ref = args as unknown as OpenSearchRef;
-      // Note: passing in `parent` causes Pulumi to lookup the current component's
-      //       generated ID for the Domain. Not the one passed int. Need to look into
-      //       this.
-      //const domain = opensearch.Domain.get(`${name}Domain`, ref.id, undefined, {
-      //  parent: self,
-      //});
-      const domain = opensearch.Domain.get(`${name}Domain`, ref.id);
+    const domain = this.part("domain", {
+      engineVersion: output(args.version).apply((v) => v ?? "OpenSearch_2.17"),
+      clusterConfig: {
+        instanceType: interpolate`${output(args.instance).apply(
+          (v) => v ?? "t3.small",
+        )}.search`,
+        instanceCount: 1,
+        dedicatedMasterEnabled: false,
+        zoneAwarenessEnabled: false,
+      },
+      ebsOptions: {
+        ebsEnabled: true,
+        volumeSize: normalizeStorage(),
+        volumeType: "gp3",
+      },
+      advancedSecurityOptions: {
+        enabled: true,
+        internalUserDatabaseEnabled: true,
+        masterUserOptions: {
+          masterUserName: username,
+          masterUserPassword: password,
+        },
+      },
+      nodeToNodeEncryption: { enabled: true },
+      encryptAtRest: { enabled: true },
+      domainEndpointOptions: {
+        enforceHttps: true,
+        tlsSecurityPolicy: "Policy-Min-TLS-1-2-2019-07",
+      },
+      // How `get` finds the username and the password
+      tags: {
+        "sst:ref:password": secret.id,
+        "sst:ref:username": username,
+      },
+    });
 
-      const input = domain.tagsAll.apply((tags) => {
-        if (!tags?.["sst:ref:username"])
-          throw new VisibleError(
-            `Failed to get username for OpenSearch ${name}.`,
-          );
-        if (!tags?.["sst:ref:password"])
-          throw new VisibleError(
-            `Failed to get password for OpenSearch ${name}.`,
-          );
+    this.part("policy", {
+      domainName: domain.domainName,
+      accessPolicies: iam.getPolicyDocumentOutput({
+        statements: [
+          {
+            principals: [{ type: "*", identifiers: ["*"] }],
+            actions: ["*"],
+            resources: ["*"],
+          },
+        ],
+      }).json,
+    });
 
-        return {
-          username: tags["sst:ref:username"],
-          password: tags["sst:ref:password"],
-        };
-      });
+    this.connection = {
+      id: domain.id,
+      username,
+      password,
+      url: interpolate`https://${domain.endpoint}`,
+    };
+    this.report({ hint: this.connection.url });
 
-      const secret = secretsmanager.getSecretVersionOutput(
-        { secretId: input.password },
-        { parent: self },
-      );
-      const password = $jsonParse(secret.secretString).apply(
-        (v) => v.password as string,
-      );
-
-      return { domain, username: input.username, password };
+    function createPassword() {
+      // As in SST 4, an empty password is generated too
+      return args.password
+        ? output(args.password)
+        : self.part("password", {
+            length: 32,
+            minLower: 1,
+            minUpper: 1,
+            minNumeric: 1,
+            minSpecial: 1,
+          }).result;
     }
 
     function normalizeStorage() {
@@ -349,158 +432,63 @@ export class OpenSearch extends Component implements Link.Linkable {
         const size = toGBs(v);
         if (size < 10) {
           throw new VisibleError(
-            `Storage must be at least 10 GB for the ${name} OpenSearch domain.`,
+            `The "storage" of ${owner} is ${v}. It has to be at least 10 GB.`,
           );
         }
         return size;
       });
     }
 
-    function registerDev() {
-      if (!args.dev) return undefined;
+    // A domain created by this component, or by `sst.aws.OpenSearch`, is
+    // tagged with its username and the secret that holds its password. Given
+    // its own, or the secret, it uses those.
+    function reference(domain: opensearch.Domain) {
+      const secret = self.existingPart("secret");
+      return {
+        id: domain.id,
+        username: args.username
+          ? output(args.username)
+          : tagOf(
+              domain,
+              "sst:ref:username",
+              `The "${name}" OpenSearch domain can't find its username: its domain has no "sst:ref:username" tag. Set "username".`,
+            ),
+        password: args.password
+          ? output(args.password)
+          : secretField(
+              secret
+                ? secret.id
+                : tagOf(
+                    domain,
+                    "sst:ref:password",
+                    `The "${name}" OpenSearch domain can't find its password: its domain has no "sst:ref:password" tag, which names the secret that holds it. Pass the secret in "existing.secret", or set "password".`,
+                  ),
+              "password",
+              self,
+            ),
+        url: interpolate`https://${domain.endpoint}`,
+      };
+    }
 
-      if (
-        $dev &&
-        args.dev.password === undefined &&
-        args.password === undefined
-      ) {
-        throw new VisibleError(
-          `You must provide the password to connect to your locally running OpenSearch domain either by setting the "dev.password" or by setting the top-level "password" property.`,
-        );
-      }
-
-      const dev = {
-        enabled: $dev,
-        url: output(args.dev.url ?? "http://localhost:9200"),
-        username: args.dev.username ? output(args.dev.username) : username,
-        password: output(args.dev.password ?? args.password ?? ""),
+    // What `sst dev` connects to, and the pane that says how the local server
+    // has to be set up
+    function runLocally(dev: NonNullable<OpenSearchArgs["dev"]>) {
+      const local = {
+        id: output("placeholder"),
+        url: devValue(dev.url, "http://localhost:9200"),
+        username: devValue(dev.username, username, true),
+        password: localPassword(dev.password, args.password, owner),
       };
 
-      new DevCommand(`${name}Dev`, {
-        dev: {
-          title: name,
-          autostart: true,
-          command: `sst print-and-not-quit`,
-        },
-        environment: {
-          SST_DEV_COMMAND_MESSAGE: interpolate`Make sure your local OpenSearch server is using:
-
-  username: "${dev.username}"
-  password: "${dev.password}"
-
-Listening on "${dev.url}"...`,
-        },
+      self.report({
+        dev: localServerPane(
+          "OpenSearch server",
+          { username: local.username, password: local.password },
+          local.url,
+        ),
       });
 
-      return dev;
-    }
-
-    function createPassword() {
-      return args.password
-        ? output(args.password)
-        : new RandomPassword(
-            `${name}Password`,
-            {
-              length: 32,
-              minLower: 1,
-              minUpper: 1,
-              minNumeric: 1,
-              minSpecial: 1,
-            },
-            { parent: self },
-          ).result;
-    }
-
-    function createSecret() {
-      const secret = new secretsmanager.Secret(
-        `${name}Secret`,
-        {
-          recoveryWindowInDays: 0,
-        },
-        { parent: self },
-      );
-
-      new secretsmanager.SecretVersion(
-        `${name}SecretVersion`,
-        {
-          secretId: secret.id,
-          secretString: jsonStringify({
-            username,
-            password,
-          }),
-        },
-        { parent: self },
-      );
-
-      return secret;
-    }
-
-    function createDomain() {
-      return new opensearch.Domain(
-        ...transform(
-          args.transform?.domain,
-          `${name}Domain`,
-          {
-            engineVersion,
-            clusterConfig: {
-              instanceType: interpolate`${instanceType}.search`,
-              instanceCount: 1,
-              dedicatedMasterEnabled: false,
-              zoneAwarenessEnabled: false,
-            },
-            ebsOptions: {
-              ebsEnabled: true,
-              volumeSize: storage,
-              volumeType: "gp3",
-            },
-            advancedSecurityOptions: {
-              enabled: true,
-              internalUserDatabaseEnabled: true,
-              masterUserOptions: {
-                masterUserName: username,
-                masterUserPassword: password,
-              },
-            },
-            nodeToNodeEncryption: {
-              enabled: true,
-            },
-            encryptAtRest: {
-              enabled: true,
-            },
-            domainEndpointOptions: {
-              enforceHttps: true,
-              tlsSecurityPolicy: "Policy-Min-TLS-1-2-2019-07",
-            },
-            tags: {
-              "sst:ref:password": secret.id,
-              "sst:ref:username": username,
-            },
-          },
-          { parent: self },
-        ),
-      );
-    }
-
-    function createPolicy() {
-      return new opensearch.DomainPolicy(
-        ...transform(
-          args.transform?.policy,
-          `${name}DomainPolicy`,
-          {
-            domainName: domain.domainName,
-            accessPolicies: iam.getPolicyDocumentOutput({
-              statements: [
-                {
-                  principals: [{ type: "*", identifiers: ["*"] }],
-                  actions: ["*"],
-                  resources: ["*"],
-                },
-              ],
-            }).json,
-          },
-          { parent: self },
-        ),
-      );
+      return local;
     }
   }
 
@@ -508,38 +496,31 @@ Listening on "${dev.url}"...`,
    * The ID of the OpenSearch component.
    */
   public get id() {
-    if (this.dev?.enabled) return output("placeholder");
-    return this.domain!.id;
+    return this.connection.id;
   }
 
   /** The username of the master user. */
   public get username() {
-    if (this.dev?.enabled) return this.dev.username;
-    return this._username!;
+    return this.connection.username;
   }
 
   /** The password of the master user. */
   public get password() {
-    if (this.dev?.enabled) return this.dev.password;
-    return this._password!;
+    return this.connection.password;
   }
 
   /**
    * The endpoint of the domain.
    */
   public get url() {
-    if (this.dev?.enabled) return this.dev.url;
-    return interpolate`https://${this.domain!.endpoint}`;
+    return this.connection.url;
   }
 
-  public get nodes() {
-    return {
-      domain: this.domain,
-    };
-  }
-
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking an OpenSearch domain gives the linked resource its URL and its master user's
+   * username and password.
+   */
+  public link() {
     return {
       properties: {
         username: this.username,
@@ -559,7 +540,8 @@ Listening on "${dev.url}"...`,
    * :::
    *
    * @param name The name of the component.
-   * @param id The ID of the existing OpenSearch component.
+   * @param id The name of the existing OpenSearch domain, or its ARN, which is the
+   * component's `id`.
    * @param opts Resource options.
    *
    * @example
@@ -572,9 +554,9 @@ Listening on "${dev.url}"...`,
    *   : new sst.aws.OpenSearch("MyOpenSearch");
    * ```
    *
-   * Here `app-dev-myopensearch-efsmkrbt` is the
-   * ID of the OpenSearch component created in the `dev` stage.
-   * You can find this by outputting the ID in the `dev` stage.
+   * Here `app-dev-myopensearch-efsmkrbt` is the name of the domain created in the
+   * `dev` stage. You can find it by outputting the component's ID there: its ARN, which
+   * `get` takes too.
    *
    * ```ts title="sst.config.ts"
    * return {
@@ -587,17 +569,15 @@ Listening on "${dev.url}"...`,
     id: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
+    // A domain is looked up by its name. Its `id` is its ARN, which ends in
+    // the name.
+    const domain = output(id).apply((id) =>
+      id.startsWith("arn:") ? parseOpenSearch(id).domainName : id,
+    );
     return new OpenSearch(
       name,
-      {
-        ref: true,
-        id,
-      } as unknown as OpenSearchArgs,
+      getArgs({ existing: { domain } }) as OpenSearchArgs,
       opts,
     );
   }
 }
-
-const __pulumiType = "sst:aws:OpenSearch";
-// @ts-expect-error
-OpenSearch.__pulumiType = __pulumiType;

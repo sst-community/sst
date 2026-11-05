@@ -13,19 +13,19 @@ const handler = "src/consumer.mjs";
 const pulumi = mockPulumi();
 
 type QueueClass =
-  | typeof import("../../../../src/components/cloudflare/queue").Queue
-  | typeof import("../../../../src/components/cloudflare/v5/queue").Queue;
+  | typeof import("../../../fixtures/v4/components/cloudflare/queue").Queue
+  | typeof import("../../../../src/components/cloudflare/queue").Queue;
 
 describe("Queue", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/queue").Queue;
-  let Queue: typeof import("../../../../src/components/cloudflare/v5/queue").Queue;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/queue").Queue;
+  let Queue: typeof import("../../../../src/components/cloudflare/queue").Queue;
   let Secret: typeof import("../../../../src/components/secret").Secret;
 
   beforeAll(async () => {
-    Original = (await import("../../../../src/components/cloudflare/queue"))
-      .Queue;
-    Queue = (await import("../../../../src/components/cloudflare/v5/queue"))
-      .Queue;
+    Original = (
+      await import("../../../fixtures/v4/components/cloudflare/queue")
+    ).Queue;
+    Queue = (await import("../../../../src/components/cloudflare/queue")).Queue;
     Secret = (await import("../../../../src/components/secret")).Secret;
     await import("../../../../src/components/cloudflare/takeover/index");
   });
@@ -193,7 +193,7 @@ describe("Queue", () => {
 
   it("binds a worker linked to it to the queue", async () => {
     const { Worker } = await import(
-      "../../../../src/components/cloudflare/v5/worker"
+      "../../../../src/components/cloudflare/worker"
     );
     const queue = new Queue("MyQueue");
     new Worker("Producer", { handler, link: [queue] });

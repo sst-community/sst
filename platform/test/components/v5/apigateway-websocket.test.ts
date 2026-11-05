@@ -53,23 +53,22 @@ const authorizerWrapper = (api: string, name: string) =>
   `sst:aws:ApiGatewayV2Authorizer::${api}Authorizer${name}`;
 
 type ApiClass =
-  | typeof import("../../../src/components/aws/apigateway-websocket").ApiGatewayWebSocket
-  | typeof import("../../../src/components/aws/v5/apigateway-websocket").ApiGatewayWebSocket;
+  | typeof import("../../fixtures/v4/components/aws/apigateway-websocket").ApiGatewayWebSocket
+  | typeof import("../../../src/components/aws/apigateway-websocket").ApiGatewayWebSocket;
 
 describe("ApiGatewayWebSocket", () => {
-  let Original: typeof import("../../../src/components/aws/apigateway-websocket").ApiGatewayWebSocket;
-  let ApiGatewayWebSocket: typeof import("../../../src/components/aws/v5/apigateway-websocket").ApiGatewayWebSocket;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
+  let Original: typeof import("../../fixtures/v4/components/aws/apigateway-websocket").ApiGatewayWebSocket;
+  let ApiGatewayWebSocket: typeof import("../../../src/components/aws/apigateway-websocket").ApiGatewayWebSocket;
+  let Function: typeof import("../../../src/components/aws/function").Function;
 
   beforeAll(async () => {
     Original = (
-      await import("../../../src/components/aws/apigateway-websocket")
+      await import("../../fixtures/v4/components/aws/apigateway-websocket")
     ).ApiGatewayWebSocket;
     ApiGatewayWebSocket = (
-      await import("../../../src/components/aws/v5/apigateway-websocket")
+      await import("../../../src/components/aws/apigateway-websocket")
     ).ApiGatewayWebSocket;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
+    Function = (await import("../../../src/components/aws/function")).Function;
     await import("../../../src/components/aws/takeover/index");
   });
 

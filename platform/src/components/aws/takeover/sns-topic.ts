@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { logicalName } from "../../naming";
-import { SnsTopic } from "../v5/sns-topic";
+import { SnsTopic } from "../sns-topic";
 import { parseTopicArn } from "../helpers/arn";
 import { childOf, subscriberFunction } from "./helpers";
 

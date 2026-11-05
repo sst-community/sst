@@ -47,12 +47,12 @@ const google = {
 } as const;
 
 type PoolClass =
-  | typeof import("../../../src/components/aws/cognito-user-pool").CognitoUserPool
-  | typeof import("../../../src/components/aws/v5/cognito-user-pool").CognitoUserPool;
+  | typeof import("../../fixtures/v4/components/aws/cognito-user-pool").CognitoUserPool
+  | typeof import("../../../src/components/aws/cognito-user-pool").CognitoUserPool;
 
 describe("CognitoUserPool", () => {
-  let OriginalCognitoUserPool: typeof import("../../../src/components/aws/cognito-user-pool").CognitoUserPool;
-  let CognitoUserPool: typeof import("../../../src/components/aws/v5/cognito-user-pool").CognitoUserPool;
+  let OriginalCognitoUserPool: typeof import("../../fixtures/v4/components/aws/cognito-user-pool").CognitoUserPool;
+  let CognitoUserPool: typeof import("../../../src/components/aws/cognito-user-pool").CognitoUserPool;
 
   let cloudflare: typeof import("../../../src/components/cloudflare/dns");
   let vercel: typeof import("../../../src/components/vercel/dns");
@@ -61,10 +61,10 @@ describe("CognitoUserPool", () => {
     cloudflare = await import("../../../src/components/cloudflare/dns");
     vercel = await import("../../../src/components/vercel/dns");
     ({ CognitoUserPool: OriginalCognitoUserPool } = await import(
-      "../../../src/components/aws/cognito-user-pool"
+      "../../fixtures/v4/components/aws/cognito-user-pool"
     ));
     ({ CognitoUserPool } = await import(
-      "../../../src/components/aws/v5/cognito-user-pool"
+      "../../../src/components/aws/cognito-user-pool"
     ));
     await import("../../../src/components/aws/takeover/cognito-user-pool");
     // What the V5 user pool creates for a domain takes over 4.x's by this
@@ -431,7 +431,7 @@ describe("CognitoUserPool", () => {
     ]);
     const fn = await pulumi.resolve(pool.nodes.trigger.preSignUp);
     expect(fn).toBeInstanceOf(
-      (await import("../../../src/components/aws/v5/function")).Function,
+      (await import("../../../src/components/aws/function")).Function,
     );
   });
 

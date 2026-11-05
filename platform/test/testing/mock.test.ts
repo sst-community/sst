@@ -19,7 +19,7 @@ describe("mock()", () => {
     expect($app).toMatchObject({ name: "acme", stage: "dev" });
     expect($dev).toBe(false);
     expect(typeof sst.component).toBe("function");
-    expect(typeof sst.aws.v5.Function).toBe("function");
+    expect(typeof sst.aws.Function).toBe("function");
     expect((globalThis as any).aws.s3.Bucket.name).toBe("Bucket");
     expect((globalThis as any).cloudflare.R2Bucket.name).toBe("R2Bucket");
     for (const name of [
@@ -68,7 +68,7 @@ describe("mock()", () => {
 
   it("gives a linked function the component's permissions", async () => {
     const uploads = new Uploads("Docs", { teams: [] });
-    new sst.aws.v5.Function("Api", {
+    new sst.aws.Function("Api", {
       handler: "src/api.handler",
       link: [uploads],
     });
@@ -85,7 +85,7 @@ describe("mock()", () => {
   // A function's links go into its code, so they're in no resource's inputs
   it("records what a function's code is built from", async () => {
     const uploads = new Uploads("Docs", { teams: [] });
-    new sst.aws.v5.Function("Api", {
+    new sst.aws.Function("Api", {
       handler: "src/api.handler",
       link: [uploads],
     });
@@ -100,7 +100,7 @@ describe("mock()", () => {
   it("deploys a function's stub in sst dev", async () => {
     (globalThis as any).$dev = true;
     try {
-      new sst.aws.v5.Function("Api", {
+      new sst.aws.Function("Api", {
         handler: "src/api.handler",
         runtime: "nodejs22.x",
       });
@@ -117,7 +117,7 @@ describe("mock()", () => {
   // An email's DKIM records are made from what SES answers, so a package's
   // test of a component with an `Email` needs no state of its own for it
   it("gives an email's domain the DKIM tokens SES would", async () => {
-    new sst.aws.v5.Email("Mail", { sender: "example.com" });
+    new sst.aws.Email("Mail", { sender: "example.com" });
     await app.settle();
     const dkim = app.resources
       .filter((r) => r.inputs.type === "CNAME")
@@ -246,7 +246,7 @@ describe("mock()", () => {
     it("says when what a function is built from changed", async () => {
       const api = (link: boolean) => () => {
         const uploads = new Uploads("Docs", { teams: [] });
-        new sst.aws.v5.Function("Api", {
+        new sst.aws.Function("Api", {
           handler: "src/api.handler",
           link: link ? [uploads] : [],
         });

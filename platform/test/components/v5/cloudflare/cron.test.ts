@@ -11,18 +11,18 @@ const schedules = ["*/5 * * * *"];
 const pulumi = mockPulumi();
 
 type CronClass =
-  | typeof import("../../../../src/components/cloudflare/cron").Cron
-  | typeof import("../../../../src/components/cloudflare/v5/cron").Cron;
+  | typeof import("../../../fixtures/v4/components/cloudflare/cron").Cron
+  | typeof import("../../../../src/components/cloudflare/cron").Cron;
 
 describe("Cron", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/cron").Cron;
-  let Cron: typeof import("../../../../src/components/cloudflare/v5/cron").Cron;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/cron").Cron;
+  let Cron: typeof import("../../../../src/components/cloudflare/cron").Cron;
   let Secret: typeof import("../../../../src/components/secret").Secret;
 
   beforeAll(async () => {
-    Original = (await import("../../../../src/components/cloudflare/cron"))
+    Original = (await import("../../../fixtures/v4/components/cloudflare/cron"))
       .Cron;
-    Cron = (await import("../../../../src/components/cloudflare/v5/cron")).Cron;
+    Cron = (await import("../../../../src/components/cloudflare/cron")).Cron;
     Secret = (await import("../../../../src/components/secret")).Secret;
     await import("../../../../src/components/cloudflare/takeover/index");
   });

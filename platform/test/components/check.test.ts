@@ -7,11 +7,11 @@ const pulumi = mockPulumi();
 
 describe("check", () => {
   let checks: typeof import("../../src/components/check");
-  let Queue: typeof import("../../src/components/aws/v5/queue").Queue;
+  let Queue: typeof import("../../src/components/aws/queue").Queue;
 
   beforeAll(async () => {
     checks = await import("../../src/components/check");
-    Queue = (await import("../../src/components/aws/v5/queue")).Queue;
+    Queue = (await import("../../src/components/aws/queue")).Queue;
   });
   beforeEach(() => pulumi.reset());
   afterEach(() => checks.resetChecks());

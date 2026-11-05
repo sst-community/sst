@@ -1,9 +1,26 @@
 import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
+import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import type { Prettify } from "../component";
+import { context } from "../contract";
+import { VisibleError } from "../error";
+import { configValue } from "./helpers/site-build";
+import type { SiteRouteArgs } from "./helpers/router";
+import { capitalized } from "./helpers/site";
+import {
+  type SiteBuild,
+  type SsrFramework,
+  type SsrSiteArgs,
+  createSsrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { CdnDomainArgs } from "./cdn";
+import type { FunctionArgs } from "./function";
 
-export interface ReactArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -17,7 +34,100 @@ export interface ReactArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
+  /**
+   * Path to the directory where your React app is located.  This path is relative to your `sst.config.ts`.
+   *
+   * By default it assumes your React app is in the root of your SST app.
+   * @default `"."`
+   *
+   * @example
+   *
+   * If your React app is in a package in your monorepo.
+   *
+   * ```js
+   * {
+   *   path: "packages/web"
+   * }
+   * ```
+   */
+  path?: string;
+  /**
+   * [Link resources](/docs/linking/) to your React app. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of resources to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: FunctionArgs["link"];
+  /**
+   * Set [environment variables](https://vitejs.dev/guide/env-and-mode) in your React app. These are made available:
+   *
+   * 1. In `react-router build`, they are loaded into `process.env`.
+   * 2. Locally while running `react-router dev` through `sst dev`.
+   *
+   * Commands started by the build command inherit these variables. A standalone
+   * `vite preview` command runs outside SST; use
+   * `sst shell --target MyWeb -- vite preview` to expose them to the preview
+   * process. Client values in `import.meta.env` remain the values embedded by
+   * the build.
+   *
+   * :::tip
+   * You can also `link` resources to your React app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
+   * :::
+   *
+   * @example
+   * ```js
+   * {
+   *   environment: {
+   *     API_URL: api.url,
+   *     STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   *   }
+   * }
+   * ```
+   */
+  environment?: FunctionArgs["environment"];
   /**
    * Permissions and the resources that the [server function](#nodes-server) in your React app needs to access. These permissions are used to create the function's IAM role.
    *
@@ -65,86 +175,22 @@ export interface ReactArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  permissions?: SsrSiteArgs["permissions"];
+  permissions?: FunctionArgs["permissions"];
   /**
-   * Path to the directory where your React app is located.  This path is relative to your `sst.config.ts`.
+   * The command used internally to build your React app.
    *
-   * By default it assumes your React app is in the root of your SST app.
-   * @default `"."`
+   * @default The `build` script in your `package.json`: `"npm run build"`, or with `yarn`, `pnpm` or `bun` when its lockfile is in the site's folder or the app's.
    *
    * @example
    *
-   * If your React app is in a package in your monorepo.
-   *
+   * If you want to use a different build command.
    * ```js
    * {
-   *   path: "packages/web"
+   *   buildCommand: "yarn build"
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
-  /**
-   * [Link resources](/docs/linking/) to your React app. This will:
-   *
-   * 1. Grant the permissions needed to access the resources.
-   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
-   *
-   * @example
-   *
-   * Takes a list of resources to link to the function.
-   *
-   * ```js
-   * {
-   *   link: [bucket, stripeKey]
-   * }
-   * ```
-   */
-  link?: SsrSiteArgs["link"];
-  /**
-   * Configure how the CloudFront cache invalidations are handled. This is run after your React app has been deployed.
-   * :::tip
-   * You get 1000 free invalidations per month. After that you pay $0.005 per invalidation path. [Read more here](https://aws.amazon.com/cloudfront/pricing/).
-   * :::
-   * @default `{paths: "all", wait: false}`
-   * @example
-   * Wait for all paths to be invalidated.
-   * ```js
-   * {
-   *   invalidation: {
-   *     paths: "all",
-   *     wait: true
-   *   }
-   * }
-   * ```
-   */
-  invalidation?: SsrSiteArgs["invalidation"];
-  /**
-   * Set [environment variables](https://vitejs.dev/guide/env-and-mode) in your React app. These are made available:
-   *
-   * 1. In `react-router build`, they are loaded into `process.env`.
-   * 2. Locally while running `react-router dev` through `sst dev`.
-   *
-   * Commands started by the build command inherit these variables. A standalone
-   * `vite preview` command runs outside SST; use
-   * `sst shell --target MyWeb -- vite preview` to expose them to the preview
-   * process. Client values in `import.meta.env` remain the values embedded by
-   * the build.
-   *
-   * :::tip
-   * You can also `link` resources to your React app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
-   * :::
-   *
-   * @example
-   * ```js
-   * {
-   *   environment: {
-   *     API_URL: api.url,
-   *     STRIPE_PUBLISHABLE_KEY: "pk_test_123"
-   *   }
-   * }
-   * ```
-   */
-  environment?: SsrSiteArgs["environment"];
+  buildCommand?: string;
   /**
    * Set a custom domain for your React app.
    *
@@ -189,7 +235,7 @@ export interface ReactArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Serve your React app through a `Router` instead of a standalone CloudFront
    * distribution.
@@ -227,7 +273,7 @@ export interface ReactArgs extends SsrSiteArgs {
    *
    * :::caution
    * If routing to a path, you need to set that as the base path in your
-   * `vite.config.ts` and `reac-router.config.ts` as well.
+   * `vite.config.ts` and `react-router.config.ts` as well.
    * :::
    *
    * ```js title="vite.config.ts" {3}
@@ -296,40 +342,11 @@ export interface ReactArgs extends SsrSiteArgs {
    * Also, make sure to set the base path in your `vite.config.ts` and `basename`
    * in your `react-router.config.ts`, like above.
    */
-  router?: SsrSiteArgs["router"];
-  /**
-   * The command used internally to build your React app.
-   *
-   * @default `"npm run build"`
-   *
-   * @example
-   *
-   * If you want to use a different build command.
-   * ```js
-   * {
-   *   buildCommand: "yarn build"
-   * }
-   * ```
-   */
-  buildCommand?: SsrSiteArgs["buildCommand"];
-  /**
-   * Configure the React app to use an existing CloudFront cache policy. By default,
-   * a new cache policy is created. Note that CloudFront has a limit of 20 cache
-   * policies per account. This allows you to reuse an existing policy instead of
-   * creating a new one.
-   * @default A new cache policy is created
-   * @example
-   * ```js
-   * {
-   *   cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6"
-   * }
-   * ```
-   */
-  cachePolicy?: SsrSiteArgs["cachePolicy"];
+  router?: SiteRouteArgs;
 }
 
 /**
- * The `React` component lets you deploy a React app built with [React Router](https://reactrouter.com/) app to AWS.
+ * The `React` component lets you deploy a React app built with [React Router](https://reactrouter.com/) to AWS.
  *
  * @example
  *
@@ -337,7 +354,7 @@ export interface ReactArgs extends SsrSiteArgs {
  *
  * Deploy a React app that's in the project root.
  *
- * ```js
+ * ```js title="sst.config.ts"
  * new sst.aws.React("MyWeb");
  * ```
  *
@@ -345,7 +362,7 @@ export interface ReactArgs extends SsrSiteArgs {
  *
  * Deploys the React app in the `my-react-app/` directory.
  *
- * ```js {2}
+ * ```js {2} title="sst.config.ts"
  * new sst.aws.React("MyWeb", {
  *   path: "my-react-app/"
  * });
@@ -355,7 +372,7 @@ export interface ReactArgs extends SsrSiteArgs {
  *
  * Set a custom domain for your React app.
  *
- * ```js {2}
+ * ```js {2} title="sst.config.ts"
  * new sst.aws.React("MyWeb", {
  *   domain: "my-app.com"
  * });
@@ -365,7 +382,7 @@ export interface ReactArgs extends SsrSiteArgs {
  *
  * Redirect `www.my-app.com` to `my-app.com`.
  *
- * ```js {4}
+ * ```js {4} title="sst.config.ts"
  * new sst.aws.React("MyWeb", {
  *   domain: {
  *     name: "my-app.com",
@@ -379,7 +396,7 @@ export interface ReactArgs extends SsrSiteArgs {
  * [Link resources](/docs/linking/) to your React app. This will grant permissions
  * to the resources and allow you to access it in your app.
  *
- * ```ts {4}
+ * ```ts {4} title="sst.config.ts"
  * const bucket = new sst.aws.Bucket("MyBucket");
  *
  * new sst.aws.React("MyWeb", {
@@ -395,103 +412,34 @@ export interface ReactArgs extends SsrSiteArgs {
  *
  * console.log(Resource.MyBucket.name);
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.React`
+ *
+ * Keep the name, and `sst migrate` moves it. The site's bucket, its
+ * server functions, and its CloudFront distribution or its entry in the router are kept.
+ * Its files, its entries in the key-value store and its route in the router's list are
+ * written again by resources of a new type, which the `sst` binary serves, and `sst
+ * migrate` takes the old ones out of the state without deleting what they wrote. Its
+ * CloudFront invalidation runs once more. A few things are written differently:
+ *
+ * - `nodes.server` holds the server of each region, by region, each an output:
+ *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. In SPA mode
+ *   there's none, so a server is listed once the build says there is one.
+ * - With `warm`, the server is warmed again when its code changes. `sst.aws.React` warmed
+ *   it on every deploy. The switch warms it once.
+ * - The base path is read from `vite.config` and `react-router.config` in any of their
+ *   extensions, like `.js`. `sst.aws.React` read only the `.ts` files.
  */
-export class React extends SsrSite {
+export class React extends component("sst:aws:React", parts) {
+  private readonly siteUrl: Output<string>;
+
   constructor(
     name: string,
     args: ReactArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected normalizeBuildCommand() { }
-
-  protected buildPlan(outputPath: Output<string>): Output<Plan> {
-    return output(outputPath).apply((outputPath) => {
-      const assetsPath = path.join("build", "client");
-      const serverPath = (() => {
-        const p = path.join("build", "server");
-        return fs.existsSync(path.join(outputPath, p)) ? p : undefined;
-      })();
-      const indexPage = "index.html";
-
-      // Get base configured in vite config ie. "/docs/"
-      const viteBase = (() => {
-        try {
-          const viteConfig = path.join(outputPath, "vite.config.ts");
-          const content = fs.readFileSync(viteConfig, "utf-8");
-          const match = content.match(/["']?base["']?:\s*["']([^"]+)["']/);
-          return match ? match[1] : undefined;
-        } catch (e) { }
-      })();
-
-      // Get base configured in react-router config ie. "/docs/"
-      const reactRouterBase = (() => {
-        try {
-          const rrConfig = path.join(outputPath, "react-router.config.ts");
-          const content = fs.readFileSync(rrConfig, "utf-8");
-          const match = content.match(/["']?basename["']?:\s*["']([^"]+)["']/);
-          return match ? match[1] : undefined;
-        } catch (e) { }
-      })();
-
-      if (viteBase) {
-        if (!viteBase.endsWith("/"))
-          throw new Error(
-            `The "base" value in vite.config.ts must end with a trailing slash ("/"). This is required for correct asset path construction.`,
-          );
-        if (!reactRouterBase)
-          throw new Error(
-            `Found "base" configured in vite.config.ts but missing "basename" in react-router.config.ts. Both configurations are required.`,
-          );
-      }
-      if (reactRouterBase) {
-        if (reactRouterBase.endsWith("/"))
-          throw new Error(
-            `The "basename" value in react-router.config.ts must not end with a trailing slash ("/"). This ensures the root URL is accessible without a trailing slash.`,
-          );
-        if (!viteBase)
-          throw new Error(
-            `Found "basename" configured in react-router.config.ts but missing "base" in vite.config.ts. Both configurations are required.`,
-          );
-      }
-
-      return {
-        base: reactRouterBase,
-        server: serverPath
-          ? (() => {
-            // React does perform their own internal ESBuild process, but it doesn't bundle
-            // 3rd party dependencies by default. In the interest of keeping deployments
-            // seamless for users we will create a server bundle with all dependencies included.
-
-            fs.copyFileSync(
-              path.join(
-                $cli.paths.platform,
-                "functions",
-                "react-server",
-                "server.mjs",
-              ),
-              path.join(outputPath, "build", "server.mjs"),
-            );
-
-            return {
-              handler: path.join(outputPath, "build", "server.handler"),
-              streaming: true,
-            };
-          })()
-          : undefined,
-        assets: [
-          {
-            from: assetsPath,
-            to: "",
-            cached: true,
-            versionedSubDir: "assets",
-          },
-        ],
-        custom404: serverPath ? undefined : `/${indexPage}`,
-      };
-    });
+    super(name, args, opts);
+    this.siteUrl = createSsrSite(this.builder(), name, args, react).url;
   }
 
   /**
@@ -501,10 +449,103 @@ export class React extends SsrSite {
    * Otherwise, it's the auto-generated CloudFront URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
 
-const __pulumiType = "sst:aws:React";
-// @ts-expect-error
-React.__pulumiType = __pulumiType;
+// How a React Router app is built, with its package manager, and its server:
+// the React Router server build wrapped in a Lambda handler. In SPA mode
+// there's no server.
+const react: SsrFramework = {
+  label: "React",
+  alwaysServes: false,
+  load: loadBuild,
+};
+
+// Reads what React Router built
+function loadBuild(builtPath: string, owner: string): SiteBuild {
+  const outputPath = path.resolve(context().paths.root, builtPath);
+  const serves = fs.existsSync(path.join(outputPath, "build", "server"));
+
+  // The base path, which Vite's `base` and React Router's `basename` both
+  // set: `/docs/` and `/docs`. The asset paths are made from `base`, and the
+  // root URL works without a slash at its end with `basename`.
+  const viteBase = configValue(outputPath, "vite.config", "base") || undefined;
+  const basename =
+    configValue(outputPath, "react-router.config", "basename") || undefined;
+  if (viteBase) {
+    if (!viteBase.endsWith("/"))
+      throw new VisibleError(
+        `The "base" in the Vite config of ${owner} is "${viteBase}". End it with a "/": "${viteBase}/".`,
+      );
+    if (!basename)
+      throw new VisibleError(
+        `${capitalized(
+          owner,
+        )} sets "base" in its Vite config and no "basename" in its react-router.config. Set "basename" to "${viteBase.replace(
+          /\/$/,
+          "",
+        )}" too.`,
+      );
+  }
+  if (basename) {
+    if (basename.endsWith("/"))
+      throw new VisibleError(
+        `The "basename" in the react-router.config of ${owner} is "${basename}". Leave out the "/" at its end: "${basename.replace(
+          /\/$/,
+          "",
+        )}".`,
+      );
+    if (!viteBase)
+      throw new VisibleError(
+        `${capitalized(
+          owner,
+        )} sets "basename" in its react-router.config and no "base" in its Vite config. Set "base" to "${basename}/" too.`,
+      );
+  }
+
+  // Wrap the server build in the Lambda handler
+  if (serves)
+    fs.copyFileSync(
+      path.join(
+        context().paths.platform,
+        "functions",
+        "react-server",
+        "server.mjs",
+      ),
+      path.join(outputPath, "build", "server.mjs"),
+    );
+
+  return {
+    sitePath: builtPath,
+    outputPath,
+    serves,
+    plan: {
+      base: basename,
+      assets: [
+        {
+          from: path.join("build", "client"),
+          to: "",
+          cached: true,
+          versionedSubDir: "assets",
+        },
+      ],
+      // In SPA mode, every path the router doesn't find in S3 is the app's
+      custom404: serves ? undefined : "/index.html",
+    },
+    server: serves
+      ? {
+          handler: path.join(builtPath, "build", "server.handler"),
+          streaming: true,
+        }
+      : undefined,
+  };
+}

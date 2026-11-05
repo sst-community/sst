@@ -29,7 +29,7 @@ const pulumi = mockPulumi({
 describe("a CDN with a domain in a new stage's preview", () => {
   it("plans every DNS record a deploy creates", async () => {
     await import("../../../src/components/aws/takeover/index");
-    const { Cdn } = await import("../../../src/components/aws/v5/cdn");
+    const { Cdn } = await import("../../../src/components/aws/cdn");
     new Cdn("Web", {
       origins: [{ originId: "default", domainName: "example.org" }],
       defaultCacheBehavior: {

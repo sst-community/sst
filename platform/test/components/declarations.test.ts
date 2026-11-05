@@ -151,10 +151,10 @@ describe("a component in a package", () => {
       {
         "index.ts": `
           import { component, type ComponentArgs } from "sst/components";
-          import { v5 } from "sst/components/aws";
+          import { Bucket } from "sst/components/aws";
           import type { ComponentResourceOptions } from "@pulumi/pulumi";
 
-          const parts = { files: v5.Bucket };
+          const parts = { files: Bucket };
 
           export interface DocsArgs extends ComponentArgs<typeof parts> {}
 
@@ -176,8 +176,10 @@ describe("a component in a package", () => {
     );
 
     expect(errors).toEqual([]);
-    expect(declaration).toContain('import { v5 } from "sst/components/aws";');
-    expect(declaration).toContain("files: typeof v5.Bucket;");
+    expect(declaration).toContain(
+      'import { Bucket } from "sst/components/aws";',
+    );
+    expect(declaration).toContain("files: typeof Bucket;");
     // Nothing named by where it's installed
     expect(declaration).not.toMatch(/import\("\.|node_modules/);
   }, 120_000);

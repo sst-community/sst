@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Dsql } from "../v5/dsql";
+import { Dsql } from "../dsql";
 
 takeover(Dsql, {
   moved: {

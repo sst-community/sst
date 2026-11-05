@@ -1,15 +1,44 @@
-import { ComponentResourceOptions, Input } from "@pulumi/pulumi";
-import * as cloudflare from "@pulumi/cloudflare";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
+import { type ComponentResourceOptions } from "@pulumi/pulumi";
+import * as cf from "@pulumi/cloudflare";
+import {
+  type ComponentArgs,
+  component,
+  named,
+  optional,
+} from "../parts-component";
+import type { Input } from "../input";
+import { notAnExistingPart, notAnOption, withDefault } from "../args";
+import { VisibleError } from "../error";
+import {
+  type DurationMinutes,
+  type DurationSeconds,
+  toMilliseconds,
+  toSeconds,
+} from "../duration";
 import { binding } from "./binding";
 import { DEFAULT_ACCOUNT_ID } from "./account-id";
-import { WorkerArgs } from "./worker";
-import { VisibleError } from "../error";
-import { QueueWorkerSubscriber } from "./queue-worker-subscriber";
-import { DurationMinutes, DurationSeconds } from "../duration";
+import { ownId, useExisting } from "./helpers/lookup";
+import { workerArgsOf } from "./helpers/worker-part";
+import { Worker, type WorkerArgs } from "./worker";
 
-export interface QueueArgs {
+const parts = () => ({
+  /**
+   * The Cloudflare Queue.
+   */
+  queue: cf.Queue,
+  /**
+   * The Worker that consumes the queue's messages, once `subscribe` adds it.
+   * Its script is named after it, `MyQueueSubscriberFunctionScript`.
+   */
+  subscriber: named(optional(Worker), "SubscriberFunction"),
+  /**
+   * The queue's consumer, which sends its messages to the subscriber, once
+   * `subscribe` adds it.
+   */
+  consumer: optional(cf.QueueConsumer),
+});
+
+export interface QueueArgs extends ComponentArgs<typeof parts> {
   /**
    * The Cloudflare account ID to use for this Queue.
    * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
@@ -17,9 +46,20 @@ export interface QueueArgs {
    */
   accountId?: Input<string>;
   /**
-   * The dead letter queue to send messages that fail processing.
+   * The dead letter queue to send the messages the subscriber fails to
+   * process to. It's a setting of the queue's consumer, so it applies once
+   * `subscribe` adds one.
    *
-   * When `dlq` is configured, `dlq.queue` is required.
+   * @example
+   * ```js
+   * {
+   *   dlq: {
+   *     queue: "my-dead-letter-queue",
+   *     retry: 5,
+   *     retryDelay: "30 seconds"
+   *   }
+   * }
+   * ```
    */
   dlq?: {
     /**
@@ -27,52 +67,40 @@ export interface QueueArgs {
      */
     queue: Input<string>;
     /**
-     * The number of times the main queue will retry the message before sending it to the dead-letter queue.
+     * The number of times the queue retries a message before it sends it to
+     * the dead letter queue.
      * @default `3`
      */
     retry?: Input<number>;
     /**
-     * The number of seconds to delay before making the message available for another attempt.
-     * @default `0 seconds`
+     * How long to wait before a message is retried.
+     * @default `"0 seconds"`
      */
     retryDelay?: Input<DurationSeconds>;
   };
   /**
-   * Maximum number of concurrent consumers that may consume from this Queue.
-   * @default `null`
+   * The maximum number of the subscriber's invocations that run at once. It's
+   * a setting of the queue's consumer, so it applies once `subscribe` adds
+   * one.
+   * @default Cloudflare's maximum
    */
   maxConcurrency?: Input<number>;
-  /**
-   * [Transform](/docs/components/#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Queue resource.
-     */
-    queue?: Transform<cloudflare.QueueArgs>;
-  };
 }
 
-export interface QueueSubscribeArgs {
+export interface QueueSubscriberArgs {
   /**
-   * The maximum number of messages to include in a batch.
-   * @default `10`
+   * How the queue's messages are batched for the subscriber.
    */
   batch?: {
     /**
-     * The maximum number of events that will be processed together in a single invocation
-     * of the consumer function.
+     * The maximum number of messages that are processed together in a single
+     * invocation of the subscriber.
      *
      * Value must be between 1 and 100.
      *
-     * :::note
-     * When `size` is set to a value greater than 10, `window` must be set to at least `1 second`.
-     * :::
-     *
      * @default `10`
      * @example
-     * Set batch size to 1. This will process events individually.
+     * Process messages one at a time.
      * ```js
      * {
      *   batch: {
@@ -83,8 +111,8 @@ export interface QueueSubscribeArgs {
      */
     size?: Input<number>;
     /**
-     * The maximum amount of time to wait for collecting events before sending the batch to
-     * the consumer function, even if the batch size hasn't been reached.
+     * The maximum amount of time to wait for a batch to fill up before it's
+     * sent to the subscriber anyway.
      *
      * Value must be between 0 seconds and 60 seconds.
      * @default `"5 seconds"`
@@ -92,26 +120,12 @@ export interface QueueSubscribeArgs {
      * ```js
      * {
      *   batch: {
-     *     window: "5 seconds"
+     *     window: "20 seconds"
      *   }
      * }
      * ```
      */
     window?: Input<DurationMinutes>;
-  };
-  /**
-   * [Transform](/docs/components/#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Worker resource.
-     */
-    worker?: Transform<WorkerArgs>;
-    /**
-     * Transform the Consumer resource.
-     */
-    consumer?: Transform<cloudflare.QueueConsumerArgs>;
   };
 }
 
@@ -140,7 +154,7 @@ export interface QueueSubscribeArgs {
  * };
  * ```
  *
- * Subscribe to the queue with a consumer worker.
+ * Subscribe to the queue with a consumer worker. A queue has one consumer.
  *
  * ```ts title="sst.config.ts"
  * queue.subscribe("consumer.ts");
@@ -161,54 +175,89 @@ export interface QueueSubscribeArgs {
  * #### Subscribe with full worker props
  *
  * ```ts title="sst.config.ts"
- * const bucket = new sst.cloudflare.Bucket("MyBucket");
- *
  * queue.subscribe({
  *   handler: "consumer.ts",
  *   link: [bucket],
  * });
  * ```
+ *
+ * #### Switch from SST 4's `sst.cloudflare.Queue`
+ *
+ * Keep the name, and `sst migrate` moves it. The queue, its consumer and the consumer's Worker are kept.
+ *
+ * - `subscribe` returns the queue, where it returned a
+ *   `QueueWorkerSubscriber`: the Worker is `queue.nodes.subscriber`, and the
+ *   consumer `queue.nodes.consumer`.
+ * - The `transform` of `subscribe` becomes the queue's `transform.subscriber`
+ *   and `transform.consumer`, and `subscribe` takes no `opts`, which is
+ *   refused: what it creates is the queue's, with the queue's options.
+ * - The subscriber's handler or Worker args are a plain value, not an output:
+ *   they decide what's created. Inside the args, `link` and `domain` are plain
+ *   values too, as [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker)
+ *   takes them, and what else is in them can be an output.
+ * - The subscriber's Worker is
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker), inside
+ *   the queue, with the name it had. `transform.subscriber` takes its args, as
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker) takes
+ *   them.
+ * - `dlq.retryDelay` is sent to Cloudflare in seconds, as Cloudflare reads it.
+ *   SST 4 sent it in milliseconds, so a retry set to wait 30 seconds waited
+ *   30,000: if you set it, the consumer is updated in place to wait what you
+ *   set.
+ * - The subscriber is created with the provider the queue has. SST 4 gave it
+ *   only a `provider` passed to the queue itself, so if your queue takes its
+ *   provider from a parent component or from `providers`, the switch gives
+ *   its Worker that provider and keeps it.
  */
-export class Queue extends Component implements Link.Linkable {
-  private queue: cloudflare.Queue;
-  private isSubscribed = false;
-  private constructorName: string;
-  private constructorArgs?: QueueArgs;
-  private constructorOpts?: ComponentResourceOptions;
+export class Queue extends component("sst:cloudflare:Queue", parts) {
+  constructor(
+    name: string,
+    args: QueueArgs = {},
+    opts?: ComponentResourceOptions,
+  ) {
+    super(name, args, opts);
 
-  constructor(name: string, args?: QueueArgs, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
-
-    const parent = this;
-    this.constructorName = name;
-    this.constructorArgs = args;
-    this.constructorOpts = opts;
-
-    const queue = create();
-
-    this.queue = queue;
-
-    function create() {
-      return new cloudflare.Queue(
-        ...transform(
-          args?.transform?.queue,
-          `${name}Queue`,
-          {
-            queueName: "",
-            accountId: args?.accountId ?? DEFAULT_ACCOUNT_ID,
-          },
-          { parent },
-        ),
+    const owner = `the "${name}" queue`;
+    // What `subscribe` creates is made from what it's given
+    for (const part of ["subscriber", "consumer"] as const)
+      notAnExistingPart(
+        args.existing,
+        part,
+        owner,
+        `"subscribe" creates the queue's subscriber Worker and its consumer from the handler or the Worker's args it's given.`,
       );
-    }
+
+    this.settings = {
+      accountId: args.accountId,
+      dlq: args.dlq,
+      maxConcurrency: args.maxConcurrency,
+    };
+    // A queue that's already deployed is used as it is. Cloudflare's provider
+    // looks one up by its account and id.
+    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
+    const existing = args.existing?.queue;
+    if (existing !== undefined)
+      useExisting(existing, accountId, (id) => this.lookupPart("queue", id));
+    else this.part("queue", { queueName: "", accountId });
+  }
+
+  // What the consumer `subscribe` adds is created with
+  private settings!: Pick<QueueArgs, "accountId" | "dlq" | "maxConcurrency">;
+
+  /**
+   * The generated ID of the queue.
+   */
+  public get id() {
+    // A looked-up queue's id has its account in front
+    return ownId(this.nodes.queue.id);
   }
 
   /**
-   * Subscribe to the queue with a worker.
+   * Subscribe to the queue with a worker. A queue has one consumer.
    *
-   * @param subscriber The worker that'll process messages from the queue.
+   * @param subscriber The worker that'll process messages from the queue: the
+   * path to its handler, or the Worker's args.
    * @param args Configure the subscription.
-   * @param opts Component resource options.
    *
    * @example
    *
@@ -221,8 +270,6 @@ export class Queue extends Component implements Link.Linkable {
    * Pass in full worker props.
    *
    * ```ts title="sst.config.ts"
-   * const bucket = new sst.cloudflare.Bucket("MyBucket");
-   *
    * queue.subscribe({
    *   handler: "consumer.ts",
    *   link: [bucket],
@@ -239,72 +286,80 @@ export class Queue extends Component implements Link.Linkable {
    *   },
    * });
    * ```
+   *
+   * To change how the subscriber is created, use the queue's `transform`.
+   *
+   * ```ts title="sst.config.ts"
+   * new sst.cloudflare.Queue("MyQueue", {
+   *   transform: {
+   *     subscriber: { url: true }
+   *   }
+   * });
+   * ```
    */
   public subscribe(
-    subscriber: Input<string | WorkerArgs>,
-    args?: QueueSubscribeArgs,
-    opts?: ComponentResourceOptions,
+    subscriber: string | WorkerArgs,
+    args: QueueSubscriberArgs = {},
   ) {
-    if (this.isSubscribed) {
-      throw new VisibleError(
-        `Cannot subscribe to the "${this.constructorName}" queue multiple times. A Cloudflare Queue can only have one consumer.`,
-      );
-    }
-
-    this.isSubscribed = true;
-
-    const parent = this;
-    const name = this.constructorName;
-
-    return new QueueWorkerSubscriber(
-      `${name}Subscriber`,
-      {
-        queue: { id: this.queue.id },
-        subscriber,
-        accountId: this.constructorArgs?.accountId,
-        dlq: this.constructorArgs?.dlq,
-        maxConcurrency: this.constructorArgs?.maxConcurrency,
-        batch: args?.batch,
-        transform: args?.transform,
-      },
-      { ...opts, provider: this.constructorOpts?.provider },
+    const name = this.componentName;
+    const owner = `the "${name}" queue`;
+    notAnOption(
+      args,
+      "transform",
+      `Use the "transform" of the "${name}" queue: its "subscriber" and "consumer".`,
     );
+    // SST 4 took the subscriber's resource options third
+    if (arguments[2] !== undefined)
+      throw new VisibleError(
+        `"subscribe" on the "${name}" queue takes no options: what it creates is the queue's, with the queue's options. Give them to the queue.`,
+      );
+    if (this.nodes.consumer)
+      throw new VisibleError(
+        `Cannot subscribe to the "${name}" queue multiple times. A Cloudflare Queue can only have one consumer.`,
+      );
+
+    const worker = workerArgsOf(subscriber, "subscriber", owner);
+
+    const { accountId, dlq, maxConcurrency } = this.settings;
+    const script = this.part("subscriber", { accountId, ...worker }).nodes
+      .worker;
+    this.part("consumer", {
+      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      deadLetterQueue: dlq?.queue,
+      queueId: this.id,
+      scriptName: script.scriptName,
+      settings: {
+        batchSize: withDefault(args.batch?.size, 10),
+        maxConcurrency,
+        maxRetries: dlq?.retry,
+        // In seconds, as Cloudflare reads it
+        retryDelay: withDefault(dlq?.retryDelay, "0 seconds", toSeconds),
+        maxWaitTimeMs: withDefault(
+          args.batch?.window,
+          "5 seconds",
+          toMilliseconds,
+        ),
+      },
+      type: "worker",
+    });
+
+    return this;
   }
 
-  getSSTLink() {
+  /**
+   * Linking a queue to a worker gives the worker a binding to send to it.
+   *
+   * @internal
+   */
+  public link() {
     return {
       properties: {},
       include: [
         binding({
           type: "queueBindings",
-          properties: {
-            queueName: this.queue.queueName,
-          },
+          properties: { queueName: this.nodes.queue.queueName },
         }),
       ],
     };
   }
-
-  /**
-   * The generated id of the queue
-   */
-  public get id() {
-    return this.queue.id;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Cloudflare queue.
-       */
-      queue: this.queue,
-    };
-  }
 }
-
-const __pulumiType = "sst:cloudflare:Queue";
-// @ts-expect-error
-Queue.__pulumiType = __pulumiType;

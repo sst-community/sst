@@ -1,7 +1,7 @@
 import { takeover } from "../../takeover";
 import { outputId } from "../../component";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { ApiGatewayWebSocket } from "../v5/apigateway-websocket";
+import { ApiGatewayWebSocket } from "../apigateway-websocket";
 import { childOf } from "./helpers";
 
 // The 4.x `ApiGatewayWebSocket` keeps each route in a component of its own,

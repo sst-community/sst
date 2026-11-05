@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, setSide, sided, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 const CLUSTER = "aws:ecs/cluster:Cluster";
@@ -28,30 +28,47 @@ const pulumi = mockPulumi({
 });
 
 describe("Cluster", () => {
-  let OriginalCluster: typeof import("../../../src/components/aws/cluster").Cluster;
-  let Cluster: typeof import("../../../src/components/aws/v5/cluster").Cluster;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let VpcV1: typeof import("../../../src/components/aws/vpc-v1").Vpc;
-  let OriginalService: typeof import("../../../src/components/aws/service").Service;
-  let Service: typeof import("../../../src/components/aws/v5/service").Service;
-  let OriginalTask: typeof import("../../../src/components/aws/task").Task;
-  let Task: typeof import("../../../src/components/aws/v5/task").Task;
+  let OriginalCluster: typeof import("../../fixtures/v4/components/aws/cluster").Cluster;
+  let Cluster: typeof import("../../../src/components/aws/cluster").Cluster;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Vpc: any;
+  let VpcV1: any;
+  let OriginalService: typeof import("../../fixtures/v4/components/aws/service").Service;
+  let Service: typeof import("../../../src/components/aws/service").Service;
+  let OriginalTask: typeof import("../../fixtures/v4/components/aws/task").Task;
+  let Task: typeof import("../../../src/components/aws/task").Task;
+  let SidedService: any;
+  let SidedTask: any;
   let aws: typeof import("@pulumi/aws");
 
   beforeAll(async () => {
-    OriginalCluster = (await import("../../../src/components/aws/cluster"))
+    OriginalCluster = (await import("../../fixtures/v4/components/aws/cluster"))
       .Cluster;
-    Cluster = (await import("../../../src/components/aws/v5/cluster")).Cluster;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    VpcV1 = (await import("../../../src/components/aws/vpc-v1")).Vpc;
-    OriginalService = (await import("../../../src/components/aws/service"))
+    Cluster = (await import("../../../src/components/aws/cluster")).Cluster;
+    Vpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    VpcV1 = (await import("../../fixtures/v4/components/aws/vpc-v1")).Vpc;
+    OriginalService = (await import("../../fixtures/v4/components/aws/service"))
       .Service;
-    Service = (await import("../../../src/components/aws/v5/service")).Service;
-    OriginalTask = (await import("../../../src/components/aws/task")).Task;
-    Task = (await import("../../../src/components/aws/v5/task")).Task;
+    Service = (await import("../../../src/components/aws/service")).Service;
+    OriginalTask = (await import("../../fixtures/v4/components/aws/task")).Task;
+    Task = (await import("../../../src/components/aws/task")).Task;
     aws = await import("@pulumi/aws");
     await import("../../../src/components/aws/takeover/service");
     await import("../../../src/components/aws/takeover/task");
+    // SST 4's for the cluster SST 4's, SST 5's for SST 5's
+    SidedService = sided(
+      () => OriginalService,
+      () => Service,
+    );
+    SidedTask = sided(
+      () => OriginalTask,
+      () => Task,
+    );
   });
 
   beforeEach(() => {
@@ -148,9 +165,14 @@ describe("Cluster", () => {
               { vpc: new Vpc("MyVpc") },
               opts,
             );
-            new Service("MyService", { cluster, image: "nginx:latest" });
-            new Task("MyTask", { cluster, image: "nginx:latest" });
+            new SidedService("MyService", { cluster, image: "nginx:latest" });
+            new SidedTask("MyTask", { cluster, image: "nginx:latest" });
           },
+          // SST 4's Service's dev command, which SST 5's reports itself
+          unclaimed: [
+            "sst:sst:DevCommand::MyServiceDev",
+            "sst:sst:Version::MyClusterVersion",
+          ],
           check: () => {
             expect(resource("MyServiceService").inputs.cluster).toBe(
               "arn:aws:mock:us-east-1:123456789012:MyClusterCluster",
@@ -167,13 +189,19 @@ describe("Cluster", () => {
             expect(names()).not.toContain("MyClusterCapacityProviders");
           },
         },
-        "a service in a cluster from another stage": (Cluster, opts) => {
-          const cluster = Cluster.get(
-            "MyCluster",
-            { id: SHARED, vpc: customVpc },
-            opts,
-          );
-          new Service("MyService", { cluster, image: "nginx:latest" });
+        "a service in a cluster from another stage": {
+          create: (Cluster, opts) => {
+            const cluster = Cluster.get(
+              "MyCluster",
+              { id: SHARED, vpc: customVpc },
+              opts,
+            );
+            new SidedService("MyService", { cluster, image: "nginx:latest" });
+          },
+          unclaimed: [
+            "sst:sst:DevCommand::MyServiceDev",
+            "sst:sst:Version::MyClusterVersion",
+          ],
         },
       },
     });
@@ -198,34 +226,11 @@ describe("Cluster", () => {
     });
   });
 
-  // The 4.x Service and Task read the same things off the V5 cluster as off
-  // their own, though their types only name the 4.x one.
   describe("with what runs in it", () => {
-    it.each([
-      ["a Vpc", () => new Vpc("MyVpc")],
-      ["the ids of a VPC", () => customVpc],
-    ])(
-      "changes nothing for a 4.x service and task when the cluster in %s is switched",
-      async (_, vpc) => {
-        const app = (Cluster: any) => () => {
-          const cluster = new Cluster("MyCluster", { vpc: vpc() });
-          new OriginalService("MyService", { cluster, image: "nginx:latest" });
-          new OriginalTask("MyTask", { cluster, image: "nginx:latest" });
-        };
-
-        expect(await takesOver(app(OriginalCluster), app(Cluster))).toEqual({
-          unclaimed: ["sst:sst:Version::MyClusterVersion"],
-          changed: [],
-        });
-        expect(resource("MyServiceService").inputs.cluster).toBe(
-          "arn:aws:mock:us-east-1:123456789012:MyClusterCluster",
-        );
-      },
-    );
-
     it("changes nothing in AWS when the cluster, its service and its task are all switched", async () => {
       const result = await takesOver(
         () => {
+          setSide("original");
           const cluster = new OriginalCluster("MyCluster", {
             vpc: new Vpc("MyVpc"),
           });
@@ -233,6 +238,7 @@ describe("Cluster", () => {
           new OriginalTask("MyTask", { cluster, image: "nginx:latest" });
         },
         () => {
+          setSide("v5");
           const cluster = new Cluster("MyCluster", { vpc: new Vpc("MyVpc") });
           new Service("MyService", { cluster, image: "nginx:latest" });
           new Task("MyTask", { cluster, image: "nginx:latest" });
@@ -244,26 +250,24 @@ describe("Cluster", () => {
         unclaimed: [
           "sst:sst:DevCommand::MyServiceDev",
           "sst:sst:Version::MyClusterVersion",
+          "sst:sst:Version::MyVpcVersion",
         ],
         changed: [],
       });
     });
 
     it("tells a task which cluster it's in", async () => {
-      for (const ClusterClass of [OriginalCluster, Cluster]) {
-        pulumi.reset();
-        const cluster = new ClusterClass("MyCluster", { vpc: customVpc });
-        const task = new Task("MyTask", { cluster, image: "nginx:latest" });
-        await pulumi.settle();
+      const cluster = new Cluster("MyCluster", { vpc: customVpc });
+      const task = new Task("MyTask", { cluster, image: "nginx:latest" });
+      await pulumi.settle();
 
-        expect(await pulumi.resolve(task.cluster)).toBe(
-          "arn:aws:mock:us-east-1:123456789012:MyClusterCluster",
-        );
-      }
+      expect(await pulumi.resolve(task.cluster)).toBe(
+        "arn:aws:mock:us-east-1:123456789012:MyClusterCluster",
+      );
     });
 
     it("gives a service the same network as the 4.x cluster does", async () => {
-      const placement = async (Cluster: any) => {
+      const placement = async (Cluster: any, Service: any) => {
         pulumi.reset();
         const cluster = new Cluster("MyCluster", { vpc: customVpc });
         const service = new Service("MyService", {
@@ -278,11 +282,11 @@ describe("Cluster", () => {
         };
       };
 
-      const original = await placement(OriginalCluster);
+      const original = await placement(OriginalCluster, OriginalService);
       expect(original.network.subnets).toEqual(customVpc.containerSubnets);
       expect(original.registry.namespaceId).toBe("ns-1");
       expect(original.host).toMatch(/^MyService\..*\.internal$/);
-      expect(await placement(Cluster)).toEqual(original);
+      expect(await placement(Cluster, Service)).toEqual(original);
     });
   });
 
@@ -544,10 +548,10 @@ describe("Cluster", () => {
       await pulumi.settle();
 
       expect(() => (cluster as any).addService("MyService", {})).toThrow(
-        'new sst.aws.v5.Service("MyService", { cluster, ...args })',
+        'new sst.aws.Service("MyService", { cluster, ...args })',
       );
       expect(() => (cluster as any).addTask("MyTask", {})).toThrow(
-        'new sst.aws.v5.Task("MyTask", { cluster, ...args })',
+        'new sst.aws.Task("MyTask", { cluster, ...args })',
       );
     });
 

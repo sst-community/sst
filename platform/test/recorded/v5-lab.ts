@@ -1,23 +1,20 @@
 /**
  * The lab app that deployed the recorded states in `testdata/states`: its
  * groups as its `sst.config.ts` creates them, with the domain scrubbed as in
- * the states. Each takes the components it's written with, the 4.x ones or
- * the V5 ones, as `sst.aws` or `sst.aws.v5`, or `sst.cloudflare` or
- * `sst.cloudflare.v5`.
+ * the states. Each takes the components it's written with: SST 5's, as
+ * `sst.aws` and `sst.cloudflare`, or SST 4's from the fixtures.
  */
 import type * as aws from "../../src/components/aws/index";
 import type * as cf from "../../src/components/cloudflare/index";
 
-/** The components a group is written with. It's typed as the V5 ones. */
-export type Components = typeof aws.v5;
+/** The components a group is written with. It's typed as SST 5's. */
+export type Components = typeof aws;
 
-/** The Cloudflare components a group is written with, typed as the V5 ones. */
-export type CloudflareComponents = typeof cf.v5;
+/** The Cloudflare components a group is written with, typed as SST 5's. */
+export type CloudflareComponents = typeof cf;
 
-/** The VPC the containers and databases are in: either kind of `Vpc`. */
-export type Vpc =
-  | InstanceType<typeof aws.Vpc>
-  | InstanceType<typeof aws.v5.Vpc>;
+/** The VPC the containers and databases are in. */
+export type Vpc = InstanceType<typeof aws.Vpc>;
 
 /**
  * SST 4's `CronV2`, which is `Cron` in 5.0: the same type, without the
@@ -210,9 +207,7 @@ export function serverless(aws: Components) {
  * The VPC the containers and databases are in: a NAT gateway in each AZ, and
  * a bastion for `sst tunnel`.
  */
-export function net(
-  aws: Components | typeof import("../../src/components/aws/index"),
-): Vpc {
+export function net(aws: Components): Vpc {
   return new aws.Vpc("Net", { nat: "managed", bastion: true });
 }
 

@@ -46,8 +46,8 @@ const CODE = `
 `;
 
 describe("AppSync", () => {
-  let OriginalAppSync: typeof import("../../../src/components/aws/app-sync").AppSync;
-  let AppSync: typeof import("../../../src/components/aws/v5/app-sync").AppSync;
+  let OriginalAppSync: typeof import("../../fixtures/v4/components/aws/app-sync").AppSync;
+  let AppSync: typeof import("../../../src/components/aws/app-sync").AppSync;
   let dir: string;
   let schema: string;
 
@@ -57,8 +57,8 @@ describe("AppSync", () => {
   beforeAll(async () => {
     cloudflare = await import("../../../src/components/cloudflare/dns");
     vercel = await import("../../../src/components/vercel/dns");
-    ({ AppSync: OriginalAppSync } = await import("../../../src/components/aws/app-sync"));
-    ({ AppSync } = await import("../../../src/components/aws/v5/app-sync"));
+    ({ AppSync: OriginalAppSync } = await import("../../fixtures/v4/components/aws/app-sync"));
+    ({ AppSync } = await import("../../../src/components/aws/app-sync"));
     await import("../../../src/components/aws/takeover/app-sync");
     await import("../../../src/components/aws/takeover/function");
     // What the V5 API creates for a domain takes over 4.x's by this
@@ -486,7 +486,7 @@ describe("AppSync", () => {
     expect(api.nodes.dataSource.httpDS).toBe(httpDS);
     const fn = await pulumi.resolve(api.nodes.dataSourceFunction.lambdaDS);
     expect(fn).toBeInstanceOf(
-      (await import("../../../src/components/aws/v5/function")).Function,
+      (await import("../../../src/components/aws/function")).Function,
     );
     expect(await pulumi.resolve(arnDS.name)).toBe("arnDS");
   });

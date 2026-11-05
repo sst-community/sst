@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { Aurora } from "../v5/aurora";
+import { Aurora } from "../aurora";
 
 takeover(Aurora, {
   moved: {

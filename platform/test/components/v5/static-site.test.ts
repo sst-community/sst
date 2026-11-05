@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
 // A static site, and one that's built. SST 4 builds a site in its folder
@@ -71,23 +71,31 @@ const pulumi = mockPulumi({
 });
 
 type V5Class =
-  typeof import("../../../src/components/aws/v5/static-site").StaticSite;
-type OriginalClass =
   typeof import("../../../src/components/aws/static-site").StaticSite;
+type OriginalClass =
+  typeof import("../../fixtures/v4/components/aws/static-site").StaticSite;
 type AnyClass = V5Class | OriginalClass;
 
 let Site: V5Class;
 let OriginalSite: OriginalClass;
-let OriginalRouter: typeof import("../../../src/components/aws/router").Router;
-let Router: typeof import("../../../src/components/aws/v5/router").Router;
+let OriginalRouter: typeof import("../../fixtures/v4/components/aws/router").Router;
+let Router: typeof import("../../../src/components/aws/router").Router;
+let SidedRouter: any;
 
 beforeAll(async () => {
-  Site = (await import("../../../src/components/aws/v5/static-site"))
+  Site = (await import("../../../src/components/aws/static-site")).StaticSite;
+  OriginalSite = (await import("../../fixtures/v4/components/aws/static-site"))
     .StaticSite;
-  OriginalSite = (await import("../../../src/components/aws/static-site"))
-    .StaticSite;
-  OriginalRouter = (await import("../../../src/components/aws/router")).Router;
-  Router = (await import("../../../src/components/aws/v5/router")).Router;
+  OriginalRouter = (await import("../../fixtures/v4/components/aws/router"))
+    .Router;
+  Router = (await import("../../../src/components/aws/router")).Router;
+  // SST 4's for SST 4's site, SST 5's for SST 5's
+  SidedRouter = await sidedClass(
+    "Router",
+    import("../../fixtures/v4/components/aws/router"),
+    import("../../../src/components/aws/router"),
+    import("../../../src/components/aws/takeover/router"),
+  );
   await import("../../../src/components/aws/takeover/index");
 });
 
@@ -262,16 +270,16 @@ describe("takes over a deployed StaticSite", () => {
           },
           opts,
         ),
-      "behind a 4.x Router": (Site, opts) => {
-        const router = new OriginalRouter("Router");
+      "behind a Router": (Site, opts) => {
+        const router = new SidedRouter("Router");
         return new Site(
           "Web",
           { path: "web", router: { instance: router } },
           opts,
         );
       },
-      "behind a V5 Router, under a path and a domain": (Site, opts) => {
-        const router = new Router("Router");
+      "behind a Router, under a path and a domain": (Site, opts) => {
+        const router = new SidedRouter("Router");
         return new Site(
           "Web",
           {
@@ -302,7 +310,7 @@ describe("takes over a deployed StaticSite", () => {
       },
       "in a bucket it's given, behind a router": {
         create: (Site, opts) => {
-          const router = new Router("Router");
+          const router = new SidedRouter("Router");
           return new Site(
             "Web",
             {
@@ -363,9 +371,9 @@ describe("takes over a deployed StaticSite", () => {
         ),
       "invalidating no paths": (Site, opts) =>
         new Site("Web", { path: "web", invalidation: { paths: [] } }, opts),
-      "built, behind a 4.x Router, under a path in the bucket": {
+      "built, behind a Router, under a path in the bucket": {
         create: (Site, opts) => {
-          const router = new OriginalRouter("Router");
+          const router = new SidedRouter("Router");
           return new Site(
             "Web",
             {
@@ -847,9 +855,7 @@ describe("StaticSite", () => {
   });
 
   it("can be linked by a function", async () => {
-    const { Function } = await import(
-      "../../../src/components/aws/v5/function"
-    );
+    const { Function } = await import("../../../src/components/aws/function");
     const web = new Site("Web", { path: "web" });
     new Function("Api", { handler: "src/api.handler", link: [web] });
     await pulumi.settle();

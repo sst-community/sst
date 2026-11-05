@@ -9,7 +9,7 @@ describe("sstGlobal()", () => {
     const sst: any = await sstGlobal({ aws: ["@pulumi/aws"] });
     expect(typeof sst.component).toBe("function");
     expect(typeof sst.Linkable).toBe("function");
-    expect(typeof sst.aws.v5.Function).toBe("function");
+    expect(typeof sst.aws.Function).toBe("function");
     expect(typeof sst.cloudflare.Worker).toBe("function");
   });
 

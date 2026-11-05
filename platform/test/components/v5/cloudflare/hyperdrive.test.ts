@@ -9,8 +9,8 @@ const handler = "src/worker.mjs";
 const pulumi = mockPulumi();
 
 type HyperdriveClass =
-  | typeof import("../../../../src/components/cloudflare/hyperdrive").Hyperdrive
-  | typeof import("../../../../src/components/cloudflare/v5/hyperdrive").Hyperdrive;
+  | typeof import("../../../fixtures/v4/components/cloudflare/hyperdrive").Hyperdrive
+  | typeof import("../../../../src/components/cloudflare/hyperdrive").Hyperdrive;
 
 // The origin, with the password as most apps give it: a secret
 const origin = () => ({
@@ -22,22 +22,22 @@ const origin = () => ({
 });
 
 describe("Hyperdrive", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/hyperdrive").Hyperdrive;
-  let Hyperdrive: typeof import("../../../../src/components/cloudflare/v5/hyperdrive").Hyperdrive;
-  let OriginalWorker: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/hyperdrive").Hyperdrive;
+  let Hyperdrive: typeof import("../../../../src/components/cloudflare/hyperdrive").Hyperdrive;
+  let OriginalWorker: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
 
   beforeAll(async () => {
     Original = (
-      await import("../../../../src/components/cloudflare/hyperdrive")
+      await import("../../../fixtures/v4/components/cloudflare/hyperdrive")
     ).Hyperdrive;
     Hyperdrive = (
-      await import("../../../../src/components/cloudflare/v5/hyperdrive")
+      await import("../../../../src/components/cloudflare/hyperdrive")
     ).Hyperdrive;
     OriginalWorker = (
-      await import("../../../../src/components/cloudflare/worker")
+      await import("../../../fixtures/v4/components/cloudflare/worker")
     ).Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
     await import("../../../../src/components/cloudflare/takeover/index");
   });

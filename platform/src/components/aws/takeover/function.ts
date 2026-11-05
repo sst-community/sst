@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { Function } from "../v5/function";
+import { Function } from "../function";
 
 takeover(Function, {
   moved: {

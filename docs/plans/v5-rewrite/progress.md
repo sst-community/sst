@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-05: step 5, the swap: SST 5's components take SST 4's places
+
+The first part of [the swap](plan.md#5-moving-an-app): the files move, and what reaches SST 4's components from SST 5's code goes.
+
+- **SST 4's files are frozen in `platform/test/fixtures/v4/components/`**, 140 of them in the layout they had (SST 4's AWS and Cloudflare components, their helpers and providers, and the experimental `DevCommand`), their imports pointing at the code they share with SST 5's. With them: SST 4's two indexes, so a test has SST 4's `sst.aws` and `sst.cloudflare`, and a copy of `step-functions/task.ts` as it was, which types its integrations with SST 4's components. The takeover suites, the recorded states and the codemod's name test load them, and nothing else does.
+- **`aws/v5/`, `cloudflare/v5/` and `experimental/v5/` move up a level.** The indexes are the 5.0 ones, with what isn't a component kept: `dns`, `linkable`, `permission`, `iamStatements`, `functionPart` and `iamEdit`, and Cloudflare's `dns`, its default account id and `binding`.
+- **SST 5's components take only SST 5's.** The helpers that took either kind (`helpers/vpc.ts` and the rest) take SST 5's alone, `TakesVpc` goes, and a route reads a router's `_signs`. Their `Any…` names are left for now, as the one kind.
+- **`sst.aws.v5.X` is `sst.aws.X`** in the components' docs and errors, and each "Switch from" section starts from SST 4's component: keep the name, and `sst migrate` moves it.
+- **The takeover suites give each side its own dependencies.** A case that puts a `Service` in a `Vpc` and a `Cluster` puts SST 4's in SST 4's and SST 5's in SST 5's, as a move does (`sided()` in `test/helpers/graph.ts`), and compares only the component it tests: the others move in suites of their own. Expected now: SST 4's version markers and dev commands of those it's given.
+- **Tests of SST 4's components alone go:** 25 files under `test/components/` (`bucket`, `static-site`, `router-url-route` and the like, and the subscriber names of #214), and the tests of an SST 5 component taking an SST 4 one. `cloudfront.test.ts` reads the router code it tests from `router-code.ts`, `moved.test.ts` takes SST 4's form from the fixtures, and `cloudflare-credentials.test.ts` checks the resources the `sst` binary serves. A new check: the providers' folders have none of SST 4's components, and nothing in the platform imports a test.
+
+**Checked:** `tsc`; the platform's suite, 102 files and 4057 tests, against 126 and 4258 before; the Go tests; the CLI builds.
+
+**Left for the swap:** the codemod still writes `sst.aws.v5.X`, which this branch no longer has; the docs site's paths and links under `v5/`, and the components' prose that says "V5"; the rulebook and `PORTING.md`; `registerVersion`, `V5Args` and the `Any…` names.
+
 ## 2026-11-05: step 5, the core stops running 4.x components
 
 What the core kept for SST 4's components goes, before the swap ([plan](plan.md#5-moving-an-app)).

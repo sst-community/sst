@@ -5,22 +5,67 @@ import {
   interpolate,
   output,
 } from "@pulumi/pulumi";
-import { Component, Prettify, Transform, transform } from "../component";
-import { Input } from "../input";
-import { Link } from "../link";
-import { Dns } from "../dns";
-import { CognitoIdentityProvider } from "./cognito-identity-provider";
-import { CognitoUserPoolClient } from "./cognito-user-pool-client";
-import { Function, FunctionArgs, FunctionArn } from "./function.js";
-import { VisibleError } from "../error";
 import { cognito, getRegionOutput, lambda } from "@pulumi/aws";
-import { dns as awsDns } from "./dns.js";
-import { DnsValidatedCertificate } from "./dns-validated-certificate.js";
-import { useProvider } from "./helpers/provider.js";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import { ifSet, notAnExistingPart, plain, usedAsItIs, withDefault, getArgs } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import { Function } from "./function";
+import { type DomainArgs, domainOf } from "./helpers/domain";
+import {
+  type FunctionInput,
+  type FunctionPart,
+  functionPart,
+  plainFunction,
+} from "./helpers/function-part";
+import { invokePermissionArgs } from "./helpers/function-permission";
+import { useProvider } from "./helpers/provider";
 import { permission } from "./permission";
-import { functionBuilder } from "./helpers/function-builder";
+import {
+  CognitoUserPoolClient,
+  type CognitoUserPoolClientArgs,
+} from "./cognito-user-pool-client";
 
-interface Triggers {
+const parts = () => ({
+  /**
+   * The Amazon Cognito User Pool.
+   */
+  userPool: cognito.UserPool,
+  /**
+   * The function behind each trigger, by trigger: `preSignUp`,
+   * `postConfirmation` and so on.
+   */
+  trigger: many(deferred(Function)),
+  /**
+   * The permission that lets the user pool invoke each trigger's function, by
+   * trigger.
+   */
+  permission: many(lambda.Permission),
+  /**
+   * The certificate for the custom domain, created when `domain` is a custom
+   * domain without a `cert`.
+   */
+  certificate: optional(DnsValidatedCertificate),
+  /**
+   * The domain of the hosted UI, when `domain` is set. One you pass in `existing` is used
+   * without `domain`, and `domainUrl` is its URL.
+   */
+  domain: optional(cognito.UserPoolDomain),
+  /**
+   * The identity providers added with `addIdentityProvider`, by provider name.
+   */
+  identityProvider: many(cognito.IdentityProvider),
+});
+
+export interface CognitoUserPoolTriggers {
   /**
    * The ARN of the AWS KMS key used for encryption.
    *
@@ -31,78 +76,57 @@ interface Triggers {
   /**
    * Triggered after the user successfully responds to the previous challenge, and a new
    * challenge needs to be created.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  createAuthChallenge?: Input<string | FunctionArgs | FunctionArn>;
+  createAuthChallenge?: FunctionInput;
   /**
    * Triggered during events like user sign-up, password recovery, email/phone number
    * verification, and when an admin creates a user. Use this trigger to customize the
    * email provider.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  customEmailSender?: Input<string | FunctionArgs | FunctionArn>;
+  customEmailSender?: FunctionInput;
   /**
    * Triggered during events like user sign-up, password recovery, email/phone number
    * verification, and when an admin creates a user. Use this trigger to customize the
    * message that is sent to your users.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  customMessage?: Input<string | FunctionArgs | FunctionArn>;
+  customMessage?: FunctionInput;
   /**
    * Triggered when an SMS message needs to be sent, such as for MFA or verification codes.
    * Use this trigger to customize the SMS provider.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  customSmsSender?: Input<string | FunctionArgs | FunctionArn>;
+  customSmsSender?: FunctionInput;
   /**
    * Triggered after each challenge response to determine the next action. Evaluates whether the
    * user has completed the authentication process or if additional challenges are needed.
-   * ARN of the lambda function to name a custom challenge.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  defineAuthChallenge?: Input<string | FunctionArgs | FunctionArn>;
+  defineAuthChallenge?: FunctionInput;
   /**
    * Triggered after a successful authentication event. Use this to perform custom actions,
    * such as logging or modifying user attributes, after the user is authenticated.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  postAuthentication?: Input<string | FunctionArgs | FunctionArn>;
+  postAuthentication?: FunctionInput;
   /**
    * Triggered after a user is successfully confirmed; sign-up or email/phone number
    * verification. Use this to perform additional actions, like sending a welcome email or
    * initializing user data, after user confirmation.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  postConfirmation?: Input<string | FunctionArgs | FunctionArn>;
+  postConfirmation?: FunctionInput;
   /**
    * Triggered before the authentication process begins. Use this to implement custom
    * validation or checks (like checking if the user is banned) before continuing
    * authentication.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  preAuthentication?: Input<string | FunctionArgs | FunctionArn>;
+  preAuthentication?: FunctionInput;
   /**
    * Triggered before the user sign-up process completes. Use this to perform custom
    * validation, auto-confirm users, or auto-verify attributes based on custom logic.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  preSignUp?: Input<string | FunctionArgs | FunctionArn>;
+  preSignUp?: FunctionInput;
   /**
    * Triggered before tokens are generated in the authentication process. Use this to
    * customize or add claims to the tokens that will be generated and returned to the user.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  preTokenGeneration?: Input<string | FunctionArgs | FunctionArn>;
+  preTokenGeneration?: FunctionInput;
   /**
    * The version of the preTokenGeneration trigger to use. Higher versions have access to
    * more information that support new features.
@@ -113,21 +137,44 @@ interface Triggers {
    * Triggered when a user attempts to sign in but does not exist in the current user pool.
    * Use this to import and validate users from an existing user directory into the
    * Cognito User Pool during sign-in.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  userMigration?: Input<string | FunctionArgs | FunctionArn>;
+  userMigration?: FunctionInput;
   /**
    * Triggered after the user responds to a custom authentication challenge. Use this to
    * verify the user's response to the challenge and determine whether to continue
    * authenticating the user.
-   *
-   * Takes the handler path, the function args, or a function ARN.
    */
-  verifyAuthChallengeResponse?: Input<string | FunctionArgs | FunctionArn>;
+  verifyAuthChallengeResponse?: FunctionInput;
 }
 
-export interface CognitoUserPoolArgs {
+export interface CognitoUserPoolPrefixDomainArgs {
+  /**
+   * Use an Amazon Cognito prefix domain. Creates a domain at
+   * `{prefix}.auth.{region}.amazoncognito.com`.
+   *
+   * Cannot contain "aws", "amazon", or "cognito".
+   */
+  prefix: Input<string>;
+}
+
+export interface CognitoUserPoolDomainArgs extends DomainArgs {
+  /**
+   * The custom domain name. Must be a subdomain (e.g., `auth.example.com`). A plain value:
+   * the DNS records are named after it.
+   */
+  name: string;
+  /**
+   * The ARN of an ACM (AWS Certificate Manager) certificate that proves ownership of the
+   * domain. By default, a certificate is created and validated automatically.
+   *
+   * Cognito serves a custom domain through CloudFront, which takes its certificate from the
+   * `us-east-1` region. The one that's created for you is created there, and one you pass
+   * in has to be there too.
+   */
+  cert?: Input<string>;
+}
+
+export interface CognitoUserPoolArgs extends ComponentArgs<typeof parts> {
   /**
    * Configure the different ways a user can sign in besides using their username.
    *
@@ -315,7 +362,13 @@ export interface CognitoUserPoolArgs {
    */
   softwareToken?: Input<boolean>;
   /**
-   * Configure triggers for this User Pool
+   * Configure triggers for this User Pool. Each one takes the handler path or the function
+   * args, which are plain values, or a function you already have, or its ARN. The
+   * `triggers` are a plain value too: they decide which functions are created.
+   *
+   * The functions are in the user pool's `nodes.trigger`, by trigger, and
+   * `transform.trigger` changes them.
+   *
    * @default No triggers
    * @example
    *
@@ -328,11 +381,14 @@ export interface CognitoUserPoolArgs {
    * }
    * ```
    */
-  triggers?: Input<Prettify<Triggers>>;
+  triggers?: Prettify<CognitoUserPoolTriggers>;
   /**
    * Configure a domain for the User Pool's hosted UI.
    *
-   * You can use either a Cognito-provided prefix domain or your own custom domain.
+   * You can use either a Cognito-provided prefix domain or your own custom domain. The
+   * domain has to be a plain value, and so do a custom domain's `name` and `dns`: they
+   * decide the certificate and the DNS records. To use a domain the user pool already has,
+   * pass it in `existing.domain` and leave this out.
    *
    * @example
    *
@@ -368,53 +424,16 @@ export interface CognitoUserPoolArgs {
    * }
    * ```
    */
-  domain?: Input<
+  domain?:
     | string
-    | {
-        /**
-         * Use an Amazon Cognito prefix domain. Creates a domain at
-         * `{prefix}.auth.{region}.amazoncognito.com`.
-         *
-         * Cannot contain "aws", "amazon", or "cognito".
-         */
-        prefix: Input<string>;
-      }
-    | {
-        /**
-         * The custom domain name. Must be a subdomain (e.g., `auth.example.com`).
-         */
-        name: Input<string>;
-        /**
-         * The DNS provider for automatic certificate validation and record creation.
-         * Set to `false` for manual DNS setup.
-         *
-         * @default `sst.aws.dns`
-         */
-        dns?: Input<false | (Dns & {})>;
-        /**
-         * ARN of an existing ACM certificate in `us-east-1`. By default, a certificate
-         * is created and validated automatically.
-         */
-        cert?: Input<string>;
-      }
-  >;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Cognito User Pool resource.
-     */
-    userPool?: Transform<cognito.UserPoolArgs>;
-    /**
-     * Transform the Cognito User Pool domain resource.
-     */
-    domain?: Transform<cognito.UserPoolDomainArgs>;
-  };
+    | CognitoUserPoolPrefixDomainArgs
+    | Prettify<CognitoUserPoolDomainArgs>;
 }
 
-export interface CognitoIdentityProviderArgs {
+export interface CognitoUserPoolAddClientArgs
+  extends Omit<CognitoUserPoolClientArgs, "userPool"> {}
+
+export interface CognitoUserPoolIdentityProviderArgs {
   /**
    * The type of identity provider.
    */
@@ -442,75 +461,16 @@ export interface CognitoIdentityProviderArgs {
    * ```
    */
   attributes?: Input<Record<string, Input<string>>>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Cognito identity provider resource.
-     */
-    identityProvider?: Transform<cognito.IdentityProviderArgs>;
-  };
-}
-
-export interface CognitoUserPoolClientArgs {
-  /**
-   * A list of identity providers that are supported for this client.
-   * @default `["COGNITO"]`
-   * @example
-   *
-   * :::tip
-   * Reference federated identity providers using their `providerName` property.
-   * :::
-   *
-   * If you are using a federated identity provider.
-   *
-   * ```js title="sst.config.ts"
-   * const provider = userPool.addIdentityProvider("MyProvider", {
-   *   type: "oidc",
-   *   details: {
-   *     authorize_scopes: "email profile",
-   *     client_id: "your-client-id",
-   *     client_secret: "your-client-secret"
-   *   },
-   * });
-   * ```
-   *
-   * Make sure to pass in `provider.providerName` instead of hardcoding it to `"MyProvider"`.
-   *
-   * ```ts title="sst.config.ts" {2}
-   * userPool.addClient("Web", {
-   *   providers: [provider.providerName]
-   * });
-   * ```
-   *
-   * This ensures the client is created after the provider.
-   */
-  providers?: Input<Input<string>[]>;
-  /**
-   * List of allowed callback URLs for the identity providers.
-   */
-  callbackUrls?: Input<Input<string>[]>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Cognito User Pool client resource.
-     */
-    client?: Transform<cognito.UserPoolClientArgs>;
-  };
-}
-
-interface CognitoUserPoolRef {
-  ref: boolean;
-  userPool: cognito.UserPool;
 }
 
 /**
  * The `CognitoUserPool` component lets you add a [Amazon Cognito User Pool](https://docs.aws.amazon.com/cognito/latest/developerguide/cognito-user-identity-pools.html) to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have. That includes its identity
+ * providers and the functions behind its triggers.
+ *
+ * @example
  *
  * #### Create the user pool
  *
@@ -563,7 +523,7 @@ interface CognitoUserPoolRef {
  * const GoogleClientId = new sst.Secret("GOOGLE_CLIENT_ID");
  * const GoogleClientSecret = new sst.Secret("GOOGLE_CLIENT_SECRET");
  *
- * userPool.addIdentityProvider({
+ * const provider = userPool.addIdentityProvider("Google", {
  *   type: "google",
  *   details: {
  *     authorize_scopes: "email profile",
@@ -581,351 +541,289 @@ interface CognitoUserPoolRef {
  * #### Add a client
  *
  * ```ts title="sst.config.ts"
- * userPool.addClient("Web");
+ * const client = userPool.addClient("Web", {
+ *   providers: [provider.providerName]
+ * });
  * ```
+ *
+ * A client is a component of its own, so you can link it. Its ID and secret are then
+ * available as `Resource.Web.id` and `Resource.Web.secret`.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Nextjs("MyWeb", {
+ *   link: [client]
+ * });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.CognitoUserPool`
+ *
+ * Keep the name, and `sst migrate` moves it. The
+ * user pool, its domain, its clients, its identity providers and its trigger functions are
+ * kept.
+ *
+ * A few things work differently:
+ *
+ * - `addIdentityProvider` returns the Cognito identity provider. `provider.providerName`
+ *   reads as before.
+ * - An identity provider's own `transform` becomes the user pool's
+ *   `transform.identityProvider`.
+ * - `domain`, with a custom domain's `name` and `dns`, has to be a plain value, not an
+ *   output. So do `triggers`, and each trigger's handler or function args: they decide
+ *   what's created. A function you already have, or its ARN, can still be an output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domain they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - An identity provider is created inside the user pool, with the provider the user pool
+ *   has. `sst.aws.CognitoUserPool` created it beside the user pool, with only a `provider`
+ *   passed to the user pool itself. So if your user pool takes its provider from a parent
+ *   component or from `providers`, the switch gives its identity providers that provider
+ *   and keeps them.
+ * - `get` gives its options to the component, so a `provider` you pass it reaches the
+ *   clients and identity providers you add, and a `parent` or `providers` the identity
+ *   providers. `sst.aws.CognitoUserPool.get` gave them to the user pool it looked up and
+ *   to nothing else. So the switch gives a client or an identity provider added to a user
+ *   pool from `get` with a provider that provider, and keeps it, with its ID.
+ * - `nodes.userPool` is the user pool, not an output of it. `nodes` has every resource,
+ *   the certificate, the trigger functions and the identity providers included.
  */
-export class CognitoUserPool extends Component implements Link.Linkable {
-  private constructorOpts: ComponentResourceOptions;
-  private userPool: Output<cognito.UserPool>;
-  private _domainUrl?: Output<string>;
+export class CognitoUserPool extends component(
+  "sst:aws:CognitoUserPool",
+  parts,
+) {
+  private hostedUiUrl?: Output<string>;
 
   constructor(
     name: string,
     args: CognitoUserPoolArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = args as unknown as CognitoUserPoolRef;
-      this.constructorOpts = opts;
-      this.userPool = output(ref.userPool);
-      return;
-    }
-
-    const parent = this;
-    const region = getRegionOutput(undefined, { parent }).region;
-
-    normalizeAliasesAndUsernames();
-    const triggers = normalizeTriggers();
-    const verify = normalizeVerify();
-    const userPool = createUserPool();
-
-    const domain = normalizeDomain();
-    const certificateArn = createSsl();
-    const cognitoDomain = createCognitoDomain();
-    createDnsRecords();
-
-    this.constructorOpts = opts;
-    this.userPool = userPool;
-    this._domainUrl = domain?.apply((d) =>
-      d.prefix
-        ? interpolate`https://${d.prefix}.auth.${region}.amazoncognito.com`
-        : interpolate`https://${d.name}`,
-    );
-
-    function normalizeAliasesAndUsernames() {
-      all([args.aliases, args.usernames]).apply(([aliases, usernames]) => {
-        if (aliases && usernames)
-          throw new VisibleError(
-            "You cannot set both aliases and usernames. Learn more about customizing sign-in attributes at https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases",
-          );
-      });
-    }
-
-    function normalizeTriggers() {
-      if (!args.triggers) return;
-
-      return output(args.triggers).apply((triggers) => {
-        if (
-          (triggers.customEmailSender || triggers.customSmsSender) &&
-          !triggers.kmsKey
-        )
-          throw new VisibleError(
-            "You must provide a KMS key via `kmsKey` when configuring `customEmailSender` or `customSmsSender`.",
-          );
-
-        return {
-          ...triggers,
-          preTokenGenerationVersion:
-            triggers.preTokenGenerationVersion === "v2" ? "V2_0" : "V1_0",
-        };
-      });
-    }
-
-    function normalizeVerify() {
-      if (!args.verify) return;
-
-      return output(args.verify).apply((verify) => {
-        return {
-          defaultEmailOption: "CONFIRM_WITH_CODE",
-          emailMessage:
-            verify.emailMessage ??
-            "The verification code to your new account is {####}",
-          emailSubject: verify.emailSubject ?? "Verify your new account",
-          smsMessage:
-            verify.smsMessage ??
-            "The verification code to your new account is {####}",
-        };
-      });
-    }
-
-    function createUserPool() {
-      return output(args.softwareToken).apply(
-        (softwareToken) =>
-          new cognito.UserPool(
-            ...transform(
-              args.transform?.userPool,
-              `${name}UserPool`,
-              {
-                aliasAttributes:
-                  args.aliases &&
-                  output(args.aliases).apply((aliases) => [
-                    ...(aliases.includes("email") ? ["email"] : []),
-                    ...(aliases.includes("phone") ? ["phone_number"] : []),
-                    ...(aliases.includes("preferred_username")
-                      ? ["preferred_username"]
-                      : []),
-                  ]),
-                usernameAttributes:
-                  args.usernames &&
-                  output(args.usernames).apply((usernames) => [
-                    ...(usernames.includes("email") ? ["email"] : []),
-                    ...(usernames.includes("phone") ? ["phone_number"] : []),
-                  ]),
-                accountRecoverySetting: {
-                  recoveryMechanisms: [
-                    {
-                      name: "verified_phone_number",
-                      priority: 1,
-                    },
-                    {
-                      name: "verified_email",
-                      priority: 2,
-                    },
-                  ],
-                },
-                adminCreateUserConfig: {
-                  allowAdminCreateUserOnly: false,
-                },
-                usernameConfiguration: {
-                  caseSensitive: false,
-                },
-                autoVerifiedAttributes: all([
-                  args.aliases || [],
-                  args.usernames || [],
-                ]).apply(([aliases, usernames]) => {
-                  const attributes = [...aliases, ...usernames];
-                  return [
-                    ...(attributes.includes("email") ? ["email"] : []),
-                    ...(attributes.includes("phone") ? ["phone_number"] : []),
-                  ];
-                }),
-                emailConfiguration: {
-                  emailSendingAccount: "COGNITO_DEFAULT",
-                },
-                verificationMessageTemplate: verify,
-                userPoolAddOns: {
-                  advancedSecurityMode: output(args.advancedSecurity).apply(
-                    (v) => (v ?? "off").toUpperCase(),
-                  ),
-                },
-                mfaConfiguration: output(args.mfa).apply((v) =>
-                  (v ?? "off").toUpperCase(),
-                ),
-                smsAuthenticationMessage: args.smsAuthenticationMessage,
-                smsConfiguration: args.sms,
-                softwareTokenMfaConfiguration: softwareToken
-                  ? { enabled: true }
-                  : undefined,
-                lambdaConfig:
-                  triggers &&
-                  triggers.apply((triggers) => {
-                    return {
-                      kmsKeyId: triggers.kmsKey,
-                      createAuthChallenge: createTrigger("createAuthChallenge"),
-                      customEmailSender:
-                        triggers.customEmailSender === undefined
-                          ? undefined
-                          : {
-                              lambdaArn: createTrigger("customEmailSender")!,
-                              lambdaVersion: "V1_0",
-                            },
-                      customMessage: createTrigger("customMessage"),
-                      customSmsSender:
-                        triggers.customSmsSender === undefined
-                          ? undefined
-                          : {
-                              lambdaArn: createTrigger("customSmsSender")!,
-                              lambdaVersion: "V1_0",
-                            },
-                      defineAuthChallenge: createTrigger("defineAuthChallenge"),
-                      postAuthentication: createTrigger("postAuthentication"),
-                      postConfirmation: createTrigger("postConfirmation"),
-                      preAuthentication: createTrigger("preAuthentication"),
-                      preSignUp: createTrigger("preSignUp"),
-                      preTokenGenerationConfig:
-                        triggers.preTokenGeneration === undefined
-                          ? undefined
-                          : {
-                              lambdaArn: createTrigger("preTokenGeneration")!,
-                              lambdaVersion: triggers.preTokenGenerationVersion,
-                            },
-                      userMigration: createTrigger("userMigration"),
-                      verifyAuthChallengeResponse: createTrigger(
-                        "verifyAuthChallengeResponse",
-                      ),
-                    };
-
-                    function createTrigger(key: keyof Triggers) {
-                      if (!triggers[key]) return;
-
-                      const fn = functionBuilder(
-                        `${name}Trigger${key}`,
-                        triggers[key]!,
-                        {
-                          description: `Subscribed to ${key} from ${name}`,
-                        },
-                        undefined,
-                        { parent },
-                      );
-
-                        new lambda.Permission(
-                          `${name}Permission${key}`,
-                          {
-                            action: "lambda:InvokeFunction",
-                            function: fn.arn,
-                            qualifier: fn.qualifier.apply((qualifier) => qualifier!),
-                            principal: "cognito-idp.amazonaws.com",
-                            sourceArn: userPool.arn,
-                          },
-                          { parent },
-                        );
-                        return fn.targetArn;
-                      }
-                  }),
-              },
-              { parent },
-            ),
-          ),
+    const owner = `the "${name}" user pool`;
+    // A user pool that's already deployed keeps the settings it has
+    if (this.existingPart("userPool"))
+      usedAsItIs(args, SETTINGS, "userPool", owner);
+    // A domain the user pool has already is used the way it is
+    if (args.existing?.domain !== undefined)
+      usedAsItIs(args, ["domain"], "domain", owner);
+    if (args.aliases && args.usernames)
+      throw new VisibleError(
+        `The "${name}" user pool is given both "aliases" and "usernames". Give it one of them. Learn more about customizing sign-in attributes at https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases`,
       );
-    }
 
-    function normalizeDomain() {
-      if (!args.domain) return;
+    const triggers = this.createTriggers(args.triggers);
 
-      return output(args.domain).apply((domain) => {
-        if (typeof domain === "string") domain = { name: domain };
-
-        if ("prefix" in domain) {
-          return {
-            prefix: domain.prefix,
-            name: undefined,
-            dns: undefined,
-            cert: undefined,
-          };
-        }
-
-        if (domain.dns === false && !domain.cert) {
-          throw new VisibleError(
-            `Need to provide a validated certificate via "cert" when DNS is disabled.`,
-          );
-        }
-
-        return {
-          prefix: undefined,
-          name: domain.name,
-          dns: domain.dns === false ? undefined : (domain.dns ?? awsDns()),
-          cert: domain.cert,
-        };
-      });
-    }
-
-    function createSsl() {
-      if (!domain) return output(undefined);
-
-      return domain.apply((domain) => {
-        if (domain.prefix) return output(undefined);
-        if (domain.cert) return output(domain.cert);
-
-        return new DnsValidatedCertificate(
-          `${name}Ssl`,
-          {
-            domainName: domain.name!,
-            dns: output(domain.dns!),
-          },
-          { parent, provider: useProvider("us-east-1") },
-        ).arn;
-      });
-    }
-
-    function createCognitoDomain() {
-      if (!domain) return;
-
-      return new cognito.UserPoolDomain(
-        ...transform(
-          args.transform?.domain,
-          `${name}Domain`,
-          {
-            userPoolId: userPool.id,
-            domain: domain.apply((d) => (d.prefix ?? d.name)!),
-            certificateArn: certificateArn as Output<string>,
-          },
-          { parent, deleteBeforeReplace: true },
+    const userPool = this.part("userPool", {
+      aliasAttributes:
+        args.aliases &&
+        output(args.aliases).apply((names) =>
+          signInAttributes(names, "email", "phone", "preferred_username"),
         ),
+      usernameAttributes:
+        args.usernames &&
+        output(args.usernames).apply((names) =>
+          signInAttributes(names, "email", "phone"),
+        ),
+      accountRecoverySetting: {
+        recoveryMechanisms: [
+          { name: "verified_phone_number", priority: 1 },
+          { name: "verified_email", priority: 2 },
+        ],
+      },
+      adminCreateUserConfig: { allowAdminCreateUserOnly: false },
+      usernameConfiguration: { caseSensitive: false },
+      autoVerifiedAttributes: all([
+        args.aliases ?? [],
+        args.usernames ?? [],
+      ]).apply(([byAlias, byUsername]) =>
+        signInAttributes([...byAlias, ...byUsername], "email", "phone"),
+      ),
+      emailConfiguration: { emailSendingAccount: "COGNITO_DEFAULT" },
+      verificationMessageTemplate: ifSet(args.verify, (verify) => ({
+        defaultEmailOption: "CONFIRM_WITH_CODE",
+        emailMessage: verify.emailMessage ?? VERIFICATION_MESSAGE,
+        emailSubject: verify.emailSubject ?? "Verify your new account",
+        smsMessage: verify.smsMessage ?? VERIFICATION_MESSAGE,
+      })),
+      userPoolAddOns: {
+        advancedSecurityMode: withDefault<string, string>(
+          args.advancedSecurity,
+          "off",
+          (mode) => mode.toUpperCase(),
+        ),
+      },
+      mfaConfiguration: withDefault<string, string>(args.mfa, "off", (mfa) =>
+        mfa.toUpperCase(),
+      ),
+      smsAuthenticationMessage: args.smsAuthenticationMessage,
+      smsConfiguration: args.sms,
+      softwareTokenMfaConfiguration: ifSet(
+        output(args.softwareToken).apply((enabled) =>
+          enabled ? { enabled: true } : undefined,
+        ),
+      ),
+      lambdaConfig: triggers?.config,
+    });
+
+    for (const [trigger, fn] of Object.entries(triggers?.functions ?? {}))
+      this.part(
+        "permission",
+        trigger,
+        invokePermissionArgs(fn, "cognito-idp.amazonaws.com", userPool.arn),
+      );
+
+    const domain = plain(args.domain, `The "domain" of ${owner}`);
+    // The certificate is a custom domain's, when it's given no `cert`
+    if (
+      !domain ||
+      (typeof domain !== "string" && ("prefix" in domain || domain.cert))
+    )
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        owner,
+        `It's the certificate of a custom domain the user pool creates: give "domain" a "name" and no "cert".`,
+      );
+    if (domain) this.hostedUiUrl = this.createDomain(domain, userPool);
+    else {
+      const existing = this.existingPart("domain");
+      if (existing) this.hostedUiUrl = urlOfDomain(existing, this);
+    }
+  }
+
+  // The function behind each trigger, and what the user pool is told about
+  // them.
+  private createTriggers(triggers: CognitoUserPoolTriggers | undefined) {
+    const name = this.componentName;
+    plain(triggers, `The "triggers" of the "${name}" user pool`);
+    if (!triggers) return undefined;
+    if (
+      (triggers.customEmailSender || triggers.customSmsSender) &&
+      !triggers.kmsKey
+    )
+      throw new VisibleError(
+        `The "triggers" of the "${name}" user pool have "customEmailSender" or "customSmsSender", which need a KMS key. Give it in "triggers.kmsKey".`,
+      );
+
+    const functions: Partial<Record<Trigger, FunctionPart>> = {};
+    for (const trigger of TRIGGERS) {
+      const definition = triggers[trigger];
+      if (!definition) continue;
+      functions[trigger] = functionPart(
+        this,
+        "trigger",
+        trigger,
+        plainFunction(
+          definition,
+          `The "${trigger}" trigger of the "${name}" user pool`,
+        ),
+        { description: `Subscribed to ${trigger} from ${name}` },
       );
     }
+    const arn = (trigger: Trigger) => functions[trigger]?.targetArn;
+    // Some triggers take the version of the event they're sent
+    const versioned = (trigger: Trigger, lambdaVersion: string) => {
+      const lambdaArn = arn(trigger);
+      return lambdaArn && { lambdaArn, lambdaVersion };
+    };
 
-    function createDnsRecords() {
-      if (!domain || !cognitoDomain) return;
+    const config: cognito.UserPoolArgs["lambdaConfig"] = {
+      kmsKeyId: triggers.kmsKey,
+      createAuthChallenge: arn("createAuthChallenge"),
+      customEmailSender: versioned("customEmailSender", "V1_0"),
+      customMessage: arn("customMessage"),
+      customSmsSender: versioned("customSmsSender", "V1_0"),
+      defineAuthChallenge: arn("defineAuthChallenge"),
+      postAuthentication: arn("postAuthentication"),
+      postConfirmation: arn("postConfirmation"),
+      preAuthentication: arn("preAuthentication"),
+      preSignUp: arn("preSignUp"),
+      preTokenGenerationConfig: versioned(
+        "preTokenGeneration",
+        triggers.preTokenGenerationVersion === "v2" ? "V2_0" : "V1_0",
+      ),
+      userMigration: arn("userMigration"),
+      verifyAuthChallengeResponse: arn("verifyAuthChallengeResponse"),
+    };
+    return { functions, config };
+  }
 
-      domain.apply((domain) => {
-        if (!domain.name || !domain.dns) return;
+  // The hosted UI's domain: a Cognito prefix domain, or a custom domain with
+  // its certificate and the DNS records that point at it. Returns its URL.
+  private createDomain(
+    domain: NonNullable<CognitoUserPoolArgs["domain"]>,
+    userPool: cognito.UserPool,
+  ) {
+    const name = this.componentName;
+    const opts = { deleteBeforeReplace: true };
 
-        domain.dns.createAlias(
-          name,
-          {
-            name: domain.name,
-            aliasName: cognitoDomain.cloudfrontDistribution,
-            aliasZone: cognitoDomain.cloudfrontDistributionZoneId,
-          },
-          { parent },
-        );
-      });
+    if (typeof domain !== "string" && "prefix" in domain) {
+      this.part(
+        "domain",
+        { userPoolId: userPool.id, domain: domain.prefix },
+        opts,
+      );
+      const region = getRegionOutput(undefined, { parent: this }).region;
+      return interpolate`https://${domain.prefix}.auth.${region}.amazoncognito.com`;
     }
+
+    const custom = domainOf(domain, `the "${name}" user pool`);
+
+    // Cognito serves a custom domain through CloudFront, which takes its
+    // certificates from us-east-1.
+    const certificateArn =
+      custom.cert ??
+      this.part(
+        "certificate",
+        { domainName: custom.name, dns: custom.dns! },
+        { provider: useProvider("us-east-1") },
+      ).arn;
+    const userPoolDomain = this.part(
+      "domain",
+      { userPoolId: userPool.id, domain: custom.name, certificateArn },
+      opts,
+    );
+    custom.dns?.alias(
+      name,
+      {
+        name: custom.name,
+        aliasName: userPoolDomain.cloudfrontDistribution,
+        aliasZone: userPoolDomain.cloudfrontDistributionZoneId,
+      },
+      this.delegateOpts(),
+    );
+    return interpolate`https://${custom.name}`;
   }
 
   /**
    * The Cognito User Pool ID.
    */
   public get id() {
-    return this.userPool.id;
+    return this.nodes.userPool.id;
   }
 
   /**
    * The Cognito User Pool ARN.
    */
   public get arn() {
-    return this.userPool.arn;
+    return this.nodes.userPool.arn;
   }
 
   /**
-   * If a `domain` is configured, this is the full URL of the hosted UI.
+   * If a `domain` is configured, or one is given in `existing.domain`, this is the full
+   * URL of the hosted UI.
    */
   public get domainUrl() {
-    return this._domainUrl;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon Cognito User Pool.
-       */
-      userPool: this.userPool,
-    };
+    return this.hostedUiUrl;
   }
 
   /**
@@ -937,25 +835,22 @@ export class CognitoUserPool extends Component implements Link.Linkable {
    *
    * @example
    *
-   * ```ts
-   * userPool.addClient("Web");
+   * ```ts title="sst.config.ts"
+   * const client = userPool.addClient("Web");
    * ```
+   *
+   * This returns the client as a component of its own, with its `id` and `secret`. Link it
+   * to read them at runtime as `Resource.Web.id` and `Resource.Web.secret`.
    */
   public addClient(
     name: string,
-    args?: CognitoUserPoolClientArgs,
+    args: CognitoUserPoolAddClientArgs = {},
     opts?: ComponentResourceOptions,
   ) {
-    // Note: Referencing an existing client will be implemented in the future:
-    // sst.aws.UserPool.getClient("pool", { userPooldID, clientID });
-
     return new CognitoUserPoolClient(
       name,
-      {
-        userPool: this.id,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider, ...opts },
+      { userPool: this.id, ...args },
+      { provider: this.componentOpts.provider, ...opts },
     );
   }
 
@@ -973,7 +868,7 @@ export class CognitoUserPool extends Component implements Link.Linkable {
    * const GithubClientId = new sst.Secret("GITHUB_CLIENT_ID");
    * const GithubClientSecret = new sst.Secret("GITHUB_CLIENT_SECRET");
    *
-   * userPool.addIdentityProvider("GitHub", {
+   * const provider = userPool.addIdentityProvider("GitHub", {
    *   type: "oidc",
    *   details: {
    *      authorize_scopes: "read:user user:email",
@@ -988,49 +883,45 @@ export class CognitoUserPool extends Component implements Link.Linkable {
    * });
    * ```
    *
-   * Or add a Google identity provider.
+   * This returns the Cognito identity provider. Pass its `providerName` to the clients that
+   * use it, so they're created after the provider.
    *
    * ```ts title="sst.config.ts"
-   * const GoogleClientId = new sst.Secret("GOOGLE_CLIENT_ID");
-   * const GoogleClientSecret = new sst.Secret("GOOGLE_CLIENT_SECRET");
-   *
-   * userPool.addIdentityProvider("Google", {
-   *   type: "google",
-   *   details: {
-   *     authorize_scopes: "email profile",
-   *     client_id: GoogleClientId.value,
-   *     client_secret: GoogleClientSecret.value,
-   *   },
-   *   attributes: {
-   *     email: "email",
-   *     name: "name",
-   *     username: "sub",
-   *   },
+   * userPool.addClient("Web", {
+   *   providers: [provider.providerName]
    * });
    * ```
    */
-  public addIdentityProvider(name: string, args: CognitoIdentityProviderArgs) {
-    return new CognitoIdentityProvider(
-      name,
-      {
-        userPool: this.id,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider },
-    );
+  public addIdentityProvider(
+    name: string,
+    args: CognitoUserPoolIdentityProviderArgs,
+  ) {
+    this.assertNew("identity provider", "identityProvider", name, args);
+
+    return this.part("identityProvider", name, {
+      userPoolId: this.id,
+      providerName: name,
+      providerType: output(args.type).apply((type) => {
+        if (!(type in PROVIDER_TYPES))
+          throw new VisibleError(
+            `The "${name}" identity provider of the "${this.componentName}" user pool has the type "${type}". Use one of ${Object.keys(PROVIDER_TYPES).join(", ")}.`,
+          );
+        return PROVIDER_TYPES[type];
+      }),
+      providerDetails: args.details,
+      attributeMapping: args.attributes,
+    });
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking a user pool gives the linked resource its ID, and access to the
+   * user pool.
+   */
+  public link() {
     return {
-      properties: {
-        id: this.id,
-      },
+      properties: { id: this.id },
       include: [
-        permission({
-          actions: ["cognito-idp:*"],
-          resources: [this.userPool.arn],
-        }),
+        permission({ actions: ["cognito-idp:*"], resources: [this.arn] }),
       ],
     };
   }
@@ -1046,6 +937,7 @@ export class CognitoUserPool extends Component implements Link.Linkable {
    *
    * @param name The name of the component.
    * @param userPoolID The ID of the existing User Pool.
+   * @param opts Resource options.
    *
    * @example
    * Imagine you create a User Pool in the `dev` stage. And in your personal stage `frank`,
@@ -1071,19 +963,83 @@ export class CognitoUserPool extends Component implements Link.Linkable {
     userPoolID: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    const userPool = cognito.UserPool.get(
-      `${name}UserPool`,
-      userPoolID,
-      undefined,
+    return new CognitoUserPool(
+      name,
+      getArgs({ existing: { userPool: userPoolID } }),
       opts,
     );
-    return new CognitoUserPool(name, {
-      ref: true,
-      userPool,
-    } as unknown as CognitoUserPoolArgs);
   }
 }
 
-const __pulumiType = "sst:aws:CognitoUserPool";
-// @ts-expect-error
-CognitoUserPool.__pulumiType = __pulumiType;
+// The args that are settings of the user pool itself
+// The URL of a user pool's domain: a custom domain, which has a certificate,
+// or a Cognito prefix domain in the user pool's region
+function urlOfDomain(domain: cognito.UserPoolDomain, parent: CognitoUserPool) {
+  const region = getRegionOutput(undefined, { parent }).region;
+  return all([domain.domain, domain.certificateArn, region]).apply(
+    ([name, cert, region]) =>
+      cert
+        ? `https://${name}`
+        : `https://${name}.auth.${region}.amazoncognito.com`,
+  );
+}
+
+const SETTINGS = [
+  "aliases",
+  "usernames",
+  "advancedSecurity",
+  "mfa",
+  "sms",
+  "smsAuthenticationMessage",
+  "verify",
+  "softwareToken",
+  "triggers",
+] as const;
+
+const TRIGGERS = [
+  "createAuthChallenge",
+  "customEmailSender",
+  "customMessage",
+  "customSmsSender",
+  "defineAuthChallenge",
+  "postAuthentication",
+  "postConfirmation",
+  "preAuthentication",
+  "preSignUp",
+  "preTokenGeneration",
+  "userMigration",
+  "verifyAuthChallengeResponse",
+] as const;
+
+type Trigger = (typeof TRIGGERS)[number];
+
+const VERIFICATION_MESSAGE =
+  "The verification code to your new account is {####}";
+
+// What Cognito calls each kind of identity provider
+const PROVIDER_TYPES = {
+  saml: "SAML",
+  oidc: "OIDC",
+  facebook: "Facebook",
+  google: "Google",
+  amazon: "LoginWithAmazon",
+  apple: "SignInWithApple",
+};
+
+// What Cognito calls the attributes a user can sign in with
+const SIGN_IN_ATTRIBUTES = {
+  email: "email",
+  phone: "phone_number",
+  preferred_username: "preferred_username",
+};
+
+// The ones of `names` that are among `allowed`, as Cognito calls them and in
+// the order `allowed` has them.
+function signInAttributes(
+  names: string[],
+  ...allowed: (keyof typeof SIGN_IN_ATTRIBUTES)[]
+) {
+  return allowed
+    .filter((name) => names.includes(name))
+    .map((name) => SIGN_IN_ATTRIBUTES[name]);
+}

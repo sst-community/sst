@@ -23,23 +23,22 @@ const pulumi = mockPulumi({
 });
 
 type AuthClass =
-  | typeof import("../../../src/components/aws/auth").Auth
-  | typeof import("../../../src/components/aws/v5/auth").Auth;
+  | typeof import("../../fixtures/v4/components/aws/auth").Auth
+  | typeof import("../../../src/components/aws/auth").Auth;
 
 // What 4.x kept in the state and the V5 one doesn't: the record of its
 // version, which has nothing in the cloud behind it
 const VERSION = "sst:sst:Version::MyAuthVersion";
 
 describe("Auth", () => {
-  let Original: typeof import("../../../src/components/aws/auth").Auth;
-  let Auth: typeof import("../../../src/components/aws/v5/auth").Auth;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
+  let Original: typeof import("../../fixtures/v4/components/aws/auth").Auth;
+  let Auth: typeof import("../../../src/components/aws/auth").Auth;
+  let Function: typeof import("../../../src/components/aws/function").Function;
 
   beforeAll(async () => {
-    Original = (await import("../../../src/components/aws/auth")).Auth;
-    Auth = (await import("../../../src/components/aws/v5/auth")).Auth;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
+    Original = (await import("../../fixtures/v4/components/aws/auth")).Auth;
+    Auth = (await import("../../../src/components/aws/auth")).Auth;
+    Function = (await import("../../../src/components/aws/function")).Function;
     await import("../../../src/components/aws/takeover/index");
   });
 

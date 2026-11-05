@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, setSide, sided } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 const SERVICE = "aws:ecs/service:Service";
@@ -78,32 +78,58 @@ const pulumi = mockPulumi({
 });
 
 type ServiceClass =
-  | typeof import("../../../src/components/aws/service").Service
-  | typeof import("../../../src/components/aws/v5/service").Service;
+  | typeof import("../../fixtures/v4/components/aws/service").Service
+  | typeof import("../../../src/components/aws/service").Service;
 
 describe("Service", () => {
-  let OriginalService: typeof import("../../../src/components/aws/service").Service;
-  let Service: typeof import("../../../src/components/aws/v5/service").Service;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let ClusterClass: typeof import("../../../src/components/aws/cluster").Cluster;
-  let Alb: typeof import("../../../src/components/aws/alb").Alb;
-  let Efs: typeof import("../../../src/components/aws/efs").Efs;
-  let Bucket: typeof import("../../../src/components/aws/v5/bucket").Bucket;
+  let OriginalService: typeof import("../../fixtures/v4/components/aws/service").Service;
+  let Service: typeof import("../../../src/components/aws/service").Service;
+  // SST 4's for SST 4's Service, SST 5's for SST 5's
+  let Vpc: any;
+  let ClusterClass: any;
+  let Alb: any;
+  let Efs: any;
+  let Bucket: typeof import("../../../src/components/aws/bucket").Bucket;
   // Where the Dockerfiles are. Building an image adds `.sst` to the ignore
   // file next to its Dockerfile.
   let app: string;
   let admin: string;
 
   beforeAll(async () => {
-    OriginalService = (await import("../../../src/components/aws/service"))
+    OriginalService = (await import("../../fixtures/v4/components/aws/service"))
       .Service;
-    Service = (await import("../../../src/components/aws/v5/service")).Service;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    ClusterClass = (await import("../../../src/components/aws/cluster"))
-      .Cluster;
-    Alb = (await import("../../../src/components/aws/alb")).Alb;
-    Efs = (await import("../../../src/components/aws/efs")).Efs;
-    Bucket = (await import("../../../src/components/aws/v5/bucket")).Bucket;
+    Service = (await import("../../../src/components/aws/service")).Service;
+    const v4 = {
+      vpc: await import("../../fixtures/v4/components/aws/vpc"),
+      cluster: await import("../../fixtures/v4/components/aws/cluster"),
+      alb: await import("../../fixtures/v4/components/aws/alb"),
+      efs: await import("../../fixtures/v4/components/aws/efs"),
+    };
+    const v5 = {
+      vpc: await import("../../../src/components/aws/vpc"),
+      cluster: await import("../../../src/components/aws/cluster"),
+      alb: await import("../../../src/components/aws/alb"),
+      efs: await import("../../../src/components/aws/efs"),
+    };
+    Vpc = sided(
+      () => v4.vpc.Vpc,
+      () => v5.vpc.Vpc,
+    );
+    ClusterClass = sided(
+      () => v4.cluster.Cluster,
+      () => v5.cluster.Cluster,
+    );
+    Alb = sided(
+      () => v4.alb.Alb,
+      () => v5.alb.Alb,
+    );
+    Efs = sided(
+      () => v4.efs.Efs,
+      () => v5.efs.Efs,
+    );
+    for (const name of ["vpc", "cluster", "alb", "efs"])
+      await import(`../../../src/components/aws/takeover/${name}`);
+    Bucket = (await import("../../../src/components/aws/bucket")).Bucket;
     await import("../../../src/components/aws/takeover/service");
     // What the V5 one creates for a domain takes over 4.x's by this
     await import(
@@ -1153,6 +1179,7 @@ describe("Service", () => {
         }`, async () => {
           const read = async (Service: ServiceClass) => {
             pulumi.reset();
+            setSide(Service === OriginalService ? "original" : "v5");
             // @ts-ignore
             global.$dev = dev;
             const service = create(Service);
@@ -1190,15 +1217,22 @@ describe("Service", () => {
       const root = paths.root;
       paths.root = app;
       try {
-        const create = (Service: ServiceClass) => () =>
-          new Service("MyService", { cluster: cluster() });
+        const create = (Service: ServiceClass) => () => {
+          setSide(Service === OriginalService ? "original" : "v5");
+          return new Service("MyService", { cluster: cluster() });
+        };
 
         const result = await pulumi.takesOver(
           create(OriginalService),
           create(Service),
         );
         expect(result.changed).toEqual([]);
-        expect(result.unclaimed).toEqual([`${DEV_COMMAND}::MyServiceDev`]);
+        // SST 4's version markers, of the cluster and the VPC too
+        expect(result.unclaimed.sort()).toEqual([
+          `${DEV_COMMAND}::MyServiceDev`,
+          "sst:sst:Version::MyClusterVersion",
+          "sst:sst:Version::MyVpcVersion",
+        ]);
         expect(resource("MyServiceImageMyService").inputs).toMatchObject({
           context: { location: app },
           dockerfile: { location: path.join(app, "Dockerfile") },
@@ -1212,8 +1246,9 @@ describe("Service", () => {
     // and what's named after a container or a protocol is named the way a
     // name is written
     it("keeps what it renames", async () => {
-      const create = (Service: ServiceClass) =>
-        new Service("MyService", {
+      const create = (Service: ServiceClass) => {
+        setSide(Service === OriginalService ? "original" : "v5");
+        return new Service("MyService", {
           cluster: cluster(),
           containers: [
             { name: "app", image: { context: app } },
@@ -1227,6 +1262,7 @@ describe("Service", () => {
             ],
           },
         });
+      };
       const own = () =>
         pulumi.resources
           .filter((r) => r.parent.endsWith("::MyService"))
@@ -1289,6 +1325,8 @@ describe("Service", () => {
       expect(result.unclaimed.sort()).toEqual([
         `${DEV_COMMAND}::MyServiceadmin-panelDev`,
         `${DEV_COMMAND}::MyServiceappDev`,
+        "sst:sst:Version::MyClusterVersion",
+        "sst:sst:Version::MyVpcVersion",
       ]);
     });
   });

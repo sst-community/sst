@@ -18,8 +18,9 @@ const pulumi = mockPulumi({
 describe("a subscriber in a new stage's preview", () => {
   it("is planned, though its old address isn't known yet", async () => {
     // The group, as an app has it, with the takeover maps
-    const { v5 } = await import("../../../src/components/aws/index");
-    const { Queue, Bucket, Dynamo, SnsTopic } = v5;
+    const { Queue, Bucket, Dynamo, SnsTopic } = await import(
+      "../../../src/components/aws/index"
+    );
     new Queue("Jobs").subscribe("src/subscriber.handler");
     new SnsTopic("Events").subscribe("Logger", "src/subscriber.handler");
     new Bucket("Files").notify({

@@ -1,18 +1,58 @@
 import {
   ComponentResourceOptions,
-  Output,
+  interpolate,
+  type Output,
   output,
 } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component.js";
-import { dns as awsDns } from "./dns.js";
-import { VisibleError } from "../error.js";
-import { DnsValidatedCertificate } from "./dns-validated-certificate.js";
-import { Link } from "../link.js";
 import { ec2, lb } from "@pulumi/aws";
-import { Vpc } from "./vpc.js";
-import { Input } from "../input.js";
-import { Dns } from "../dns.js";
-import { listenerKey } from "./helpers/load-balancer.js";
+import {
+  type ComponentArgs,
+  component,
+  many,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import {
+  notAnExistingPart,
+  plainDeep,
+  usedAsItIs,
+  withDefault,
+  getArgs,
+} from "../args";
+import { VisibleError } from "../error";
+import type { Input } from "../input";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import { listenerKey } from "./helpers/load-balancer";
+import {
+  certificateOf,
+  forbidden,
+  type LoadBalancerDomainArgs,
+  loadBalancerDomain,
+  pointDomainAt,
+  securityGroupArgs,
+} from "./helpers/load-balancer-args";
+import { type AnyVpc, assertVpcIds, isVpc, subnetsOf } from "./helpers/vpc";
+
+const parts = () => ({
+  /**
+   * The AWS Security Group of the load balancer.
+   */
+  securityGroup: ec2.SecurityGroup,
+  /**
+   * The certificate of the custom domain. Only created when there's a `domain` without
+   * a `cert` of its own.
+   */
+  certificate: optional(DnsValidatedCertificate),
+  /**
+   * The AWS Load Balancer.
+   */
+  loadBalancer: lb.LoadBalancer,
+  /**
+   * The AWS Load Balancer listeners, by protocol and port: `HTTPS443`. A listener that
+   * `getListener` looks up is added when it's asked for.
+   */
+  listener: many(lb.Listener),
+});
 
 export interface AlbListenerArgs {
   /**
@@ -39,20 +79,22 @@ export interface AlbListenerArgs {
   protocol: "http" | "https";
 }
 
-export interface AlbArgs {
+export interface AlbDomainArgs extends LoadBalancerDomainArgs {}
+
+export interface AlbArgs extends ComponentArgs<typeof parts> {
   /**
-   * The VPC to deploy the ALB in. Can be an SST `Vpc` component or a custom VPC configuration.
+   * The VPC to deploy the ALB in: a `Vpc` component, or the ids of a VPC.
    *
    * @example
    *
-   * Using an SST Vpc component:
+   * Using a `Vpc` component:
    * ```js
    * {
    *   vpc: myVpc
    * }
    * ```
    *
-   * Using a custom VPC:
+   * Using the ids of a VPC:
    * ```js
    * {
    *   vpc: {
@@ -63,20 +105,22 @@ export interface AlbArgs {
    * }
    * ```
    */
-  vpc: Vpc | Input<{
-    /**
-     * The VPC ID.
-     */
-    id: Input<string>;
-    /**
-     * The public subnet IDs.
-     */
-    publicSubnets: Input<Input<string>[]>;
-    /**
-     * The private subnet IDs.
-     */
-    privateSubnets: Input<Input<string>[]>;
-  }>;
+  vpc:
+    | AnyVpc
+    | Input<{
+        /**
+         * The VPC ID.
+         */
+        id: Input<string>;
+        /**
+         * The public subnet IDs.
+         */
+        publicSubnets: Input<Input<string>[]>;
+        /**
+         * The private subnet IDs.
+         */
+        privateSubnets: Input<Input<string>[]>;
+      }>;
   /**
    * Configure if the load balancer should be public (internet-facing) or private (internal).
    *
@@ -91,6 +135,9 @@ export interface AlbArgs {
    * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
    * providers, you'll need to pass in a `cert` that validates domain ownership and add the
    * DNS records.
+   *
+   * The domain has to be a plain value, and so do its `name`, `aliases` and `dns`: they
+   * decide the certificate and the DNS records.
    *
    * When SST creates the certificate, the load balancer is created after the certificate
    * is validated, and removed before the certificate.
@@ -113,72 +160,30 @@ export interface AlbArgs {
    * }
    * ```
    */
-  domain?:
-    | string
-    | {
-        /**
-         * The custom domain name.
-         */
-        name: string;
-        /**
-         * Alias domains that should also point to this load balancer.
-         */
-        aliases?: string[];
-        /**
-         * The ARN of an ACM certificate that proves ownership of the domain.
-         * By default, a certificate is created and validated automatically.
-         */
-        cert?: Input<string>;
-        /**
-         * The DNS provider to use. Defaults to AWS Route 53.
-         * Set to `false` for manual DNS setup.
-         *
-         * @default `sst.aws.dns`
-         */
-        dns?: false | (Dns & {});
-      };
+  domain?: string | Prettify<AlbDomainArgs>;
   /**
    * The listeners for the load balancer. Each entry creates a listener on the specified
-   * port and protocol.
+   * port and protocol. A plain list: each listener is named after its protocol and port.
    *
    * @example
    * ```js
    * {
    *   listeners: [
- *     { port: 80, protocol: "http" },
- *     { port: 443, protocol: "https" }
- *   ]
+   *     { port: 80, protocol: "http" },
+   *     { port: 443, protocol: "https" }
+   *   ]
    * }
    * ```
    */
   listeners: AlbListenerArgs[];
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying resources.
-   */
-  transform?: {
-    /**
-     * Transform the AWS Load Balancer resource.
-     */
-    loadBalancer?: Transform<lb.LoadBalancerArgs>;
-    /**
-     * Transform the AWS Security Group resource for the Load Balancer.
-     */
-    securityGroup?: Transform<ec2.SecurityGroupArgs>;
-    /**
-     * Transform the AWS Load Balancer listener resource.
-     */
-    listener?: Transform<lb.ListenerArgs>;
-  };
-}
-
-interface AlbRef {
-  ref: true;
-  loadBalancerArn: Input<string>;
 }
 
 /**
  * The `Alb` component lets you create a standalone Application Load Balancer that can be
  * shared across multiple services.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -217,231 +222,149 @@ interface AlbRef {
  * ```ts title="sst.config.ts"
  * const alb = sst.aws.Alb.get("SharedAlb", "arn:aws:elasticloadbalancing:...");
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Alb`
+ *
+ * Keep the name, and `sst migrate` moves it. The load balancer, its
+ * security group, listeners, certificate and DNS records are kept.
+ *
+ * A few things work differently:
+ *
+ * - Switch the services on the load balancer first, or along with it. A
+ *   `sst.aws.Service` takes either one. A
+ *   [`sst.aws.Service`](/docs/component/aws/service) only takes `sst.aws.Alb`.
+ * - `nodes.listeners` is `nodes.listener`. `nodes` also has the certificate, which can
+ *   be transformed.
+ * - A transform function for `listener` is also given the listener's protocol and port:
+ *   `HTTPS443`.
+ * - A `domain` with `dns: false` and no `cert` is refused. There's nothing to validate
+ *   a certificate with.
+ * - `domain`, with its `name`, `aliases` and `dns`, has to be a plain value, not an
+ *   output. `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domains they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - A `vpc` that's another resource, not a `Vpc` or the ids of a VPC, is refused.
+ * - An https listener without a `domain` is refused as the config is read, where AWS
+ *   refused it on deploy.
  */
-export class Alb extends Component implements Link.Linkable {
-  private loadBalancer: lb.LoadBalancer;
-  private securityGroup: ec2.SecurityGroup;
-  private listeners: Record<string, lb.Listener> = {};
-  private certificateArn?: Output<string | undefined>;
-  private vpcId: Output<string>;
-  private _url: Output<string>;
-  private constructorName: string;
+export class Alb extends component("sst:aws:Alb", parts) {
+  // What the services on the load balancer and what links to it read
+  private balancer: { url: Output<string>; vpcId: Output<string> };
 
-  constructor(
-    name: string,
-    args: AlbArgs,
-    opts: ComponentResourceOptions = {},
-  ) {
-    super(__pulumiType, name, args, opts);
+  constructor(name: string, args: AlbArgs, opts?: ComponentResourceOptions) {
+    super(name, args, opts);
 
-    this.constructorName = name;
+    const of = `the "${name}" load balancer`;
 
-    if (args && "ref" in args) {
-      const ref = args as unknown as AlbRef;
-      const loadBalancer = lb.LoadBalancer.get(
-        `${name}LoadBalancer`,
-        output(ref.loadBalancerArn),
-        {},
-        { parent: this },
+    // A load balancer that's already deployed, with the security group it has
+    const existing = this.existingPart("loadBalancer");
+    if (existing) {
+      usedAsItIs(
+        args,
+        ["vpc", "public", "domain", "listeners"],
+        "loadBalancer",
+        of,
       );
-      const securityGroup = ec2.SecurityGroup.get(
-        `${name}SecurityGroup`,
-        loadBalancer.securityGroups.apply((sgs) => {
-          if (!sgs?.length) {
-            throw new VisibleError(
-              `No security groups found on the referenced ALB "${name}".`,
-            );
-          }
-          return sgs[0];
-        }),
-        {},
-        { parent: this },
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        of,
+        `The "loadBalancer" it's given has its certificates on its listeners already.`,
       );
-      this.loadBalancer = loadBalancer;
-      this.securityGroup = securityGroup;
-      this.vpcId = loadBalancer.vpcId;
-      this._url = loadBalancer.dnsName.apply(
-        (dnsName) => `http://${dnsName}`,
-      );
-      this.registerOutputs({ _hint: this._url });
+      if (!this.existingPart("securityGroup"))
+        this.lookupPart(
+          "securityGroup",
+          existing.securityGroups.apply((groups) => {
+            if (!groups?.length)
+              throw new VisibleError(
+                `The "loadBalancer" the "${name}" load balancer is given has no security group. Pass the one it should have in "existing.securityGroup".`,
+              );
+            return groups[0];
+          }),
+        );
+      this.balancer = {
+        url: interpolate`http://${existing.dnsName}`,
+        vpcId: existing.vpcId,
+      };
+      this.report({ hint: this.balancer.url });
       return;
     }
 
-    const self = this;
-    const pub = output(args.public ?? true);
-    const { vpcId, subnets } = normalizeVpc();
-    const domain = normalizeDomain();
-    const securityGroup = createSecurityGroup();
-    const { cert, arn: certificateArn } = createSsl();
-    const loadBalancer = createLoadBalancer();
-    createListeners();
-    createDnsRecords();
-
-    this.loadBalancer = loadBalancer;
-    this.securityGroup = securityGroup;
-    this.certificateArn = certificateArn;
-    this.vpcId = vpcId;
-    this._url = domain
-      ? output(`https://${domain.name}/`)
-      : loadBalancer.dnsName.apply((dnsName) => `http://${dnsName}`);
-
-    this.registerOutputs({ _hint: this._url });
-
-    function normalizeVpc() {
-      if (args.vpc instanceof Vpc) {
-        const vpc = args.vpc;
-        return {
-          vpcId: vpc.id,
-          subnets: pub.apply((isPublic) =>
-            isPublic ? vpc.publicSubnets : vpc.privateSubnets,
-          ),
-        };
-      }
-
-      return output(args.vpc).apply((vpc) => ({
-        vpcId: output(vpc.id),
-        subnets: pub.apply((isPublic) =>
-          isPublic
-            ? output(vpc.publicSubnets)
-            : output(vpc.privateSubnets),
-        ),
-      }));
-    }
-
-    function normalizeDomain() {
-      if (!args.domain) return undefined;
-      const raw =
-        typeof args.domain === "string" ? { name: args.domain } : args.domain;
-      return {
-        name: raw.name,
-        aliases: raw.aliases ?? [],
-        dns: raw.dns === false ? undefined : raw.dns ?? awsDns(),
-        cert: raw.cert,
-      };
-    }
-
-    function createSecurityGroup() {
-      return new ec2.SecurityGroup(
-        ...transform(
-          args.transform?.securityGroup,
-          `${name}SecurityGroup`,
-          {
-            description: "Managed by SST",
-            vpcId,
-            egress: [
-              {
-                fromPort: 0,
-                toPort: 0,
-                protocol: "-1",
-                cidrBlocks: ["0.0.0.0/0"],
-              },
-            ],
-            ingress: [
-              {
-                fromPort: 0,
-                toPort: 0,
-                protocol: "-1",
-                cidrBlocks: ["0.0.0.0/0"],
-              },
-            ],
-          },
-          { parent: self },
-        ),
+    const listeners = plainDeep(args.listeners, `The "listeners" of ${of}`);
+    const domain = loadBalancerDomain(args.domain, of);
+    // An https listener needs the domain's certificate
+    if (!domain && listeners.some((l) => l.protocol === "https"))
+      throw new VisibleError(
+        `An https listener of ${of} needs a certificate. Set the "domain" of the load balancer.`,
       );
-    }
 
-    function createSsl(): {
-      cert?: DnsValidatedCertificate;
-      arn: Output<string | undefined>;
-    } {
-      if (!domain) return { arn: output(undefined) };
-      if (domain.cert) return { arn: output(domain.cert) };
+    // In the public subnets, or in the private ones when it's internal
+    const isPublic = withDefault(args.public, true);
+    const vpc = isVpc(args.vpc)
+      ? {
+          id: args.vpc.id,
+          publicSubnets: subnetsOf(args.vpc, "public"),
+          privateSubnets: subnetsOf(args.vpc, "private"),
+        }
+      : (assertVpcIds(args.vpc, of), output(args.vpc));
+    const vpcId = output(vpc.id);
+    const subnets = isPublic.apply((isPublic) =>
+      isPublic ? vpc.publicSubnets : vpc.privateSubnets,
+    );
 
-      const cert = new DnsValidatedCertificate(
-        `${name}Ssl`,
-        {
-          domainName: domain.name,
-          alternativeNames: domain.aliases,
-          dns: domain.dns!,
-        },
-        { parent: self },
+    const securityGroup = this.part("securityGroup", securityGroupArgs(vpcId));
+
+    if (!domain || domain.cert)
+      notAnExistingPart(
+        args.existing,
+        "certificate",
+        of,
+        domain
+          ? `It uses the "cert" of its "domain".`
+          : `It's only created for a "domain".`,
       );
-      return { cert, arn: cert.arn };
+    const certificate =
+      domain && certificateOf(domain, (args) => this.part("certificate", args));
+
+    const loadBalancer = this.part(
+      "loadBalancer",
+      {
+        internal: isPublic.apply((v) => !v),
+        loadBalancerType: "application",
+        subnets,
+        securityGroups: [securityGroup.id],
+        enableCrossZoneLoadBalancing: true,
+      },
+      // The load balancer is what holds on to the certificate, so it's
+      // removed first. Its listeners are given the certificate, but it isn't.
+      { dependsOn: certificate?.created },
+    );
+
+    // Each listener refuses what none of its rules match. The services on the
+    // load balancer add the rules.
+    for (const listener of listeners) {
+      const protocol = listener.protocol.toUpperCase();
+      this.part("listener", listenerKey(protocol, listener.port), {
+        loadBalancerArn: loadBalancer.arn,
+        port: listener.port,
+        protocol,
+        certificateArn: protocol === "HTTPS" ? certificate?.arn : undefined,
+        defaultActions: forbidden(),
+      });
     }
 
-    function createLoadBalancer() {
-      return new lb.LoadBalancer(
-        ...transform(
-          args.transform?.loadBalancer,
-          `${name}LoadBalancer`,
-          {
-            internal: pub.apply((v) => !v),
-            loadBalancerType: "application",
-            subnets,
-            securityGroups: [securityGroup.id],
-            enableCrossZoneLoadBalancing: true,
+    if (domain) pointDomainAt(name, domain, loadBalancer, this.delegateOpts());
 
-          },
-          // Depend on the certificate, so on remove the load balancer is
-          //   deleted before it.
-          { parent: self, dependsOn: cert ? [cert] : [] },
-        ),
-      );
-    }
-
-    function createListeners() {
-      for (const l of args.listeners) {
-        const protocol = l.protocol.toUpperCase();
-        const port = l.port;
-        const key = listenerKey(protocol, port);
-
-        const listener = new lb.Listener(
-          ...transform(
-            args.transform?.listener,
-            `${name}Listener${protocol}${port}`,
-            {
-              loadBalancerArn: loadBalancer.arn,
-              port,
-              protocol,
-              certificateArn: protocol === "HTTPS"
-                ? certificateArn.apply((arn) => arn!) as Output<string>
-                : undefined,
-              defaultActions: [
-                {
-                  type: "fixed-response",
-                  fixedResponse: {
-                    statusCode: "403",
-                    contentType: "text/plain",
-                    messageBody: "Forbidden",
-                  },
-                },
-              ],
-            },
-            { parent: self },
-          ),
-        );
-
-        self.listeners[key] = listener;
-      }
-    }
-
-    function createDnsRecords() {
-      if (!domain?.dns) return;
-
-      for (const recordName of [domain.name, ...domain.aliases]) {
-        const namePrefix =
-          recordName === domain.name ? name : `${name}${recordName}`;
-        domain.dns.createAlias(
-          namePrefix,
-          {
-            name: recordName,
-            aliasName: loadBalancer.dnsName,
-            aliasZone: loadBalancer.zoneId,
-          },
-          { parent: self },
-        );
-      }
-    }
+    this.balancer = {
+      url: domain
+        ? interpolate`https://${domain.name}/`
+        : interpolate`http://${loadBalancer.dnsName}`,
+      vpcId,
+    };
+    this.report({ hint: this.balancer.url });
   }
 
   /**
@@ -449,100 +372,75 @@ export class Alb extends Component implements Link.Linkable {
    * domain URL (eg. `https://app.example.com/`). Otherwise, it's the ALB's DNS name.
    */
   public get url(): Output<string> {
-    return this._url;
+    return this.balancer.url;
   }
 
   /**
    * The ARN of the load balancer.
    */
   public get arn(): Output<string> {
-    return this.loadBalancer.arn;
+    return this.nodes.loadBalancer.arn;
   }
 
   /**
    * The DNS name of the load balancer.
    */
   public get dnsName(): Output<string> {
-    return this.loadBalancer.dnsName;
+    return this.nodes.loadBalancer.dnsName;
   }
 
   /**
    * The zone ID of the load balancer.
    */
   public get zoneId(): Output<string> {
-    return this.loadBalancer.zoneId;
+    return this.nodes.loadBalancer.zoneId;
   }
 
   /**
    * The security group ID of the load balancer.
    */
   public get securityGroupId(): Output<string> {
-    return this.securityGroup.id;
-  }
-
-  /**
-   * The underlying resources this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The AWS Load Balancer resource.
-       */
-      loadBalancer: this.loadBalancer,
-      /**
-       * The AWS Security Group resource.
-       */
-      securityGroup: this.securityGroup,
-      /**
-       * The AWS Listener resources, keyed by "PROTOCOLPORT" (e.g. "HTTPS443").
-       */
-      listeners: this.listeners,
-    };
-  }
-
-  /** @internal */
-  public get _certArn(): Output<string | undefined> {
-    return this.certificateArn ?? output(undefined);
+    return this.nodes.securityGroup.id;
   }
 
   /** @internal */
   public get _vpc(): Output<string> {
-    return this.vpcId;
+    return this.balancer.vpcId;
   }
 
   /**
-   * Get a specific listener by protocol and port.
+   * Get a specific listener by protocol and port. A listener the component didn't
+   * create is looked up on the load balancer.
    *
    * @example
    * ```ts
    * const listener = alb.getListener("https", 443);
    * ```
    */
-  public getListener(
-    protocol: string,
-    port: number,
-  ): lb.Listener {
+  public getListener(protocol: string, port: number): lb.Listener {
     const key = listenerKey(protocol, port);
-    if (this.listeners[key]) return this.listeners[key];
+    if (key in this.nodes.listener) return this.nodes.listener[key];
 
-    const discovered = lb.Listener.get(
-      `${this.constructorName}Listener${protocol.toUpperCase()}${port}`,
-      lb.getListenerOutput({
-        loadBalancerArn: this.loadBalancer.arn,
-        port,
-      }).arn,
-      {},
-      { parent: this },
+    return (
+      this.existingPart("listener", key) ??
+      this.lookupPart(
+        "listener",
+        key,
+        lb.getListenerOutput(
+          { loadBalancerArn: this.nodes.loadBalancer.arn, port },
+          { parent: this },
+        ).arn,
+      )
     );
-    this.listeners[key] = discovered;
-    return discovered;
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking a load balancer gives the linked resource its URL.
+   */
+  public link() {
     return {
       properties: {
-        url: this._url,
+        url: this.url,
       },
     };
   }
@@ -563,15 +461,11 @@ export class Alb extends Component implements Link.Linkable {
     name: string,
     loadBalancerArn: Input<string>,
     opts?: ComponentResourceOptions,
-  ): Alb {
+  ) {
     return new Alb(
       name,
-      { ref: true, loadBalancerArn } as unknown as AlbArgs,
+      getArgs({ existing: { loadBalancer: loadBalancerArn } }) as AlbArgs,
       opts,
     );
   }
 }
-
-const __pulumiType = "sst:aws:Alb";
-// @ts-expect-error
-Alb.__pulumiType = __pulumiType;

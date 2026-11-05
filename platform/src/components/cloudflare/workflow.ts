@@ -1,13 +1,25 @@
-import { ComponentResourceOptions } from "@pulumi/pulumi";
+import { type ComponentResourceOptions } from "@pulumi/pulumi";
 import * as cf from "@pulumi/cloudflare";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
-import { Input } from "../input";
+import { type ComponentArgs, component, named } from "../parts-component";
+import type { Input } from "../input";
+import { notAnExistingPart, plain } from "../args";
 import { binding } from "./binding";
 import { DEFAULT_ACCOUNT_ID } from "./account-id";
-import { Worker, WorkerArgs } from "./worker";
+import { Worker } from "./worker";
 
-export interface WorkflowArgs {
+const parts = () => ({
+  /**
+   * The Worker that hosts the workflow class. Its script is named after it,
+   * `MyWorkflowScriptScript`.
+   */
+  worker: named(Worker, "Script"),
+  /**
+   * The Cloudflare Workflow.
+   */
+  workflow: cf.Workflow,
+});
+
+export interface WorkflowArgs extends ComponentArgs<typeof parts> {
   /**
    * Path to the handler file that exports the class that extends `WorkflowEntrypoint`.
    *
@@ -62,6 +74,9 @@ export interface WorkflowArgs {
    * 1. Make them available on `this.env` inside your workflow class.
    * 2. Allow you to access them in your workflow using the [SDK](/docs/reference/sdk/).
    *
+   * A link to something in AWS gives the workflow's Worker an IAM user, so
+   * the list is a plain value, not an output.
+   *
    * @example
    *
    * Takes a list of components to link to the workflow.
@@ -72,7 +87,7 @@ export interface WorkflowArgs {
    * }
    * ```
    */
-  link?: Input<any[]>;
+  link?: any[];
   /**
    * Key-value pairs that are set as environment variables on the workflow's Worker.
    *
@@ -90,25 +105,11 @@ export interface WorkflowArgs {
    */
   environment?: Input<Record<string, Input<string>>>;
   /**
-   * The Cloudflare account ID to use for this Workflow.
+   * The Cloudflare account ID to use for this Workflow and its Worker.
    * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
    * @internal
    */
   accountId?: Input<string>;
-  /**
-   * [Transform](/docs/components/#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the underlying Worker that hosts the workflow class.
-     */
-    worker?: Transform<WorkerArgs>;
-    /**
-     * Transform the Workflow resource.
-     */
-    workflow?: Transform<cf.WorkflowArgs>;
-  };
 }
 
 /**
@@ -180,8 +181,6 @@ export interface WorkflowArgs {
  * #### Give the workflow access to other resources
  *
  * ```ts title="sst.config.ts"
- * const bucket = new sst.cloudflare.Bucket("Orders");
- *
  * const processor = new sst.cloudflare.Workflow("OrderProcessor", {
  *   handler: "src/workflow.ts",
  *   className: "OrderProcessor",
@@ -189,93 +188,76 @@ export interface WorkflowArgs {
  * });
  * ```
  *
+ * #### Switch from SST 4's `sst.cloudflare.Workflow`
+ *
+ * Keep the name, and `sst migrate` moves it. The workflow and its Worker are kept.
+ *
+ * - `link` is a plain value, not an output: a link to something in AWS gives
+ *   the Worker an IAM user. Each link's values can still be outputs.
+ * - The Worker is [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker).
+ *   `transform.worker` takes its args, as
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker) takes
+ *   them.
  */
-export class Workflow extends Component implements Link.Linkable {
-  private worker: Worker;
-  private workflow: cf.Workflow;
-
+export class Workflow extends component("sst:cloudflare:Workflow", parts) {
   constructor(
     name: string,
     args: WorkflowArgs,
     opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    const parent = this;
+    const owner = `the "${name}" workflow`;
+    notAnExistingPart(
+      args.existing,
+      "worker",
+      owner,
+      `The workflow creates the Worker that hosts its class from "handler".`,
+    );
+    notAnExistingPart(
+      args.existing,
+      "workflow",
+      owner,
+      `The workflow is created for the Worker it creates from "handler". To bind a workflow you have, link a worker to it with "sst.cloudflare.binding()".`,
+    );
 
-    const worker = createWorker();
-    const workflow = createWorkflow();
-
-    this.worker = worker;
-    this.workflow = workflow;
-
-    function createWorker() {
-      return new Worker(
-        ...transform(
-          args.transform?.worker,
-          `${name}Script`,
-          {
-            handler: args.handler,
-            link: args.link,
-            environment: args.environment,
-          },
-          { parent },
-        ),
-      );
-    }
-
-    function createWorkflow() {
-      return new cf.Workflow(
-        ...transform(
-          args.transform?.workflow,
-          `${name}Workflow`,
-          {
-            accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
-            workflowName: "",
-            className: args.className,
-            scriptName: worker.nodes.worker.scriptName,
-          },
-          { parent },
-        ),
-      );
-    }
+    const worker = this.part("worker", {
+      handler: args.handler,
+      link: plain(
+        args.link,
+        `The "link" of ${owner}`,
+        "A link to something in AWS gives the Worker an IAM user, so the list has to be known before the user is created.",
+      ),
+      environment: args.environment,
+      accountId: args.accountId,
+    });
+    this.part("workflow", {
+      accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
+      workflowName: "",
+      className: args.className,
+      scriptName: worker.nodes.worker.scriptName,
+    });
   }
 
   /**
    * The name of the Cloudflare Workflow.
    */
   public get workflowName() {
-    return this.workflow.workflowName;
+    return this.nodes.workflow.workflowName;
   }
 
   /**
    * The name of the workflow class.
    */
   public get className() {
-    return this.workflow.className;
+    return this.nodes.workflow.className;
   }
 
   /**
    * The name of the Worker script that hosts the workflow class.
    */
   public get scriptName() {
-    return this.workflow.scriptName;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Cloudflare Worker that hosts the workflow class.
-       */
-      worker: this.worker,
-      /**
-       * The Cloudflare Workflow resource.
-       */
-      workflow: this.workflow,
-    };
+    return this.nodes.workflow.scriptName;
   }
 
   /**
@@ -293,27 +275,15 @@ export class Workflow extends Component implements Link.Linkable {
    *
    * @internal
    */
-  getSSTLink() {
+  public link() {
+    const properties = {
+      workflowName: this.workflowName,
+      className: this.className,
+      scriptName: this.scriptName,
+    };
     return {
-      properties: {
-        workflowName: this.workflow.workflowName,
-        className: this.workflow.className,
-        scriptName: this.workflow.scriptName,
-      },
-      include: [
-        binding({
-          type: "workflowBindings",
-          properties: {
-            workflowName: this.workflow.workflowName,
-            className: this.workflow.className,
-            scriptName: this.workflow.scriptName,
-          },
-        }),
-      ],
+      properties,
+      include: [binding({ type: "workflowBindings", properties })],
     };
   }
 }
-
-const __pulumiType = "sst:cloudflare:Workflow";
-// @ts-expect-error
-Workflow.__pulumiType = __pulumiType;

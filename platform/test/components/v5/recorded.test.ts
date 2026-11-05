@@ -122,10 +122,11 @@ describe("the lab's serverless group, as v4.23.1 deployed it", () => {
     // The engine's mock is one for the process, so it's made here
     const pulumi = replay("serverless-sites.json", "rec");
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const { serverless } = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
+      () => serverless(aws4 as any),
       () => serverless(aws as any),
-      () => serverless(aws.v5 as any),
       // What the 4.x components don't make: the sites deployed beside them,
       // and the link references the program's runner makes for each
       // component, which the mock doesn't run
@@ -285,10 +286,11 @@ describe("the lab's router, as v4.23.1 deployed it", () => {
   beforeAll(async () => {
     const pulumi = replay("serverless-sites.json", "rec");
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const { router } = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
+      () => router(aws4 as any),
       () => router(aws as any),
-      () => router(aws.v5 as any),
       // Everything but the router: the serverless group, the sites, and the
       // link references
       (r) =>
@@ -393,10 +395,11 @@ describe("the lab's Next.js site, as v4.23.1 deployed it", () => {
       recorded.inputs.files.map((file: { key: string }) => file.key),
     );
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const lab = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
+      () => lab.next(aws4 as any, lab.router(aws4 as any), "true"),
       () => lab.next(aws as any, lab.router(aws as any), "true"),
-      () => lab.next(aws.v5 as any, lab.router(aws.v5 as any), "true"),
       // Everything but the router and the site: the serverless group, the
       // other sites, and the link references
       (r) =>
@@ -512,10 +515,11 @@ describe("the lab's Astro site, as v4.23.1 deployed it", () => {
       recorded.inputs.files.map((file: { key: string }) => file.key),
     );
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const lab = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
+      () => lab.astro(aws4 as any, lab.router(aws4 as any), "true"),
       () => lab.astro(aws as any, lab.router(aws as any), "true"),
-      () => lab.astro(aws.v5 as any, lab.router(aws.v5 as any), "true"),
       // Everything but the router and the site: the serverless group, the
       // other sites, and the link references
       (r) =>
@@ -609,10 +613,11 @@ describe("the lab's SvelteKit app, as v4.23.1 deployed it", () => {
       recorded.inputs.files.map((file: { key: string }) => file.key),
     );
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const lab = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
+      () => lab.svelte(aws4 as any, lab.router(aws4 as any), "true"),
       () => lab.svelte(aws as any, lab.router(aws as any), "true"),
-      () => lab.svelte(aws.v5 as any, lab.router(aws.v5 as any), "true"),
       // Everything but the router and the site: the serverless group, the
       // other sites, and the link references
       (r) =>
@@ -686,10 +691,11 @@ describe("the lab's static sites, as v4.23.1 deployed them", () => {
       }
     }
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const lab = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
+      () => lab.staticSites(aws4 as any, lab.router(aws4 as any)),
       () => lab.staticSites(aws as any, lab.router(aws as any)),
-      () => lab.staticSites(aws.v5 as any, lab.router(aws.v5 as any)),
       // Everything but the router and the sites: the serverless group, the
       // other sites, and the link references
       (r) =>
@@ -740,10 +746,11 @@ describe("the lab's serverless group, as v4.23.1 deployed it in sst dev", () => 
     // @ts-ignore
     global.$dev = true;
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const { serverless } = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
+      () => serverless(aws4 as any),
       () => serverless(aws as any),
-      () => serverless(aws.v5 as any),
       (r) => r.type === "sst:sst:LinkRef",
     );
     // @ts-ignore
@@ -854,6 +861,7 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
     // The engine's mock is one for the process, so it's made here
     pulumi = replay("vpc-containers-databases.json", "recvpc");
     const aws = await import("../../../src/components/aws/index");
+    const aws4 = await import("../../fixtures/v4/components/aws/index");
     const lab = await import("../../recorded/v5-lab");
     const groups = (components: any) => () => {
       const vpc = lab.net(components);
@@ -861,8 +869,8 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
       lab.databases(components, vpc);
     };
     run = await pulumi.takesOverState(
+      groups(aws4 as any),
       groups(aws),
-      groups(aws.v5),
       (r) => r.type === "sst:sst:LinkRef",
     );
   });
@@ -999,20 +1007,21 @@ describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => 
     // The account SST 4's CLI and 5.0's give the components
     process.env.CLOUDFLARE_DEFAULT_ACCOUNT_ID = CLOUDFLARE_ACCOUNT;
     const cf = await import("../../../src/components/cloudflare/index");
+    const cf4 = await import("../../fixtures/v4/components/cloudflare/index");
     expect(cf.DEFAULT_ACCOUNT_ID).toBe(CLOUDFLARE_ACCOUNT);
     const lab = await import("../../recorded/v5-lab");
     run = await pulumi.takesOverState(
       // When SST 4 deployed the stage, none of its scripts was there
       () => {
         scripts = [];
-        lab.cloudflare(cf as any);
-        lab.cfSites(cf as any, "true");
+        lab.cloudflare(cf4 as any);
+        lab.cfSites(cf4 as any, "true");
       },
       // When it moves, the API Worker has the tag of its one migration
       () => {
         scripts = [{ id: "v5-lab-reccf-cfapiscript", migration_tag: "v1" }];
-        lab.cloudflare(cf.v5);
-        lab.cfSites(cf.v5, "true");
+        lab.cloudflare(cf);
+        lab.cfSites(cf, "true");
       },
       (r) => r.type === "sst:sst:LinkRef",
     );

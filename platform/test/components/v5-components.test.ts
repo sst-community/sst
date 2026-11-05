@@ -5,18 +5,27 @@ import { mockPulumi } from "../helpers/graph";
 
 mockPulumi();
 
-// Every V5 component: a file in its provider's `v5` folder, like `aws/v5/`,
-// named like the file of the component it replaces. Its docs page and sidebar
-// entry are found there too. What's still written by hand for each one is
-// checked here.
+// Every one of SST 5's components: a file in its provider's folder, like
+// `aws/`, named like the file of SST 4's component it replaces, which is
+// frozen in the fixtures. Its docs page and sidebar entry are found there too.
+// What's still written by hand for each one is checked here.
 const GROUPS = ["aws", "cloudflare"] as const;
 type Group = (typeof GROUPS)[number];
 const dirOf = (group: Group) =>
-  new URL(`../../src/components/${group}/v5/`, import.meta.url);
+  new URL(`../../src/components/${group}/`, import.meta.url);
+const fixturesOf = (group: Group) =>
+  new URL(`../fixtures/v4/components/${group}/`, import.meta.url);
 const filesOf = (group: Group) =>
   fs
     .readdirSync(dirOf(group))
-    .filter((file) => file.endsWith(".ts") && file !== "index.ts");
+    .filter(
+      (file) =>
+        file.endsWith(".ts") &&
+        file !== "index.ts" &&
+        /^export class \w+ extends component\(/m.test(
+          fs.readFileSync(new URL(file, dirOf(group)), "utf8"),
+        ),
+    );
 type Dir = ReturnType<typeof dirOf>;
 const files = GROUPS.flatMap((group) =>
   filesOf(group).map((file) => [group, file] as const),
@@ -53,80 +62,7 @@ const TYPE_NAMES: Record<Group, Record<string, string>> = {
   },
 };
 
-// The 5.0 rewrite makes a clean break from 4.x code. These are built the 5.0
-// way; the others still lean on 4.x until each is rebuilt.
-const rebuilt: Record<Group, string[]> = {
-  aws: [
-    "vpc.ts",
-    "function.ts",
-    "router.ts",
-    "nextjs.ts",
-    "cdn.ts",
-    "dns-validated-certificate.ts",
-    "https-redirect.ts",
-    "bucket.ts",
-    "queue.ts",
-    "sns-topic.ts",
-    "dynamo.ts",
-    "bus.ts",
-    "cron.ts",
-    "cluster.ts",
-    "task.ts",
-    "efs.ts",
-    "redis.ts",
-    "postgres.ts",
-    "mysql.ts",
-    "aurora.ts",
-    "dsql.ts",
-    "apigateway-http.ts",
-    "app-sync.ts",
-    "cognito-user-pool.ts",
-    "cognito-user-pool-client.ts",
-    "email.ts",
-    "alb.ts",
-    "service.ts",
-    "astro.ts",
-    "svelte-kit.ts",
-    "static-site.ts",
-    "tan-stack-start.ts",
-    "nuxt.ts",
-    "solid-start.ts",
-    "analog.ts",
-    "remix.ts",
-    "react.ts",
-    "step-functions.ts",
-    "cognito-identity-pool.ts",
-    "auth.ts",
-    "realtime.ts",
-    "workflow.ts",
-    "apigateway-websocket.ts",
-    "apigateway-rest.ts",
-    "apigateway-rest-usage-plan.ts",
-    "apigateway-rest-api-key.ts",
-    "microvm.ts",
-    "kinesis-stream.ts",
-    "open-search.ts",
-  ],
-  cloudflare: [
-    "worker.ts",
-    "kv.ts",
-    "d1.ts",
-    "bucket.ts",
-    "hyperdrive.ts",
-    "ai.ts",
-    "rate-limit.ts",
-    "queue.ts",
-    "cron.ts",
-    "workflow.ts",
-    "durable-object.ts",
-    "static-site.ts",
-    "astro.ts",
-    "react-router.ts",
-    "tan-stack-start.ts",
-  ],
-};
-
-describe("V5 components", () => {
+describe("SST 5's components", () => {
   let takeoverOf: typeof import("../../src/components/takeover").takeoverOf;
 
   beforeAll(async () => {
@@ -140,20 +76,13 @@ describe("V5 components", () => {
     expect(filesOf("cloudflare")).toContain("worker.ts");
   });
 
-  it.each(GROUPS)("are exported as sst.%s.v5", (group) => {
-    const index = fs.readFileSync(new URL("../index.ts", dirOf(group)), "utf8");
-    expect(index).toContain(`export * as v5 from "./v5/index.js";`);
-  });
-
-  describe.each(files)("%s/v5/%s", (group, file) => {
+  describe.each(files)("%s/%s", (group, file) => {
     const name = file.slice(0, -3);
     const dir = dirOf(group);
     let component: any;
 
     beforeAll(async () => {
-      const module = await import(
-        `../../src/components/${group}/v5/${name}.ts`
-      );
+      const module = await import(`../../src/components/${group}/${name}.ts`);
       component = Object.values(module).find(
         (value: any) => typeof value?.__pulumiType === "string",
       );
@@ -167,14 +96,15 @@ describe("V5 components", () => {
       const originalName = RENAMED[group][component.name] ?? component.name;
       const typeName = TYPE_NAMES[group][component.name] ?? originalName;
       expect(component.__pulumiType).toBe(`sst:${group}:${typeName}`);
-      // The 4.x file that declares the type: the one of the same name, when
+      // SST 4's file that declares the type: the one of the same name, when
       // it does, as a `.v1` beside it may declare it too
+      const old = fixturesOf(group);
       const declaring = fs
-        .readdirSync(new URL("..", dir))
+        .readdirSync(old)
         .filter((f) => f.endsWith(".ts"))
         .filter((f) =>
           new RegExp(`\\b(?:__)?pulumiType = "${component.__pulumiType}"`).test(
-            fs.readFileSync(new URL(`../${f}`, dir), "utf8"),
+            fs.readFileSync(new URL(f, old), "utf8"),
           ),
         );
       // Two 4.x components can have one type, as Cloudflare's `StaticSiteV2`
@@ -182,7 +112,7 @@ describe("V5 components", () => {
       // replaces
       const replaced = declaring.filter((f) =>
         new RegExp(`\\bclass ${originalName}\\b`).test(
-          fs.readFileSync(new URL(`../${f}`, dir), "utf8"),
+          fs.readFileSync(new URL(f, old), "utf8"),
         ),
       );
       const candidates = replaced.length ? replaced : declaring;
@@ -192,7 +122,7 @@ describe("V5 components", () => {
         `No 4.x file in ${group}/ declares ${component.__pulumiType}`,
       ).toBeDefined();
       const original = await import(
-        `../../src/components/${group}/${originalFile}`
+        `../fixtures/v4/components/${group}/${originalFile}`
       );
       expect(
         original[originalName]?.__pulumiType,
@@ -216,17 +146,17 @@ describe("V5 components", () => {
     });
 
     it("has its takeover map loaded, when it has one", () => {
-      if (!fs.existsSync(new URL(`../takeover/${file}`, dir))) return;
+      if (!fs.existsSync(new URL(`takeover/${file}`, dir))) return;
       expect(
         takeoverOf(component),
         `Import ${group}/takeover/${file} from ${group}/takeover/index.ts`,
       ).toBeDefined();
     });
 
-    it(`is exported from sst.${group}.v5`, () => {
+    it(`is exported from sst.${group}`, () => {
       const index = fs.readFileSync(new URL("index.ts", dir), "utf8");
       const line = `export * from "./${file.slice(0, -3)}";`;
-      expect(index, `Add \`${line}\` to ${group}/v5/index.ts`).toContain(line);
+      expect(index, `Add \`${line}\` to ${group}/index.ts`).toContain(line);
     });
 
     // What came before belongs in the takeover map. The component's code
@@ -244,85 +174,47 @@ describe("V5 components", () => {
       expect(otherTypes).toEqual([]);
       expect(code).not.toMatch(/takeover|\baliases\s*:/);
     });
-
-    // Its args, types and docs are its own. A 4.x component it takes, like a
-    // `Vpc` or a `Router`, is reached through a helper that takes either kind
-    // (`helpers/vpc.ts`), until 5.0 has no 4.x components: those are the only
-    // 4.x files it reaches, through any of the helpers it uses. The modules
-    // that aren't components, like `permission.ts` or the providers, are
-    // shared.
-    it("reaches no 4.x component's file, once it's built the 5.0 way", () => {
-      if (!rebuilt[group].includes(file)) return;
-      expect(fourXReached(new URL(file, dir))).toEqual([]);
-    });
   });
 });
 
-// The helpers that take either kind of a component, and the 4.x file each
-// imports for it. A V5 component reaches 4.x's code through these alone.
-const eitherKind: Record<string, string[]> = {
-  "aws/helpers/vpc.ts": ["aws/vpc.ts"],
-  "aws/helpers/efs.ts": ["aws/efs.ts"],
-  "aws/helpers/bucket.ts": ["aws/bucket.ts"],
-  "aws/helpers/queue.ts": ["aws/queue.ts"],
-  "aws/helpers/sns-topic.ts": ["aws/sns-topic.ts"],
-  "aws/helpers/bus.ts": ["aws/bus.ts"],
-  "aws/helpers/task.ts": ["aws/task.ts"],
-  "aws/helpers/router.ts": ["aws/router.ts"],
-  // A load balancer a service shares
-  "aws/helpers/alb.ts": ["aws/alb.ts"],
-  // A task's or a service's cluster
-  "aws/helpers/cluster.ts": ["aws/cluster.ts"],
-  // A function given as either \`Function\`, or either \`Workflow\`
-  "aws/helpers/function-part.ts": ["aws/function.ts", "aws/workflow.ts"],
-  // The states the 4.x and V5 \`StepFunctions\` share. They take the 4.x
-  // \`Function\`'s permission type, and \`task.ts\` the 4.x components the 4.x
-  // one's integrations take, types only. The V5 one's integrations are its
-  // own. When the 4.x components go, these imports go with them.
-  "aws/step-functions/state.ts": ["aws/function.ts"],
-  "aws/step-functions/map.ts": ["aws/function.ts"],
-  "aws/step-functions/task.ts": [
-    "aws/function.ts",
-    "aws/sns-topic.ts",
-    "aws/queue.ts",
-    "aws/task.ts",
-    "aws/bus.ts",
-  ],
-};
-
-// The 4.x component files a file reaches: those it imports, and those the
-// helpers it imports reach, but what a helper imports to take either kind
-function fourXReached(start: Dir) {
-  const reached = new Set<string>();
-  const seen = new Set<string>();
-  const walk = (file: Dir) => {
-    const name = fileURLToPath(file).split("/src/components/")[1];
-    const code = fs.readFileSync(file, "utf8");
-    for (const match of code.matchAll(
-      /(?:\bfrom|^\s*import)\s*["'](\.[^"']+)["']/gm,
-    )) {
-      const target = new URL(`${match[1].replace(/\.js$/, "")}.ts`, file);
-      // Outside the components, like \`util/\`, isn't a component's
-      const targetName = fileURLToPath(target).split("/src/components/")[1];
-      if (!targetName || !fs.existsSync(target)) continue;
-      if (seen.has(`${name}>${targetName}`)) continue;
-      seen.add(`${name}>${targetName}`);
-      const isFourX = /\bclass \w+ extends Component\b/.test(
-        fs.readFileSync(target, "utf8"),
+// SST 4's components are frozen in the fixtures, for the takeover suites and
+// the recorded states, and nowhere else: the platform has none of them, and
+// reaches none.
+describe("the platform", () => {
+  const files = (dir: string): string[] =>
+    fs
+      .readdirSync(dir, { withFileTypes: true })
+      .flatMap((entry) =>
+        entry.isDirectory()
+          ? files(`${dir}/${entry.name}`)
+          : /\.(ts|mts|js|mjs)$/.test(entry.name)
+            ? [`${dir}/${entry.name}`]
+            : [],
       );
-      if (isFourX) {
-        if (!eitherKind[name]?.includes(targetName))
-          reached.add(`${targetName}, through ${name}`);
-      } else if (
-        /^\w+\/helpers\//.test(targetName) ||
-        targetName.startsWith("aws/step-functions/")
-      )
-        walk(target);
-    }
-  };
-  walk(start);
-  return [...reached].sort();
-}
+  const src = fileURLToPath(new URL("../../src", import.meta.url));
+
+  // SST's own, like `Secret` and `Linkable`, are outside the providers' folders
+  it("has none of SST 4's components", () => {
+    const providers = ["aws", "cloudflare", "vercel", "experimental"];
+    expect(
+      providers
+        .flatMap((group) => files(`${src}/components/${group}`))
+        .filter((file) =>
+          /\bclass \w+ extends Component\b/.test(fs.readFileSync(file, "utf8")),
+        ),
+    ).toEqual([]);
+  });
+
+  it("imports nothing from the tests", () => {
+    expect(
+      files(src).filter((file) =>
+        /(?:\bfrom|\bimport\(?)\s*["'][^"']*(?:\/test\/|fixtures\/v4)/.test(
+          fs.readFileSync(file, "utf8"),
+        ),
+      ),
+    ).toEqual([]);
+  });
+});
 
 // The CLI bundles a config with esbuild, and this package says its files have
 // no side effects. A file that's imported for what it does, not for what it
@@ -366,7 +258,7 @@ describe("a config the CLI builds", () => {
 
     for (const group of GROUPS) {
       const maps = fs
-        .readdirSync(new URL("../takeover/", dirOf(group)))
+        .readdirSync(new URL("takeover/", dirOf(group)))
         .filter((file) => !["index.ts", "helpers.ts"].includes(file));
       expect(maps.length).toBeGreaterThan(0);
       for (const map of maps)

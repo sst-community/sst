@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { StaticSite } from "../v5/static-site";
+import { StaticSite } from "../static-site";
 
 takeover(StaticSite, {
   // The site's files, its entries in the key-value store, its route in the

@@ -43,12 +43,12 @@ const SHARED_ARN = "arn:aws:sns:us-east-1:123456789012:events-prod.fifo";
 const STATIC = `${logicalName("events-prod.fifo")}Subscriber`;
 
 describe("SnsTopic", () => {
-  let OriginalSnsTopic: typeof import("../../../src/components/aws/sns-topic").SnsTopic;
-  let SnsTopic: typeof import("../../../src/components/aws/v5/sns-topic").SnsTopic;
+  let OriginalSnsTopic: typeof import("../../fixtures/v4/components/aws/sns-topic").SnsTopic;
+  let SnsTopic: typeof import("../../../src/components/aws/sns-topic").SnsTopic;
 
   beforeAll(async () => {
-    OriginalSnsTopic = (await import("../../../src/components/aws/sns-topic")).SnsTopic;
-    SnsTopic = (await import("../../../src/components/aws/v5/sns-topic"))
+    OriginalSnsTopic = (await import("../../fixtures/v4/components/aws/sns-topic")).SnsTopic;
+    SnsTopic = (await import("../../../src/components/aws/sns-topic"))
       .SnsTopic;
     await import("../../../src/components/aws/takeover/sns-topic");
     await import("../../../src/components/aws/takeover/function");
@@ -182,7 +182,7 @@ describe("SnsTopic", () => {
       topic.nodes.subscriber.Emailer.apply(done),
     );
     expect(fn).toBeInstanceOf(
-      (await import("../../../src/components/aws/v5/function")).Function,
+      (await import("../../../src/components/aws/function")).Function,
     );
   });
 
@@ -205,7 +205,7 @@ describe("SnsTopic", () => {
   });
 
   it("accepts a queue component as a subscriber", async () => {
-    const { Queue } = await import("../../../src/components/aws/v5/queue");
+    const { Queue } = await import("../../../src/components/aws/queue");
     const queue = new Queue("Orders");
     new SnsTopic("MyTopic").subscribeQueue("Orders", queue);
     await pulumi.settle();
@@ -332,28 +332,20 @@ describe("SnsTopic", () => {
   it("takes a subscriber written any way that has a name", async () => {
     const { output } = await import("@pulumi/pulumi");
     const { Function } = await import(
-      "../../../src/components/aws/v5/function"
-    );
-    const { Function: OriginalFunction } = await import(
       "../../../src/components/aws/function"
     );
     const { Workflow } = await import("../../../src/components/aws/workflow");
-    const { Queue } = await import("../../../src/components/aws/v5/queue");
-    const { Queue: OriginalQueue } = await import(
-      "../../../src/components/aws/queue"
-    );
+    const { Queue } = await import("../../../src/components/aws/queue");
     const topic = new SnsTopic("MyTopic")
       .subscribe("Handler", "src/email.handler")
       .subscribe("Args", { handler: "src/email.handler", timeout: "60 seconds" })
       .subscribe("Arn", FUNCTION_ARN)
       .subscribe("Later", output(FUNCTION_ARN))
       .subscribe("Mine", new Function("Mine", { handler: "src/a.handler" }))
-      .subscribe("Old", new OriginalFunction("Old", { handler: "src/b.handler" }))
       .subscribe("Flow", new Workflow("Flow", { handler: "src/c.handler" }))
       .subscribeQueue("QueueArn", QUEUE_ARN)
       .subscribeQueue("QueueLater", output(QUEUE_ARN))
-      .subscribeQueue("Jobs", new Queue("Jobs"))
-      .subscribeQueue("OldJobs", new OriginalQueue("OldJobs"));
+      .subscribeQueue("Jobs", new Queue("Jobs"));
     await pulumi.settle();
 
     expect(Object.keys(topic.nodes.subscription).sort()).toEqual([
@@ -364,8 +356,6 @@ describe("SnsTopic", () => {
       "Jobs",
       "Later",
       "Mine",
-      "Old",
-      "OldJobs",
       "QueueArn",
       "QueueLater",
     ]);
@@ -390,12 +380,12 @@ describe("SnsTopic", () => {
     expect(() =>
       Static.subscribe("Emailer", FUNCTION_ARN, "src/email.handler"),
     ).toThrow(
-      /sst\.aws\.v5\.SnsTopic\.get\("MyTopic", topicArn\)\.subscribe\(/,
+      /sst\.aws\.SnsTopic\.get\("MyTopic", topicArn\)\.subscribe\(/,
     );
     expect(() =>
       Static.subscribeQueue("Orders", FUNCTION_ARN, QUEUE_ARN),
     ).toThrow(
-      /sst\.aws\.v5\.SnsTopic\.get\("MyTopic", topicArn\)\.subscribeQueue\(/,
+      /sst\.aws\.SnsTopic\.get\("MyTopic", topicArn\)\.subscribeQueue\(/,
     );
   });
 

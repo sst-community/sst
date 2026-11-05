@@ -69,8 +69,8 @@ const pulumi = mockPulumi({
 describe("a file system in a new stage's preview", () => {
   it("plans a mount target in each AZ, whatever VPC it's in", async () => {
     const aws = await import("@pulumi/aws");
-    const { Efs } = await import("../../../src/components/aws/v5/efs");
-    const { Vpc } = await import("../../../src/components/aws/v5/vpc");
+    const { Efs } = await import("../../../src/components/aws/efs");
+    const { Vpc } = await import("../../../src/components/aws/vpc");
 
     // In a VPC the app creates. That they're made without waiting for the
     // subnets' ids, which a real preview doesn't know, is in efs.test.ts:

@@ -1,6 +1,6 @@
 import { plain } from "../../args";
 import { VisibleError } from "../../error";
-import type { WorkerArgs } from "../v5/worker";
+import type { WorkerArgs } from "../worker";
 
 /**
  * The args of a Worker a component creates, from what it's given: the path

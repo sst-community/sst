@@ -1,6 +1,6 @@
 import { sstResource, takeover } from "../../takeover";
 import { logicalName } from "../../naming";
-import { DnsValidatedCertificate } from "../v5/dns-validated-certificate";
+import { DnsValidatedCertificate } from "../dns-validated-certificate";
 
 // 4.x named a validation record after its name in DNS, which only the
 // certificate knows, once it's created: `<certificate>CNAMERecord<name>`. The

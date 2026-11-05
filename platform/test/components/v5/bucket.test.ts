@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
-import { mockPulumi, type TakeoverWay } from "../../helpers/graph";
+import { mockPulumi, type TakeoverWay, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 // A policy document is worked out by AWS. Here it's the statements it's given,
@@ -62,26 +62,37 @@ const threeTargets = [
 ];
 
 type BucketClass =
-  | typeof import("../../../src/components/aws/bucket").Bucket
-  | typeof import("../../../src/components/aws/v5/bucket").Bucket;
-type OriginalBucketArgs = import("../../../src/components/aws/bucket").BucketArgs;
+  | typeof import("../../fixtures/v4/components/aws/bucket").Bucket
+  | typeof import("../../../src/components/aws/bucket").Bucket;
+type OriginalBucketArgs = import("../../fixtures/v4/components/aws/bucket").BucketArgs;
 type NotifyArgs = Parameters<
-  import("../../../src/components/aws/bucket").Bucket["notify"]
+  import("../../fixtures/v4/components/aws/bucket").Bucket["notify"]
 >[0] &
-  Parameters<import("../../../src/components/aws/v5/bucket").Bucket["notify"]>[0];
-type BucketArgs = import("../../../src/components/aws/v5/bucket").BucketArgs;
+  Parameters<import("../../../src/components/aws/bucket").Bucket["notify"]>[0];
+type BucketArgs = import("../../../src/components/aws/bucket").BucketArgs;
 
 describe("Bucket", () => {
-  let OriginalBucket: typeof import("../../../src/components/aws/bucket").Bucket;
-  let Bucket: typeof import("../../../src/components/aws/v5/bucket").Bucket;
-  let OriginalQueue: typeof import("../../../src/components/aws/queue").Queue;
-  let OriginalSnsTopic: typeof import("../../../src/components/aws/sns-topic").SnsTopic;
+  let OriginalBucket: typeof import("../../fixtures/v4/components/aws/bucket").Bucket;
+  let Bucket: typeof import("../../../src/components/aws/bucket").Bucket;
+  let SidedQueue: any;
+  let SidedSnsTopic: any;
 
   beforeAll(async () => {
-    OriginalQueue = (await import("../../../src/components/aws/queue")).Queue;
-    OriginalSnsTopic = (await import("../../../src/components/aws/sns-topic")).SnsTopic;
-    OriginalBucket = (await import("../../../src/components/aws/bucket")).Bucket;
-    Bucket = (await import("../../../src/components/aws/v5/bucket")).Bucket;
+    OriginalBucket = (await import("../../fixtures/v4/components/aws/bucket")).Bucket;
+    // SST 4's for SST 4's Bucket, SST 5's for SST 5's
+    SidedQueue = await sidedClass(
+      "Queue",
+      import("../../fixtures/v4/components/aws/queue"),
+      import("../../../src/components/aws/queue"),
+      import("../../../src/components/aws/takeover/queue"),
+    );
+    SidedSnsTopic = await sidedClass(
+      "SnsTopic",
+      import("../../fixtures/v4/components/aws/sns-topic"),
+      import("../../../src/components/aws/sns-topic"),
+      import("../../../src/components/aws/takeover/sns-topic"),
+    );
+    Bucket = (await import("../../../src/components/aws/bucket")).Bucket;
     await import("../../../src/components/aws/takeover/bucket");
     await import("../../../src/components/aws/takeover/function");
   });
@@ -348,8 +359,8 @@ describe("Bucket", () => {
           create: (Bucket, opts) =>
             new Bucket("MyBucket", {}, opts).notify({
               notifications: [
-                { name: "Orders", queue: new OriginalQueue("Orders") },
-                { name: "Uploads", topic: new OriginalSnsTopic("Uploads") },
+                { name: "Orders", queue: new SidedQueue("Orders") },
+                { name: "Uploads", topic: new SidedSnsTopic("Uploads") },
               ],
             }),
           unclaimed: [WRAPPER],
@@ -565,7 +576,7 @@ describe("Bucket", () => {
         bucket.nodes.subscriber.Resizer.apply(done),
       );
       expect(fn).toBeInstanceOf(
-        (await import("../../../src/components/aws/v5/function")).Function,
+        (await import("../../../src/components/aws/function")).Function,
       );
     });
 
@@ -601,9 +612,9 @@ describe("Bucket", () => {
     });
 
     it("accepts V5 queue and topic components", async () => {
-      const { Queue } = await import("../../../src/components/aws/v5/queue");
+      const { Queue } = await import("../../../src/components/aws/queue");
       const { SnsTopic } = await import(
-        "../../../src/components/aws/v5/sns-topic"
+        "../../../src/components/aws/sns-topic"
       );
       new Bucket("MyBucket").notify({
         notifications: [
@@ -804,26 +815,21 @@ describe("Bucket", () => {
     it("takes a function you have, or an output of one", async () => {
       const { output } = await import("@pulumi/pulumi");
       const { Function } = await import(
-        "../../../src/components/aws/v5/function"
-      );
-      const { Function: OriginalFunction } = await import(
         "../../../src/components/aws/function"
       );
       const { Workflow } = await import("../../../src/components/aws/workflow");
       const mine = new Function("Mine", { handler: "src/mine.handler" });
-      const old = new OriginalFunction("Old", { handler: "src/old.handler" });
       const flow = new Workflow("Flow", { handler: "src/flow.handler" });
       new Bucket("MyBucket")
         .notify({
           eventBridge: true,
           notifications: [
             { name: "Mine", function: mine },
-            { name: "Old", function: old },
             { name: "Flow", function: flow },
             { name: "Later", function: output(mine) },
           ],
         })
-        .subscribeEventBridge("Resizer", output(old));
+        .subscribeEventBridge("Resizer", output(flow));
       await pulumi.settle();
 
       // No function of the bucket's own
@@ -836,17 +842,18 @@ describe("Bucket", () => {
       expect(invoked("MyBucketPermissionLater")).toBe(
         invoked("MyBucketPermissionMine"),
       );
-      expect(invoked("MyBucketPermissionOld")).toMatch(/Old/);
       expect(invoked("MyBucketPermissionFlow")).toMatch(/Flow/);
       expect(invoked("MyBucketEventBridgePermissionResizer")).toBe(
-        invoked("MyBucketPermissionOld"),
+        invoked("MyBucketPermissionFlow"),
       );
     });
 
     it("takes a queue or a topic in an output", async () => {
       const { output } = await import("@pulumi/pulumi");
-      const queue = new OriginalQueue("Orders");
-      const topic = new OriginalSnsTopic("Uploads");
+      const { Queue } = await import("../../../src/components/aws/queue");
+      const { SnsTopic } = await import("../../../src/components/aws/sns-topic");
+      const queue = new Queue("Orders");
+      const topic = new SnsTopic("Uploads");
       new Bucket("MyBucket").notify({
         notifications: [
           { name: "Orders", queue: output(queue) as any },
@@ -965,7 +972,7 @@ describe("Bucket", () => {
     const Static = Bucket as any;
     for (const method of ["subscribe", "subscribeQueue", "subscribeTopic"])
       expect(() => Static[method]("arn:aws:s3:::shared", QUEUE_ARN)).toThrow(
-        /reference (it|the bucket) with "get" and call "notify" on that: sst\.aws\.v5\.Bucket\.get\(/,
+        /reference (it|the bucket) with "get" and call "notify" on that: sst\.aws\.Bucket\.get\(/,
       );
     expect(() =>
       Static.subscribeEventBridge("Resizer", "shared", FUNCTION_ARN),

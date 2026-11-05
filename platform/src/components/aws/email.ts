@@ -1,23 +1,57 @@
 import {
   ComponentResourceOptions,
   Output,
-  all,
   interpolate,
   output,
+  unsecret,
 } from "@pulumi/pulumi";
-import { Component, Prettify, Transform, transform } from "../component";
-import { Link } from "../link";
-import { Input } from "../input";
-import { Dns } from "../dns";
-import { dns as awsDns } from "./dns.js";
 import { getRegionOutput, ses, sesv2 } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  many,
+  named,
+  optional,
+} from "../parts-component";
+import { plain, plainDeep, onlyExisting, getArgs } from "../args";
+import type { Input } from "../input";
+import type { DnsAdapter } from "../dns-adapter";
+import { VisibleError } from "../error";
+import { dns as awsDns } from "./dns";
 import { permission } from "./permission";
 
-interface Events {
+const parts = () => ({
   /**
-   * The name of the event.
+   * The Amazon SES identity: the email address or the domain the emails are
+   * sent from.
    */
-  name: Input<string>;
+  identity: sesv2.EmailIdentity,
+  /**
+   * The Amazon SES configuration set the identity sends with.
+   */
+  configurationSet: named(sesv2.ConfigurationSet, "Config"),
+  /**
+   * The custom MAIL FROM domain, when `mailFrom` is set.
+   */
+  mailFromAttributes: named(
+    optional(sesv2.EmailIdentityMailFromAttributes),
+    "MailFrom",
+  ),
+  /**
+   * Where each of the `events` is sent, by the event's name.
+   */
+  event: many(sesv2.ConfigurationSetEventDestination),
+  /**
+   * Waits for Amazon SES to verify the domain, when `sender` is a domain.
+   */
+  verification: optional(ses.DomainIdentityVerification),
+});
+
+export interface EmailEventArgs {
+  /**
+   * The name of the event. A plain value: the event's destination is named after it.
+   */
+  name: string;
   /**
    * The types of events to send.
    */
@@ -45,9 +79,12 @@ interface Events {
   bus?: Input<string>;
 }
 
-export interface EmailArgs {
+export interface EmailArgs extends ComponentArgs<typeof parts> {
   /**
    * The email address or domain name that you want to send emails from.
+   *
+   * It has to be a plain value: whether it's a domain decides what's created
+   * to verify it.
    *
    * :::note
    * You'll need to verify the email address or domain you are using.
@@ -90,10 +127,12 @@ export interface EmailArgs {
    * }
    * ```
    */
-  sender: Input<string>;
+  sender: string;
   /**
    * The DNS adapter you want to use for managing DNS records. Only specify this if you
    * are using a domain name as the `sender`.
+   *
+   * It has to be a plain value.
    *
    * :::note
    * If `dns` is set to `false`, you have to add the DNS records manually to verify
@@ -122,7 +161,7 @@ export interface EmailArgs {
    * }
    * ```
    */
-  dns?: Input<false | (Dns & {})>;
+  dns?: false | DnsAdapter;
   /**
    * The DMARC policy for the domain. This'll create a DNS record with the given DMARC policy.
    * Only specify this if you are using a domain name as the `sender`.
@@ -138,12 +177,40 @@ export interface EmailArgs {
    */
   dmarc?: Input<string>;
   /**
+   * Whether to create the DKIM records SES gives the domain to sign with. Only specify this
+   * if you are using a domain name as the `sender`. A plain value: it decides whether the
+   * records are created.
+   *
+   * Set it to `false` when you sign with a key of your own, set through
+   * `transform.identity`. SES gives no records for that: add the ones for your key yourself.
+   * The domain's other records are still created.
+   *
+   * @default `true`
+   * @example
+   * ```js
+   * {
+   *   dkim: false,
+   *   transform: {
+   *     identity: {
+   *       dkimSigningAttributes: {
+   *         domainSigningPrivateKey: privateKey,
+   *         domainSigningSelector: "sst"
+   *       }
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  dkim?: boolean;
+  /**
    * Configure a custom [MAIL FROM domain](https://docs.aws.amazon.com/ses/latest/dg/mail-from.html)
    * for the emails you send. This sets the `Return-Path` (envelope sender) to use a subdomain of
    * your own domain instead of the default `amazonses.com`. It improves SPF alignment for DMARC
    * and routes bounce and complaint feedback through your domain.
    *
    * This'll create the required MX and SPF DNS records for the MAIL FROM subdomain.
+   *
+   * It has to be a plain value, and so do its fields.
    *
    * :::note
    * This is only valid when `sender` is a domain. The MAIL FROM `domain` must be a subdomain
@@ -161,7 +228,7 @@ export interface EmailArgs {
    * }
    * ```
    */
-  mailFrom?: Input<{
+  mailFrom?: {
     /**
      * The custom MAIL FROM subdomain. Must be a subdomain of the `sender` domain.
      *
@@ -174,7 +241,7 @@ export interface EmailArgs {
      * }
      * ```
      */
-    domain: Input<string>;
+    domain: string;
     /**
      * Control what happens when the required MX record of the custom MAIL FROM domain isn't
      * configured correctly.
@@ -194,53 +261,38 @@ export interface EmailArgs {
      * }
      * ```
      */
-    rejectOnMxFailure?: Input<boolean>;
-  }>;
+    rejectOnMxFailure?: boolean;
+  };
   /**
    * Configure event notifications for this Email component.
+   *
+   * The list has to be a plain value, and so does each event's `name`: an event's
+   * destination is named after it, in `nodes.event`. Its other fields can be outputs.
    *
    * @default No event notifications
    * @example
    *
    * ```js
    * {
-   *   events: {
-   *     name: "OnBounce",
-   *     types: ["bounce"],
-   *     topic: "arn:aws:sns:us-east-1:123456789012:MyTopic"
-   *   }
+   *   events: [
+   *     {
+   *       name: "OnBounce",
+   *       types: ["bounce"],
+   *       topic: "arn:aws:sns:us-east-1:123456789012:MyTopic"
+   *     }
+   *   ]
    * }
    * ```
    */
-  events?: Input<Prettify<Events>[]>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the SES identity resource.
-     */
-    identity?: Transform<sesv2.EmailIdentityArgs>;
-    /**
-     * Transform the SES configuration set resource.
-     */
-    configurationSet?: Transform<sesv2.ConfigurationSetArgs>;
-    /**
-     * Transform the SES MAIL FROM attributes resource.
-     */
-    mailFromAttributes?: Transform<sesv2.EmailIdentityMailFromAttributesArgs>;
-  };
-}
-
-interface EmailRef {
-  ref: boolean;
-  sender: Input<string>;
+  events?: EmailEventArgs[];
 }
 
 /**
  * The `Email` component lets you send emails in your app.
  * It uses [Amazon Simple Email Service](https://aws.amazon.com/ses/).
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * You can configure it to send emails from a specific email address or from any email addresses
  * in a domain.
@@ -327,295 +379,224 @@ interface EmailRef {
  *   })
  * );
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Email`
+ *
+ * Keep the name, and `sst migrate` moves it. The identity,
+ * the configuration set and the DNS records are kept.
+ *
+ * A few things work differently:
+ *
+ * - `sender`, `dns`, `mailFrom` and `events` have to be plain values, not outputs.
+ *   The name of each of the `events` is how its destination is known.
+ * - `dmarc` can only be set when `sender` is a domain, and that's checked even when
+ *   it's given as an output.
+ * - `transform` also takes `event` and `verification`.
+ * - `dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - A domain's three DKIM records are named after their place, not after the tokens SES
+ *   gives, so a preview shows them. A domain's hosted zone is found without a resource:
+ *   SST 4's `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - With a DKIM key of your own, set through `transform.identity`, SES gives no tokens,
+ *   and `sst.aws.Email` created no DKIM records. Set `dkim` to `false` to say so; a deploy
+ *   without it says to. The domain's other records are kept.
+ * - An event whose name isn't a capitalized name made of letters and numbers is kept
+ *   under the name `sst.aws.Email` gave it.
  */
-export class Email extends Component implements Link.Linkable {
-  private _sender: Output<string>;
-  private identity: sesv2.EmailIdentity;
-  private configurationSet: sesv2.ConfigurationSet;
+export class Email extends component("sst:aws:Email", parts) {
+  private readonly senderValue: Output<string>;
+  private dkim: { key: string; name: Output<string>; value: Output<string> }[] =
+    [];
 
   constructor(name: string, args: EmailArgs, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
-    const self = this;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this._sender = ref.identity.emailIdentity;
-      this.identity = ref.identity;
-      this.configurationSet = ref.configurationSet;
+    const owner = `the "${name}" email`;
+
+    // An identity that's already there: find the configuration set it sends
+    // with, unless it's given too, and create nothing else
+    if (args.existing?.identity !== undefined)
+      onlyExisting(args.existing, ["identity", "configurationSet"], owner);
+    const existing = this.existingPart("identity");
+    if (existing) {
+      if (!this.existingPart("configurationSet"))
+        this.lookupPart(
+          "configurationSet",
+          existing.configurationSetName.apply((set) => set!),
+        );
+      this.senderValue = existing.emailIdentity;
       return;
     }
 
-    const isDomain = checkIsDomain();
-    const dns = normalizeDns();
-    const dmarc = normalizeDmarc();
-    normalizeMailFrom();
-    const configurationSet = createConfigurationSet();
-    const identity = createIdentity();
-    if (args.mailFrom) createMailFrom();
-    createEvents();
-    isDomain.apply((isDomain) => {
-      if (!isDomain) return;
-      createDkimRecords();
-      createDmarcRecord();
-      createMailFromRecords();
-      waitForVerification();
+    const what = (arg: string) => `The "${arg}" of ${owner}`;
+    const sender = plain(args.sender, what("sender"));
+    const dns = plain(args.dns, what("dns"));
+    const dkim = plain(args.dkim, what("dkim"));
+    const mailFrom = plainDeep(args.mailFrom, what("mailFrom"));
+    const events = plain(args.events, what("events")) ?? [];
+    for (const event of events)
+      plain(
+        event.name,
+        `The name of each of the "events" of the "${name}" email`,
+      );
+
+    const isDomain = !sender.includes("@");
+    // What's only for a domain, refused for an email address
+    const forDomain = (arg: string) =>
+      new VisibleError(
+        `"${arg}" is only an option for ${owner} when its "sender" is a domain, and it's the address "${sender}".`,
+      );
+    if (!isDomain && dns) throw forDomain("dns");
+    if (!isDomain && dkim !== undefined) throw forDomain("dkim");
+    if (!isDomain && args.dmarc !== undefined) throw forDomain("dmarc");
+    if (mailFrom && !isDomain) throw forDomain("mailFrom");
+    if (mailFrom && !mailFrom.domain.endsWith(`.${sender}`))
+      throw new VisibleError(
+        `The "mailFrom.domain" of ${owner} is "${mailFrom.domain}". It has to be a subdomain of its "sender", "${sender}".`,
+      );
+
+    const configurationSet = this.part("configurationSet", {
+      configurationSetName: "",
     });
+    const identity = this.part("identity", {
+      emailIdentity: sender,
+      configurationSetName: configurationSet.configurationSetName,
+    });
+    if (mailFrom)
+      this.part("mailFromAttributes", {
+        emailIdentity: identity.emailIdentity,
+        mailFromDomain: mailFrom.domain,
+        behaviorOnMxFailure: mailFrom.rejectOnMxFailure
+          ? "REJECT_MESSAGE"
+          : "USE_DEFAULT_VALUE",
+      });
 
-    this._sender = output(args.sender);
-    this.identity = identity;
-    this.configurationSet = configurationSet;
+    for (const event of events)
+      this.part("event", event.name, {
+        configurationSetName: configurationSet.configurationSetName,
+        eventDestinationName: event.name,
+        eventDestination: {
+          matchingEventTypes: output(event.types).apply((types) =>
+            types.map((type) => type.toUpperCase().replaceAll("-", "_")),
+          ),
+          ...(event.bus
+            ? { eventBridgeDestination: { eventBusArn: event.bus } }
+            : {}),
+          ...(event.topic ? { snsDestination: { topicArn: event.topic } } : {}),
+          enabled: true,
+        },
+      });
 
-    function reference() {
-      const ref = args as EmailRef;
-      const identity = sesv2.EmailIdentity.get(
-        `${name}Identity`,
-        ref.sender,
-        undefined,
-        { parent: self },
-      );
-      const configurationSet = sesv2.ConfigurationSet.get(
-        `${name}Config`,
-        identity.configurationSetName.apply((v) => v!),
-        undefined,
-        { parent: self },
-      );
+    this.senderValue = output(sender);
+    if (!isDomain) return;
 
+    this.verifyDomain(sender, identity, dns, dkim, args.dmarc, mailFrom);
+  }
+
+  // A domain is verified with DNS records: DKIM, DMARC, and the records of a
+  // custom MAIL FROM domain. SES checks for them, and the verification part
+  // waits until it has.
+  private verifyDomain(
+    sender: string,
+    identity: sesv2.EmailIdentity,
+    dns: EmailArgs["dns"],
+    dkim: boolean | undefined,
+    dmarc: Input<string> | undefined,
+    mailFrom: { domain: string } | undefined,
+  ) {
+    const name = this.componentName;
+    const adapter = dns === false ? undefined : dns ?? awsDns();
+    if (adapter) {
+      const record = (record: Parameters<DnsAdapter["record"]>[1]) =>
+        adapter.record(name, record, this.delegateOpts());
+      // Only read where they're put in DNS: with a key of your own there are none
+      if (dkim !== false) this.dkim = this.dkimRecords(sender, identity);
+      for (const record_ of this.dkim) record({ type: "CNAME", ...record_ });
+      record({
+        type: "TXT",
+        name: `_dmarc.${sender}`,
+        value: dmarc ?? "v=DMARC1; p=none;",
+      });
+      if (mailFrom) {
+        const region = getRegionOutput(undefined, { parent: this }).region;
+        record({
+          type: "MX",
+          name: mailFrom.domain,
+          value: interpolate`feedback-smtp.${region}.amazonses.com`,
+          priority: 10,
+        });
+        record({
+          type: "TXT",
+          name: mailFrom.domain,
+          value: "v=spf1 include:amazonses.com ~all",
+        });
+      }
+    }
+
+    this.part("verification", { domain: sender }, { dependsOn: [identity] });
+  }
+
+  // A domain's three DKIM records. Their names in DNS are made from the tokens
+  // SES gives once the identity is created, so each is named after its place:
+  // the tokens in order, so the same token keeps its record.
+  private dkimRecords(sender: string, identity: sesv2.EmailIdentity) {
+    // The tokens go in public DNS records. They're read off an output that's
+    // secret because it can hold a signing key of your own.
+    const tokens = unsecret(identity.dkimSigningAttributes.tokens).apply(
+      (tokens) => {
+        if (tokens?.length !== 3)
+          throw new VisibleError(
+            `SES gave the "${this.componentName}" email ${
+              tokens?.length ?? 0
+            } DKIM tokens. It gives 3 when it signs with a key of its own. To sign with your own key, set "dkim" to false and add its records yourself.`,
+          );
+        return [...tokens].sort();
+      },
+    );
+    return [0, 1, 2].map((i) => {
+      const token = tokens.apply((tokens) => tokens[i]);
       return {
-        identity,
-        configurationSet,
+        key: `dkim${i + 1}._domainkey.${sender}`,
+        name: interpolate`${token}._domainkey.${sender}`,
+        value: interpolate`${token}.dkim.amazonses.com`,
       };
-    }
+    });
+  }
 
-    function checkIsDomain() {
-      return output(args.sender).apply((sender) => !sender.includes("@"));
-    }
-
-    function normalizeDns() {
-      all([args.dns, isDomain]).apply(([dns, isDomain]) => {
-        if (!isDomain && dns)
-          throw new Error(
-            `The "dns" property is only valid when "sender" is a domain.`,
-          );
-      });
-
-      return args.dns ?? awsDns();
-    }
-
-    function normalizeDmarc() {
-      all([args.dmarc, isDomain]).apply(([dmarc, isDomain]) => {
-        if (!isDomain && dmarc)
-          throw new Error(
-            `The "dmarc" property is only valid when "sender" is a domain.`,
-          );
-      });
-
-      return args.dmarc ?? `v=DMARC1; p=none;`;
-    }
-
-    function normalizeMailFrom() {
-      all([args.mailFrom, isDomain, args.sender]).apply(
-        ([mailFrom, isDomain, sender]) => {
-          if (!mailFrom) return;
-          if (!isDomain)
-            throw new Error(
-              `The "mailFrom" property is only valid when "sender" is a domain.`,
-            );
-          if (!mailFrom.domain.endsWith(`.${sender}`))
-            throw new Error(
-              `The "mailFrom.domain" "${mailFrom.domain}" must be a subdomain of the "sender" domain "${sender}".`,
-            );
-        },
-      );
-    }
-
-    function createConfigurationSet() {
-      return new sesv2.ConfigurationSet(
-        ...transform(
-          args.transform?.configurationSet,
-          `${name}Config`,
-          { configurationSetName: "" },
-          { parent: self },
-        ),
-      );
-    }
-
-    function createIdentity() {
-      return new sesv2.EmailIdentity(
-        ...transform(
-          args.transform?.identity,
-          `${name}Identity`,
-          {
-            emailIdentity: args.sender,
-            configurationSetName: configurationSet.configurationSetName,
-          },
-          { parent: self },
-        ),
-      );
-    }
-
-    function createMailFrom() {
-      const mailFrom = output(args.mailFrom!);
-      return new sesv2.EmailIdentityMailFromAttributes(
-        ...transform(
-          args.transform?.mailFromAttributes,
-          `${name}MailFrom`,
-          {
-            emailIdentity: identity.emailIdentity,
-            mailFromDomain: mailFrom.domain,
-            behaviorOnMxFailure: output(mailFrom.rejectOnMxFailure).apply(
-              (reject) => (reject ? "REJECT_MESSAGE" : "USE_DEFAULT_VALUE"),
-            ),
-          },
-          { parent: self },
-        ),
-      );
-    }
-
-    function createEvents() {
-      output(args.events ?? []).apply((events) =>
-        events.forEach((event) => {
-          new sesv2.ConfigurationSetEventDestination(
-            `${name}Event${event.name}`,
-            {
-              configurationSetName: configurationSet.configurationSetName,
-              eventDestinationName: event.name,
-              eventDestination: {
-                matchingEventTypes: event.types.map((t) =>
-                  t.toUpperCase().replaceAll("-", "_"),
-                ),
-                ...(event.bus
-                  ? { eventBridgeDestination: { eventBusArn: event.bus } }
-                  : {}),
-                ...(event.topic
-                  ? { snsDestination: { topicArn: event.topic } }
-                  : {}),
-                enabled: true,
-              },
-            },
-            { parent: self },
-          );
-        }),
-      );
-    }
-
-    function createDkimRecords() {
-      all([dns, identity?.dkimSigningAttributes.tokens]).apply(
-        ([dns, tokens]) => {
-          if (!dns) return;
-
-          tokens?.map((token) =>
-            dns.createRecord(
-              name,
-              {
-                type: "CNAME",
-                name: interpolate`${token}._domainkey.${args.sender}`,
-                value: `${token}.dkim.amazonses.com`,
-              },
-              { parent: self },
-            ),
-          );
-        },
-      );
-    }
-
-    function createDmarcRecord() {
-      output(dns).apply((dns) => {
-        if (!dns) return;
-
-        dns.createRecord(
-          name,
-          {
-            type: "TXT",
-            name: interpolate`_dmarc.${args.sender}`,
-            value: dmarc,
-          },
-          { parent: self },
-        );
-      });
-    }
-
-    function createMailFromRecords() {
-      all([
-        dns,
-        args.mailFrom,
-        getRegionOutput(undefined, { parent: self }).region,
-      ]).apply(([dns, mailFrom, region]) => {
-        if (!dns || !mailFrom) return;
-
-        dns.createRecord(
-          name,
-          {
-            type: "MX",
-            name: mailFrom.domain,
-            value: `feedback-smtp.${region}.amazonses.com`,
-            priority: 10,
-          },
-          { parent: self },
-        );
-        dns.createRecord(
-          name,
-          {
-            type: "TXT",
-            name: mailFrom.domain,
-            value: `v=spf1 include:amazonses.com ~all`,
-          },
-          { parent: self },
-        );
-      });
-    }
-
-    function waitForVerification() {
-      new ses.DomainIdentityVerification(
-        `${name}Verification`,
-        {
-          domain: args.sender,
-        },
-        { parent: self, dependsOn: identity },
-      );
-    }
+  /**
+   * Each DKIM record: what it's named after, and its name in DNS.
+   * @internal
+   */
+  public get _dkimRecords() {
+    return this.dkim.map(({ key, name }) => ({ key, name }));
   }
 
   /**
    * The sender email address or domain name.
    */
   public get sender() {
-    return this._sender;
+    return this.senderValue;
   }
 
   /**
    * The name of the configuration set.
    */
   public get configSet() {
-    return this.configurationSet.configurationSetName;
+    return this.nodes.configurationSet.configurationSetName;
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
+   * Linking an email gives the linked resource the sender and the
+   * configuration set, and permission to send with them.
    */
-  public get nodes() {
+  public link() {
     return {
-      /**
-       * The Amazon SES identity.
-       */
-      identity: this.identity,
-      /**
-       * The Amazon SES configuration set.
-       */
-      configurationSet: this.configurationSet,
-    };
-  }
-
-  /** @internal */
-  public getSSTLink() {
-    return {
-      properties: {
-        sender: this._sender,
-        configSet: this.configSet,
-      },
+      properties: { sender: this.sender, configSet: this.configSet },
       include: [
         permission({
           actions: ["ses:*"],
-          resources: [this.identity.arn, this.configurationSet.arn],
+          resources: [this.nodes.identity.arn, this.nodes.configurationSet.arn],
         }),
         // When the SES account is in sandbox mode, it seems you have to include verified
         // receipients inside `resources`. Needs further investigation.
@@ -659,15 +640,8 @@ export class Email extends Component implements Link.Linkable {
   ) {
     return new Email(
       name,
-      {
-        ref: true,
-        sender,
-      } as EmailArgs,
+      getArgs({ existing: { identity: sender } }) as EmailArgs,
       opts,
     );
   }
 }
-
-const __pulumiType = "sst:aws:Email";
-// @ts-expect-error
-Email.__pulumiType = __pulumiType;

@@ -1,11 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { toPosix } from "../path.js";
 import crypto from "crypto";
-import archiver from "archiver";
-import type { Loader } from "esbuild";
-import type { EsbuildOptions } from "../esbuild.js";
-import { glob } from "glob";
 import {
   all,
   asset,
@@ -13,25 +8,11 @@ import {
   interpolate,
   Output,
   output,
+  rootStackResource,
+  runtime as pulumiRuntime,
   secret,
   unsecret,
-  rootStackResource,
 } from "@pulumi/pulumi";
-import { bootstrap } from "./helpers/bootstrap.js";
-import {
-  Duration,
-  DurationDays,
-  DurationMinutes,
-  toDays,
-  toSeconds,
-} from "../duration.js";
-import { Size, toMBs } from "../size.js";
-import { Component, Prettify, Transform, transform } from "../component.js";
-import { Link } from "../link.js";
-import { VisibleError } from "../error.js";
-import type { Input } from "../input.js";
-import { logicalName, physicalName } from "../naming.js";
-import { RETENTION } from "./logging.js";
 import {
   cloudwatch,
   ecr,
@@ -43,30 +24,128 @@ import {
   s3,
   types,
 } from "@pulumi/aws";
-import { Permission, permission } from "./permission.js";
-import { Vpc } from "./vpc.js";
 import { Image } from "@pulumi/docker-build";
-import { rpc } from "../rpc/rpc.js";
-import { parseRoleArn, splitQualifiedFunctionArn } from "./helpers/arn.js";
-import { lazy } from "../../util/lazy.js";
-import { devStubCode, linkEncryptionKey } from "./helpers/function-shared.js";
-import { Efs } from "./efs.js";
-import { FunctionEnvironmentUpdate } from "./providers/function-environment-update.js";
-import { warnOnce } from "../../util/warn.js";
 import {
-  normalizeRouteArgs,
-  RouterRouteArgs,
-  RouterRouteArgsDeprecated,
-} from "./router.js";
-import { KvRoutesUpdate } from "./providers/kv-routes-update.js";
-import { KvKeys } from "./providers/kv-keys.js";
+  type ComponentArgs,
+  component,
+  many,
+  optional,
+} from "../parts-component";
+import { ifSet, plain, plainDeep, usedAsItIs, withDefault, withoutDependencies, getArgs } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { Link } from "../link";
+import { logicalName, physicalName } from "../naming";
+import {
+  Duration,
+  DurationDays,
+  DurationMinutes,
+  toDays,
+  toSeconds,
+} from "../duration";
+import { Size, toMBs } from "../size";
+import type { Loader } from "esbuild";
+import type { EsbuildOptions } from "../esbuild";
+import { rpc } from "../rpc/rpc";
+import { devStub, context } from "../contract";
+import { type Runtime, commandsOf, isRuntime } from "../runtime";
+import { type AnyVpc, privateNetworkOf } from "./helpers/vpc";
+import { inlinePolicies } from "./helpers/iam";
+import { type AnyEfs, isEfs } from "./helpers/efs";
+import { type AnyRouter, type RouteArgs, routeOf } from "./helpers/router";
+import { RETENTION } from "./logging";
+import { Permission, permission } from "./permission";
+import { bootstrap } from "./helpers/bootstrap";
+import { parseRoleArn, splitQualifiedFunctionArn } from "./helpers/arn";
+import {
+  FunctionBundle,
+  FunctionFile,
+  buildBundle,
+  devBridgeBundle,
+  injectHandler,
+  zipCode,
+} from "./helpers/function-code";
+import { devStubCode, linkEncryptionKey } from "./helpers/function-shared";
+import { FunctionEnvironmentUpdate } from "./resources/function-environment-update";
+import { KvKeys } from "./resources/kv-keys";
+import { KvRoutesUpdate } from "./resources/kv-routes-update";
+
+const parts = {
+  /**
+   * The IAM Role the function uses. A role you passed by its ARN is looked up when you
+   * read this, and the deploy fails if it doesn't exist.
+   */
+  role: iam.Role,
+  /**
+   * The CloudWatch Log Group the function's logs are stored in. It isn't created when
+   * `logging` is `false`.
+   */
+  logGroup: optional(cloudwatch.LogGroup),
+  /**
+   * The function's code: a zip file in the asset bucket of your account. A Python
+   * function deployed as a container has an `image` instead.
+   */
+  code: optional(s3.BucketObjectv2),
+  /**
+   * The source maps of the function's code, one for each file the build writes. They
+   * are numbered from `0`, and they're only known once the function is built.
+   */
+  sourcemap: many(s3.BucketObjectv2),
+  /**
+   * The container image of a Python function that's deployed as a container.
+   */
+  image: optional(Image),
+  /**
+   * The AWS Lambda function.
+   */
+  function: lambda.Function,
+  /**
+   * The Lambda function URL, when `url` is enabled.
+   */
+  url: optional(lambda.FunctionUrl),
+  /**
+   * The alias the URL of a durable function points to.
+   */
+  urlAlias: optional(lambda.Alias),
+  /**
+   * The permission to call the function's URL: for everyone, or for the router's
+   * distribution when the URL is behind a router that signs its requests.
+   */
+  urlAccess: optional(lambda.Permission),
+  /**
+   * The permission to invoke the function through its URL. It's given to whoever
+   * `urlAccess` is.
+   */
+  urlInvoke: optional(lambda.Permission),
+  /**
+   * What the router needs to know to reach the function's URL, stored in the router's
+   * key value store.
+   */
+  routeKey: optional(KvKeys),
+  /**
+   * The entry for the function's URL in the router's list of routes.
+   */
+  routesUpdate: optional(KvRoutesUpdate),
+  /**
+   * The provisioned concurrency of the function, when `concurrency.provisioned` is set.
+   */
+  provisioned: optional(lambda.ProvisionedConcurrencyConfig),
+  /**
+   * The settings for asynchronous invocations, when `retries` is set.
+   */
+  eventInvokeConfig: optional(lambda.FunctionEventInvokeConfig),
+  /**
+   * The environment variables added with `addEnvironment`.
+   */
+  environmentUpdate: optional(FunctionEnvironmentUpdate),
+};
 
 /**
- * Helper type to define function ARN type
+ * The ARN of a Lambda function.
  */
 export type FunctionArn = `arn:${string}` & {};
 
-export type FunctionPermissionArgs = {
+export interface FunctionPermissionArgs {
   /**
    * Configures whether the permission is allowed or denied.
    * @default `"allow"`
@@ -135,9 +214,9 @@ export type FunctionPermissionArgs = {
       values: Input<Input<string>[]>;
     }>[]
   >;
-};
+}
 
-interface FunctionUrlCorsArgs {
+export interface FunctionUrlCorsArgs {
   /**
    * Allow cookies or other credentials in requests to the function URL.
    * @default `false`
@@ -255,24 +334,291 @@ interface FunctionUrlCorsArgs {
   maxAge?: Input<Duration>;
 }
 
-export interface FunctionArgs {
+export interface FunctionLoggingArgs {
   /**
-   * Disable running this function [Live](/docs/live/) in `sst dev`.
-   * @deprecated Use `dev` instead.
-   * @default `true`
+   * The duration the function logs are kept in CloudWatch.
+   *
+   * It can't be set with a log group passed in `existing.logGroup`, which has its own
+   * retention.
+   *
+   * @default `1 month`
    * @example
    * ```js
    * {
-   *   live: false
+   *   logging: {
+   *     retention: "forever"
+   *   }
    * }
    * ```
    */
-  live?: Input<false>;
+  retention?: Input<keyof typeof RETENTION>;
+  /**
+   * The [log format](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs-advanced.html)
+   * of the Lambda function.
+   * @default `"text"`
+   * @example
+   * ```js
+   * {
+   *   logging: {
+   *     format: "json"
+   *   }
+   * }
+   * ```
+   */
+  format?: Input<"text" | "json">;
+}
+
+export interface FunctionUrlArgs {
+  /**
+   * Serve your function URL through a `Router` instead of a standalone Function URL.
+   *
+   * By default, this component creates a direct function URL endpoint. But you might
+   * want to serve it through the distribution of your `Router` as a:
+   *
+   * - A path like `/api/users`
+   * - A subdomain like `api.example.com`
+   * - Or a combined pattern like `dev.example.com/api`
+   *
+   * Whether the URL is served through a router decides what's created, so it has to
+   * be a plain value, and so does the router.
+   *
+   * @example
+   *
+   * To serve your function **from a path**, you'll need to configure the root domain
+   * in your `Router` component.
+   *
+   * ```ts title="sst.config.ts" {2}
+   * const router = new sst.aws.Router("Router", {
+   *   domain: "example.com"
+   * });
+   * ```
+   *
+   * Now set the `router` and the `path` in the `url` prop.
+   *
+   * ```ts {4,5}
+   * {
+   *   url: {
+   *     router: {
+   *       instance: router,
+   *       path: "/api/users"
+   *     }
+   *   }
+   * }
+   * ```
+   *
+   * To serve your function **from a subdomain**, you'll need to configure the
+   * domain in your `Router` component to match both the root and the subdomain.
+   *
+   * ```ts title="sst.config.ts" {3,4}
+   * const router = new sst.aws.Router("Router", {
+   *   domain: {
+   *     name: "example.com",
+   *     aliases: ["*.example.com"]
+   *   }
+   * });
+   * ```
+   *
+   * Now set the `domain` in the `router` prop.
+   *
+   * ```ts {5}
+   * {
+   *   url: {
+   *     router: {
+   *       instance: router,
+   *       domain: "api.example.com"
+   *     }
+   *   }
+   * }
+   * ```
+   *
+   * Finally, to serve your function **from a combined pattern** like
+   * `dev.example.com/api`, you'll need to configure the domain in your `Router` to
+   * match the subdomain.
+   *
+   * ```ts title="sst.config.ts" {3,4}
+   * const router = new sst.aws.Router("Router", {
+   *   domain: {
+   *     name: "example.com",
+   *     aliases: ["*.example.com"]
+   *   }
+   * });
+   * ```
+   *
+   * And set the `domain` and the `path`.
+   *
+   * ```ts {5,6}
+   * {
+   *   url: {
+   *     router: {
+   *       instance: router,
+   *       domain: "dev.example.com",
+   *       path: "/api/users"
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  router?: RouteArgs;
+  /**
+   * The authorization used for the function URL. Supports [IAM authorization](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html).
+   *
+   * It decides which permissions are created, so it has to be a plain value.
+   *
+   * @default `"none"`
+   * @example
+   * ```js
+   * {
+   *   url: {
+   *     authorization: "iam"
+   *   }
+   * }
+   * ```
+   */
+  authorization?: "none" | "iam";
+  /**
+   * Customize the CORS (Cross-origin resource sharing) settings for the function URL.
+   * @default `true`
+   * @example
+   * Disable CORS.
+   * ```js
+   * {
+   *   url: {
+   *     cors: false
+   *   }
+   * }
+   * ```
+   * Only enable the `GET` and `POST` methods for `https://example.com`.
+   * ```js
+   * {
+   *   url: {
+   *     cors: {
+   *       allowMethods: ["GET", "POST"],
+   *       allowOrigins: ["https://example.com"]
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  cors?: Input<boolean | FunctionUrlCorsArgs>;
+}
+
+export interface FunctionPythonArgs {
+  /**
+   * Set this to `true` if you want to deploy this function as a container image.
+   * There are a couple of reasons why you might want to do this.
+   *
+   * 1. The Lambda package size has an unzipped limit of 250MB. Whereas the
+   *    container image size has a limit of 10GB.
+   * 2. Even if you are below the 250MB limit, larger Lambda function packages
+   *    have longer cold starts when compared to container image.
+   * 3. You might want to use a custom Dockerfile to handle complex builds.
+   *
+   * It decides whether an image is built, so it has to be a plain value.
+   *
+   * @default `false`
+   * @example
+   * ```ts
+   * {
+   *   python: {
+   *     container: true
+   *   }
+   * }
+   * ```
+   *
+   * When you run `sst deploy`, it uses a built-in Dockerfile. It also needs
+   * the Docker daemon to be running.
+   *
+   * :::note
+   * This needs the Docker daemon to be running.
+   * :::
+   *
+   * To use a custom Dockerfile, add one to the root of the uv workspace
+   * of the function.
+   *
+   * ```txt {5}
+   * ├── sst.config.ts
+   * ├── pyproject.toml
+   * └── function
+   *     ├── pyproject.toml
+   *     ├── Dockerfile
+   *     └── src
+   *         └── function
+   *             └── api.py
+   * ```
+   *
+   * You can refer to [this example of using a container image](/docs/examples/#aws-lambda-python-container).
+   */
+  container?:
+    | boolean
+    | {
+        /**
+         * Controls whether Docker build cache is enabled.
+         * @default `true`
+         * @example
+         * Disable Docker build caching, useful for environments like Localstack where
+         * ECR cache export is not supported.
+         * ```js
+         * {
+         *   python: {
+         *     container: {
+         *       cache: false
+         *     }
+         *   }
+         * }
+         * ```
+         */
+        cache?: Input<boolean>;
+      };
+}
+
+export interface FunctionConcurrencyArgs {
+  /**
+   * Provisioned concurrency keeps a number of Lambda instances ready to handle
+   * requests, which reduces cold starts. It incurs extra charges, and it needs
+   * `versioning` to be enabled.
+   *
+   * It decides whether the provisioned concurrency is created, so it has to be a
+   * plain number.
+   *
+   * @default No provisioned concurrency
+   * @example
+   * ```js
+   * {
+   *   concurrency: {
+   *     provisioned: 10
+   *   }
+   * }
+   * ```
+   */
+  provisioned?: number;
+  /**
+   * Reserved concurrency limits the maximum number of concurrent executions for a
+   * function, ensuring critical functions always have capacity. It does not incur
+   * extra charges.
+   *
+   * :::note
+   * Setting this to `0` will disable the function from being triggered.
+   * :::
+   *
+   * @default No reserved concurrency
+   * @example
+   * ```js
+   * {
+   *   concurrency: {
+   *     reserved: 50
+   *   }
+   * }
+   * ```
+   */
+  reserved?: Input<number>;
+}
+
+export interface FunctionArgs extends ComponentArgs<typeof parts> {
   /**
    * Disable running this function [_Live_](/docs/live/) in `sst dev`.
    *
-   * By default, the functions in your app are run locally in `sst dev`. To do this, a _stub_
-   * version of your function is deployed, instead of the real function.
+   * By default, the functions in your app are run locally in `sst dev`. To do this, a
+   * _stub_ version of your function is deployed, instead of the real function.
    *
    * :::note
    * In `sst dev` a _stub_ version of your function is deployed.
@@ -286,27 +632,15 @@ export interface FunctionArgs {
    * This shows under the **Functions** tab in the multiplexer sidebar where your invocations
    * are logged.
    *
-   * A function that's _Live_ makes a round trip to your machine for each invocation. You can
-   * turn this off by setting `dev` to `false`, which makes its invocations faster. It's worth
-   * doing for a function you aren't working on, such as an authorizer, which runs before
-   * each request to its routes that it doesn't have a cached result for.
-   *
-   * ```js
-   * api.addAuthorizer({
-   *   name: "MyAuthorizer",
-   *   lambda: {
-   *     function: {
-   *       handler: "src/authorizer.handler",
-   *       dev: false
-   *     }
-   *   }
-   * });
-   * ```
-   *
-   * The function then runs in AWS as it's deployed, so it can't reach anything that only
-   * runs on your machine.
+   * A function that's _Live_ makes a round trip to your machine for each invocation, so
+   * turning it off makes its invocations faster. It's worth doing for a function you
+   * aren't working on, such as an authorizer, which runs before each request to its
+   * routes that it doesn't have a cached result for. The function then runs in AWS as
+   * it's deployed, so it can't reach anything that only runs on your machine.
    *
    * Read more about [Live](/docs/live/) and [`sst dev`](/docs/reference/cli/#dev).
+   *
+   * It decides which function is deployed, so it has to be a plain value.
    *
    * @default `true`
    * @example
@@ -316,7 +650,7 @@ export interface FunctionArgs {
    * }
    * ```
    */
-  dev?: Input<false>;
+  dev?: false;
   /**
    * Configure the maximum number of retry attempts for this function when invoked
    * asynchronously.
@@ -326,6 +660,9 @@ export interface FunctionArgs {
    *
    * Valid values are between 0 and 2.
    *
+   * Whether it's set decides whether the settings for asynchronous invocations are
+   * created, so it has to be a plain value.
+   *
    * @default `2`
    * @example
    * ```js
@@ -334,7 +671,7 @@ export interface FunctionArgs {
    * }
    * ```
    */
-  retries?: Input<number>;
+  retries?: number;
   /**
    * The name for the function.
    *
@@ -372,14 +709,17 @@ export interface FunctionArgs {
    */
   description?: Input<string>;
   /**
-   * The language runtime for the function.
+   * The language runtime for the function: one SST builds in, or a runtime made of
+   * commands, from `sst.runtime`, for one it doesn't.
    *
    * Node.js and Golang are officially supported. While, Python and Rust are
-   * community supported. Support for other runtimes are on the roadmap.
+   * community supported.
    *
    * A later release can move the default to a newer Node.js, and says so in its notes.
    * A function that uses the default is then updated on its next deploy. Set `runtime`
    * to keep it on one version.
+   *
+   * It decides what's built, so it has to be a plain value.
    *
    * @default `"nodejs24.x"`
    *
@@ -389,8 +729,23 @@ export interface FunctionArgs {
    *   runtime: "nodejs24.x"
    * }
    * ```
+   *
+   * A runtime made of commands builds the function with its `build` command, runs it
+   * with its `dev` command in `sst dev`, and is deployed with the Lambda runtime it
+   * names.
+   *
+   * ```js
+   * {
+   *   runtime: sst.runtime({
+   *     lambda: "ruby3.4",
+   *     build: { command: "bundle install" },
+   *     dev: { command: "bundle exec aws_lambda_ric $_HANDLER" },
+   *     watch: ["*.rb", "Gemfile.lock"],
+   *   })
+   * }
+   * ```
    */
-  runtime?: Input<
+  runtime?:
     | "nodejs18.x"
     | "nodejs20.x"
     | "nodejs22.x"
@@ -405,7 +760,7 @@ export interface FunctionArgs {
     | "python3.12"
     | "python3.13"
     | "python3.14"
-  >;
+    | Runtime;
   /**
    * Path to the source code directory for the function. By default, the handler is
    * bundled with [esbuild](https://esbuild.github.io/). Use `bundle` to skip bundling.
@@ -424,6 +779,8 @@ export interface FunctionArgs {
    * left out of the zip.
    * :::
    *
+   * It decides what's built, so it has to be a plain value.
+   *
    * @example
    *
    * Here, the entire `packages/functions/src` directory is zipped, except for the
@@ -437,7 +794,7 @@ export interface FunctionArgs {
    * }
    * ```
    */
-  bundle?: Input<string>;
+  bundle?: string;
   /**
    * Path to the handler for the function.
    *
@@ -445,6 +802,8 @@ export interface FunctionArgs {
    * - For Python this is also `{path}/{file}.{method}`.
    * - For Golang this is `{path}` to the Go module.
    * - For Rust this is `{path}` to the Rust crate.
+   *
+   * It decides what's built, so it has to be a plain value.
    *
    * @example
    *
@@ -513,7 +872,7 @@ export interface FunctionArgs {
    * config = Path(__file__).parent / "config.json"
    * ```
    *
-   * For large dependencies like numpy or pandas, deploy as a container. See [`python.container`](#python-container).
+   * For large dependencies like numpy or pandas, deploy as a container. See [`python.container`](#functionpythonargs).
    *
    * For common project layouts, check out the [Python examples](https://github.com/sst-community/sst/tree/main/examples/python-layouts).
    *
@@ -547,7 +906,7 @@ export interface FunctionArgs {
    * Where `crates/api` is the path to the Rust crate. This means there is a
    * `Cargo.toml` file in `crates/api`, and the main() function handles the lambda.
    */
-  handler: Input<string>;
+  handler: string;
   /**
    * The maximum amount of time the function can run. The minimum timeout is 1 second and the maximum is 900 seconds or 15 minutes.
    *
@@ -677,7 +1036,7 @@ export interface FunctionArgs {
    * }
    * ```
    */
-  permissions?: Input<Prettify<FunctionPermissionArgs>[]>;
+  permissions?: Input<FunctionPermissionArgs[]>;
   /**
    * Policies to attach to the function. These policies will be added to the
    * function's IAM role.
@@ -734,9 +1093,15 @@ export interface FunctionArgs {
   /**
    * @internal
    */
-  injections?: Input<string[]>;
+  injections?: string[];
   /**
-   * Configure the function logs in CloudWatch. Or pass in `false` to disable writing logs.
+   * Configure the function logs in CloudWatch. Or pass in `false` to disable writing
+   * logs: the function is then not given permissions to write to CloudWatch.
+   *
+   * Whether the function logs has to be a plain value. The fields can be outputs.
+   *
+   * To write to a log group you already have, pass it in `existing.logGroup`.
+   *
    * @default `{retention: "1 month", format: "text"}`
    * @example
    * ```js
@@ -744,63 +1109,13 @@ export interface FunctionArgs {
    *   logging: false
    * }
    * ```
-   * When set to `false`, the function is not given permissions to write to CloudWatch.
-   * Logs.
    */
-  logging?: Input<
-    | false
-    | {
-        /**
-         * The duration the function logs are kept in CloudWatch.
-         *
-         * Not application when an existing log group is provided.
-         *
-         * @default `1 month`
-         * @example
-         * ```js
-         * {
-         *   logging: {
-         *     retention: "forever"
-         *   }
-         * }
-         * ```
-         */
-        retention?: Input<keyof typeof RETENTION>;
-        /**
-         * Assigns the given CloudWatch log group name to the function. This allows you to pass in a previously created log group.
-         *
-         * By default, the function creates a new log group when it's created.
-         *
-         * @default Creates a log group
-         * @example
-         * ```js
-         * {
-         *   logging: {
-         *     logGroup: "/existing/log-group"
-         *   }
-         * }
-         * ```
-         */
-        logGroup?: Input<string>;
-        /**
-         * The [log format](https://docs.aws.amazon.com/lambda/latest/dg/monitoring-cloudwatchlogs-advanced.html)
-         * of the Lambda function.
-         * @default `"text"`
-         * @example
-         * ```js
-         * {
-         *   logging: {
-         *     format: "json"
-         *   }
-         * }
-         * ```
-         */
-        format?: Input<"text" | "json">;
-      }
-  >;
+  logging?: false | FunctionLoggingArgs;
   /**
    * The [architecture](https://docs.aws.amazon.com/lambda/latest/dg/foundation-arch.html)
    * of the Lambda function.
+   *
+   * It decides what's built, so it has to be a plain value.
    *
    * @default `"x86_64"`
    * @example
@@ -810,34 +1125,14 @@ export interface FunctionArgs {
    * }
    * ```
    */
-  architecture?: Input<"x86_64" | "arm64">;
-  /**
-   * Assigns the given IAM role ARN to the function. This allows you to pass in a previously created role.
-   *
-   * :::caution
-   * When you pass in a role, the function will not update it if you add `permissions` or `link` resources.
-   * :::
-   *
-   * By default, the function creates a new IAM role when it's created. It'll update this role if you add `permissions` or `link` resources.
-   *
-   * However, if you pass in a role, you'll need to update it manually if you add `permissions` or `link` resources.
-   *
-   * SST does not read the role on each deploy. If the role is deleted, a deploy of an
-   * existing function still succeeds, and the function fails when it runs because
-   * Lambda can no longer assume the role.
-   *
-   * @default Creates a new role
-   * @example
-   * ```js
-   * {
-   *   role: "arn:aws:iam::123456789012:role/my-role"
-   * }
-   * ```
-   */
-  role?: Input<string>;
+  architecture?: "x86_64" | "arm64";
   /**
    * Enable [Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/lambda-urls.html).
    * These are dedicated endpoints for your Lambda functions.
+   *
+   * Whether there is a URL, and whether it's served through a router, have to be plain
+   * values. The fields of the CORS settings can be outputs.
+   *
    * @default `false`
    * @example
    * Enable it with the default options.
@@ -847,153 +1142,19 @@ export interface FunctionArgs {
    * }
    * ```
    *
-   * Configure the authorization and CORS settings for the endpoint.
+   * Configure the authorization and CORS settings for the URL.
    * ```js
    * {
    *   url: {
    *     authorization: "iam",
    *     cors: {
-   *       allowOrigins: ['https://example.com']
+   *       allowOrigins: ["https://example.com"]
    *     }
    *   }
    * }
    * ```
    */
-  url?: Input<
-    | boolean
-    | {
-        /**
-         * @deprecated The `url.router` prop is now the recommended way to serve your
-         * function URL through a `Router` component.
-         */
-        route?: Prettify<RouterRouteArgsDeprecated>;
-        /**
-         * Serve your function URL through a `Router` instead of a standalone Function URL.
-         *
-         * By default, this component creates a direct function URL endpoint. But you might
-         * want to serve it through the distribution of your `Router` as a:
-         *
-         * - A path like `/api/users`
-         * - A subdomain like `api.example.com`
-         * - Or a combined pattern like `dev.example.com/api`
-         *
-         * @example
-         *
-         * To serve your function **from a path**, you'll need to configure the root domain
-         * in your `Router` component.
-         *
-         * ```ts title="sst.config.ts" {2}
-         * const router = new sst.aws.Router("Router", {
-         *   domain: "example.com"
-         * });
-         * ```
-         *
-         * Now set the `router` and the `path` in the `url` prop.
-         *
-         * ```ts {4,5}
-         * {
-         *   url: {
-         *     router: {
-         *       instance: router,
-         *       path: "/api/users"
-         *     }
-         *   }
-         * }
-         * ```
-         *
-         * To serve your function **from a subdomain**, you'll need to configure the
-         * domain in your `Router` component to match both the root and the subdomain.
-         *
-         * ```ts title="sst.config.ts" {3,4}
-         * const router = new sst.aws.Router("Router", {
-         *   domain: {
-         *     name: "example.com",
-         *     aliases: ["*.example.com"]
-         *   }
-         * });
-         * ```
-         *
-         * Now set the `domain` in the `router` prop.
-         *
-         * ```ts {5}
-         * {
-         *   url: {
-         *     router: {
-         *       instance: router,
-         *       domain: "api.example.com"
-         *     }
-         *   }
-         * }
-         * ```
-         *
-         * Finally, to serve your function **from a combined pattern** like
-         * `dev.example.com/api`, you'll need to configure the domain in your `Router` to
-         * match the subdomain.
-         *
-         * ```ts title="sst.config.ts" {3,4}
-         * const router = new sst.aws.Router("Router", {
-         *   domain: {
-         *     name: "example.com",
-         *     aliases: ["*.example.com"]
-         *   }
-         * });
-         * ```
-         *
-         * And set the `domain` and the `path`.
-         *
-         * ```ts {5,6}
-         * {
-         *   url: {
-         *     router: {
-         *       instance: router,
-         *       domain: "dev.example.com",
-         *       path: "/api/users"
-         *     }
-         *   }
-         * }
-         * ```
-         */
-        router?: Prettify<RouterRouteArgs>;
-        /**
-         * The authorization used for the function URL. Supports [IAM authorization](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html).
-         * @default `"none"`
-         * @example
-         * ```js
-         * {
-         *   url: {
-         *     authorization: "iam"
-         *   }
-         * }
-         * ```
-         */
-        authorization?: Input<"none" | "iam">;
-        /**
-         * Customize the CORS (Cross-origin resource sharing) settings for the function URL.
-         * @default `true`
-         * @example
-         * Disable CORS.
-         * ```js
-         * {
-         *   url: {
-         *     cors: false
-         *   }
-         * }
-         * ```
-         * Only enable the `GET` and `POST` methods for `https://example.com`.
-         * ```js
-         * {
-         *   url: {
-         *     cors: {
-         *       allowMethods: ["GET", "POST"],
-         *       allowOrigins: ["https://example.com"]
-         *     }
-         *   }
-         * }
-         * ```
-         */
-        cors?: Input<boolean | Prettify<FunctionUrlCorsArgs>>;
-      }
-  >;
+  url?: boolean | FunctionUrlArgs;
   /**
    * Configure how your function is bundled.
    *
@@ -1001,8 +1162,10 @@ export interface FunctionArgs {
    * code using [esbuild](https://esbuild.github.io/). This tree shakes your code to
    * only include what's used; reducing the size of your function package and improving
    * cold starts.
+   *
+   * It decides what's built, so it has to be a plain value.
    */
-  nodejs?: Input<{
+  nodejs?: {
     /**
      * @internal
      * Point to a file that exports a list of esbuild plugins to use.
@@ -1028,7 +1191,7 @@ export interface FunctionArgs {
      *
      * You'll also need to install the npm package of the plugin.
      */
-    plugins?: Input<string>;
+    plugins?: string;
     /**
      * Configure additional esbuild loaders for other file extensions. This is useful
      * when your code is importing non-JS files like `.png`, `.css`, etc.
@@ -1044,7 +1207,7 @@ export interface FunctionArgs {
      * }
      * ```
      */
-    loader?: Input<Record<string, Loader>>;
+    loader?: Record<string, Loader>;
     /**
      * Dependencies that need to be excluded from the function package.
      *
@@ -1078,7 +1241,7 @@ export interface FunctionArgs {
      *
      * Passing `["packageName"]` is the same as passing `{ packageName: "*" }`.
      */
-    install?: Input<string[] | Record<string, string>>;
+    install?: string[] | Record<string, string>;
     /**
      * Use this to insert a string at the beginning of the generated JS file.
      *
@@ -1091,7 +1254,7 @@ export interface FunctionArgs {
      * }
      * ```
      */
-    banner?: Input<string>;
+    banner?: string;
     /**
      * This allows you to customize esbuild config that is used.
      *
@@ -1115,7 +1278,7 @@ export interface FunctionArgs {
      * }
      * ```
      */
-    esbuild?: Input<EsbuildOptions>;
+    esbuild?: EsbuildOptions;
     /**
      * Disable if the function code is minified when bundled.
      *
@@ -1130,7 +1293,7 @@ export interface FunctionArgs {
      * }
      * ```
      */
-    minify?: Input<boolean>;
+    minify?: boolean;
     /**
      * Configure the format of the generated JS code; ESM or CommonJS.
      *
@@ -1145,7 +1308,7 @@ export interface FunctionArgs {
      * }
      * ```
      */
-    format?: Input<"cjs" | "esm">;
+    format?: "cjs" | "esm";
     /**
      * Configure if source maps are added to the function bundle when **deployed**. Since they
      * increase payload size and potentially cold starts, they are not added by default.
@@ -1168,7 +1331,7 @@ export interface FunctionArgs {
      * }
      * ```
      */
-    sourcemap?: Input<boolean>;
+    sourcemap?: boolean;
     /**
      * If enabled, modules that are dynamically imported will be bundled in their own files
      * with common dependencies placed in shared chunks. This can help reduce cold starts
@@ -1185,83 +1348,18 @@ export interface FunctionArgs {
      * }
      * ```
      */
-    splitting?: Input<boolean>;
-  }>;
+    splitting?: boolean;
+  };
   /**
    * Configure how your Python function is packaged.
    */
-  python?: Input<{
-    /**
-     * Set this to `true` if you want to deploy this function as a container image.
-     * There are a couple of reasons why you might want to do this.
-     *
-     * 1. The Lambda package size has an unzipped limit of 250MB. Whereas the
-     *    container image size has a limit of 10GB.
-     * 2. Even if you are below the 250MB limit, larger Lambda function packages
-     *    have longer cold starts when compared to container image.
-     * 3. You might want to use a custom Dockerfile to handle complex builds.
-     *
-     * @default `false`
-     * @example
-     * ```ts
-     * {
-     *   python: {
-     *     container: true
-     *   }
-     * }
-     * ```
-     *
-     * When you run `sst deploy`, it uses a built-in Dockerfile. It also needs
-     * the Docker daemon to be running.
-     *
-     * :::note
-     * This needs the Docker daemon to be running.
-     * :::
-     *
-     * To use a custom Dockerfile, add one to the rooot of the uv workspace
-     * of the function.
-     *
-     *
-     * ```txt {5}
-     * ├── sst.config.ts
-     * ├── pyproject.toml
-     * └── function
-     *     ├── pyproject.toml
-     *     ├── Dockerfile
-     *     └── src
-     *         └── function
-     *             └── api.py
-     * ```
-     *
-     * You can refer to [this example of using a container image](/docs/examples/#aws-lambda-python-container).
-     */
-    container?: Input<
-      | boolean
-      | {
-          /**
-           * Controls whether Docker build cache is enabled.
-           * @default `true`
-           * @example
-           * Disable Docker build caching, useful for environments like Localstack where
-           * ECR cache export is not supported.
-           * ```js
-           * {
-           *   python: {
-           *     container: {
-           *       cache: false
-           *     }
-           *   }
-           * }
-           * ```
-           */
-          cache?: Input<boolean>;
-        }
-    >;
-  }>;
+  python?: FunctionPythonArgs;
   /**
    * Add additional files to copy into the function package. Takes a list of objects
    * with `from` and `to` paths. These will be copied over before the function package
    * is zipped up.
+   *
+   * It decides what's built, so it has to be a plain value.
    *
    * @example
    *
@@ -1294,21 +1392,19 @@ export interface FunctionArgs {
    * }
    * ```
    */
-  copyFiles?: Input<
-    {
-      /**
-       * Source path relative to the `sst.config.ts`.
-       */
-      from: Input<string>;
-      /**
-       * Destination path relative to function root in the package. By default, it
-       * creates the same directory structure as the `from` path and copies the file.
-       *
-       * @default The `from` path in the function package
-       */
-      to?: Input<string>;
-    }[]
-  >;
+  copyFiles?: {
+    /**
+     * Source path relative to the `sst.config.ts`.
+     */
+    from: string;
+    /**
+     * Destination path relative to function root in the package. By default, it
+     * creates the same directory structure as the `from` path and copies the file.
+     *
+     * @default The `from` path in the function package
+     */
+    to?: string;
+  }[];
   /**
    * Configure the concurrency settings for the function.
    *
@@ -1323,50 +1419,7 @@ export interface FunctionArgs {
    * }
    * ```
    */
-  concurrency?: Input<{
-    /**
-     * Provisioned concurrency ensures a specific number of Lambda instances are always
-     * ready to handle requests, reducing cold start times. Enabling this will incur
-     * extra charges.
-     *
-     * :::note
-     * Enabling provisioned concurrency will incur extra charges.
-     * :::
-     *
-     * Note that `versioning` needs to be enabled for provisioned concurrency.
-     *
-     * @default No provisioned concurrency
-     * @example
-     * ```js
-     * {
-     *   concurrency: {
-     *     provisioned: 10
-     *   }
-     * }
-     * ```
-     */
-    provisioned?: Input<number>;
-    /**
-     * Reserved concurrency limits the maximum number of concurrent executions for a
-     * function, ensuring critical functions always have capacity. It does not incur
-     * extra charges.
-     *
-     * :::note
-     * Setting this to `0` will disable the function from being triggered.
-     * :::
-     *
-     * @default No reserved concurrency
-     * @example
-     * ```js
-     * {
-     *   concurrency: {
-     *     reserved: 50
-     *   }
-     * }
-     * ```
-     */
-    reserved?: Input<number>;
-  }>;
+  concurrency?: FunctionConcurrencyArgs;
   /**
    * Enable versioning for the function.
    *
@@ -1449,7 +1502,7 @@ export interface FunctionArgs {
     /**
      * The EFS file system to mount. Or an EFS access point ARN.
      */
-    efs: Input<Efs | string>;
+    efs: Input<AnyEfs | string>;
     /**
      * The path to mount the volume.
      * @default `"/mnt/efs"`
@@ -1494,7 +1547,7 @@ export interface FunctionArgs {
    * ```
    */
   vpc?:
-    | Vpc
+    | AnyVpc
     | Input<{
         /**
          * A list of VPC security group IDs.
@@ -1504,13 +1557,7 @@ export interface FunctionArgs {
          * A list of VPC subnet IDs.
          */
         privateSubnets: Input<Input<string>[]>;
-        /**
-         * A list of VPC subnet IDs.
-         * @deprecated Use `privateSubnets` instead.
-         */
-        subnets?: Input<Input<string>[]>;
       }>;
-
   /**
    * Hook into the Lambda function build process.
    */
@@ -1553,29 +1600,6 @@ export interface FunctionArgs {
         retention?: Input<DurationDays>;
       };
   /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Lambda Function resource.
-     */
-    function?: Transform<lambda.FunctionArgs>;
-    /**
-     * Transform the IAM Role resource.
-     */
-    role?: Transform<iam.RoleArgs>;
-    /**
-     * Transform the CloudWatch LogGroup resource.
-     */
-    logGroup?: Transform<cloudwatch.LogGroupArgs>;
-    /**
-     * Transform the Function Event Invoke Config resource. This is only created
-     * when the `retries` property is set.
-     */
-    eventInvokeConfig?: Transform<lambda.FunctionEventInvokeConfigArgs>;
-  };
-  /**
    * @internal
    */
   _skipMetadata?: boolean;
@@ -1589,69 +1613,25 @@ export interface FunctionArgs {
  * The `Function` component lets you add serverless functions to your app.
  * It uses [AWS Lambda](https://aws.amazon.com/lambda/).
  *
- * #### Supported runtimes
- *
- * Currently supports **Node.js** and **Golang** functions. **Python** and **Rust**
- * are community supported. Other runtimes are on the roadmap.
+ * It's built from parts, so every resource it creates can be transformed, is available
+ * in `nodes`, and can be swapped for one you already have. How to switch to it is the
+ * last example.
  *
  * @example
  *
  * #### Minimal example
  *
+ * Pass in the path to your handler function.
  *
- * <Tabs>
- *   <TabItem label="Node">
- *   Pass in the path to your handler function.
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Function("MyFunction", {
+ *   handler: "src/lambda.handler"
+ * });
+ * ```
  *
- *   ```ts title="sst.config.ts"
- *   new sst.aws.Function("MyFunction", {
- *     handler: "src/lambda.handler"
- *   });
- *   ```
- *
- *   [Learn more below](#handler).
- *   </TabItem>
- *   <TabItem label="Python">
- *   Pass in the path to your handler function.
- *
- *   ```ts title="sst.config.ts"
- *   new sst.aws.Function("MyFunction", {
- *     runtime: "python3.13",
- *     handler: "functions/src/functions/api.handler"
- *   });
- *   ```
- *
- *   You need to have uv installed and your handler function needs to be in a uv workspace. [Learn more below](#handler).
- *   </TabItem>
- *   <TabItem label="Go">
- *   Pass in the directory to your Go module.
- *
- *   ```ts title="sst.config.ts"
- *   new sst.aws.Function("MyFunction", {
- *     runtime: "go",
- *     handler: "./src"
- *   });
- *   ```
- *
- *   [Learn more below](#handler).
- *   </TabItem>
- *   <TabItem label="Rust">
- *   Pass in the directory where your Cargo.toml lives.
- *
- *   ```ts title="sst.config.ts"
- *   new sst.aws.Function("MyFunction", {
- *     runtime: "rust",
- *     handler: "./crates/api/"
- *   });
- *   ```
- *
- *   [Learn more below](#handler).
- *   </TabItem>
- * </Tabs>
+ * What `handler` means for each runtime is under [`handler`](#handler).
  *
  * #### Set additional config
- *
- * Pass in additional Lambda config.
  *
  * ```ts {3,4} title="sst.config.ts"
  * new sst.aws.Function("MyFunction", {
@@ -1675,75 +1655,13 @@ export interface FunctionArgs {
  * });
  * ```
  *
- * You can use the [SDK](/docs/reference/sdk/) to access the linked resources
- * in your handler.
+ * ```ts title="src/lambda.ts"
+ * import { Resource } from "sst";
  *
- * <Tabs>
- *   <TabItem label="Node">
- *   ```ts title="src/lambda.ts"
- *   import { Resource } from "sst";
- *
- *   console.log(Resource.MyBucket.name);
- *   ```
- *   </TabItem>
- *   <TabItem label="Python">
- *   ```ts title="functions/src/functions/api.py"
- *   from sst import Resource
- *
- *   def handler(event, context):
- *       print(Resource.MyBucket.name)
- *   ```
- *
- *   Where the `sst-sdk` package can be added to your `pyproject.toml`.
- *
- *   ```toml title="functions/pyproject.toml"
- *   [project]
- *   dependencies = ["sst-sdk"]
- *
- *   [tool.uv.sources]
- *   sst-sdk = { git = "https://github.com/sst-community/sst.git", subdirectory = "sdk/python", branch = "main" }
- *   ```
- *   </TabItem>
- *   <TabItem label="Go">
- *   ```go title="src/main.go"
- *   import (
- *     "github.com/sst/sst/v3/sdk/golang/resource"
- *   )
- *
- *   resource.Get("MyBucket", "name")
- *   ```
- *   </TabItem>
- *   <TabItem label="Rust">
- *   ```rust title="src/main.rs"
- *   use sst_sdk::Resource;
- *   #[derive(serde::Deserialize, Debug)]
- *   struct Bucket {
- *      name: String,
- *   }
- *
- *   let resource = Resource::init().unwrap();
- *   let Bucket { name } = resource.get("Bucket").unwrap();
- *   ```
- *   </TabItem>
- * </Tabs>
- *
- * #### Set environment variables
- *
- * Set environment variables that you can read in your function. For example, using
- * `process.env` in your Node.js functions.
- *
- * ```ts {4} title="sst.config.ts"
- * new sst.aws.Function("MyFunction", {
- *   handler: "src/lambda.handler",
- *   environment: {
- *     DEBUG: "true"
- *   }
- * });
+ * console.log(Resource.MyBucket.name);
  * ```
  *
  * #### Enable function URLs
- *
- * Enable function URLs to invoke the function over HTTP.
  *
  * ```ts {3} title="sst.config.ts"
  * new sst.aws.Function("MyFunction", {
@@ -1752,188 +1670,554 @@ export interface FunctionArgs {
  * });
  * ```
  *
- * #### Bundling
+ * #### Change what's created
  *
- * Customize how SST uses [esbuild](https://esbuild.github.io/) to bundle your Node.js
- * functions with the `nodejs` property.
+ * Every resource the function creates is a part you can transform.
  *
- * ```ts title="sst.config.ts" {3-5}
+ * ```ts title="sst.config.ts"
  * new sst.aws.Function("MyFunction", {
  *   handler: "src/lambda.handler",
- *   nodejs: {
- *     install: ["pg"]
+ *   url: true,
+ *   transform: {
+ *     function: { tracingConfig: { mode: "Active" } },
+ *     logGroup: { logGroupClass: "INFREQUENT_ACCESS" },
+ *     url: { invokeMode: "RESPONSE_STREAM" }
  *   }
  * });
  * ```
  *
- * Or override it entirely by passing in your own function `bundle`.
+ * #### Use a role or log group you already have
+ *
+ * Pass the resource, or the name to look it up by. A role can also be passed by its ARN.
+ * It's then used as it is, and only looked up if you read `nodes.role`.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Function("MyFunction", {
+ *   handler: "src/lambda.handler",
+ *   existing: {
+ *     role: "my-lambda-role",
+ *     logGroup: "/my/shared/logs"
+ *   }
+ * });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Function`
+ *
+ * Keep the name, and `sst migrate` moves it. The function, its
+ * role, log group, code and URL are kept. Behind a router, its route's entry in the router's
+ * store and its route in the router's list are written again by resources of a new type,
+ * which the `sst` binary serves, and `sst migrate` takes the old ones out of the state
+ * without deleting them. What it adds to its environment after it's created is written again
+ * once the same way. A few things are written differently:
+ *
+ * - `handler`, `bundle`, `runtime`, `architecture`, `nodejs` and `copyFiles` have to be
+ *   plain values, not outputs: the function is built from them, and a preview has to
+ *   know what's built. So do `dev`, `logging`, `url`, `url.authorization`, `url.router`,
+ *   `python`, `python.container`, `concurrency`, `concurrency.provisioned` and
+ *   `retries`, which decide what's created.
+ * - `role: roleArn` becomes `existing: { role: roleArn }`. It can also be the role or
+ *   its name, which is looked up on every deploy.
+ * - `logging: { logGroup: name }` becomes `existing: { logGroup }`, with the log group
+ *   or its name.
+ * - `live: false` becomes `dev: false`, and `url.route` becomes `url.router`.
+ * - The way `sst.aws.Function` takes those four still works.
+ * - `nodes.function` and `nodes.logGroup` are the resources themselves, not outputs.
+ * - The alias the URL of a durable function points at is created with the function's
+ *   `provider`. `sst.aws.Function` created it with your app's provider, whatever the
+ *   function was given. If a durable function has a `url` and a `provider`, the switch
+ *   gives the alias that provider and keeps it, and the URL with it.
+ * - `transform: { function: { environment: { variables: { A: "1" } } } }` adds a
+ *   variable where it used to replace them all.
+ * - A `vpc` that's another resource, like an `aws.ec2.Vpc`, is refused: pass a `Vpc`, or
+ *   the ids of its subnets and security groups.
+ *
+ * The V5 components create their functions, like a queue's subscriber, as
+ * `sst.aws.Function` too. There you can keep writing the function the way
+ * `sst.aws.Function` takes it, but for what a build reads: `handler`, `bundle`,
+ * `runtime`, `architecture`, `nodejs` and `copyFiles` have to be plain values there
+ * too.
  */
-export class Function extends Component implements Link.Linkable {
-  private constructorName: string;
-  private durable: boolean;
-  private function: Output<lambda.Function>;
-  private role: () => iam.Role;
-  private logGroup: Output<cloudwatch.LogGroup | undefined>;
-  private urlEndpoint: Output<string | undefined>;
-  private urlResource: Output<lambda.FunctionUrl | undefined>;
-  private eventInvokeConfig?: lambda.FunctionEventInvokeConfig;
-
-  // Made once for the app, and shared with sst.aws.v5.Function
-  private static readonly encryptionKey = linkEncryptionKey;
-
-  private static readonly devBridgeCode = devStubCode;
-
-  public static readonly appsync = lazy(() =>
-    rpc.call<{
-      http: string;
-      realtime: string;
-      arn: string;
-      shared: boolean;
-    }>("Provider.Aws.Appsync", {}),
-  );
-
-  /**
-   * What of AppSync a stub's role can reach in `sst dev`: any Event API while
-   * it's the shared one, as before, or only the stage's own when `dev.appsync`
-   * is `"stage"`.
-   * @internal
-   */
-  public static appsyncResources(appsync: { arn: string; shared: boolean }) {
-    return appsync.shared ? ["*"] : [appsync.arn, `${appsync.arn}/*`];
-  }
+export class Function extends component("sst:aws:Function", parts) {
+  private readonly durable: boolean;
+  private readonly fn: lambda.Function;
+  private readonly urlEndpoint: Output<string | undefined>;
 
   constructor(
     name: string,
     args: FunctionArgs,
     opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    this.constructorName = name;
-    this.durable = Boolean(args.durable);
-    // A $transform written for sst.aws.v5.Function runs on this one too, as
-    // they share a type, and a runtime from sst.runtime is only for that one
-    if (
-      typeof args.runtime === "object" &&
-      args.runtime !== null &&
-      !Output.isInstance(args.runtime)
-    )
-      throw new VisibleError(
-        `The "runtime" of the "${name}" function isn't a runtime's name. A runtime from sst.runtime is for sst.aws.v5.Function; a $transform that sets one runs on sst.aws.Function too, as they share a type.`,
-      );
+    super(name, args, opts);
+    const self = this;
+    const durable = (this.durable = Boolean(args.durable));
 
-    const parent = this;
-    const dev = normalizeDev();
-    const isContainer = all([args.python, dev]).apply(
-      ([python, dev]) => !dev && !!python?.container,
+    // A function that's already deployed is only referenced: whatever would
+    // configure it is refused
+    const existing = this.existingPart("function");
+    if (existing) {
+      usedAsItIs(
+        args,
+        Object.keys(args).filter(
+          (key) => key !== "transform" && key !== "existing",
+        ),
+        "function",
+        `the "${name}" function`,
+      );
+      this.fn = existing;
+      this.urlEndpoint = output(undefined);
+      return;
+    }
+
+    const option = (arg: string) => `The "${arg}" of the "${name}" function`;
+    // A few options are written another way for the 4.x `Function`: `live`,
+    // `role`, `logging.logGroup` and `url.route`. They're taken here too. A
+    // `$transform` written for the 4.x one runs on this one, as they have
+    // the same type, and so does the definition of a function part. One
+    // written for this one runs on the 4.x one too, which turns down a runtime
+    // from `sst.runtime`.
+    const given = args as Record<string, any>;
+    const original: {
+      live?: boolean;
+      role?: Input<string>;
+      logGroup?: Input<string>;
+    } = {
+      live: given.live,
+      role: given.role,
+      logGroup: plain(given.logging, option("logging"))?.logGroup,
+    };
+
+    // The args that decide which resources are created are read first
+    const dev =
+      plain(args.dev, option("dev")) !== false &&
+      !(args.dev === undefined && original.live === false) &&
+      context().dev;
+    const logging = normalizeLogging();
+    const url = normalizeUrl();
+    const python = plain(args.python, option("python"));
+    const container = plain(python?.container, option("python.container"));
+    const isContainer = !dev && Boolean(container);
+    const concurrency = plain(args.concurrency, option("concurrency"));
+    const provisioned = plain(
+      concurrency?.provisioned,
+      option("concurrency.provisioned"),
     );
-    const containerCache = all([args.python]).apply(([python]) =>
-      typeof python?.container === "object"
-        ? python.container.cache ?? true
-        : true,
-    );
+    const retries = plain(args.retries, option("retries"));
+
     const partition = getPartitionOutput({}, opts).partition;
     const region = getRegionOutput({}, opts).region;
     const bootstrapData = region.apply((region) => bootstrap.forRegion(region));
-    const injections = normalizeInjections();
-    const runtime = output(args.runtime ?? "nodejs24.x");
-    const timeout = normalizeTimeout();
-    const memory = normalizeMemory();
-    const storage = output(args.storage).apply((v) => v ?? "512 MB");
-    const architecture = output(args.architecture).apply((v) => v ?? "x86_64");
-    const environment = normalizeEnvironment();
-    const streaming = normalizeStreaming();
-    const logging = normalizeLogging();
-    const volume = normalizeVolume();
-    const url = normalizeUrl();
+    const assetBucket = bootstrapData.apply((data) => data.asset);
+    // The key links are encrypted with is created once for the app, and
+    // shared with the 4.x `Function`, so an app with both has one
+    const encryptionKey = linkEncryptionKey().base64;
+    // What's built is read from these, and a preview has to know what's
+    // built: its handler, and the source maps it writes
+    const isBuilt =
+      "The function is built from it, and a preview has to know what's built.";
+    plain(args.handler, option("handler"), isBuilt);
+    plain(args.bundle, option("bundle"), isBuilt);
+    plainDeep(args.nodejs, option("nodejs"), isBuilt);
+    plainDeep(args.copyFiles, option("copyFiles"), isBuilt);
+    const architecture =
+      plain(args.architecture, option("architecture"), isBuilt) ?? "x86_64";
+    const injections =
+      plainDeep(args.injections, option("injections"), isBuilt) ?? [];
+    // A runtime made of commands is built and run by them, and deployed with
+    // the Lambda runtime it names
+    const runtimeArg = plain(args.runtime, option("runtime"), isBuilt);
+    if (
+      runtimeArg !== undefined &&
+      typeof runtimeArg !== "string" &&
+      !isRuntime(runtimeArg)
+    )
+      throw new VisibleError(
+        `The "runtime" of the "${name}" function is a runtime's name, like "nodejs24.x", or a runtime from sst.runtime.`,
+      );
+    const commands = isRuntime(runtimeArg) ? commandsOf(runtimeArg) : undefined;
+    const runtime =
+      runtimeArg === undefined
+        ? "nodejs24.x"
+        : typeof runtimeArg === "string"
+          ? runtimeArg
+          : runtimeArg.lambda;
+    if (commands && injections.length > 0)
+      throw new VisibleError(
+        `The "${name}" function has "injections", which are for a Node.js function SST builds, not one built by a runtime from sst.runtime.`,
+      );
+    const streaming = withDefault(args.streaming, false);
+    // `Link.build` gives an output for each link, and `all` reads them. Left
+    // as outputs, each one's name would be an output where a string is read.
+    const links = output(args.link || []).apply((links) =>
+      all(Link.build(links)),
+    );
     const copyFiles = normalizeCopyFiles();
-    const durable = normalizeDurable();
-    const policies = output(args.policies ?? []);
-    const vpc = normalizeVpc();
     const nodejs = normalizeNodeJs();
+    const vpc = normalizeVpc();
+    const volume = normalizeVolume();
+    const environment = normalizeEnvironment();
+    const durableConfig = normalizeDurable();
 
-    const linkData = buildLinkData();
-    const linkPermissions = buildLinkPermissions();
-    const { bundle, handler: handler0, sourcemaps } = buildHandler();
-    const { handler, wrapper } = buildHandlerWrapper();
-    const role = createRole();
-    const imageAsset = createImageAsset();
-    const logGroup = createLogGroup();
-    const zipAsset = createZipAsset();
-    const fn = createFunction();
-    const { endpoint: urlEndpoint, resource: urlResource } = createUrl();
-    createProvisioned();
-    const eventInvokeConfig = createEventInvokeConfig();
+    // A role passed by its ARN, the way 4.x takes it, is used as it is. It's
+    // only looked up when `nodes.role` is read: a lookup is an IAM GetRole on
+    // every run, for every function that shares the role. One passed by its
+    // name, or as an output, is looked up for its ARN.
+    const existingRole = args.existing?.role;
+    const givenRoleArn =
+      typeof existingRole === "string" && existingRole.startsWith("arn:")
+        ? existingRole
+        : existingRole === undefined
+          ? original.role
+          : undefined;
+    const lookUpRole = (id: Input<string>) =>
+      this.lookupPart(
+        "role",
+        output(id).apply((id) =>
+          id.startsWith("arn:") ? parseRoleArn(id).roleName : id,
+        ),
+      );
+    let role: iam.Role | undefined;
+    if (givenRoleArn !== undefined)
+      this.partHandle("role").defer(() => (role ??= lookUpRole(givenRoleArn)));
+    else if (existingRole !== undefined && !(existingRole instanceof iam.Role))
+      role = lookUpRole(existingRole);
+    else role = this.existingPart("role") ?? this.part("role", roleArgs());
+    const roleArn = givenRoleArn ?? role!.arn;
 
-    const links = linkData.apply((input) => input.map((item) => item.name));
+    const givenLogGroup =
+      original.logGroup !== undefined && !args.existing?.logGroup;
+    const logGroup = !logging
+      ? undefined
+      : givenLogGroup
+        ? this.lookupPart("logGroup", original.logGroup!)
+        : this.part(
+            "logGroup",
+            {
+              name: interpolate`/aws/lambda/${
+                args.name ?? physicalName(64, `${name}Function`)
+              }`,
+              retentionInDays: logging.retention,
+            },
+            { ignoreChanges: ["name"] },
+          );
 
-    this.function = fn;
-    this.role = role;
-    this.logGroup = logGroup;
-    this.urlEndpoint = urlEndpoint;
-    this.urlResource = urlResource;
-    this.eventInvokeConfig = eventInvokeConfig;
-
-    const buildInput = output({
+    // Build the code. In `sst dev` the stub is deployed in its place, and the
+    // CLI is told about the function so it can run it locally.
+    // What the build is given but the links and the key
+    const buildParts = output({
       functionID: name,
       handler: args.handler,
       bundle: args.bundle,
-      logGroup: logGroup.apply((l) => l?.name),
-      encryptionKey: Function.encryptionKey().base64,
       runtime,
-      links: output(linkData).apply((input) =>
-        Object.fromEntries(input.map((item) => [item.name, item.properties])),
-      ),
       copyFiles,
-      properties: output({ nodejs, python: args.python }).apply((val) => ({
+      properties: output({ nodejs, python }).apply((val) => ({
         ...(val.nodejs || val.python),
         architecture,
       })),
       dev,
+      ...(commands ? { commands } : {}),
     });
+    const buildInput = all([
+      buildParts,
+      encryptionKey,
+      links.apply((links) =>
+        Object.fromEntries(links.map((item) => [item.name, item.properties])),
+      ),
+    ]).apply(([parts, encryptionKey, links]) => ({
+      ...parts,
+      encryptionKey,
+      links,
+    }));
+    if (dev) buildInput.apply((input) => rpc.call("Runtime.AddTarget", input));
+    // What's built is files on this machine. It's given the links, and a
+    // link's name is read from the component that's linked, so without this
+    // the code would depend on every resource of every linked component. A
+    // subscriber that links what it subscribes to would wait for itself.
+    const built: Output<FunctionBundle> = dev
+      ? output(devBridgeBundle(durable))
+      : withoutDependencies(
+          buildInput.apply((input) =>
+            buildBundle(
+              { ...input, isContainer },
+              args.hook && ((dir) => args.hook!.postbuild(dir)),
+            ),
+          ),
+        );
+    // A Node.js handler is wrapped in a file that runs the injections first
+    const entryOf = (built: Output<FunctionBundle>) =>
+      all([built, streaming]).apply(
+        ([built, streaming]): { handler: string; wrapper?: FunctionFile } =>
+          dev || commands || !runtime.startsWith("nodejs")
+            ? { handler: built.handler }
+            : injectHandler(name, { ...built, streaming, injections }),
+      );
+    const entry = entryOf(built);
+    // In a preview of a new stage, what's linked and the key aren't known yet,
+    // so the build waits for them. What the build writes doesn't depend on
+    // either: the links are encrypted into a file of their own after it. So
+    // the preview builds without them, to learn what the function is made of:
+    // its handler, which the provider needs to plan a Zip function, and its
+    // source maps, so that what the deploy uploads is in the preview.
+    const knowsBuild = output((built as any).isKnown as Promise<boolean>).apply(
+      (known) =>
+        // With `bundle`, the build writes into the app's own folder, which a
+        // build with no key would leave wrong
+        known || dev || !!args.bundle || !pulumiRuntime.isDryRun(),
+    );
+    let builtWithoutLinks: Output<FunctionBundle> | undefined;
+    const buildWithoutLinks = () =>
+      (builtWithoutLinks ??= withoutDependencies(
+        buildParts.apply((parts) =>
+          buildBundle(
+            {
+              ...parts,
+              // a key of the right length, as none is known yet
+              encryptionKey: Buffer.alloc(32).toString("base64"),
+              links: {},
+              isContainer,
+            },
+            args.hook && ((dir) => args.hook!.postbuild(dir)),
+          ),
+        ),
+      ));
+    // What's built, as far as what the function is made of goes. Every
+    // preview knows it.
+    const shape: Output<FunctionBundle> = knowsBuild.apply((knows) =>
+      knows ? built : buildWithoutLinks(),
+    );
+    const handler = knowsBuild.apply((knows) =>
+      knows
+        ? entry.apply((entry) => entry.handler)
+        : entryOf(buildWithoutLinks()).apply((entry) => entry.handler),
+    );
 
-    buildInput.apply(async (input) => {
-      if (!input.dev) return;
-      await rpc.call("Runtime.AddTarget", input);
+    const image = isContainer ? createImage() : undefined;
+    const code = isContainer
+      ? undefined
+      : output(dev ? devBridgeCode() : createCode());
+
+    // This is a hack to avoid handler being marked as having propertyDependencies.
+    // There is an unresolved bug in pulumi that causes issues when it does:
+    // "runtime and handler must be defined when code is zip".
+    // @ts-expect-error
+    handler.allResources = () => Promise.resolve(new Set());
+    const fn = this.part(
+      "function",
+      {
+        name: args.name,
+        description: args.description ?? "",
+        role: roleArn,
+        timeout: withDefault(args.timeout, "20 seconds", toSeconds),
+        memorySize: withDefault(args.memory, "1024 MB", toMBs),
+        ephemeralStorage: { size: withDefault(args.storage, "512 MB", toMBs) },
+        environment: { variables: environment },
+        architectures: [architecture],
+        loggingConfig: logging &&
+          logGroup && { logFormat: logging.format, logGroup: logGroup.name },
+        vpcConfig: vpc && {
+          securityGroupIds: vpc.securityGroups,
+          subnetIds: vpc.privateSubnets,
+        },
+        fileSystemConfig: volume && {
+          arn: volume.efs,
+          localMountPath: volume.path,
+        },
+        layers: args.layers,
+        tags: args.tags,
+        publish: output(args.versioning).apply((v) => v ?? durable),
+        reservedConcurrentExecutions: concurrency?.reserved,
+        durableConfig: durableConfig && {
+          executionTimeout: durableConfig.timeout,
+          retentionPeriod: durableConfig.retention,
+        },
+        ...(image
+          ? {
+              packageType: "Image",
+              imageUri: image.ref.apply((ref) => ref?.replace(":latest", "")),
+              imageConfig: {
+                commands: [
+                  handler.apply((handler) =>
+                    // A Python image is given the handler as a module path:
+                    // no leading "./", and "." in place of "/"
+                    runtime.includes("python")
+                      ? handler.replace(/\.\//g, "").replace(/\//g, ".")
+                      : handler,
+                  ),
+                ],
+              },
+            }
+          : {
+              packageType: "Zip",
+              s3Bucket: code!.apply((code) => code.bucket),
+              s3Key: code!.apply((code) => code.key),
+              handler: unsecret(handler),
+              runtime:
+                runtime === "go" || runtime === "rust"
+                  ? "provided.al2023"
+                  : runtime,
+            }),
+      },
+      // In `sst dev` the function is the stub, whatever its transform says
+      dev
+        ? {
+            transformations: [
+              ({ props, opts }) => ({
+                props: {
+                  ...props,
+                  description: props.description
+                    ? output(props.description as Input<string>).apply(
+                        (v) => (v ? `${v.substring(0, 240)} (live)` : "live"),
+                      )
+                    : "live",
+                  runtime: durable ? "nodejs24.x" : "provided.al2023",
+                  architectures: ["x86_64"],
+                },
+                opts,
+              }),
+            ],
+          }
+        : undefined,
+    );
+
+    this.fn = fn;
+    this.urlEndpoint = url ? createUrl(url) : output(undefined);
+
+    if (provisioned)
+      this.part("provisioned", {
+        functionName: fn.name,
+        qualifier: fn.publish.apply((publish) => {
+          if (publish !== true)
+            throw new VisibleError(
+              `The "${name}" function has provisioned concurrency, which needs versions of the function: set "versioning" to true.`,
+            );
+          return fn.version;
+        }),
+        provisionedConcurrentExecutions: provisioned,
+      });
+
+    if (retries !== undefined)
+      this.part("eventInvokeConfig", {
+        functionName: fn.name,
+        maximumRetryAttempts: retries,
+      });
+
+    this.report({
+      function: { handler: args.handler, internal: args._skipMetadata, dev },
+      hint: args._skipHint ? undefined : this.urlEndpoint,
     });
-
     this.registerOutputs({
-      _live: unsecret(
-        output(dev).apply((dev) => {
-          if (!dev) return undefined;
-          return all([
-            name,
-            links,
-            args.handler,
-            args.bundle,
-            args.runtime,
-            nodejs,
-            copyFiles,
-          ]).apply(
-            ([name, links, handler, bundle, runtime, nodejs, copyFiles]) => {
-              return {
+      // What's run locally in `sst dev`. Its links by name, as 4.x writes
+      // them: what they hold can be a secret, like a client's, and this is
+      // kept in the state in plain text.
+      _live: dev
+        ? unsecret(
+            all([
+              links.apply((links) => links.map((link) => link.name)),
+              args.handler,
+              args.bundle,
+              runtime,
+              nodejs,
+              copyFiles,
+            ]).apply(
+              ([links, handler, bundle, runtime, nodejs, copyFiles]) => ({
                 functionID: name,
                 links,
-                handler: handler,
-                bundle: bundle,
-                runtime: runtime || "nodejs24.x",
+                handler,
+                bundle,
+                runtime,
                 copyFiles,
                 properties: nodejs,
-              };
-            },
-          );
-        }),
-      ),
-      _metadata: {
-        handler: args.handler,
-        internal: args._skipMetadata,
-        dev: dev,
-      },
-      _hint: args._skipHint ? undefined : urlEndpoint,
+              }),
+            ),
+          )
+        : undefined,
     });
 
-    function normalizeDev() {
-      return all([args.dev, args.live]).apply(
-        ([d, l]) => $dev && d !== false && l !== false,
+    function normalizeLogging() {
+      const logging = plain(args.logging, option("logging"));
+      if (logging === false) return undefined;
+
+      if (
+        logging?.retention !== undefined &&
+        (args.existing?.logGroup || original.logGroup !== undefined)
+      )
+        throw new VisibleError(
+          `Cannot set "logging.retention" for the "${name}" function: it's given a log group, and that log group has its own retention.`,
+        );
+
+      return {
+        retention: output(logging?.retention).apply(
+          (retention) => RETENTION[retention ?? "1 month"],
+        ),
+        format: output(logging?.format).apply((format) => {
+          if (durable && format && format !== "json")
+            throw new VisibleError(
+              `The "${name}" function is durable, so its "logging.format" has to be "json".`,
+            );
+          return (format ?? (durable ? "json" : "text")) === "json"
+            ? "JSON"
+            : "Text";
+        }),
+      };
+    }
+
+    function normalizeUrl() {
+      const url = plain(args.url, option("url"));
+      if (url === false || url === undefined) return undefined;
+      const urlArgs = url === true ? {} : url;
+      // 4.x takes the router as `route.router`
+      const given = plain(
+        (urlArgs as { route?: Omit<RouteArgs, "instance"> & { router: AnyRouter } })
+          .route,
+        option("url.route"),
+      );
+      plain(given?.router, option("url.route.router"));
+      const router: RouteArgs | undefined =
+        urlArgs.router ??
+        (given && (({ router, ...route }) => ({ ...route, instance: router }))(given));
+
+      const defaultCors: types.input.lambda.FunctionUrlCors = {
+        allowHeaders: ["*"],
+        allowMethods: ["*"],
+        allowOrigins: ["*"],
+      };
+      return {
+        authorization:
+          plain(urlArgs.authorization, option("url.authorization")) ?? "none",
+        cors: output(urlArgs.cors).apply((cors) =>
+          cors === false
+            ? undefined
+            : cors === true || cors === undefined
+              ? defaultCors
+              : {
+                  ...defaultCors,
+                  ...cors,
+                  maxAge: cors.maxAge && toSeconds(cors.maxAge),
+                },
+        ),
+        router: router && routeOfRouter(router),
+      };
+    }
+
+    function routeOfRouter(router: RouteArgs) {
+      plain(router, option("url.router"));
+      return routeOf(router, option("url.router.instance"));
+    }
+
+    function normalizeCopyFiles() {
+      return output(args.copyFiles ?? []).apply((copyFiles) =>
+        Promise.all(
+          copyFiles.map(async (entry) => {
+            const from = path.join(context().paths.root, entry.from);
+            const to = entry.to || entry.from;
+            if (path.isAbsolute(to))
+              throw new VisibleError(
+                `The "copyFiles" of the "${name}" function copy a file to "${to}", which has to be a relative path.`,
+              );
+
+            const stats = await fs.promises.stat(from);
+            return { from, to, isDir: stats.isDirectory() };
+          }),
+        ),
       );
     }
 
@@ -1950,33 +2234,51 @@ export class Function extends Component implements Link.Linkable {
       );
     }
 
-    function normalizeInjections() {
-      return output(args.injections).apply((injections) => injections ?? []);
+    function normalizeVpc() {
+      if (!args.vpc) return;
+      return privateNetworkOf(
+        args.vpc,
+        `the "${name}" function`,
+        (id) =>
+          `\nWarning: One or more functions are deployed in the "${id}" VPC, which does not have a NAT gateway. As a result, these functions cannot access the internet. If your functions need internet access, enable it by setting the "nat" prop on the "Vpc" component.\n`,
+      );
     }
 
-    function normalizeTimeout() {
-      return output(args.timeout).apply((timeout) => timeout ?? "20 seconds");
+    function normalizeVolume() {
+      if (!args.volume) return;
+
+      return output(args.volume).apply((volume) => ({
+        efs:
+          isEfs(volume.efs)
+            ? volume.efs.nodes.accessPoint.arn
+            : output(volume.efs),
+        path: volume.path ?? "/mnt/efs",
+      }));
     }
 
-    function normalizeMemory() {
-      return output(args.memory).apply((memory) => memory ?? "1024 MB");
+    function normalizeDurable() {
+      if (!args.durable) return;
+      const config = args.durable === true ? {} : args.durable;
+      return {
+        timeout: withDefault(config.timeout, "14 days", toSeconds),
+        retention: withDefault(config.retention, "30 days", toDays),
+      };
     }
 
     function normalizeEnvironment() {
       return all([
         args.environment,
-        dev,
         bootstrapData,
-        Function.encryptionKey().base64,
+        encryptionKey,
         args.link,
         args.streaming,
         args.bundle,
-        dev.apply((dev) => dev ? Function.appsync() : undefined),
-      ]).apply(([environment, dev, bootstrap, key, link, streaming, bundle, appsync]) => {
+        dev ? devStub() : undefined,
+      ]).apply(([environment, bootstrap, key, link, streaming, bundle, stub]) => {
         const result = environment ?? {};
         result.SST_RESOURCE_App = JSON.stringify({
-          name: $app.name,
-          stage: $app.stage,
+          name: context().app.name,
+          stage: context().app.stage,
         });
         for (const linkable of link || []) {
           if (!Link.isLinkable(linkable)) continue;
@@ -1986,23 +2288,17 @@ export class Function extends Component implements Link.Linkable {
           }
         }
         result.SST_KEY = key;
-        // When a shared `bundle` is used, multiple functions write into the
-        // same output directory — the Go runtime namespaces the encrypted
-        // resource file under `.sst/<FunctionID>/resource.enc` to avoid a
-        // concurrent-write race that corrupts the ciphertext, AND so each
-        // Lambda's uploaded zip can exclude every sibling's subtree (the
-        // zipper filters on `.sst/<otherFunctionID>/`). Point each Lambda
-        // at its own file to match.
+        // Functions that share a `bundle` each have their own file, under
+        // `.sst/<name>/`, where the CLI writes it
         result.SST_KEY_FILE = bundle
           ? `.sst/${name}/resource.enc`
           : "resource.enc";
         if (dev) {
           result.SST_REGION = process.env.SST_AWS_REGION!;
-          result.SST_APPSYNC_HTTP = appsync!.http;
-          result.SST_APPSYNC_REALTIME = appsync!.realtime;
+          Object.assign(result, stub!.environment);
           result.SST_FUNCTION_ID = name;
-          result.SST_APP = $app.name;
-          result.SST_STAGE = $app.stage;
+          result.SST_APP = context().app.name;
+          result.SST_STAGE = context().app.stage;
           result.SST_ASSET_BUCKET = bootstrap.asset;
           if (process.env.SST_FUNCTION_TIMEOUT) {
             result.SST_FUNCTION_TIMEOUT = process.env.SST_FUNCTION_TIMEOUT;
@@ -2015,1119 +2311,365 @@ export class Function extends Component implements Link.Linkable {
       });
     }
 
-    function normalizeStreaming() {
-      return output(args.streaming).apply((streaming) => streaming ?? false);
-    }
-
-    function normalizeLogging() {
-      return output(args.logging).apply((logging) => {
-        if (logging === false) return undefined;
-
-        if (logging?.retention && logging?.logGroup) {
-          throw new VisibleError(
-            `Cannot set both "logging.retention" and "logging.logGroup"`,
-          );
-        }
-
-        if (args.durable && logging?.format && logging?.format != "json") {
-          throw new VisibleError(
-            `Durable functions require "logging.format" to be set to "json"`,
-          );
-        }
-
-        const defaultFormat = args.durable ? "json" : "text";
-
-        return {
-          logGroup: logging?.logGroup,
-          retention: logging?.retention ?? "1 month",
-          format: logging?.format ?? defaultFormat,
-        };
-      });
-    }
-
-    function normalizeVolume() {
-      if (!args.volume) return;
-
-      return output(args.volume).apply((volume) => ({
-        efs:
-          volume.efs instanceof Efs
-            ? volume.efs.nodes.accessPoint.arn
-            : output(volume.efs),
-        path: volume.path ?? "/mnt/efs",
-      }));
-    }
-
-    function normalizeUrl() {
-      return output(args.url).apply((url) => {
-        if (url === false || url === undefined) return;
-        if (url === true) {
-          url = {};
-        }
-
-        // normalize authorization
-        const defaultAuthorization = "none" as const;
-        const authorization = url.authorization ?? defaultAuthorization;
-
-        // normalize cors
-        const defaultCors: types.input.lambda.FunctionUrlCors = {
-          allowHeaders: ["*"],
-          allowMethods: ["*"],
-          allowOrigins: ["*"],
-        };
-        const cors =
-          url.cors === false
-            ? undefined
-            : url.cors === true || url.cors === undefined
-              ? defaultCors
-              : {
-                  ...defaultCors,
-                  ...url.cors,
-                  maxAge: url.cors.maxAge && toSeconds(url.cors.maxAge),
-                };
-
-        return {
-          authorization,
-          cors,
-          route: normalizeRouteArgs(url.router, url.route),
-        };
-      });
-    }
-
-    function normalizeCopyFiles() {
-      return output(args.copyFiles ?? []).apply((copyFiles) =>
-        Promise.all(
-          copyFiles.map(async (entry) => {
-            const from = path.join($cli.paths.root, entry.from);
-            const to = entry.to || entry.from;
-            if (path.isAbsolute(to)) {
-              throw new VisibleError(
-                `Copy destination path "${to}" must be relative`,
-              );
-            }
-
-            const stats = await fs.promises.stat(from);
-            const isDir = stats.isDirectory();
-
-            return { from, to, isDir };
-          }),
-        ),
+    function roleArgs(): iam.RoleArgs {
+      const linkPermissions = Link.getInclude<Permission>(
+        "aws.permission",
+        args.link,
       );
-    }
-
-    function normalizeVpc() {
-      // "vpc" is undefined
-      if (!args.vpc) return;
-
-      // "vpc" is a Vpc component
-      if (args.vpc instanceof Vpc) {
-        const result = {
-          privateSubnets: args.vpc.privateSubnets,
-          securityGroups: args.vpc.securityGroups,
-        };
-        return all([
-          args.vpc.id,
-          args.vpc.nodes.natGateways,
-          args.vpc.nodes.natInstances,
-        ]).apply(([id, natGateways, natInstances]) => {
-          if (natGateways.length === 0 && natInstances.length === 0) {
-            warnOnce(
-              `\nWarning: One or more functions are deployed in the "${id}" VPC, which does not have a NAT gateway. As a result, these functions cannot access the internet. If your functions need internet access, enable it by setting the "nat" prop on the "Vpc" component.\n`,
-            );
-          }
-          return result;
-        });
-      }
-
-      return output(args.vpc).apply((vpc) => {
-        // "vpc" is object
-        if (vpc.subnets) {
-          throw new VisibleError(
-            `The "vpc.subnets" property has been renamed to "vpc.privateSubnets". Update your code to use "vpc.privateSubnets" instead.`,
-          );
-        }
-
-        return vpc;
-      });
-    }
-
-    function normalizeDurable() {
-      if (!args.durable) return;
-      const config = args.durable === true ? {} : args.durable;
-      return {
-        timeout: output(config.timeout).apply((v) =>
-          toSeconds(v ?? "14 days"),
-        ),
-        retention: output(config.retention).apply((v) =>
-          toDays(v ?? "30 days"),
-        ),
-      };
-    }
-
-    function buildLinkData() {
-      return output(args.link || []).apply((links) => Link.build(links));
-    }
-
-    function buildLinkPermissions() {
-      return Link.getInclude<Permission>("aws.permission", args.link);
-    }
-
-    function buildHandler() {
-      return all([runtime, dev, isContainer]).apply(
-        async ([runtime, dev, isContainer]) => {
-          if (dev) {
-            return resolveDevBridge();
-          }
-
-          const buildResult = buildInput.apply(async (input) => {
-            const result = await rpc.call<{
-              handler: string;
-              out: string;
-              errors: string[];
-              sourcemaps: string[];
-            }>("Runtime.Build", { ...input, isContainer });
-            if (result.errors.length > 0) {
-              throw new Error(result.errors.join("\n"));
-            }
-            if (args.hook?.postbuild) await args.hook.postbuild(result.out);
-            return result;
-          });
-
-          return {
-            handler: buildResult.handler,
-            bundle: buildResult.out,
-            sourcemaps: buildResult.sourcemaps,
-          };
-
-          function resolveDevBridge() {
-            if (durable) {
-              return {
-                handler: "index.handler",
-                bundle: path.join($cli.paths.platform, "dist", "nodejs-bridge"),
-                sourcemaps: undefined,
-              };
-            }
-
-            return {
-              handler: "bootstrap",
-              bundle: path.join($cli.paths.platform, "dist", "bridge"),
-              sourcemaps: undefined,
-            };
-          }
-        },
-      );
-    }
-
-    function buildHandlerWrapper() {
-      const ret = all([
-        dev,
-        bundle,
-        handler0,
-        linkData,
-        streaming,
-        injections,
-        runtime,
-      ]).apply(
-        async ([
-          dev,
-          bundle,
-          handler,
-          linkData,
-          streaming,
-          injections,
-          runtime,
-        ]) => {
-          if (dev) return { handler };
-          if (!runtime.startsWith("nodejs")) {
-            return { handler };
-          }
-
-          const hasUserInjections = injections.length > 0;
-
-          if (!hasUserInjections) return { handler };
-
-          const parsed = path.posix.parse(handler);
-          const handlerDir = parsed.dir;
-          const oldHandlerFileName = parsed.name;
-          const oldHandlerFunction = parsed.ext.replace(/^\./, "");
-          const newHandlerFileName = "server-index";
-          const newHandlerFunction = "handler";
-
-          // Validate handler file exists
-          const newHandlerFileExt = [".js", ".mjs", ".cjs"].find((ext) =>
-            fs.existsSync(
-              path.join(bundle!, handlerDir, oldHandlerFileName + ext),
-            ),
-          );
-          if (!newHandlerFileExt) {
-            throw new VisibleError(
-              `Could not find handler file "${handler}" for function "${name}"`,
-            );
-          }
-
-          const split = injections.reduce(
-            (acc, item) => {
-              if (item.startsWith("outer:")) {
-                acc.outer.push(item.substring("outer:".length));
-                return acc;
-              }
-              acc.inner.push(item);
-              return acc;
-            },
-            { outer: [] as string[], inner: [] as string[] },
-          );
-
-          return {
-            handler: path.posix.join(
-              handlerDir,
-              `${newHandlerFileName}.${newHandlerFunction}`,
-            ),
-            wrapper: {
-              name: path.posix.join(handlerDir, `${newHandlerFileName}.mjs`),
-              content: streaming
-                ? [
-                    ...split.outer,
-                    `export const ${newHandlerFunction} = awslambda.streamifyResponse(async (event, responseStream, context) => {`,
-                    ...split.inner,
-                    `  const { ${oldHandlerFunction}: rawHandler} = await import("./${oldHandlerFileName}${newHandlerFileExt}");`,
-                    `  return rawHandler(event, responseStream, context);`,
-                    `});`,
-                  ].join("\n")
-                : [
-                    ...split.outer,
-                    `export const ${newHandlerFunction} = async (event, context) => {`,
-                    ...split.inner,
-                    `  const { ${oldHandlerFunction}: rawHandler} = await import("./${oldHandlerFileName}${newHandlerFileExt}");`,
-                    `  return rawHandler(event, context);`,
-                    `};`,
-                  ].join("\n"),
-            },
-          };
-        },
-      );
-      return {
-        handler: ret.handler,
-        wrapper: ret.wrapper,
-      };
-    }
-
-    function createRole() {
-      // When a role ARN is passed in, the function is wired up from that ARN directly
-      // (see `createFunction`), so the Role is only needed to back `nodes.role`. Looking
-      // it up eagerly costs an IAM GetRole per function on every run — a `read` op, which
-      // is never treated as unchanged — so defer it until something asks for it. Apps that
-      // share one role across many functions pay that lookup once per function today.
-      if (args.role) {
-        const roleArn = args.role;
-        let existing: { role: iam.Role } | { error: unknown } | undefined;
-        return () => {
-          // Reads once. If the read throws, later accesses throw the same error
-          // and don't register the role again.
-          if (!existing) {
-            try {
-              existing = {
-                role: iam.Role.get(
-                  `${name}Role`,
-                  output(roleArn).apply(parseRoleArn).roleName,
-                  {},
-                  { parent },
-                ),
-              };
-            } catch (error) {
-              existing = { error };
-            }
-          }
-          if ("error" in existing) throw existing.error;
-          return existing.role;
-        };
-      }
-
-      const policy = all([
-        args.permissions || [],
-        linkPermissions,
-        dev,
-        dev.apply((dev) => (dev ? Function.appsync() : undefined)),
-      ]).apply(
-        ([argsPermissions, linkPermissions, dev, appsync]) =>
-          iam.getPolicyDocumentOutput({
-            statements: [
-              ...argsPermissions,
-              ...linkPermissions,
-              ...(dev
-                ? [
-                    {
-                      effect: "allow",
-                      actions: ["appsync:*"],
-                      resources: Function.appsyncResources(appsync!),
-                    },
-                    {
-                      effect: "allow",
-                      actions: ["s3:*"],
-                      resources: [
-                        interpolate`arn:${partition}:s3:::${bootstrapData.asset}`,
-                        interpolate`arn:${partition}:s3:::${bootstrapData.asset}/*`,
-                      ],
-                    },
-                  ]
-                : []),
-            ].map((item) => ({
-              effect: (() => {
-                const effect = item.effect ?? "allow";
-                return effect.charAt(0).toUpperCase() + effect.slice(1);
-              })(),
-              actions: item.actions,
-              resources: item.resources,
-              conditions: "conditions" in item ? item.conditions : undefined,
+      // In `sst dev` the stub reaches the CLI through the stage's transport,
+      // and uses the asset bucket
+      const devPermissions = dev
+        ? output(devStub()).apply((stub) => [
+            ...stub.permissions.map((permission) => ({
+              effect: "allow" as const,
+              ...permission,
             })),
+            {
+              effect: "allow" as const,
+              actions: ["s3:*"],
+              resources: [
+                interpolate`arn:${partition}:s3:::${assetBucket}`,
+                interpolate`arn:${partition}:s3:::${assetBucket}/*`,
+              ],
+            },
+          ])
+        : [];
+
+      const managed = (policy: string) =>
+        interpolate`arn:${partition}:iam::aws:policy/service-role/${policy}`;
+      return {
+        // Only `sst dev` trusts the account too, so the CLI can take the role
+        // to run the function locally. This goes by `$dev`, as `Function`
+        // does, and not by the function's own `dev`: a site's dev server is
+        // created with `dev: false`, and the CLI still takes its role.
+        assumeRolePolicy: iam.getPolicyDocumentOutput({
+          statements: [
+            {
+              actions: ["sts:AssumeRole"],
+              principals: [
+                {
+                  type: "Service",
+                  identifiers: ["lambda.amazonaws.com"],
+                },
+                ...(context().dev
+                  ? [
+                      {
+                        type: "AWS",
+                        identifiers: [
+                          interpolate`arn:${partition}:iam::${
+                            getCallerIdentityOutput({}, opts).accountId
+                          }:root`,
+                        ],
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          ],
+        }).json,
+        inlinePolicies: inlinePolicies([
+          args.permissions,
+          linkPermissions,
+          devPermissions,
+        ]),
+        managedPolicyArns: output(args.policies ?? []).apply((policies) => [
+          ...policies,
+          ...(logging ? [managed("AWSLambdaBasicExecutionRole")] : []),
+          ...(vpc ? [managed("AWSLambdaVPCAccessExecutionRole")] : []),
+          ...(durable
+            ? [managed("AWSLambdaBasicDurableExecutionRolePolicy")]
+            : []),
+        ]),
+      };
+    }
+
+    // The build has already put the user's code, its config and a Dockerfile
+    // in the artifact directory. What's left is to build the image and push
+    // it to the container registry.
+    function createImage() {
+      const authToken = ecr.getAuthorizationTokenOutput({
+        registryId: bootstrapData.assetEcrRegistryId,
+      });
+      // Set unless the cache is switched off
+      const cached = output(
+        typeof container === "object" ? container.cache : undefined,
+      ).apply((cache) => (cache === false ? undefined : true));
+      const cacheRef = interpolate`${bootstrapData.assetEcrUrl}:${name}-cache`;
+
+      return self.part("image", {
+        tags: [interpolate`${bootstrapData.assetEcrUrl}:latest`],
+        context: {
+          // Read once the code is built, so the image is built after it
+          location: built.apply(() =>
+            path.join(context().paths.work, "artifacts", `${name}-src`),
+          ),
+        },
+        cacheFrom: ifSet(cached, () => [{ registry: { ref: cacheRef } }]),
+        cacheTo: ifSet(cached, () => [
+          {
+            registry: {
+              ref: cacheRef,
+              imageManifest: true,
+              ociMediaTypes: true,
+              mode: "max" as const,
+            },
+          },
+        ]),
+        platforms: [architecture === "arm64" ? "linux/arm64" : "linux/amd64"],
+        push: true,
+        registries: [
+          authToken.apply((authToken) => ({
+            address: authToken.proxyEndpoint,
+            username: authToken.userName,
+            password: secret(authToken.password),
+          })),
+        ],
+      });
+    }
+
+    function createCode() {
+      const zip = all([built, entry, copyFiles, args.bundle]).apply(
+        ([built, entry, copyFiles, customBundle]) =>
+          zipCode({
+            to: path.resolve(context().paths.work, "artifacts", name, "code.zip"),
+            bundle: built.bundle,
+            sourcemaps: built.sourcemaps,
+            copyFiles,
+            wrapper: entry.wrapper,
+            sharedBundle: customBundle ? name : undefined,
           }),
       );
 
-      // Created eagerly, as before. `role` is consumed inside an `apply` in
-      // `createFunction`, so this must not be deferred — the thunk exists only so both
-      // branches share a return type.
-      const role = new iam.Role(
-        ...transform(
-          args.transform?.role,
-          `${name}Role`,
-          {
-            // Only `sst dev` trusts the account root, so the CLI can assume the
-            // role. This goes by `$dev` and not by this function's own `dev`,
-            // as the dev server of a site is created with `dev: false` and its
-            // role is still assumed by the CLI. A deployed role trusts the
-            // Lambda service alone.
-            assumeRolePolicy: iam.getPolicyDocumentOutput({
-              statements: [
-                {
-                  actions: ["sts:AssumeRole"],
-                  principals: [
-                    {
-                      type: "Service",
-                      identifiers: ["lambda.amazonaws.com"],
-                    },
-                    ...($dev
-                      ? [
-                          {
-                            type: "AWS",
-                            identifiers: [
-                              interpolate`arn:${partition}:iam::${
-                                getCallerIdentityOutput({}, opts).accountId
-                              }:root`,
-                            ],
-                          },
-                        ]
-                      : []),
-                  ],
-                },
-              ],
-            }).json,
-            // if there are no statements, do not add an inline policy.
-            // adding an inline policy with no statements will cause an error.
-            inlinePolicies: policy.apply(({ statements }) =>
-              statements ? [{ name: "inline", policy: policy.json }] : [],
-            ),
-            managedPolicyArns: all([logging, policies]).apply(
-              ([logging, policies]) => [
-                ...policies,
-                ...(logging
-                  ? [
-                      interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole`,
-                    ]
-                  : []),
-                ...(vpc
-                  ? [
-                      interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole`,
-                    ]
-                  : []),
-                ...(durable
-                  ? [
-                      interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy`,
-                    ]
-                  : []),
-              ],
-            ),
-          },
-          { parent },
-        ),
-      );
-      return () => role;
-    }
-
-    function createImageAsset() {
-      // The build artifact directory already exists, with all the user code and
-      // config files. It also has the dockerfile, we need to now just build and push to
-      // the container registry.
-      return all([isContainer, dev, bundle, containerCache]).apply(
-        ([
-          isContainer,
-          dev,
-          bundle, // We need the bundle to be resolved because of implicit dockerfiles even though we don't use it here
-          containerCache,
-        ]) => {
-          if (!isContainer || dev) return;
-
-          const authToken = ecr.getAuthorizationTokenOutput({
-            registryId: bootstrapData.assetEcrRegistryId,
-          });
-
-          return new Image(
-            `${name}Image`,
-            {
-              tags: [$interpolate`${bootstrapData.assetEcrUrl}:latest`],
-              context: {
-                location: path.join(
-                  $cli.paths.work,
-                  "artifacts",
-                  `${name}-src`,
-                ),
-              },
-              ...(containerCache !== false
-                ? {
-                    cacheFrom: [
-                      {
-                        registry: {
-                          ref: $interpolate`${bootstrapData.assetEcrUrl}:${name}-cache`,
-                        },
-                      },
-                    ],
-                    cacheTo: [
-                      {
-                        registry: {
-                          ref: $interpolate`${bootstrapData.assetEcrUrl}:${name}-cache`,
-                          imageManifest: true,
-                          ociMediaTypes: true,
-                          mode: "max",
-                        },
-                      },
-                    ],
-                  }
-                : {}),
-              platforms: [
-                architecture.apply((v) =>
-                  v === "arm64" ? "linux/arm64" : "linux/amd64",
-                ),
-              ],
-              push: true,
-              registries: [
-                authToken.apply((authToken) => ({
-                  address: authToken.proxyEndpoint,
-                  username: authToken.userName,
-                  password: secret(authToken.password),
-                })),
-              ],
-            },
-            { parent },
-          );
-        },
-      );
-    }
-
-    function createZipAsset() {
-      // Note: cannot point the bundle to the `.open-next/server-function`
-      //       b/c the folder contains node_modules. And pnpm node_modules
-      //       contains symlinks. Pulumi cannot zip symlinks correctly.
-      //       We will zip the folder ourselves.
-      return all([
-        bundle,
-        wrapper,
-        sourcemaps,
-        copyFiles,
-        isContainer,
-        logGroup.apply((l) => l?.arn),
-        dev,
-        all([region, args.bundle]).apply(([regionName, customBundle]) => ({
-          regionName,
-          customBundle: !!customBundle,
-        })),
-      ]).apply(
-        async ([
-          bundle,
-          wrapper,
-          sourcemaps,
-          copyFiles,
-          isContainer,
-          logGroupArn,
-          dev,
-          { regionName, customBundle },
-        ]) => {
-          if (isContainer) return;
-
-          if (dev) {
-            const cacheKey = `${regionName}:${bundle}`;
-            const cache = Function.devBridgeCode();
-            const existing = cache.get(cacheKey);
-            if (existing) return existing;
-
-            const created = createCode();
-            cache.set(cacheKey, created);
-            created.catch(() => cache.delete(cacheKey));
-            return created;
-          }
-
-          return createCode();
-
-          async function createCode() {
-            const zipPath = path.resolve(
-              $cli.paths.work,
-              "artifacts",
-              dev
-                ? `dev-bridge-${regionName}-${logicalName(path.basename(bundle))}`
-                : name,
-              "code.zip",
-            );
-            await fs.promises.mkdir(path.dirname(zipPath), {
-              recursive: true,
-            });
-
-            await new Promise(async (resolve, reject) => {
-              const ws = fs.createWriteStream(zipPath);
-              const archive = archiver("zip", {
-                // Ensure deterministic zip file hashes
-                // https://github.com/archiverjs/node-archiver/issues/397#issuecomment-554327338
-                statConcurrency: 1,
-              });
-              archive.on("warning", reject);
-              archive.on("error", reject);
-              // archive has been finalized and the output file descriptor has closed, resolve promise
-              // this has to be done before calling `finalize` since the events may fire immediately after.
-              // see https://www.npmjs.com/package/archiver
-              ws.once("close", () => {
-                resolve(zipPath);
-              });
-              archive.pipe(ws);
-
-              const files = [];
-
-              for (const item of [
-                {
-                  from: bundle,
-                  to: ".",
-                  isDir: true,
-                },
-                ...(!dev ? copyFiles : []),
-              ]) {
-                if (!item.isDir) {
-                  files.push({
-                    from: item.from,
-                    to: item.to,
-                  });
-                }
-                const found = await glob("**", {
-                  cwd: item.from,
-                  dot: true,
-                  ignore:
-                    sourcemaps?.map((item) => path.relative(bundle, item)) ||
-                    [],
-                });
-                // Functions that share a `bundle:` directory each get their
-                // own `.sst/<name>/resource.enc` (written by the Go runtime).
-                // Keep only this function's folder in its zip, so a function
-                // doesn't ship the linked resources of its siblings. Only
-                // applies to zip functions, `glob` returns "/" separated paths
-                // on every platform.
-                const ownDir = `.sst/${name}/`;
-                const filtered =
-                  !dev && customBundle && item.from === bundle
-                    ? found.filter((file) => {
-                        const f = toPosix(file);
-                        // also leave out the shared file an older version wrote
-                        if (f === "resource.enc") return false;
-                        return (
-                          !f.startsWith(".sst/") ||
-                          f === `.sst/${name}` ||
-                          f.startsWith(ownDir)
-                        );
-                      })
-                    : found;
-                files.push(
-                  ...filtered.map((file) => ({
-                    from: path.join(item.from, file),
-                    to: path.join(item.to, file),
-                  })),
-                );
-              }
-              files.sort((a, b) => a.to.localeCompare(b.to));
-              for (const file of files) {
-                archive.file(file.from, {
-                  name: file.to,
-                  date: new Date(0),
-                });
-              }
-
-              // Add handler wrapper into the zip
-              if (wrapper) {
-                archive.append(wrapper.content, {
-                  name: wrapper.name,
-                  date: new Date(0),
-                });
-              }
-
-              await archive.finalize();
-            });
-
-            const hash = crypto.createHash("sha256");
-            hash.update(await fs.promises.readFile(zipPath));
-            const hashValue = hash.digest("hex");
-            const assetBucket = region.apply((region) =>
-              bootstrap.forRegion(region).then((d) => d.asset),
-            );
-            if (logGroupArn && sourcemaps) {
-              let index = 0;
-              for (const file of sourcemaps) {
-                new s3.BucketObjectv2(
-                  `${name}Sourcemap${index}`,
-                  {
-                    key: interpolate`sourcemap/${logGroupArn}/${hashValue}.${path.basename(
-                      file,
-                    )}`,
-                    bucket: assetBucket,
-                    source: new asset.FileAsset(file),
-                  },
-                  { parent, retainOnDelete: true },
-                );
-                index++;
-              }
-            }
-
-            return new s3.BucketObjectv2(
-              dev
-                ? `DevBridgeCode${logicalName(regionName)}${logicalName(path.basename(bundle))}`
-                : `${name}Code`,
+      // The source maps are stored under the log group the function creates,
+      // which is where the errors to map are read from. Which there are comes
+      // from the build as every preview knows it.
+      const ownLogGroup =
+        self.existingPart("logGroup") || givenLogGroup ? undefined : logGroup;
+      if (ownLogGroup)
+        shape.apply((shape) =>
+          (shape.sourcemaps ?? []).forEach((file, index) =>
+            self.part(
+              "sourcemap",
+              `${index}`,
               {
-                key: dev
-                  ? `assets/dev-bridge-code-${hashValue}.zip`
-                  : interpolate`assets/${name}-code-${hashValue}.zip`,
+                key: interpolate`sourcemap/${ownLogGroup.arn}/${
+                  zip.hash
+                }.${path.basename(file)}`,
                 bucket: assetBucket,
-                source: new asset.FileArchive(zipPath),
+                // In a deploy, the build is the one the files come from
+                source: built.apply(
+                  (built) => new asset.FileAsset(built.sourcemaps![index]),
+                ),
               },
-              dev
-                ? {
-                    parent: rootStackResource,
-                    provider: opts?.provider,
-                    // The dev bridge key is shared by every app and stage in this
-                    // account and region. Retain it so removing a stage, deploying it
-                    // outside dev, or changing its bridge version doesn't delete the
-                    // object other stages' Lambdas are still created from.
-                    retainOnDelete: true,
-                  }
-                : { parent },
-            );
-          }
-        },
-      );
-    }
-
-    function createLogGroup() {
-      return logging.apply((logging) => {
-        if (!logging) return;
-        if (logging.logGroup) return;
-
-        return new cloudwatch.LogGroup(
-          ...transform(
-            args.transform?.logGroup,
-            `${name}LogGroup`,
-            {
-              name: interpolate`/aws/lambda/${
-                args.name ?? physicalName(64, `${name}Function`)
-              }`,
-              retentionInDays: RETENTION[logging.retention],
-            },
-            { parent, ignoreChanges: ["name"] },
+              { retainOnDelete: true },
+            ),
           ),
         );
+
+      return self.part("code", {
+        key: interpolate`assets/${name}-code-${zip.hash}.zip`,
+        bucket: assetBucket,
+        source: zip.apply((zip) => new asset.FileArchive(zip.path)),
       });
     }
 
-    function createFunction() {
-      return all([
-        logging,
-        logGroup,
-        isContainer,
-        imageAsset,
-        zipAsset,
-        args.concurrency,
-        dev,
-      ]).apply(
-        ([
-          logging,
-          logGroup,
-          isContainer,
-          imageAsset,
-          zipAsset,
-          concurrency,
-          dev,
-        ]) => {
-          // This is a hack to avoid handler being marked as having propertyDependencies.
-          // There is an unresolved bug in pulumi that causes issues when it does
-          // @ts-expect-error
-          handler.allResources = () => Promise.resolve(new Set());
-          const transformed = transform(
-            args.transform?.function,
-            `${name}Function`,
-            {
-              name: args.name,
-              description: args.description ?? "",
-              role: args.role ?? role().arn,
-              timeout: timeout.apply((timeout) => toSeconds(timeout)),
-              memorySize: memory.apply((memory) => toMBs(memory)),
-              ephemeralStorage: { size: storage.apply((v) => toMBs(v)) },
-              environment: {
-                variables: environment,
-              },
-              architectures: [architecture],
-              loggingConfig: logging && {
-                logFormat: logging.format === "json" ? "JSON" : "Text",
-                logGroup: logging.logGroup ?? logGroup!.name,
-              },
-              vpcConfig: vpc && {
-                securityGroupIds: vpc.securityGroups,
-                subnetIds: vpc.privateSubnets,
-              },
-              fileSystemConfig: volume && {
-                arn: volume.efs,
-                localMountPath: volume.path,
-              },
-              layers: args.layers,
-              tags: args.tags,
-              publish: output(args.versioning).apply(
-                (v) => v ?? Boolean(args.durable),
-              ),
-              reservedConcurrentExecutions: concurrency?.reserved,
-              durableConfig: durable && {
-                executionTimeout: durable.timeout,
-                retentionPeriod: durable.retention,
-              },
-              ...(isContainer
-                ? {
-                    packageType: "Image",
-                    imageUri: imageAsset!.ref.apply(
-                      (ref) => ref?.replace(":latest", ""),
-                    ),
-                    imageConfig: {
-                      commands: [
-                        all([handler, runtime]).apply(([handler, runtime]) => {
-                          // If a python container image we have to rewrite the handler path so lambdaric is happy
-                          // This means no leading . and replace all / with .
-                          if (isContainer && runtime.includes("python")) {
-                            return handler
-                              .replace(/\.\//g, "")
-                              .replace(/\//g, ".");
-                          }
-                          return handler;
-                        }),
-                      ],
-                    },
-                  }
-                : {
-                    packageType: "Zip",
-                    s3Bucket: zipAsset!.bucket,
-                    s3Key: zipAsset!.key,
-                    handler: unsecret(handler),
-                    runtime: runtime.apply((v) =>
-                      v === "go" || v === "rust" ? "provided.al2023" : v,
-                    ),
-                  }),
-            },
-            { parent },
-          );
-          return new lambda.Function(
-            transformed[0],
-            {
-              ...transformed[1],
-              ...(dev
-                ? {
-                    description: transformed[1].description
-                      ? output(transformed[1].description).apply(
-                          (v) => (v ? `${v.substring(0, 240)} (live)` : "live"),
-                        )
-                      : "live",
-                    runtime: resolveDevRuntime(),
-                    architectures: ["x86_64"],
-                  }
-                : {}),
-            },
-            transformed[2],
-          );
+    // Every live function in a region is created from the same stub, so its
+    // code is uploaded once for the app, outside of any function.
+    function devBridgeCode() {
+      return all([built, region]).apply(([{ bundle }, region]) => {
+        const cache = devStubCode();
+        const cacheKey = `${region}:${bundle}`;
+        const cached = cache.get(cacheKey);
+        if (cached) return cached;
 
-          function resolveDevRuntime() {
-            if (durable) {
-              return "nodejs24.x";
-            }
-
-            return "provided.al2023";
-          }
-        },
-      );
+        const stub = logicalName(path.basename(bundle));
+        const created = zipCode({
+          to: path.resolve(
+            context().paths.work,
+            "artifacts",
+            `dev-bridge-${region}-${stub}`,
+            "code.zip",
+          ),
+          bundle,
+        }).then(
+          (zip) =>
+            new s3.BucketObjectv2(
+              `DevBridgeCode${logicalName(region)}${stub}`,
+              {
+                key: `assets/dev-bridge-code-${zip.hash}.zip`,
+                bucket: assetBucket,
+                source: new asset.FileArchive(zip.path),
+              },
+              {
+                parent: rootStackResource,
+                provider: opts?.provider,
+                // The dev bridge key is shared by every app and stage in this
+                // account and region. Retain it so removing a stage, deploying it
+                // outside dev, or changing its bridge version doesn't delete the
+                // object other stages' Lambdas are still created from.
+                retainOnDelete: true,
+              },
+            ),
+        );
+        cache.set(cacheKey, created);
+        created.catch(() => cache.delete(cacheKey));
+        return created;
+      });
     }
 
-    function createUrl(): {
-      endpoint: Output<string | undefined>;
-      resource: Output<lambda.FunctionUrl | undefined>;
-    } {
-      const result = url.apply((url) => {
-        if (url === undefined)
-          return { endpoint: output(undefined), resource: undefined };
+    function createUrl(url: NonNullable<ReturnType<typeof normalizeUrl>>) {
+      const { authorization } = url;
+      const route = url.router?.route;
+      // A router can sign its requests to the URL. Then only its
+      // distribution may call the URL, whatever the authorization is.
+      const isOac = url.router?.signs ?? false;
 
-        const authorization = output(url.authorization ?? "none");
-        const isOac = output(url.route?.routerProtection).apply(
-          (p) => p?.mode === "oac" || p?.mode === "oac-with-edge-signing",
-        );
-        const isIam = all([isOac, authorization]).apply(
-          ([oac, authorization]) => oac || authorization === "iam",
-        );
+      /**
+       * Lambda Function URLs only accept alias names in the explicit `qualifier`
+       * field. Durable functions with URLs therefore need an alias target here,
+       * even when the underlying function is still on `$LATEST`.
+       * See https://github.com/hashicorp/terraform-provider-aws/issues/31459
+       */
+      const alias = durable
+        ? self.part("urlAlias", {
+            functionName: fn.arn,
+            functionVersion: fn.version,
+          })
+        : undefined;
 
-        /**
-         * Lambda Function URLs only accept alias names in the explicit `qualifier`
-         * field. Durable functions with URLs therefore need an alias target here,
-         * even when the underlying function is still on `$LATEST`.
-         * See https://github.com/hashicorp/terraform-provider-aws/issues/31459
-         */
-        const qualifier = durable
-          ? new lambda.Alias(`${name}Durable`, {
-              functionName: fn.arn,
-              functionVersion: fn.version,
-            }).name
-          : undefined;
-
-        const fnUrl = new lambda.FunctionUrl(
-          `${name}Url`,
-          {
-            functionName: durable ? fn.arn : fn.name,
-            qualifier,
-            authorizationType: isIam.apply((isIam) =>
-              isIam ? "AWS_IAM" : "NONE",
-            ),
-            invokeMode: streaming.apply((streaming) =>
-              streaming ? "RESPONSE_STREAM" : "BUFFERED",
-            ),
-            cors: url.cors,
-          },
-          { parent },
-        );
-
-        if (!url.route) {
-          authorization.apply((authorization) => {
-            if (authorization !== "none") return;
-
-            new lambda.Permission(
-              `${name}PublicFunctionUrlAccess`,
-              {
-                action: "lambda:InvokeFunctionUrl",
-                function: fn.name,
-                principal: "*",
-                functionUrlAuthType: "NONE",
-              },
-              { parent, dependsOn: [fnUrl] },
-            );
-            new lambda.Permission(
-              `${name}InvokeFunction`,
-              {
-                action: "lambda:InvokeFunction",
-                function: fn.name,
-                principal: "*",
-                invokedViaFunctionUrl: true,
-              },
-              { parent, dependsOn: [fnUrl] },
-            );
-          });
-          return { endpoint: fnUrl.functionUrl, resource: fnUrl };
-        }
-
-        // Create permissions based on Router protection mode
-        all([isOac, authorization, url.route.routerDistributionArn]).apply(
-          ([oac, authorization, distributionArn]) => {
-            if (oac && distributionArn) {
-              new lambda.Permission(
-                `${name}CloudFrontFunctionUrlAccess`,
-                {
-                  action: "lambda:InvokeFunctionUrl",
-                  function: fn.name,
-                  principal: "cloudfront.amazonaws.com",
-                  sourceArn: distributionArn,
-                },
-                { parent, dependsOn: [fnUrl] },
-              );
-              new lambda.Permission(
-                `${name}CloudFrontInvokeFunction`,
-                {
-                  action: "lambda:InvokeFunction",
-                  function: fn.name,
-                  principal: "cloudfront.amazonaws.com",
-                  sourceArn: distributionArn,
-                  invokedViaFunctionUrl: true,
-                },
-                { parent, dependsOn: [fnUrl] },
-              );
-            } else if (authorization === "none") {
-              new lambda.Permission(
-                `${name}PublicFunctionUrlAccess`,
-                {
-                  action: "lambda:InvokeFunctionUrl",
-                  function: fn.name,
-                  principal: "*",
-                  functionUrlAuthType: "NONE",
-                },
-                { parent, dependsOn: [fnUrl] },
-              );
-              new lambda.Permission(
-                `${name}PublicInvokeFunction`,
-                {
-                  action: "lambda:InvokeFunction",
-                  function: fn.name,
-                  principal: "*",
-                  invokedViaFunctionUrl: true,
-                },
-                { parent, dependsOn: [fnUrl] },
-              );
-            }
-          },
-        );
-
-        // add router route
-        const routeNamespace = crypto
-          .createHash("md5")
-          .update(`${$app.name}-${$app.stage}-${name}`)
-          .digest("hex")
-          .substring(0, 4);
-        new KvKeys(
-          `${name}RouteKey`,
-          {
-            store: url.route.routerKvStoreArn,
-            namespace: routeNamespace,
-            entries: all([fnUrl.functionUrl, isOac, url.route]).apply(
-              ([fnUrlValue, oac, route]) => {
-                const timeouts = [
-                  "connectionTimeout" as const,
-                  "readTimeout" as const,
-                  "keepAliveTimeout" as const,
-                ].flatMap((k) => {
-                  const value = route[k];
-                  return value ? [[k, toSeconds(value)]] : [];
-                });
-                return {
-                  metadata: JSON.stringify({
-                    host: new URL(fnUrlValue).host,
-                    rewrite: route.rewrite,
-                    origin: {
-                      ...(oac
-                        ? {
-                            originAccessControlConfig: {
-                              enabled: true,
-                              signingBehavior: "always",
-                              signingProtocol: "sigv4",
-                              originType: "lambda",
-                            },
-                          }
-                        : {}),
-                      connectionAttempts: route.connectionAttempts,
-                      ...(timeouts.length
-                        ? { timeouts: Object.fromEntries(timeouts) }
-                        : {}),
-                    },
-                  }),
-                };
-              },
-            ),
-            purge: false,
-          },
-          { parent },
-        );
-        new KvRoutesUpdate(
-          `${name}RoutesUpdate`,
-          {
-            store: url.route.routerKvStoreArn,
-            namespace: url.route.routerKvNamespace,
-            key: "routes",
-            entry: url.route.apply((route) =>
-              ["url", routeNamespace, route.hostPattern, route.pathPrefix].join(
-                ",",
-              ),
-            ),
-          },
-          { parent },
-        );
-        return { endpoint: url.route.routerUrl, resource: fnUrl };
+      const fnUrl = self.part("url", {
+        functionName: durable ? fn.arn : fn.name,
+        qualifier: alias?.name,
+        authorizationType: output(isOac).apply((oac) =>
+          oac || authorization === "iam" ? "AWS_IAM" : "NONE",
+        ),
+        invokeMode: streaming.apply((streaming) =>
+          streaming ? "RESPONSE_STREAM" : "BUFFERED",
+        ),
+        cors: ifSet(url.cors),
       });
-      return {
-        endpoint: result.apply((r) => r.endpoint),
-        resource: result.apply((r) => r.resource),
+
+      // Lambda takes one change to a function at a time, so a permission
+      // added while the URL is still being created can fail with a conflict.
+      // The permissions wait for the URL.
+      const afterUrl = { dependsOn: [fnUrl] };
+
+      const allowEveryone = () => {
+        self.part(
+          "urlAccess",
+          {
+            action: "lambda:InvokeFunctionUrl",
+            function: fn.name,
+            principal: "*",
+            functionUrlAuthType: "NONE",
+          },
+          afterUrl,
+        );
+        self.part(
+          "urlInvoke",
+          {
+            action: "lambda:InvokeFunction",
+            function: fn.name,
+            principal: "*",
+            invokedViaFunctionUrl: true,
+          },
+          afterUrl,
+        );
       };
-    }
 
-    function createProvisioned() {
-      return all([args.concurrency, fn.publish]).apply(
-        ([concurrency, publish]) => {
-          if (!concurrency?.provisioned || concurrency.provisioned === 0) {
-            return;
-          }
-
-          if (publish !== true) {
-            throw new VisibleError(
-              `Provisioned concurrency requires function versioning. Set "versioning: true" to enable function versioning.`,
-            );
-          }
-
-          return new lambda.ProvisionedConcurrencyConfig(
-            `${name}Provisioned`,
-            {
-              functionName: fn.name,
-              qualifier: fn.version,
-              provisionedConcurrentExecutions: concurrency.provisioned,
-            },
-            { parent },
-          );
-        },
-      );
-    }
-
-    function createEventInvokeConfig() {
-      if (args.retries === undefined) {
-        return undefined;
+      if (!route) {
+        if (authorization === "none") allowEveryone();
+        return fnUrl.functionUrl;
       }
 
-      return new lambda.FunctionEventInvokeConfig(
-        ...transform(
-          args.transform?.eventInvokeConfig,
-          `${name}EventInvokeConfig`,
-          {
-            functionName: fn.name,
-            maximumRetryAttempts: args.retries,
-          },
-          { parent },
-        ),
-      );
-    }
-  }
+      // Who may call the URL depends on whether the router signs its
+      // requests. A V5 router's settings say so plainly. A 4.x one, or one
+      // that's referenced, says so in an output a preview knows. Its
+      // distribution is only passed in.
+      const permit = (oac: boolean) => {
+        if (oac) {
+          self.part(
+            "urlAccess",
+            {
+              action: "lambda:InvokeFunctionUrl",
+              function: fn.name,
+              principal: "cloudfront.amazonaws.com",
+              sourceArn: route.routerDistributionArn,
+            },
+            afterUrl,
+          );
+          self.part(
+            "urlInvoke",
+            {
+              action: "lambda:InvokeFunction",
+              function: fn.name,
+              principal: "cloudfront.amazonaws.com",
+              sourceArn: route.routerDistributionArn,
+              invokedViaFunctionUrl: true,
+            },
+            afterUrl,
+          );
+        } else if (authorization === "none") allowEveryone();
+      };
+      if (typeof isOac === "boolean") permit(isOac);
+      else isOac.apply(permit);
 
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    const self = this;
-    return {
-      /**
-       * The IAM Role the function will use. If you passed in a `role`, it's read from
-       * AWS the first time you access this, including through `const { role } = fn.nodes`
-       * or `{ ...fn.nodes }`, and the deploy fails if that role doesn't exist.
-       */
-      get role() {
-        return self.role();
-      },
-      /**
-       * The AWS Lambda function.
-       */
-      function: this.function,
-      /**
-       * The CloudWatch Log Group the function logs are stored.
-       */
-      logGroup: this.logGroup,
-      /**
-       * The Function Event Invoke Config resource if retries are configured.
-       */
-      eventInvokeConfig: this.eventInvokeConfig,
-      /**
-       * The Lambda Function URL resource if `url` is enabled.
-       */
-      url: this.urlResource,
-    };
+      const routeNamespace = crypto
+        .createHash("md5")
+        .update(`${context().app.name}-${context().app.stage}-${name}`)
+        .digest("hex")
+        .substring(0, 4);
+      self.part("routeKey", {
+        store: route.routerKvStoreArn,
+        namespace: routeNamespace,
+        entries: all([fnUrl.functionUrl, isOac, route]).apply(
+          ([fnUrlValue, oac, route]) => {
+            const timeouts = [
+              "connectionTimeout" as const,
+              "readTimeout" as const,
+              "keepAliveTimeout" as const,
+            ].flatMap((k) => {
+              const value = route[k];
+              return value ? [[k, toSeconds(value)]] : [];
+            });
+            return {
+              metadata: JSON.stringify({
+                host: new URL(fnUrlValue).host,
+                rewrite: route.rewrite,
+                origin: {
+                  ...(oac
+                    ? {
+                        originAccessControlConfig: {
+                          enabled: true,
+                          signingBehavior: "always",
+                          signingProtocol: "sigv4",
+                          originType: "lambda",
+                        },
+                      }
+                    : {}),
+                  connectionAttempts: route.connectionAttempts,
+                  ...(timeouts.length
+                    ? { timeouts: Object.fromEntries(timeouts) }
+                    : {}),
+                },
+              }),
+            };
+          },
+        ),
+        purge: false,
+      });
+      self.part("routesUpdate", {
+        store: route.routerKvStoreArn,
+        namespace: route.routerKvNamespace,
+        key: "routes",
+        entry: route.apply((route) =>
+          ["url", routeNamespace, route.hostPattern, route.pathPrefix].join(
+            ",",
+          ),
+        ),
+      });
+      return route.routerUrl;
+    }
   }
 
   /**
@@ -3137,7 +2679,7 @@ export class Function extends Component implements Link.Linkable {
     return this.urlEndpoint.apply((url) => {
       if (!url) {
         throw new VisibleError(
-          `Function URL is not enabled. Enable it with "url: true".`,
+          `The "${this.componentName}" function has no URL. Enable it with "url: true".`,
         );
       }
       return url;
@@ -3148,19 +2690,20 @@ export class Function extends Component implements Link.Linkable {
    * The name of the Lambda function.
    */
   public get name() {
-    return this.function.name;
+    return this.fn.name;
   }
 
   /**
    * The ARN of the Lambda function.
    */
   public get arn() {
-    return this.function.arn;
+    return this.fn.arn;
   }
 
-  /** @internal */
+  // A function with versions, or a durable one, is invoked through its
+  // latest version.
   private get useQualifiedTarget() {
-    return this.function.publish.apply(
+    return this.fn.publish.apply(
       (publish) => (publish ?? false) || this.durable,
     );
   }
@@ -3168,7 +2711,7 @@ export class Function extends Component implements Link.Linkable {
   /** @internal */
   public get targetArn() {
     return this.useQualifiedTarget.apply((useQualifiedTarget) =>
-      useQualifiedTarget ? this.function.qualifiedArn : this.arn,
+      useQualifiedTarget ? this.fn.qualifiedArn : this.arn,
     );
   }
 
@@ -3182,9 +2725,7 @@ export class Function extends Component implements Link.Linkable {
   /** @internal */
   public get targetInvokeArn() {
     return this.useQualifiedTarget.apply((useQualifiedTarget) =>
-      useQualifiedTarget
-        ? this.function.qualifiedInvokeArn
-        : this.function.invokeArn,
+      useQualifiedTarget ? this.fn.qualifiedInvokeArn : this.fn.invokeArn,
     );
   }
 
@@ -3194,12 +2735,12 @@ export class Function extends Component implements Link.Linkable {
       useQualifiedTarget
         ? all([
             this.arn,
-            this.function.qualifiedArn,
-            this.function.responseStreamingInvokeArn,
+            this.fn.qualifiedArn,
+            this.fn.responseStreamingInvokeArn,
           ]).apply(([arn, qualifiedArn, responseStreamingInvokeArn]) =>
             responseStreamingInvokeArn.replace(arn, qualifiedArn),
           )
-        : this.function.responseStreamingInvokeArn,
+        : this.fn.responseStreamingInvokeArn,
     );
   }
 
@@ -3207,7 +2748,7 @@ export class Function extends Component implements Link.Linkable {
    * Add environment variables lazily to the function after the function is created.
    *
    * This is useful for adding environment variables that are only available after the
-   * function is created, like the function URL.
+   * function is created, like the function URL. It can be called once.
    *
    * @param environment The environment variables to add to the function.
    *
@@ -3226,71 +2767,28 @@ export class Function extends Component implements Link.Linkable {
    * ```
    */
   public addEnvironment(environment: Input<Record<string, Input<string>>>) {
-    return new FunctionEnvironmentUpdate(
-      `${this.constructorName}EnvironmentUpdate`,
-      {
-        functionName: this.name,
-        environment,
-        region: getRegionOutput(undefined, { parent: this }).region,
-        functionLastModified: this.function.lastModified,
-      },
-      { parent: this },
-    );
-  }
-
-  /** @internal */
-  static fromDefinition(
-    name: string,
-    definition: Input<string | FunctionArgs>,
-    override: Pick<FunctionArgs, "description" | "permissions">,
-    argsTransform?: Transform<FunctionArgs>,
-    opts?: ComponentResourceOptions,
-  ) {
-    return output(definition).apply((definition) => {
-      if (typeof definition === "string") {
-        return new Function(
-          ...transform(
-            argsTransform,
-            name,
-            { handler: definition, ...override },
-            opts || {},
-          ),
-        );
-      } else if (definition.handler) {
-        return new Function(
-          ...transform(
-            argsTransform,
-            name,
-            {
-              ...definition,
-              ...override,
-              permissions: all([
-                definition.permissions,
-                override?.permissions,
-              ]).apply(([permissions, overridePermissions]) => [
-                ...(permissions ?? []),
-                ...(overridePermissions ?? []),
-              ]),
-            },
-            opts || {},
-          ),
-        );
-      }
-      throw new Error(`Invalid function definition for the "${name}" Function`);
+    if (this.nodes.environmentUpdate)
+      throw new VisibleError(
+        `"addEnvironment" was already called on the "${this.componentName}" function. Pass all of the environment variables in one call.`,
+      );
+    return this.part("environmentUpdate", {
+      functionName: this.name,
+      environment,
+      region: getRegionOutput(undefined, { parent: this }).region,
+      functionLastModified: this.fn.lastModified,
     });
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking a function gives the linked resource its name and URL, and lets it invoke
+   * the function.
+   */
+  public link() {
     return {
       properties: {
         name: this.name,
         url: this.urlEndpoint,
-        ...(this.durable
-          ? {
-              qualifier: this.qualifier,
-            }
-          : {}),
+        ...(this.durable ? { qualifier: this.qualifier } : {}),
       },
       include: [
         permission({
@@ -3313,7 +2811,33 @@ export class Function extends Component implements Link.Linkable {
       ],
     };
   }
+
+  /**
+   * Reference an existing function with the given function name. This is useful when you
+   * create a function in one stage and want to share it in another. Linking it gives the
+   * linked resource its name and lets it invoke the function. The function is used the
+   * way it is: it isn't configured here.
+   *
+   * @param name The name of the component.
+   * @param functionName The name of the existing Lambda function.
+   * @param opts Component resource options.
+   *
+   * @example
+   *
+   * ```ts title="sst.config.ts"
+   * const fn = $app.stage === "frank"
+   *   ? sst.aws.Function.get("MyFunction", "app-dev-MyFunctionFunction-abcdefgh")
+   *   : new sst.aws.Function("MyFunction", { handler: "src/lambda.handler" });
+   * ```
+   */
+  public static get(
+    name: string,
+    functionName: Input<string>,
+    opts?: ComponentResourceOptions,
+  ) {
+    const args: Partial<FunctionArgs> = {
+      existing: { function: functionName },
+    };
+    return new Function(name, getArgs(args) as FunctionArgs, opts);
+  }
 }
-const __pulumiType = "sst:aws:Function";
-// @ts-expect-error
-Function.__pulumiType = __pulumiType;

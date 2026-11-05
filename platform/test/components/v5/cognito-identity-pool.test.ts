@@ -22,23 +22,22 @@ const pulumi = mockPulumi({
 });
 
 type PoolClass =
-  | typeof import("../../../src/components/aws/cognito-identity-pool").CognitoIdentityPool
-  | typeof import("../../../src/components/aws/v5/cognito-identity-pool").CognitoIdentityPool;
+  | typeof import("../../fixtures/v4/components/aws/cognito-identity-pool").CognitoIdentityPool
+  | typeof import("../../../src/components/aws/cognito-identity-pool").CognitoIdentityPool;
 
 describe("CognitoIdentityPool", () => {
-  let Original: typeof import("../../../src/components/aws/cognito-identity-pool").CognitoIdentityPool;
-  let CognitoIdentityPool: typeof import("../../../src/components/aws/v5/cognito-identity-pool").CognitoIdentityPool;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
+  let Original: typeof import("../../fixtures/v4/components/aws/cognito-identity-pool").CognitoIdentityPool;
+  let CognitoIdentityPool: typeof import("../../../src/components/aws/cognito-identity-pool").CognitoIdentityPool;
+  let Function: typeof import("../../../src/components/aws/function").Function;
 
   beforeAll(async () => {
     Original = (
-      await import("../../../src/components/aws/cognito-identity-pool")
+      await import("../../fixtures/v4/components/aws/cognito-identity-pool")
     ).CognitoIdentityPool;
     CognitoIdentityPool = (
-      await import("../../../src/components/aws/v5/cognito-identity-pool")
+      await import("../../../src/components/aws/cognito-identity-pool")
     ).CognitoIdentityPool;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
+    Function = (await import("../../../src/components/aws/function")).Function;
     await import("../../../src/components/aws/takeover/index");
   });
 

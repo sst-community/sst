@@ -11,9 +11,9 @@ rdsInstanceSuite(
     load: async () => {
       await import("../../../src/components/aws/takeover/postgres");
       return {
-        original: (await import("../../../src/components/aws/postgres"))
+        original: (await import("../../fixtures/v4/components/aws/postgres"))
           .Postgres,
-        v5: (await import("../../../src/components/aws/v5/postgres")).Postgres,
+        v5: (await import("../../../src/components/aws/postgres")).Postgres,
       };
     },
     // 4.x's `Postgres` has a `.v1`, and marks which one a stage has

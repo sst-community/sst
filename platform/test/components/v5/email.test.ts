@@ -36,14 +36,15 @@ const TOPIC_ARN = "arn:aws:sns:us-east-1:123456789012:bounces";
 const BUS_ARN = "arn:aws:events:us-east-1:123456789012:event-bus/mail";
 
 describe("Email", () => {
-  let OriginalEmail: typeof import("../../../src/components/aws/email").Email;
-  let Email: typeof import("../../../src/components/aws/v5/email").Email;
+  let OriginalEmail: typeof import("../../fixtures/v4/components/aws/email").Email;
+  let Email: typeof import("../../../src/components/aws/email").Email;
   let cloudflare: typeof import("../../../src/components/cloudflare/dns");
   let vercel: typeof import("../../../src/components/vercel/dns");
 
   beforeAll(async () => {
-    OriginalEmail = (await import("../../../src/components/aws/email")).Email;
-    Email = (await import("../../../src/components/aws/v5/email")).Email;
+    OriginalEmail = (await import("../../fixtures/v4/components/aws/email"))
+      .Email;
+    Email = (await import("../../../src/components/aws/email")).Email;
     await import("../../../src/components/aws/takeover/email");
     cloudflare = await import("../../../src/components/cloudflare/dns");
     vercel = await import("../../../src/components/vercel/dns");

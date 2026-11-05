@@ -42,12 +42,12 @@ const LOAD_BALANCER_ARN =
 const vpc = { securityGroups: ["sg-1"], subnets: ["subnet-1", "subnet-2"] };
 
 describe("ApiGatewayHttp", () => {
-  let OriginalApiGatewayV2: typeof import("../../../src/components/aws/apigatewayv2").ApiGatewayV2;
-  let ApiGatewayHttp: typeof import("../../../src/components/aws/v5/apigateway-http").ApiGatewayHttp;
+  let OriginalApiGatewayV2: typeof import("../../fixtures/v4/components/aws/apigatewayv2").ApiGatewayV2;
+  let ApiGatewayHttp: typeof import("../../../src/components/aws/apigateway-http").ApiGatewayHttp;
 
   let Linkable: typeof import("../../../src/components/linkable").Linkable;
-  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
+  let OriginalVpc: typeof import("../../fixtures/v4/components/aws/vpc").Vpc;
+  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
   let cloudflare: typeof import("../../../src/components/cloudflare/dns");
   let vercel: typeof import("../../../src/components/vercel/dns");
 
@@ -56,15 +56,15 @@ describe("ApiGatewayHttp", () => {
     cloudflare = await import("../../../src/components/cloudflare/dns");
     vercel = await import("../../../src/components/vercel/dns");
     ({ ApiGatewayV2: OriginalApiGatewayV2 } = await import(
-      "../../../src/components/aws/apigatewayv2"
+      "../../fixtures/v4/components/aws/apigatewayv2"
     ));
     ({ ApiGatewayHttp } = await import(
-      "../../../src/components/aws/v5/apigateway-http"
+      "../../../src/components/aws/apigateway-http"
     ));
     await import("../../../src/components/aws/takeover/apigateway-http");
     await import("../../../src/components/aws/takeover/function");
-    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    OriginalVpc = (await import("../../fixtures/v4/components/aws/vpc")).Vpc;
+    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/vpc");
     // What the V5 API creates for a domain takes over 4.x's by this
     await import(
@@ -333,7 +333,7 @@ describe("ApiGatewayHttp", () => {
     expect(Object.keys(api.nodes.permission)).toEqual(["GET /", "GetUser"]);
     const handler = await pulumi.resolve(api.nodes.handler.GetUser);
     expect(handler).toBeInstanceOf(
-      (await import("../../../src/components/aws/v5/function")).Function,
+      (await import("../../../src/components/aws/function")).Function,
     );
   });
 

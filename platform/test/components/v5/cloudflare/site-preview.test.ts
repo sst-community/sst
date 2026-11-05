@@ -58,16 +58,16 @@ afterAll(() => fs.rmSync(app, { recursive: true, force: true }));
 describe("Cloudflare sites in a new stage's preview", () => {
   it("are built without what isn't known, and plan the Worker a deploy creates", async () => {
     const { Astro } = await import(
-      "../../../../src/components/cloudflare/v5/astro"
+      "../../../../src/components/cloudflare/astro"
     );
     const { StaticSite } = await import(
-      "../../../../src/components/cloudflare/v5/static-site"
+      "../../../../src/components/cloudflare/static-site"
     );
     const { Worker } = await import(
-      "../../../../src/components/cloudflare/v5/worker"
+      "../../../../src/components/cloudflare/worker"
     );
     const { Linkable } = await import("../../../../src/components/linkable");
-    const { Kv } = await import("../../../../src/components/cloudflare/v5/kv");
+    const { Kv } = await import("../../../../src/components/cloudflare/kv");
     // What Cloudflare gives back, like a Worker's URL, isn't known
     const api = new Worker("Api", { handler: "src/api.mjs", url: true });
     const thing = new Linkable("Thing", {

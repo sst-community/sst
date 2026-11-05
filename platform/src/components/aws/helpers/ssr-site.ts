@@ -75,14 +75,14 @@ import {
   siteInvalidation,
   siteKvEntries,
 } from "../site-code";
-import { Bucket } from "../v5/bucket";
-import { Cdn, type CdnDomainArgs, cdnDomain } from "../v5/cdn";
+import { Bucket } from "../bucket";
+import { Cdn, type CdnDomainArgs, cdnDomain } from "../cdn";
 import {
   Function,
   type FunctionArgs,
   type FunctionArn,
   type FunctionPermissionArgs,
-} from "../v5/function";
+} from "../function";
 
 /**
  * What every site with a server is built from: its assets and their files,
@@ -724,13 +724,13 @@ export interface SsrSiteArgs {
    * Create a `Vpc` component.
    *
    * ```js title="sst.config.ts"
-   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
+   * const myVpc = new sst.aws.Vpc("MyVpc");
    * ```
    *
    * Or reference an existing VPC.
    *
    * ```js title="sst.config.ts"
-   * const myVpc = sst.aws.v5.Vpc.get("MyVpc", "vpc-12345678901234567");
+   * const myVpc = sst.aws.Vpc.get("MyVpc", "vpc-12345678901234567");
    * ```
    *
    * And pass it in.

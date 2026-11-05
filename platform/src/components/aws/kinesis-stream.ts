@@ -1,31 +1,45 @@
-import { ComponentResourceOptions, Output, all, output } from "@pulumi/pulumi";
+import { getArgs } from "../args";
+import { ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { kinesis, lambda } from "@pulumi/aws";
-import { Component, Transform, transform } from "../component.js";
-import { Input } from "../input.js";
-import { Link } from "../link.js";
-import { hashStringToPrettyString, logicalName } from "../naming.js";
-import { FunctionArgs, FunctionArn } from "./function.js";
-import { KinesisStreamLambdaSubscriber } from "./kinesis-stream-lambda-subscriber.js";
-import { parseKinesisStreamArn } from "./helpers/arn.js";
-import { permission } from "./permission.js";
-import { isFunctionSubscriber } from "./helpers/subscriber.js";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+} from "../parts-component";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { parseKinesisStreamArn } from "./helpers/arn";
+import { Function } from "./function";
+import {
+  assertNamedSubscriber,
+  eventSourceSubscriber,
+  filterCriteria,
+} from "./helpers/event-source";
+import type { FunctionInput } from "./helpers/function-part";
+import { permission } from "./permission";
 
-export interface KinesisStreamArgs {
+const parts = () => ({
   /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
+   * The Amazon Kinesis Data Stream.
    */
-  transform?: {
-    /**
-     * Transform the Kinesis stream resource.
-     */
-    stream?: Transform<kinesis.StreamArgs>;
-  };
-}
-
-export interface KinesisStreamLambdaSubscriberArgs {
+  stream: kinesis.Stream,
   /**
-   * Filter the events that'll be processed by the `subscribers` functions.
+   * The functions subscribed to the stream, by subscriber name.
+   */
+  subscriber: many(deferred(Function)),
+  /**
+   * The Lambda event source mappings that send the stream's records to each subscriber,
+   * by subscriber name.
+   */
+  eventSourceMapping: many(lambda.EventSourceMapping),
+});
+
+export interface KinesisStreamArgs extends ComponentArgs<typeof parts> {}
+
+export interface KinesisStreamSubscriberArgs {
+  /**
+   * Filter the events that'll be processed by the subscriber's function.
    *
    * :::tip
    * You can pass in up to 5 different filters.
@@ -60,23 +74,16 @@ export interface KinesisStreamLambdaSubscriberArgs {
    *   ],
    * }
    * ```
-   *
    */
   filters?: Input<Input<Record<string, any>>[]>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Lambda Event Source Mapping resource.
-     */
-    eventSourceMapping?: Transform<lambda.EventSourceMappingArgs>;
-  };
 }
 
 /**
  * The `KinesisStream` component lets you add an [Amazon Kinesis Data Streams](https://docs.aws.amazon.com/streams/latest/dev/introduction.html) to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have. That includes the resources of
+ * each subscriber, which are kept inside the stream.
  *
  * @example
  *
@@ -116,46 +123,95 @@ export interface KinesisStreamLambdaSubscriberArgs {
  *   PartitionKey: "myKey",
  * }));
  * ```
+ *
+ * #### Use a stream you already have
+ *
+ * Reference it by its name or ARN. The stream is used the way it is: the component
+ * doesn't configure it.
+ *
+ * ```ts title="sst.config.ts"
+ * const stream = sst.aws.KinesisStream.get("MyStream", "app-dev-mystream");
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.KinesisStream`
+ *
+ * Keep the name, and `sst migrate` moves it. The
+ * stream and the subscribers you've deployed are kept, as long as the subscribers have
+ * names.
+ *
+ * A few things work differently:
+ *
+ * - A subscriber's resources are parts of the stream. `subscribe()` returns the stream,
+ *   and the subscriber's function and event source mapping are in `nodes.subscriber` and
+ *   `nodes.eventSourceMapping` under its name. To change how they're created, use the
+ *   stream's `transform`: a subscriber's own `transform` is refused.
+ * - Every subscriber has a name. One that was added without a name isn't kept: remove it
+ *   and deploy before you switch, then add it back with a name.
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - A subscriber's function is described after the component, `Subscribed to MyStream`,
+ *   where `sst.aws.KinesisStream` named the component it kept the subscriber in: an
+ *   update in place. For a stream from `get`, it names the component `get` created,
+ *   where the static `subscribe` named the stream.
+ * - A subscriber is created with the provider the stream has. `sst.aws.KinesisStream`
+ *   gave it only a `provider` passed to the stream itself, so if your stream takes its
+ *   provider from a parent component or from `providers`, the switch gives its subscribers
+ *   that provider and keeps them, with the provider's default tags.
+ * - To subscribe to a stream that isn't in your app, reference it with `get`, by its
+ *   name or the ARN you gave the static `subscribe`, and subscribe to that. The static
+ *   `subscribe` is refused with what to write.
+ *
+ *   ```ts title="sst.config.ts" del={1} ins={2-4}
+ *   sst.aws.KinesisStream.subscribe("MySubscriber", streamArn, "src/subscriber.handler");
+ *   sst.aws.KinesisStream
+ *     .get("Orders", streamArn)
+ *     .subscribe("MySubscriber", "src/subscriber.handler");
+ *   ```
+ * - `get` gives its options to the component, so a `provider` or `parent` you pass it
+ *   applies to the stream's subscribers too. The static `subscribe` created a subscriber
+ *   with your app's provider, at the top of your app. If you pass `get` a `provider`, or a
+ *   parent that has `providers`, and subscribe to that stream, the switch gives the
+ *   subscriber that provider and keeps it.
  */
-export class KinesisStream extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorOpts: ComponentResourceOptions;
-  private stream: kinesis.Stream;
-
+export class KinesisStream extends component("sst:aws:KinesisStream", parts) {
   constructor(
     name: string,
     args: KinesisStreamArgs = {},
     opts: ComponentResourceOptions = {},
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    const parent = this;
-    const stream = createStream();
-    this.stream = stream;
-    this.constructorName = name;
-    this.constructorOpts = opts;
+    this.part("stream", { streamModeDetails: { streamMode: "ON_DEMAND" } });
+  }
 
-    function createStream() {
-      return new kinesis.Stream(
-        ...transform(
-          args?.transform?.stream,
-          `${name}Stream`,
-          {
-            streamModeDetails: {
-              streamMode: "ON_DEMAND",
-            },
-          },
-          { parent },
-        ),
-      );
-    }
+  /**
+   * The name of the Kinesis Data Stream.
+   */
+  public get name() {
+    return this.nodes.stream.name;
+  }
+
+  /**
+   * The ARN of the Kinesis Data Stream.
+   */
+  public get arn() {
+    return this.nodes.stream.arn;
   }
 
   /**
    * Subscribe to the Kinesis stream.
    *
    * @param name The name of the subscriber.
-   * @param subscriber The function that'll be notified.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
@@ -189,228 +245,121 @@ export class KinesisStream extends Component implements Link.Linkable {
    * });
    * ```
    *
-   * Or pass in the ARN of an existing Lambda function.
+   * Or pass in the ARN of an existing Lambda function. A function you pass in, or its ARN,
+   * isn't given permission to read the stream: link the stream to a function in your app,
+   * or give the function's role that permission yourself.
    *
    * ```js title="sst.config.ts"
    * stream.subscribe("MySubscriber", "arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
+   *
+   * To change how one subscriber is created, use the stream's `transform`. Its function
+   * form is given the subscriber's name.
+   *
+   * ```js title="sst.config.ts"
+   * new sst.aws.KinesisStream("MyStream", {
+   *   transform: {
+   *     eventSourceMapping: (args, opts, name, subscriber) => {
+   *       if (subscriber === "MySubscriber") args.startingPosition = "TRIM_HORIZON";
+   *     }
+   *   }
+   * });
+   * ```
    */
   public subscribe(
     name: string,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: KinesisStreamLambdaSubscriberArgs,
-  ): Output<KinesisStreamLambdaSubscriber>;
+    subscriber: FunctionInput,
+    args: KinesisStreamSubscriberArgs = {},
+  ) {
+    assertNamedSubscriber(
+      `the "${this.componentName}" stream`,
+      "subscribe",
+      name,
+      subscriber,
+    );
+    this.assertNew("subscriber", "eventSourceMapping", name, args, [
+      "subscriber",
+      "eventSourceMapping",
+    ]);
+
+    eventSourceSubscriber(this.builder(), name, subscriber, {
+      component: this.componentName,
+      kind: "stream",
+      source: this.arn,
+      actions: [
+        "kinesis:DescribeStream",
+        "kinesis:DescribeStreamSummary",
+        "kinesis:GetRecords",
+        "kinesis:GetShardIterator",
+        "kinesis:ListShards",
+        "kinesis:ListStreams",
+        "kinesis:SubscribeToShard",
+      ],
+      mapping: {
+        startingPosition: "LATEST",
+        filterCriteria: filterCriteria(args.filters),
+      },
+    });
+
+    return this;
+  }
+
   /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
+   * `sst.aws.KinesisStream.subscribe` subscribed to a stream by its ARN. Reference the
+   * stream with `get` and subscribe to that.
+   *
+   * @internal
    */
-  public subscribe(
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: KinesisStreamLambdaSubscriberArgs,
-  ): Output<KinesisStreamLambdaSubscriber>;
-  public subscribe(nameOrSubscriber: any, subscriberOrArgs?: any, args?: any) {
-    return isFunctionSubscriber(subscriberOrArgs).apply((v) =>
-      v
-        ? KinesisStream._subscribe(
-            nameOrSubscriber, // name
-            this.constructorName,
-            this.nodes.stream.arn,
-            subscriberOrArgs, // subscriber
-            args,
-            { provider: this.constructorOpts.provider },
-          )
-        : KinesisStream._subscribeV1(
-            this.constructorName,
-            this.nodes.stream.arn,
-            nameOrSubscriber, // subscriber
-            subscriberOrArgs, // args
-            { provider: this.constructorOpts.provider },
-          ),
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to a stream that isn't in your app, reference it with "get" and subscribe to that: sst.aws.KinesisStream.get("MyStream", "my-stream-name").subscribe("MySubscriber", "src/subscriber.handler").`,
     );
   }
 
   /**
-   * Subscribe to the Kinesis stream that was not created in your app.
+   * Reference an existing Kinesis Data Stream with the given stream name or ARN. This is
+   * useful when you create a stream in one stage and want to share it in another stage,
+   * or to subscribe to a stream that isn't in your app. The stream is used the way it is:
+   * it isn't configured here.
    *
-   * @param name The name of the subscriber.
-   * @param streamArn The ARN of the Kinesis Stream to subscribe to.
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
+   * @param name The name of the component.
+   * @param streamName The name of the Kinesis Data Stream, or its ARN.
+   * @param opts Component resource options.
    *
    * @example
+   * Subscribe to a stream that isn't in your app.
    *
-   * For example, let's say you have the ARN of an existing Kinesis stream.
-   *
-   * ```js title="sst.config.ts"
-   * const streamArn = "arn:aws:kinesis:us-east-1:123456789012:stream/MyStream";
-   * ```
-   *
-   * You can subscribe to it by passing in the ARN.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.KinesisStream.subscribe("MySubscriber", streamArn, "src/subscriber.handler");
-   * ```
-   *
-   * Add a filter to the subscription.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.KinesisStream.subscribe("MySubscriber", streamArn, "src/subscriber.handler", {
-   *   filters: [
-   *     {
-   *       data: {
-   *         order: {
-   *           type: ["buy"],
-   *         },
-   *       },
-   *     },
-   *   ],
-   * });
-   * ```
-   *
-   * Customize the subscriber function.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.KinesisStream.subscribe("MySubscriber", streamArn, {
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds"
-   * });
+   * ```ts title="sst.config.ts"
+   * sst.aws.KinesisStream
+   *   .get("Orders", "orders-stream")
+   *   .subscribe("MySubscriber", "src/subscriber.handler");
    * ```
    */
-  public static subscribe(
+  public static get(
     name: string,
-    streamArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: KinesisStreamLambdaSubscriberArgs,
-  ): Output<KinesisStreamLambdaSubscriber>;
-  /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
-   */
-  public static subscribe(
-    streamArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: KinesisStreamLambdaSubscriberArgs,
-  ): Output<KinesisStreamLambdaSubscriber>;
-  public static subscribe(
-    nameOrStreamArn: any,
-    streamArnOrSubscriber: any,
-    subscriberOrArgs?: any,
-    args?: any,
+    streamName: Input<string>,
+    opts?: ComponentResourceOptions,
   ) {
-    return isFunctionSubscriber(subscriberOrArgs).apply((v) =>
-      v
-        ? output(streamArnOrSubscriber).apply((streamArn) =>
-            this._subscribe(
-              nameOrStreamArn, // name
-              logicalName(parseKinesisStreamArn(streamArn).streamName),
-              streamArn,
-              subscriberOrArgs, // subscriber
-              args,
-            ),
-          )
-        : output(nameOrStreamArn).apply((streamArn) =>
-            this._subscribeV1(
-              logicalName(parseKinesisStreamArn(streamArn).streamName),
-              streamArn,
-              streamArnOrSubscriber, // subscriber
-              subscriberOrArgs, // args
-            ),
-          ),
+    // A stream is looked up by its name
+    const stream = output(streamName).apply((id) =>
+      id.startsWith("arn:") ? parseKinesisStreamArn(id).streamName : id,
     );
-  }
-
-  private static _subscribe(
-    subscriberName: string,
-    name: string,
-    streamArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args: KinesisStreamLambdaSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return output(args).apply(
-      (args) =>
-        new KinesisStreamLambdaSubscriber(
-          `${name}Subscriber${subscriberName}`,
-          {
-            stream: { arn: streamArn },
-            subscriber,
-            ...args,
-          },
-          opts,
-        ),
-    );
-  }
-
-  private static _subscribeV1(
-    name: string,
-    streamArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args: KinesisStreamLambdaSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return all([streamArn, subscriber, args]).apply(
-      ([streamArn, subscriber, args]) => {
-        const suffix = logicalName(
-          hashStringToPrettyString(
-            [
-              streamArn,
-              JSON.stringify(args.filters ?? {}),
-              typeof subscriber === "string" ? subscriber : subscriber.handler,
-            ].join(""),
-            6,
-          ),
-        );
-        return new KinesisStreamLambdaSubscriber(
-          `${name}Subscriber${suffix}`,
-          {
-            stream: { arn: streamArn },
-            subscriber,
-            ...args,
-          },
-          opts,
-        );
-      },
-    );
-  }
-
-  public get name() {
-    return this.stream.name;
-  }
-
-  public get arn() {
-    return this.stream.arn;
+    return new KinesisStream(name, getArgs({ existing: { stream } }), opts);
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
+   * Linking a stream gives the linked resource the stream's name and permission to use
+   * it.
    */
-  public get nodes() {
+  public link() {
     return {
-      /**
-       * The Amazon Kinesis Data Stream.
-       */
-      stream: this.stream,
-    };
-  }
-
-  /** @internal */
-  getSSTLink() {
-    return {
-      properties: {
-        name: this.stream.name,
-      },
+      properties: { name: this.name },
       include: [
         permission({
           actions: ["kinesis:*"],
-          resources: [this.nodes.stream.arn],
+          resources: [this.arn],
         }),
       ],
     };
   }
 }
-
-const __pulumiType = "sst:aws:KinesisStream";
-// @ts-expect-error
-KinesisStream.__pulumiType = __pulumiType;

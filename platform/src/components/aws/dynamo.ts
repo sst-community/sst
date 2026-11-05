@@ -1,22 +1,46 @@
 import {
   ComponentResourceOptions,
-  Output,
   all,
   interpolate,
   output,
 } from "@pulumi/pulumi";
-import { Component, outputId, Transform, transform } from "../component";
-import { Link } from "../link";
-import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
-import { hashStringToPrettyString, logicalName } from "../naming";
-import { parseDynamoStreamArn } from "./helpers/arn";
-import { DynamoLambdaSubscriber } from "./dynamo-lambda-subscriber";
 import { dynamodb, lambda } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+} from "../parts-component";
+import { ifSet, usedAsItIs, getArgs } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { Function } from "./function";
+import { parseDynamoArn } from "./helpers/arn";
+import {
+  assertNamedSubscriber,
+  eventSourceSubscriber,
+  filterCriteria,
+} from "./helpers/event-source";
+import type { FunctionInput } from "./helpers/function-part";
 import { permission } from "./permission";
-import { isFunctionSubscriber } from "./helpers/subscriber";
 
-export interface DynamoArgs {
+const parts = () => ({
+  /**
+   * The Amazon DynamoDB Table.
+   */
+  table: dynamodb.Table,
+  /**
+   * The functions subscribed to the table's stream, by subscriber name.
+   */
+  subscriber: many(deferred(Function)),
+  /**
+   * The Lambda event source mappings that send the stream's records to each
+   * subscriber, by subscriber name.
+   */
+  eventSourceMapping: many(lambda.EventSourceMapping),
+});
+
+export interface DynamoArgs extends ComponentArgs<typeof parts> {
   /**
    * An object defining the fields of the table that'll be used to create indexes. The key is the name of the field and the value is the type.
    *
@@ -251,16 +275,6 @@ export interface DynamoArgs {
    * ```
    */
   deletionProtection?: Input<boolean>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the DynamoDB Table resource.
-     */
-    table?: Transform<dynamodb.TableArgs>;
-  };
 }
 
 export interface DynamoSubscriberArgs {
@@ -309,7 +323,7 @@ export interface DynamoSubscriberArgs {
    * ```
    *
    * To process only those records where the `CustomerName` is `AnyCompany Industries`.
-
+   *
    * ```js
    * {
    *   filters: [
@@ -327,25 +341,20 @@ export interface DynamoSubscriberArgs {
    * ```
    */
   filters?: Input<Input<Record<string, any>>[]>;
-  /**
-   * [Transform](/docs/components#transform) how this subscription creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Lambda Event Source Mapping resource.
-     */
-    eventSourceMapping?: Transform<lambda.EventSourceMappingArgs>;
-  };
 }
 
-interface DynamoRef {
-  ref: boolean;
-  table: dynamodb.Table;
-}
+// A field of any other type is created as binary, as `Dynamo` creates it
+const fieldType = (type: string) =>
+  type === "string" ? "S" : type === "number" ? "N" : "B";
+
+type Projection = "all" | "keys-only" | string[];
+type IndexKey = string | string[];
 
 /**
  * The `Dynamo` component lets you add an [Amazon DynamoDB](https://aws.amazon.com/dynamodb/) table to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -363,8 +372,6 @@ interface DynamoRef {
  *
  * #### Add a global index
  *
- * Optionally add a global index to the table.
- *
  * ```ts {8-10} title="sst.config.ts"
  * new sst.aws.Dynamo("MyTable", {
  *   fields: {
@@ -379,31 +386,7 @@ interface DynamoRef {
  * });
  * ```
  *
- * #### Add a composite key global index
- *
- * Use multi-attribute composite keys in a global index. This is useful when you want
- * to combine multiple attributes into a single partition or sort key.
- *
- * ```ts {8-12} title="sst.config.ts"
- * new sst.aws.Dynamo("MyTable", {
- *   fields: {
- *     region: "string",
- *     category: "string",
- *     createdAt: "number",
- *   },
- *   primaryIndex: { hashKey: "region", rangeKey: "createdAt" },
- *   globalIndexes: {
- *     RegionCategoryIndex: {
- *       hashKey: ["region", "category"],
- *       rangeKey: "createdAt"
- *     }
- *   }
- * });
- * ```
- *
  * #### Add a local index
- *
- * Optionally add a local index to the table.
  *
  * ```ts {8-10} title="sst.config.ts"
  * new sst.aws.Dynamo("MyTable", {
@@ -434,7 +417,7 @@ interface DynamoRef {
  * });
  * ```
  *
- * Then, subscribing to it.
+ * Then subscribe to it. Each subscriber has a name.
  *
  * ```ts title="sst.config.ts"
  * table.subscribe("MySubscriber", "src/subscriber.handler");
@@ -452,9 +435,9 @@ interface DynamoRef {
  *
  * Once linked, you can query the table through your app.
  *
- * ```ts title="app/page.tsx" {1,8}
+ * ```ts title="app/page.tsx" {1,7}
  * import { Resource } from "sst";
- * import { DynamoDBClient, QueryCommand, ScanCommand } from "@aws-sdk/client-dynamodb";
+ * import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
  *
  * const client = new DynamoDBClient();
  *
@@ -466,158 +449,153 @@ interface DynamoRef {
  *   }
  * }));
  * ```
+ *
+ * #### Use a table you already have
+ *
+ * Reference it by its name or ARN. The table is used the way it is: the component doesn't
+ * configure it, and refuses `fields`, `primaryIndex` and the other settings of a table
+ * next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * const table = sst.aws.Dynamo.get("MyTable", "app-dev-mytable");
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Dynamo`
+ *
+ * Keep the name, and `sst migrate` moves it. The table and the
+ * subscribers you've deployed are kept, as long as the subscribers have names.
+ *
+ * A few things are written differently:
+ *
+ * - `nodes.table` is the table, not an output of it.
+ * - A subscriber's resources are parts of the table. `subscribe()` returns the table, and
+ *   the subscriber's function and event source mapping are in `nodes.subscriber` and
+ *   `nodes.eventSourceMapping` under its name. To change how they're created, use the
+ *   table's `transform`.
+ * - Every subscriber has a name. One that was added without a name isn't kept: remove it
+ *   and deploy before you switch, then add it back with a name.
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - A subscriber's function is described after the component, `Subscribed to MyTable`,
+ *   where `sst.aws.Dynamo` named the component it kept the subscriber in: an update in
+ *   place.
+ * - A subscriber is created with the provider the table has. `sst.aws.Dynamo` gave it only
+ *   a `provider` passed to the table itself, so if your table takes its provider from a
+ *   parent component or from `providers`, the switch gives its subscribers that provider
+ *   and keeps them, with the provider's default tags.
+ * - To subscribe to the stream of a table that isn't in your app, reference the table with
+ *   `get`, by its name or the stream ARN you gave the static `subscribe`, and subscribe
+ *   to that. The static `subscribe` is refused with what to write.
+ *
+ *   ```ts title="sst.config.ts" del={1} ins={2-4}
+ *   sst.aws.Dynamo.subscribe("MySubscriber", streamArn, "src/subscriber.handler");
+ *   sst.aws.Dynamo
+ *     .get("Orders", streamArn)
+ *     .subscribe("MySubscriber", "src/subscriber.handler");
+ *   ```
+ * - `get` gives its options to the component, so a `provider` or `parent` you pass it
+ *   applies to the table's subscribers too. `sst.aws.Dynamo.get` gave them to the table it
+ *   looked up and to nothing else. If you pass `get` a `provider` and subscribe to that
+ *   table, the switch gives the subscriber that provider and keeps it.
+ * - A `transform` function for the table is given the table's keys, indexes, attributes
+ *   and stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
  */
-export class Dynamo extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorOpts: ComponentResourceOptions;
-  private table: Output<dynamodb.Table>;
+export class Dynamo extends component("sst:aws:Dynamo", parts) {
+  constructor(name: string, args: DynamoArgs, opts?: ComponentResourceOptions) {
+    super(name, args, opts);
 
-  constructor(
-    name: string,
-    args: DynamoArgs,
-    opts: ComponentResourceOptions = {},
-  ) {
-    super(__pulumiType, name, args, opts);
-    this.constructorName = name;
-    this.constructorOpts = opts;
-
-    if (args && "ref" in args) {
-      const ref = args as unknown as DynamoRef;
-      this.table = output(ref.table);
+    // A table that's already deployed has its fields and indexes
+    if (this.existingPart("table")) {
+      usedAsItIs(
+        args,
+        [
+          "fields",
+          "primaryIndex",
+          "globalIndexes",
+          "localIndexes",
+          "stream",
+          "ttl",
+          "deletionProtection",
+        ],
+        "table",
+        `the "${name}" table`,
+      );
       return;
     }
 
-    const parent = this;
+    const primaryIndex = output(args.primaryIndex);
+    const stream = output(args.stream);
 
-    const table = createTable();
-
-    this.table = table;
-
-    function createTable() {
-      return all([
-        args.fields,
-        args.primaryIndex,
-        args.globalIndexes,
-        args.localIndexes,
-        args.stream,
-        args.deletionProtection,
-      ]).apply(
-        ([
-          fields,
-          primaryIndex,
-          globalIndexes,
-          localIndexes,
-          stream,
-          deletionProtection,
-        ]) =>
-          new dynamodb.Table(
-            ...transform(
-              args.transform?.table,
-              `${name}Table`,
-              {
-                attributes: Object.entries(fields).map(([name, type]) => ({
-                  name,
-                  type: type === "string" ? "S" : type === "number" ? "N" : "B",
-                })),
-                billingMode: "PAY_PER_REQUEST",
-                hashKey: primaryIndex.hashKey,
-                rangeKey: primaryIndex.rangeKey,
-                streamEnabled: Boolean(stream),
-                streamViewType: stream
-                  ? stream.toUpperCase().replaceAll("-", "_")
-                  : undefined,
-                pointInTimeRecovery: {
-                  enabled: true,
-                },
-                ttl:
-                  args.ttl === undefined
-                    ? undefined
-                    : {
-                        attributeName: args.ttl,
-                        enabled: true,
-                      },
-                globalSecondaryIndexes: Object.entries(globalIndexes ?? {}).map(
-                  ([name, index]) => ({
-                    name,
-                    ...(Array.isArray(index.hashKey) ||
-                    Array.isArray(index.rangeKey)
-                      ? {
-                          keySchemas: [
-                            ...[index.hashKey].flat().map((k) => ({
-                              attributeName: k,
-                              keyType: "HASH",
-                            })),
-                            ...(index.rangeKey
-                              ? [index.rangeKey].flat().map((k) => ({
-                                  attributeName: k,
-                                  keyType: "RANGE",
-                                }))
-                              : []),
-                          ],
-                        }
-                      : {
-                          hashKey: index.hashKey,
-                          ...(index.rangeKey
-                            ? { rangeKey: index.rangeKey }
-                            : {}),
-                        }),
-                    ...(index.projection === "keys-only"
-                      ? { projectionType: "KEYS_ONLY" }
-                      : Array.isArray(index.projection)
-                        ? {
-                            projectionType: "INCLUDE",
-                            nonKeyAttributes: index.projection,
-                          }
-                        : { projectionType: "ALL" }),
-                  }),
-                ),
-                localSecondaryIndexes: Object.entries(localIndexes ?? {}).map(
-                  ([name, index]) => ({
-                    name,
-                    rangeKey: index.rangeKey,
-                    ...(index.projection === "keys-only"
-                      ? { projectionType: "KEYS_ONLY" }
-                      : Array.isArray(index.projection)
-                        ? {
-                            projectionType: "INCLUDE",
-                            nonKeyAttributes: index.projection,
-                          }
-                        : { projectionType: "ALL" }),
-                  }),
-                ),
-                deletionProtectionEnabled: deletionProtection,
-              },
-              { parent },
-            ),
-          ),
-      );
-    }
+    this.part("table", {
+      attributes: output(args.fields).apply((fields) =>
+        Object.entries(fields).map(([name, type]) => ({
+          name,
+          type: fieldType(type),
+        })),
+      ),
+      billingMode: "PAY_PER_REQUEST",
+      hashKey: primaryIndex.hashKey,
+      rangeKey: ifSet(primaryIndex.rangeKey),
+      streamEnabled: stream.apply((stream) => Boolean(stream)),
+      streamViewType: ifSet(stream, (stream) =>
+        stream.toUpperCase().replaceAll("-", "_"),
+      ),
+      pointInTimeRecovery: { enabled: true },
+      ttl:
+        args.ttl === undefined
+          ? undefined
+          : { attributeName: args.ttl, enabled: true },
+      globalSecondaryIndexes: output(args.globalIndexes).apply((indexes) =>
+        Object.entries(indexes ?? {}).map(([name, index]) => ({
+          name,
+          ...indexKeys(index),
+          ...projection(index.projection),
+        })),
+      ),
+      localSecondaryIndexes: output(args.localIndexes).apply((indexes) =>
+        Object.entries(indexes ?? {}).map(([name, index]) => ({
+          name,
+          rangeKey: index.rangeKey,
+          ...projection(index.projection),
+        })),
+      ),
+      deletionProtectionEnabled: args.deletionProtection,
+    });
   }
 
   /**
    * The ARN of the DynamoDB Table.
    */
   public get arn() {
-    return this.table.arn;
+    return this.nodes.table.arn;
   }
 
   /**
    * The name of the DynamoDB Table.
    */
   public get name() {
-    return this.table.name;
+    return this.nodes.table.name;
   }
 
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon DynamoDB Table.
-       */
-      table: this.table,
-    };
+  // The ARN of the table's stream, for something that reads from it
+  private get streamArn() {
+    const table = this.nodes.table;
+    return all([table.streamEnabled, table.streamArn]).apply(
+      ([enabled, arn]) => {
+        if (!enabled)
+          throw new VisibleError(
+            `Cannot subscribe to the "${this.componentName}" table because its stream is not enabled. Set "stream" on the table.`,
+          );
+        return arn;
+      },
+    );
   }
 
   /**
@@ -628,7 +606,9 @@ export class Dynamo extends Component implements Link.Linkable {
    * :::
    *
    * @param name The name of the subscriber.
-   * @param subscriber The function that'll be notified.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
@@ -664,228 +644,99 @@ export class Dynamo extends Component implements Link.Linkable {
    * });
    * ```
    *
-   * Or pass in the ARN of an existing Lambda function.
+   * Or pass in the ARN of an existing Lambda function. A function you pass in, or its ARN,
+   * isn't given permission to read the stream: link the table to a function in your app,
+   * or give the function's role that permission yourself.
    *
    * ```js title="sst.config.ts"
    * table.subscribe("MySubscriber", "arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
-   */
-  public subscribe(
-    name: string,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: DynamoSubscriberArgs,
-  ): Output<DynamoLambdaSubscriber>;
-  /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
-   */
-  public subscribe(
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: DynamoSubscriberArgs,
-  ): Output<DynamoLambdaSubscriber>;
-
-  public subscribe(nameOrSubscriber: any, subscriberOrArgs?: any, args?: any) {
-    const sourceName = this.constructorName;
-
-    return all([
-      this.nodes.table.streamEnabled,
-      isFunctionSubscriber(subscriberOrArgs),
-    ]).apply(([streamEnabled, isFunctionSubscriber]) => {
-      if (!streamEnabled) {
-        throw new Error(
-          `Cannot subscribe to "${sourceName}" because stream is not enabled.`,
-        );
-      }
-
-      return isFunctionSubscriber
-        ? Dynamo._subscribe(
-            nameOrSubscriber, // name
-            this.constructorName,
-            this.nodes.table.streamArn,
-            subscriberOrArgs, // subscriber
-            args,
-            { provider: this.constructorOpts.provider },
-          )
-        : Dynamo._subscribeV1(
-            this.constructorName,
-            this.nodes.table.streamArn,
-            nameOrSubscriber, // subscriber
-            subscriberOrArgs, // args
-            { provider: this.constructorOpts.provider },
-          );
-    });
-  }
-
-  /**
-   * Subscribe to the DynamoDB stream of a table that was not created in your app.
    *
-   * @param name The name of the subscriber.
-   * @param streamArn The ARN of the DynamoDB Stream to subscribe to.
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have a DynamoDB stream ARN of an existing table.
+   * To change how one subscriber is created, use the table's `transform`. Its function
+   * form is given the subscriber's name.
    *
    * ```js title="sst.config.ts"
-   * const streamArn = "arn:aws:dynamodb:us-east-1:123456789012:table/MyTable/stream/2024-02-25T23:17:55.264";
-   * ```
-   *
-   * You can subscribe to it by passing in the ARN.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Dynamo.subscribe("MySubscriber", streamArn, "src/subscriber.handler");
-   * ```
-   *
-   * Add a filter to the subscription.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Dynamo.subscribe("MySubscriber", streamArn, "src/subscriber.handler", {
-   *   filters: [
-   *     {
-   *       dynamodb: {
-   *         Keys: {
-   *           CustomerName: {
-   *             S: ["AnyCompany Industries"]
-   *           }
-   *         }
-   *       }
+   * new sst.aws.Dynamo("MyTable", {
+   *   // ...
+   *   transform: {
+   *     eventSourceMapping: (args, opts, name, subscriber) => {
+   *       if (subscriber === "MySubscriber") args.startingPosition = "TRIM_HORIZON";
    *     }
-   *   ]
-   * });
-   * ```
-   *
-   * Customize the subscriber function.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Dynamo.subscribe("MySubscriber", streamArn, {
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds"
+   *   }
    * });
    * ```
    */
-  public static subscribe(
+  public subscribe(
     name: string,
-    streamArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: DynamoSubscriberArgs,
-  ): Output<DynamoLambdaSubscriber>;
-  /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
-   */
-  public static subscribe(
-    streamArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: DynamoSubscriberArgs,
-  ): Output<DynamoLambdaSubscriber>;
-
-  public static subscribe(
-    nameOrStreamArn: any,
-    streamArnOrSubscriber: any,
-    subscriberOrArgs?: any,
-    args?: any,
-  ) {
-    return isFunctionSubscriber(subscriberOrArgs).apply((v) =>
-      v
-        ? output(streamArnOrSubscriber).apply((streamArn) =>
-            this._subscribe(
-              nameOrStreamArn, // name
-              logicalName(parseDynamoStreamArn(streamArn).tableName),
-              streamArn,
-              subscriberOrArgs, // subscriber
-              args,
-            ),
-          )
-        : output(nameOrStreamArn).apply((streamArn) =>
-            this._subscribeV1(
-              logicalName(parseDynamoStreamArn(streamArn).tableName),
-              streamArn,
-              streamArnOrSubscriber, // subscriber
-              subscriberOrArgs, // args
-            ),
-          ),
-    );
-  }
-
-  private static _subscribe(
-    subscriberName: string,
-    name: string,
-    streamArn: string | Output<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: FunctionInput,
     args: DynamoSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
   ) {
-    return output(args).apply(
-      (args) =>
-        new DynamoLambdaSubscriber(
-          `${name}Subscriber${subscriberName}`,
-          {
-            dynamo: { streamArn },
-            subscriber,
-            ...args,
-          },
-          opts,
-        ),
+    assertNamedSubscriber(
+      `the "${this.componentName}" table`,
+      "subscribe",
+      name,
+      subscriber,
     );
-  }
+    this.assertNew("subscriber", "eventSourceMapping", name, args, [
+      "subscriber",
+      "eventSourceMapping",
+    ]);
 
-  private static _subscribeV1(
-    name: string,
-    streamArn: string | Output<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args: DynamoSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return all([name, subscriber, args]).apply(([name, subscriber, args]) => {
-      const suffix = logicalName(
-        hashStringToPrettyString(
-          [
-            typeof streamArn === "string" ? streamArn : outputId,
-            JSON.stringify(args.filters ?? {}),
-            typeof subscriber === "string" ? subscriber : subscriber.handler,
-          ].join(""),
-          6,
-        ),
-      );
-
-      return new DynamoLambdaSubscriber(
-        `${name}Subscriber${suffix}`,
-        {
-          dynamo: { streamArn },
-          subscriber,
-          disableParent: true,
-          ...args,
-        },
-        opts,
-      );
+    eventSourceSubscriber(this.builder(), name, subscriber, {
+      component: this.componentName,
+      kind: "table",
+      source: this.streamArn,
+      actions: [
+        "dynamodb:DescribeStream",
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator",
+        "dynamodb:ListStreams",
+      ],
+      mapping: {
+        filterCriteria: filterCriteria(args.filters),
+        startingPosition: "LATEST",
+      },
     });
+
+    return this;
   }
 
   /**
-   * Reference an existing DynamoDB Table with the given table name. This is useful when you
-   * create a table in one stage and want to share it in another stage. It avoid having to
-   * create a new table in the other stage.
+   * `sst.aws.Dynamo.subscribe` subscribed to a table's stream by its ARN. Reference the
+   * table with `get` and subscribe to that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to the stream of a table that isn't in your app, reference the table with "get" and subscribe to that: sst.aws.Dynamo.get("MyTable", streamArn).subscribe("MySubscriber", "src/subscriber.handler").`,
+    );
+  }
+
+  /**
+   * Reference an existing DynamoDB Table with the given table name, its ARN, or the ARN of
+   * its stream. This is useful when you create a table in one stage and want to share it
+   * in another stage, or to subscribe to the stream of a table that isn't in your app.
    *
    * :::tip
    * You can use the `static get` method to share a table across stages.
    * :::
    *
    * @param name The name of the component.
-   * @param tableName The name of the DynamoDB Table.
-   * @param opts Resource options.
+   * @param table The name of the DynamoDB Table, its ARN, or the ARN of its stream.
+   * @param opts Component resource options.
    *
    * @example
    * Imagine you create a table in the `dev` stage. And in your personal stage `frank`,
    * instead of creating a new table, you want to share the table from `dev`.
    *
-   * ```ts title=sst.config.ts"
+   * ```ts title="sst.config.ts"
    * const table = $app.stage === "frank"
-   *  ? sst.aws.Dynamo.get("MyTable", "app-dev-mytable")
-   *  : new sst.aws.Dynamo("MyTable");
+   *   ? sst.aws.Dynamo.get("MyTable", "app-dev-mytable")
+   *   : new sst.aws.Dynamo("MyTable", {
+   *       fields: { userId: "string" },
+   *       primaryIndex: { hashKey: "userId" }
+   *     });
    * ```
    *
    * Here `app-dev-mytable` is the name of the DynamoDB Table created in the `dev` stage.
@@ -896,24 +747,35 @@ export class Dynamo extends Component implements Link.Linkable {
    *   table: table.name
    * };
    * ```
+   *
+   * Subscribe to the stream of a table that isn't in your app.
+   *
+   * ```ts title="sst.config.ts"
+   * sst.aws.Dynamo
+   *   .get("Orders", "orders-table")
+   *   .subscribe("MySubscriber", "src/subscriber.handler");
+   * ```
    */
   public static get(
     name: string,
-    tableName: Input<string>,
+    table: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Dynamo(name, {
-      ref: true,
-      table: dynamodb.Table.get(`${name}Table`, tableName, undefined, opts),
-    } satisfies DynamoRef as unknown as DynamoArgs);
+    // A table is looked up by its name
+    const tableName = output(table).apply((id) =>
+      id.startsWith("arn:") ? parseDynamoArn(id).tableName : id,
+    );
+    const args: Partial<DynamoArgs> = { existing: { table: tableName } };
+    return new Dynamo(name, getArgs(args) as DynamoArgs, opts);
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking a table gives the linked resource the table's name and permission
+   * to use it.
+   */
+  public link() {
     return {
-      properties: {
-        name: this.name,
-      },
+      properties: { name: this.name },
       include: [
         permission({
           actions: ["dynamodb:*"],
@@ -924,6 +786,29 @@ export class Dynamo extends Component implements Link.Linkable {
   }
 }
 
-const __pulumiType = "sst:aws:Dynamo";
-// @ts-expect-error
-Dynamo.__pulumiType = __pulumiType;
+// A key made of several fields is written as a key schema
+function indexKeys(index: { hashKey: IndexKey; rangeKey?: IndexKey }) {
+  if (Array.isArray(index.hashKey) || Array.isArray(index.rangeKey))
+    return {
+      keySchemas: [
+        ...[index.hashKey].flat().map((attributeName) => ({
+          attributeName,
+          keyType: "HASH",
+        })),
+        ...(index.rangeKey ? [index.rangeKey].flat() : []).map(
+          (attributeName) => ({ attributeName, keyType: "RANGE" }),
+        ),
+      ],
+    };
+  return {
+    hashKey: index.hashKey,
+    ...(index.rangeKey ? { rangeKey: index.rangeKey } : {}),
+  };
+}
+
+function projection(fields?: Projection) {
+  if (fields === "keys-only") return { projectionType: "KEYS_ONLY" };
+  if (Array.isArray(fields))
+    return { projectionType: "INCLUDE", nonKeyAttributes: fields };
+  return { projectionType: "ALL" };
+}

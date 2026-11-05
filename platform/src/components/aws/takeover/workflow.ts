@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Workflow } from "../v5/workflow";
+import { Workflow } from "../workflow";
 
 // Nothing moved. The map says the 4.x form has this 5.0 form, so a stage
 // switches it with `sst migrate`, and a new stage refuses the 4.x one.

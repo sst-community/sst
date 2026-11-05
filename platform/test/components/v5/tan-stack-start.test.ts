@@ -74,9 +74,10 @@ ssrSiteSuite(
     name: "TanStackStart",
     site: "Web",
     load: async () => ({
-      original: (await import("../../../src/components/aws/tan-stack-start"))
-        .TanStackStart as any,
-      v5: (await import("../../../src/components/aws/v5/tan-stack-start"))
+      original: (
+        await import("../../fixtures/v4/components/aws/tan-stack-start")
+      ).TanStackStart as any,
+      v5: (await import("../../../src/components/aws/tan-stack-start"))
         .TanStackStart as any,
     }),
     paths: { site, based, app },
@@ -133,9 +134,7 @@ ssrSiteSuite(
 
       it("reads the base path where Nitro 3 puts the server's code", async () => {
         writeSite("nitro3", { base: "/docs", nitro3: true });
-        const { Router } = await import(
-          "../../../src/components/aws/v5/router"
-        );
+        const { Router } = await import("../../../src/components/aws/router");
         const failures = await rejectionsOf(async () => {
           new (Site())("Web", {
             path: "nitro3",

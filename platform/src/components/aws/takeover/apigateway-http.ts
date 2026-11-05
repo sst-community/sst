@@ -1,7 +1,7 @@
 import { takeover } from "../../takeover";
 import { outputId } from "../../component";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { ApiGatewayHttp } from "../v5/apigateway-http";
+import { ApiGatewayHttp } from "../apigateway-http";
 import { childOf } from "./helpers";
 
 // The 4.x `ApiGatewayV2` keeps each route in a component of its own, next to

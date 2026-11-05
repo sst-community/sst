@@ -3,20 +3,18 @@ import { ec2 } from "@pulumi/aws";
 import { knownValue } from "../../args";
 import { VisibleError } from "../../error";
 import { warnOnce } from "../../../util/warn";
-import { Vpc as OriginalVpc } from "../vpc";
-import { Vpc } from "../v5/vpc";
+import { Vpc } from "../vpc";
 
 /**
- * A `Vpc` component: the 4.x one or the V5 one. Every V5 component that takes
- * a VPC takes either. They read its `id`, `publicSubnets`, `privateSubnets`,
- * `securityGroups`, `nodes.vpc` and `nodes.cloudmapNamespace`, which the two
- * give alike, and whether it has a NAT with `hasNat()`.
+ * A `Vpc` component. Every component that takes a VPC reads its `id`,
+ * `publicSubnets`, `privateSubnets`, `securityGroups`, `nodes.vpc` and
+ * `nodes.cloudmapNamespace`, and whether it has a NAT with `hasNat()`.
  */
-export type AnyVpc = OriginalVpc | Vpc;
+export type AnyVpc = Vpc;
 
 /** Whether a `vpc` arg is a `Vpc` component, and not the ids of a VPC. */
 export function isVpc(vpc: unknown): vpc is AnyVpc {
-  return vpc instanceof OriginalVpc || vpc instanceof Vpc;
+  return vpc instanceof Vpc;
 }
 
 /**
@@ -51,7 +49,7 @@ export function subnetsAndSecurityGroupsOf(
   what: string,
 ) {
   if (isVpc(vpc)) {
-    // The two `Vpc`s type these differently
+    // Inputs, as `Vpc` types them
     const securityGroups: Input<Input<string>[]> = vpc.securityGroups;
     return {
       subnets: subnetsOf(vpc, "private"),
@@ -83,7 +81,7 @@ export function privateNetworkOf(
   noNat: (id: string) => string,
 ): { privateSubnets: Output<string[]>; securityGroups: Output<string[]> } {
   if (isVpc(vpc)) {
-    // The two `Vpc`s type these differently
+    // Inputs, as `Vpc` types them
     const privateSubnets: Input<Input<string>[]> = vpc.privateSubnets;
     const securityGroups: Input<Input<string>[]> = vpc.securityGroups;
     // What's put in the VPC waits for the warning
@@ -111,7 +109,7 @@ export function privateNetworkOf(
   };
 }
 
-/** The ids of a VPC's public or private subnets, from either kind of `Vpc`. */
+/** The ids of a VPC's public or private subnets. */
 export function subnetsOf(
   vpc: AnyVpc,
   kind: "public" | "private",
@@ -126,9 +124,9 @@ export function subnetsOf(
  * under, one in each AZ:
  *
  * - For a `Vpc` the app creates, the AZ's number, as the VPC keeps its own
- *   subnets. A V5 `Vpc` gives them as the program runs; a 4.x one, which made
- *   its subnets in the order of its AZs, once a preview knows them. Either
- *   way the keys are the same, so switching the `Vpc` keeps what's made.
+ *   subnets, which it gives as the program runs. SST 4's `Vpc` made its
+ *   subnets in the order of its AZs, so the keys are the same, and a move
+ *   keeps what's made.
  * - For a `Vpc` from `get`, the AZ's name, since its lookup keeps no order,
  *   as `subnetsByAz()` finds it.
  *
@@ -146,14 +144,7 @@ export function privateSubnetsOf(
 ):
   | Record<string, Output<string>>
   | Promise<Record<string, Output<string>> | undefined> {
-  if (vpc instanceof Vpc && vpc.privateSubnetsByAz)
-    return vpc.privateSubnetsByAz;
-  if (vpc instanceof OriginalVpc && !vpc.isReferenced)
-    return knownValue(vpc.nodes.privateSubnets).then(
-      (subnets) =>
-        subnets &&
-        Object.fromEntries(subnets.map((subnet, i) => [`${i + 1}`, subnet.id])),
-    );
+  if (vpc.privateSubnetsByAz) return vpc.privateSubnetsByAz;
   return subnetsByAz(subnetsOf(vpc, "private"), parent, what);
 }
 
@@ -196,25 +187,8 @@ export function subnetsByAz(
 
 /**
  * Whether a VPC's private subnets reach the internet through a NAT.
- * `undefined` when that isn't known, as for a V5 `Vpc` that's referenced.
+ * `undefined` when that isn't known, as for a `Vpc` that's referenced.
  */
 export function hasNat(vpc: AnyVpc): Output<boolean | undefined> {
-  if (vpc instanceof Vpc) return output(vpc.hasNat);
-  return output([vpc.nodes.natGateways, vpc.nodes.natInstances]).apply(
-    ([natGateways, natInstances]) =>
-      natGateways.length > 0 || natInstances.length > 0,
-  );
+  return output(vpc.hasNat);
 }
-
-// The args of a component that takes a VPC, with a `vpc` that can be either
-// kind of `Vpc`:
-//
-//   interface RedisArgs extends V5Args<TakesVpc<OriginalRedisArgs>, typeof parts> {}
-//
-// (Not a doc comment: an interface that extends this would show it as its own
-// description in the generated docs.)
-export type TakesVpc<Args> = {
-  [K in keyof Args]: K extends "vpc"
-    ? AnyVpc | Exclude<Args[K], OriginalVpc>
-    : Args[K];
-};

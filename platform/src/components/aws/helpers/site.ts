@@ -62,7 +62,7 @@ export function rejectSst4SiteArgs(args: { existing?: object }, owner: string) {
     args.existing,
     "cdn",
     owner,
-    `A site creates its own distribution. To serve it through one that's deployed, serve it through a Router with "router", and reference the router with "sst.aws.v5.Router.get()".`,
+    `A site creates its own distribution. To serve it through one that's deployed, serve it through a Router with "router", and reference the router with "sst.aws.Router.get()".`,
   );
 }
 

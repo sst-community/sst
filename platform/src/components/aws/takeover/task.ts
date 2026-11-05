@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Task } from "../v5/task";
+import { Task } from "../task";
 
 takeover(Task, {
   moved: {

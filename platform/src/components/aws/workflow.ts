@@ -1,27 +1,38 @@
-import { ComponentResourceOptions, Input, output } from "@pulumi/pulumi";
-import { Duration, DurationDays, DurationMinutes } from "../duration.js";
-import { Component } from "../component.js";
-import { RETENTION } from "./logging.js";
-import { Function, FunctionArgs } from "./function.js";
+import { ComponentResourceOptions, output } from "@pulumi/pulumi";
+import { type ComponentArgs, component, named } from "../parts-component";
+import { plain, usedAsItIs } from "../args";
+import { VisibleError } from "../error";
+import type { Input } from "../input";
+import type { Duration, DurationDays, DurationMinutes } from "../duration";
+import type { RETENTION } from "./logging";
+import { Function, type FunctionArgs } from "./function";
+
+const parts = () => ({
+  /**
+   * The SST Function component backing the workflow.
+   */
+  function: named(Function, "Handler"),
+});
 
 export interface WorkflowArgs
   extends Omit<
-    FunctionArgs,
-    | "concurrency"
-    | "durable"
-    | "injections"
-    | "live"
-    | "logging"
-    | "retries"
-    | "runtime"
-    | "streaming"
-    | "timeout"
-    | "transform"
-    | "url"
-    | "versioning"
-    | "_skipHint"
-    | "_skipMetadata"
-  > {
+      FunctionArgs,
+      | "concurrency"
+      | "durable"
+      | "existing"
+      | "injections"
+      | "logging"
+      | "retries"
+      | "runtime"
+      | "streaming"
+      | "timeout"
+      | "transform"
+      | "url"
+      | "versioning"
+      | "_skipHint"
+      | "_skipMetadata"
+    >,
+    ComponentArgs<typeof parts> {
   /**
    * The language runtime for the workflow.
    *
@@ -36,7 +47,7 @@ export interface WorkflowArgs
    * }
    * ```
    */
-  runtime?: Input<"nodejs22.x" | "nodejs24.x" | "python3.13">;
+  runtime?: "nodejs22.x" | "nodejs24.x" | "python3.13";
   /**
    * Number of days to retain the workflow execution state.
    *
@@ -69,6 +80,9 @@ export interface WorkflowArgs
    * Configure the workflow logs in CloudWatch. Or pass in `false` to disable writing logs.
    * The only supported log format is `json`.
    *
+   * Whether there are logs decides whether the log group is created, so `logging` has to be
+   * a plain value, not an output. What's in it can be an output.
+   *
    * @default `{retention: "1 month", format: "json"}`
    */
   logging?:
@@ -86,7 +100,7 @@ export interface WorkflowArgs
         /**
          * The duration the workflow logs are kept in CloudWatch.
          *
-         * Not applicable when an existing log group is provided.
+         * It can't be set with `logGroup`, which has its own retention.
          *
          * @default `1 month`
          * @example
@@ -117,24 +131,15 @@ export interface WorkflowArgs
          */
         logGroup?: Input<string>;
       };
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying resources.
-   */
-  transform?: {
-    /**
-     * Transform the underlying SST Function component resources.
-     */
-    function?: FunctionArgs["transform"];
-  };
 }
 
 /**
  * The `Workflow` component lets you add serverless workflows to your app using
  * [AWS Lambda Durable Functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
  *
- * It's a thin wrapper around the [`Function`](/docs/component/aws/function) component
+ * It's a thin wrapper around the [`Function`](/docs/component/aws/v5/function) component
  * with durable execution enabled.
- * It includes an [SDK](/docs/components/aws/workflow/#sdk) that wraps the AWS SDK with a simpler interface, adds helper methods, and makes it easier to integrate with other SST components.
+ * It includes an [SDK](#sdk) that wraps the AWS SDK with a simpler interface, adds helper methods, and makes it easier to integrate with other SST components.
  *
  * @example
  *
@@ -204,7 +209,7 @@ export interface WorkflowArgs
  *   handler: "src/workflow.handler",
  * });
  *
- * new sst.aws.CronV2("MyCron", {
+ * new sst.aws.Cron("MyCron", {
  *   schedule: "rate(1 minute)",
  *   function: workflow,
  * });
@@ -263,6 +268,25 @@ export interface WorkflowArgs
  *
  * [Check out the full example](/docs/examples/#aws-workflow-bus).
  *
+ * #### Switch from SST 4's `sst.aws.Workflow`
+ *
+ * Keep the name, and `sst migrate` moves it. Its function,
+ * `<name>Handler`, becomes a V5 `Function` under the same name, as the `Function`'s own
+ * "Switch from" says. A few things are written differently:
+ *
+ * - `transform.function` transforms the function's args, as the `transform` of any part
+ *   does. What `sst.aws.Workflow` took there, the function's own `transform`, goes in
+ *   `transform.function.transform`.
+ * - What the function is built from, like `handler`, `runtime` or `bundle`, has to be a
+ *   plain value, not an output, as [`sst.aws.Function`](/docs/component/aws/v5/function)
+ *   takes it. So does `logging`, since whether there are logs decides whether a log group
+ *   is created. What's in `logging` can be an output.
+ * - A workflow can be given to the V5 `Cron`, `Bus` and the other V5 components that take
+ *   a function, as `sst.aws.Workflow` could be to theirs. SST 4's components don't take the
+ *   V5 one: switch a component the workflow is given to with it.
+ * - `role` isn't one of its args, as it isn't the V5 `Function`'s. To give the function a
+ *   role you have, write `transform: { function: { existing: { role } } }`.
+ *
  * ---
  *
  * ### Limitations
@@ -304,108 +328,120 @@ export interface WorkflowArgs
  * [AWS Lambda pricing](https://aws.amazon.com/lambda/pricing/#Lambda_Durable_Functions_Pricing)
  * for more details.
  */
-export class Workflow extends Component {
-  private readonly fn: Function;
-
+export class Workflow extends component("sst:aws:Workflow", parts) {
   constructor(
     name: string,
     args: WorkflowArgs,
     opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    const timeouts = normalizeTimeouts();
-    const logging = normalizeLogging();
+    // What SST 4 took in `transform.function` was the function's own
+    // transform, which goes in its `transform` now
+    const fnTransform = args.transform?.function;
+    if (
+      fnTransform &&
+      typeof fnTransform === "object" &&
+      (["function", "logGroup", "eventInvokeConfig"].some(
+        (key) => key in fnTransform,
+      ) ||
+        typeof (fnTransform as Record<string, unknown>).role === "object")
+    )
+      throw new VisibleError(
+        `The "transform.function" of the "${name}" workflow transforms the function's args. To transform the function's own resources, as SST 4 took there, put them in "transform.function.transform": { function: { transform: { function: { ... } } } }.`,
+      );
 
-    this.fn = new Function(
-      `${name}Handler`,
-      {
-        ...args,
-        logging,
-        versioning: true, // deployments should not override running workflows
-        timeout: timeouts.invocation,
-        durable: {
-          timeout: timeouts.execution,
-          retention: args.retention,
-        },
-        transform: args.transform?.function,
-      },
-      { parent: this },
+    const {
+      transform: _transform,
+      existing: _existing,
+      timeout,
+      retention,
+      logging: givenLogging,
+      ...functionArgs
+    } = args;
+    // A function that's already there is used the way it is: whatever would
+    // configure it is refused
+    if (this.existingPart("function"))
+      usedAsItIs(
+        args,
+        Object.keys(args).filter(
+          (key) => key !== "transform" && key !== "existing",
+        ),
+        "function",
+        `the "${name}" workflow`,
+      );
+    const timeouts = output(timeout);
+    const logging = plain(
+      givenLogging,
+      `The "logging" of the "${name}" workflow`,
     );
+    plain(args.runtime, `The "runtime" of the "${name}" workflow`);
 
+    this.part("function", {
+      ...functionArgs,
+      logging:
+        logging === undefined
+          ? undefined
+          : logging === false
+            ? false
+            : {
+                retention: logging.retention,
+                format: "json" as const,
+              },
+      ...(logging && logging.logGroup !== undefined
+        ? { existing: { logGroup: logging.logGroup } }
+        : {}),
+      // A deploy doesn't change the code of a workflow that's running
+      versioning: true,
+      timeout: timeouts.apply((timeout) => timeout?.invocation ?? "5 minutes"),
+      durable: {
+        timeout: timeouts.apply((timeout) => timeout?.execution ?? "14 days"),
+        retention,
+      },
+    });
+
+    // As SST 4 registered them
     this.registerOutputs({
       name: this.name,
       arn: this.arn,
       qualifier: this.qualifier,
     });
-
-    function normalizeTimeouts() {
-      const timeouts = output(args.timeout);
-
-      return {
-        invocation: timeouts.apply(
-          (timeout) => timeout?.invocation ?? "5 minutes",
-        ),
-        execution: timeouts.apply(
-          (timeout) => timeout?.execution ?? "14 days",
-        ),
-      };
-    }
-
-    function normalizeLogging() {
-      if (args.logging === undefined) return undefined;
-
-      return output(args.logging).apply((logging) => {
-        if (logging === false) return false;
-        return {
-          ...logging,
-          format: "json" as const,
-        };
-      });
-    }
-  }
-
-  /** @internal */
-  public getFunction() {
-    return this.fn;
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
+   * The function backing the workflow.
    */
-  public get nodes() {
-    return {
-      /**
-       * The SST Function component backing the workflow.
-       */
-      function: this.fn,
-    };
+  public getFunction() {
+    return this.nodes.function;
   }
 
   /**
    * The name of the Lambda function backing the workflow.
    */
   public get name() {
-    return this.fn.name;
+    return this.nodes.function.name;
   }
 
   /**
    * The ARN of the Lambda function backing the workflow.
    */
   public get arn() {
-    return this.fn.arn;
+    return this.nodes.function.arn;
   }
 
   /**
    * The published version qualifier backing the workflow.
    */
   public get qualifier() {
-    return this.fn.qualifier;
+    return this.nodes.function.qualifier;
   }
 
-  /** @internal */
-  public getSSTLink() {
-    const link = this.fn.getSSTLink();
+  /**
+   * Linking a workflow gives the linked resource the name of its function and the version
+   * it runs, and lets it start the workflow and manage its executions.
+   */
+  public link() {
+    const link = this.nodes.function.link();
     return {
       properties: {
         name: link.properties.name,
@@ -415,7 +451,3 @@ export class Workflow extends Component {
     };
   }
 }
-
-const __pulumiType = "sst:aws:Workflow";
-// @ts-expect-error
-Workflow.__pulumiType = __pulumiType;

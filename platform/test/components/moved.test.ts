@@ -6,6 +6,8 @@ import { component } from "../../src/components/parts-component";
 import { takeover } from "../../src/components/takeover";
 import { leaveMarker, recordVersions } from "../../src/components/move";
 import { newRun } from "../../src/util/lazy";
+// SST 4's form of a component, frozen in the fixtures
+import * as Sst4 from "../fixtures/v4/components/aws/index";
 
 const app = await mock({ app: "acme", stage: "dev" });
 const cli = (globalThis as any).$cli;
@@ -74,8 +76,8 @@ describe("the marker of a stage on SST 5's components", () => {
   it("is left after the program when the stage moves, with all but what it kept", () => {
     stage({ move: true, types: [Bucket, Queue] });
     expect(leaveMarker("before")).toBeUndefined();
-    new sst.aws.Bucket("Uploads");
-    new sst.aws.v5.Queue("Jobs");
+    new Sst4.Bucket("Uploads");
+    new sst.aws.Queue("Jobs");
     const listed = leaveMarker("after")!;
     expect(listed.get(Queue)).toBe(1);
     expect(listed.has(Bucket)).toBe(false);
@@ -83,7 +85,7 @@ describe("the marker of a stage on SST 5's components", () => {
 
   it("waits for everything the move deploys, so one that fails is moved again", async () => {
     stage({ move: true, types: [Queue] });
-    const jobs = new sst.aws.v5.Queue("Jobs");
+    const jobs = new sst.aws.Queue("Jobs");
     leaveMarker("after");
     recordVersions();
     await app.settle();
@@ -99,7 +101,7 @@ describe("the marker of a stage on SST 5's components", () => {
     // The core refuses to deploy one; its diff shows nothing new
     stage({ types: [Bucket] });
     expect(leaveMarker("before")).toBeUndefined();
-    new sst.aws.Bucket("Uploads");
+    new Sst4.Bucket("Uploads");
     expect(leaveMarker("after")).toBeUndefined();
   });
 
@@ -114,15 +116,15 @@ describe("the marker of a stage on SST 5's components", () => {
   describe("and SST 4's form of a component that has a 5.0 form", () => {
     it("is refused on a stage that moved to the 5.0 form", () => {
       stage({ moved: true, components: { [Bucket]: 1 }, types: [Bucket] });
-      expect(() => new sst.aws.Bucket("Uploads")).toThrow(
+      expect(() => new Sst4.Bucket("Uploads")).toThrow(
         "\"Uploads\" is SST 4's sst.aws.Bucket, and this stage has moved to its 5.0 form. Use the 5.0 form: a stage doesn't go back to SST 4's components by a deploy.",
       );
-      expect(() => new sst.aws.v5.Bucket("Files")).not.toThrow();
+      expect(() => new sst.aws.Bucket("Files")).not.toThrow();
     });
 
     it("is refused on a new stage", () => {
       stage({ empty: true });
-      expect(() => new sst.aws.Bucket("Uploads")).toThrow(
+      expect(() => new Sst4.Bucket("Uploads")).toThrow(
         "\"Uploads\" is SST 4's sst.aws.Bucket. A new stage starts on SST 5's components: use its 5.0 form.",
       );
     });
@@ -130,35 +132,35 @@ describe("the marker of a stage on SST 5's components", () => {
     it("runs on a stage that hasn't moved", () => {
       // Its diff, and its move
       stage({ types: [Bucket] });
-      expect(() => new sst.aws.Bucket("Uploads")).not.toThrow();
+      expect(() => new Sst4.Bucket("Uploads")).not.toThrow();
     });
 
     it("runs on a stage that moved before it had a 5.0 form, until a move switches it", () => {
       // The marker doesn't list it, and the stage has it
       stage({ moved: true, components: { [Nextjs]: 1 }, types: [Bucket, Nextjs] });
-      expect(() => new sst.aws.Bucket("Uploads")).not.toThrow();
+      expect(() => new Sst4.Bucket("Uploads")).not.toThrow();
       expect(leaveMarker("after")).toBeUndefined();
-      expect(() => new sst.aws.v5.Bucket("Files")).toThrow(
+      expect(() => new sst.aws.Bucket("Files")).toThrow(
         "\"Files\" is SST 5's sst.aws.Bucket, and this stage still has SST 4's sst.aws.Bucket. Switching to it is a move: `sst migrate --check` shows what it does, and `sst migrate` makes it.",
       );
     });
 
     it("counts as moved on a stage that has none of it", () => {
       stage({ moved: true, components: { [Nextjs]: 1 }, types: [Nextjs] });
-      expect(() => new sst.aws.v5.Bucket("Files")).not.toThrow();
-      expect(() => new sst.aws.Bucket("Uploads")).toThrow(/has moved/);
+      expect(() => new sst.aws.Bucket("Files")).not.toThrow();
+      expect(() => new Sst4.Bucket("Uploads")).toThrow(/has moved/);
     });
 
     it("is switched all at once by a move", () => {
       stage({ move: true, types: [Bucket] });
-      new sst.aws.v5.Bucket("Files");
-      expect(() => new sst.aws.Bucket("Uploads")).toThrow(
+      new sst.aws.Bucket("Files");
+      expect(() => new Sst4.Bucket("Uploads")).toThrow(
         '"Uploads" is SST 4\'s sst.aws.Bucket, and this move switches others to their 5.0 form. A move switches all of a component at once: use its 5.0 form.',
       );
       newRun();
       stage({ move: true, types: [Bucket] });
-      new sst.aws.Bucket("Uploads");
-      expect(() => new sst.aws.v5.Bucket("Files")).toThrow(
+      new Sst4.Bucket("Uploads");
+      expect(() => new sst.aws.Bucket("Files")).toThrow(
         "\"Files\" is SST 5's sst.aws.Bucket, and this move keeps others in SST 4's form. A move switches all of a component at once: use the 5.0 form for each.",
       );
     });
@@ -167,7 +169,7 @@ describe("the marker of a stage on SST 5's components", () => {
       // As inside an `apply` the program didn't wait for
       stage({ move: true, types: [Bucket] });
       leaveMarker("after");
-      expect(() => new sst.aws.Bucket("Uploads")).toThrow(/has moved/);
+      expect(() => new Sst4.Bucket("Uploads")).toThrow(/has moved/);
     });
 
     it("moves with the component of SST's it's in", () => {
@@ -175,24 +177,24 @@ describe("the marker of a stage on SST 5's components", () => {
       // Like the functions SST 4's sites create
       const site = new Component("sst:aws:Site", "Web");
       expect(
-        () => new sst.aws.Bucket("WebAssets", {}, { parent: site }),
+        () => new Sst4.Bucket("WebAssets", {}, { parent: site }),
       ).not.toThrow();
       newRun();
       stage({ move: true, types: [Bucket] });
-      new sst.aws.Bucket("WebFiles", {}, { parent: site });
+      new Sst4.Bucket("WebFiles", {}, { parent: site });
       expect(leaveMarker("after")?.get(Bucket)).toBe(1);
       // Nor does it keep the stage from having a 5.0 one at the top
       newRun();
       stage({ moved: true, components: {}, types: [], nested: [Bucket] });
-      expect(() => new sst.aws.v5.Bucket("Files")).not.toThrow();
+      expect(() => new sst.aws.Bucket("Files")).not.toThrow();
     });
 
     it("is kept by a move at the top of the app, beside a 5.0 one inside one of SST's", () => {
       // A 5.0 site's bucket moves with the site; the app's own stays SST 4's
       stage({ move: true, types: [Bucket] });
       const site = new Component("sst:aws:Site", "Web");
-      new sst.aws.v5.Bucket("WebAssets", {}, { parent: site });
-      new sst.aws.Bucket("Uploads");
+      new sst.aws.Bucket("WebAssets", {}, { parent: site });
+      new Sst4.Bucket("Uploads");
       expect(leaveMarker("after")?.has(Bucket)).toBe(false);
       expect(recordVersions()?.has(Bucket)).toBe(false);
       // The site's is listed apart
@@ -203,21 +205,21 @@ describe("the marker of a stage on SST 5's components", () => {
       stage({ moved: true, components: {}, types: [Bucket] });
       expect(leaveMarker("before")?.has(Bucket)).toBe(false);
       const docs = new Component("sst:aws:Site", "Docs");
-      new sst.aws.v5.Bucket("DocsAssets", {}, { parent: docs });
-      expect(() => new sst.aws.Bucket("Uploads")).not.toThrow();
+      new sst.aws.Bucket("DocsAssets", {}, { parent: docs });
+      expect(() => new Sst4.Bucket("Uploads")).not.toThrow();
       expect(recordVersions()?.has(Bucket)).toBe(false);
-      expect(() => new sst.aws.v5.Bucket("Files")).toThrow(/still has SST 4's/);
+      expect(() => new sst.aws.Bucket("Files")).toThrow(/still has SST 4's/);
       // Until a move switches it, and lists it
       newRun();
       stage({ move: true, moved: true, components: {}, types: [Bucket] });
-      new sst.aws.v5.Bucket("Uploads");
+      new sst.aws.Bucket("Uploads");
       expect(leaveMarker("after")?.get(Bucket)).toBe(1);
     });
 
     it("counts inside an app's or a package's own component", () => {
       stage({ move: true, types: [Bucket] });
       const wrapper = new Component("acme:index:Wrapper", "Wrapper");
-      new sst.aws.Bucket("WrapperFiles", {}, { parent: wrapper });
+      new Sst4.Bucket("WrapperFiles", {}, { parent: wrapper });
       expect(leaveMarker("after")?.has(Bucket)).toBe(false);
     });
 

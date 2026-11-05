@@ -1,7 +1,7 @@
 import { interpolate } from "@pulumi/pulumi";
 import { takeover } from "../../takeover";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { Bucket } from "../v5/bucket";
+import { Bucket } from "../bucket";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Bucket` keeps what `notify()` creates in a component of its own,

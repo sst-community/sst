@@ -3,11 +3,11 @@
 // `EVERY_PART` lists, so `sst diff` and `sst migrate --check` see everything a
 // deploy creates.
 export async function everyPart() {
-  const { Bucket } = await import("../../../src/components/aws/v5/bucket");
-  const { Function } = await import("../../../src/components/aws/v5/function");
-  const { Queue } = await import("../../../src/components/aws/v5/queue");
+  const { Bucket } = await import("../../../src/components/aws/bucket");
+  const { Function } = await import("../../../src/components/aws/function");
+  const { Queue } = await import("../../../src/components/aws/queue");
   const { SnsTopic } = await import(
-    "../../../src/components/aws/v5/sns-topic"
+    "../../../src/components/aws/sns-topic"
   );
   await import("../../../src/components/aws/takeover/index");
 

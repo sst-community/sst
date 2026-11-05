@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { Router } from "../v5/router";
+import { Router } from "../router";
 import { childOf } from "./helpers";
 
 // The 4.x `Router` keeps each route of `route()` and `routeBucket()` in a

@@ -1,14 +1,25 @@
+import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output } from "@pulumi/pulumi";
-import { VisibleError } from "../error.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
-import { existsAsync } from "../../util/fs.js";
+import type { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import { VisibleError } from "../error";
 import {
   validateFrameworkConfig,
   validateNoWranglerFile,
-} from "./helpers/validation.js";
+} from "./helpers/validation";
+import {
+  type SsrFramework,
+  type SsrSiteArgs,
+  ssrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { WorkerArgs } from "./worker";
 
-export interface ReactRouterArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface ReactRouterArgs
+  extends SsrSiteArgs,
+    ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -22,7 +33,39 @@ export interface ReactRouterArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
   /**
    * Path to the directory where your React Router app is located. This path is relative to your `sst.config.ts`.
    *
@@ -39,7 +82,7 @@ export interface ReactRouterArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
+  path?: string;
   /**
    * [Link resources](/docs/linking/) to your React Router app. This will:
    *
@@ -64,7 +107,7 @@ export interface ReactRouterArgs extends SsrSiteArgs {
    * console.log(Resource.MyBucket.name);
    * ```
    */
-  link?: SsrSiteArgs["link"];
+  link?: any[];
   /**
    * Set environment variables in your React Router app. These are made available:
    *
@@ -94,9 +137,13 @@ export interface ReactRouterArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  environment?: SsrSiteArgs["environment"];
+  environment?: Input<Record<string, Input<string>>>;
   /**
-   * Set a custom domain for your React Router app.
+   * Set a custom domain for your React Router app. Supports domains hosted on Cloudflare.
+   *
+   * A domain given as an object is a plain value, not an output: each of
+   * its `aliases` and `redirects` creates resources of its own. Its `name`
+   * can be an output, and so can a domain given as a string.
    *
    * @example
    *
@@ -128,11 +175,11 @@ export interface ReactRouterArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: WorkerArgs["domain"];
   /**
    * The command used internally to build your React Router app.
    *
-   * @default `"npm run build"`
+   * @default The `build` script in your `package.json`, run with the package manager whose lockfile is there, like `"npm run build"`.
    *
    * @example
    *
@@ -143,8 +190,47 @@ export interface ReactRouterArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  buildCommand?: SsrSiteArgs["buildCommand"];
+  buildCommand?: string;
 }
+
+// React Router's build, as Cloudflare's Vite plugin writes it
+const reactRouter: SsrFramework = {
+  label: "React Router",
+  check(site, owner) {
+    validateFrameworkConfig({
+      sitePath: site,
+      configName: "vite.config",
+      componentName: owner,
+    });
+    validateNoWranglerFile(site, owner);
+  },
+  // The Worker's entry, which the Vite plugin builds from
+  wrangler: (site) => ({ main: path.join(site, "workers", "app.ts") }),
+  async load(site, owner) {
+    const server = path.join("build", "server", "index.js");
+    const assets = path.join("build", "client");
+    if (!fs.existsSync(path.join(site, server)))
+      throw new VisibleError(
+        [
+          `The build of ${owner} has no Worker at "${path.join(
+            site,
+            server,
+          )}".`,
+          "",
+          "Make sure the Cloudflare Vite plugin is configured in your `vite.config.ts`.",
+          "If your React Router app is entirely pre-rendered, use `sst.cloudflare.StaticSite` instead.",
+        ].join("\n"),
+      );
+    if (!fs.existsSync(path.join(site, assets)))
+      throw new VisibleError(
+        `The build of ${owner} has no files to serve at "${path.join(
+          site,
+          assets,
+        )}".`,
+      );
+    return { server, assets };
+  },
+};
 
 /**
  * The `ReactRouter` component lets you deploy a [React Router v7](https://reactrouter.com) app to Cloudflare.
@@ -252,58 +338,45 @@ export interface ReactRouterArgs extends SsrSiteArgs {
  * ```
  *
  * [Check out the full example](/docs/examples/#cloudflare-react-router).
+ *
+ * #### Switch from SST 4's `sst.cloudflare.ReactRouter`
+ *
+ * Keep the name, and `sst migrate` moves it.
+ * The app's Worker, its URL and its custom domains are kept. A few things are written
+ * differently:
+ *
+ * - The app is built in the deploy itself, once, with the values of what it's linked to.
+ *   `sst.cloudflare.ReactRouter` built it with a command it kept in the state, which goes.
+ * - `sst diff` builds the app too, and writes the Wrangler config its build reads. Values
+ *   that aren't known until the deploy, like those of what the same deploy creates on a new
+ *   stage, are left out of that build and of that config, and so is the binding to something
+ *   that isn't created yet, like a new KV namespace. `sst.cloudflare.ReactRouter` skipped its
+ *   build in `sst diff` then.
+ * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
+ *   pack, build the app twice: in the preview, and in the deploy.
+ * - `sst refresh` doesn't build the app, where `sst.cloudflare.ReactRouter` did. Its Worker
+ *   stays as it is, and isn't listed while it runs.
+ * - `path`, `buildCommand` and `link` have to be plain values, not outputs: the build reads
+ *   them, or they decide what's created. A `domain` given as an object is a plain value
+ *   too. Its `name` can be an output, and so can a domain given as a string.
+ * - `compatibility` sets the Worker's compatibility date and flags, and the Wrangler config's.
+ *   One set in `transform.server` still reaches both.
+ * - In `sst dev`, reading `nodes.server` says the app runs on your machine, where
+ *   `sst.cloudflare.ReactRouter` gave `undefined`.
  */
-export class ReactRouter extends SsrSite {
+export class ReactRouter extends component(
+  "sst:cloudflare:ReactRouter",
+  parts,
+) {
+  private readonly siteUrl: Output<string | undefined>;
+
   constructor(
     name: string,
     args: ReactRouterArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected validate(sitePath: string): void {
-    validateFrameworkConfig({
-      sitePath,
-      configName: "vite.config",
-      componentName: "ReactRouter",
-    });
-    validateNoWranglerFile(sitePath, "ReactRouter");
-  }
-
-  protected buildPlan(outputPath: Output<string>): Output<Plan> {
-    return outputPath.apply(async (outputPath) => {
-      const serverPath = path.join(outputPath, "build", "server", "index.js");
-      const assetsPath = path.join(outputPath, "build", "client");
-
-      if (!(await existsAsync(serverPath))) {
-        throw new VisibleError(
-          [
-            `React Router server bundle not found at:\n  "${serverPath}".`,
-            "",
-            "Make sure the Cloudflare Vite plugin is configured in your `vite.config.ts`.",
-            "If your React Router project is entirely pre-rendered, use `sst.cloudflare.StaticSite` instead.",
-          ].join("\n"),
-        );
-      }
-
-      if (!(await existsAsync(assetsPath))) {
-        throw new VisibleError(
-          `React Router assets directory not found at:\n  "${assetsPath}".`,
-        );
-      }
-
-      return {
-        server: "./build/server/index.js",
-        assets: "./build/client",
-      };
-    });
-  }
-
-  protected buildWrangler(sitePath: string) {
-    return {
-      main: path.resolve(sitePath, "workers/app.ts"),
-    };
+    super(name, args, opts);
+    this.siteUrl = ssrSite(this.builder(), name, args, reactRouter).url;
   }
 
   /**
@@ -313,10 +386,14 @@ export class ReactRouter extends SsrSite {
    * Otherwise, it's the auto-generated Worker URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
-
-const __pulumiType = "sst:cloudflare:ReactRouter";
-// @ts-expect-error
-ReactRouter.__pulumiType = __pulumiType;

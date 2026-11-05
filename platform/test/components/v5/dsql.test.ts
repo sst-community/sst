@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 
 const CLUSTER = "aws:dsql/cluster:Cluster";
 const PEERING = "aws:dsql/clusterPeering:ClusterPeering";
@@ -40,20 +40,26 @@ const pulumi = mockPulumi({
 const regions = { witness: "us-west-2", peer: "us-east-2" };
 
 type DsqlClass =
-  | typeof import("../../../src/components/aws/dsql").Dsql
-  | typeof import("../../../src/components/aws/v5/dsql").Dsql;
+  | typeof import("../../fixtures/v4/components/aws/dsql").Dsql
+  | typeof import("../../../src/components/aws/dsql").Dsql;
 
 describe("Dsql", () => {
-  let OriginalDsql: typeof import("../../../src/components/aws/dsql").Dsql;
-  let Dsql: typeof import("../../../src/components/aws/v5/dsql").Dsql;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let VpcV5: typeof import("../../../src/components/aws/v5/vpc").Vpc;
+  let OriginalDsql: typeof import("../../fixtures/v4/components/aws/dsql").Dsql;
+  let Dsql: typeof import("../../../src/components/aws/dsql").Dsql;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Vpc: any;
+  let VpcV5: typeof import("../../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
-    OriginalDsql = (await import("../../../src/components/aws/dsql")).Dsql;
-    Dsql = (await import("../../../src/components/aws/v5/dsql")).Dsql;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    VpcV5 = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    OriginalDsql = (await import("../../fixtures/v4/components/aws/dsql")).Dsql;
+    Dsql = (await import("../../../src/components/aws/dsql")).Dsql;
+    Vpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    VpcV5 = (await import("../../../src/components/aws/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/dsql");
     await import("../../../src/components/aws/takeover/vpc");
   });
@@ -292,8 +298,6 @@ describe("Dsql", () => {
               },
               opts,
             ),
-          // The 4.x Vpc's version marker, with nothing in AWS behind it
-          unclaimed: ["sst:sst:Version::MyVpcVersion"],
         },
         "both endpoints": (Dsql, opts) => {
           new Dsql(

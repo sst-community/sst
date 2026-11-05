@@ -1,7 +1,9 @@
-import { ComponentResourceOptions } from "@pulumi/pulumi";
-import { Component } from "../component";
-import { Link } from "../link";
+import type { ComponentResourceOptions } from "@pulumi/pulumi";
+import { component } from "../parts-component";
 import { binding } from "./binding";
+
+// Workers AI is a binding a Worker gets. Nothing is created in Cloudflare.
+const parts = {};
 
 export interface AiArgs {}
 
@@ -38,10 +40,20 @@ export interface AiArgs {}
  *   prompt: "What is the origin of the phrase 'Hello, World'"
  * });
  * ```
+ *
+ * #### Switch from SST 4's `sst.cloudflare.Ai`
+ *
+ * Keep the name, and `sst migrate` moves it. It
+ * creates nothing in Cloudflare, and a Worker it's linked to gets the same
+ * binding, so nothing there changes.
  */
-export class Ai extends Component implements Link.Linkable {
-  constructor(name: string, args?: AiArgs, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
+export class Ai extends component("sst:cloudflare:Ai", parts) {
+  constructor(
+    name: string,
+    args: AiArgs = {},
+    opts: ComponentResourceOptions = {},
+  ) {
+    super(name, args, opts);
   }
 
   /**
@@ -59,19 +71,10 @@ export class Ai extends Component implements Link.Linkable {
    *
    * @internal
    */
-  getSSTLink() {
+  public link() {
     return {
       properties: {},
-      include: [
-        binding({
-          type: "aiBindings",
-          properties: {},
-        }),
-      ],
+      include: [binding({ type: "aiBindings", properties: {} })],
     };
   }
 }
-
-const __pulumiType = "sst:cloudflare:Ai";
-// @ts-expect-error
-Ai.__pulumiType = __pulumiType;

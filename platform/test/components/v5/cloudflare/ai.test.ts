@@ -8,22 +8,23 @@ const handler = "src/worker.mjs";
 const pulumi = mockPulumi();
 
 type AiClass =
-  | typeof import("../../../../src/components/cloudflare/ai").Ai
-  | typeof import("../../../../src/components/cloudflare/v5/ai").Ai;
+  | typeof import("../../../fixtures/v4/components/cloudflare/ai").Ai
+  | typeof import("../../../../src/components/cloudflare/ai").Ai;
 
 describe("Ai", () => {
-  let Original: typeof import("../../../../src/components/cloudflare/ai").Ai;
-  let Ai: typeof import("../../../../src/components/cloudflare/v5/ai").Ai;
-  let OriginalWorker: typeof import("../../../../src/components/cloudflare/worker").Worker;
-  let Worker: typeof import("../../../../src/components/cloudflare/v5/worker").Worker;
+  let Original: typeof import("../../../fixtures/v4/components/cloudflare/ai").Ai;
+  let Ai: typeof import("../../../../src/components/cloudflare/ai").Ai;
+  let OriginalWorker: typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker;
+  let Worker: typeof import("../../../../src/components/cloudflare/worker").Worker;
 
   beforeAll(async () => {
-    Original = (await import("../../../../src/components/cloudflare/ai")).Ai;
-    Ai = (await import("../../../../src/components/cloudflare/v5/ai")).Ai;
+    Original = (await import("../../../fixtures/v4/components/cloudflare/ai"))
+      .Ai;
+    Ai = (await import("../../../../src/components/cloudflare/ai")).Ai;
     OriginalWorker = (
-      await import("../../../../src/components/cloudflare/worker")
+      await import("../../../fixtures/v4/components/cloudflare/worker")
     ).Worker;
-    Worker = (await import("../../../../src/components/cloudflare/v5/worker"))
+    Worker = (await import("../../../../src/components/cloudflare/worker"))
       .Worker;
     await import("../../../../src/components/cloudflare/takeover/index");
   });

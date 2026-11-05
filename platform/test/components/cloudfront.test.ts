@@ -7,18 +7,16 @@ import {
   CF_BLOCK_CLOUDFRONT_URL_INJECTION,
   CF_ROUTER_INJECTION,
   routerLookupCode,
-} from "../../src/components/aws/router";
+} from "../../src/components/aws/router-code";
 
 const require = createRequire(import.meta.url);
-// The router's code: the 4.x `Router`'s handler, and the code it shares with
-// the V5 one and the sites
-const routerSource = ["router.ts", "router-code.ts"]
-  .map((file) =>
-    readFileSync(
-      new URL(`../../src/components/aws/${file}`, import.meta.url),
-      "utf8",
-    ),
-  )
+// The router's code, which the Router shares with the sites, in the handler
+// SST 4's Router wraps it in. SST 5's wraps the same pieces.
+const routerSource = [
+  "../fixtures/v4/components/aws/router.ts",
+  "../../src/components/aws/router-code.ts",
+]
+  .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
   .join("\n");
 
 type CloudFrontField = {

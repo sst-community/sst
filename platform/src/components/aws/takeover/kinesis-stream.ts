@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { logicalName } from "../../naming";
-import { KinesisStream } from "../v5/kinesis-stream";
+import { KinesisStream } from "../kinesis-stream";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `KinesisStream` keeps each subscription in a component of its own,

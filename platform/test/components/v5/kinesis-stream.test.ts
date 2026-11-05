@@ -22,19 +22,18 @@ const pulumi = mockPulumi({
 });
 
 type StreamClass =
-  | typeof import("../../../src/components/aws/kinesis-stream").KinesisStream
-  | typeof import("../../../src/components/aws/v5/kinesis-stream").KinesisStream;
+  | typeof import("../../fixtures/v4/components/aws/kinesis-stream").KinesisStream
+  | typeof import("../../../src/components/aws/kinesis-stream").KinesisStream;
 
 describe("KinesisStream", () => {
-  let Original: typeof import("../../../src/components/aws/kinesis-stream").KinesisStream;
-  let KinesisStream: typeof import("../../../src/components/aws/v5/kinesis-stream").KinesisStream;
+  let Original: typeof import("../../fixtures/v4/components/aws/kinesis-stream").KinesisStream;
+  let KinesisStream: typeof import("../../../src/components/aws/kinesis-stream").KinesisStream;
 
   beforeAll(async () => {
-    Original = (await import("../../../src/components/aws/kinesis-stream"))
+    Original = (await import("../../fixtures/v4/components/aws/kinesis-stream"))
       .KinesisStream;
-    KinesisStream = (
-      await import("../../../src/components/aws/v5/kinesis-stream")
-    ).KinesisStream;
+    KinesisStream = (await import("../../../src/components/aws/kinesis-stream"))
+      .KinesisStream;
     await import("../../../src/components/aws/takeover/index");
   });
 
@@ -164,7 +163,7 @@ describe("KinesisStream", () => {
         "a subscriber that's a function's ARN, in an output": {
           create: async (KinesisStream, opts) => {
             const { Function } = await import(
-              "../../../src/components/aws/function"
+              "../../fixtures/v4/components/aws/function"
             );
             new KinesisStream("MyStream", {}, opts).subscribe(
               "Indexer",
@@ -381,7 +380,7 @@ describe("KinesisStream", () => {
         "src/indexer.handler",
       ),
     ).toThrow(
-      /reference it with "get" and subscribe to that: sst\.aws\.v5\.KinesisStream\.get\(/,
+      /reference it with "get" and subscribe to that: sst\.aws\.KinesisStream\.get\(/,
     );
   });
 

@@ -1,33 +1,99 @@
 import {
   ComponentResourceOptions,
-  Output,
-  all,
   interpolate,
+  Output,
   output,
 } from "@pulumi/pulumi";
+import { apigatewayv2, cloudwatch, lambda } from "@pulumi/aws";
 import {
-  Component,
-  outputId,
-  Prettify,
-  Transform,
-  transform,
-} from "../component";
-import { Link } from "../link";
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import { notAnOption, plain } from "../args";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
-import { hashStringToPrettyString, physicalName, logicalName } from "../naming";
-import { DnsValidatedCertificate } from "./dns-validated-certificate";
-import { RETENTION } from "./logging";
-import { dns as awsDns } from "./dns.js";
-import { ApiGatewayV2DomainArgs } from "./helpers/apigatewayv2-domain";
-import { ApiGatewayV2Authorizer } from "./apigatewayv2-authorizer";
-import { ApiGatewayWebSocketRoute } from "./apigateway-websocket-route";
-import { setupApiGatewayAccount } from "./helpers/apigateway-account";
-import { apigatewayv2, cloudwatch } from "@pulumi/aws";
-import { permission } from "./permission";
 import { VisibleError } from "../error";
+import { DnsValidatedCertificate } from "./dns-validated-certificate";
+import { Function } from "./function";
+import {
+  type ApiGatewayAccessLogArgs,
+  type ApiGatewayDomainArgs,
+  accessLogGroup,
+  authorizerPermissionArgs,
+  createRegionalDomain,
+  notAnOldRouteTransform,
+  notAnOldTransform,
+  routePermissionArgs,
+} from "./helpers/apigateway";
+import {
+  type FunctionInput,
+  functionPart,
+  plainFunction,
+} from "./helpers/function-part";
+import { apiGatewayAccount } from "./helpers/apigateway-account";
+import { permission } from "./permission";
 
-export interface ApiGatewayWebSocketArgs {
+const parts = () => ({
+  /**
+   * The Amazon API Gateway WebSocket API.
+   */
+  api: apigatewayv2.Api,
+  /**
+   * The API's `$default` stage.
+   */
+  stage: apigatewayv2.Stage,
+  /**
+   * The CloudWatch LogGroup for the access logs.
+   */
+  logGroup: cloudwatch.LogGroup,
+  /**
+   * The certificate of the custom domain, unless one is given in `domain.cert`.
+   */
+  certificate: optional(DnsValidatedCertificate),
+  /**
+   * The API Gateway domain name, with a custom domain.
+   */
+  domainName: optional(apigatewayv2.DomainName),
+  /**
+   * The mapping of the API to the domain name, with a custom domain.
+   */
+  domainMapping: optional(apigatewayv2.ApiMapping),
+  /**
+   * The function each route invokes, by the route's name, or the route itself.
+   */
+  handler: many(deferred(Function)),
+  /**
+   * The permission for API Gateway to invoke each route's function.
+   */
+  permission: many(lambda.Permission),
+  /**
+   * Each route's integration with its function.
+   */
+  integration: many(apigatewayv2.Integration),
+  /**
+   * Each route.
+   */
+  route: many(apigatewayv2.Route),
+  /**
+   * Each authorizer, by its name.
+   */
+  authorizer: many(apigatewayv2.Authorizer),
+  /**
+   * Each authorizer's function, by the authorizer's name.
+   */
+  authorizerFunction: many(deferred(Function)),
+  /**
+   * The permission for API Gateway to invoke each authorizer's function.
+   */
+  authorizerPermission: many(lambda.Permission),
+});
+
+export interface ApiGatewayWebSocketArgs
+  extends ComponentArgs<typeof parts>,
+    ApiGatewayAccessLogArgs {
   /**
    * Set a custom domain for your WebSocket API.
    *
@@ -39,6 +105,10 @@ export interface ApiGatewayWebSocketArgs {
    * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
    * providers.
    * :::
+   *
+   * Whether there's a domain decides what's created, so `domain` has to be a plain value,
+   * not an output. To use a domain name you already have in API Gateway, pass it in
+   * `existing.domainName`, with the `path` here.
    *
    * @example
    *
@@ -61,106 +131,24 @@ export interface ApiGatewayWebSocketArgs {
    * }
    * ```
    */
-  domain?: Input<string | Prettify<ApiGatewayV2DomainArgs>>;
-  /**
-   * Configure the [API Gateway logs](https://docs.aws.amazon.com/apigateway/latest/developerguide/view-cloudwatch-log-events-in-cloudwatch-console.html) in CloudWatch. By default, access logs are enabled and kept for 1 month.
-   * @default `{retention: "1 month"}`
-   * @example
-   * ```js
-   * {
-   *   accessLog: {
-   *     retention: "forever"
-   *   }
-   * }
-   * ```
-   */
-  accessLog?: Input<{
-    /**
-     * The duration the API Gateway logs are kept in CloudWatch.
-     * @default `1 month`
-     */
-    retention?: Input<keyof typeof RETENTION>;
-  }>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the API Gateway WebSocket API resource.
-     */
-    api?: Transform<apigatewayv2.ApiArgs>;
-    /**
-     * Transform the API Gateway WebSocket API stage resource.
-     */
-    stage?: Transform<apigatewayv2.StageArgs>;
-    /**
-     * Transform the API Gateway WebSocket API domain name resource.
-     */
-    domainName?: Transform<apigatewayv2.DomainNameArgs>;
-    /**
-     * Transform the CloudWatch LogGroup resource used for access logs.
-     */
-    accessLog?: Transform<cloudwatch.LogGroupArgs>;
-    /**
-     * Transform the routes. This can be used to customize the handler function and
-     * the arguments for each route.
-     *
-     * @example
-     * ```js
-     * {
-     *   transform: {
-     *     route: {
-     *       handler: {
-     *         link: [bucket, stripeKey]
-     *       },
-     *       args: {
-     *         auth: { iam: true }
-     *       }
-     *     }
-     *   }
-     * }
-     * ```
-     */
-    route?: {
-      /**
-       * Transform the handler function for the route.
-       */
-      handler?: Transform<FunctionArgs>;
-      /**
-       * Transform the arguments for the route.
-       */
-      args?: Transform<ApiGatewayWebSocketRouteArgs>;
-    };
-  };
+  domain?: string | Prettify<Partial<ApiGatewayDomainArgs>>;
 }
 
 export interface ApiGatewayWebSocketAuthorizerArgs {
   /**
-   * @deprecated API Gateway only supports JWT authorizers on HTTP APIs, so this stops
-   * the deploy. Use `lambda` with a function that verifies the token instead.
+   * The name of the authorizer. Its resources are named after it, and it's how the API's
+   * `transform` and `nodes` know it.
+   *
+   * Must be unique across all authorizers.
+   *
+   * @example
+   * ```js
+   * {
+   *   name: "MyAuthorizer"
+   * }
+   * ```
    */
-  jwt?: Input<{
-    /**
-     * Base domain of the identity provider that issues JSON Web Tokens.
-     * @example
-     * ```js
-     * {
-     *   issuer: "https://issuer.com/"
-     * }
-     * ```
-     */
-    issuer: Input<string>;
-    /**
-     * List of the intended recipients of the JWT. A valid JWT must provide an `aud` that matches at least one entry in this list.
-     */
-    audiences: Input<Input<string>[]>;
-    /**
-     * Specifies where to extract the JWT from the request.
-     * @default `"route.request.header.Authorization"`
-     */
-    identitySource?: Input<string>;
-  }>;
+  name: string;
   /**
    * Create a Lambda authorizer that can be used by the `$connect` route.
    *
@@ -180,9 +168,13 @@ export interface ApiGatewayWebSocketAuthorizerArgs {
    * }
    * ```
    */
-  lambda?: Input<{
+  lambda: {
     /**
      * The Lambda authorizer function. Takes the handler path or the function args.
+     *
+     * A handler or the args have to be plain values, since whether a function is
+     * created is decided from them.
+     *
      * @example
      * Add a simple authorizer.
      *
@@ -203,16 +195,7 @@ export interface ApiGatewayWebSocketAuthorizerArgs {
      * }
      * ```
      */
-    function: Input<string | FunctionArgs>;
-    /**
-     * @deprecated WebSocket APIs ignore this. It's only for HTTP API authorizers.
-     */
-    payload?: Input<"1.0" | "2.0">;
-    /**
-     * @deprecated WebSocket APIs ignore this. A WebSocket authorizer always returns an
-     * IAM policy.
-     */
-    response?: Input<"simple" | "iam">;
+    function: FunctionInput;
     /**
      * Specifies where to extract the identity from. A request without it is rejected
      * before the authorizer runs.
@@ -228,16 +211,6 @@ export interface ApiGatewayWebSocketAuthorizerArgs {
      * ```
      */
     identitySources?: Input<Input<string>[]>;
-  }>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the API Gateway authorizer resource.
-     */
-    authorizer?: Transform<apigatewayv2.AuthorizerArgs>;
   };
 }
 
@@ -260,48 +233,33 @@ export interface ApiGatewayWebSocketRouteArgs {
   auth?: Input<
     | false
     | {
-      /**
-       * Enable IAM authorization for a given API route. When IAM auth is enabled, clients
-       * need to use Signature Version 4 to sign their requests with their AWS credentials.
-       */
-      iam?: Input<boolean>;
-      /**
-       * @deprecated API Gateway only supports JWT auth on HTTP APIs, so this stops the
-       * deploy on the `$connect` route. Use `lambda` with a Lambda authorizer that
-       * verifies the token instead.
-       */
-      jwt?: Input<{
         /**
-         * Authorizer ID of the JWT authorizer.
+         * Enable IAM authorization for a given API route. When IAM auth is enabled, clients
+         * need to use Signature Version 4 to sign their requests with their AWS credentials.
          */
-        authorizer: Input<string>;
+        iam?: Input<boolean>;
         /**
-         * Defines the permissions or access levels that the JWT grants. If the JWT does not have the required scope, the request is rejected. By default it does not require any scopes.
+         * Enable custom Lambda authorization for a given API route. Pass in the authorizer ID.
+         *
+         * @example
+         * ```js
+         * {
+         *   auth: {
+         *     lambda: myAuthorizer.id
+         *   }
+         * }
+         * ```
+         *
+         * Where `myAuthorizer` is created by calling the `addAuthorizer` method.
          */
-        scopes?: Input<Input<string>[]>;
-      }>;
-      /**
-       * Enable custom Lambda authorization for a given API route. Pass in the authorizer ID.
-       *
-       * @example
-       * ```js
-       * {
-       *   auth: {
-       *     lambda: myAuthorizer.id
-       *   }
-       * }
-       * ```
-       *
-       * Where `myAuthorizer` is created by calling the `addAuthorizer` method.
-       */
-      lambda?: Input<string>;
-    }
+        lambda?: Input<string>;
+      }
   >;
   /**
    * The name of the route.
    *
-   * By default, SST generates a unique suffix from the route path. Setting `name` gives
-   * you a stable, human-readable name like `MyApiRouteSendMessageHandler`.
+   * By default, a route is named after itself, like `$connect` or `sendMessage`. Setting
+   * `name` gives it another, like `SendMessage`.
    *
    * Must be unique across all routes.
    *
@@ -313,20 +271,6 @@ export interface ApiGatewayWebSocketRouteArgs {
    * ```
    */
   name?: string;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the API Gateway WebSocket API integration resource.
-     */
-    integration?: Transform<apigatewayv2.IntegrationArgs>;
-    /**
-     * Transform the API Gateway WebSocket API route resource.
-     */
-    route?: Transform<apigatewayv2.RouteArgs>;
-  };
 }
 
 /**
@@ -357,241 +301,125 @@ export interface ApiGatewayWebSocketRouteArgs {
  * api.route("$default", "src/default.handler");
  * api.route("sendMessage", "src/sendMessage.handler");
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.ApiGatewayWebSocket`
+ *
+ * Keep the name, and `sst migrate` moves it. The API, its stage, access log, domain, and each route's and authorizer's
+ * resources are kept. A few things are written differently:
+ *
+ * - The routes and authorizers are inside the component, where
+ *   `sst.aws.ApiGatewayWebSocket` kept each in a component of its own. A route is kept by
+ *   its name, or the route itself, like `sendMessage`; `route` and `addAuthorizer` return
+ *   the API and the authorizer, not those components.
+ * - `addAuthorizer` takes one object, with the authorizer's name in it, as
+ *   [`sst.aws.ApiGatewayHttp`](/docs/component/aws/v5/apigateway-http)'s does. The
+ *   authorizer is kept by that name. The call with the name first is refused with what to
+ *   write.
+ *
+ *   ```ts title="sst.config.ts" del={1} ins={2}
+ *   api.addAuthorizer("MyAuthorizer", { lambda: { function: "src/authorizer.handler" } });
+ *   api.addAuthorizer({ name: "MyAuthorizer", lambda: { function: "src/authorizer.handler" } });
+ *   ```
+ * - A route's and an authorizer's own `transform`, and `transform.route.handler`, become
+ *   the API's `transform` for `handler`, `integration`, `route` and `authorizer`, which
+ *   apply to every route or authorizer and are given its name in a function.
+ *   `transform.route.args` is gone: give each route its `auth`. Each is refused with what
+ *   to write.
+ * - `transform.accessLog` is `transform.logGroup`, and the certificate is `nodes.certificate`.
+ * - `domain` has to be a plain value, not an output. `domain.nameId` is
+ *   `existing.domainName`.
+ * - `domain.dns` is an adapter SST 5's components use, like `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   doesn't work.
+ * - The DNS records that validate the certificate are named after the domain they
+ *   validate, and a domain's hosted zone is found without a resource: SST 4's
+ *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
+ * - `nodes.domainName` is `undefined` without a domain, where `sst.aws.ApiGatewayWebSocket`
+ *   threw.
+ * - An authorizer's `jwt`, and its `lambda.payload` and `lambda.response`, are refused. API
+ *   Gateway doesn't take a JWT authorizer on a WebSocket API, which
+ *   `sst.aws.ApiGatewayWebSocket` refused in the deploy, and ignores the other two. A
+ *   route's `auth.jwt` is refused the same way.
+ * - An authorizer's `lambda` and a route's handler have to be plain values: whether a
+ *   function is created is decided from them. A function you have, or its ARN, can be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - Next to `existing.domainName`, a domain's `name`, `dns` and `cert` are refused: the
+ *   domain name is used the way it is.
+ * - API Gateway's account settings, which give the API a role to write its access log
+ *   with, are read and set up with the provider the API has.
+ *   `sst.aws.ApiGatewayWebSocket` used only a `provider` passed to the API itself, so an
+ *   API that takes its provider from a parent component or from `providers` has the
+ *   account of that provider's region set up, where it had the default region's. The
+ *   setup is kept when the API is removed.
+ * - The routes and authorizers are created with the provider the API has.
+ *   `sst.aws.ApiGatewayWebSocket` gave them only a `provider` passed to the API itself, so
+ *   if your API takes its provider from a parent component or from `providers`, the switch
+ *   gives its routes and authorizers that provider and keeps them, with the provider's
+ *   default tags.
  */
-export class ApiGatewayWebSocket extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorArgs: ApiGatewayWebSocketArgs;
-  private constructorOpts: ComponentResourceOptions;
-  private api: apigatewayv2.Api;
-  private stage: apigatewayv2.Stage;
-  private apigDomain?: Output<apigatewayv2.DomainName>;
-  private apiMapping?: Output<apigatewayv2.ApiMapping>;
-  private logGroup: cloudwatch.LogGroup;
+export class ApiGatewayWebSocket extends component(
+  "sst:aws:ApiGatewayWebSocket",
+  parts,
+) {
+  private readonly namedRoutes = new Set<string>();
 
   constructor(
     name: string,
     args: ApiGatewayWebSocketArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
+    // SST 4's transform of the access log, before the component turns down
+    // a key it doesn't have, with what to write instead
+    const owner = `the "${name}" API`;
+    notAnOldTransform(args.transform, "accessLog", owner);
+    super(name, args, opts);
+    notAnOldRouteTransform(
+      args.transform,
+      owner,
+      `To give a route an auth, give it in the route's args.`,
+    );
 
-    const parent = this;
+    // The account's role for API Gateway to write logs with, made once for
+    // the account when it has none
+    const account = apiGatewayAccount(this.builder(), name);
 
-    const accessLog = normalizeAccessLog();
-    const domain = normalizeDomain();
+    const api = this.part("api", {
+      protocolType: "WEBSOCKET",
+      routeSelectionExpression: "$request.body.action",
+    });
+    const logGroup = this.part(
+      "logGroup",
+      ...accessLogGroup(name, args, owner),
+    );
+    const stage = this.part(
+      "stage",
+      {
+        apiId: api.id,
+        autoDeploy: true,
+        name: "$default",
+        accessLogSettings: {
+          destinationArn: logGroup.arn,
+          format: ACCESS_LOG_FORMAT,
+        },
+      },
+      { dependsOn: account },
+    );
 
-    const apigAccount = setupApiGatewayAccount(name, opts);
-    const api = createApi();
-    const logGroup = createLogGroup();
-    const stage = createStage();
-
-    const certificateArn = createSsl();
-    const apigDomain = createDomainName();
-    createDnsRecords();
-    const apiMapping = createDomainMapping();
-
-    this.constructorName = name;
-    this.constructorArgs = args;
-    this.constructorOpts = opts;
-    this.api = api;
-    this.stage = stage;
-    this.apigDomain = apigDomain;
-    this.apiMapping = apiMapping;
-    this.logGroup = logGroup;
-
-    this.registerOutputs({
-      _hint: this.url,
+    createRegionalDomain(this.builder(), this.delegateOpts(), {
+      name,
+      domain: args.domain,
+      existing: args.existing,
+      apiId: api.id,
+      stage: stage.name,
     });
 
-    function normalizeAccessLog() {
-      return output(args.accessLog).apply((accessLog) => ({
-        ...accessLog,
-        retention: accessLog?.retention ?? "1 month",
-      }));
-    }
-
-    function normalizeDomain() {
-      if (!args.domain) return;
-
-      return output(args.domain).apply((domain) => {
-        // validate
-        if (typeof domain !== "string") {
-          if (domain.name && domain.nameId)
-            throw new VisibleError(
-              `Cannot configure both domain "name" and "nameId" for the "${name}" API.`,
-            );
-          if (!domain.name && !domain.nameId)
-            throw new VisibleError(
-              `Either domain "name" or "nameId" is required for the "${name}" API.`,
-            );
-          if (domain.dns === false && !domain.cert)
-            throw new VisibleError(
-              `Domain "cert" is required when "dns" is disabled for the "${name}" API.`,
-            );
-        }
-
-        // normalize
-        const norm = typeof domain === "string" ? { name: domain } : domain;
-        return {
-          name: norm.name,
-          nameId: norm.nameId,
-          path: norm.path,
-          dns: norm.dns === false ? undefined : norm.dns ?? awsDns(),
-          cert: norm.cert,
-        };
-      });
-    }
-
-    function createApi() {
-      return new apigatewayv2.Api(
-        ...transform(
-          args.transform?.api,
-          `${name}Api`,
-          {
-            protocolType: "WEBSOCKET",
-            routeSelectionExpression: "$request.body.action",
-          },
-          { parent },
-        ),
-      );
-    }
-
-    function createLogGroup() {
-      return new cloudwatch.LogGroup(
-        ...transform(
-          args.transform?.accessLog,
-          `${name}AccessLog`,
-          {
-            name: `/aws/vendedlogs/apis/${physicalName(64, name)}`,
-            retentionInDays: accessLog.apply(
-              (accessLog) => RETENTION[accessLog.retention],
-            ),
-          },
-          { parent, ignoreChanges: ["name"] },
-        ),
-      );
-    }
-
-    function createStage() {
-      return new apigatewayv2.Stage(
-        ...transform(
-          args.transform?.stage,
-          `${name}Stage`,
-          {
-            apiId: api.id,
-            autoDeploy: true,
-            name: "$default",
-            accessLogSettings: {
-              destinationArn: logGroup.arn,
-              format: JSON.stringify({
-                // request info
-                requestTime: `"$context.requestTime"`,
-                requestId: `"$context.requestId"`,
-                eventType: `"$context.eventType"`,
-                routeKey: `"$context.routeKey"`,
-                status: `$context.status`, // integer value, do not wrap in quotes
-                // integration info
-                integrationRequestId: `"$context.awsEndpointRequestId"`,
-                integrationStatus: `"$context.integrationStatus"`,
-                integrationLatency: `"$context.integrationLatency"`,
-                integrationServiceStatus: `"$context.integration.integrationStatus"`,
-                // caller info
-                ip: `"$context.identity.sourceIp"`,
-                userAgent: `"$context.identity.userAgent"`,
-                //cognitoIdentityId:`"$context.identity.cognitoIdentityId"`, // not supported in us-west-2 region
-                connectedAt: `"$context.connectedAt"`,
-                connectionId: `"$context.connectionId"`,
-              }),
-            },
-          },
-          { parent, dependsOn: apigAccount },
-        ),
-      );
-    }
-
-    function createSsl() {
-      if (!domain) return output(undefined);
-
-      return domain.apply((domain) => {
-        if (domain.cert) return output(domain.cert);
-        if (domain.nameId) return output(undefined);
-
-        return new DnsValidatedCertificate(
-          `${name}Ssl`,
-          {
-            domainName: domain.name!,
-            dns: domain.dns!,
-          },
-          { parent },
-        ).arn;
-      });
-    }
-
-    function createDomainName() {
-      if (!domain || !certificateArn) return;
-
-      return all([domain, certificateArn]).apply(([domain, certificateArn]) => {
-        return domain.nameId
-          ? apigatewayv2.DomainName.get(
-            `${name}DomainName`,
-            domain.nameId,
-            {},
-            { parent },
-          )
-          : new apigatewayv2.DomainName(
-            ...transform(
-              args.transform?.domainName,
-              `${name}DomainName`,
-              {
-                domainName: domain.name!,
-                domainNameConfiguration: {
-                  certificateArn: certificateArn!,
-                  endpointType: "REGIONAL",
-                  securityPolicy: "TLS_1_2",
-                },
-              },
-              { parent },
-            ),
-          );
-      });
-    }
-
-    function createDnsRecords(): void {
-      if (!domain || !apigDomain) return;
-
-      domain.apply((domain) => {
-        if (!domain.dns) return;
-        if (domain.nameId) return;
-
-        domain.dns.createAlias(
-          name,
-          {
-            name: domain.name!,
-            aliasName: apigDomain.domainNameConfiguration.targetDomainName,
-            aliasZone: apigDomain.domainNameConfiguration.hostedZoneId,
-          },
-          { parent },
-        );
-      });
-    }
-
-    function createDomainMapping() {
-      if (!domain || !apigDomain) return;
-
-      return domain.path?.apply(
-        (path) =>
-          new apigatewayv2.ApiMapping(
-            `${name}DomainMapping`,
-            {
-              apiId: api.id,
-              domainName: apigDomain.id,
-              stage: "$default",
-              apiMappingKey: path,
-            },
-            { parent },
-          ),
-      );
-    }
+    this.report({ hint: this.url });
   }
 
   /**
@@ -601,14 +429,15 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    * Otherwise, it's the auto-generated API Gateway URL.
    */
   public get url() {
+    const { api, stage, domainName, domainMapping } = this.nodes;
     // Note: If mapping key is set, the URL needs a trailing slash. Without the
     //       trailing slash, the API fails with the error {"message":"Not Found"}
-    return this.apigDomain && this.apiMapping
-      ? all([this.apigDomain.domainName, this.apiMapping.apiMappingKey]).apply(
-        ([domain, key]) =>
-          key ? `wss://${domain}/${key}/` : `wss://${domain}`,
-      )
-      : interpolate`${this.api.apiEndpoint}/${this.stage.name}`;
+    return domainName && domainMapping
+      ? output([domainName.domainName, domainMapping.apiMappingKey]).apply(
+          ([domain, key]) =>
+            key ? `wss://${domain}/${key}/` : `wss://${domain}`,
+        )
+      : interpolate`${api.apiEndpoint}/${stage.name}`;
   }
 
   /**
@@ -627,37 +456,10 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    */
   public get managementEndpoint() {
     // ie. https://v1lmfez2nj.execute-api.us-east-1.amazonaws.com/$default
-    return this.api.apiEndpoint.apply(
-      (endpoint) =>
-        interpolate`${endpoint.replace("wss", "https")}/${this.stage.name}`,
-    );
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    const self = this;
-    return {
-      /**
-       * The Amazon API Gateway V2 API.
-       */
-      api: this.api,
-      /**
-       * The API Gateway HTTP API domain name.
-       */
-      get domainName() {
-        if (!self.apigDomain)
-          throw new VisibleError(
-            `"nodes.domainName" is not available when domain is not configured for the "${self.constructorName}" API.`,
-          );
-        return self.apigDomain;
-      },
-      /**
-       * The CloudWatch LogGroup for the access logs.
-       */
-      logGroup: this.logGroup,
-    };
+    const { api, stage } = this.nodes;
+    return interpolate`${api.apiEndpoint.apply((endpoint) =>
+      endpoint.replace("wss", "https"),
+    )}/${stage.name}`;
   }
 
   /**
@@ -722,53 +524,81 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    */
   public route(
     route: string,
-    handler: Input<string | FunctionArgs | FunctionArn>,
+    handler: FunctionInput,
     args: ApiGatewayWebSocketRouteArgs = {},
   ) {
-    const prefix = this.constructorName;
-    const suffix = logicalName(
-      args.name
-        ? args.name
-        : ["$connect", "$disconnect", "$default"].includes(route)
-          ? route
-          : hashStringToPrettyString(`${outputId}${route}`, 6),
-    );
+    const name = this.componentName;
+    const id = args.name ?? route;
+    this.assertNew("route", "route", id, args, [
+      "handler",
+      "permission",
+      "integration",
+      "route",
+    ]);
+    if (args.name !== undefined) this.namedRoutes.add(id);
+    const auth = args.auth;
+    if (route === "$connect" && plainJwtOnly(auth))
+      throw jwtAuthError(route, name);
 
-    const transformed = transform(
-      this.constructorArgs.transform?.route?.args,
-      `${prefix}Route${suffix}`,
-      args,
-      { provider: this.constructorOpts.provider },
-    );
-
-    return new ApiGatewayWebSocketRoute(
-      transformed[0],
-      {
-        api: {
-          name: prefix,
-          id: this.api.id,
-          executionArn: this.api.executionArn,
-        },
-        route,
+    const { api } = this.nodes;
+    const fn = functionPart(
+      this,
+      "handler",
+      id,
+      plainFunction(
         handler,
-        handlerTransform: this.constructorArgs.transform?.route?.handler,
-        ...transformed[1],
-      },
-      transformed[2],
+        `The handler of the "${route}" route of the "${name}" API`,
+      ),
+      { description: `${name} route ${route}` },
     );
+    const permission = this.part(
+      "permission",
+      id,
+      routePermissionArgs(fn, api.executionArn),
+    );
+    const integration = this.part(
+      "integration",
+      id,
+      {
+        apiId: api.id,
+        integrationType: "AWS_PROXY",
+        integrationUri: fn.targetInvokeArn,
+      },
+      { dependsOn: [permission] },
+    );
+    // Auth is checked when a client connects
+    const authorization =
+      route === "$connect"
+        ? output(auth).apply((auth) => {
+            if (!auth) return { type: "NONE" };
+            if (auth.iam) return { type: "AWS_IAM" };
+            if (auth.lambda)
+              return { type: "CUSTOM", authorizerId: auth.lambda };
+            if ((auth as any).jwt) throw jwtAuthError(route, name);
+            return { type: "NONE" };
+          })
+        : output({ type: "NONE" } as { type: string; authorizerId?: string });
+    this.part("route", id, {
+      apiId: api.id,
+      routeKey: route,
+      target: interpolate`integrations/${integration.id}`,
+      authorizationType: authorization.type,
+      authorizerId: authorization.apply((a) => a.authorizerId!),
+    });
+    return this;
   }
 
   /**
    * Add an authorizer to the API Gateway WebSocket API.
    *
-   * @param name The name of the authorizer.
-   * @param args Configure the authorizer.
+   * @param args Configure the authorizer, with its name.
    *
    * @example
    * Add a Lambda authorizer.
    *
    * ```js title="sst.config.ts"
-   * const authorizer = api.addAuthorizer("MyAuthorizer", {
+   * const authorizer = api.addAuthorizer({
+   *   name: "MyAuthorizer",
    *   lambda: {
    *     function: "src/authorizer.handler"
    *   }
@@ -793,7 +623,8 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    * const pool = new sst.aws.CognitoUserPool("MyUserPool");
    * const client = pool.addClient("Web");
    *
-   * const authorizer = api.addAuthorizer("MyAuthorizer", {
+   * const authorizer = api.addAuthorizer({
+   *   name: "MyAuthorizer",
    *   lambda: {
    *     function: {
    *       handler: "src/authorizer.handler",
@@ -852,28 +683,74 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    * another issuer, `aws-jwt-verify`'s `JwtVerifier` or the `jose` package can check the
    * token against the issuer's keys.
    */
-  public addAuthorizer(name: string, args: ApiGatewayWebSocketAuthorizerArgs) {
-    const self = this;
-    const constructorName = this.constructorName;
-
-    return new ApiGatewayV2Authorizer(
-      `${constructorName}Authorizer${name}`,
-      {
-        api: {
-          id: self.api.id,
-          name: constructorName,
-          executionArn: this.api.executionArn,
-        },
-        type: "websocket",
-        name,
-        ...args,
-      },
-      { provider: this.constructorOpts.provider },
+  public addAuthorizer(args: ApiGatewayWebSocketAuthorizerArgs) {
+    // SST 4's form, with the name first
+    if (typeof args === "string")
+      throw new VisibleError(
+        `An authorizer of the "${this.componentName}" API is given its name in its args, like the HTTP and REST APIs' authorizers: api.addAuthorizer({ name: "${args}", lambda: { function: "src/authorizer.handler" } }).`,
+      );
+    const { name } = args;
+    const what = `the "${name}" authorizer of the "${this.componentName}" API`;
+    this.assertNew("authorizer", "authorizer", name, args, [
+      "authorizer",
+      "authorizerFunction",
+      "authorizerPermission",
+    ]);
+    notAnOption(
+      args,
+      "jwt",
+      `API Gateway only supports JWT authorizers on HTTP APIs. Use "lambda" with a function that verifies the token.`,
+      what,
     );
+    const settings = plain(args.lambda, `The "lambda" of ${what}`);
+    if (!settings)
+      throw new VisibleError(
+        `${what[0].toUpperCase()}${what.slice(
+          1,
+        )} has no "lambda". A WebSocket API's authorizer is a Lambda authorizer: give it "lambda.function".`,
+      );
+    for (const option of ["payload", "response"])
+      notAnOption(
+        settings,
+        option,
+        `A WebSocket API's authorizer always returns an IAM policy, so API Gateway ignores it. Remove it.`,
+        `the "lambda" of ${what}`,
+      );
+
+    const { api } = this.nodes;
+    const fn = functionPart(
+      this,
+      "authorizerFunction",
+      name,
+      plainFunction(settings.function, `The "lambda.function" of ${what}`),
+      { description: `${this.componentName} authorizer` },
+    );
+    const authorizer = this.part("authorizer", name, {
+      apiId: api.id,
+      authorizerType: "REQUEST",
+      identitySources: output(settings.identitySources).apply(
+        (sources) => sources ?? ["route.request.header.Authorization"],
+      ),
+      authorizerUri: fn.targetInvokeArn,
+    });
+    this.part(
+      "authorizerPermission",
+      name,
+      authorizerPermissionArgs(fn, api.executionArn, authorizer.id),
+    );
+    return authorizer;
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Whether the route kept under `id` was given a `name`, rather than kept
+   * under the route itself.
+   * @internal
+   */
+  public routeIsNamed(id: string) {
+    return this.namedRoutes.has(id);
+  }
+
+  link() {
     return {
       properties: {
         url: this.url,
@@ -882,13 +759,44 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
       include: [
         permission({
           actions: ["execute-api:ManageConnections"],
-          resources: [interpolate`${this.api.executionArn}/*/*/@connections/*`],
+          resources: [
+            interpolate`${this.nodes.api.executionArn}/*/*/@connections/*`,
+          ],
         }),
       ],
     };
   }
 }
 
-const __pulumiType = "sst:aws:ApiGatewayWebSocket";
-// @ts-expect-error
-ApiGatewayWebSocket.__pulumiType = __pulumiType;
+// Whether a route's auth is a JWT and nothing else, when it's known now
+function plainJwtOnly(auth: ApiGatewayWebSocketRouteArgs["auth"]) {
+  if (!auth || Output.isInstance(auth) || auth instanceof Promise) return false;
+  const given = auth as Record<string, unknown>;
+  return Boolean(given.jwt && !given.iam && !given.lambda);
+}
+
+function jwtAuthError(route: string, api: string) {
+  return new VisibleError(
+    `The "${route}" route of the "${api}" API uses "auth.jwt", but API Gateway only supports JWT auth on HTTP APIs. Use "auth.lambda" with a Lambda authorizer that verifies the token.`,
+  );
+}
+
+const ACCESS_LOG_FORMAT = JSON.stringify({
+  // request info
+  requestTime: `"$context.requestTime"`,
+  requestId: `"$context.requestId"`,
+  eventType: `"$context.eventType"`,
+  routeKey: `"$context.routeKey"`,
+  status: `$context.status`, // integer value, do not wrap in quotes
+  // integration info
+  integrationRequestId: `"$context.awsEndpointRequestId"`,
+  integrationStatus: `"$context.integrationStatus"`,
+  integrationLatency: `"$context.integrationLatency"`,
+  integrationServiceStatus: `"$context.integration.integrationStatus"`,
+  // caller info
+  ip: `"$context.identity.sourceIp"`,
+  userAgent: `"$context.identity.userAgent"`,
+  //cognitoIdentityId:`"$context.identity.cognitoIdentityId"`, // not supported in us-west-2 region
+  connectedAt: `"$context.connectedAt"`,
+  connectionId: `"$context.connectionId"`,
+});

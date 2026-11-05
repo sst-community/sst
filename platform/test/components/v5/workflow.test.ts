@@ -32,27 +32,26 @@ const pulumi = mockPulumi({
 });
 
 type WorkflowClass =
-  | typeof import("../../../src/components/aws/workflow").Workflow
-  | typeof import("../../../src/components/aws/v5/workflow").Workflow;
+  | typeof import("../../fixtures/v4/components/aws/workflow").Workflow
+  | typeof import("../../../src/components/aws/workflow").Workflow;
 
 describe("Workflow", () => {
-  let Original: typeof import("../../../src/components/aws/workflow").Workflow;
-  let Workflow: typeof import("../../../src/components/aws/v5/workflow").Workflow;
-  let OriginalCronV2: typeof import("../../../src/components/aws/cron-v2").CronV2;
-  let Cron: typeof import("../../../src/components/aws/v5/cron").Cron;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
-  let Bucket: typeof import("../../../src/components/aws/v5/bucket").Bucket;
+  let Original: typeof import("../../fixtures/v4/components/aws/workflow").Workflow;
+  let Workflow: typeof import("../../../src/components/aws/workflow").Workflow;
+  let OriginalCronV2: typeof import("../../fixtures/v4/components/aws/cron-v2").CronV2;
+  let Cron: typeof import("../../../src/components/aws/cron").Cron;
+  let Function: typeof import("../../../src/components/aws/function").Function;
+  let Bucket: typeof import("../../../src/components/aws/bucket").Bucket;
 
   beforeAll(async () => {
-    Original = (await import("../../../src/components/aws/workflow")).Workflow;
-    Workflow = (await import("../../../src/components/aws/v5/workflow"))
+    Original = (await import("../../fixtures/v4/components/aws/workflow"))
       .Workflow;
-    OriginalCronV2 = (await import("../../../src/components/aws/cron-v2"))
+    Workflow = (await import("../../../src/components/aws/workflow")).Workflow;
+    OriginalCronV2 = (await import("../../fixtures/v4/components/aws/cron-v2"))
       .CronV2;
-    Cron = (await import("../../../src/components/aws/v5/cron")).Cron;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
-    Bucket = (await import("../../../src/components/aws/v5/bucket")).Bucket;
+    Cron = (await import("../../../src/components/aws/cron")).Cron;
+    Function = (await import("../../../src/components/aws/function")).Function;
+    Bucket = (await import("../../../src/components/aws/bucket")).Bucket;
     await import("../../../src/components/aws/takeover/index");
   });
 
@@ -154,7 +153,9 @@ describe("Workflow", () => {
         },
         "subscribed to a bus": {
           original: async (opts) => {
-            const { Bus } = await import("../../../src/components/aws/bus");
+            const { Bus } = await import(
+              "../../fixtures/v4/components/aws/bus"
+            );
             return new Bus("MyBus", {}, opts).subscribe(
               "MySubscriber",
               new Original(
@@ -166,7 +167,7 @@ describe("Workflow", () => {
             );
           },
           v5: async (opts) => {
-            const { Bus } = await import("../../../src/components/aws/v5/bus");
+            const { Bus } = await import("../../../src/components/aws/bus");
             return new Bus("MyBus", {}, opts).subscribe(
               "MySubscriber",
               new Workflow(

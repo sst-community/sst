@@ -67,8 +67,8 @@ ssrSiteSuite(
     name: "Astro",
     site: "Web",
     load: async () => ({
-      original: (await import("../../../src/components/aws/astro")).Astro,
-      v5: (await import("../../../src/components/aws/v5/astro")).Astro,
+      original: (await import("../../fixtures/v4/components/aws/astro")).Astro,
+      v5: (await import("../../../src/components/aws/astro")).Astro,
     }),
     paths: { site, based, app },
     alwaysServes: false,

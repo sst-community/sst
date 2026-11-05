@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Redis } from "../v5/redis";
+import { Redis } from "../redis";
 
 takeover(Redis, {
   moved: {

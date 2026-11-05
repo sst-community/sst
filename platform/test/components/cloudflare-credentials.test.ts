@@ -48,50 +48,53 @@ const settled = (value: pulumi.Output<unknown>) =>
 describe("SST's Cloudflare and Vercel resources", () => {
   beforeAll(async () => {
     const root = "../../src/components";
+    // What the provider in the `sst` binary serves, with the stage's
+    // credentials from its environment
     const { WorkerUrl } = await import(
-      `${root}/cloudflare/providers/worker-url`
+      `${root}/cloudflare/resources/worker-url`
     );
+    const { WorkerPlacement } = await import(
+      `${root}/cloudflare/resources/worker-placement`
+    );
+    const { DnsRecord } = await import(
+      `${root}/cloudflare/resources/dns-record`
+    );
+    const { DnsRecord: VercelDnsRecord } = await import(
+      `${root}/vercel/resources/dns-record`
+    );
+    // And the dynamic resources SST still makes, which call the CLI
     const { ZoneLookup } = await import(
       `${root}/cloudflare/providers/zone-lookup`
     );
-    const { KvData } = await import(`${root}/cloudflare/providers/kv-data`);
-    const { WorkerPlacement } = await import(
-      `${root}/cloudflare/providers/worker-placement`
-    );
-    const { DnsRecord } = await import(
+    const { DnsRecord: DynamicDnsRecord } = await import(
       `${root}/cloudflare/providers/dns-record`
     );
-    const { WorkerScript } = await import(
-      `${root}/cloudflare/providers/worker-script`
-    );
-    const { WorkerAssets } = await import(
-      `${root}/cloudflare/providers/worker-assets`
-    );
-    const { DnsRecord: VercelDnsRecord } = await import(
+    const { DnsRecord: DynamicVercelDnsRecord } = await import(
       `${root}/vercel/providers/dns-record`
     );
     const { buildApp } = await import(`${root}/base/base-ssr-site`);
 
     const resources: pulumi.Resource[] = [
       new WorkerUrl("Url", { accountId: "a", scriptName: "s", enabled: true }),
-      new ZoneLookup("Zone", { accountId: "a", domain: "example.com" }),
-      new KvData("Kv", { accountId: "a", namespaceId: "n", entries: [] }),
       new WorkerPlacement("Placement", {
         accountId: "a",
         scriptName: "s",
         mode: "smart",
       } as any),
       new DnsRecord("Caa", { zoneId: "z", type: "CAA", name: "example.com" }),
-      new WorkerScript("Script", {
-        scriptName: "s",
-        content: { filename: "f", hash: "h" },
-      } as any),
-      new WorkerAssets("Assets", {
-        directory: "d",
-        scriptName: "s",
-        manifest: {},
-      }),
       new VercelDnsRecord("VercelCaa", {
+        domain: "example.com",
+        type: "CAA",
+        name: "example.com",
+        value: `0 issue "amazonaws.com"`,
+      }),
+      new ZoneLookup("Zone", { accountId: "a", domain: "example.com" }),
+      new DynamicDnsRecord("DynamicCaa", {
+        zoneId: "z",
+        type: "CAA",
+        name: "example.com",
+      }),
+      new DynamicVercelDnsRecord("DynamicVercelCaa", {
         domain: "example.com",
         type: "CAA",
         name: "example.com",
@@ -105,19 +108,26 @@ describe("SST's Cloudflare and Vercel resources", () => {
     ]);
   });
 
-  it("keep no credential in their inputs or their provider's code", () => {
+  it("keep no credential in their inputs", () => {
+    const own = created.filter((r) => r.name !== "SiteBuilder");
+    expect(own.length).toBeGreaterThan(6);
+    for (const resource of own) {
+      const saved = JSON.stringify(resource.inputs);
+      expect(
+        SECRETS.filter((secret) => saved.includes(secret)),
+        resource.name,
+      ).toEqual([]);
+    }
+  });
+
+  it("keep none in the code a dynamic one stores", () => {
     const dynamic = created.filter(
       (r) => r.type === "pulumi-nodejs:dynamic:Resource",
     );
     expect(dynamic.map((r) => r.name).sort()).toEqual(
       [
-        "Assets.sst.cloudflare.WorkerAssets",
-        "Caa.sst.cloudflare.DnsRecord",
-        "Kv.sst.cloudflare.KvPairs",
-        "Placement.sst.cloudflare.WorkerPlacement",
-        "Script.sst.cloudflare.WorkerScript",
-        "Url.sst.cloudflare.WorkerUrl",
-        "VercelCaa.sst.vercel.DnsRecord",
+        "DynamicCaa.sst.cloudflare.DnsRecord",
+        "DynamicVercelCaa.sst.vercel.DnsRecord",
         "Zone.sst.cloudflare.ZoneLookup",
       ].sort(),
     );
@@ -127,11 +137,6 @@ describe("SST's Cloudflare and Vercel resources", () => {
       // In a deploy, `$app` is a value in the program, which the code would
       // capture with the config
       expect(code, resource.name).not.toMatch(/\$app\b/);
-      const saved = JSON.stringify(resource.inputs);
-      expect(
-        SECRETS.filter((secret) => saved.includes(secret)),
-        resource.name,
-      ).toEqual([]);
     }
   });
 

@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Realtime } from "../v5/realtime";
+import { Realtime } from "../realtime";
 import { childOf } from "./helpers";
 
 // The 4.x `Realtime` keeps each subscriber in a component of its own, at the

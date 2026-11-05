@@ -8,14 +8,8 @@ import type {
   Parts,
   PartsComponent,
 } from "../../parts-component";
-import {
-  Function as OriginalFunction,
-  FunctionArgs as OriginalFunctionArgs,
-  FunctionArn,
-} from "../function";
-import { Function, FunctionArgs } from "../v5/function";
-import { Workflow as OriginalWorkflow } from "../workflow";
-import { Workflow } from "../v5/workflow";
+import { Function, FunctionArgs, FunctionArn } from "../function";
+import { Workflow } from "../workflow";
 import { splitQualifiedFunctionArn } from "./arn";
 
 /**
@@ -33,8 +27,8 @@ export type FunctionPart = Output<{
   targetResponseStreamingInvokeArn: Output<string>;
 }>;
 
-/** A `Function` component: the 4.x one or the V5 one. */
-export type AnyFunction = Function | OriginalFunction;
+/** A `Function` component. */
+export type AnyFunction = Function;
 
 /**
  * What a user can pass for a function: a handler, its args, or one they
@@ -42,13 +36,10 @@ export type AnyFunction = Function | OriginalFunction;
  */
 export type FunctionDefinition = Input<
   | string
-  | OriginalFunctionArgs
   | FunctionArgs
   | FunctionArn
   | Function
-  | OriginalFunction
   | Workflow
-  | OriginalWorkflow
 >;
 
 /**
@@ -61,9 +52,7 @@ export type FunctionInput =
   | Input<string>
   | FunctionArgs
   | Input<Function>
-  | Input<OriginalFunction>
-  | Input<Workflow>
-  | Input<OriginalWorkflow>;
+  | Input<Workflow>;
 
 /**
  * What `existing` gives a function part: a function you have, a workflow, or
@@ -75,9 +64,7 @@ function existingFunction(given: unknown, what: string): FunctionDefinition {
     return plainFunction(given as FunctionInput, what);
   if (
     given instanceof Function ||
-    given instanceof OriginalFunction ||
     given instanceof Workflow ||
-    given instanceof OriginalWorkflow ||
     (typeof given === "string" && given.startsWith("arn:"))
   )
     return given as FunctionDefinition;
@@ -113,9 +100,7 @@ export function plainFunction(
       return value as FunctionArn;
     if (
       value instanceof Function ||
-      value instanceof OriginalFunction ||
-      value instanceof Workflow ||
-      value instanceof OriginalWorkflow
+      value instanceof Workflow
     )
       return value;
     throw new VisibleError(
@@ -208,13 +193,8 @@ export function functionPart(
   return fn;
 
   function create(definition: unknown) {
-    if (definition instanceof Function || definition instanceof OriginalFunction)
-      return use(definition);
-    if (
-      definition instanceof Workflow ||
-      definition instanceof OriginalWorkflow
-    )
-      return use(definition.getFunction());
+    if (definition instanceof Function) return use(definition);
+    if (definition instanceof Workflow) return use(definition.getFunction());
     if (typeof definition === "string" && definition.startsWith("arn:"))
       return useArn(definition, part.name);
 
@@ -283,9 +263,9 @@ function withDefaults(
 const isPlain = (value: unknown) =>
   !Output.isInstance(value) && typeof (value as any)?.then !== "function";
 
-function use(fn: Function | OriginalFunction) {
+function use(fn: Function) {
   return {
-    getFunction: () => fn as Function,
+    getFunction: () => fn,
     arn: fn.arn,
     targetArn: fn.targetArn,
     qualifier: fn.qualifier,

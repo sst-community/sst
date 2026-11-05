@@ -17,7 +17,7 @@ import {
   withoutUnknowns,
 } from "../../aws/helpers/site-build";
 import { DEFAULT_ACCOUNT_ID } from "../account-id";
-import { Worker, type WorkerArgs, checkDomain } from "../v5/worker";
+import { Worker, type WorkerArgs, checkDomain } from "../worker";
 import {
   DEFAULT_COMPATIBILITY_DATE,
   DEFAULT_COMPATIBILITY_FLAGS,

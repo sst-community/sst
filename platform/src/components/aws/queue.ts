@@ -1,23 +1,55 @@
 import {
   ComponentResourceOptions,
-  all,
-  output,
   jsonStringify,
-  Output,
+  output,
 } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
+import { lambda, sqs } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  optional,
+} from "../parts-component";
+import {
+  ifSet,
+  notAnOption,
+  usedAsItIs,
+  withDefault,
+  getArgs,
+} from "../args";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
 import { VisibleError } from "../error";
-import { hashStringToPrettyString, logicalName } from "../naming";
+import {
+  type DurationHours,
+  type DurationMinutes,
+  toSeconds,
+} from "../duration";
+import { Function } from "./function";
 import { parseQueueArn } from "./helpers/arn";
-import { QueueLambdaSubscriber } from "./queue-lambda-subscriber";
-import { iam, lambda, sqs } from "@pulumi/aws";
-import { DurationHours, DurationMinutes, toSeconds } from "../duration";
-import { permission } from "./permission.js";
+import {
+  batchSettings,
+  eventSourceSubscriber,
+  filterCriteria,
+} from "./helpers/event-source";
+import type { FunctionInput } from "./helpers/function-part";
+import { permission } from "./permission";
 
-export interface QueueArgs {
+const parts = () => ({
+  /**
+   * The Amazon SQS Queue.
+   */
+  queue: sqs.Queue,
+  /**
+   * The function subscribed to the queue.
+   */
+  subscriber: deferred(Function),
+  /**
+   * The Lambda event source mapping that sends the queue's messages to the subscriber.
+   */
+  eventSourceMapping: optional(lambda.EventSourceMapping),
+});
+
+export interface QueueArgs extends ComponentArgs<typeof parts> {
   /**
    * FIFO or _first-in-first-out_ queues are designed to guarantee that messages are processed exactly once and in the order that they are sent.
    *
@@ -47,14 +79,14 @@ export interface QueueArgs {
   fifo?: Input<
     | boolean
     | {
-      /**
-       * Content-based deduplication automatically generates a deduplication ID by hashing
-       * the message body to prevent duplicate message delivery.
-       *
-       * @default `false`
-       */
-      contentBasedDeduplication?: Input<boolean>;
-    }
+        /**
+         * Content-based deduplication automatically generates a deduplication ID by hashing
+         * the message body to prevent duplicate message delivery.
+         *
+         * @default `false`
+         */
+        contentBasedDeduplication?: Input<boolean>;
+      }
   >;
   /**
    * The period of time which the delivery of all messages in the queue is delayed.
@@ -121,27 +153,17 @@ export interface QueueArgs {
   dlq?: Input<
     | string
     | {
-      /**
-       * The ARN of the dead-letter queue.
-       */
-      queue: Input<string>;
-      /**
-       * The number of times the main queue will retry the message before sending it to the dead-letter queue.
-       * @default `3`
-       */
-      retry: Input<number>;
-    }
+        /**
+         * The ARN of the dead-letter queue.
+         */
+        queue: Input<string>;
+        /**
+         * The number of times the main queue will retry the message before sending it to the dead-letter queue.
+         * @default `3`
+         */
+        retry: Input<number>;
+      }
   >;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the SQS Queue resource.
-     */
-    queue?: Transform<sqs.QueueArgs>;
-  };
 }
 
 export interface QueueSubscriberArgs {
@@ -165,7 +187,7 @@ export interface QueueSubscriberArgs {
    * ```
    *
    * To process only those records where the `RequestCode` is `BBBB`.
-
+   *
    * ```js
    * {
    *   filters: [
@@ -195,7 +217,7 @@ export interface QueueSubscriberArgs {
   filters?: Input<Input<Record<string, any>>[]>;
   /**
    * Configure batch processing options for the consumer function.
-   * @default `{size: 10, window: "20 seconds", partialResponses: false}`
+   * @default `{size: 10, window: "0 seconds", partialResponses: false}`
    */
   batch?: Input<{
     /**
@@ -280,29 +302,13 @@ export interface QueueSubscriberArgs {
      */
     partialResponses?: Input<boolean>;
   }>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Lambda Event Source Mapping resource.
-     */
-    eventSourceMapping?: Transform<lambda.EventSourceMappingArgs>;
-    /**
-     * Transform the subscriber Function resource.
-     */
-    function?: Transform<FunctionArgs>;
-  };
-}
-
-interface QueueRef {
-  ref: true;
-  queueUrl: Input<string>;
 }
 
 /**
  * The `Queue` component lets you add a serverless queue to your app. It uses [Amazon SQS](https://aws.amazon.com/sqs/).
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -351,124 +357,119 @@ interface QueueRef {
  *   MessageBody: "Hello from Next.js!"
  * }));
  * ```
+ *
+ * #### Use a queue you already have
+ *
+ * Pass the queue, or its URL. The queue is used the way it is: the component doesn't
+ * configure it, and refuses `fifo`, `delay`, `visibilityTimeout` and `dlq` next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Queue("MyQueue", {
+ *   existing: {
+ *     queue: "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue"
+ *   }
+ * });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Queue`
+ *
+ * Keep the name, and `sst migrate` moves it. The queue and subscriber
+ * you've deployed are kept.
+ *
+ * A few things are written differently:
+ *
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - A subscriber's function is described after the component, `Subscribed to MyQueue`,
+ *   where `sst.aws.Queue` named the component it kept the subscriber in: an update in
+ *   place.
+ * - The subscriber is created with the provider the queue has. `sst.aws.Queue` gave it only
+ *   a `provider` passed to the queue itself, so if your queue takes its provider from a
+ *   parent component or from `providers`, the switch gives its subscriber that provider and
+ *   keeps it, with the provider's default tags.
+ * - `subscribe` returns the queue, where it returned the subscriber: its function is
+ *   `queue.nodes.subscriber`, and its event source mapping
+ *   `queue.nodes.eventSourceMapping`.
+ * - The `transform` of `subscribe` becomes the queue's `transform.subscriber` and
+ *   `transform.eventSourceMapping`, and `subscribe` takes no `opts`, which is refused:
+ *   what it creates is the queue's, with the queue's options. For a queue that isn't in
+ *   your app, write `new sst.aws.Queue(name, { existing: { queue: queueUrl }, transform })`,
+ *   which is what `get` does, with your `transform`.
+ * - `sst.aws.Queue.subscribe(queueArn, subscriber)` becomes
+ *   `sst.aws.Queue.get(name, queueArn).subscribe(subscriber)`, and is refused with what
+ *   to write. What it created is kept. It's created with the options you give `get`: if
+ *   you gave `sst.aws.Queue.subscribe` a `parent` or a `provider`, give `get` the same, or
+ *   the switch doesn't keep it.
  */
-export class Queue extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorOpts: ComponentResourceOptions;
-  private queue: sqs.Queue;
-  private isSubscribed: boolean = false;
-
+export class Queue extends component("sst:aws:Queue", parts) {
   constructor(
     name: string,
     args: QueueArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    const self = this;
-    this.constructorName = name;
-    this.constructorOpts = opts;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this.queue = ref.queue;
-      return;
-    }
-
-    const fifo = normalizeFifo();
-    const dlq = normalizeDlq();
-    const visibilityTimeout = output(args?.visibilityTimeout ?? "30 seconds");
-    const delay = output(args?.delay ?? "0 seconds");
-
-    this.queue = createQueue();
-
-    function reference() {
-      const ref = args as QueueRef;
-      const queue = sqs.Queue.get(`${name}Queue`, ref.queueUrl, undefined, {
-        parent: self,
-      });
-
-      return { queue };
-    }
-
-    function normalizeFifo() {
-      return output(args?.fifo).apply((v) => {
-        if (!v) return false;
-        if (v === true)
-          return {
-            contentBasedDeduplication: false,
-          };
-
-        return {
-          contentBasedDeduplication: v.contentBasedDeduplication ?? false,
-        };
-      });
-    }
-
-    function normalizeDlq() {
-      if (args?.dlq === undefined) return;
-
-      return output(args?.dlq).apply((v) =>
-        typeof v === "string" ? { queue: v, retry: 3 } : v,
+    // A queue that's already there is used the way it is
+    if (this.existingPart("queue"))
+      usedAsItIs(
+        args,
+        ["fifo", "delay", "visibilityTimeout", "dlq"],
+        "queue",
+        `the "${name}" queue`,
       );
-    }
 
-    function createQueue() {
-      return new sqs.Queue(
-        ...transform(
-          args?.transform?.queue,
-          `${name}Queue`,
-          {
-            fifoQueue: fifo.apply((v) => v !== false),
-            contentBasedDeduplication: fifo.apply((v) =>
-              v === false ? false : v.contentBasedDeduplication,
-            ),
-            visibilityTimeoutSeconds: visibilityTimeout.apply((v) =>
-              toSeconds(v),
-            ),
-            delaySeconds: delay.apply((v) => toSeconds(v)),
-            redrivePolicy:
-              dlq &&
-              jsonStringify({
-                deadLetterTargetArn: dlq.queue,
-                maxReceiveCount: dlq.retry,
-              }),
-          },
-          { parent: self },
-        ),
-      );
-    }
+    const fifo = output(args.fifo).apply((v) => (v === true ? {} : v));
+    const dlq = output(args.dlq).apply((v) =>
+      typeof v === "string" ? { queue: v, retry: 3 } : v,
+    );
+
+    this.part("queue", {
+      fifoQueue: fifo.apply((v) => !!v),
+      contentBasedDeduplication: fifo.apply(
+        (v) => (v && v.contentBasedDeduplication) || false,
+      ),
+      visibilityTimeoutSeconds: withDefault(
+        args.visibilityTimeout,
+        "30 seconds",
+        toSeconds,
+      ),
+      delaySeconds: withDefault(args.delay, "0 seconds", toSeconds),
+      redrivePolicy: ifSet(dlq, (dlq) =>
+        jsonStringify({
+          deadLetterTargetArn: dlq.queue,
+          maxReceiveCount: dlq.retry,
+        }),
+      ),
+    });
   }
 
   /**
    * The ARN of the SQS Queue.
    */
   public get arn() {
-    return this.queue.arn;
+    return this.nodes.queue.arn;
   }
 
   /**
    * The SQS Queue URL.
    */
   public get url() {
-    return this.queue.url;
+    return this.nodes.queue.url;
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon SQS Queue.
-       */
-      queue: this.queue,
-    };
-  }
-
-  /**
-   * Subscribe to this queue.
+   * Subscribe to this queue. A queue can have one subscriber.
    *
-   * @param subscriber The function that'll be notified.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
@@ -491,222 +492,115 @@ export class Queue extends Component implements Link.Linkable {
    * });
    * ```
    *
-   * Customize the subscriber function.
-   *
-   * ```js title="sst.config.ts"
-   * queue.subscribe({
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds"
-   * });
-   * ```
-   *
-   * Or pass in the ARN of an existing Lambda function.
+   * Or pass in the ARN of an existing Lambda function. A function you pass in, or its ARN,
+   * isn't given permission to receive from the queue: link the queue to a function in
+   * your app, or give the function's role that permission yourself.
    *
    * ```js title="sst.config.ts"
    * queue.subscribe("arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
+   *
+   * To change how the subscriber is created, use the queue's `transform`.
+   *
+   * ```js title="sst.config.ts"
+   * new sst.aws.Queue("MyQueue", {
+   *   transform: {
+   *     eventSourceMapping: { enabled: false }
+   *   }
+   * });
+   * ```
    */
-  public subscribe(
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: QueueSubscriberArgs,
-    opts?: ComponentResourceOptions,
-  ) {
-    if (this.isSubscribed)
-      throw new VisibleError(
-        `Cannot subscribe to the "${this.constructorName}" queue multiple times. An SQS Queue can only have one subscriber.`,
-      );
-    this.isSubscribed = true;
-
-    return Queue._subscribeFunction(
-      this.constructorName,
-      this.arn,
-      subscriber,
+  public subscribe(subscriber: FunctionInput, args: QueueSubscriberArgs = {}) {
+    notAnOption(
       args,
-      { ...opts, provider: this.constructorOpts.provider },
+      "transform",
+      `Use the "transform" of the "${this.componentName}" queue: its "subscriber" and "eventSourceMapping".`,
     );
-  }
-
-  /**
-   * Subscribe to an SQS Queue that was not created in your app.
-   *
-   * @param queueArn The ARN of the SQS Queue to subscribe to.
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing SQS Queue with the following ARN.
-   *
-   * ```js title="sst.config.ts"
-   * const queueArn = "arn:aws:sqs:us-east-1:123456789012:MyQueue";
-   * ```
-   *
-   * You can subscribe to it by passing in the ARN.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Queue.subscribe(queueArn, "src/subscriber.handler");
-   * ```
-   *
-   * Add a filter to the subscription.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Queue.subscribe(queueArn, "src/subscriber.handler", {
-   *   filters: [
-   *     {
-   *       body: {
-   *         RequestCode: ["BBBB"]
-   *       }
-   *     }
-   *   ]
-   * });
-   * ```
-   *
-   * Customize the subscriber function.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Queue.subscribe(queueArn, {
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds"
-   * });
-   * ```
-   */
-  public static subscribe(
-    queueArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: QueueSubscriberArgs,
-    opts?: ComponentResourceOptions,
-  ) {
-    return output(queueArn).apply((queueArn) =>
-      this._subscribeFunction(
-        logicalName(parseQueueArn(queueArn).queueName),
-        queueArn,
-        subscriber,
-        args,
-        opts,
-      ),
-    );
-  }
-
-  private static _subscribeFunction(
-    name: string,
-    queueArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args: QueueSubscriberArgs = {},
-    opts?: ComponentResourceOptions,
-  ) {
-    return output(queueArn).apply((queueArn) => {
-      const suffix = logicalName(hashStringToPrettyString(queueArn, 6));
-
-      return new QueueLambdaSubscriber(
-        `${name}Subscriber${suffix}`,
-        {
-          queue: { arn: queueArn },
-          subscriber,
-          ...args,
-        },
-        opts,
+    // `sst.aws.Queue` took the subscriber's resource options third
+    if (arguments[2] !== undefined)
+      throw new VisibleError(
+        `"subscribe" on the "${this.componentName}" queue takes no options: what it creates is the queue's, with the queue's options. Give them to the queue, or to "get" for a queue that isn't in your app.`,
       );
+    if (this.nodes.eventSourceMapping)
+      throw new VisibleError(
+        `Cannot subscribe to the "${this.componentName}" queue multiple times. An SQS Queue can only have one subscriber.`,
+      );
+
+    eventSourceSubscriber(this.builder(), undefined, subscriber, {
+      component: this.componentName,
+      kind: "queue",
+      source: this.arn,
+      actions: [
+        "sqs:ChangeMessageVisibility",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ReceiveMessage",
+      ],
+      mapping: {
+        filterCriteria: filterCriteria(args.filters),
+        ...batchSettings(args.batch),
+      },
     });
+
+    return this;
   }
 
   /**
-   * Reference an existing SQS Queue with its queue URL. This is useful when you create a
-   * queue in one stage and want to share it in another stage. It avoids having to create
-   * a new queue in the other stage.
+   * `sst.aws.Queue.subscribe` subscribed to a queue by its ARN. Reference the queue with
+   * `get` and subscribe to that.
    *
-   * :::tip
-   * You can use the `static get` method to share SQS queues across stages.
-   * :::
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to a queue that isn't in your app, reference it with "get" and subscribe to that: sst.aws.Queue.get("MyQueue", queueArn).subscribe("src/subscriber.handler").`,
+    );
+  }
+
+  /**
+   * Reference an existing SQS Queue. This is useful when you create a queue in one stage and
+   * want to share it in another, or to subscribe to a queue that isn't in your app.
    *
    * @param name The name of the component.
-   * @param queueUrl The URL of the existing SQS Queue.
-   * @param opts Resource options.
+   * @param queue The URL or ARN of the existing SQS Queue.
+   * @param opts Component resource options.
    *
    * @example
-   * Imagine you create a queue in the `dev` stage. And in your personal stage `frank`,
-   * instead of creating a new queue, you want to share the queue from `dev`.
    *
    * ```ts title="sst.config.ts"
    * const queue = $app.stage === "frank"
-   *   ? sst.aws.Queue.get("MyQueue", "https://sqs.us-east-1.amazonaws.com/123456789012/MyQueue")
+   *   ? sst.aws.Queue.get("MyQueue", "https://sqs.us-east-1.amazonaws.com/123456789012/app-dev-MyQueue")
    *   : new sst.aws.Queue("MyQueue");
    * ```
    *
-   * Here `https://sqs.us-east-1.amazonaws.com/123456789012/MyQueue` is the URL of the queue
-   * created in the `dev` stage. You can find this by outputting the queue URL in the `dev`
-   * stage.
+   * Subscribe to a queue that isn't in your app.
    *
    * ```ts title="sst.config.ts"
-   * return queue.url;
+   * sst.aws.Queue
+   *   .get("Orders", "arn:aws:sqs:us-east-1:123456789012:orders")
+   *   .subscribe("src/subscriber.handler");
    * ```
    */
   public static get(
     name: string,
-    queueUrl: Input<string>,
+    queue: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Queue(
-      name,
-      {
-        ref: true,
-        queueUrl,
-      } as QueueArgs,
-      opts,
+    const url = output(queue).apply((v) =>
+      v.startsWith("arn:") ? parseQueueArn(v).queueUrl : v,
     );
+    return new Queue(name, getArgs({ existing: { queue: url } }), opts);
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking a queue gives the linked resource the queue's URL and permission
+   * to use it.
+   */
+  public link() {
     return {
-      properties: {
-        url: this.url,
-      },
-      include: [
-        permission({
-          actions: ["sqs:*"],
-          resources: [this.arn],
-        }),
-      ],
+      properties: { url: this.url },
+      include: [permission({ actions: ["sqs:*"], resources: [this.arn] })],
     };
   }
-
-  /** @internal */
-  static createPolicy(
-    name: string,
-    arn: Output<string>,
-    opts?: ComponentResourceOptions,
-  ) {
-    return new sqs.QueuePolicy(
-      name,
-      {
-        queueUrl: arn.apply((arn) => parseQueueArn(arn).queueUrl),
-        policy: iam.getPolicyDocumentOutput({
-          statements: [
-            {
-              actions: ["sqs:SendMessage"],
-              resources: [arn],
-              principals: [
-                {
-                  type: "Service",
-                  identifiers: [
-                    "sns.amazonaws.com",
-                    "s3.amazonaws.com",
-                    "events.amazonaws.com",
-                  ],
-                },
-              ],
-            },
-          ],
-        }).json,
-      },
-      {
-        retainOnDelete: true,
-        ...opts,
-      },
-    );
-  }
 }
-
-const __pulumiType = "sst:aws:Queue";
-// @ts-expect-error
-Queue.__pulumiType = __pulumiType;

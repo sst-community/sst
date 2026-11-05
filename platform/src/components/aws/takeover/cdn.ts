@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { Cdn } from "../v5/cdn";
+import { Cdn } from "../cdn";
 
 // Nothing moved. The waiter was one of SST's own dynamic resources: the one
 // in its place waits again once.

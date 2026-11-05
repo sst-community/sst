@@ -1,10 +1,22 @@
-import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output } from "@pulumi/pulumi";
-import { VisibleError } from "../error.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
+import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import type { Prettify } from "../component";
+import { nitroSite } from "./helpers/nitro";
+import { configValue } from "./helpers/site-build";
+import type { SiteRouteArgs } from "./helpers/router";
+import {
+  type SsrFramework,
+  type SsrSiteArgs,
+  createSsrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { CdnDomainArgs } from "./cdn";
+import type { FunctionArgs } from "./function";
 
-export interface AnalogArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface AnalogArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -18,7 +30,97 @@ export interface AnalogArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
+  /**
+   * Path to the directory where your Analog app is located.  This path is relative to your `sst.config.ts`.
+   *
+   * By default it assumes your Analog app is in the root of your SST app.
+   * @default `"."`
+   *
+   * @example
+   *
+   * If your Analog app is in a package in your monorepo.
+   *
+   * ```js
+   * {
+   *   path: "packages/web"
+   * }
+   * ```
+   */
+  path?: string;
+  /**
+   * [Link resources](/docs/linking/) to your Analog app. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of resources to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: FunctionArgs["link"];
+  /**
+   * Set [environment variables](https://analogjs.org/docs/guides/migrating#using-environment-variables) in your Analog app. These are made available:
+   *
+   * 1. In `ng build`, they are loaded into `process.env`.
+   * 2. Locally while running `ng serve` through `sst dev`.
+   *
+   * :::tip
+   * You can also `link` resources to your Analog app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
+   * :::
+   *
+   * Only variables prefixed with `VITE_` are available in the browser.
+   *
+   * @example
+   * ```js
+   * {
+   *   environment: {
+   *     API_URL: api.url,
+   *     // Accessible in the browser
+   *     VITE_STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   *   }
+   * }
+   * ```
+   */
+  environment?: FunctionArgs["environment"];
   /**
    * Permissions and the resources that the [server function](#nodes-server) in your Analog app needs to access. These permissions are used to create the function's IAM role.
    *
@@ -66,83 +168,22 @@ export interface AnalogArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  permissions?: SsrSiteArgs["permissions"];
+  permissions?: FunctionArgs["permissions"];
   /**
-   * Path to the directory where your Analog app is located.  This path is relative to your `sst.config.ts`.
+   * The command used internally to build your Analog app.
    *
-   * By default it assumes your Analog app is in the root of your SST app.
-   * @default `"."`
+   * @default The `build` script in your `package.json`: `"npm run build"`, or with `yarn`, `pnpm` or `bun` when its lockfile is in the site's folder or the app's.
    *
    * @example
    *
-   * If your Analog app is in a package in your monorepo.
-   *
+   * If you want to use a different build command.
    * ```js
    * {
-   *   path: "packages/web"
+   *   buildCommand: "yarn build"
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
-  /**
-   * [Link resources](/docs/linking/) to your Analog app. This will:
-   *
-   * 1. Grant the permissions needed to access the resources.
-   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
-   *
-   * @example
-   *
-   * Takes a list of resources to link to the function.
-   *
-   * ```js
-   * {
-   *   link: [bucket, stripeKey]
-   * }
-   * ```
-   */
-  link?: SsrSiteArgs["link"];
-  /**
-   * Configure how the CloudFront cache invalidations are handled. This is run after your Analog app has been deployed.
-   * :::tip
-   * You get 1000 free invalidations per month. After that you pay $0.005 per invalidation path. [Read more here](https://aws.amazon.com/cloudfront/pricing/).
-   * :::
-   * @default `{paths: "all", wait: false}`
-   * @example
-   * Wait for all paths to be invalidated.
-   * ```js
-   * {
-   *   invalidation: {
-   *     paths: "all",
-   *     wait: true
-   *   }
-   * }
-   * ```
-   */
-  invalidation?: SsrSiteArgs["invalidation"];
-  /**
-   * Set [environment variables](https://analogjs.org/docs/guides/migrating#using-environment-variables) in your Analog app. These are made available:
-   *
-   * 1. In `ng build`, they are loaded into `process.env`.
-   * 2. Locally while running `sst dev ng serve`.
-   *
-   * :::tip
-   * You can also `link` resources to your Analog app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
-   * :::
-   *
-   * Only variables prefixed with `VITE_` are available in the browser.
-   *
-   * @example
-   * ```js
-   * {
-   *   environment: {
-   *     API_URL: api.url,
-   *     // Accessible in the browser
-   *     VITE_STRIPE_PUBLISHABLE_KEY: "pk_test_123"
-   *   }
-   * }
-   * ```
-   */
-  environment?: SsrSiteArgs["environment"];
+  buildCommand?: string;
   /**
    * Set a custom domain for your Analog app.
    *
@@ -187,7 +228,7 @@ export interface AnalogArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Serve your Analog app through a `Router` instead of a standalone CloudFront
    * distribution.
@@ -292,46 +333,16 @@ export interface AnalogArgs extends SsrSiteArgs {
    * Also, make sure to set the base path and API prefix in your `vite.config.ts`,
    * like above.
    */
-  router?: SsrSiteArgs["router"];
-  /**
-   * The command used internally to build your Analog app.
-   *
-   * @default `"npm run build"`
-   *
-   * @example
-   *
-   * If you want to use a different build command.
-   * ```js
-   * {
-   *   buildCommand: "yarn build"
-   * }
-   * ```
-   */
-  buildCommand?: SsrSiteArgs["buildCommand"];
-  /**
-   * Configure the Analog app to use an existing CloudFront cache policy.
-   *
-   * :::note
-   * CloudFront has a limit of 20 cache policies per account, though you can request a limit
-   * increase.
-   * :::
-   *
-   * By default, a new cache policy is created for it. This allows you to reuse an existing
-   * policy instead of creating a new one.
-   *
-   * @default A new cache policy is created
-   * @example
-   * ```js
-   * {
-   *   cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6"
-   * }
-   * ```
-   */
-  cachePolicy?: SsrSiteArgs["cachePolicy"];
+  router?: SiteRouteArgs;
 }
 
 /**
  * The `Analog` component lets you deploy a [Analog](https://analogjs.org) app to AWS.
+ *
+ * :::note
+ * Your Analog app has to be built with Nitro's `aws-lambda` preset: set `nitro.preset` in
+ * the `analog()` plugin's options to `"aws-lambda"` in your `vite.config.ts`.
+ * :::
  *
  * @example
  *
@@ -397,53 +408,38 @@ export interface AnalogArgs extends SsrSiteArgs {
  *
  * console.log(Resource.MyBucket.name);
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Analog`
+ *
+ * Keep the name, and `sst migrate` moves it. The site's bucket, its
+ * server functions, and its CloudFront distribution or its entry in the router are kept.
+ * Its files, its entries in the key-value store and its route in the router's list are
+ * written again by resources of a new type, which the `sst` binary serves, and `sst
+ * migrate` takes the old ones out of the state without deleting what they wrote. Its
+ * CloudFront invalidation runs once more. A few things are written differently:
+ *
+ * - `nodes.server` holds the server of each region, by region, each an output:
+ *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
+ *   is given an AWS provider of its own, the server is listed once it's created; set
+ *   `regions` to have it from the start.
+ * - With `warm`, the server is warmed again when its code changes. `sst.aws.Analog` warmed
+ *   it on every deploy. The switch warms it once.
+ * - With `awsLambda: { streaming: true }` in Nitro's config, the server's URL streams its
+ *   responses. `sst.aws.Analog` ignored it and buffered them.
+ * - The base path is read from `vite.config` with any extension, like `.js` or `.mts`, and
+ *   it's what's in the quotes after `base`. `sst.aws.Analog` read only `vite.config.ts`,
+ *   and failed without it, and read on to the last quote of the line.
  */
-export class Analog extends SsrSite {
+export class Analog extends component("sst:aws:Analog", parts) {
+  private readonly siteUrl: Output<string>;
+
   constructor(
     name: string,
     args: AnalogArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected normalizeBuildCommand() { }
-
-  protected buildPlan(outputPath: Output<string>): Output<Plan> {
-    return outputPath.apply((outputPath) => {
-      const nitro = JSON.parse(
-        fs.readFileSync(
-          path.join(outputPath, "dist", "analog", "nitro.json"),
-          "utf-8",
-        ),
-      );
-
-      if (!["aws-lambda"].includes(nitro.preset)) {
-        throw new VisibleError(
-          `Analog's vite.config.ts must be configured to use the "aws-lambda" preset. It is currently set to "${nitro.preset}".`,
-        );
-      }
-
-      const basepath = fs
-        .readFileSync(path.join(outputPath, "vite.config.ts"), "utf-8")
-        .match(/base: ['"](.*)['"]/)?.[1];
-
-      return {
-        base: basepath,
-        server: {
-          description: "Server handler for Analog",
-          handler: "index.handler",
-          bundle: path.join(outputPath, "dist", "analog", "server"),
-        },
-        assets: [
-          {
-            from: path.join("dist", "analog", "public"),
-            to: "",
-            cached: true,
-          },
-        ],
-      };
-    });
+    super(name, args, opts);
+    this.siteUrl = createSsrSite(this.builder(), name, args, analog).url;
   }
 
   /**
@@ -453,10 +449,45 @@ export class Analog extends SsrSite {
    * Otherwise, it's the auto-generated CloudFront URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
 
-const __pulumiType = "sst:aws:Analog";
-// @ts-expect-error
-Analog.__pulumiType = __pulumiType;
+// How an Analog app is built, with its package manager and Nitro's
+// "aws-lambda" preset, and what its server is
+const analog: SsrFramework = {
+  label: "Analog",
+  alwaysServes: true,
+  // Nitro's client files aren't in a versioned folder
+  versionedFiles: false,
+  load: (builtPath) =>
+    nitroSite(builtPath, {
+      framework: "Analog",
+      output: path.join("dist", "analog"),
+      howToSet: [
+        "Set it in your `vite.config.ts`:",
+        "  // vite.config.ts",
+        "  export default defineConfig({",
+        "    plugins: [",
+        "      analog({",
+        "        nitro: {",
+        '          preset: "aws-lambda",',
+        "          awsLambda: { streaming: true }, // optional",
+        "        },",
+        "      }),",
+        "    ],",
+        "  });",
+      ],
+      description: "Server handler for Analog",
+      // From `base` in the Vite config
+      base: (outputPath) => configValue(outputPath, "vite.config", "base"),
+    }),
+};

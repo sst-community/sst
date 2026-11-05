@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { OpenSearch } from "../v5/open-search";
+import { OpenSearch } from "../open-search";
 
 // Nothing moved: every part has the name and the place it had in 4.x. The map
 // says the 4.x form has this 5.0 form, so a stage switches it with `sst

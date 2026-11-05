@@ -4,15 +4,15 @@ import { mockPulumi } from "../../helpers/graph";
 const pulumi = mockPulumi();
 
 describe("DevCommand", () => {
-  let OriginalDevCommand: typeof import("../../../src/components/experimental/dev-command").DevCommand;
-  let DevCommand: typeof import("../../../src/components/experimental/v5/dev-command").DevCommand;
+  let OriginalDevCommand: typeof import("../../fixtures/v4/components/experimental/dev-command").DevCommand;
+  let DevCommand: typeof import("../../../src/components/experimental/dev-command").DevCommand;
 
   beforeAll(async () => {
     OriginalDevCommand = (
-      await import("../../../src/components/experimental/dev-command")
+      await import("../../fixtures/v4/components/experimental/dev-command")
     ).DevCommand;
     DevCommand = (
-      await import("../../../src/components/experimental/v5/dev-command")
+      await import("../../../src/components/experimental/dev-command")
     ).DevCommand;
   });
 

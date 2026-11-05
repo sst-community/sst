@@ -19,8 +19,8 @@ const pulumi = mockPulumi({
 });
 
 type RealtimeClass =
-  | typeof import("../../../src/components/aws/realtime").Realtime
-  | typeof import("../../../src/components/aws/v5/realtime").Realtime;
+  | typeof import("../../fixtures/v4/components/aws/realtime").Realtime
+  | typeof import("../../../src/components/aws/realtime").Realtime;
 
 // The hash 4.x named a subscriber with, from its filter and handler
 const hashOf = (filter: string, handler: string) =>
@@ -34,16 +34,15 @@ const subscriber = (filter: string, handler: string) =>
   )}`;
 
 describe("Realtime", () => {
-  let Original: typeof import("../../../src/components/aws/realtime").Realtime;
-  let Realtime: typeof import("../../../src/components/aws/v5/realtime").Realtime;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
+  let Original: typeof import("../../fixtures/v4/components/aws/realtime").Realtime;
+  let Realtime: typeof import("../../../src/components/aws/realtime").Realtime;
+  let Function: typeof import("../../../src/components/aws/function").Function;
 
   beforeAll(async () => {
-    Original = (await import("../../../src/components/aws/realtime")).Realtime;
-    Realtime = (await import("../../../src/components/aws/v5/realtime"))
+    Original = (await import("../../fixtures/v4/components/aws/realtime"))
       .Realtime;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
+    Realtime = (await import("../../../src/components/aws/realtime")).Realtime;
+    Function = (await import("../../../src/components/aws/function")).Function;
     await import("../../../src/components/aws/takeover/index");
   });
 

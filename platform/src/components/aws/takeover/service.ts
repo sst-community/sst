@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Service } from "../v5/service";
+import { Service } from "../service";
 
 takeover(Service, {
   moved: {

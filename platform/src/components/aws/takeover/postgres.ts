@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { Postgres } from "../v5/postgres";
+import { Postgres } from "../postgres";
 
 takeover(Postgres, {
   moved: {

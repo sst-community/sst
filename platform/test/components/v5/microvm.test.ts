@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
 // The app's folder, with the image's contexts
@@ -42,21 +42,29 @@ const pulumi = mockPulumi({
 });
 
 type MicroVmClass =
-  | typeof import("../../../src/components/aws/microvm").MicroVm
-  | typeof import("../../../src/components/aws/v5/microvm").MicroVm;
+  | typeof import("../../fixtures/v4/components/aws/microvm").MicroVm
+  | typeof import("../../../src/components/aws/microvm").MicroVm;
 
 describe("MicroVm", () => {
-  let OriginalMicroVm: typeof import("../../../src/components/aws/microvm").MicroVm;
-  let MicroVm: typeof import("../../../src/components/aws/v5/microvm").MicroVm;
-  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
+  let OriginalMicroVm: typeof import("../../fixtures/v4/components/aws/microvm").MicroVm;
+  let MicroVm: typeof import("../../../src/components/aws/microvm").MicroVm;
+  let OriginalVpc: typeof import("../../fixtures/v4/components/aws/vpc").Vpc;
+  let SidedVpc: any;
+  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
-    OriginalMicroVm = (await import("../../../src/components/aws/microvm"))
+    OriginalMicroVm = (await import("../../fixtures/v4/components/aws/microvm"))
       .MicroVm;
-    MicroVm = (await import("../../../src/components/aws/v5/microvm")).MicroVm;
-    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    MicroVm = (await import("../../../src/components/aws/microvm")).MicroVm;
+    OriginalVpc = (await import("../../fixtures/v4/components/aws/vpc")).Vpc;
+    // SST 4's for SST 4's side, SST 5's for SST 5's
+    SidedVpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/index");
   });
 
@@ -111,9 +119,7 @@ describe("MicroVm", () => {
           );
         },
         "an image linked to a bucket": async (MicroVm, opts) => {
-          const { Bucket } = await import(
-            "../../../src/components/aws/v5/bucket"
-          );
+          const { Bucket } = await import("../../../src/components/aws/bucket");
           new MicroVm(
             "Sandbox",
             { image: { context: "sandbox" }, link: [new Bucket("MyBucket")] },
@@ -138,7 +144,7 @@ describe("MicroVm", () => {
             "Sandbox",
             {
               image: { context: "sandbox" },
-              vpc: new OriginalVpc("MyVpc", { nat: "managed" }),
+              vpc: new SidedVpc("MyVpc", { nat: "managed" }),
             },
             opts,
           );
@@ -188,7 +194,7 @@ describe("MicroVm", () => {
         "in sst dev, in a VPC, linked": {
           create: async (MicroVm, opts) => {
             const { Bucket } = await import(
-              "../../../src/components/aws/v5/bucket"
+              "../../../src/components/aws/bucket"
             );
             // @ts-ignore
             global.$dev = true;
@@ -319,7 +325,7 @@ describe("MicroVm", () => {
   });
 
   it("gives the execution role the permissions and the links'", async () => {
-    const { Bucket } = await import("../../../src/components/aws/v5/bucket");
+    const { Bucket } = await import("../../../src/components/aws/bucket");
     new MicroVm("Sandbox", {
       image: { context: "sandbox" },
       link: [new Bucket("MyBucket")],
@@ -493,22 +499,19 @@ describe("MicroVm", () => {
     ).toEqual(["arn:aws:mock:us-east-1:123456789012:SandboxNetworkConnector"]);
   });
 
-  it("takes either kind of Vpc", async () => {
-    for (const vpc of [
-      () => new OriginalVpc("MyVpc", { nat: "managed" }),
-      () => new Vpc("MyVpc", { nat: "managed" }),
-    ]) {
-      pulumi.reset();
-      new MicroVm("Sandbox", { image: { context: "sandbox" }, vpc: vpc() });
-      await pulumi.settle();
-      const egress = resource("SandboxNetworkConnector").inputs.configuration
-        .vpcEgressConfiguration;
-      expect(egress.subnetIds).toEqual([
-        "MyVpcPrivateSubnet1_id",
-        "MyVpcPrivateSubnet2_id",
-      ]);
-      expect(egress.securityGroupIds).toEqual(["MyVpcSecurityGroup_id"]);
-    }
+  it("takes a Vpc", async () => {
+    new MicroVm("Sandbox", {
+      image: { context: "sandbox" },
+      vpc: new Vpc("MyVpc", { nat: "managed" }),
+    });
+    await pulumi.settle();
+    const egress = resource("SandboxNetworkConnector").inputs.configuration
+      .vpcEgressConfiguration;
+    expect(egress.subnetIds).toEqual([
+      "MyVpcPrivateSubnet1_id",
+      "MyVpcPrivateSubnet2_id",
+    ]);
+    expect(egress.securityGroupIds).toEqual(["MyVpcSecurityGroup_id"]);
   });
 
   it("refuses another resource as the ids of a VPC", async () => {

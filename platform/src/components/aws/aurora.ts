@@ -1,31 +1,69 @@
+import { all, ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
+import { rds, secretsmanager } from "@pulumi/aws";
 import {
-  all,
-  ComponentResourceOptions,
-  interpolate,
-  jsonStringify,
-  output,
-  Output,
-} from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component.js";
-import { Link } from "../link.js";
-import { Input } from "../input.js";
-import { iam, rds, secretsmanager } from "@pulumi/aws";
-import { VisibleError } from "../error.js";
-import { Vpc } from "./vpc.js";
-import { RandomPassword } from "@pulumi/random";
-import { DevCommand } from "../experimental/dev-command.js";
-import { RdsRoleLookup } from "./providers/rds-role-lookup.js";
-import { DurationHours, toSeconds } from "../duration.js";
-import { permission } from "./permission.js";
+  type ComponentArgs,
+  type LinkInclude,
+  component,
+  many,
+  optional,
+} from "../parts-component";
+import { knownValue, plain, withDefault, onlyExisting, getArgs } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { type DurationHours, toSeconds } from "../duration";
+import { transformPart } from "../transform";
+import { context } from "../contract";
+import {
+  createCredentials,
+  createRdsProxy,
+  createRdsProxyTarget,
+  localDatabase,
+  type ProxyArgs,
+  rdsCredentialParts,
+  rdsProxyParts,
+} from "./helpers/rds";
+import { secretField, tagOf } from "./helpers/secret";
+import { permission } from "./permission";
+import { type AnyVpc, subnetsAndSecurityGroupsOf } from "./helpers/vpc";
+
+const parts = {
+  /**
+   * The Secrets Manager secret that stores the master user's username and password. Next
+   * to an existing `cluster`, it's the one given here, or the one the cluster is tagged
+   * with.
+   */
+  secret: secretsmanager.Secret,
+  ...rdsCredentialParts,
+  /**
+   * The RDS subnet group. Not created by `get`.
+   */
+  subnetGroup: optional(rds.SubnetGroup),
+  /**
+   * The RDS instance parameter group. Not created by `get`.
+   */
+  instanceParameterGroup: optional(rds.ParameterGroup),
+  /**
+   * The RDS cluster parameter group. Not created by `get`.
+   */
+  clusterParameterGroup: optional(rds.ClusterParameterGroup),
+  /**
+   * The RDS Cluster.
+   */
+  cluster: rds.Cluster,
+  /**
+   * The primary database instance in the RDS Cluster.
+   */
+  instance: rds.ClusterInstance,
+  /**
+   * The read-only replicas in the RDS Cluster, by number, from `0`.
+   */
+  replica: many(rds.ClusterInstance),
+  ...rdsProxyParts,
+};
 
 type ACU = `${number} ACU`;
 
-function parseACU(acu: ACU) {
-  const result = parseFloat(acu.split(" ")[0]);
-  return result;
-}
-
-export interface AuroraArgs {
+export interface AuroraArgs extends ComponentArgs<typeof parts> {
   /**
    * The Aurora engine to use.
    *
@@ -44,7 +82,8 @@ export interface AuroraArgs {
   /**
    * The version of the Aurora engine.
    *
-   * The default is `"17"` for Postgres and `"3.08.0"` for MySQL.
+   * The default is `"17"` for Postgres and `"3.08.0"` for MySQL. Changing this default
+   * doesn't change the version of a cluster that's already deployed.
    *
    * Check out the [available Postgres versions](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.html#Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.apg) and [available MySQL versions](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.html#Concepts.Aurora_Fea_Regions_DB-eng.Feature.ServerlessV2.amy) in your region.
    *
@@ -53,10 +92,10 @@ export interface AuroraArgs {
    * :::
    *
    * Auto-pause and resume is only supported in the following versions:
-   * - Aurora PostgresSQL 16.3 and higher
-   * - Aurora PostgresSQL 15.7 and higher
-   * - Aurora PostgresSQL 14.12 and higher
-   * - Aurora PostgresSQL 13.15 and higher
+   * - Aurora PostgreSQL 16.3 and higher
+   * - Aurora PostgreSQL 15.7 and higher
+   * - Aurora PostgreSQL 14.12 and higher
+   * - Aurora PostgreSQL 13.15 and higher
    * - Aurora MySQL 3.08.0 and higher
    *
    * :::caution
@@ -103,9 +142,12 @@ export interface AuroraArgs {
    *
    * ```js
    * {
-   *   password: (new sst.Secret("MyDBPassword")).value
+   *   password: new sst.Secret("MyDBPassword").value
    * }
    * ```
+   *
+   * Whether it's set decides whether a password is generated, so it has to be set or left
+   * out, not given as an output that may be `undefined`.
    */
   password?: Input<string>;
   /**
@@ -124,7 +166,7 @@ export interface AuroraArgs {
    * @example
    * ```js
    * {
-   *   databaseName: "acme"
+   *   database: "acme"
    * }
    * ```
    */
@@ -182,7 +224,7 @@ export interface AuroraArgs {
      *
      * You can [read more here](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.setting-capacity.html#aurora-serverless-v2.setting-capacity.incompatible_parameters).
      *
-     * @default `0.5 ACU`
+     * @default `0 ACU`
      * @example
      * ```js
      * {
@@ -194,8 +236,10 @@ export interface AuroraArgs {
      */
     min?: Input<ACU>;
     /**
-     * The maximum number of ACUs or _Aurora Capacity Units_. Ranges from 1 to 128, in
-     * increments of 0.5. Where each ACU is roughly equivalent to 2 GB of memory.
+     * The maximum number of ACUs or _Aurora Capacity Units_. Ranges from 1 to 128 on older
+     * engine versions, and higher on recent ones, in increments of 0.5. Where each ACU is
+     * roughly equivalent to 2 GB of memory. Check out the [capacity
+     * limits](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.setting-capacity.html).
      *
      * @default `4 ACU`
      * @example
@@ -216,8 +260,8 @@ export interface AuroraArgs {
      * This only applies when the `min` is set to 0 ACUs.
      * :::
      *
-     * Must be between `"5 minutes"` and `"60 minutes"` or `"1 hour"`. So if the `min` is set
-     * to 0 ACUs, by default, the database will be auto-paused after `"5 minutes"`.
+     * Must be between `"5 minutes"` and `"24 hours"`. So if the `min` is set to 0 ACUs, by
+     * default, the database will be auto-paused after `"5 minutes"`.
      *
      * When the database is paused, you are not charged for the ACUs. On the next database
      * connection, the database will resume. It takes about 15 seconds for the database to
@@ -249,6 +293,8 @@ export interface AuroraArgs {
    * reads. You can add up to 15 read-only replicas to offload the read traffic from the
    * primary instance.
    *
+   * This has to be a plain value, not an output: it decides which resources are created.
+   *
    * @default `0`
    * @example
    * ```js
@@ -257,13 +303,13 @@ export interface AuroraArgs {
    * }
    * ```
    */
-  replicas?: Input<number>;
+  replicas?: number;
   /**
    * Enable [RDS Data API](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api.html)
    * for the database.
    *
    * The RDS Data API provides a secure HTTP endpoint and does not need a persistent connection.
-   * You also doesn't need the `sst tunnel` or a VPN to connect to it from your local machine.
+   * You also don't need the `sst tunnel` or a VPN to connect to it from your local machine.
    *
    * RDS Data API is [billed per request](#cost). Check out the [RDS Data API
    * pricing](https://aws.amazon.com/rds/aurora/pricing/#Data_API_costs) for more details.
@@ -288,6 +334,8 @@ export interface AuroraArgs {
    * There's an [extra cost](#cost) attached to enabling this. Check out the [RDS Proxy
    * pricing](https://aws.amazon.com/rds/proxy/pricing/) for more details.
    *
+   * This has to be a plain value, not an output: it decides which resources are created.
+   *
    * @default `false`
    * @example
    * ```js
@@ -296,75 +344,18 @@ export interface AuroraArgs {
    * }
    * ```
    */
-  proxy?: Input<
-    | boolean
-    | {
-        /**
-         * Add extra credentials the proxy can use to connect to the database.
-         *
-         * Your app will use the master `username` and `password`. So you don't need to specify
-         * them here.
-         *
-         * These credentials are for any other services that need to connect to your database
-         * directly.
-         *
-         * :::tip
-         * You need to create these credentials manually in the database.
-         * :::
-         *
-         * These credentials are not automatically created. You'll need to create these
-         * credentials manually in the database.
-         *
-         * @example
-         * ```js
-         * {
-         *   credentials: [
-         *     {
-         *       username: "metabase",
-         *       password: "Passw0rd!"
-         *     }
-         *   ]
-         * }
-         * ```
-         *
-         * You can use a [`Secret`](/docs/component/secret) to manage the password.
-         *
-         * ```js
-         * {
-         *   credentials: [
-         *     {
-         *       username: "metabase",
-         *       password: (new sst.Secret("MyDBPassword")).value
-         *     }
-         *   ]
-         * }
-         * ```
-         */
-        credentials?: Input<
-          Input<{
-            /**
-             * The username of the user.
-             */
-            username: Input<string>;
-            /**
-             * The password of the user.
-             */
-            password: Input<string>;
-          }>[]
-        >;
-      }
-  >;
+  proxy?: boolean | ProxyArgs;
   /**
    * The VPC to use for the database cluster.
    *
    * @example
-   * Create a VPC component.
+   * Create a `Vpc` component.
    *
    * ```js
    * const myVpc = new sst.aws.Vpc("MyVpc");
    * ```
    *
-   * And pass it in.
+   * And pass it in. The cluster is in its private subnets.
    *
    * ```js
    * {
@@ -377,14 +368,14 @@ export interface AuroraArgs {
    * ```js
    * {
    *   vpc: {
-   *     subnets: ["subnet-0db7376a7ad4db5fd ", "subnet-06fc7ee8319b2c0ce"],
+   *     subnets: ["subnet-0db7376a7ad4db5fd", "subnet-06fc7ee8319b2c0ce"],
    *     securityGroups: ["sg-0399348378a4c256c"]
    *   }
    * }
    * ```
    */
   vpc:
-    | Vpc
+    | AnyVpc
     | Input<{
         /**
          * A list of subnet IDs in the VPC to deploy the Aurora cluster in.
@@ -402,7 +393,11 @@ export interface AuroraArgs {
    * connect to a locally running database, you can configure the `dev` prop.
    *
    * This will skip deploying an Aurora database and link to the locally running database
-   * instead.
+   * instead. `sst dev` shows what the local database has to be set up with, in a pane of its
+   * own.
+   *
+   * This has to be a plain value, not an output: it decides whether the database is
+   * deployed. The values inside it can be outputs.
    *
    * @example
    *
@@ -429,7 +424,7 @@ export interface AuroraArgs {
     host?: Input<string>;
     /**
      * The port of the local database to connect to when running in dev.
-     * @default `5432`
+     * @default `5432` for Postgres, `3306` for MySQL
      */
     port?: Input<number>;
     /**
@@ -443,51 +438,40 @@ export interface AuroraArgs {
      */
     username?: Input<string>;
     /**
-     * The password of the local database to connect to when running in dev.
+     * The password of the local database to connect to when running in dev. `sst dev`
+     * needs this or the top-level `password`.
      * @default Inherit from the top-level [`password`](#password).
      */
     password?: Input<string>;
   };
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the RDS subnet group.
-     */
-    subnetGroup?: Transform<rds.SubnetGroupArgs>;
-    /**
-     * Transform the RDS cluster parameter group.
-     */
-    clusterParameterGroup?: Transform<rds.ClusterParameterGroupArgs>;
-    /**
-     * Transform the RDS instance parameter group.
-     */
-    instanceParameterGroup?: Transform<rds.ParameterGroupArgs>;
-    /**
-     * Transform the RDS Cluster.
-     */
-    cluster?: Transform<rds.ClusterArgs>;
-    /**
-     * Transform the database instance in the RDS Cluster.
-     */
-    instance?: Transform<rds.ClusterInstanceArgs>;
-    /**
-     * Transform the RDS Proxy.
-     */
-    proxy?: Transform<rds.ProxyArgs>;
-  };
 }
 
-interface AuroraRef {
-  ref: boolean;
-  id: Input<string>;
+/** What the rest of the app reads from the database, deployed or local. */
+interface Connection {
+  id: Output<string>;
+  clusterArn: Output<string>;
+  secretArn: Output<string>;
+  host: Output<string>;
+  /** Where read-only connections go. */
+  reader: Output<string>;
+  port: Output<number>;
+  username: Output<string>;
+  password: Output<string>;
+  database: Output<string>;
+  /** The proxy connections go through, when there's one to deploy or look up. */
+  proxy?: Output<rds.Proxy | undefined>;
+  /** What a linked resource is allowed to do with the database. */
+  include: LinkInclude[];
 }
+
+const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
 
 /**
  * The `Aurora` component lets you add a Aurora Postgres or MySQL cluster to your app
  * using [Amazon Aurora Serverless v2](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.html).
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -610,6 +594,31 @@ interface AuroraRef {
  * This will skip deploying the database and link to the locally running Postgres database
  * instead. [Check out the full example](/docs/examples/#aws-aurora-local).
  *
+ * #### Switch from SST 4's `sst.aws.Aurora`
+ *
+ * Keep the name, and `sst migrate` moves it. The cluster you've
+ * deployed is kept, and so is everything around it: its instances, password, secrets,
+ * parameter groups and proxy. What waits for the role RDS needs before the proxy is
+ * created is a resource of a new type, which the `sst` binary serves: `sst migrate`
+ * takes SST 4's out of the state, and the new one finds the role.
+ *
+ * A few things work differently:
+ *
+ * - `replicas`, `proxy`, its list of `credentials`, and each credential's `username` are
+ *   plain values, not outputs. They decide which resources are created.
+ * - With `dev` set, `sst.aws.Aurora` created a component for the pane `sst dev` shows, in
+ *   every deploy. The V5 one tells `sst dev` itself, so a deploy drops that component. It
+ *   has nothing in AWS behind it. An empty local password is shown as "[no password]" in
+ *   the pane.
+ * - `nodes` has every resource, not only the cluster and the instance. The secret that
+ *   stores the master user's credentials is `nodes.secret`. In `sst dev` with `dev` set,
+ *   reading one of them fails and says why it's missing, where `sst.aws.Aurora` gave
+ *   `undefined`.
+ * - `transform.instance` still applies to the primary instance and to each replica. To
+ *   change only the replicas, use `transform.replica`, which is applied after it.
+ * - If you set `tags` on the cluster with an object in `transform`, it keeps the tags SST
+ *   sets next to yours. They're added back when you switch.
+ *
  * ---
  *
  * ### Cost
@@ -648,533 +657,328 @@ interface AuroraRef {
  * Check out the [RDS Data API pricing](https://aws.amazon.com/rds/aurora/pricing/#Data_API_costs)
  * for more details.
  */
-export class Aurora extends Component implements Link.Linkable {
-  private cluster?: rds.Cluster;
-  private instance?: rds.ClusterInstance;
-  private secret?: secretsmanager.Secret;
-  private _password?: Output<string>;
-  private proxy?: Output<rds.Proxy | undefined>;
-  private dev?: {
-    enabled: boolean;
-    host: Output<string>;
-    port: Output<number>;
-    username: Output<string>;
-    password: Output<string>;
-    database: Output<string>;
-  };
+export class Aurora extends component("sst:aws:Aurora", parts) {
+  private connection: Connection;
 
   constructor(name: string, args: AuroraArgs, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
+
     const self = this;
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this.cluster = ref.cluster;
-      this.instance = ref.instance;
-      this._password = ref.password;
-      this.proxy = output(ref.proxy);
-      this.secret = ref.secret;
-      return;
-    }
-
     const engine = output(args.engine);
-    const version = all([args.version, engine]).apply(
-      ([version, engine]) =>
-        version ?? { postgres: "17", mysql: "3.08.0" }[engine],
-    );
     const username = all([args.username, engine]).apply(
       ([username, engine]) =>
         username ?? { postgres: "postgres", mysql: "root" }[engine],
     );
-    const dbName = output(args.database).apply(
-      (name) => name ?? $app.name.replaceAll("-", "_"),
+    const dbName = withDefault(
+      args.database,
+      context().app.name.replaceAll("-", "_"),
     );
-    const dataApi = output(args.dataApi).apply((v) => v ?? false);
-    const scaling = normalizeScaling();
-    const replicas = normalizeReplicas();
-    const vpc = normalizeVpc();
 
-    const dev = registerDev();
-    if (dev?.enabled) {
-      this.dev = dev;
+    const owner = `the "${name}" Aurora database`;
+
+    // Given a cluster that's already deployed, it uses its instance, secret
+    // and proxy, and creates nothing else
+    if (args.existing?.cluster !== undefined)
+      onlyExisting(
+        args.existing,
+        ["cluster", "instance", "secret", "proxy"],
+        owner,
+      );
+
+    // In `sst dev`, a database on the user's machine stands in for the
+    // cluster, one that's already deployed too. This is the only place the
+    // component handles dev mode.
+    const dev = plain(args.dev, `The "dev" of ${owner}`);
+    if (dev && context().dev) {
+      this.runsLocally();
+      this.connection = runLocally(dev);
       return;
     }
 
-    const password = createPassword();
-    const secret = createSecret();
-    const subnetGroup = createSubnetGroup();
-    const instanceParameterGroup = createInstanceParameterGroup();
-    const clusterParameterGroup = createClusterParameterGroup();
-    const proxy = createProxy();
-    const cluster = createCluster();
-    const instance = createInstances();
-    createProxyTarget();
-
-    this.cluster = cluster;
-    this.instance = instance;
-    this.secret = secret;
-    this._password = password;
-    this.proxy = proxy;
-
-    function reference() {
-      const ref = args as unknown as AuroraRef;
-      const cluster = rds.Cluster.get(`${name}Cluster`, ref.id, undefined, {
-        parent: self,
-      });
-
-      const instance = rds.ClusterInstance.get(
-        `${name}Instance`,
-        rds
-          .getInstancesOutput(
-            {
-              filters: [
-                {
-                  name: "db-cluster-id",
-                  values: [cluster.id],
-                },
-              ],
-            },
-            { parent: self },
-          )
-          .instanceIdentifiers.apply((ids) => {
-            if (!ids.length) {
-              throw new VisibleError(
-                `Database instance not found in cluster ${cluster.id}`,
-              );
-            }
-            return ids[0];
-          }),
-        undefined,
-        { parent: self },
-      );
-
-      const secretId = cluster.tagsAll
-        .apply((tags) => tags?.["sst:ref:password"])
-        .apply((passwordTag) => {
-          if (!passwordTag)
-            throw new VisibleError(
-              `Failed to get password for Postgres ${name}.`,
-            );
-          return passwordTag;
-        });
-
-      const secret = secretsmanager.Secret.get(
-        `${name}ProxySecret`,
-        secretId,
-        undefined,
-        { parent: self },
-      );
-      const secretVersion = secretsmanager.getSecretVersionOutput(
-        { secretId },
-        { parent: self },
-      );
-      const password = $jsonParse(secretVersion.secretString).apply(
-        (v) => v.password as string,
-      );
-
-      const proxy = cluster.tagsAll
-        .apply((tags) => tags?.["sst:ref:proxy"])
-        .apply((proxyTag) =>
-          proxyTag
-            ? rds.Proxy.get(`${name}Proxy`, proxyTag, undefined, {
-                parent: self,
-              })
-            : undefined,
-        );
-
-      return { cluster, instance, proxy, password, secret };
+    // A cluster that's already deployed
+    const existing = this.existingPart("cluster");
+    if (existing) {
+      this.connection = reference(existing);
+      return;
     }
 
-    function normalizeScaling() {
-      return output(args.scaling).apply((scaling) => {
-        const max = scaling?.max ?? "4 ACU";
-        const min = scaling?.min ?? "0 ACU";
-        const isAutoPauseEnabled = parseACU(min) === 0;
-        if (scaling?.pauseAfter && !isAutoPauseEnabled) {
-          throw new VisibleError(
-            `Cannot configure "pauseAfter" when the minimum ACU is not 0 for the "${name}" Aurora database.`,
-          );
-        }
+    const proxy = plain(args.proxy, `The "proxy" of ${owner}`);
+    const replicas = plain(args.replicas, `The "replicas" of ${owner}`) ?? 0;
+    if (replicas > 15)
+      throw new VisibleError(
+        `The "replicas" of ${owner} is ${replicas}. It can have 15 read-only replicas at most.`,
+      );
 
-        return {
-          max,
-          min,
-          pauseAfter: isAutoPauseEnabled
-            ? scaling?.pauseAfter ?? "5 minutes"
-            : undefined,
-        };
-      });
-    }
-
-    function normalizeReplicas() {
-      return output(args.replicas ?? 0).apply((replicas) => {
-        if (replicas > 15) {
-          throw new VisibleError(
-            `Cannot create more than 15 read-only replicas for the "${name}" Aurora database.`,
-          );
-        }
-        return replicas;
-      });
-    }
-
-    function normalizeVpc() {
-      // "vpc" is a Vpc component
-      if (args.vpc instanceof Vpc) {
-        return {
-          subnets: args.vpc.privateSubnets,
-          securityGroups: args.vpc.securityGroups,
-        };
-      }
-
-      // "vpc" is object
-      return output(args.vpc);
-    }
-
-    function registerDev() {
-      if (!args.dev) return undefined;
-
-      if (
-        $dev &&
-        args.dev.password === undefined &&
-        args.password === undefined
-      ) {
+    const version = all([args.version, engine]).apply(
+      ([version, engine]) =>
+        version ?? { postgres: "17", mysql: "3.08.0" }[engine],
+    );
+    const family = all([engine, version]).apply(([engine, version]) => {
+      if (engine === "postgres")
+        return `aurora-postgresql${version.split(".")[0]}`;
+      return version.startsWith("2") ? `aurora-mysql5.7` : `aurora-mysql8.0`;
+    });
+    const scaling = output(args.scaling).apply((scaling) => {
+      const max = scaling?.max ?? "4 ACU";
+      const min = scaling?.min ?? "0 ACU";
+      // A cluster that scales down to nothing is paused when it's idle
+      const pauses = acus(min) === 0;
+      if (scaling?.pauseAfter && !pauses)
         throw new VisibleError(
-          `You must provide the password to connect to your locally running database either by setting the "dev.password" or by setting the top-level "password" property.`,
+          `The "scaling.pauseAfter" of ${owner} is only for a cluster that scales down to 0 ACU, and its "scaling.min" is ${min}. Remove "pauseAfter", or set "min" to "0 ACU".`,
         );
-      }
-
-      const dev = {
-        enabled: $dev,
-        host: output(args.dev.host ?? "localhost"),
-        port: all([args.dev.port, engine]).apply(
-          ([port, engine]) => port ?? { postgres: 5432, mysql: 3306 }[engine],
-        ),
-        username: args.dev.username ? output(args.dev.username) : username,
-        password: output(args.dev.password ?? args.password ?? ""),
-        database: args.dev.database ? output(args.dev.database) : dbName,
+      return {
+        max,
+        min,
+        pauseAfter: pauses ? scaling?.pauseAfter ?? "5 minutes" : undefined,
       };
+    });
+    const vpc = subnetsAndSecurityGroupsOf(args.vpc, owner);
+    // An engine version the user didn't choose isn't moved once it's deployed
+    const pinned = (field: string) => (args.version ? [] : [field]);
+    const parameterGroupOpts = {
+      ignoreChanges: pinned("family"),
+      // Necessary for the subnet to be deleted after the instance.
+      // This is either a Pulumi bug or an undocumented feature.
+      deleteBeforeReplace: false,
+    };
 
-      new DevCommand(`${name}Dev`, {
-        dev: {
-          title: name,
-          autostart: true,
-          command: `sst print-and-not-quit`,
-        },
-        environment: {
-          SST_DEV_COMMAND_MESSAGE: interpolate`Make sure your local database is using:
+    const builder = this.builder();
+    const { password, secret } = createCredentials(
+      builder,
+      username,
+      args.password,
+    );
 
-  username: "${dev.username}"
-  password: "${dev.password}"
-  database: "${dev.database}"
+    const subnetGroup = this.part("subnetGroup", { subnetIds: vpc.subnets });
 
-Listening on "${dev.host}:${dev.port}"...`,
-        },
-      });
+    const instanceParameterGroup = this.part(
+      "instanceParameterGroup",
+      { family, parameters: [] },
+      parameterGroupOpts,
+    );
+    const clusterParameterGroup = this.part(
+      "clusterParameterGroup",
+      { family, parameters: [] },
+      parameterGroupOpts,
+    );
 
-      return dev;
-    }
+    // The cluster is tagged with its proxy, so the proxy comes first
+    const rdsProxy = proxy
+      ? createRdsProxy(builder, proxy === true ? {} : proxy, {
+          master: secret,
+          engineFamily: engine.apply((engine) =>
+            engine === "postgres" ? "POSTGRESQL" : "MYSQL",
+          ),
+          subnets: vpc.subnets,
+          owner,
+        })
+      : undefined;
 
-    function createPassword() {
-      return args.password
-        ? output(args.password)
-        : new RandomPassword(
-            `${name}Password`,
-            {
-              length: 32,
-              special: false,
-            },
-            { parent: self },
-          ).result;
-    }
-
-    function createSecret() {
-      const secret = new secretsmanager.Secret(
-        `${name}ProxySecret`,
-        {
-          recoveryWindowInDays: 0,
-        },
-        { parent: self },
-      );
-
-      new secretsmanager.SecretVersion(
-        `${name}ProxySecretVersion`,
-        {
-          secretId: secret.id,
-          secretString: jsonStringify({ username, password }),
-        },
-        { parent: self },
-      );
-
-      return secret;
-    }
-
-    function createSubnetGroup() {
-      return new rds.SubnetGroup(
-        ...transform(
-          args.transform?.subnetGroup,
-          `${name}SubnetGroup`,
-          {
-            subnetIds: vpc.subnets,
-          },
-          { parent: self },
+    const cluster = this.part(
+      "cluster",
+      {
+        engine: engine.apply((engine) =>
+          engine === "postgres"
+            ? rds.EngineType.AuroraPostgresql
+            : rds.EngineType.AuroraMysql,
         ),
-      );
-    }
-
-    function createInstanceParameterGroup() {
-      return new rds.ParameterGroup(
-        ...transform(
-          args.transform?.instanceParameterGroup,
-          `${name}ParameterGroup`,
-          {
-            family: all([engine, version]).apply(([engine, version]) => {
-              if (engine === "postgres")
-                return `aurora-postgresql${version.split(".")[0]}`;
-              return version.startsWith("2")
-                ? `aurora-mysql5.7`
-                : `aurora-mysql8.0`;
-            }),
-            parameters: [],
-          },
-          {
-            parent: self,
-            ignoreChanges: args.version ? [] : ["family"],
-            // Necessary for the subnet to be deleted after the instance.
-            // This is either a Pulumi bug or an undocumented feature.
-            deleteBeforeReplace: false,
-          },
-        ),
-      );
-    }
-
-    function createClusterParameterGroup() {
-      return new rds.ClusterParameterGroup(
-        ...transform(
-          args.transform?.clusterParameterGroup,
-          `${name}ClusterParameterGroup`,
-          {
-            family: all([engine, version]).apply(([engine, version]) => {
-              if (engine === "postgres")
-                return `aurora-postgresql${version.split(".")[0]}`;
-              return version.startsWith("2")
-                ? `aurora-mysql5.7`
-                : `aurora-mysql8.0`;
-            }),
-            parameters: [],
-          },
-          {
-            parent: self,
-            ignoreChanges: args.version ? [] : ["family"],
-            // Necessary for the subnet to be deleted after the instance.
-            // This is either a Pulumi bug or an undocumented feature.
-            deleteBeforeReplace: false,
-          },
-        ),
-      );
-    }
-
-    function createCluster() {
-      return new rds.Cluster(
-        ...transform(
-          args.transform?.cluster,
-          `${name}Cluster`,
-          {
-            engine: engine.apply((engine) =>
-              engine === "postgres"
-                ? rds.EngineType.AuroraPostgresql
-                : rds.EngineType.AuroraMysql,
-            ),
-            engineMode: "provisioned",
-            engineVersion: all([engine, version]).apply(([engine, version]) => {
-              if (engine === "postgres") return version;
-
-              return version.startsWith("2")
-                ? `5.7.mysql_aurora.${version}`
-                : `8.0.mysql_aurora.${version}`;
-            }),
-            databaseName: dbName,
-            masterUsername: username,
-            masterPassword: password,
-            dbClusterParameterGroupName: clusterParameterGroup.name,
-            dbInstanceParameterGroupName: instanceParameterGroup.name,
-            serverlessv2ScalingConfiguration: scaling.apply((scaling) => ({
-              maxCapacity: parseACU(scaling.max),
-              minCapacity: parseACU(scaling.min),
-              secondsUntilAutoPause: scaling.pauseAfter
-                ? toSeconds(scaling.pauseAfter)
-                : undefined,
-            })),
-            applyImmediately: true,
-            allowMajorVersionUpgrade: true,
-            skipFinalSnapshot: true,
-            storageEncrypted: true,
-            enableHttpEndpoint: dataApi,
-            dbSubnetGroupName: subnetGroup?.name,
-            vpcSecurityGroupIds: vpc.securityGroups,
-            tags: proxy.apply((proxy) => ({
-              "sst:ref:password": secret.id,
-              ...(proxy ? { "sst:ref:proxy": proxy.id } : {}),
-            })),
-          },
-          {
-            parent: self,
-            ignoreChanges: args.version ? [] : ["engineVersion"],
-          },
-        ),
-      );
-    }
-
-    function createInstances() {
-      const props = {
-        clusterIdentifier: cluster.id,
-        instanceClass: "db.serverless",
-        engine: cluster.engine.apply((v) => v as rds.EngineType),
-        engineVersion: cluster.engineVersion,
-        dbSubnetGroupName: cluster.dbSubnetGroupName,
-        dbParameterGroupName: instanceParameterGroup.name,
-        autoMinorVersionUpgrade: false,
-      };
-
-      // Create primary instance
-      const instance = new rds.ClusterInstance(
-        ...transform(args.transform?.instance, `${name}Instance`, props, {
-          parent: self,
+        engineMode: "provisioned",
+        engineVersion: all([engine, version]).apply(([engine, version]) => {
+          if (engine === "postgres") return version;
+          return version.startsWith("2")
+            ? `5.7.mysql_aurora.${version}`
+            : `8.0.mysql_aurora.${version}`;
         }),
+        databaseName: dbName,
+        masterUsername: username,
+        masterPassword: password,
+        dbClusterParameterGroupName: clusterParameterGroup.name,
+        dbInstanceParameterGroupName: instanceParameterGroup.name,
+        serverlessv2ScalingConfiguration: scaling.apply((scaling) => ({
+          maxCapacity: acus(scaling.max),
+          minCapacity: acus(scaling.min),
+          secondsUntilAutoPause: scaling.pauseAfter
+            ? toSeconds(scaling.pauseAfter)
+            : undefined,
+        })),
+        applyImmediately: true,
+        allowMajorVersionUpgrade: true,
+        skipFinalSnapshot: true,
+        storageEncrypted: true,
+        enableHttpEndpoint: withDefault(args.dataApi, false),
+        dbSubnetGroupName: subnetGroup.name,
+        vpcSecurityGroupIds: vpc.securityGroups,
+        // What a component that references this cluster looks up
+        tags: {
+          "sst:ref:password": secret.id,
+          ...(rdsProxy ? { "sst:ref:proxy": rdsProxy.id } : {}),
+        },
+      },
+      { ignoreChanges: pinned("engineVersion") },
+    );
+
+    const instanceArgs = {
+      clusterIdentifier: cluster.id,
+      instanceClass: "db.serverless",
+      engine: cluster.engine.apply((v) => v as rds.EngineType),
+      engineVersion: cluster.engineVersion,
+      dbSubnetGroupName: cluster.dbSubnetGroupName,
+      dbParameterGroupName: instanceParameterGroup.name,
+      autoMinorVersionUpgrade: false,
+    };
+    const instance = this.part("instance", instanceArgs);
+
+    for (let i = 0; i < replicas; i++) {
+      // The instance's transform applies to each replica too, as it does in
+      // `Aurora`. The replica's own transform is applied after it.
+      const [, replicaArgs, replicaOpts] = transformPart(
+        args.transform?.instance,
+        `${name}Replica${i}`,
+        { ...instanceArgs, promotionTier: 15 },
+        { parent: self, ignoreChanges: pinned("engineVersion") },
       );
-
-      // Create replicas
-      replicas.apply((replicas) => {
-        for (let i = 0; i < replicas; i++) {
-          new rds.ClusterInstance(
-            ...transform(
-              args.transform?.instance,
-              `${name}Replica${i}`,
-              {
-                ...props,
-                promotionTier: 15,
-              },
-              {
-                parent: self,
-                ignoreChanges: args.version ? [] : ["engineVersion"],
-              },
-            ),
-          );
-        }
-      });
-
-      return instance;
+      this.part("replica", `${i}`, replicaArgs, replicaOpts);
     }
 
-    function createProxy() {
-      return all([args.proxy]).apply(([proxy]) => {
-        if (!proxy) return;
+    if (rdsProxy)
+      createRdsProxyTarget(builder, rdsProxy, {
+        dbClusterIdentifier: cluster.clusterIdentifier,
+      });
 
-        const credentials = proxy === true ? [] : proxy.credentials ?? [];
+    this.connection = connectTo(
+      cluster,
+      instance,
+      secret,
+      password,
+      output(rdsProxy),
+    );
 
-        // Create secrets
-        const secrets = credentials.map((credential) => {
-          const secret = new secretsmanager.Secret(
-            `${name}ProxySecret${credential.username}`,
-            {
-              recoveryWindowInDays: 0,
-            },
-            { parent: self },
-          );
-
-          new secretsmanager.SecretVersion(
-            `${name}ProxySecretVersion${credential.username}`,
-            {
-              secretId: secret.id,
-              secretString: jsonStringify({
-                username: credential.username,
-                password: credential.password,
-              }),
-            },
-            { parent: self },
-          );
-          return secret;
-        });
-
-        const role = new iam.Role(
-          `${name}ProxyRole`,
-          {
-            assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
-              Service: "rds.amazonaws.com",
-            }),
-            inlinePolicies: [
-              {
-                name: "inline",
-                policy: iam.getPolicyDocumentOutput({
-                  statements: [
-                    {
-                      actions: ["secretsmanager:GetSecretValue"],
-                      resources: [secret.arn, ...secrets.map((s) => s.arn)],
-                    },
-                  ],
-                }).json,
-              },
-            ],
-          },
-          { parent: self },
+    // A cluster created by this component, or by the 4.x one, is tagged with
+    // the secret that holds its credentials, and with its proxy when it has
+    // one. The rest is found from those.
+    function reference(cluster: rds.Cluster) {
+      const instance =
+        self.existingPart("instance") ??
+        self.lookupPart(
+          "instance",
+          all([
+            cluster.id,
+            rds.getInstancesOutput(
+              { filters: [{ name: "db-cluster-id", values: [cluster.id] }] },
+              { parent: self },
+            ).instanceIdentifiers,
+          ]).apply(([id, instances]) => {
+            if (!instances.length)
+              throw new VisibleError(
+                `The "${name}" Aurora database can't find an instance in its cluster, "${id}".`,
+              );
+            return instances[0];
+          }),
         );
 
-        const lookup = new RdsRoleLookup(
-          `${name}ProxyRoleLookup`,
-          { name: "AWSServiceRoleForRDS" },
-          { parent: self },
-        );
-
-        return new rds.Proxy(
-          ...transform(
-            args.transform?.proxy,
-            `${name}Proxy`,
-            {
-              engineFamily: engine.apply((engine) =>
-                engine === "postgres" ? "POSTGRESQL" : "MYSQL",
-              ),
-              auths: [
-                {
-                  authScheme: "SECRETS",
-                  iamAuth: "DISABLED",
-                  secretArn: secret.arn,
-                },
-                ...secrets.map((s) => ({
-                  authScheme: "SECRETS",
-                  iamAuth: "DISABLED",
-                  secretArn: s.arn,
-                })),
-              ],
-              roleArn: role.arn,
-              vpcSubnetIds: vpc.subnets,
-            },
-            { parent: self, dependsOn: [lookup] },
+      const secret =
+        self.existingPart("secret") ??
+        self.lookupPart(
+          "secret",
+          tagOf(
+            cluster,
+            "sst:ref:password",
+            `The "${name}" Aurora database can't find its secret: its cluster has no "sst:ref:password" tag, which names the secret that holds its password. Pass the secret in "existing.secret".`,
           ),
         );
-      });
+
+      // The proxy the cluster is tagged with is looked up once a preview
+      // knows the tags, not inside an `apply`: until then it isn't in
+      // `nodes`, and `host` waits for it.
+      const proxy =
+        self.existingPart("proxy") ??
+        self.after(knownValue(cluster.tagsAll), (tags) =>
+          tags?.["sst:ref:proxy"]
+            ? self.lookupPart("proxy", tags["sst:ref:proxy"])
+            : undefined,
+        );
+
+      return connectTo(
+        cluster,
+        instance,
+        secret,
+        args.password
+          ? output(args.password)
+          : secretField(secret.id, "password", self),
+        output(proxy),
+      );
     }
 
-    function createProxyTarget() {
-      proxy.apply((proxy) => {
-        if (!proxy) return;
+    function connectTo(
+      cluster: rds.Cluster,
+      instance: rds.ClusterInstance,
+      secret: secretsmanager.Secret,
+      password: Output<string>,
+      proxy: Output<rds.Proxy | undefined>,
+    ): Connection {
+      return {
+        id: cluster.id,
+        clusterArn: cluster.arn,
+        secretArn: secret.arn,
+        // Connections go through the proxy when there is one
+        host: all([cluster.endpoint, proxy]).apply(
+          ([endpoint, proxy]) =>
+            proxy?.endpoint ?? output(endpoint.split(":")[0]),
+        ),
+        reader: cluster.readerEndpoint.apply(
+          (endpoint) => endpoint.split(":")[0],
+        ),
+        port: instance.port,
+        username: cluster.masterUsername,
+        password,
+        database: cluster.databaseName,
+        proxy,
+        include: [
+          permission({
+            actions: ["secretsmanager:GetSecretValue"],
+            resources: [secret.arn],
+          }),
+          permission({
+            actions: [
+              "rds-data:BatchExecuteStatement",
+              "rds-data:BeginTransaction",
+              "rds-data:CommitTransaction",
+              "rds-data:ExecuteStatement",
+              "rds-data:RollbackTransaction",
+            ],
+            resources: [cluster.arn],
+          }),
+        ],
+      };
+    }
 
-        const targetGroup = new rds.ProxyDefaultTargetGroup(
-          `${name}ProxyTargetGroup`,
-          {
-            dbProxyName: proxy.name,
-          },
-          { parent: self },
-        );
-
-        new rds.ProxyTarget(
-          `${name}ProxyTarget`,
-          {
-            dbProxyName: proxy.name,
-            targetGroupName: targetGroup.name,
-            dbClusterIdentifier: cluster.clusterIdentifier,
-          },
-          { parent: self },
-        );
-      });
+    // What `sst dev` connects to, and the pane that says how the local
+    // database has to be set up
+    function runLocally(dev: NonNullable<AuroraArgs["dev"]>): Connection {
+      const local = localDatabase(
+        dev,
+        {
+          password: args.password,
+          username,
+          database: dbName,
+          port: engine.apply(
+            (engine) => ({ postgres: 5432, mysql: 3306 })[engine],
+          ),
+        },
+        owner,
+        "database",
+      );
+      self.report({ dev: local.pane });
+      return {
+        id: output("placeholder"),
+        clusterArn: output("placeholder"),
+        secretArn: output("placeholder"),
+        ...local.connection,
+        reader: local.connection.host,
+        include: [],
+      };
     }
   }
 
@@ -1182,90 +986,76 @@ Listening on "${dev.host}:${dev.port}"...`,
    * The ID of the RDS Cluster.
    */
   public get id() {
-    if (this.dev?.enabled) return output("placeholder");
-    return this.cluster!.id;
+    return this.connection.id;
   }
 
   /**
    * The ARN of the RDS Cluster.
    */
   public get clusterArn() {
-    if (this.dev?.enabled) return output("placeholder");
-    return this.cluster!.arn;
+    return this.connection.clusterArn;
   }
 
   /**
    * The ARN of the master user secret.
    */
   public get secretArn() {
-    if (this.dev?.enabled) return output("placeholder");
-    return this.secret!.arn;
+    return this.connection.secretArn;
   }
 
   /** The username of the master user. */
   public get username() {
-    if (this.dev?.enabled) return this.dev.username;
-    return this.cluster!.masterUsername;
+    return this.connection.username;
   }
 
   /** The password of the master user. */
   public get password() {
-    if (this.dev?.enabled) return this.dev.password;
-    return this._password!;
+    return this.connection.password;
   }
 
   /**
    * The name of the database.
    */
   public get database() {
-    if (this.dev?.enabled) return this.dev.database;
-    return this.cluster!.databaseName;
+    return this.connection.database;
   }
 
   /**
    * The port of the database.
    */
   public get port() {
-    if (this.dev?.enabled) return this.dev.port;
-    return this.instance!.port;
+    return this.connection.port;
   }
 
   /**
    * The host of the database.
    */
   public get host() {
-    if (this.dev?.enabled) return this.dev.host;
-    return all([this.cluster!.endpoint, this.proxy!]).apply(
-      ([endpoint, proxy]) => proxy?.endpoint ?? output(endpoint.split(":")[0]),
-    );
+    return this.connection.host;
   }
 
   /**
    * The reader endpoint of the database.
    */
   public get reader() {
-    if (this.dev?.enabled) return this.dev.host;
-    return all([this.cluster!.readerEndpoint, this.proxy!]).apply(
-      ([endpoint, proxy]) => {
-        if (proxy) {
-          throw new VisibleError(
-            "Reader endpoint is not currently supported for RDS Proxy. Please contact us on Discord or open a GitHub issue.",
-          );
-        }
-        return output(endpoint.split(":")[0]);
-      },
-    );
+    const { reader, proxy } = this.connection;
+    if (!proxy) return reader;
+    return all([reader, proxy]).apply(([reader, proxy]) => {
+      if (proxy)
+        throw new VisibleError(
+          `The "${this.componentName}" Aurora database connects through its proxy, which has no reader endpoint. Connect to its "host".`,
+        );
+      return reader;
+    });
   }
 
-  public get nodes() {
-    return {
-      cluster: this.cluster,
-      instance: this.instance,
-    };
-  }
-
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * Linking a database gives the linked resource what it needs to connect:
+   * the host, port, database, username and password, and the ARNs of the
+   * cluster and its secret for the RDS Data API.
+   */
+  public link() {
+    const { reader, proxy } = this.connection;
     return {
       properties: {
         clusterArn: this.clusterArn,
@@ -1275,33 +1065,14 @@ Listening on "${dev.host}:${dev.port}"...`,
         password: this.password,
         port: this.port,
         host: this.host,
-        reader: this.dev?.enabled
-          ? this.dev.host
-          : all([this.cluster!.readerEndpoint, this.proxy!]).apply(
-              ([endpoint, proxy]) => {
-                if (proxy) return output(undefined);
-                return output(endpoint.split(":")[0]);
-              },
-            ),
+        // A proxy has no reader endpoint
+        reader: proxy
+          ? all([reader, proxy]).apply(([reader, proxy]) =>
+              proxy ? undefined : reader,
+            )
+          : reader,
       },
-      include: this.dev?.enabled
-        ? []
-        : [
-            permission({
-              actions: ["secretsmanager:GetSecretValue"],
-              resources: [this.secretArn],
-            }),
-            permission({
-              actions: [
-                "rds-data:BatchExecuteStatement",
-                "rds-data:BeginTransaction",
-                "rds-data:CommitTransaction",
-                "rds-data:ExecuteStatement",
-                "rds-data:RollbackTransaction",
-              ],
-              resources: [this.clusterArn],
-            }),
-          ],
+      include: this.connection.include,
     };
   }
 
@@ -1314,6 +1085,10 @@ Listening on "${dev.host}:${dev.port}"...`,
    * You can use the `static get` method to share Aurora clusters across stages.
    * :::
    *
+   * Its instance, the secret with its password, and its proxy when it has one are found
+   * from the cluster. The proxy is looked up once the cluster's tags are read, so it's in
+   * `nodes` only after that.
+   *
    * @param name The name of the component.
    * @param id The ID of the existing Aurora cluster.
    * @param opts Resource options.
@@ -1325,7 +1100,7 @@ Listening on "${dev.host}:${dev.port}"...`,
    * ```ts title="sst.config.ts"
    * const database = $app.stage === "frank"
    *   ? sst.aws.Aurora.get("MyDatabase", "app-dev-mydatabase")
-   *   : new sst.aws.Aurora("MyDatabase");
+   *   : new sst.aws.Aurora("MyDatabase", { engine: "postgres", vpc });
    * ```
    *
    * Here `app-dev-mydatabase` is the ID of the cluster created in the `dev` stage.
@@ -1342,15 +1117,8 @@ Listening on "${dev.host}:${dev.port}"...`,
   ) {
     return new Aurora(
       name,
-      {
-        ref: true,
-        id,
-      } as unknown as AuroraArgs,
+      getArgs({ existing: { cluster: id } }) as AuroraArgs,
       opts,
     );
   }
 }
-
-const __pulumiType = "sst:aws:Aurora";
-// @ts-expect-error
-Aurora.__pulumiType = __pulumiType;

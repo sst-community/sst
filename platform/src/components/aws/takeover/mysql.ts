@@ -1,5 +1,5 @@
 import { sstResource, takeover } from "../../takeover";
-import { Mysql } from "../v5/mysql";
+import { Mysql } from "../mysql";
 
 takeover(Mysql, {
   moved: {

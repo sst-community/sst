@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { logicalName } from "../../naming";
-import { Email } from "../v5/email";
+import { Email } from "../email";
 
 // The 4.x `Email` named each event's destination after the event's name as it
 // was given. The V5 one names it the way it names any part with an id, which

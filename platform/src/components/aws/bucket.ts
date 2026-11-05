@@ -1,35 +1,119 @@
 import {
   ComponentResourceOptions,
-  output,
-  interpolate,
-  all,
   Output,
+  Resource,
+  all,
+  interpolate,
+  output,
 } from "@pulumi/pulumi";
-import { hashStringToPrettyString, logicalName } from "../naming";
-import { Component, Prettify, Transform, transform } from "../component";
-import { Link } from "../link";
-import type { Input } from "../input";
-import { Function, FunctionArgs, FunctionArn } from "./function.js";
-import { Workflow } from "./workflow.js";
-import { Duration, DurationDays, toSeconds } from "../duration";
-import { VisibleError } from "../error";
-import { parseBucketArn } from "./helpers/arn";
-import { BucketLambdaSubscriber } from "./bucket-lambda-subscriber";
 import {
   cloudwatch,
   getCallerIdentityOutput,
   getPartitionOutput,
   iam,
+  lambda,
   s3,
+  sns,
+  sqs,
+  types,
 } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import { notAnOption, plain, usedAsItIs, withDefault, getArgs } from "../args";
+import type { Plain } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { type Duration, type DurationDays, toSeconds } from "../duration";
+import { Function } from "./function";
+import {
+  type FunctionInput,
+  functionPart,
+  plainFunction,
+} from "./helpers/function-part";
+import { invokePermissionArgs } from "./helpers/function-permission";
+import { enabledState, ruleFunctionTarget } from "./helpers/eventbridge";
+import { sendPolicy } from "./helpers/queue-policy";
+import { type AnyQueue, queueArnOf } from "./helpers/queue";
+import { type AnySnsTopic, topicArnOf } from "./helpers/sns-topic";
 import { permission } from "./permission";
-import { BucketQueueSubscriber } from "./bucket-queue-subscriber";
-import { BucketTopicSubscriber } from "./bucket-topic-subscriber";
-import { Queue } from "./queue";
-import { SnsTopic } from "./sns-topic";
-import { BucketNotification } from "./bucket-notification";
-import { BusLambdaSubscriber } from "./bus-lambda-subscriber";
-import type { BusSubscriberArgs } from "./bus";
+
+const parts = () => ({
+  /**
+   * The Amazon S3 bucket.
+   */
+  bucket: s3.Bucket,
+  /**
+   * The bucket's versioning configuration, created when `versioning` is on.
+   */
+  versioning: optional(s3.BucketVersioning),
+  /**
+   * The bucket's public access block. It isn't created when
+   * `publicAccessBlock` is `false`.
+   */
+  publicAccessBlock: optional(s3.BucketPublicAccessBlock),
+  /**
+   * The bucket's policy.
+   */
+  policy: optional(s3.BucketPolicy),
+  /**
+   * The bucket's CORS configuration. It isn't created when `cors` is `false`.
+   */
+  cors: optional(s3.BucketCorsConfiguration),
+  /**
+   * The bucket's lifecycle configuration, created when `lifecycle` has rules.
+   */
+  lifecycle: optional(s3.BucketLifecycleConfiguration),
+  /**
+   * The bucket's notification configuration, created by `notify`. A bucket has
+   * one, which holds all of its notifications.
+   */
+  notification: optional(s3.BucketNotification),
+  /**
+   * The functions that are notified, by notification name.
+   */
+  subscriber: many(deferred(Function)),
+  /**
+   * The permissions that let the bucket invoke each notified function, by
+   * notification name.
+   */
+  permission: many(lambda.Permission),
+  /**
+   * The policies that let the bucket send to each notified queue, by
+   * notification name.
+   */
+  queuePolicy: many(sqs.QueuePolicy),
+  /**
+   * The policies that let the bucket publish to each notified topic, by
+   * notification name.
+   */
+  topicPolicy: many(sns.TopicPolicy),
+  /**
+   * The functions subscribed to the bucket's events on the default
+   * EventBridge bus, by subscriber name.
+   */
+  eventBridgeSubscriber: many(deferred(Function)),
+  /**
+   * The permissions that let EventBridge invoke each of those functions, by
+   * subscriber name.
+   */
+  eventBridgePermission: many(lambda.Permission),
+  /**
+   * The rules that match the bucket's events for each subscriber, by
+   * subscriber name.
+   */
+  eventBridgeRule: many(cloudwatch.EventRule),
+  /**
+   * The targets that send what each rule matches to its function, by
+   * subscriber name.
+   */
+  eventBridgeTarget: many(cloudwatch.EventTarget),
+});
 
 interface BucketCorsArgs {
   /**
@@ -122,7 +206,7 @@ interface BucketLifecycleArgs {
    * ```js
    * {
    *   id: "expire-tmp-files",
-   *   prefix: "/tmp",
+   *   prefix: "tmp/",
    *   expiresIn: "7 days"
    * }
    * ```
@@ -172,32 +256,14 @@ interface BucketLifecycleArgs {
   expiresAt?: Input<string>;
 }
 
-export interface BucketArgs {
-  /**
-   * Enable public read access for all the files in the bucket.
-   *
-   * :::tip
-   * You don't need to enable this if you're using CloudFront to serve files from the bucket.
-   * :::
-   *
-   * Should only be turned on if you want to host public files directly from the bucket.
-   * @deprecated Use `access` instead.
-   * @default `false`
-   * @example
-   * ```js
-   * {
-   *   public: true
-   * }
-   * ```
-   */
-  public?: Input<boolean>;
+export interface BucketArgs extends ComponentArgs<typeof parts> {
   /**
    * Enable public read access for all the files in the bucket. By default, no access is
    * granted.
    *
    * :::tip
-   * If you are using the `Router` to serve files from this bucket, you need to allow
-   * `cloudfront` access the bucket.
+   * If you are using the [`Router`](/docs/component/aws/v5/router) to serve files from this
+   * bucket, you need to allow `cloudfront` access the bucket.
    * :::
    *
    * This adds a statement to the bucket policy that either allows `public` access or just
@@ -378,9 +444,6 @@ export interface BucketArgs {
        *   }]
        * }
        * ```
-       *
-       * Allow specific IAM users.
-       *
        */
       principals: Input<
         | "*"
@@ -480,18 +543,31 @@ export interface BucketArgs {
    * }
    * ```
    *
+   * Whether there is a CORS configuration decides what's created, so it's a plain value.
+   * Its fields can be outputs.
+   *
    * @default `true`
-   */
-  cors?: Input<false | Prettify<BucketCorsArgs>>;
-  /**
-   * The lifecycle configuration for the bucket.
    * @example
-   * Delete objects in the "/tmp" directory after 30 days.
+   * Turn off CORS.
+   *
+   * ```js
+   * {
+   *   cors: false
+   * }
+   * ```
+   */
+  cors?: boolean | Prettify<BucketCorsArgs>;
+  /**
+   * The lifecycle configuration for the bucket. Whether there is one decides what's
+   * created, so the list is a plain value. Each rule in it can be an output.
+   *
+   * @example
+   * Delete objects in the `tmp/` folder after 30 days.
    * ```js
    * {
    *   lifecycle: [
    *     {
-   *       prefix: "/tmp",
+   *       prefix: "tmp/",
    *       expiresIn: "30 days"
    *     }
    *   ]
@@ -504,24 +580,25 @@ export interface BucketArgs {
    *   lifecycle: [
    *     {
    *       id: "expire-tmp-files",
-   *       prefix: "/tmp",
+   *       prefix: "tmp/",
    *       expiresIn: "7 days"
    *     },
    *     {
    *       id: "archive-old-logs",
-   *       prefix: "/logs",
+   *       prefix: "logs/",
    *       expiresIn: "90 days"
    *     }
    *   ]
    * }
    * ```
    */
-  lifecycle?: Input<Input<Prettify<BucketLifecycleArgs>>[]>;
+  lifecycle?: Input<Prettify<BucketLifecycleArgs>>[];
   /**
    * Enable versioning for the bucket.
    *
    * Bucket versioning enables you to store multiple versions of an object, protecting
-   * against accidental deletion or overwriting.
+   * against accidental deletion or overwriting. It decides what's created, so it's a
+   * plain value.
    *
    * @default `false`
    * @example
@@ -531,255 +608,255 @@ export interface BucketArgs {
    * }
    * ```
    */
-  versioning?: Input<boolean>;
+  versioning?: boolean;
   /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
+   * Whether to create the bucket's public access block. Set it to `false` in
+   * an account that doesn't let you manage them.
+   *
+   * @default `true`
+   * @example
+   * ```js
+   * {
+   *   publicAccessBlock: false
+   * }
+   * ```
    */
-  transform?: {
-    /**
-     * Transform the S3 Bucket resource.
-     */
-    bucket?: Transform<s3.BucketArgs>;
-    /**
-     * Transform the S3 Bucket CORS configuration resource.
-     */
-    cors?: Transform<s3.BucketCorsConfigurationArgs>;
-    /**
-     * Transform the S3 Bucket Policy resource.
-     */
-    policy?: Transform<s3.BucketPolicyArgs>;
-    /**
-     * Transform the S3 Bucket versioning resource.
-     */
-    versioning?: Transform<s3.BucketVersioningArgs>;
-    /**
-     * Transform the S3 Bucket lifecycle resource.
-     * */
-    lifecycle?: Transform<s3.BucketLifecycleConfigurationArgs>;
-    /**
-     * Transform the public access block resource that's attached to the Bucket.
-     *
-     * Returns `false` if the public access block resource should not be created.
-     */
-    publicAccessBlock?: Transform<s3.BucketPublicAccessBlockArgs> | false;
-  };
+  publicAccessBlock?: boolean;
 }
 
-export interface BucketNotificationsArgs {
+export interface BucketNotificationArgs {
   /**
-   * Enable EventBridge notifications for this bucket. This publishes every S3 event of
-   * the bucket to the account's default EventBridge bus. It doesn't send them anywhere
-   * by itself: add rules with [`Bucket.subscribeEventBridge`](#static-subscribeeventbridge),
-   * or your own rules on the default bus, to react to them.
+   * The name of the notification. It's the notification's id in the bucket's
+   * `nodes` and `transform`, and it's used in the names of the resources
+   * created for it, so it's a plain value.
    *
-   * S3 keeps a single notification configuration for each bucket. To use EventBridge
-   * together with the queue, topic and function `notifications` below, set it in the
-   * same `notify` call. Calling `notify` again would replace what was set before, so
-   * it isn't allowed.
+   * Must be unique across the bucket's notifications.
+   */
+  name: string;
+  /**
+   * The function that'll be notified: the handler of one to create, its args, a function
+   * component, or the ARN of a function you have. Only a function you have, or its ARN,
+   * can be an output.
    *
-   * Set it to `false` to turn EventBridge notifications off.
+   * @example
+   * ```js
+   * {
+   *   name: "MySubscriber",
+   *   function: "src/subscriber.handler"
+   * }
+   * ```
+   *
+   * Customize the subscriber function. The `link` ensures the subscriber can access the
+   * bucket through the [SDK](/docs/reference/sdk/).
+   *
+   * ```js
+   * {
+   *   name: "MySubscriber",
+   *   function: {
+   *     handler: "src/subscriber.handler",
+   *     timeout: "60 seconds",
+   *     link: [bucket]
+   *   }
+   * }
+   * ```
+   *
+   * Or pass in the ARN of an existing Lambda function.
+   *
+   * ```js
+   * {
+   *   name: "MySubscriber",
+   *   function: "arn:aws:lambda:us-east-1:123456789012:function:my-function"
+   * }
+   * ```
+   */
+  function?: FunctionInput;
+  /**
+   * The queue that'll be notified: a queue component, or the ARN of a queue.
+   *
+   * @example
+   * For example, let's say you have a queue.
+   *
+   * ```js title="sst.config.ts"
+   * const myQueue = new sst.aws.Queue("MyQueue");
+   * ```
+   *
+   * You can subscribe to this bucket with it.
+   *
+   * ```js
+   * {
+   *   name: "MySubscriber",
+   *   queue: myQueue
+   * }
+   * ```
+   *
+   * Or pass in the ARN of an existing SQS queue.
+   *
+   * ```js
+   * {
+   *   name: "MySubscriber",
+   *   queue: "arn:aws:sqs:us-east-1:123456789012:my-queue"
+   * }
+   * ```
+   */
+  queue?: Input<string | AnyQueue>;
+  /**
+   * The topic that'll be notified: a topic component, or the ARN of a topic.
+   *
+   * @example
+   * For example, let's say you have a topic.
+   *
+   * ```js title="sst.config.ts"
+   * const myTopic = new sst.aws.SnsTopic("MyTopic");
+   * ```
+   *
+   * You can subscribe to this bucket with it.
+   *
+   * ```js
+   * {
+   *   name: "MySubscriber",
+   *   topic: myTopic
+   * }
+   * ```
+   *
+   * Or pass in the ARN of an existing SNS topic.
+   *
+   * ```js
+   * {
+   *   name: "MySubscriber",
+   *   topic: "arn:aws:sns:us-east-1:123456789012:my-topic"
+   * }
+   * ```
+   */
+  topic?: Input<string | AnySnsTopic>;
+  /**
+   * A list of S3 event types that'll trigger a notification.
+   * @default All S3 events
+   * @example
+   * ```js
+   * {
+   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
+   * }
+   * ```
+   */
+  events?: Input<
+    Input<
+      | "s3:ObjectCreated:*"
+      | "s3:ObjectCreated:Put"
+      | "s3:ObjectCreated:Post"
+      | "s3:ObjectCreated:Copy"
+      | "s3:ObjectCreated:CompleteMultipartUpload"
+      | "s3:ObjectRemoved:*"
+      | "s3:ObjectRemoved:Delete"
+      | "s3:ObjectRemoved:DeleteMarkerCreated"
+      | "s3:ObjectRestore:*"
+      | "s3:ObjectRestore:Post"
+      | "s3:ObjectRestore:Completed"
+      | "s3:ObjectRestore:Delete"
+      | "s3:ReducedRedundancyLostObject"
+      | "s3:Replication:*"
+      | "s3:Replication:OperationFailedReplication"
+      | "s3:Replication:OperationMissedThreshold"
+      | "s3:Replication:OperationReplicatedAfterThreshold"
+      | "s3:Replication:OperationNotTracked"
+      | "s3:LifecycleExpiration:*"
+      | "s3:LifecycleExpiration:Delete"
+      | "s3:LifecycleExpiration:DeleteMarkerCreated"
+      | "s3:LifecycleTransition"
+      | "s3:IntelligentTiering"
+      | "s3:ObjectTagging:*"
+      | "s3:ObjectTagging:Put"
+      | "s3:ObjectTagging:Delete"
+      | "s3:ObjectAcl:Put"
+    >[]
+  >;
+  /**
+   * An S3 object key prefix that will trigger a notification.
+   * @example
+   * To be notified for all the objects in the `images/` folder.
+   * ```js
+   * {
+   *   filterPrefix: "images/"
+   * }
+   * ```
+   */
+  filterPrefix?: Input<string>;
+  /**
+   * An S3 object key suffix that will trigger the notification.
+   * @example
+   * To be notified for all the objects with the `.jpg` suffix.
+   * ```js
+   * {
+   *  filterSuffix: ".jpg"
+   * }
+   * ```
+   */
+  filterSuffix?: Input<string>;
+}
+
+export interface BucketNotifyArgs {
+  /**
+   * Publish every S3 event of the bucket to the account's default EventBridge bus. It
+   * doesn't send them anywhere by itself: subscribe to them with
+   * [`subscribeEventBridge`](#subscribeeventbridge), or add your own rules on the default bus.
+   *
+   * S3 keeps one notification configuration for each bucket, so set it in the same call
+   * as the `notifications`.
    *
    * @default `false`
    * @example
    * ```js
    * {
    *   eventBridge: true,
-   *   notifications: [
-   *     {
-   *       name: "MySubscriber",
-   *       queue: myQueue
-   *     }
-   *   ]
+   *   notifications: [{ name: "MySubscriber", queue: myQueue }]
    * }
    * ```
    */
   eventBridge?: Input<boolean>;
   /**
-   * A list of subscribers that'll be notified when events happen in the bucket. Leave
-   * it out if the bucket only uses `eventBridge`.
+   * The notifications of the bucket. Each one has a `name` and one of
+   * `function`, `queue` or `topic`. Leave it out if the bucket only uses
+   * `eventBridge`.
+   *
+   * What's created for each notification is decided from the list, so it's a plain value.
+   *
+   * @example
+   * ```js
+   * {
+   *   notifications: [
+   *     {
+   *       name: "MySubscriber",
+   *       function: "src/subscriber.handler",
+   *       events: ["s3:ObjectCreated:*"],
+   *       filterPrefix: "images/"
+   *     }
+   *   ]
+   * }
+   * ```
    */
-  notifications?: Input<
-    Input<{
-      /**
-       * The name of the subscriber.
-       */
-      name: Input<string>;
-      /**
-       * The function that'll be notified.
-       *
-       * @example
-       * ```js
-       * {
-       *   name: "MySubscriber",
-       *   function: "src/subscriber.handler"
-       * }
-       * ```
-       *
-       * Customize the subscriber function. The `link` ensures the subscriber can access the
-       * bucket through the [SDK](/docs/reference/sdk/).
-       *
-       * ```js
-       * {
-       *   name: "MySubscriber",
-       *   function: {
-       *     handler: "src/subscriber.handler",
-       *     timeout: "60 seconds",
-       *     link: [bucket]
-       *   }
-       * }
-       * ```
-       *
-       * Or pass in the ARN of an existing Lambda function.
-       *
-       * ```js
-       * {
-       *   name: "MySubscriber",
-       *   function: "arn:aws:lambda:us-east-1:123456789012:function:my-function"
-       * }
-       * ```
-       */
-      function?: Input<string | FunctionArgs | FunctionArn>;
-      /**
-       * The Queue that'll be notified.
-       *
-       * @example
-       * For example, let's say you have a queue.
-       *
-       * ```js title="sst.config.ts"
-       * const myQueue = new sst.aws.Queue("MyQueue");
-       * ```
-       *
-       * You can subscribe to this bucket with it.
-       *
-       * ```js
-       * {
-       *   name: "MySubscriber",
-       *   queue: myQueue
-       * }
-       * ```
-       *
-       * Or pass in the ARN of an existing SQS queue.
-       *
-       * ```js
-       * {
-       *   name: "MySubscriber",
-       *   queue: "arn:aws:sqs:us-east-1:123456789012:my-queue"
-       * }
-       * ```
-       */
-      queue?: Input<string | Queue>;
-      /**
-       * The SNS topic that'll be notified.
-       *
-       * @example
-       * For example, let's say you have a topic.
-       *
-       * ```js title="sst.config.ts"
-       * const myTopic = new sst.aws.SnsTopic("MyTopic");
-       * ```
-       *
-       * You can subscribe to this bucket with it.
-       *
-       * ```js
-       * {
-       *   name: "MySubscriber",
-       *   topic: myTopic
-       * }
-       * ```
-       *
-       * Or pass in the ARN of an existing SNS topic.
-       *
-       * ```js
-       * {
-       *   name: "MySubscriber",
-       *   topic: "arn:aws:sns:us-east-1:123456789012:my-topic"
-       * }
-       * ```
-       */
-      topic?: Input<string | SnsTopic>;
-      /**
-       * A list of S3 event types that'll trigger a notification.
-       * @default All S3 events
-       * @example
-       * ```js
-       * {
-       *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-       * }
-       * ```
-       */
-      events?: Input<
-        Input<
-          | "s3:ObjectCreated:*"
-          | "s3:ObjectCreated:Put"
-          | "s3:ObjectCreated:Post"
-          | "s3:ObjectCreated:Copy"
-          | "s3:ObjectCreated:CompleteMultipartUpload"
-          | "s3:ObjectRemoved:*"
-          | "s3:ObjectRemoved:Delete"
-          | "s3:ObjectRemoved:DeleteMarkerCreated"
-          | "s3:ObjectRestore:*"
-          | "s3:ObjectRestore:Post"
-          | "s3:ObjectRestore:Completed"
-          | "s3:ObjectRestore:Delete"
-          | "s3:ReducedRedundancyLostObject"
-          | "s3:Replication:*"
-          | "s3:Replication:OperationFailedReplication"
-          | "s3:Replication:OperationMissedThreshold"
-          | "s3:Replication:OperationReplicatedAfterThreshold"
-          | "s3:Replication:OperationNotTracked"
-          | "s3:LifecycleExpiration:*"
-          | "s3:LifecycleExpiration:Delete"
-          | "s3:LifecycleExpiration:DeleteMarkerCreated"
-          | "s3:LifecycleTransition"
-          | "s3:IntelligentTiering"
-          | "s3:ObjectTagging:*"
-          | "s3:ObjectTagging:Put"
-          | "s3:ObjectTagging:Delete"
-          | "s3:ObjectAcl:Put"
-        >[]
-      >;
-      /**
-       * An S3 object key prefix that will trigger a notification.
-       * @example
-       * To be notified for all the objects in the `images/` folder.
-       * ```js
-       * {
-       *   filterPrefix: "images/"
-       * }
-       * ```
-       */
-      filterPrefix?: Input<string>;
-      /**
-       * An S3 object key suffix that will trigger the notification.
-       * @example
-       * To be notified for all the objects with the `.jpg` suffix.
-       * ```js
-       * {
-       *  filterSuffix: ".jpg"
-       * }
-       * ```
-       */
-      filterSuffix?: Input<string>;
-    }>[]
-  >;
-  /**
-   * [Transform](/docs/components#transform) how this notification creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the S3 Bucket Notification resource.
-     */
-    notification?: Transform<s3.BucketNotificationArgs>;
-  };
+  notifications?: BucketNotificationArgs[];
 }
 
-export interface BucketEventBridgeSubscriberArgs
-  extends Omit<BusSubscriberArgs, "pattern"> {
+export interface BucketEventBridgeSubscriberArgs {
+  /**
+   * Configures whether the subscriber is enabled. When disabled, the EventBridge
+   * rule is still created, but it won't receive events.
+   *
+   * @default true
+   * @example
+   * ```ts
+   * {
+   *   enabled: false
+   * }
+   * ```
+   */
+  enabled?: Input<boolean>;
   /**
    * Filter the S3 events that'll be processed by the subscriber. The `source` and
    * bucket name are automatically added to the EventBridge pattern.
+   *
+   * :::tip
+   * Learn more about [event patterns](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-patterns.html).
+   * :::
    */
   pattern?: Input<{
     /**
@@ -832,104 +909,21 @@ export interface BucketEventBridgeSubscriberArgs
 }
 
 /**
- * @internal
- */
-export interface BucketSubscriberArgs {
-  /**
-   * A list of S3 event types that'll trigger the notification.
-   * @default All S3 events
-   * @example
-   * ```js
-   * {
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * }
-   * ```
-   */
-  events?: Input<
-    Input<
-      | "s3:ObjectCreated:*"
-      | "s3:ObjectCreated:Put"
-      | "s3:ObjectCreated:Post"
-      | "s3:ObjectCreated:Copy"
-      | "s3:ObjectCreated:CompleteMultipartUpload"
-      | "s3:ObjectRemoved:*"
-      | "s3:ObjectRemoved:Delete"
-      | "s3:ObjectRemoved:DeleteMarkerCreated"
-      | "s3:ObjectRestore:*"
-      | "s3:ObjectRestore:Post"
-      | "s3:ObjectRestore:Completed"
-      | "s3:ObjectRestore:Delete"
-      | "s3:ReducedRedundancyLostObject"
-      | "s3:Replication:*"
-      | "s3:Replication:OperationFailedReplication"
-      | "s3:Replication:OperationMissedThreshold"
-      | "s3:Replication:OperationReplicatedAfterThreshold"
-      | "s3:Replication:OperationNotTracked"
-      | "s3:LifecycleExpiration:*"
-      | "s3:LifecycleExpiration:Delete"
-      | "s3:LifecycleExpiration:DeleteMarkerCreated"
-      | "s3:LifecycleTransition"
-      | "s3:IntelligentTiering"
-      | "s3:ObjectTagging:*"
-      | "s3:ObjectTagging:Put"
-      | "s3:ObjectTagging:Delete"
-      | "s3:ObjectAcl:Put"
-    >[]
-  >;
-  /**
-   * An S3 object key prefix that will trigger the notification.
-   * @example
-   * To filter for all the objects in the `images/` folder.
-   * ```js
-   * {
-   *   filterPrefix: "images/"
-   * }
-   * ```
-   */
-  filterPrefix?: Input<string>;
-  /**
-   * An S3 object key suffix that will trigger the notification.
-   * @example
-   * To filter for all the objects with the `.jpg` suffix.
-   * ```js
-   * {
-   *  filterSuffix: ".jpg"
-   * }
-   * ```
-   */
-  filterSuffix?: Input<string>;
-  /**
-   * [Transform](/docs/components#transform) how this notification creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the S3 Bucket Notification resource.
-     */
-    notification?: Transform<s3.BucketNotificationArgs>;
-  };
-}
-
-interface BucketRef {
-  ref: boolean;
-  bucket: s3.Bucket;
-}
-
-/**
- * The `Bucket` component lets you add an [AWS S3 Bucket](https://aws.amazon.com/s3/) to
- * your app.
+ * The `Bucket` component lets you add an [AWS S3 Bucket](https://aws.amazon.com/s3/) to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have. That includes the resources of
+ * each notification.
  *
  * @example
  *
- * #### Minimal example
+ * #### Create a bucket
  *
  * ```ts title="sst.config.ts"
  * const bucket = new sst.aws.Bucket("MyBucket");
  * ```
  *
- * #### Public read access
- *
- * Enable `public` read access for all the files in the bucket. Useful for hosting public files.
+ * #### Make it public
  *
  * ```ts title="sst.config.ts"
  * new sst.aws.Bucket("MyBucket", {
@@ -937,7 +931,9 @@ interface BucketRef {
  * });
  * ```
  *
- * #### Add a subscriber
+ * #### Add notifications
+ *
+ * Each notification has a name, and sends events to a function, a queue or a topic.
  *
  * ```ts title="sst.config.ts"
  * bucket.notify({
@@ -950,9 +946,19 @@ interface BucketRef {
  * });
  * ```
  *
- * #### Link the bucket to a resource
+ * #### Subscribe to its events in EventBridge
  *
- * You can link the bucket to other resources, like a function or your Next.js app.
+ * Publish the bucket's events to the default EventBridge bus, then subscribe to them.
+ *
+ * ```ts title="sst.config.ts"
+ * bucket
+ *   .notify({ eventBridge: true })
+ *   .subscribeEventBridge("Resizer", "src/resize.handler", {
+ *     pattern: { detailType: ["Object Created"] }
+ *   });
+ * ```
+ *
+ * #### Link the bucket to a resource
  *
  * ```ts title="sst.config.ts"
  * new sst.aws.Nextjs("MyWeb", {
@@ -968,1069 +974,607 @@ interface BucketRef {
  * import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
  *
  * const command = new PutObjectCommand({
- *    Key: "file.txt",
- *    Bucket: Resource.MyBucket.name
- *  });
- *  await getSignedUrl(new S3Client({}), command);
+ *   Key: "file.txt",
+ *   Bucket: Resource.MyBucket.name
+ * });
+ * await getSignedUrl(new S3Client({}), command);
  * ```
+ *
+ * #### Use a bucket you already have
+ *
+ * Pass the bucket, or its name. The bucket is used the way it is: the component doesn't
+ * configure it, and refuses `access`, `cors`, `versioning` and the other settings of a
+ * bucket next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Bucket("MyBucket", {
+ *   existing: {
+ *     bucket: "app-dev-mybucket-12345678"
+ *   }
+ * });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Bucket`
+ *
+ * Keep the name, and `sst migrate` moves it. The bucket, what
+ * configures it, and the resources `notify` created are kept.
+ *
+ * A few things are written differently:
+ *
+ * - `versioning`, `cors` and the list of `lifecycle` rules are plain values, not outputs,
+ *   since they decide what's created. The fields of `cors` and each rule can still be
+ *   outputs.
+ * - So are the list of `notifications` that `notify` takes, each notification in it, and
+ *   its `name`. A notification's `function`, and the function `subscribeEventBridge`
+ *   takes, can't be a handler or a function's args in an output: they decide what's
+ *   created. A function you already have, or its ARN, can still be an output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - A `transform` function for `cors` or `lifecycle` is given outputs where
+ *   `sst.aws.Bucket` gave it plain values, like `corsRules[0].allowedOrigins` and
+ *   `rules`. Change them with `apply`, or set them with an object.
+ * - A notification's function is described after the component, `Notified by MyBucket on
+ *   ...`, where `sst.aws.Bucket` named the component it kept the notifications in: an
+ *   update in place.
+ * - `transform: { publicAccessBlock: false }` becomes `publicAccessBlock: false`.
+ * - `public: true` becomes `access: "public"`.
+ * - The `transform` of `notify` becomes the bucket's `transform.notification`.
+ * - `subscribe`, `subscribeQueue` and `subscribeTopic` are gone, and are refused with what
+ *   to write. Use `notify`, which keeps the subscriber you had.
+ * - The static `sst.aws.Bucket.subscribe`, `subscribeQueue` and `subscribeTopic`, which
+ *   took a bucket's ARN, are gone too: call `notify` on `get`. They're refused with what
+ *   to write. What they created isn't kept: remove it and deploy before you switch, then
+ *   add it back with `notify`.
+ * - `sst.aws.Bucket.subscribeEventBridge(name, bucketName, ...)` is `subscribeEventBridge`
+ *   on the bucket, or on `get` for a bucket that isn't in your app, and the static one is
+ *   refused with what to write. What it created is kept. It's created with the bucket's
+ *   `provider`, where `sst.aws.Bucket` used your app's: if your bucket has a `provider`,
+ *   the switch gives its rule, target and permission that provider and keeps them.
+ * - `get` gives its options to the component, so a `provider` or `parent` you pass it
+ *   applies to the bucket's notifications too. `sst.aws.Bucket.get` gave them to the bucket it
+ *   looked up and to nothing else. If you pass `get` a `provider` and call `notify` on that
+ *   bucket, the switch gives its notifications that provider and keeps them.
  */
-export class Bucket extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorOpts: ComponentResourceOptions;
-  private isSubscribed: boolean = false;
-  private bucket: Output<s3.Bucket>;
-
+export class Bucket extends component("sst:aws:Bucket", parts) {
   constructor(
     name: string,
     args: BucketArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    this.constructorName = name;
-    this.constructorOpts = opts;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = args as BucketRef;
-      this.bucket = output(ref.bucket);
+    notAnOption(
+      args,
+      "public",
+      `Use "access" instead: access: "public".`,
+      `the "${name}" bucket`,
+    );
+    const noBlock: unknown = args.transform?.publicAccessBlock;
+    if (noBlock === false)
+      throw new VisibleError(
+        `In the "${name}" bucket, "transform.publicAccessBlock" changes the public access block, so it can't be false. To not create one, set "publicAccessBlock" to false.`,
+      );
+
+    const bucket = this.part("bucket", { forceDestroy: true });
+
+    // A bucket that's already there is used the way it is
+    if (this.existingPart("bucket")) {
+      usedAsItIs(args, CONFIGURES, "bucket", `the "${name}" bucket`);
       return;
     }
 
-    const parent = this;
-    // Looked up once, and only for a bucket that needs them (access "cloudfront").
-    let cloudfrontScope: Output<string> | undefined;
-    const getCloudfrontScope = () =>
-      (cloudfrontScope ??= interpolate`arn:${getPartitionOutput({}, opts).partition}:cloudfront::${getCallerIdentityOutput({}, opts).accountId}:distribution/*`);
-    const access = normalizeAccess();
-    const enforceHttps = output(args.enforceHttps ?? true);
-    const policyArgs = normalizePolicy();
-
-    const bucket = createBucket();
-    createVersioning();
-    const publicAccessBlock = createPublicAccess();
-    const policy = createBucketPolicy();
-    createCorsRule();
-    createLifecycle();
-
-    // Ensure the policy is created when the bucket is used in another component
-    // (ie. bucket.name). Also, a bucket can only have one policy. We want to ensure
-    // the policy created here is created first. And SST will throw an error if
-    // another policy is created after this one.
-    this.bucket = policy.apply(() => bucket);
-
-    function normalizeAccess() {
-      return all([args.public, args.access]).apply(([pub, access]) =>
-        pub === true ? "public" : access,
-      );
-    }
-
-    function normalizePolicy() {
-      return output(args.policy ?? []).apply((policy) =>
-        policy.map((p) => ({
-          ...p,
-          effect:
-            p.effect && p.effect.charAt(0).toUpperCase() + p.effect.slice(1),
-          principals:
-            p.principals === "*"
-              ? [{ type: "*", identifiers: ["*"] }]
-              : p.principals.map((i) => ({
-                  ...i,
-                  type: {
-                    aws: "AWS",
-                    service: "Service",
-                    federated: "Federated",
-                    canonical: "Canonical",
-                  }[i.type],
-                })),
-          paths: p.paths
-            ? p.paths.map((path) => path.replace(/^\//, ""))
-            : ["", "*"],
-        })),
-      );
-    }
-
-    function createBucket() {
-      return new s3.Bucket(
-        ...transform(
-          args.transform?.bucket,
-          `${name}Bucket`,
-          {
-            forceDestroy: true,
-          },
-          { parent },
-        ),
-      );
-    }
-
-    function createVersioning() {
-      return output(args.versioning).apply((versioning) => {
-        if (!versioning) return;
-
-        return new s3.BucketVersioning(
-          ...transform(
-            args.transform?.versioning,
-            `${name}Versioning`,
-            {
-              bucket: bucket.bucket,
-              versioningConfiguration: {
-                status: "Enabled",
-              },
-            },
-            { parent },
-          ),
-        );
+    if (plain(args.versioning, `The "versioning" of the "${name}" bucket`))
+      this.part("versioning", {
+        bucket: bucket.bucket,
+        versioningConfiguration: { status: "Enabled" },
       });
-    }
 
-    function createLifecycle() {
-      return output(args.lifecycle).apply((lifecycleRules) => {
-        if (!lifecycleRules || lifecycleRules.length === 0) return;
-
-        const seenIds = new Map<string, number>();
-
-        const resolvedIds = lifecycleRules.map((rule, index) => {
-          const rawId = rule.id ?? `${name}LifecycleRule${index}`;
-          const resolvedId = rawId.trim();
-
-          if (resolvedId.length === 0) {
-            throw new VisibleError(
-              `Lifecycle rule at index ${index} has an empty or whitespace-only "id". Please provide a valid id or omit it to use the auto-generated id.`,
-            );
-          }
-
-          if (resolvedId.length > 255) {
-            throw new VisibleError(
-              `Lifecycle rule at index ${index} has an "id" that is ${resolvedId.length} characters long. AWS S3 lifecycle rule IDs cannot exceed 255 characters.`,
-            );
-          }
-
-          const existingIndex = seenIds.get(resolvedId);
-          if (existingIndex !== undefined) {
-            throw new VisibleError(
-              `Lifecycle rule "id" values must be unique. The id "${resolvedId}" is used by rules at indexes ${existingIndex} and ${index}.`,
-            );
-          }
-          seenIds.set(resolvedId, index);
-
-          return resolvedId;
-        });
-
-        return new s3.BucketLifecycleConfiguration(
-          ...transform(
-            args.transform?.lifecycle,
-            `${name}Lifecycle`,
-            {
-              bucket: bucket.bucket,
-              rules: lifecycleRules.map((rule, index) => ({
-                id: resolvedIds[index],
-                status: rule.enabled !== false ? "Enabled" : "Disabled",
-                expiration:
-                  rule.expiresIn || rule.expiresAt
-                    ? {
-                        days: rule.expiresIn
-                          ? toSeconds(rule.expiresIn) / 86400
-                          : undefined,
-                        date: rule.expiresAt
-                          ? `${rule.expiresAt}T00:00:00Z`
-                          : undefined,
-                      }
-                    : undefined,
-                filter: rule.prefix ? { prefix: rule.prefix } : undefined,
-              })),
-            },
-            { parent },
-          ),
-        );
-      });
-    }
-
-    function createPublicAccess() {
-      if (args.transform?.publicAccessBlock === false) return;
-
-      return new s3.BucketPublicAccessBlock(
-        ...transform(
-          args.transform?.publicAccessBlock,
-          `${name}PublicAccessBlock`,
-          {
+    const isPrivate = output(args.access).apply((v) => v !== "public");
+    const publicAccessBlock =
+      plain(
+        args.publicAccessBlock,
+        `The "publicAccessBlock" of the "${name}" bucket`,
+      ) === false
+        ? undefined
+        : this.part("publicAccessBlock", {
             bucket: bucket.bucket,
             blockPublicAcls: true,
-            blockPublicPolicy: access.apply((v) => v !== "public"),
+            blockPublicPolicy: isPrivate,
             ignorePublicAcls: true,
-            restrictPublicBuckets: access.apply((v) => v !== "public"),
+            restrictPublicBuckets: isPrivate,
+          });
+
+    this.part(
+      "policy",
+      { bucket: bucket.bucket, policy: policyDocument(bucket.arn, args, opts) },
+      { dependsOn: publicAccessBlock },
+    );
+
+    const cors = plain(args.cors, `The "cors" of the "${name}" bucket`);
+    if (cors !== false) {
+      const rule = cors === true ? undefined : cors;
+      this.part("cors", {
+        bucket: bucket.bucket,
+        corsRules: [
+          {
+            allowedHeaders: withDefault(rule?.allowHeaders, ["*"]),
+            allowedMethods: withDefault(rule?.allowMethods, [
+              "DELETE",
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+            ]),
+            allowedOrigins: withDefault(rule?.allowOrigins, ["*"]),
+            exposeHeaders: withDefault(rule?.exposeHeaders, ["ETag"]),
+            maxAgeSeconds: withDefault(rule?.maxAge, "0 seconds", toSeconds),
           },
-          { parent },
-        ),
-      );
-    }
-
-    function createBucketPolicy() {
-      return all([access, enforceHttps, policyArgs]).apply(
-        ([access, enforceHttps, policyArgs]) => {
-          const statements = [];
-          if (access) {
-            statements.push({
-              principals: [
-                access === "public"
-                  ? { type: "*", identifiers: ["*"] }
-                  : {
-                      type: "Service",
-                      identifiers: ["cloudfront.amazonaws.com"],
-                    },
-              ],
-              actions: ["s3:GetObject"],
-              resources: [interpolate`${bucket.arn}/*`],
-              // Without a condition, a distribution in any AWS account could
-              // read the bucket through its own Origin Access Control.
-              conditions:
-                access === "public"
-                  ? undefined
-                  : [
-                      {
-                        test: "StringLike",
-                        variable: "aws:SourceArn",
-                        values: [getCloudfrontScope()],
-                      },
-                    ],
-            });
-          }
-          if (enforceHttps) {
-            statements.push({
-              effect: "Deny",
-              principals: [{ type: "*", identifiers: ["*"] }],
-              actions: ["s3:*"],
-              resources: [bucket.arn, interpolate`${bucket.arn}/*`],
-              conditions: [
-                {
-                  test: "Bool",
-                  variable: "aws:SecureTransport",
-                  values: ["false"],
-                },
-              ],
-            });
-          }
-          statements.push(
-            ...policyArgs.map((policy) => ({
-              effect: policy.effect,
-              principals: policy.principals,
-              actions: policy.actions,
-              conditions: policy.conditions,
-              resources: policy.paths.map((path) =>
-                path === "" ? bucket.arn : interpolate`${bucket.arn}/${path}`,
-              ),
-            })),
-          );
-
-          return new s3.BucketPolicy(
-            ...transform(
-              args.transform?.policy,
-              `${name}Policy`,
-              {
-                bucket: bucket.bucket,
-                policy: iam.getPolicyDocumentOutput({ statements }).json,
-              },
-              {
-                parent,
-                dependsOn: publicAccessBlock,
-              },
-            ),
-          );
-        },
-      );
-    }
-
-    function createCorsRule() {
-      return output(args.cors).apply((cors) => {
-        if (cors === false) return;
-
-        return new s3.BucketCorsConfiguration(
-          ...transform(
-            args.transform?.cors,
-            `${name}Cors`,
-            {
-              bucket: bucket.bucket,
-              corsRules: [
-                {
-                  allowedHeaders: cors?.allowHeaders ?? ["*"],
-                  allowedMethods: cors?.allowMethods ?? [
-                    "DELETE",
-                    "GET",
-                    "HEAD",
-                    "POST",
-                    "PUT",
-                  ],
-                  allowedOrigins: cors?.allowOrigins ?? ["*"],
-                  exposeHeaders: cors?.exposeHeaders ?? ["ETag"],
-                  maxAgeSeconds: toSeconds(cors?.maxAge ?? "0 seconds"),
-                },
-              ],
-            },
-            { parent },
-          ),
-        );
+        ],
       });
     }
+
+    const lifecycle = plain(
+      args.lifecycle,
+      `The "lifecycle" of the "${name}" bucket`,
+    );
+    if (lifecycle && lifecycle.length > 0)
+      this.part("lifecycle", {
+        bucket: bucket.bucket,
+        rules: output(lifecycle).apply((rules) => {
+          const ids = lifecycleIds(name, rules);
+          return rules.map((rule, index) => ({
+            id: ids[index],
+            status: rule.enabled !== false ? "Enabled" : "Disabled",
+            expiration:
+              rule.expiresIn || rule.expiresAt
+                ? {
+                    days: rule.expiresIn
+                      ? toSeconds(rule.expiresIn) / 86400
+                      : undefined,
+                    date: rule.expiresAt
+                      ? `${rule.expiresAt}T00:00:00Z`
+                      : undefined,
+                  }
+                : undefined,
+            filter: rule.prefix ? { prefix: rule.prefix } : undefined,
+          }));
+        }),
+      });
   }
 
   /**
    * The generated name of the S3 Bucket.
    */
   public get name() {
-    return this.bucket.bucket;
+    return this.afterPolicy(this.nodes.bucket.bucket);
   }
 
   /**
    * The domain name of the bucket. Has the format `${bucketName}.s3.amazonaws.com`.
    */
   public get domain() {
-    return this.bucket.bucketDomainName;
+    return this.afterPolicy(this.nodes.bucket.bucketDomainName);
   }
 
   /**
    * The ARN of the S3 Bucket.
    */
   public get arn() {
-    return this.bucket.arn;
+    return this.afterPolicy(this.nodes.bucket.arn);
+  }
+
+  // A bucket has one policy. Whatever uses the bucket through its name, ARN
+  // or domain waits for this one, so a second policy fails instead of racing
+  // it, and nothing reaches the bucket before the policy is in place.
+  private afterPolicy(value: Output<string>) {
+    const policy = this.nodes.policy;
+    return policy ? all([value, policy.id]).apply(([value]) => value) : value;
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon S3 bucket.
-       */
-      bucket: this.bucket,
-    };
-  }
-
-  /**
-   * Reference an existing bucket with the given bucket name. This is useful when you
-   * create a bucket in one stage and want to share it in another stage. It avoids having to
-   * create a new bucket in the other stage.
+   * Subscribe to the events of this bucket with functions, queues and topics. A bucket has
+   * one notification configuration, so pass all the notifications in one call.
    *
-   * :::tip
-   * You can use the `static get` method to share buckets across stages.
-   * :::
+   * @param args The notifications.
+   *
+   * @example
+   *
+   * Notify a function, a queue and a topic.
+   *
+   * ```js title="sst.config.ts"
+   * const queue = new sst.aws.Queue("MyQueue");
+   * const topic = new sst.aws.SnsTopic("MyTopic");
+   *
+   * bucket.notify({
+   *   notifications: [
+   *     {
+   *       name: "MySubscriber",
+   *       function: "src/subscriber.handler"
+   *     },
+   *     {
+   *       name: "MyQueue",
+   *       queue
+   *     },
+   *     {
+   *       name: "MyTopic",
+   *       topic
+   *     }
+   *   ]
+   * });
+   * ```
+   *
+   * Only notify on some events, for some of the objects.
+   *
+   * ```js title="sst.config.ts"
+   * bucket.notify({
+   *   notifications: [
+   *     {
+   *       name: "MySubscriber",
+   *       function: "src/subscriber.handler",
+   *       events: ["s3:ObjectCreated:*"],
+   *       filterPrefix: "images/",
+   *       filterSuffix: ".jpg"
+   *     }
+   *   ]
+   * });
+   * ```
+   *
+   * Customize the function, or pass in the ARN of one you already have.
+   *
+   * ```js title="sst.config.ts"
+   * bucket.notify({
+   *   notifications: [
+   *     {
+   *       name: "MySubscriber",
+   *       function: {
+   *         handler: "src/subscriber.handler",
+   *         timeout: "60 seconds"
+   *       }
+   *     },
+   *     {
+   *       name: "MyOtherSubscriber",
+   *       function: "arn:aws:lambda:us-east-1:123456789012:function:my-function"
+   *     }
+   *   ]
+   * });
+   * ```
+   *
+   * To change how the notification's resources are created, use the bucket's `transform`.
+   * A function there is given the notification's name.
+   *
+   * ```js title="sst.config.ts"
+   * new sst.aws.Bucket("MyBucket", {
+   *   transform: {
+   *     subscriber: (args, opts, name, notification) => {
+   *       if (notification === "MySubscriber") args.memory = "2048 MB";
+   *     }
+   *   }
+   * });
+   * ```
+   *
+   * To be notified of the events of a bucket that isn't in your app, reference it with
+   * `get` first.
+   *
+   * ```js title="sst.config.ts"
+   * sst.aws.Bucket.get("Uploads", "my-uploads-bucket").notify({
+   *   notifications: [{ name: "MySubscriber", function: "src/subscriber.handler" }]
+   * });
+   * ```
+   */
+  public notify(args: BucketNotifyArgs) {
+    const name = this.componentName;
+    notAnOption(
+      args,
+      "transform",
+      `Use the "transform" of the "${name}" bucket: its "notification", and "subscriber", "permission", "queuePolicy" and "topicPolicy" for what each notification creates.`,
+    );
+    if (this.nodes.notification)
+      throw new VisibleError(
+        `"notify" was already called on the "${name}" bucket. A bucket has one notification configuration: pass all of its notifications in one call.`,
+      );
+
+    if (!args.eventBridge && !args.notifications)
+      throw new VisibleError(
+        `"notify" on the "${name}" bucket needs "notifications", or "eventBridge" set to true.`,
+      );
+    const notifications = plain(
+      args.notifications ?? [],
+      `The "notifications" of the "${name}" bucket`,
+    );
+
+    const lambdaFunctions: types.input.s3.BucketNotificationLambdaFunction[] = [];
+    const queues: types.input.s3.BucketNotificationQueue[] = [];
+    const topics: types.input.s3.BucketNotificationTopic[] = [];
+    const dependsOn: Resource[] = [];
+    const names = new Set<string>();
+
+    for (const n of notifications) {
+      plain(n, `Each notification of the "${name}" bucket`);
+      plain(n.name, `The "name" of each notification of the "${name}" bucket`);
+      if (names.has(n.name))
+        throw new VisibleError(
+          `The "${name}" bucket already has a notification named "${n.name}". Give each notification its own name.`,
+        );
+      names.add(n.name);
+
+      const targets = [n.function, n.queue, n.topic].filter(
+        (target) => target !== undefined,
+      ).length;
+      if (targets !== 1) {
+        const has = targets === 0 ? "has none" : "has more than one";
+        throw new VisibleError(
+          `The "${n.name}" notification of the "${name}" bucket ${has} of "function", "queue" and "topic". Give it one.`,
+        );
+      }
+
+      const events = withDefault(n.events, EVENTS);
+      const config = {
+        id: n.name,
+        events,
+        filterPrefix: n.filterPrefix,
+        filterSuffix: n.filterSuffix,
+      };
+
+      if (n.function !== undefined) {
+        const fn = functionPart(
+          this,
+          "subscriber",
+          n.name,
+          plainFunction(
+            n.function,
+            `The "function" of the "${n.name}" notification of the "${name}" bucket`,
+          ),
+          {
+            description: events.apply((events) =>
+              events.length < 5
+                ? `Notified by ${name} on ${events.join(", ")}`
+                : `Notified by ${name} on ${events.slice(0, 3).join(", ")}, and ${events.length - 3} more events`,
+            ),
+          },
+        );
+        dependsOn.push(
+          this.part(
+            "permission",
+            n.name,
+            invokePermissionArgs(fn, "s3.amazonaws.com", this.arn),
+          ),
+        );
+        lambdaFunctions.push({ ...config, lambdaFunctionArn: fn.targetArn });
+      } else if (n.queue !== undefined) {
+        const queueArn = queueArnOf(n.queue);
+        dependsOn.push(
+          this.part("queuePolicy", n.name, ...sendPolicy(queueArn)),
+        );
+        queues.push({ ...config, queueArn });
+      } else {
+        const topicArn = topicArnOf(n.topic!);
+        dependsOn.push(
+          this.part("topicPolicy", n.name, {
+            arn: topicArn,
+            policy: iam.getPolicyDocumentOutput({
+              statements: [
+                {
+                  actions: ["sns:Publish"],
+                  resources: [topicArn],
+                  principals: [
+                    { type: "Service", identifiers: ["s3.amazonaws.com"] },
+                  ],
+                  conditions: [
+                    {
+                      test: "ArnEquals",
+                      variable: "aws:SourceArn",
+                      values: [this.arn],
+                    },
+                  ],
+                },
+              ],
+            }).json,
+          }),
+        );
+        topics.push({ ...config, topicArn });
+      }
+    }
+
+    this.part(
+      "notification",
+      {
+        bucket: this.name,
+        eventbridge: args.eventBridge,
+        lambdaFunctions,
+        queues,
+        topics,
+      },
+      { dependsOn },
+    );
+
+    return this;
+  }
+
+  /**
+   * Subscribe to the bucket's events on the account's default EventBridge bus with a
+   * function. This creates a rule that matches the events of this bucket, and a target
+   * for it. The bucket has to publish to EventBridge: for a bucket in your app, that's
+   * `notify({ eventBridge: true })`. For a bucket that isn't, reference it with `get` and
+   * turn EventBridge on for it where it's managed.
+   *
+   * @param name The name of the subscriber.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
+   * @param args Configure the subscription.
+   *
+   * @example
+   *
+   * ```js title="sst.config.ts"
+   * bucket.subscribeEventBridge("Resizer", "src/resize.handler", {
+   *   pattern: {
+   *     detailType: ["Object Created"],
+   *     detail: {
+   *       object: { key: [{ prefix: "uploads/" }] }
+   *     }
+   *   }
+   * });
+   * ```
+   */
+  public subscribeEventBridge(
+    name: string,
+    subscriber: FunctionInput,
+    args: BucketEventBridgeSubscriberArgs = {},
+  ) {
+    this.assertNew("EventBridge subscriber", "eventBridgeRule", name, args, [
+      "eventBridgeRule",
+      "eventBridgeTarget",
+    ]);
+    // The account's default bus, where S3 publishes a bucket's events
+    const bus = "default";
+    const rule = this.part("eventBridgeRule", name, {
+      eventBusName: bus,
+      state: enabledState(args.enabled),
+      // This bucket's events, and of those the ones the pattern matches
+      eventPattern: all([this.name, args.pattern ?? {}]).apply(
+        ([bucketName, pattern]) => {
+          const detail = pattern.detail ?? {};
+          return JSON.stringify({
+            "detail-type": pattern.detailType,
+            source: ["aws.s3"],
+            detail: {
+              ...detail,
+              bucket: { ...(detail.bucket ?? {}), name: [bucketName] },
+            },
+          });
+        },
+      ),
+    });
+    ruleFunctionTarget(
+      this.builder(),
+      {
+        subscriber: "eventBridgeSubscriber",
+        permission: "eventBridgePermission",
+        target: "eventBridgeTarget",
+      },
+      name,
+      rule,
+      {
+        bus,
+        subscriber: plainFunction(
+          subscriber,
+          `The EventBridge subscriber "${name}" of the "${this.componentName}" bucket`,
+        ),
+        description: `Subscribed to ${bus}`,
+      },
+    );
+    return this;
+  }
+
+  /** @internal */
+  public subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribe" isn't a method of the "${this.componentName}" bucket. Notify the function with "notify": bucket.notify({ notifications: [{ name: "MySubscriber", function: "src/subscriber.handler" }] }).`,
+    );
+  }
+
+  /** @internal */
+  public subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribeQueue" isn't a method of the "${this.componentName}" bucket. Notify the queue with "notify": bucket.notify({ notifications: [{ name: "MyQueue", queue }] }).`,
+    );
+  }
+
+  /** @internal */
+  public subscribeTopic(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribeTopic" isn't a method of the "${this.componentName}" bucket. Notify the topic with "notify": bucket.notify({ notifications: [{ name: "MyTopic", topic }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribe` subscribed to a bucket by its ARN. Reference the bucket
+   * with `get` and call `notify` on that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To be notified of the events of a bucket that isn't in your app, reference it with "get" and call "notify" on that: sst.aws.Bucket.get("MyBucket", bucketName).notify({ notifications: [{ name: "MySubscriber", function: "src/subscriber.handler" }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribeQueue` subscribed a queue to a bucket by its ARN. Reference
+   * the bucket with `get` and call `notify` on that.
+   *
+   * @internal
+   */
+  public static subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To notify a queue of the events of a bucket that isn't in your app, reference the bucket with "get" and call "notify" on that: sst.aws.Bucket.get("MyBucket", bucketName).notify({ notifications: [{ name: "MyQueue", queue }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribeTopic` subscribed a topic to a bucket by its ARN. Reference
+   * the bucket with `get` and call `notify` on that.
+   *
+   * @internal
+   */
+  public static subscribeTopic(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To notify a topic of the events of a bucket that isn't in your app, reference the bucket with "get" and call "notify" on that: sst.aws.Bucket.get("MyBucket", bucketName).notify({ notifications: [{ name: "MyTopic", topic }] }).`,
+    );
+  }
+
+  /**
+   * `sst.aws.Bucket.subscribeEventBridge` subscribed to a bucket's events by its name.
+   * It's a method of the bucket now.
+   *
+   * @internal
+   */
+  public static subscribeEventBridge(..._args: unknown[]): never {
+    throw new VisibleError(
+      `"subscribeEventBridge" is a method of the bucket: call it on the bucket, or on "get" for a bucket that isn't in your app: sst.aws.Bucket.get("MyBucket", bucketName).subscribeEventBridge("MySubscriber", "src/subscriber.handler").`,
+    );
+  }
+
+  /**
+   * Reference an existing bucket with its name. This is useful when you create a bucket in
+   * one stage and want to share it in another, or to be notified of the events of a bucket
+   * that isn't in your app. The bucket is used the way it is: it isn't configured here.
    *
    * @param name The name of the component.
    * @param bucketName The name of the existing S3 Bucket.
-   * @param opts Resource options.
+   * @param opts Component resource options.
    *
    * @example
-   * Imagine you create a bucket in the `dev` stage. And in your personal stage `frank`,
-   * instead of creating a new bucket, you want to share the bucket from `dev`.
    *
    * ```ts title="sst.config.ts"
    * const bucket = $app.stage === "frank"
    *   ? sst.aws.Bucket.get("MyBucket", "app-dev-mybucket-12345678")
    *   : new sst.aws.Bucket("MyBucket");
    * ```
-   *
-   * Here `app-dev-mybucket-12345678` is the auto-generated bucket name for the bucket created
-   * in the `dev` stage. You can find this by outputting the bucket name in the `dev` stage.
-   *
-   * ```ts title="sst.config.ts"
-   * return {
-   *   bucket: bucket.name
-   * };
-   * ```
    */
   public static get(
     name: string,
-    bucketName: string,
+    bucketName: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Bucket(name, {
-      ref: true,
-      bucket: s3.Bucket.get(`${name}Bucket`, bucketName, undefined, opts),
-    } as BucketArgs);
-  }
-
-  /**
-   * Subscribe to event notifications from this bucket. You can subscribe to these
-   * notifications with a function, a queue, or a topic.
-   *
-   * @param args The config for the event notifications.
-   *
-   * @example
-   *
-   * For exmaple, to notify a function:
-   *
-   * ```js title="sst.config.ts" {5}
-   * bucket.notify({
-   *   notifications: [
-   *     {
-   *       name: "MySubscriber",
-   *       function: "src/subscriber.handler"
-   *     }
-   *   ]
-   * });
-   * ```
-   *
-   * Or let's say you have a queue.
-   *
-   * ```js title="sst.config.ts"
-   * const myQueue = new sst.aws.Queue("MyQueue");
-   * ```
-   *
-   * You can notify it by passing in the queue.
-   *
-   * ```js title="sst.config.ts" {5}
-   * bucket.notify({
-   *   notifications: [
-   *     {
-   *       name: "MySubscriber",
-   *       queue: myQueue
-   *     }
-   *   ]
-   * });
-   * ```
-   *
-   * Or let's say you have a topic.
-   *
-   * ```js title="sst.config.ts"
-   * const myTopic = new sst.aws.SnsTopic("MyTopic");
-   * ```
-   *
-   * You can notify it by passing in the topic.
-   *
-   * ```js title="sst.config.ts" {5}
-   * bucket.notify({
-   *   notifications: [
-   *     {
-   *       name: "MySubscriber",
-   *       topic: myTopic
-   *     }
-   *   ]
-   * });
-   * ```
-   *
-   * Or enable EventBridge notifications for this bucket. This publishes S3 events
-   * to the account's default EventBridge bus.
-   *
-   * ```js title="sst.config.ts"
-   * bucket.notify({
-   *   eventBridge: true
-   * });
-   * ```
-   *
-   * You can also set it to only send notifications for specific S3 events.
-   *
-   * ```js {6}
-   * bucket.notify({
-   *   notifications: [
-   *     {
-   *       name: "MySubscriber",
-   *       function: "src/subscriber.handler",
-   *       events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   *     }
-   *   ]
-   * });
-   * ```
-   *
-   * And you can add filters to be only notified from specific files in the bucket.
-   *
-   * ```js {6}
-   * bucket.notify({
-   *   notifications: [
-   *     {
-   *       name: "MySubscriber",
-   *       function: "src/subscriber.handler",
-   *       filterPrefix: "images/"
-   *     }
-   *   ]
-   * });
-   * ```
-   */
-  public notify(args: BucketNotificationsArgs) {
-    if (this.isSubscribed) {
-      throw new VisibleError(
-        `Cannot call "notify" on the "${this.constructorName}" bucket multiple times. Calling it again will override previous notifications.`,
-      );
-    }
-    if (!args.eventBridge && !args.notifications) {
-      throw new VisibleError(
-        `Cannot call "notify" on the "${this.constructorName}" bucket without notifications or EventBridge enabled.`,
-      );
-    }
-    this.isSubscribed = true;
-    const name = this.constructorName;
-    const opts = this.constructorOpts;
-
-    return new BucketNotification(
-      `${name}Notifications`,
-      {
-        bucket: { name: this.bucket.bucket, arn: this.bucket.arn },
-        ...args,
-      },
+    return new Bucket(
+      name,
+      getArgs({ existing: { bucket: bucketName } }),
       opts,
     );
   }
 
   /**
-   * Subscribe to S3 EventBridge notifications from a bucket with a function. The bucket
-   * is given by name, so it can be one that SST doesn't manage.
-   *
-   * This creates an EventBridge rule on the account's default bus, and a target for
-   * it, only. The rule matches the events of that one bucket. The bucket has to publish
-   * to EventBridge for it to receive anything: for a bucket in your app, that's
-   * `notify({ eventBridge: true })`; for any other bucket, turn it on there.
-   *
-   * @param name The name of the subscription.
-   * @param bucketName The name of the S3 bucket to subscribe to.
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribeEventBridge("Uploads", "my-bucket", "src/subscriber.handler", {
-   *   pattern: {
-   *     detailType: ["Object Created"],
-   *     detail: {
-   *       object: {
-   *         key: [{ prefix: "uploads/" }]
-   *       }
-   *     }
-   *   }
-   * });
-   * ```
+   * Linking a bucket gives the linked resource the bucket's name and
+   * permission to use the bucket and its objects.
    */
-  public static subscribeEventBridge(
-    name: string,
-    bucketName: Input<string>,
-    subscriber: Input<
-      string | Workflow | Function | FunctionArgs | FunctionArn
-    >,
-    args: BucketEventBridgeSubscriberArgs = {},
-  ) {
-    return all([bucketName, args]).apply(([bucketName, args]) => {
-      const bucket = logicalName(bucketName);
-      const bus = cloudwatch.EventBus.get(
-        `${bucket}EventBridgeSubscriber${name}DefaultBus`,
-        "default",
-      );
-      const pattern = output(args.pattern ?? {}).apply((pattern) => {
-        const detail = pattern.detail ?? {};
-
-        return {
-          source: ["aws.s3"],
-          detailType: pattern.detailType,
-          detail: {
-            ...detail,
-            bucket: {
-              ...(detail.bucket ?? {}),
-              name: [bucketName],
-            },
-          },
-        };
-      });
-
-      return new BusLambdaSubscriber(`${bucket}EventBridgeSubscriber${name}`, {
-        bus: { name: bus.name, arn: bus.arn },
-        subscriber,
-        ...args,
-        pattern,
-      });
-    });
-  }
-
-  /**
-   * Subscribe to events from this bucket.
-   *
-   * @deprecated The `notify` function is now the recommended way to subscribe to events
-   * from this bucket. It allows you to configure multiple subscribers at once. To migrate,
-   * remove the current subscriber, deploy the changes, and then add the subscriber
-   * back using the new `notify` function.
-   *
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * ```js title="sst.config.ts"
-   * bucket.subscribe("src/subscriber.handler");
-   * ```
-   *
-   * Subscribe to specific S3 events. The `link` ensures the subscriber can access the bucket.
-   *
-   * ```js title="sst.config.ts" "link: [bucket]"
-   * bucket.subscribe({
-   *   handler: "src/subscriber.handler",
-   *   link: [bucket]
-   * }, {
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Subscribe to specific S3 events from a specific folder.
-   *
-   * ```js title="sst.config.ts" {2}
-   * bucket.subscribe("src/subscriber.handler", {
-   *   filterPrefix: "images/",
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Customize the subscriber function.
-   *
-   * ```js title="sst.config.ts"
-   * bucket.subscribe({
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds",
-   * });
-   * ```
-   *
-   * Or pass in the ARN of an existing Lambda function.
-   *
-   * ```js title="sst.config.ts"
-   * bucket.subscribe("arn:aws:lambda:us-east-1:123456789012:function:my-function");
-   * ```
-   */
-  public subscribe(
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: BucketSubscriberArgs,
-  ) {
-    this.ensureNotSubscribed();
-    return Bucket._subscribeFunction(
-      this.constructorName,
-      this.bucket.bucket,
-      this.bucket.arn,
-      subscriber,
-      args,
-      { provider: this.constructorOpts.provider },
-    );
-  }
-
-  /**
-   * Subscribe to events of an S3 bucket that was not created in your app.
-   *
-   * @deprecated The `notify` function is now the recommended way to subscribe to events
-   * from this bucket. It allows you to configure multiple subscribers at once. To migrate,
-   * remove the current subscriber, deploy the changes, and then add the subscriber
-   * back using the new `notify` function.
-   *
-   * @param bucketArn The ARN of the S3 bucket to subscribe to.
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing S3 bucket with the following ARN.
-   *
-   * ```js title="sst.config.ts"
-   * const bucketArn = "arn:aws:s3:::my-bucket";
-   * ```
-   *
-   * You can subscribe to it by passing in the ARN.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribe(bucketArn, "src/subscriber.handler");
-   * ```
-   *
-   * Subscribe to specific S3 events.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribe(bucketArn, "src/subscriber.handler", {
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Subscribe to specific S3 events from a specific folder.
-   *
-   * ```js title="sst.config.ts" {2}
-   * sst.aws.Bucket.subscribe(bucketArn, "src/subscriber.handler", {
-   *   filterPrefix: "images/",
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Customize the subscriber function.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribe(bucketArn, {
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds",
-   * });
-   * ```
-   */
-  public static subscribe(
-    bucketArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: BucketSubscriberArgs,
-  ) {
-    return output(bucketArn).apply((bucketArn) => {
-      const bucketName = parseBucketArn(bucketArn).bucketName;
-      return this._subscribeFunction(
-        bucketName,
-        bucketName,
-        bucketArn,
-        subscriber,
-        args,
-      );
-    });
-  }
-
-  private static _subscribeFunction(
-    name: string,
-    bucketName: Input<string>,
-    bucketArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args: BucketSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return all([bucketArn, subscriber, args]).apply(
-      ([bucketArn, subscriber, args]) => {
-        const subscriberId = this.buildSubscriberId(
-          bucketArn,
-          typeof subscriber === "string" ? subscriber : subscriber.handler,
-        );
-
-        return new BucketLambdaSubscriber(
-          `${name}Subscriber${subscriberId}`,
-          {
-            bucket: { name: bucketName, arn: bucketArn },
-            subscriber,
-            subscriberId,
-            ...args,
-          },
-          opts,
-        );
-      },
-    );
-  }
-
-  /**
-   * Subscribe to events from this bucket with an SQS Queue.
-   *
-   * @deprecated The `notify` function is now the recommended way to subscribe to events
-   * from this bucket. It allows you to configure multiple subscribers at once. To migrate,
-   * remove the current subscriber, deploy the changes, and then add the subscriber
-   * back using the new `notify` function.
-   *
-   * @param queueArn The ARN of the queue that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have a queue.
-   *
-   * ```js title="sst.config.ts"
-   * const queue = new sst.aws.Queue("MyQueue");
-   * ```
-   *
-   * You can subscribe to this bucket with it.
-   *
-   * ```js title="sst.config.ts"
-   * bucket.subscribe(queue.arn);
-   * ```
-   *
-   * Subscribe to specific S3 events.
-   *
-   * ```js title="sst.config.ts"
-   * bucket.subscribe(queue.arn, {
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Subscribe to specific S3 events from a specific folder.
-   *
-   * ```js title="sst.config.ts" {2}
-   * bucket.subscribe(queue.arn, {
-   *   filterPrefix: "images/",
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   */
-  public subscribeQueue(
-    queueArn: Input<string>,
-    args: BucketSubscriberArgs = {},
-  ) {
-    this.ensureNotSubscribed();
-    return Bucket._subscribeQueue(
-      this.constructorName,
-      this.bucket.bucket,
-      this.arn,
-      queueArn,
-      args,
-      { provider: this.constructorOpts.provider },
-    );
-  }
-
-  /**
-   * Subscribe to events of an S3 bucket that was not created in your app with an SQS Queue.
-   *
-   * @deprecated The `notify` function is now the recommended way to subscribe to events
-   * from this bucket. It allows you to configure multiple subscribers at once. To migrate,
-   * remove the current subscriber, deploy the changes, and then add the subscriber
-   * back using the new `notify` function.
-   *
-   * @param bucketArn The ARN of the S3 bucket to subscribe to.
-   * @param queueArn The ARN of the queue that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing S3 bucket and SQS queue with the following ARNs.
-   *
-   * ```js title="sst.config.ts"
-   * const bucketArn = "arn:aws:s3:::my-bucket";
-   * const queueArn = "arn:aws:sqs:us-east-1:123456789012:MyQueue";
-   * ```
-   *
-   * You can subscribe to the bucket with the queue.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribeQueue(bucketArn, queueArn);
-   * ```
-   *
-   * Subscribe to specific S3 events.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribeQueue(bucketArn, queueArn, {
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Subscribe to specific S3 events from a specific folder.
-   *
-   * ```js title="sst.config.ts" {2}
-   * sst.aws.Bucket.subscribeQueue(bucketArn, queueArn, {
-   *   filterPrefix: "images/",
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   */
-  public static subscribeQueue(
-    bucketArn: Input<string>,
-    queueArn: Input<string>,
-    args?: BucketSubscriberArgs,
-  ) {
-    return output(bucketArn).apply((bucketArn) => {
-      const bucketName = parseBucketArn(bucketArn).bucketName;
-      return this._subscribeQueue(
-        bucketName,
-        bucketName,
-        bucketArn,
-        queueArn,
-        args,
-      );
-    });
-  }
-
-  private static _subscribeQueue(
-    name: string,
-    bucketName: Input<string>,
-    bucketArn: Input<string>,
-    queueArn: Input<string>,
-    args: BucketSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return all([bucketArn, queueArn, args]).apply(
-      ([bucketArn, queueArn, args]) => {
-        const subscriberId = this.buildSubscriberId(bucketArn, queueArn);
-
-        return new BucketQueueSubscriber(
-          `${name}Subscriber${subscriberId}`,
-          {
-            bucket: { name: bucketName, arn: bucketArn },
-            queue: queueArn,
-            subscriberId,
-            ...args,
-          },
-          opts,
-        );
-      },
-    );
-  }
-
-  /**
-   * Subscribe to events from this bucket with an SNS Topic.
-   *
-   * @deprecated The `notify` function is now the recommended way to subscribe to events
-   * from this bucket. It allows you to configure multiple subscribers at once. To migrate,
-   * remove the current subscriber, deploy the changes, and then add the subscriber
-   * back using the new `notify` function.
-   *
-   * @param topicArn The ARN of the topic that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have a topic.
-   *
-   * ```js title="sst.config.ts"
-   * const topic = new sst.aws.SnsTopic("MyTopic");
-   * ```
-   *
-   * You can subscribe to this bucket with it.
-   *
-   * ```js title="sst.config.ts"
-   * bucket.subscribe(topic.arn);
-   * ```
-   *
-   * Subscribe to specific S3 events.
-   *
-   * ```js title="sst.config.ts"
-   * bucket.subscribe(topic.arn, {
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Subscribe to specific S3 events from a specific folder.
-   *
-   * ```js title="sst.config.ts" {2}
-   * bucket.subscribe(topic.arn, {
-   *   filterPrefix: "images/",
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   */
-  public subscribeTopic(
-    topicArn: Input<string>,
-    args: BucketSubscriberArgs = {},
-  ) {
-    this.ensureNotSubscribed();
-    return Bucket._subscribeTopic(
-      this.constructorName,
-      this.bucket.bucket,
-      this.arn,
-      topicArn,
-      args,
-      { provider: this.constructorOpts.provider },
-    );
-  }
-
-  /**
-   * Subscribe to events of an S3 bucket that was not created in your app with an SNS Topic.
-   *
-   * @deprecated The `notify` function is now the recommended way to subscribe to events
-   * from this bucket. It allows you to configure multiple subscribers at once. To migrate,
-   * remove the current subscriber, deploy the changes, and then add the subscriber
-   * back using the new `notify` function.
-   *
-   * @param bucketArn The ARN of the S3 bucket to subscribe to.
-   * @param topicArn The ARN of the topic that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing S3 bucket and SNS topic with the following ARNs.
-   *
-   * ```js title="sst.config.ts"
-   * const bucketArn = "arn:aws:s3:::my-bucket";
-   * const topicArn = "arn:aws:sns:us-east-1:123456789012:MyTopic";
-   * ```
-   *
-   * You can subscribe to the bucket with the topic.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribe(bucketArn, topicArn);
-   * ```
-   *
-   * Subscribe to specific S3 events.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bucket.subscribe(bucketArn, topicArn, {
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   *
-   * Subscribe to specific S3 events from a specific folder.
-   *
-   * ```js title="sst.config.ts" {2}
-   * sst.aws.Bucket.subscribe(bucketArn, topicArn, {
-   *   filterPrefix: "images/",
-   *   events: ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
-   * });
-   * ```
-   */
-  public static subscribeTopic(
-    bucketArn: Input<string>,
-    topicArn: Input<string>,
-    args?: BucketSubscriberArgs,
-  ) {
-    return output(bucketArn).apply((bucketArn) => {
-      const bucketName = parseBucketArn(bucketArn).bucketName;
-      return this._subscribeTopic(
-        bucketName,
-        bucketName,
-        bucketArn,
-        topicArn,
-        args,
-      );
-    });
-  }
-
-  private static _subscribeTopic(
-    name: string,
-    bucketName: Input<string>,
-    bucketArn: Input<string>,
-    topicArn: Input<string>,
-    args: BucketSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return all([bucketArn, topicArn, args]).apply(
-      ([bucketArn, topicArn, args]) => {
-        const subscriberId = this.buildSubscriberId(bucketArn, topicArn);
-
-        return new BucketTopicSubscriber(
-          `${name}Subscriber${subscriberId}`,
-          {
-            bucket: { name: bucketName, arn: bucketArn },
-            topic: topicArn,
-            subscriberId,
-            ...args,
-          },
-          opts,
-        );
-      },
-    );
-  }
-
-  private static buildSubscriberId(bucketArn: string, _discriminator: string) {
-    return logicalName(
-      hashStringToPrettyString(
-        [
-          bucketArn,
-          // Temporarily only allowing one subscriber per bucket because of the
-          // AWS/Terraform issue that appending/removing a notification deletes
-          // all existing notifications.
-          //
-          // A solution would be to implement a dynamic provider. On create,
-          // get existing notifications then append. And on delete, get existing
-          // notifications then remove from the list.
-          //
-          // https://github.com/hashicorp/terraform-provider-aws/issues/501
-          //
-          // Commenting out the lines below to ensure the id never changes.
-          // Because on id change, the removal of notification happens after
-          // the creation of notification. And the newly created notification
-          // gets removed.
-
-          //...events,
-          //args.filterPrefix ?? "",
-          //args.filterSuffix ?? "",
-          //discriminator,
-        ].join(""),
-        6,
-      ),
-    );
-  }
-
-  private ensureNotSubscribed() {
-    if (this.isSubscribed)
-      throw new VisibleError(
-        `Cannot subscribe to the "${this.constructorName}" bucket multiple times. An S3 bucket can only have one subscriber.`,
-      );
-    this.isSubscribed = true;
-  }
-
-  /** @internal */
-  public getSSTLink() {
+  public link() {
     return {
-      properties: {
-        name: this.name,
-      },
+      properties: { name: this.name },
       include: [
         permission({
           actions: ["s3:*"],
@@ -2041,6 +1585,145 @@ export class Bucket extends Component implements Link.Linkable {
   }
 }
 
-const __pulumiType = "sst:aws:Bucket";
-// @ts-expect-error
-Bucket.__pulumiType = __pulumiType;
+// The args that configure the bucket, which an existing bucket isn't given
+const CONFIGURES = [
+  "access",
+  "policy",
+  "enforceHttps",
+  "cors",
+  "lifecycle",
+  "versioning",
+  "publicAccessBlock",
+] as const;
+
+// What a notification is sent on when it doesn't say
+const EVENTS: NonNullable<Plain<BucketNotificationArgs["events"]>> = [
+  "s3:ObjectCreated:*",
+  "s3:ObjectRemoved:*",
+  "s3:ObjectRestore:*",
+  "s3:ReducedRedundancyLostObject",
+  "s3:Replication:*",
+  "s3:LifecycleExpiration:*",
+  "s3:LifecycleTransition",
+  "s3:IntelligentTiering",
+  "s3:ObjectTagging:*",
+  "s3:ObjectAcl:Put",
+];
+
+const EVERYONE = { type: "*", identifiers: ["*"] };
+
+const PRINCIPALS = {
+  aws: "AWS",
+  service: "Service",
+  federated: "Federated",
+  canonical: "Canonical",
+};
+
+/**
+ * The bucket policy: read access for the public or for CloudFront, the
+ * statement that denies requests that aren't over HTTPS, and the user's own
+ * statements. The account and partition are looked up with the component's
+ * provider.
+ */
+function policyDocument(
+  arn: Output<string>,
+  args: Pick<BucketArgs, "access" | "enforceHttps" | "policy">,
+  opts?: ComponentResourceOptions,
+) {
+  return all([
+    args.access,
+    withDefault(args.enforceHttps, true),
+    args.policy ?? [],
+  ]).apply(([access, enforceHttps, policy]) => {
+    const statements: types.input.iam.GetPolicyDocumentStatementArgs[] = [];
+    if (access)
+      statements.push({
+        principals: [
+          access === "public"
+            ? EVERYONE
+            : { type: "Service", identifiers: ["cloudfront.amazonaws.com"] },
+        ],
+        actions: ["s3:GetObject"],
+        resources: [interpolate`${arn}/*`],
+        // Without it, a distribution in any AWS account could read the bucket
+        // through its own origin access control
+        conditions:
+          access === "public"
+            ? undefined
+            : [
+                {
+                  test: "StringLike",
+                  variable: "aws:SourceArn",
+                  values: [
+                    interpolate`arn:${getPartitionOutput({}, opts).partition}:cloudfront::${getCallerIdentityOutput({}, opts).accountId}:distribution/*`,
+                  ],
+                },
+              ],
+      });
+    if (enforceHttps)
+      statements.push({
+        effect: "Deny",
+        principals: [EVERYONE],
+        actions: ["s3:*"],
+        resources: [arn, interpolate`${arn}/*`],
+        conditions: [
+          {
+            test: "Bool",
+            variable: "aws:SecureTransport",
+            values: ["false"],
+          },
+        ],
+      });
+    for (const statement of policy) {
+      // A path is relative to the bucket. Without paths, a statement covers
+      // the bucket and everything in it.
+      const paths = statement.paths?.map((path) => path.replace(/^\//, ""));
+      statements.push({
+        effect:
+          statement.effect &&
+          statement.effect.charAt(0).toUpperCase() + statement.effect.slice(1),
+        principals:
+          statement.principals === "*"
+            ? [EVERYONE]
+            : statement.principals.map((principal) => ({
+                ...principal,
+                type: PRINCIPALS[principal.type],
+              })),
+        actions: statement.actions,
+        conditions: statement.conditions,
+        resources: (paths ?? ["", "*"]).map((path) =>
+          path === "" ? arn : interpolate`${arn}/${path}`,
+        ),
+      });
+    }
+    return iam.getPolicyDocumentOutput({ statements }).json;
+  });
+}
+
+/**
+ * The id of each lifecycle rule: its own, or one made from the bucket's name
+ * and the rule's position. S3 needs each to be unique and at most 255
+ * characters.
+ */
+function lifecycleIds(name: string, rules: { id?: string }[]) {
+  const seen = new Map<string, number>();
+  return rules.map((rule, index) => {
+    const id = (rule.id ?? `${name}LifecycleRule${index}`).trim();
+    const what = `Lifecycle rule ${index} of the "${name}" bucket`;
+    if (id.length === 0)
+      throw new VisibleError(
+        `${what} has an empty "id". Give it one, or leave "id" out for one made from the bucket's name.`,
+      );
+    if (id.length > 255)
+      throw new VisibleError(
+        `${what} has an "id" that's ${id.length} characters long. S3 takes at most 255.`,
+      );
+    const other = seen.get(id);
+    if (other !== undefined)
+      throw new VisibleError(
+        `Lifecycle rules ${other} and ${index} of the "${name}" bucket have the same "id", "${id}". Give each its own.`,
+      );
+    seen.set(id, index);
+    return id;
+  });
+}

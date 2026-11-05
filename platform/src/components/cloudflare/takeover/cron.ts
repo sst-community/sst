@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Cron } from "../v5/cron";
+import { Cron } from "../cron";
 
 takeover(Cron, {
   moved: {

@@ -1,12 +1,12 @@
 import {
-  all,
   ComponentResourceOptions,
-  interpolate,
+  Input,
   Output,
+  all,
+  interpolate,
   output,
+  secret,
 } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component";
-import { Input } from "../input";
 import {
   ec2,
   getAvailabilityZonesOutput,
@@ -16,15 +16,130 @@ import {
   servicediscovery,
   ssm,
 } from "@pulumi/aws";
-import { Vpc as VpcV1 } from "./vpc-v1";
-import { Link } from "../link";
-import { VisibleError } from "../error";
 import { PrivateKey } from "@pulumi/tls";
-import { rootStackResource } from "@pulumi/pulumi";
+import {
+  type ComponentArgs,
+  component,
+  many,
+  named,
+  optional,
+} from "../parts-component";
+import { notAnExistingPart, plain, usedAsItIs, getArgs } from "../args";
+import { context } from "../contract";
+import { VisibleError } from "../error";
 
-export type { VpcArgs as VpcV1Args } from "./vpc-v1";
+const parts = {
+  /**
+   * The Amazon EC2 VPC.
+   */
+  vpc: ec2.Vpc,
+  /**
+   * The Internet Gateway. All the traffic from the public subnets is routed through it.
+   */
+  internetGateway: ec2.InternetGateway,
+  /**
+   * The VPC's default security group. It lets in traffic from inside the VPC only.
+   */
+  securityGroup: ec2.DefaultSecurityGroup,
+  /**
+   * A public subnet in each AZ, by the AZ's number: `"1"`, `"2"` and so on.
+   */
+  publicSubnet: many(ec2.Subnet),
+  /**
+   * The route table of each public subnet, by the AZ's number. It routes to the
+   * Internet Gateway.
+   */
+  publicRouteTable: many(ec2.RouteTable),
+  /**
+   * What gives each public subnet its route table, by the AZ's number.
+   */
+  publicRouteTableAssociation: many(ec2.RouteTableAssociation),
+  /**
+   * A private subnet in each AZ, by the AZ's number.
+   */
+  privateSubnet: many(ec2.Subnet),
+  /**
+   * The route table of each private subnet, by the AZ's number. With `nat`, it routes
+   * to the NAT in the same AZ.
+   */
+  privateRouteTable: many(ec2.RouteTable),
+  /**
+   * What gives each private subnet its route table, by the AZ's number.
+   */
+  privateRouteTableAssociation: many(ec2.RouteTableAssociation),
+  /**
+   * With `nat`, an Elastic IP for the NAT in each AZ, by the AZ's number. With
+   * `nat.ip`, it's the one given, looked up.
+   */
+  elasticIp: many(ec2.Eip),
+  /**
+   * With `nat: "managed"`, a NAT Gateway in each AZ, by the AZ's number.
+   */
+  natGateway: many(ec2.NatGateway),
+  /**
+   * With `nat: "ec2"`, the security group of the NAT instances.
+   */
+  natSecurityGroup: named(
+    optional(ec2.SecurityGroup),
+    "NatInstanceSecurityGroup",
+  ),
+  /**
+   * With `nat: "ec2"`, the IAM role the NAT instances run as. With `nat.ec2.role`,
+   * it's the one given, looked up.
+   */
+  natInstanceRole: optional(iam.Role),
+  /**
+   * With `nat: "ec2"`, the instance profile of the NAT instances.
+   */
+  natInstanceProfile: optional(iam.InstanceProfile),
+  /**
+   * With `nat: "ec2"`, a NAT instance in each AZ, by the AZ's number.
+   */
+  natInstance: many(ec2.Instance),
+  /**
+   * With `nat: "ec2"`, what gives each NAT instance its Elastic IP, by the AZ's number.
+   */
+  natInstanceEipAssociation: many(ec2.EipAssociation),
+  /**
+   * With `bastion`, the bastion's security group. It lets in SSH. Not created with
+   * `nat: "ec2"`, whose first instance is the bastion.
+   */
+  bastionSecurityGroup: optional(ec2.SecurityGroup),
+  /**
+   * With `bastion`, the IAM role the bastion runs as. Not created with
+   * `bastion.instanceProfile` or `nat: "ec2"`.
+   */
+  bastionRole: optional(iam.Role),
+  /**
+   * With `bastion`, the bastion's instance profile. With `bastion.instanceProfile`,
+   * it's the one given, looked up. Not created with `nat: "ec2"`.
+   */
+  bastionProfile: optional(iam.InstanceProfile),
+  /**
+   * With `bastion`, the bastion instance, in the first public subnet. Not created with
+   * `nat: "ec2"`, whose first instance is the bastion.
+   */
+  bastionInstance: optional(ec2.Instance),
+  /**
+   * With `bastion`, the key `sst tunnel` connects to the bastion with.
+   */
+  tlsPrivateKey: optional(PrivateKey),
+  /**
+   * With `bastion`, the SSM parameter that keeps the bastion's private key, for the
+   * stages that reference this VPC with `get`.
+   */
+  privateKeyValue: optional(ssm.Parameter),
+  /**
+   * With `bastion`, the EC2 key pair of the bastion's key.
+   */
+  keyPair: optional(ec2.KeyPair),
+  /**
+   * The AWS Cloud Map namespace, `sst`, for service discovery.
+   */
+  cloudmapNamespace: servicediscovery.PrivateDnsNamespace,
+};
 
-export interface VpcArgs {
+export interface VpcArgs extends ComponentArgs<typeof parts> {
   /**
    * Specify the Availability Zones or AZs for the VPC.
    *
@@ -34,6 +149,9 @@ export interface VpcArgs {
    *
    * By default, it creates a VPC with 2 availability zones since services like RDS and
    * Fargate need at least 2 AZs.
+   *
+   * It decides how many subnets are created, so it's a plain value: a number, or a list
+   * whose length is known. The AZs in the list can be outputs.
    * @default `2`
    * @example
    * Create a VPC with 3 AZs
@@ -50,7 +168,7 @@ export interface VpcArgs {
    * }
    * ```
    */
-  az?: Input<number | Input<string>[]>;
+  az?: number | Input<string>[];
   /**
    * Configures NAT. Enabling NAT allows resources in private subnets to connect to the internet.
    *
@@ -78,6 +196,10 @@ export interface VpcArgs {
    * NAT EC2 instances are much cheaper than NAT Gateways, the `t4g.nano` instance type is around
    * $3 per month. But you'll need to scale it up manually if you need more bandwidth.
    *
+   * Which NAT it is, and how many Elastic IPs are given, decide what's created, so `nat`,
+   * `nat.type`, `nat.ec2` and the list in `nat.ip` are plain values. The Elastic IP
+   * allocation IDs, and the instance type, AMI and role in `nat.ec2`, can be outputs.
+   *
    * @default NAT is disabled
    * @example
    * ```ts
@@ -86,7 +208,7 @@ export interface VpcArgs {
    * }
    * ```
    */
-  nat?: Input<
+  nat?:
     | "ec2"
     | "managed"
     | {
@@ -96,7 +218,7 @@ export interface VpcArgs {
          * - If `nat.ec2` is provided, `nat.type` defaults to `"ec2"`.
          * - Otherwise, `nat.type` must be explicitly specified.
          */
-        type?: Input<"ec2" | "managed">;
+        type?: "ec2" | "managed";
         /**
          * A list of Elastic IP allocation IDs to use for the NAT Gateways or NAT
          * instances. The number of allocation IDs must match the number of AZs.
@@ -112,7 +234,7 @@ export interface VpcArgs {
          * }
          * ```
          */
-        ip?: Input<Input<string>[]>;
+        ip?: Input<string>[];
         /**
          * Configures the NAT EC2 instance.
          * @default `{instance: "t4g.nano"}`
@@ -127,13 +249,13 @@ export interface VpcArgs {
          * }
          * ```
          */
-        ec2?: Input<{
+        ec2?: {
           /**
            * The type of instance to use for the NAT.
            *
            * @default `"t4g.nano"`
            */
-          instance: Input<string>;
+          instance?: Input<string>;
           /**
            * The AMI to use for the NAT.
            *
@@ -174,9 +296,8 @@ export interface VpcArgs {
            * ```
            */
           role?: Input<string>;
-        }>;
-      }
-  >;
+        };
+      };
   /**
    * Configures a bastion host that can be used to connect to resources in the VPC.
    *
@@ -194,10 +315,19 @@ export interface VpcArgs {
    * However if `nat: "ec2"` is enabled, the EC2 instance that NAT creates will be used
    * as the bastion host. No additional EC2 instance will be created.
    *
+   * The bastion runs the newest Amazon Linux 2023 image for Arm, with the kernel Amazon
+   * makes the default. It's read from Amazon's public SSM parameter
+   * `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64`, so the deploy
+   * needs `ssm:GetParameter` on it. A deploy after Amazon releases a new image replaces
+   * the bastion.
+   *
    * If you are running `sst dev`, a tunnel will be automatically created to the bastion host.
    * This uses a network interface to forward traffic from your local machine to the bastion host.
    *
    * You can learn more about [`sst tunnel`](/docs/reference/cli#tunnel).
+   *
+   * It decides what's created, so it's a plain value. The instance profile's name can be
+   * an output: whether it's given is what decides.
    *
    * @default `false`
    * @example
@@ -218,78 +348,28 @@ export interface VpcArgs {
    * }
    * ```
    */
-  bastion?: Input<
+  bastion?:
     | boolean
     | {
         /**
          * The name of an existing IAM instance profile to use for the bastion.
          */
         instanceProfile: Input<string>;
-      }
-  >;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the EC2 VPC resource.
-     */
-    vpc?: Transform<ec2.VpcArgs>;
-    /**
-     * Transform the EC2 Internet Gateway resource.
-     */
-    internetGateway?: Transform<ec2.InternetGatewayArgs>;
-    /**
-     * Transform the EC2 NAT Gateway resource.
-     */
-    natGateway?: Transform<ec2.NatGatewayArgs>;
-    /**
-     * Transform the EC2 NAT instance resource.
-     */
-    natInstance?: Transform<ec2.InstanceArgs>;
-    /**
-     * Transform the EC2 NAT security group resource.
-     */
-    natSecurityGroup?: Transform<ec2.SecurityGroupArgs>;
-    /**
-     * Transform the EC2 Elastic IP resource.
-     */
-    elasticIp?: Transform<ec2.EipArgs>;
-    /**
-     * Transform the EC2 Security Group resource.
-     */
-    securityGroup?: Transform<ec2.SecurityGroupArgs>;
-    /**
-     * Transform the EC2 public subnet resource.
-     */
-    publicSubnet?: Transform<ec2.SubnetArgs>;
-    /**
-     * Transform the EC2 private subnet resource.
-     */
-    privateSubnet?: Transform<ec2.SubnetArgs>;
-    /**
-     * Transform the EC2 route table resource for the public subnet.
-     */
-    publicRouteTable?: Transform<ec2.RouteTableArgs>;
-    /**
-     * Transform the EC2 route table resource for the private subnet.
-     */
-    privateRouteTable?: Transform<ec2.RouteTableArgs>;
-    /**
-     * Transform the EC2 bastion instance resource.
-     */
-    bastionInstance?: Transform<ec2.InstanceArgs>;
-    /**
-     * Transform the EC2 bastion security group resource.
-     */
-    bastionSecurityGroup?: Transform<ec2.SecurityGroupArgs>;
-  };
+      };
 }
 
-interface VpcRef {
-  ref: boolean;
-  vpcId: Input<string>;
+// What the components that take a VPC read from it, the same whether it was
+// created or referenced with `get`
+interface Network {
+  publicSubnets: Output<string[]>;
+  privateSubnets: Output<string[]>;
+  securityGroups: Output<string[]>;
+  bastion: Output<string | undefined>;
+  // Whether the private subnets reach the internet. Not known for a VPC
+  // that's referenced.
+  nat?: boolean;
+  // The private subnets by the AZ's number, for a VPC that's created
+  privateSubnetsByAz?: Record<string, Output<string>>;
 }
 
 /**
@@ -333,6 +413,52 @@ interface VpcRef {
  *   nat: "managed"
  * });
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Vpc`
+ *
+ * Keep the name, and `sst migrate` moves it. The VPC you've deployed is
+ * kept, and so is everything in it.
+ *
+ * A few things work differently:
+ *
+ * - Switch what's in the VPC first, or along with it. The V5 components that take a `vpc`
+ *   take either kind. A 4.x component, like [`sst.aws.Nextjs`](/docs/component/aws/nextjs)'s
+ *   server function, is typed for `sst.aws.Vpc` alone.
+ * - `az`, `nat` and `bastion` are plain values, since they decide what's created. Some
+ *   values inside them can still be outputs, like an AZ's name, `nat.ec2.ami` or
+ *   `bastion.instanceProfile`. Each arg says which.
+ * - `nodes` has an entry for each part. A part there's one of in each AZ is an object
+ *   keyed by the AZ's number, and named in the singular:
+ *   `Object.values(vpc.nodes.privateSubnet)` in place of `vpc.nodes.privateSubnets`, and
+ *   `vpc.nodes.natGateway["1"]` for the first NAT Gateway. `nodes.vpc`,
+ *   `nodes.internetGateway`, `nodes.securityGroup` and `nodes.cloudmapNamespace` are as
+ *   they were. The NAT's and the bastion's security groups are the resources, not
+ *   outputs of them, and `undefined` when they aren't created. With `nat: "ec2"` and
+ *   `bastion`, the first NAT instance is the bastion: `nodes.bastionInstance` and
+ *   `nodes.bastionSecurityGroup` are `undefined`, where `sst.aws.Vpc` gave the NAT's, and
+ *   `bastion` is the instance's ID.
+ * - `transform` takes the same keys, and one for each resource it didn't have, like
+ *   `cloudmapNamespace`. A function there is given outputs where it was given plain
+ *   values, like a subnet's `availabilityZone` when `az` is a number.
+ * - The bastion runs the newest Amazon Linux 2023 image with Amazon's default kernel.
+ *   `sst.aws.Vpc` looked for the newest image of any kernel, and Amazon releases several
+ *   at once, so which one it found could change from one deploy to the next. A switch
+ *   replaces the bastion once if it doesn't run that image. Start `sst tunnel` again
+ *   after that deploy. The image is read from Amazon's public SSM parameter, so a deploy
+ *   role that's limited to what it needs also needs `ssm:GetParameter` on
+ *   `arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*`.
+ * - `get` looks up the VPC, its default security group, its Internet Gateway and its
+ *   Cloud Map namespace, which are in `nodes`, and finds the subnets and the bastion with
+ *   lookups that aren't resources, so `nodes` has no subnets, route tables or NATs. A
+ *   switch drops the lookups `sst.aws.Vpc.get` kept in the state, which changes nothing in
+ *   AWS. Its `nodes.securityGroup` is looked up as a default security group, where
+ *   `sst.aws.Vpc.get` looked it up as a security group, and its `nodes.cloudmapNamespace`
+ *   has no `vpc`, which AWS doesn't give.
+ * - If you set `tags` with an object in `transform` on the VPC, the NAT instances or the
+ *   bastion, or on the NAT's or the bastion's security group, it keeps the tags SST sets
+ *   next to yours. They're added back when you switch. A stage that references this VPC
+ *   with `get` finds its bastion by them.
+ * - `sst.aws.Vpc.v1` has no V5 form.
  *
  * ---
  *
@@ -381,1213 +507,610 @@ interface VpcRef {
  * [EC2 Data Transfer pricing](https://aws.amazon.com/ec2/pricing/on-demand/#Data_Transfer)
  * for more details.
  */
-export class Vpc extends Component implements Link.Linkable {
-  private vpc: ec2.Vpc;
-  private internetGateway: ec2.InternetGateway;
-  private securityGroup: ec2.SecurityGroup;
-  private natGateways: Output<ec2.NatGateway[]>;
-  private natInstances: Output<ec2.Instance[]>;
-  private natSecurityGroup: Output<ec2.SecurityGroup | undefined>;
-  private elasticIps: Output<ec2.Eip[]>;
-  private _publicSubnets: Output<ec2.Subnet[]>;
-  private _privateSubnets: Output<ec2.Subnet[]>;
-  // Whether it's a VPC from `get`, whose subnets were looked up in no order
-  private referenced = false;
-  private publicRouteTables: Output<ec2.RouteTable[]>;
-  private privateRouteTables: Output<ec2.RouteTable[]>;
-  private bastionInstance: Output<ec2.Instance | undefined>;
-  private bastionSecurityGroup: Output<ec2.SecurityGroup | undefined>;
-  private cloudmapNamespace: servicediscovery.PrivateDnsNamespace;
-  private privateKeyValue: Output<string | undefined>;
-  public static v1 = VpcV1;
+export class Vpc extends component("sst:aws:Vpc", parts) {
+  private readonly network: Network;
 
   constructor(
     name: string,
     args: VpcArgs = {},
     opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    const _version = 2;
-    const _refVersion = 2;
-    const self = this;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this.referenced = true;
-      this.vpc = ref.vpc;
-      this.internetGateway = ref.internetGateway;
-      this.securityGroup = ref.securityGroup;
-      this._publicSubnets = output(ref.publicSubnets);
-      this._privateSubnets = output(ref.privateSubnets);
-      this.publicRouteTables = output(ref.publicRouteTables);
-      this.privateRouteTables = output(ref.privateRouteTables);
-      this.natGateways = output(ref.natGateways);
-      this.natInstances = output(ref.natInstances);
-      this.natSecurityGroup = output(ref.natSecurityGroup);
-      this.elasticIps = ref.elasticIps;
-      this.bastionInstance = ref.bastionInstance;
-      this.bastionSecurityGroup = output(ref.bastionSecurityGroup);
-      this.cloudmapNamespace = ref.cloudmapNamespace;
-      this.privateKeyValue = output(ref.privateKeyValue);
-      registerOutputs();
-      return;
+    const existing = this.existingPart("vpc");
+    this.network = existing
+      ? this.reference(name, existing, args)
+      : this.create(name, args);
+  }
+
+  private create(name: string, args: VpcArgs): Network {
+    const self = this;
+    const of = `the "${name}" VPC`;
+    const zones = zonesOf();
+    const nat = natOf();
+    const bastion = bastionOf();
+    const ids = zones.map((_, i) => `${i + 1}`);
+    const { app } = context();
+
+    // A part the VPC doesn't create, for the args it's given, can't be in
+    // `existing`: it wouldn't be used
+    const notCreated = (keys: string[], instead: string) => {
+      for (const key of keys)
+        notAnExistingPart(args.existing, key, of, instead);
+    };
+    if (!nat) notCreated(["elasticIp"], `It's only created with "nat".`);
+    if (nat?.type !== "managed")
+      notCreated(["natGateway"], `It's only created when "nat" is "managed".`);
+    if (nat?.type !== "ec2")
+      notCreated(
+        [
+          "natSecurityGroup",
+          "natInstanceRole",
+          "natInstanceProfile",
+          "natInstance",
+          "natInstanceEipAssociation",
+        ],
+        `It's only created when "nat" is "ec2".`,
+      );
+    const bastionParts = [
+      "bastionSecurityGroup",
+      "bastionRole",
+      "bastionProfile",
+      "bastionInstance",
+    ];
+    if (!bastion)
+      notCreated(
+        [...bastionParts, "tlsPrivateKey", "privateKeyValue", "keyPair"],
+        `It's only created with "bastion".`,
+      );
+    else if (nat?.type === "ec2")
+      notCreated(
+        bastionParts,
+        `When "nat" is "ec2", the first NAT instance is the bastion.`,
+      );
+    else if (bastion.instanceProfile !== undefined)
+      notCreated(
+        ["bastionRole"],
+        `The bastion runs with "bastion.instanceProfile".`,
+      );
+
+    const vpc = this.part("vpc", {
+      cidrBlock: "10.0.0.0/16",
+      enableDnsSupport: true,
+      enableDnsHostnames: true,
+      tags: {
+        Name: `${app.name}-${app.stage}-${name} VPC`,
+        // What the 4.x `Vpc` writes. Its `get`, and this one's, read the second.
+        "sst:component-version": "2",
+        "sst:ref-version": "2",
+      },
+    });
+
+    const key = bastion ? keyOf() : undefined;
+
+    const internetGateway = this.part("internetGateway", { vpcId: vpc.id });
+
+    this.part("securityGroup", {
+      vpcId: vpc.id,
+      egress: [
+        { fromPort: 0, toPort: 0, protocol: "-1", cidrBlocks: ["0.0.0.0/0"] },
+      ],
+      ingress: [
+        // Only from inside the VPC
+        { fromPort: 0, toPort: 0, protocol: "-1", cidrBlocks: [vpc.cidrBlock] },
+      ],
+    });
+
+    const publicSubnets = zones.map((zone, i) => {
+      const subnet = this.part("publicSubnet", ids[i], {
+        vpcId: vpc.id,
+        cidrBlock: `10.0.${8 * i}.0/22`,
+        availabilityZone: zone,
+        mapPublicIpOnLaunch: true,
+      });
+      const routeTable = this.part("publicRouteTable", ids[i], {
+        vpcId: vpc.id,
+        routes: [{ cidrBlock: "0.0.0.0/0", gatewayId: internetGateway.id }],
+      });
+      this.part("publicRouteTableAssociation", ids[i], {
+        subnetId: subnet.id,
+        routeTableId: routeTable.id,
+      });
+      return subnet;
+    });
+
+    const elasticIps = nat
+      ? ids.map((id, i) =>
+          nat.ip
+            ? this.existingPart("elasticIp", id) ??
+              this.lookupPart("elasticIp", id, nat.ip[i])
+            : this.part("elasticIp", id, { domain: "vpc" }),
+        )
+      : [];
+
+    const natGateways =
+      nat?.type === "managed"
+        ? ids.map((id, i) =>
+            this.part("natGateway", id, {
+              subnetId: publicSubnets[i].id,
+              allocationId: elasticIps[i].id,
+            }),
+          )
+        : [];
+
+    const natInstances = nat?.type === "ec2" ? natInstancesOf(nat.ec2) : [];
+
+    const privateSubnets = zones.map((zone, i) => {
+      const subnet = this.part("privateSubnet", ids[i], {
+        vpcId: vpc.id,
+        cidrBlock: `10.0.${8 * i + 4}.0/22`,
+        availabilityZone: zone,
+      });
+      const routeTable = this.part("privateRouteTable", ids[i], {
+        vpcId: vpc.id,
+        routes: [
+          ...(natGateways[i]
+            ? [{ cidrBlock: "0.0.0.0/0", natGatewayId: natGateways[i].id }]
+            : []),
+          ...(natInstances[i]
+            ? [
+                {
+                  cidrBlock: "0.0.0.0/0",
+                  networkInterfaceId: natInstances[i].primaryNetworkInterfaceId,
+                },
+              ]
+            : []),
+        ],
+      });
+      this.part("privateRouteTableAssociation", ids[i], {
+        subnetId: subnet.id,
+        routeTableId: routeTable.id,
+      });
+      return subnet;
+    });
+
+    // With NAT instances, the first is the bastion
+    const bastionInstance = !bastion
+      ? undefined
+      : natInstances.length
+        ? natInstances[0]
+        : bastionInstanceOf(bastion);
+
+    this.part("cloudmapNamespace", { name: "sst", vpc: vpc.id });
+
+    if (bastionInstance && key)
+      this.report({
+        tunnel: {
+          // A NAT instance is reached at its Elastic IP
+          ip: natInstances.length
+            ? elasticIps[0].publicIp
+            : bastionInstance.publicIp,
+          username: "ec2-user",
+          privateKey: key.privateKey,
+          subnets: [...privateSubnets, ...publicSubnets].map(
+            (subnet) => subnet.cidrBlock,
+          ),
+        },
+      });
+
+    return {
+      publicSubnets: all(publicSubnets.map((subnet) => subnet.id)),
+      privateSubnets: all(privateSubnets.map((subnet) => subnet.id)),
+      securityGroups: output([this.nodes.securityGroup.id]),
+      bastion: output(bastionInstance?.id),
+      nat: nat !== undefined,
+      privateSubnetsByAz: Object.fromEntries(
+        privateSubnets.map((subnet, i) => [ids[i], subnet.id]),
+      ),
+    };
+
+    // A zone for each AZ: as given, or the region's first ones
+    function zonesOf(): Input<string>[] {
+      const az = plain(args.az, `The "az" of the "${name}" VPC`) ?? 2;
+      if (Array.isArray(az)) return az;
+      if (!Number.isInteger(az) || az < 0)
+        throw new VisibleError(
+          `The "az" of the "${name}" VPC has to be a whole number of AZs or a list of them. It's ${az}.`,
+        );
+      const names = getAvailabilityZonesOutput(
+        { state: "available" },
+        { parent: self },
+      ).names;
+      return Array.from({ length: az }, (_, i) =>
+        names.apply((names) => names[i]),
+      );
     }
 
-    registerVersion();
-    const zones = normalizeAz();
-    const nat = normalizeNat();
-    const bastion = normalizeBastion();
-    const partition = getPartitionOutput({}, opts).partition;
+    function natOf() {
+      const nat = plain(args.nat, `The "nat" of the "${name}" VPC`);
+      if (!nat) return undefined;
+      if (nat === "managed") return { type: "managed" as const };
+      if (nat === "ec2")
+        return { type: "ec2" as const, ec2: { instance: "t4g.nano" } };
 
-    const vpc = createVpc();
-    const { keyPair, privateKeyValue } = createKeyPair();
-    const internetGateway = createInternetGateway();
-    const securityGroup = createSecurityGroup();
-    const { publicSubnets, publicRouteTables } = createPublicSubnets();
-    const elasticIps = createElasticIps();
-    const natGateways = createNatGateways();
-    const { natInstances, natSecurityGroup } = createNatInstances();
-    const { privateSubnets, privateRouteTables } = createPrivateSubnets();
-    const { bastionInstance, bastionSecurityGroup } = createBastion();
-    const cloudmapNamespace = createCloudmapNamespace();
-
-    this.vpc = vpc;
-    this.internetGateway = internetGateway;
-    this.securityGroup = securityGroup;
-    this.natGateways = natGateways;
-    this.natInstances = natInstances;
-    this.natSecurityGroup = natSecurityGroup;
-    this.elasticIps = elasticIps;
-    this._publicSubnets = publicSubnets;
-    this._privateSubnets = privateSubnets;
-    this.publicRouteTables = publicRouteTables;
-    this.privateRouteTables = privateRouteTables;
-    this.bastionInstance = output(bastionInstance);
-    this.bastionSecurityGroup = bastionSecurityGroup;
-    this.cloudmapNamespace = cloudmapNamespace;
-    this.privateKeyValue = output(privateKeyValue);
-    registerOutputs();
-
-    function reference() {
-      const ref = args as VpcRef;
-      const vpc = ec2.Vpc.get(`${name}Vpc`, ref.vpcId, undefined, {
-        parent: self,
-      });
-
-      const vpcId = vpc.tagsAll.apply((tags) => {
-        registerVersion(
-          tags?.["sst:component-version"]
-            ? parseInt(tags["sst:component-version"])
-            : undefined,
+      plain(nat.type, `The "nat.type" of the "${name}" VPC`);
+      const ip = plain(nat.ip, `The "nat.ip" of the "${name}" VPC`);
+      const ec2 = plain(nat.ec2, `The "nat.ec2" of the "${name}" VPC`);
+      if (ec2 && nat.type === "managed")
+        throw new VisibleError(
+          `The "nat" of ${of} has "ec2" settings, so its "type" can't be "managed". Make it "ec2", or leave it out.`,
+        );
+      if (!nat.type && !ec2)
+        throw new VisibleError(
+          `The "nat" of ${of} has no "type". Set it to "managed" or "ec2".`,
+        );
+      if (ip && ip.length !== zones.length)
+        throw new VisibleError(
+          `The "nat.ip" of ${of} has ${ip.length} Elastic IPs, for ${zones.length} AZs. Give one for each AZ.`,
         );
 
-        if (tags?.["sst:ref-version"] !== _refVersion.toString()) {
-          throw new VisibleError(
-            [
-              `There have been some minor changes to the "Vpc" component that's being referenced by "${name}".\n`,
-              `To update, you'll need to redeploy the stage where the VPC was created. And then redeploy this stage.`,
-            ].join("\n"),
-          );
-        }
+      return ec2 || nat.type === "ec2"
+        ? {
+            type: "ec2" as const,
+            ip,
+            ec2: {
+              instance: ec2?.instance ?? "t4g.nano",
+              ami: ec2?.ami,
+              role: ec2?.role,
+            },
+          }
+        : { type: "managed" as const, ip };
+    }
 
-        return output(ref.vpcId);
+    function bastionOf() {
+      const bastion = plain(args.bastion, `The "bastion" of the "${name}" VPC`);
+      if (!bastion) return undefined;
+      if (bastion === true) return { instanceProfile: undefined };
+      return { instanceProfile: bastion.instanceProfile };
+    }
+
+    // The key `sst tunnel` connects with, kept in SSM for a stage that
+    // references this VPC
+    function keyOf() {
+      const tlsPrivateKey = self.part("tlsPrivateKey", {
+        algorithm: "RSA",
+        rsaBits: 4096,
+      });
+      self.part("privateKeyValue", {
+        name: interpolate`/sst/vpc/${vpc.id}/private-key-value`,
+        description: "Bastion host private key",
+        type: ssm.ParameterType.SecureString,
+        value: tlsPrivateKey.privateKeyOpenssh,
+      });
+      const keyPair = self.part("keyPair", {
+        publicKey: tlsPrivateKey.publicKeyOpenssh,
+      });
+      return { keyPair, privateKey: tlsPrivateKey.privateKeyOpenssh };
+    }
+
+    function natInstancesOf(settings: {
+      instance: Input<string>;
+      ami?: Input<string>;
+      role?: Input<string>;
+    }) {
+      const securityGroup = self.part("natSecurityGroup", {
+        vpcId: vpc.id,
+        ingress: [
+          { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
+        ],
+        egress: [
+          { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
+        ],
+        tags: { "sst:is-nat-sg": "true" },
       });
 
-      const internetGateway = ec2.InternetGateway.get(
-        `${name}InstanceGateway`,
-        ec2.getInternetGatewayOutput(
+      // Whether it's given decides, so it can be an output
+      const role =
+        settings.role !== undefined
+          ? self.existingPart("natInstanceRole") ??
+            self.lookupPart("natInstanceRole", settings.role)
+          : self.part("natInstanceRole", ec2RoleArgs());
+      const profile = self.part("natInstanceProfile", { role: role.name });
+
+      const ami =
+        settings.ami ??
+        ec2.getAmiOutput(
           {
-            filters: [{ name: "attachment.vpc-id", values: [vpcId] }],
+            // fck-nat's account
+            owners: ["568608671756"],
+            filters: [
+              // The image has the SSM agent installed
+              { name: "name", values: ["fck-nat-al2023-*"] },
+              { name: "architecture", values: ["arm64"] },
+            ],
+            mostRecent: true,
           },
           { parent: self },
-        ).internetGatewayId,
-        undefined,
-        { parent: self },
-      );
-      const securityGroup = ec2.SecurityGroup.get(
-        `${name}SecurityGroup`,
-        all([
-          ec2
-            .getSecurityGroupsOutput(
-              {
-                filters: [
-                  { name: "group-name", values: ["default"] },
-                  { name: "vpc-id", values: [vpcId] },
-                ],
-              },
-              { parent: self },
+        ).id;
+
+      return ids.map((id, i) => {
+        const instance = self.part("natInstance", id, {
+          instanceType: settings.instance,
+          ami,
+          subnetId: publicSubnets[i].id,
+          vpcSecurityGroupIds: [securityGroup.id],
+          iamInstanceProfile: profile.name,
+          sourceDestCheck: false,
+          keyName: key?.keyPair.keyName,
+          tags: {
+            Name: `${name} NAT Instance`,
+            "sst:is-nat": "true",
+            // What `get` finds the bastion by
+            ...(bastion && i === 0 ? { "sst:is-bastion": "true" } : {}),
+          },
+        });
+        self.part("natInstanceEipAssociation", id, {
+          instanceId: instance.id,
+          allocationId: elasticIps[i].id,
+        });
+        return instance;
+      });
+    }
+
+    function bastionInstanceOf(bastion: { instanceProfile?: Input<string> }) {
+      const securityGroup = self.part("bastionSecurityGroup", {
+        vpcId: vpc.id,
+        ingress: [
+          {
+            protocol: "tcp",
+            fromPort: 22,
+            toPort: 22,
+            cidrBlocks: ["0.0.0.0/0"],
+          },
+        ],
+        egress: [
+          { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
+        ],
+        tags: { "sst:is-bastion-sg": "true" },
+      });
+
+      // Whether it's given decides, so it can be an output
+      const profile =
+        bastion.instanceProfile !== undefined
+          ? self.existingPart("bastionProfile") ??
+            self.lookupPart(
+              "bastionProfile",
+              output(bastion.instanceProfile).apply((profile) => {
+                if (profile.startsWith("arn:"))
+                  throw new VisibleError(
+                    `The "bastion.instanceProfile" of ${of} is an ARN. Give the instance profile's name.`,
+                  );
+                return profile;
+              }),
             )
-            .ids,
+          : self.part("bastionProfile", {
+              role: self.part("bastionRole", ec2RoleArgs()).name,
+            });
+
+      // Amazon releases an image for each kernel at the same time, so the
+      // newest image by name can be any of them. Its public parameter names
+      // one: the newest, with the kernel it makes the default.
+      const ami = ssm.getParameterOutput(
+        {
+          name: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64",
+        },
+        { parent: self },
+      ).insecureValue;
+
+      return self.part("bastionInstance", {
+        instanceType: "t4g.nano",
+        ami,
+        subnetId: publicSubnets[0].id,
+        vpcSecurityGroupIds: [securityGroup.id],
+        iamInstanceProfile: profile.name,
+        keyName: key?.keyPair.keyName,
+        tags: { "sst:is-bastion": "true" },
+      });
+    }
+
+    // A role an EC2 instance runs as, which Session Manager can reach it through
+    function ec2RoleArgs(): iam.RoleArgs {
+      const partition = getPartitionOutput({}, { parent: self }).partition;
+      return {
+        assumeRolePolicy: iam.getPolicyDocumentOutput({
+          statements: [
+            {
+              actions: ["sts:AssumeRole"],
+              principals: [
+                { type: "Service", identifiers: ["ec2.amazonaws.com"] },
+              ],
+            },
+          ],
+        }).json,
+        managedPolicyArns: [
+          interpolate`arn:${partition}:iam::aws:policy/AmazonSSMManagedInstanceCore`,
+        ],
+      };
+    }
+  }
+
+  // A VPC SST created, in another stage. Its subnets and bastion are found
+  // with lookups that aren't resources: how many there are is only known once
+  // they've been looked up.
+  private reference(name: string, vpc: ec2.Vpc, args: VpcArgs): Network {
+    const self = this;
+    const of = `the "${name}" VPC`;
+
+    // It's used the way it is, and what's in it is found with lookups
+    usedAsItIs(args, ["az", "nat", "bastion"], "vpc", of);
+    const found = [
+      "vpc",
+      "internetGateway",
+      "securityGroup",
+      "cloudmapNamespace",
+    ];
+    for (const key of Object.keys(args.existing ?? {}))
+      if (!found.includes(key))
+        notAnExistingPart(
+          args.existing,
+          key,
+          of,
+          `It creates nothing in the "vpc" it's given, and finds its subnets and its bastion with lookups.`,
+        );
+
+    const vpcId = all([vpc.id, vpc.tagsAll]).apply(([id, tags]) => {
+      if (tags?.["sst:ref-version"] !== "2")
+        throw new VisibleError(
+          `The "vpc" ${of} is given was created by an older version of SST's "Vpc". Deploy the stage that created it again, then this one.`,
+        );
+      return id;
+    });
+    const byVpc = { name: "vpc-id", values: [vpcId] };
+
+    if (!this.existingPart("internetGateway"))
+      this.lookupPart(
+        "internetGateway",
+        ec2.getInternetGatewayOutput(
+          { filters: [{ name: "attachment.vpc-id", values: [vpcId] }] },
+          { parent: this },
+        ).internetGatewayId,
+      );
+
+    const securityGroup =
+      this.existingPart("securityGroup") ??
+      this.lookupPart(
+        "securityGroup",
+        all([
+          ec2.getSecurityGroupsOutput(
+            { filters: [{ name: "group-name", values: ["default"] }, byVpc] },
+            { parent: this },
+          ).ids,
           vpcId,
         ]).apply(([ids, vpcId]) => {
-          if (!ids.length) {
+          if (!ids.length)
             throw new VisibleError(
-              `Security group not found in VPC ${vpcId}`,
+              `The VPC "${vpcId}" ${of} is given has no default security group.`,
             );
-          }
           return ids[0];
         }),
-        undefined,
-        { parent: self },
       );
-      const privateSubnets = ec2
-        .getSubnetsOutput(
-          {
-            filters: [
-              { name: "vpc-id", values: [vpcId] },
-              { name: "tag:Name", values: ["*Private*"] },
-            ],
-          },
-          { parent: self },
-        )
-        .ids.apply((ids) =>
-          ids.map((id, i) =>
-            ec2.Subnet.get(`${name}PrivateSubnet${i + 1}`, id, undefined, {
-              parent: self,
-            }),
-          ),
-        );
-      const privateRouteTables = privateSubnets.apply((subnets) =>
-        subnets.map((subnet, i) =>
-          ec2.RouteTable.get(
-            `${name}PrivateRouteTable${i + 1}`,
-            ec2.getRouteTableOutput({ subnetId: subnet.id }, { parent: self })
-              .routeTableId,
-            undefined,
-            { parent: self },
-          ),
-        ),
-      );
-      const publicSubnets = ec2
-        .getSubnetsOutput(
-          {
-            filters: [
-              { name: "vpc-id", values: [vpcId] },
-              { name: "tag:Name", values: ["*Public*"] },
-            ],
-          },
-          { parent: self },
-        )
-        .ids.apply((ids) =>
-          ids.map((id, i) =>
-            ec2.Subnet.get(`${name}PublicSubnet${i + 1}`, id, undefined, {
-              parent: self,
-            }),
-          ),
-        );
-      const publicRouteTables = publicSubnets.apply((subnets) =>
-        subnets.map((subnet, i) =>
-          ec2.RouteTable.get(
-            `${name}PublicRouteTable${i + 1}`,
-            ec2.getRouteTableOutput({ subnetId: subnet.id }, { parent: self })
-              .routeTableId,
-            undefined,
-            { parent: self },
-          ),
-        ),
-      );
-      const natGateways = publicSubnets.apply((subnets) => {
-        const natGatewayIds = subnets.map((subnet, i) =>
-          ec2
-            .getNatGatewaysOutput(
-              {
-                filters: [
-                  { name: "subnet-id", values: [subnet.id] },
-                  { name: "state", values: ["available"] },
-                ],
-              },
-              { parent: self },
-            )
-            .ids.apply((ids) => ids[0]),
-        );
-        return output(natGatewayIds).apply((ids) =>
-          ids
-            .filter((id) => id)
-            .map((id, i) =>
-              ec2.NatGateway.get(`${name}NatGateway${i + 1}`, id, undefined, {
-                parent: self,
-              }),
-            ),
-        );
-      });
-      const natInstances = ec2
-        .getInstancesOutput(
-          {
-            filters: [
-              { name: "tag:sst:is-nat", values: ["true"] },
-              { name: "vpc-id", values: [vpcId] },
-            ],
-          },
-          { parent: self },
-        )
-        .ids.apply((ids) =>
-          ids.map((id, i) =>
-            ec2.Instance.get(`${name}NatInstance${i + 1}`, id, undefined, {
-              parent: self,
-            }),
-          ),
-        );
-      const natSecurityGroup = ec2
-        .getSecurityGroupsOutput(
-          {
-            filters: [
-              { name: "tag:sst:is-nat-sg", values: ["true"] },
-              { name: "vpc-id", values: [vpcId] },
-            ],
-          },
-          { parent: self },
-        )
-        .ids.apply((ids) => 
-          ids.length 
-            ? ec2.SecurityGroup.get(`${name}NatInstanceSecurityGroup`, ids[0], undefined, {
-              parent: self
-            })
-            : undefined,
-        );
-      const elasticIps = all([natGateways, natInstances]).apply(
-        ([natGateways, natInstances]) => {
-          if (natGateways.length) {
-            return output(
-              natGateways.map((nat, i) =>
-                ec2.Eip.get(
-                  `${name}ElasticIp${i + 1}`,
-                  nat.allocationId as Output<string>,
-                  undefined,
-                  { parent: self },
-                ),
-              ),
-            );
-          }
-          if (natInstances.length) {
-            return ec2
-              .getEipsOutput(
-                {
-                  filters: [
-                    {
-                      name: "instance-id",
-                      values: natInstances.map((instance) => instance.id),
-                    },
-                  ],
-                },
-                {
-                  parent: self,
-                },
-              )
-              .allocationIds.apply((ids) =>
-                ids.map((id, i) =>
-                  ec2.Eip.get(`${name}ElasticIp${i + 1}`, id, undefined, {
-                    parent: self,
-                  }),
-                ),
-              );
-          }
-          return output([]);
-        },
-      );
-      const bastionInstance = ec2
-        .getInstancesOutput(
-          {
-            filters: [
-              { name: "tag:sst:is-bastion", values: ["true"] },
-              { name: "vpc-id", values: [vpcId] },
-            ],
-          },
-          { parent: self },
-        )
-        .ids.apply((ids) =>
-          ids.length
-            ? ec2.Instance.get(`${name}BastionInstance`, ids[0], undefined, {
-                parent: self,
-              })
-            : undefined,
-        );
-      const bastionSecurityGroup = ec2
-        .getSecurityGroupsOutput(
-          {
-            filters: [
-              { name: "tag:sst:is-bastion-sg", values: ["true"] },
-              { name: "vpc-id", values: [vpcId] },
-            ],
-          },
-          { parent: self },
-        )
-        .ids.apply((ids) => 
-          ids.length 
-            ? ec2.SecurityGroup.get(`${name}BastionSecurityGroup`, ids[0], undefined, {
-              parent: self
-            })
-            : undefined,
-        );
 
-      // Note: can also use servicediscovery.getDnsNamespaceOutput() here, ie.
-      // ```ts
-      // const namespaceId = servicediscovery.getDnsNamespaceOutput({
-      //   name: "sst",
-      //   type: "DNS_PRIVATE",
-      // }).id;
-      // ```
-      // but if user deployed multiple VPCs into the same account. This will error because
-      // there are multiple results. Even though `getDnsNamespaceOutput()` takes tags in args,
-      // the tags are not used for lookup.
-      const zone = output(vpcId).apply((vpcId) =>
-        route53.getZone(
-          {
-            name: "sst",
-            privateZone: true,
-            vpcId,
-          },
-          { parent: self },
-        ),
-      );
-      const namespaceId = zone.linkedServiceDescription.apply((description) => {
-        const match = description.match(/:namespace\/(ns-[a-z1-9]*)/)?.[1];
-        if (!match) {
+    // The zone the namespace made. Cloud Map has no lookup of a namespace by
+    // its VPC, and a lookup by name finds every VPC's `sst`.
+    if (!this.existingPart("cloudmapNamespace")) {
+      const namespaceId = all([
+        route53.getZoneOutput(
+          { name: "sst", privateZone: true, vpcId },
+          { parent: this },
+        ).linkedServiceDescription,
+        vpcId,
+      ]).apply(([description, vpcId]) => {
+        const id = description.match(/:namespace\/(ns-[a-z0-9]+)/)?.[1];
+        if (!id)
           throw new VisibleError(
-            `Cloud Map namespace not found for VPC ${vpcId}`,
+            `The VPC "${vpcId}" ${of} is given has no "sst" Cloud Map namespace.`,
           );
-        }
-        return match;
+        return id;
       });
-      const cloudmapNamespace = servicediscovery.PrivateDnsNamespace.get(
-        `${name}CloudmapNamespace`,
-        namespaceId,
-        { vpc: vpcId },
-        { parent: self },
-      );
-
-      const privateKeyValue = bastionInstance.apply((v) => {
-        if (!v) return;
-        const param = ssm.Parameter.get(
-          `${name}PrivateKeyValue`,
-          interpolate`/sst/vpc/${vpcId}/private-key-value`,
-          undefined,
-          { parent: self },
-        );
-        return param.value;
-      });
-
-      return {
-        vpc,
-        internetGateway,
-        securityGroup,
-        publicSubnets,
-        publicRouteTables,
-        privateSubnets,
-        privateRouteTables,
-        natGateways,
-        natInstances,
-        natSecurityGroup,
-        elasticIps,
-        bastionInstance,
-        bastionSecurityGroup,
-        cloudmapNamespace,
-        privateKeyValue,
-      };
+      this.lookupPart("cloudmapNamespace", namespaceId);
     }
 
-    function registerVersion(overrideVersion?: number) {
-      self.registerVersion({
-        new: _version,
-        old: overrideVersion ?? $cli.state.version[name],
-        message: [
-          `There is a new version of "Vpc" that has breaking changes.`,
-          ``,
-          `To continue using the previous version, rename "Vpc" to "Vpc.v${$cli.state.version[name]}". Or recreate this component to update - https://sst-community.github.io/sst/docs/components/#versioning`,
-        ].join("\n"),
-      });
-    }
+    const subnets = (kind: string) =>
+      ec2.getSubnetsOutput(
+        { filters: [byVpc, { name: "tag:Name", values: [`*${kind}*`] }] },
+        { parent: this },
+      ).ids;
+    const publicSubnets = subnets("Public");
+    const privateSubnets = subnets("Private");
 
-    function registerOutputs() {
-      self.registerOutputs({
-        _tunnel: all([
-          self.bastionInstance,
-          self.elasticIps,
-          self.natInstances,
-          self.privateKeyValue,
-          self._privateSubnets,
-          self._publicSubnets,
-        ]).apply(
-          ([
-            bastion,
-            elasticIps,
-            natInstances,
-            privateKeyValue,
-            privateSubnets,
-            publicSubnets,
-          ]) => {
-            if (!bastion) return;
-            return {
-              ip:
-                natInstances.length && elasticIps[0]
-                  ? elasticIps[0].publicIp
-                  : bastion.publicIp,
+    const bastions = ec2.getInstancesOutput(
+      { filters: [{ name: "tag:sst:is-bastion", values: ["true"] }, byVpc] },
+      { parent: this },
+    );
+
+    this.report({
+      tunnel: all([bastions.ids, bastions.publicIps]).apply(([ids, ips]) =>
+        ids.length
+          ? {
+              // A NAT instance's public IP is its Elastic IP
+              ip: ips[0],
               username: "ec2-user",
-              privateKey: privateKeyValue!,
-              subnets: [...privateSubnets, ...publicSubnets].map(
-                (s) => s.cidrBlock,
-              ),
-            };
-          },
-        ),
-      });
-    }
-
-    function normalizeAz() {
-      return output(args.az).apply((az) => {
-        if (Array.isArray(az)) return output(az);
-
-        const zones = getAvailabilityZonesOutput(
-          {
-            state: "available",
-          },
-          { parent: self },
-        );
-        return all([zones, args.az ?? 2]).apply(([zones, az]) =>
-          Array(az)
-            .fill(0)
-            .map((_, i) => zones.names[i]),
-        );
-      });
-    }
-
-    function normalizeNat() {
-      return all([args.nat, zones]).apply(([nat, zones]) => {
-        if (nat === "managed") {
-          return { type: "managed" as const };
-        }
-        if (nat === "ec2") {
-          return {
-            type: "ec2" as const,
-            ec2: { instance: "t4g.nano", ami: undefined, role: undefined },
-          };
-        }
-        if (nat) {
-          if (nat.ec2 && nat.type === "managed")
-            throw new VisibleError(
-              `The "nat.type" cannot be "managed" when "nat.ec2" is specified.`,
-            );
-
-          if (!nat.type && !nat.ec2)
-            throw new VisibleError(
-              `Missing "nat.type" for the "${name}" VPC. It is required when "nat.ec2" is not specified.`,
-            );
-
-          if (nat.ip && nat.ip.length !== zones.length)
-            throw new VisibleError(
-              `The number of Elastic IP allocation IDs must match the number of AZs.`,
-            );
-
-          return nat.ec2 || nat.type === "ec2"
-            ? {
-                type: "ec2" as const,
-                ip: nat.ip,
-                ec2: {
-                  instance: nat.ec2?.instance ?? "t4g.nano",
-                  ami: nat.ec2?.ami,
-                  role: nat.ec2?.role,
-                },
-              }
-            : {
-                type: "managed" as const,
-                ip: nat.ip,
-              };
-        }
-        return undefined;
-      });
-    }
-
-    function normalizeBastion() {
-      return output(args.bastion).apply((bastion) => {
-        if (!bastion) return { enabled: false, instanceProfileName: undefined };
-        if (typeof bastion === "boolean")
-          return { enabled: bastion, instanceProfileName: undefined };
-
-        return {
-          enabled: true,
-          instanceProfileName: bastion.instanceProfile,
-        };
-      });
-    }
-
-    function createVpc() {
-      return new ec2.Vpc(
-        ...transform(
-          args.transform?.vpc,
-          `${name}Vpc`,
-          {
-            cidrBlock: "10.0.0.0/16",
-            enableDnsSupport: true,
-            enableDnsHostnames: true,
-            tags: {
-              Name: `${$app.name}-${$app.stage}-${name} VPC`,
-              "sst:component-version": _version.toString(),
-              "sst:ref-version": _refVersion.toString(),
-            },
-          },
-          { parent: self },
-        ),
-      );
-    }
-
-    function createKeyPair() {
-      const ret = bastion.apply((bastion) => {
-        if (!bastion.enabled) return {};
-
-        const tlsPrivateKey = new PrivateKey(
-          `${name}TlsPrivateKey`,
-          {
-            algorithm: "RSA",
-            rsaBits: 4096,
-          },
-          { parent: self },
-        );
-
-        new ssm.Parameter(
-          `${name}PrivateKeyValue`,
-          {
-            name: interpolate`/sst/vpc/${vpc.id}/private-key-value`,
-            description: "Bastion host private key",
-            type: ssm.ParameterType.SecureString,
-            value: tlsPrivateKey.privateKeyOpenssh,
-          },
-          { parent: self },
-        );
-
-        const keyPair = new ec2.KeyPair(
-          `${name}KeyPair`,
-          {
-            publicKey: tlsPrivateKey.publicKeyOpenssh,
-          },
-          { parent: self },
-        );
-
-        return { keyPair, privateKeyValue: tlsPrivateKey.privateKeyOpenssh };
-      });
-      return {
-        keyPair: output(ret.keyPair),
-        privateKeyValue: output(ret.privateKeyValue),
-      };
-    }
-
-    function createInternetGateway() {
-      return new ec2.InternetGateway(
-        ...transform(
-          args.transform?.internetGateway,
-          `${name}InternetGateway`,
-          {
-            vpcId: vpc.id,
-          },
-          { parent: self },
-        ),
-      );
-    }
-
-    function createSecurityGroup() {
-      return new ec2.DefaultSecurityGroup(
-        ...transform(
-          args.transform?.securityGroup,
-          `${name}SecurityGroup`,
-          {
-            description: "Managed by SST",
-            vpcId: vpc.id,
-            egress: [
-              {
-                fromPort: 0,
-                toPort: 0,
-                protocol: "-1",
-                cidrBlocks: ["0.0.0.0/0"],
-              },
-            ],
-            ingress: [
-              {
-                fromPort: 0,
-                toPort: 0,
-                protocol: "-1",
-                // Restricts inbound traffic to only within the VPC
-                cidrBlocks: [vpc.cidrBlock],
-              },
-            ],
-          },
-          { parent: self },
-        ),
-      );
-    }
-
-    function createElasticIps() {
-      return all([nat, publicSubnets]).apply(([nat, subnets]) => {
-        if (!nat) return [];
-        if (nat.ip)
-          return nat.ip.map((allocationId, i) =>
-            ec2.Eip.get(`${name}ElasticIp${i + 1}`, allocationId, undefined, {
-              parent: self,
-            }),
-          );
-
-        return subnets.map(
-          (_, i) =>
-            new ec2.Eip(
-              ...transform(
-                args.transform?.elasticIp,
-                `${name}ElasticIp${i + 1}`,
-                {
-                  domain: "vpc",
-                },
-                { parent: self },
-              ),
-            ),
-        );
-      });
-    }
-
-    function createNatGateways() {
-      return all([nat, publicSubnets, elasticIps]).apply(
-        ([nat, subnets, elasticIps]) => {
-          if (nat?.type !== "managed") return [];
-
-          return subnets.map(
-            (subnet, i) =>
-              new ec2.NatGateway(
-                ...transform(
-                  args.transform?.natGateway,
-                  `${name}NatGateway${i + 1}`,
-                  {
-                    subnetId: subnet.id,
-                    allocationId: elasticIps[i]?.id ?? nat.ip![i],
-                  },
+              // Kept secret whatever the lookup marks
+              privateKey: secret(
+                ssm.getParameterOutput(
+                  { name: interpolate`/sst/vpc/${vpcId}/private-key-value` },
                   { parent: self },
-                ),
+                ).value,
               ),
-          );
-        },
-      );
-    }
-
-    function createNatInstances() {
-      return nat.apply((nat) => {
-        if (nat?.type !== "ec2")
-          return output({
-            natSecurityGroup: undefined,
-            natInstances: [] as ec2.Instance[],
-          });
-
-        const natSecurityGroup = new ec2.SecurityGroup(
-          ...transform(
-            args.transform?.natSecurityGroup,
-            `${name}NatInstanceSecurityGroup`,
-            {
-              vpcId: vpc.id,
-              ingress: [
-                {
-                  protocol: "-1",
-                  fromPort: 0,
-                  toPort: 0,
-                  cidrBlocks: ["0.0.0.0/0"],
-                },
-              ],
-              egress: [
-                {
-                  protocol: "-1",
-                  fromPort: 0,
-                  toPort: 0,
-                  cidrBlocks: ["0.0.0.0/0"],
-                },
-              ],
-              tags: {
-                "sst:is-nat-sg": "true",
-              },
-            },
-            { parent: self },
-          ),
-        );
-
-        const role = nat.ec2.role
-          ? iam.Role.get(
-              `${name}NatInstanceRole`,
-              nat.ec2.role,
-              {},
-              { parent: self },
-            )
-          : new iam.Role(
-              `${name}NatInstanceRole`,
-              {
-                assumeRolePolicy: iam.getPolicyDocumentOutput({
-                  statements: [
-                    {
-                      actions: ["sts:AssumeRole"],
-                      principals: [
-                        {
-                          type: "Service",
-                          identifiers: ["ec2.amazonaws.com"],
-                        },
-                      ],
-                    },
-                  ],
-                }).json,
-                managedPolicyArns: [
-                  interpolate`arn:${partition}:iam::aws:policy/AmazonSSMManagedInstanceCore`,
-                ],
-              },
-              { parent: self },
-            );
-
-        const instanceProfile = new iam.InstanceProfile(
-          `${name}NatInstanceProfile`,
-          { role: role.name },
-          { parent: self },
-        );
-
-        const ami =
-          nat.ec2.ami ??
-          ec2.getAmiOutput(
-            {
-              owners: ["568608671756"], // AWS account ID for fck-nat AMI
-              filters: [
-                {
-                  name: "name",
-                  // The AMI has the SSM agent pre-installed
-                  values: ["fck-nat-al2023-*"],
-                },
-                {
-                  name: "architecture",
-                  values: ["arm64"],
-                },
-              ],
-              mostRecent: true,
-            },
-            { parent: self },
-          ).id;
-
-        return all([zones, publicSubnets, elasticIps, keyPair, bastion, natSecurityGroup]).apply(
-          ([zones, publicSubnets, elasticIps, keyPair, bastion, natSecurityGroup]) => ({
-            natInstances: zones.map((_, i) => {
-              const instance = new ec2.Instance(
-                ...transform(
-                  args.transform?.natInstance,
-                  `${name}NatInstance${i + 1}`,
-                  {
-                    instanceType: nat.ec2.instance,
-                    ami,
-                    subnetId: publicSubnets[i].id,
-                    vpcSecurityGroupIds: [natSecurityGroup.id],
-                    iamInstanceProfile: instanceProfile.name,
-                    sourceDestCheck: false,
-                    keyName: keyPair?.keyName,
-                    tags: {
-                      Name: `${name} NAT Instance`,
-                      "sst:is-nat": "true",
-                      ...(bastion.enabled && i === 0
-                        ? { "sst:is-bastion": "true" }
-                        : {}),
-                    },
-                  },
-                  { parent: self },
-                ),
-              );
-
-              new ec2.EipAssociation(
-                `${name}NatInstanceEipAssociation${i + 1}`,
-                {
-                  instanceId: instance.id,
-                  allocationId: elasticIps[i]?.id ?? nat.ip![i],
-                },
-                {
-                  parent: self,
-                  aliases: [{ parent: rootStackResource }],
-                },
-              );
-
-              return instance;
-            }),
-            natSecurityGroup,
-          }),
-        );
-      });
-    }
-
-    function createPublicSubnets() {
-      const ret = zones.apply((zones) =>
-        zones.map((zone, i) => {
-          const subnet = new ec2.Subnet(
-            ...transform(
-              args.transform?.publicSubnet,
-              `${name}PublicSubnet${i + 1}`,
-              {
-                vpcId: vpc.id,
-                cidrBlock: `10.0.${8 * i}.0/22`,
-                availabilityZone: zone,
-                mapPublicIpOnLaunch: true,
-              },
-              { parent: self },
-            ),
-          );
-
-          const routeTable = new ec2.RouteTable(
-            ...transform(
-              args.transform?.publicRouteTable,
-              `${name}PublicRouteTable${i + 1}`,
-              {
-                vpcId: vpc.id,
-                routes: [
-                  {
-                    cidrBlock: "0.0.0.0/0",
-                    gatewayId: internetGateway.id,
-                  },
-                ],
-              },
-              { parent: self },
-            ),
-          );
-
-          new ec2.RouteTableAssociation(
-            `${name}PublicRouteTableAssociation${i + 1}`,
-            {
-              subnetId: subnet.id,
-              routeTableId: routeTable.id,
-            },
-            { parent: self },
-          );
-
-          return { subnet, routeTable };
-        }),
-      );
-
-      return {
-        publicSubnets: ret.apply((ret) => ret.map((r) => r.subnet)),
-        publicRouteTables: ret.apply((ret) => ret.map((r) => r.routeTable)),
-      };
-    }
-
-    function createPrivateSubnets() {
-      const ret = zones.apply((zones) =>
-        zones.map((zone, i) => {
-          const subnet = new ec2.Subnet(
-            ...transform(
-              args.transform?.privateSubnet,
-              `${name}PrivateSubnet${i + 1}`,
-              {
-                vpcId: vpc.id,
-                cidrBlock: `10.0.${8 * i + 4}.0/22`,
-                availabilityZone: zone,
-              },
-              { parent: self },
-            ),
-          );
-
-          const routeTable = new ec2.RouteTable(
-            ...transform(
-              args.transform?.privateRouteTable,
-              `${name}PrivateRouteTable${i + 1}`,
-              {
-                vpcId: vpc.id,
-                routes: all([natGateways, natInstances]).apply(
-                  ([natGateways, natInstances]) => [
-                    ...(natGateways[i]
-                      ? [
-                          {
-                            cidrBlock: "0.0.0.0/0",
-                            natGatewayId: natGateways[i].id,
-                          },
-                        ]
-                      : []),
-                    ...(natInstances[i]
-                      ? [
-                          {
-                            cidrBlock: "0.0.0.0/0",
-                            networkInterfaceId:
-                              natInstances[i].primaryNetworkInterfaceId,
-                          },
-                        ]
-                      : []),
-                  ],
-                ),
-              },
-              { parent: self },
-            ),
-          );
-
-          new ec2.RouteTableAssociation(
-            `${name}PrivateRouteTableAssociation${i + 1}`,
-            {
-              subnetId: subnet.id,
-              routeTableId: routeTable.id,
-            },
-            { parent: self },
-          );
-
-          return { subnet, routeTable };
-        }),
-      );
-
-      return {
-        privateSubnets: ret.apply((ret) => ret.map((r) => r.subnet)),
-        privateRouteTables: ret.apply((ret) => ret.map((r) => r.routeTable)),
-      };
-    }
-
-    function createBastion() {
-      return all([bastion, natInstances, natSecurityGroup, keyPair]).apply(
-        ([bastion, natInstances, natSecurityGroup, keyPair]) => {
-          if (!bastion.enabled)
-            return {
-              bastionSecurityGroup: undefined,
-              bastionInstance: undefined,
-            };
-
-          if (natInstances.length)
-            return {
-              bastionSecurityGroup: natSecurityGroup,
-              bastionInstance: natInstances[0],
-            };
-
-          const bastionSecurityGroup = new ec2.SecurityGroup(
-            ...transform(
-              args.transform?.bastionSecurityGroup,
-              `${name}BastionSecurityGroup`,
-              {
-                vpcId: vpc.id,
-                ingress: [
-                  {
-                    protocol: "tcp",
-                    fromPort: 22,
-                    toPort: 22,
-                    cidrBlocks: ["0.0.0.0/0"],
-                  },
-                ],
-                egress: [
-                  {
-                    protocol: "-1",
-                    fromPort: 0,
-                    toPort: 0,
-                    cidrBlocks: ["0.0.0.0/0"],
-                  },
-                ],
-                tags: {
-                  "sst:is-bastion-sg": "true",
-                },
-              },
-              { parent: self },
-            ),
-          );
-
-          const instanceProfile = output(
-            bastion.instanceProfileName,
-          ).apply((instanceProfileName) => {
-            if (instanceProfileName) {
-              if (instanceProfileName.startsWith("arn:")) {
-                throw new VisibleError(
-                  "Bastion instance profile must be a name, not an ARN.",
-                );
-              }
-
-              return iam.InstanceProfile.get(
-                `${name}BastionProfile`,
-                instanceProfileName,
-                {},
-                { parent: self },
-              );
+              subnets: all([privateSubnets, publicSubnets]).apply(
+                ([privateIds, publicIds]) =>
+                  all(
+                    [...privateIds, ...publicIds].map(
+                      (id) =>
+                        ec2.getSubnetOutput({ id }, { parent: self }).cidrBlock,
+                    ),
+                  ),
+              ),
             }
+          : undefined,
+      ) as Output<any>,
+    });
 
-            const role = new iam.Role(
-              `${name}BastionRole`,
-              {
-                assumeRolePolicy: iam.getPolicyDocumentOutput({
-                  statements: [
-                    {
-                      actions: ["sts:AssumeRole"],
-                      principals: [
-                        {
-                          type: "Service",
-                          identifiers: ["ec2.amazonaws.com"],
-                        },
-                      ],
-                    },
-                  ],
-                }).json,
-                managedPolicyArns: [
-                  interpolate`arn:${partition}:iam::aws:policy/AmazonSSMManagedInstanceCore`,
-                ],
-              },
-              { parent: self },
-            );
-
-            return new iam.InstanceProfile(
-              `${name}BastionProfile`,
-              { role: role.name },
-              { parent: self },
-            );
-          });
-
-          const ami = ec2.getAmiOutput(
-            {
-              owners: ["amazon"],
-              filters: [
-                {
-                  name: "name",
-                  // The AMI has the SSM agent pre-installed
-                  values: ["al2023-ami-20*"],
-                },
-                {
-                  name: "architecture",
-                  values: ["arm64"],
-                },
-              ],
-              mostRecent: true,
-            },
-            { parent: self },
-          );
-          const bastionInstance = new ec2.Instance(
-            ...transform(
-              args.transform?.bastionInstance,
-              `${name}BastionInstance`,
-              {
-                instanceType: "t4g.nano",
-                ami: ami.id,
-                subnetId: publicSubnets.apply((v) => v[0].id),
-                vpcSecurityGroupIds: [bastionSecurityGroup.id],
-                iamInstanceProfile: instanceProfile.apply(
-                  (ip) => ip.name,
-                ),
-                keyName: keyPair?.keyName,
-                tags: {
-                  "sst:is-bastion": "true",
-                },
-              },
-              { parent: self },
-            ),
-          );
-          return { bastionInstance, bastionSecurityGroup };
-        },
-      );
-    }
-
-    function createCloudmapNamespace() {
-      return new servicediscovery.PrivateDnsNamespace(
-        `${name}CloudmapNamespace`,
-        {
-          name: "sst",
-          vpc: vpc.id,
-        },
-        { parent: self },
-      );
-    }
+    return {
+      publicSubnets,
+      privateSubnets,
+      securityGroups: output([securityGroup.id]),
+      bastion: bastions.ids.apply((ids) => ids[0] as string | undefined),
+    };
   }
 
   /**
    * The VPC ID.
    */
   public get id() {
-    return this.vpc.id;
+    return this.nodes.vpc.id;
   }
 
   /**
    * A list of public subnet IDs in the VPC.
    */
   public get publicSubnets() {
-    return this._publicSubnets.apply((subnets) =>
-      subnets.map((subnet) => subnet.id),
-    );
+    return this.network.publicSubnets;
   }
 
   /**
    * A list of private subnet IDs in the VPC.
    */
-  /**
-   * Whether it's a VPC from `get`, whose subnets were looked up in no order.
-   * @internal
-   */
-  public get isReferenced() {
-    return this.referenced;
-  }
-
   public get privateSubnets() {
-    return this._privateSubnets.apply((subnets) =>
-      subnets.map((subnet) => subnet.id),
-    );
+    return this.network.privateSubnets;
   }
 
   /**
    * A list of VPC security group IDs.
    */
   public get securityGroups() {
-    return output(this.securityGroup).apply((v) => [v.id]);
+    return this.network.securityGroups;
   }
 
   /**
    * The bastion instance ID.
    */
   public get bastion() {
-    return this.bastionInstance.apply((v) => {
-      if (!v) {
+    return this.network.bastion.apply((id) => {
+      if (!id)
         throw new VisibleError(
-          `VPC bastion is not enabled. Enable it with "bastion: true" or "bastion: { instanceProfile: \"name\" }".`,
+          `The "${this.componentName}" VPC has no bastion. Set its "bastion".`,
         );
-      }
-      return v.id;
+      return id;
     });
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
+   * Whether the private subnets reach the internet through a NAT. `undefined` for a VPC
+   * that's referenced with `get`.
+   * @internal
    */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon EC2 VPC.
-       */
-      vpc: this.vpc,
-      /**
-       * The Amazon EC2 Internet Gateway.
-       */
-      internetGateway: this.internetGateway,
-      /**
-       * The Amazon EC2 Security Group.
-       */
-      securityGroup: this.securityGroup,
-      /**
-       * The Amazon EC2 NAT Gateway.
-       */
-      natGateways: this.natGateways,
-      /**
-       * The Amazon EC2 NAT instances.
-       */
-      natInstances: this.natInstances,
-      /**
-       * The Amazon EC2 Security Group for the NAT instances.
-       */
-      natSecurityGroup: this.natSecurityGroup,
-      /**
-       * The Amazon EC2 Elastic IP.
-       */
-      elasticIps: this.elasticIps,
-      /**
-       * The Amazon EC2 public subnet.
-       */
-      publicSubnets: this._publicSubnets,
-      /**
-       * The Amazon EC2 private subnet.
-       */
-      privateSubnets: this._privateSubnets,
-      /**
-       * The Amazon EC2 route table for the public subnet.
-       */
-      publicRouteTables: this.publicRouteTables,
-      /**
-       * The Amazon EC2 route table for the private subnet.
-       */
-      privateRouteTables: this.privateRouteTables,
-      /**
-       * The Amazon EC2 bastion instance.
-       */
-      bastionInstance: this.bastionInstance,
-      /**
-       * The Amazon EC2 Security Group for the bastion instance.
-       */
-      bastionSecurityGroup: this.bastionSecurityGroup,
-      /**
-       * The AWS Cloudmap namespace.
-       */
-      cloudmapNamespace: this.cloudmapNamespace,
-    };
+  public get hasNat() {
+    return this.network.nat;
+  }
+
+  /**
+   * The private subnets by the AZ's number, as they're kept in `nodes`.
+   * `undefined` for a VPC that's referenced with `get`.
+   * @internal
+   */
+  public get privateSubnetsByAz() {
+    return this.network.privateSubnetsByAz;
   }
 
   /**
@@ -1627,26 +1150,14 @@ export class Vpc extends Component implements Link.Linkable {
     vpcId: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Vpc(
-      name,
-      {
-        ref: true,
-        vpcId,
-      } satisfies VpcRef as VpcArgs,
-      opts,
-    );
+    return new Vpc(name, getArgs({ existing: { vpc: vpcId } }), opts);
   }
 
-  /** @internal */
-  public getSSTLink() {
+  public link() {
     return {
       properties: {
-        bastion: this.bastionInstance.apply((v) => v?.id),
+        bastion: this.network.bastion,
       },
     };
   }
 }
-
-const __pulumiType = "sst:aws:Vpc";
-// @ts-expect-error
-Vpc.__pulumiType = __pulumiType;

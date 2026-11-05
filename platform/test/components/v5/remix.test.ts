@@ -68,9 +68,9 @@ ssrSiteSuite(
     name: "Remix",
     site: "Web",
     load: async () => ({
-      original: (await import("../../../src/components/aws/remix"))
+      original: (await import("../../fixtures/v4/components/aws/remix"))
         .Remix as any,
-      v5: (await import("../../../src/components/aws/v5/remix")).Remix as any,
+      v5: (await import("../../../src/components/aws/remix")).Remix as any,
     }),
     paths: { site, based, app },
     alwaysServes: true,
@@ -144,9 +144,7 @@ ssrSiteSuite(
       });
 
       it("reads the base path from a Vite config in another extension", async () => {
-        const { Router } = await import(
-          "../../../src/components/aws/v5/router"
-        );
+        const { Router } = await import("../../../src/components/aws/router");
         new (Site())("Web", {
           path: "js",
           buildCommand: "true",

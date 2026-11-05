@@ -1,11 +1,26 @@
 import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output, all } from "@pulumi/pulumi";
-import type { Input } from "../input.js";
-import { VisibleError } from "../error.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
+import { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import type { Prettify } from "../component";
+import { context } from "../contract";
+import { plain } from "../args";
+import { configText, configValue } from "./helpers/site-build";
+import type { SiteRouteArgs } from "./helpers/router";
+import { BUILD_READS_IT } from "./helpers/site";
+import {
+  type SiteBuild,
+  type SsrFramework,
+  type SsrSiteArgs,
+  createSsrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { CdnDomainArgs } from "./cdn";
+import type { FunctionArgs } from "./function";
 
-export interface RemixArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface RemixArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -19,7 +34,94 @@ export interface RemixArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
+  /**
+   * Path to the directory where your Remix app is located.  This path is relative to your `sst.config.ts`.
+   *
+   * By default it assumes your Remix app is in the root of your SST app.
+   * @default `"."`
+   *
+   * @example
+   *
+   * If your Remix app is in a package in your monorepo.
+   *
+   * ```js
+   * {
+   *   path: "packages/web"
+   * }
+   * ```
+   */
+  path?: string;
+  /**
+   * [Link resources](/docs/linking/) to your Remix app. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of resources to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: FunctionArgs["link"];
+  /**
+   * Set [environment variables](https://remix.run/docs/en/main/guides/envvars) in your Remix app. These are made available:
+   *
+   * 1. In `remix build`, they are loaded into `process.env`.
+   * 2. Locally while running through `sst dev`.
+   *
+   * :::tip
+   * You can also `link` resources to your Remix app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
+   * :::
+   *
+   * @example
+   * ```js
+   * {
+   *   environment: {
+   *     API_URL: api.url,
+   *     STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   *   }
+   * }
+   * ```
+   */
+  environment?: FunctionArgs["environment"];
   /**
    * Permissions and the resources that the [server function](#nodes-server) in your Remix app needs to access. These permissions are used to create the function's IAM role.
    *
@@ -67,80 +169,22 @@ export interface RemixArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  permissions?: SsrSiteArgs["permissions"];
+  permissions?: FunctionArgs["permissions"];
   /**
-   * Path to the directory where your Remix app is located.  This path is relative to your `sst.config.ts`.
+   * The command used internally to build your Remix app.
    *
-   * By default it assumes your Remix app is in the root of your SST app.
-   * @default `"."`
+   * @default The `build` script in your `package.json`: `"npm run build"`, or with `yarn`, `pnpm` or `bun` when its lockfile is in the site's folder or the app's.
    *
    * @example
    *
-   * If your Remix app is in a package in your monorepo.
-   *
+   * If you want to use a different build command.
    * ```js
    * {
-   *   path: "packages/web"
+   *   buildCommand: "yarn build"
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
-  /**
-   * [Link resources](/docs/linking/) to your Remix app. This will:
-   *
-   * 1. Grant the permissions needed to access the resources.
-   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
-   *
-   * @example
-   *
-   * Takes a list of resources to link to the function.
-   *
-   * ```js
-   * {
-   *   link: [bucket, stripeKey]
-   * }
-   * ```
-   */
-  link?: SsrSiteArgs["link"];
-  /**
-   * Configure how the CloudFront cache invalidations are handled. This is run after your Remix app has been deployed.
-   * :::tip
-   * You get 1000 free invalidations per month. After that you pay $0.005 per invalidation path. [Read more here](https://aws.amazon.com/cloudfront/pricing/).
-   * :::
-   * @default `{paths: "all", wait: false}`
-   * @example
-   * Wait for all paths to be invalidated.
-   * ```js
-   * {
-   *   invalidation: {
-   *     paths: "all",
-   *     wait: true
-   *   }
-   * }
-   * ```
-   */
-  invalidation?: SsrSiteArgs["invalidation"];
-  /**
-   * Set [environment variables](https://remix.run/docs/en/main/guides/envvars) in your Remix app. These are made available:
-   *
-   * 1. In `remix build`, they are loaded into `process.env`.
-   * 2. Locally while running through `sst dev`.
-   *
-   * :::tip
-   * You can also `link` resources to your Remix app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
-   * :::
-   *
-   * @example
-   * ```js
-   * {
-   *   environment: {
-   *     API_URL: api.url,
-   *     STRIPE_PUBLISHABLE_KEY: "pk_test_123"
-   *   }
-   * }
-   * ```
-   */
-  environment?: SsrSiteArgs["environment"];
+  buildCommand?: string;
   /**
    * Set a custom domain for your Remix app.
    *
@@ -185,7 +229,7 @@ export interface RemixArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Serve your Remix app through a `Router` instead of a standalone CloudFront
    * distribution.
@@ -284,50 +328,14 @@ export interface RemixArgs extends SsrSiteArgs {
    * Also, make sure to set this as the `base` in your `vite.config.ts`, like
    * above.
    */
-  router?: SsrSiteArgs["router"];
-  /**
-   * The command used internally to build your Remix app.
-   *
-   * @default `"npm run build"`
-   *
-   * @example
-   *
-   * If you want to use a different build command.
-   * ```js
-   * {
-   *   buildCommand: "yarn build"
-   * }
-   * ```
-   */
-  buildCommand?: SsrSiteArgs["buildCommand"];
+  router?: SiteRouteArgs;
   /**
    * The directory where the build output is located. This should match the value of
    * `buildDirectory` in the Remix plugin section of your Vite config.
    *
    * @default `"build"`
    */
-  buildDirectory?: Input<string>;
-  /**
-   * Configure the Remix app to use an existing CloudFront cache policy.
-   *
-   * :::note
-   * CloudFront has a limit of 20 cache policies per account, though you can request a limit
-   * increase.
-   * :::
-   *
-   * By default, a new cache policy is created for it. This allows you to reuse an existing
-   * policy instead of creating a new one.
-   *
-   * @default A new cache policy is created
-   *
-   * @example
-   * ```js
-   * {
-   *   cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6"
-   * }
-   * ```
-   */
-  cachePolicy?: SsrSiteArgs["cachePolicy"];
+  buildDirectory?: string;
 }
 
 /**
@@ -397,167 +405,45 @@ export interface RemixArgs extends SsrSiteArgs {
  *
  * console.log(Resource.MyBucket.name);
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Remix`
+ *
+ * Keep the name, and `sst migrate` moves it. The site's bucket, its
+ * server functions, and its CloudFront distribution or its entry in the router are kept.
+ * Its files, its entries in the key-value store and its route in the router's list are
+ * written again by resources of a new type, which the `sst` binary serves, and `sst
+ * migrate` takes the old ones out of the state without deleting what they wrote. Its
+ * CloudFront invalidation runs once more. A few things are written differently:
+ *
+ * - `nodes.server` holds the server of each region, by region, each an output:
+ *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
+ *   is given an AWS provider of its own, the server is listed once it's created; set
+ *   `regions` to have it from the start.
+ * - With `warm`, the server is warmed again when its code changes. `sst.aws.Remix` warmed
+ *   it on every deploy. The switch warms it once.
+ * - `buildDirectory` has to be a plain value, not an output: what's deployed is read from
+ *   it.
+ * - The base path is read from the Vite config in any of its extensions, like
+ *   `vite.config.js`, and it's what's in the quotes after `base`. `sst.aws.Remix` read only
+ *   `vite.config.ts`, and failed without it, and read on to the last quote of the line.
+ * - The Vite config isn't loaded to check it. `sst.aws.Remix` loaded it with Vite after the
+ *   build, and failed when that Vite wasn't found from the app.
  */
-export class Remix extends SsrSite {
+export class Remix extends component("sst:aws:Remix", parts) {
+  private readonly siteUrl: Output<string>;
+
   constructor(
     name: string,
     args: RemixArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected normalizeBuildCommand() {}
-
-  protected buildPlan(
-    outputPath: Output<string>,
-    _name: string,
-    args: RemixArgs,
-  ): Output<Plan> {
-    return all([outputPath, args.buildDirectory]).apply(
-      async ([outputPath, buildDirectory]) => {
-        // The path for all files that need to be in the "/" directory (static assets)
-        // is different when using Vite. These will be located in the "build/client"
-        // path of the output by default. It will be the "public" folder when using remix config.
-        let assetsPath = "public";
-        let assetsVersionedSubDir = "build";
-        let buildPath = path.join(outputPath, "build");
-
-        const viteConfig = await loadViteConfig();
-        if (viteConfig) {
-          assetsPath = path.join(
-            viteConfig.__remixPluginContext.remixConfig.buildDirectory,
-            "client",
-          );
-          assetsVersionedSubDir = "assets";
-          buildPath = path.join(
-            outputPath,
-            viteConfig.__remixPluginContext.remixConfig.buildDirectory,
-          );
-        }
-
-        const basepath = fs
-          .readFileSync(path.join(outputPath, "vite.config.ts"), "utf-8")
-          .match(/base: ['"](.*)['"]/)?.[1];
-
-        return {
-          base: basepath,
-          server: createServerLambdaBundle(),
-          assets: [
-            {
-              from: assetsPath,
-              to: "",
-              cached: true,
-              versionedSubDir: assetsVersionedSubDir,
-            },
-          ],
-        };
-
-        async function loadViteConfig() {
-          const file = [
-            "vite.config.ts",
-            "vite.config.js",
-            "vite.config.mts",
-            "vite.config.mjs",
-          ].find((filename) => fs.existsSync(path.join(outputPath, filename)));
-          if (!file) return;
-
-          try {
-            // @ts-ignore
-            const vite = await import("vite");
-            const config = await vite.loadConfigFromFile(
-              { command: "build", mode: "production" },
-              path.join(outputPath, file),
-            );
-            if (!config) throw new Error();
-
-            return {
-              __remixPluginContext: {
-                remixConfig: {
-                  buildDirectory: buildDirectory ?? "build",
-                },
-              },
-            };
-          } catch (e) {
-            throw new VisibleError(
-              `Could not load Vite configuration from "${file}". Check that your Remix project uses Vite and the file exists.`,
-            );
-          }
-        }
-
-        function createServerLambdaBundle() {
-          // Create a Lambda@Edge handler for the Remix server bundle.
-          //
-          // Note: Remix does perform their own internal ESBuild process, but it
-          // doesn't bundle 3rd party dependencies by default. In the interest of
-          // keeping deployments seamless for users we will create a server bundle
-          // with all dependencies included. We will still need to consider how to
-          // address any need for external dependencies, although I think we should
-          // possibly consider this at a later date.
-
-          // In this path we are assuming that the Remix build only outputs the
-          // "core server build". We can safely assume this as we have guarded the
-          // remix.config.js to ensure it matches our expectations for the build
-          // configuration.
-          // We need to ensure that the "core server build" is wrapped with an
-          // appropriate Lambda@Edge handler. We will utilise an internal asset
-          // template to create this wrapper within the "core server build" output
-          // directory.
-
-          // Ensure build directory exists
-          fs.mkdirSync(buildPath, { recursive: true });
-
-          // Copy the server lambda handler and pre-append the build injection based
-          // on the config file used.
-          const content = [
-            // When using Vite config, the output build will be "server/index.js"
-            // and when using Remix config it will be `server.js`.
-            `// Import the server build that was produced by 'remix build'`,
-            viteConfig
-              ? `import * as remixServerBuild from "./server/index.js";`
-              : `import * as remixServerBuild from "./index.js";`,
-            ``,
-            fs.readFileSync(
-              path.join(
-                $cli.paths.platform,
-                "functions",
-                "remix-server",
-                "regional-server.mjs",
-              ),
-            ),
-          ].join("\n");
-          fs.writeFileSync(path.join(buildPath, "server.mjs"), content);
-
-          // Copy the Remix polyfil to the server build directory
-          //
-          // Note: We need to ensure that the polyfills are injected above other code that
-          // will depend on them when not using Vite. Importing them within the top of the
-          // lambda code doesn't appear to guarantee this, we therefore leverage ESBUild's
-          // `inject` option to ensure that the polyfills are injected at the top of
-          // the bundle.
-          const polyfillDest = path.join(buildPath, "polyfill.mjs");
-          fs.copyFileSync(
-            path.join(
-              $cli.paths.platform,
-              "functions",
-              "remix-server",
-              "polyfill.mjs",
-            ),
-            polyfillDest,
-          );
-
-          return {
-            handler: path.join(buildPath, "server.handler"),
-            nodejs: {
-              esbuild: {
-                inject: [path.resolve(polyfillDest)],
-              },
-            },
-            streaming: true,
-          };
-        }
-      },
-    );
+    super(name, args, opts);
+    this.siteUrl = createSsrSite(
+      this.builder(),
+      name,
+      args,
+      remixFramework(args),
+    ).url;
   }
 
   /**
@@ -567,10 +453,93 @@ export class Remix extends SsrSite {
    * Otherwise, it's the auto-generated CloudFront URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
 
-const __pulumiType = "sst:aws:Remix";
-// @ts-expect-error
-Remix.__pulumiType = __pulumiType;
+// How a Remix app is built, with its package manager, and its server: the
+// Remix server build wrapped in a Lambda handler
+function remixFramework(args: RemixArgs): SsrFramework<SiteBuild> {
+  let buildDirectory: string | undefined;
+  return {
+    label: "Remix",
+    alwaysServes: true,
+    check(option) {
+      buildDirectory = plain(
+        args.buildDirectory,
+        option("buildDirectory"),
+        BUILD_READS_IT,
+      );
+    },
+    load: (builtPath) => loadBuild(builtPath, buildDirectory ?? "build"),
+  };
+}
+
+// Reads what Remix built, with Vite or with Remix's own compiler
+function loadBuild(builtPath: string, buildDirectory: string): SiteBuild {
+  const outputPath = path.resolve(context().paths.root, builtPath);
+  const viteConfig = configText(outputPath, "vite.config");
+  // With Vite, the server build is `<buildDirectory>/server/index.js` and the
+  // client's files are in `<buildDirectory>/client`. Remix's own compiler
+  // builds the server to `build/index.js`, and the client's files are in
+  // `public`.
+  const serverDir = viteConfig !== undefined ? buildDirectory : "build";
+  const buildPath = path.join(outputPath, serverDir);
+  const handlerPath = path.join(builtPath, serverDir);
+
+  // Wrap the server build in the Lambda handler, with the polyfills first.
+  // ESBuild's `inject` puts them above the code that depends on them, which
+  // an import at the top of the handler doesn't guarantee.
+  const platform = path.join(
+    context().paths.platform,
+    "functions",
+    "remix-server",
+  );
+  fs.mkdirSync(buildPath, { recursive: true });
+  fs.writeFileSync(
+    path.join(buildPath, "server.mjs"),
+    [
+      `// Import the server build that was produced by 'remix build'`,
+      viteConfig !== undefined
+        ? `import * as remixServerBuild from "./server/index.js";`
+        : `import * as remixServerBuild from "./index.js";`,
+      ``,
+      fs.readFileSync(path.join(platform, "regional-server.mjs")),
+    ].join("\n"),
+  );
+  const polyfill = path.join(buildPath, "polyfill.mjs");
+  fs.copyFileSync(path.join(platform, "polyfill.mjs"), polyfill);
+
+  return {
+    sitePath: builtPath,
+    outputPath,
+    serves: true,
+    plan: {
+      // From `base` in the Vite config
+      base: configValue(outputPath, "vite.config", "base"),
+      assets: [
+        viteConfig !== undefined
+          ? {
+              from: path.join(buildDirectory, "client"),
+              to: "",
+              cached: true,
+              versionedSubDir: "assets",
+            }
+          : { from: "public", to: "", cached: true, versionedSubDir: "build" },
+      ],
+    },
+    server: {
+      handler: path.join(handlerPath, "server.handler"),
+      nodejs: { esbuild: { inject: [polyfill] } },
+      streaming: true,
+    },
+  };
+}

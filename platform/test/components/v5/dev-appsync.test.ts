@@ -27,10 +27,8 @@ describe("sst dev with the stage's own Event API", () => {
   beforeAll(async () => {
     // @ts-ignore
     global.$dev = true;
-    const { Function } = await import(
-      "../../../src/components/aws/v5/function"
-    );
-    const { Task } = await import("../../../src/components/aws/v5/task");
+    const { Function } = await import("../../../src/components/aws/function");
+    const { Task } = await import("../../../src/components/aws/task");
     const { Cluster } = await import("../../../src/components/aws/cluster");
     new Function("MyFunction", { handler: "src/index.handler" });
     new Task("MyTask", {

@@ -1,19 +1,82 @@
-import { all, ComponentResourceOptions, output } from "@pulumi/pulumi";
-import { Component, transform, Transform } from "../component";
-import { toDays, type DurationDays } from "../duration";
-import { Link } from "../link";
-import { backup, dsql, ec2, iam, Provider, Region } from "@pulumi/aws";
-import { permission } from "./permission";
-import { useProvider } from "./helpers/provider";
-import { Vpc } from "./vpc";
 import {
-  parseDsqlPublicEndpoint,
-  parseDsqlPrivateEndpoint,
-} from "./helpers/arn";
+  all,
+  ComponentResourceOptions,
+  type ProviderResource,
+} from "@pulumi/pulumi";
+import { backup, dsql, ec2, iam, type Region } from "@pulumi/aws";
+import { ComponentArgs, component, named, optional } from "../parts-component";
+import { plain, withDefault, getArgs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { type DurationDays, toDays } from "../duration";
+import { transformPart } from "../transform";
+import {
+  parseDsqlPrivateEndpoint,
+  parseDsqlPublicEndpoint,
+} from "./helpers/arn";
+import { useProvider } from "./helpers/provider";
+import { permission } from "./permission";
+import { type AnyVpc, isVpc, subnetsOf } from "./helpers/vpc";
 
-export interface DsqlArgs {
+const parts = {
+  /**
+   * The DSQL cluster.
+   */
+  cluster: dsql.Cluster,
+  /**
+   * The peer DSQL cluster, in the peer region. Multi-region only.
+   */
+  peerCluster: optional(dsql.Cluster),
+  /**
+   * The peering that tells the cluster about its peer. Multi-region only.
+   */
+  clusterPeering: optional(dsql.ClusterPeering),
+  /**
+   * The peering that tells the peer cluster about the cluster, in the peer region.
+   * Multi-region only.
+   */
+  peerClusterPeering: optional(dsql.ClusterPeering),
+  /**
+   * The EC2 security group for the DSQL VPC endpoints.
+   */
+  // A security group is named with a tag made from its logical name, so it
+  // keeps the name it was first deployed with.
+  endpointSecurityGroup: named(
+    optional(ec2.SecurityGroup),
+    "DsqlEndpointSecurityGroup",
+  ),
+  /**
+   * The EC2 VPC endpoint for DSQL management operations.
+   */
+  managementEndpoint: optional(ec2.VpcEndpoint),
+  /**
+   * The EC2 VPC endpoint for DSQL connections.
+   */
+  connectionEndpoint: optional(ec2.VpcEndpoint),
+  /**
+   * The IAM role AWS Backup uses to back up the cluster.
+   */
+  backupRole: optional(iam.Role),
+  /**
+   * The AWS Backup vault.
+   */
+  backupVault: optional(backup.Vault),
+  /**
+   * The AWS Backup vault in the peer region, which the backups are copied to.
+   * Multi-region only.
+   */
+  peerBackupVault: optional(backup.Vault),
+  /**
+   * The AWS Backup plan.
+   */
+  backupPlan: optional(backup.Plan),
+  /**
+   * The AWS Backup selection.
+   */
+  backupSelection: optional(backup.Selection),
+};
+
+export interface DsqlArgs extends ComponentArgs<typeof parts> {
   /**
    * Configure multi-region cluster peering.
    *
@@ -21,6 +84,8 @@ export interface DsqlArgs {
    * linked via a witness region. The witness must differ from both cluster regions.
    *
    * Learn more about [AWS DSQL regions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/what-is-aurora-dsql.html#region-availability).
+   *
+   * Whether the cluster is multi-region, and its peer region, have to be plain values.
    *
    * @example
    *
@@ -34,10 +99,10 @@ export interface DsqlArgs {
    * ```
    */
   regions?: {
-    /** The witness region. Must differ from both cluster regions. */
+    /** The witness region. It has to differ from both cluster regions. */
     witness: Input<string>;
-    /** The AWS region for the peer cluster. */
-    peer: Input<string>;
+    /** The AWS region of the peer cluster. */
+    peer: string;
   };
 
   /**
@@ -99,13 +164,17 @@ export interface DsqlArgs {
       };
 
   /**
-   *
    * Create AWS PrivateLink interface endpoints in a VPC for private connectivity.
-   * This allows lambdas placed inside a VPC without NAT gateways to connect to the DSQL instance.
+   * This lets functions in a VPC without a NAT gateway connect to the cluster.
+   *
+   * The endpoints are in the VPC's private subnets, and take connections from anywhere
+   * in the VPC.
    *
    * :::note
-   * Currently only single region VPC is supported.
+   * Only a single-region cluster can have VPC endpoints.
    * :::
+   *
+   * Which endpoints are created has to be decided by plain values.
    *
    * @example
    *
@@ -124,7 +193,7 @@ export interface DsqlArgs {
    *
    * const cluster = new sst.aws.Dsql("MyCluster", {
    *   vpc: {
-   *     instance: vpc,
+   *     instance: myVpc,
    *     endpoints: {
    *       management: true,
    *       connection: true,
@@ -134,73 +203,54 @@ export interface DsqlArgs {
    * ```
    */
   vpc?:
-    | Vpc
+    | AnyVpc
     | {
-        instance: Vpc;
+        /** The VPC to create the endpoints in. */
+        instance: AnyVpc;
+        /** Which endpoints to create. */
         endpoints?: {
           /**
-           * Endpoint for control plane ops (create, get, update, delete clusters).
+           * An endpoint for the control plane: creating, reading, updating and deleting
+           * clusters.
            *
            * @default `false`
            */
           management?: boolean;
           /**
-           * Endpoint for PostgreSQL client connections.
+           * An endpoint for PostgreSQL client connections.
            *
            * @default `true`
            */
           connection?: boolean;
         };
       };
-
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the DSQL cluster resource.
-     */
-    cluster?: Transform<dsql.ClusterArgs>;
-    /**
-     * Transform the peer DSQL cluster resource.
-     */
-    peerCluster?: Transform<dsql.ClusterArgs>;
-    /**
-     * Transform the EC2 security group resource for the DSQL VPC endpoints.
-     */
-    endpointSecurityGroup?: Transform<ec2.SecurityGroupArgs>;
-    /**
-     * Transform the EC2 VPC endpoint resource for DSQL management operations.
-     */
-    managementEndpoint?: Transform<ec2.VpcEndpointArgs>;
-    /**
-     * Transform the EC2 VPC endpoint resource for DSQL connections.
-     */
-    connectionEndpoint?: Transform<ec2.VpcEndpointArgs>;
-    /**
-     * Transform the AWS Backup vault resource.
-     */
-    backupVault?: Transform<backup.VaultArgs>;
-    /**
-     * Transform the AWS Backup plan resource.
-     */
-    backupPlan?: Transform<backup.PlanArgs>;
-    /**
-     * Transform the AWS Backup selection resource.
-     */
-    backupSelection?: Transform<backup.SelectionArgs>;
-  };
 }
 
-interface DsqlRef {
-  ref: boolean;
-  cluster: dsql.Cluster;
-  peerCluster?: dsql.Cluster;
+export interface DsqlGetArgs {
+  /**
+   * The identifier of the cluster.
+   */
+  id: Input<string>;
+  /**
+   * The peer of a multi-region cluster.
+   */
+  peer?: {
+    /**
+     * The identifier of the peer cluster.
+     */
+    id: Input<string>;
+    /**
+     * The AWS region of the peer cluster.
+     */
+    region: string;
+  };
 }
 
 /**
  * The `Dsql` component lets you add an [Amazon Aurora DSQL](https://aws.amazon.com/rds/aurora/dsql/) cluster to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -237,8 +287,6 @@ interface DsqlRef {
  * });
  * ```
  *
- * [Check out the full example](/docs/examples/#aws-dsql-multiregion).
- *
  * #### With private VPC endpoints
  *
  * ```ts title="sst.config.ts"
@@ -251,8 +299,6 @@ interface DsqlRef {
  *   }
  * });
  * ```
- *
- * [Check out the full example](/docs/examples/#aws-dsql-vpc).
  *
  * #### With backups
  *
@@ -271,8 +317,23 @@ interface DsqlRef {
  * });
  * ```
  *
- * You can also use Drizzle ORM to query your DSQL cluster.
- * [Check out the Drizzle example](/docs/examples/#aws-dsql-drizzle).
+ * #### Switch from SST 4's `sst.aws.Dsql`
+ *
+ * Keep the name, and `sst migrate` moves it. The cluster you've
+ * deployed is kept, and so is everything around it: its peer, VPC endpoints and backups.
+ *
+ * A few things work differently:
+ *
+ * - `regions.peer` is a plain value, not an output. It decides which region the peer's
+ *   resources are created in.
+ * - `nodes` has every resource, not only the two clusters. Each can be transformed, the
+ *   two sides of the peering and the backup role included.
+ * - `transform.backupVault` still applies to the vault in the peer region as well. To
+ *   change only that one, use `transform.peerBackupVault`, which is applied after it.
+ *   A function that told the two apart by name now gets `MyClusterPeerBackupVault` for
+ *   the peer's.
+ * - If you set `multiRegionProperties` on the cluster with an object in `transform`, it
+ *   keeps its witness region.
  *
  * ---
  *
@@ -289,321 +350,233 @@ interface DsqlRef {
  * costs roughly 1.3 x $8 + 15 x $0.33 or **$15 per month**.
  *
  * Check out the [Aurora DSQL pricing](https://aws.amazon.com/rds/aurora/dsql/pricing/) for more details.
- *
  */
-
-export class Dsql extends Component implements Link.Linkable {
-  private cluster: dsql.Cluster;
-  private peerCluster: dsql.Cluster | undefined;
-  private connectionEndpoint: ec2.VpcEndpoint | undefined;
-  private constructorName: string;
-
+export class Dsql extends component("sst:aws:Dsql", parts) {
   constructor(
     name: string,
     args: DsqlArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    this.constructorName = name;
+    super(name, args, opts);
+    const self = this;
 
-    if (args && "ref" in args) {
-      const ref = args as unknown as DsqlRef;
-      this.cluster = ref.cluster;
-      this.peerCluster = ref.peerCluster;
+    const regions = plain(
+      args.regions,
+      `The "regions" of the "${name}" DSQL cluster`,
+    );
+    // What's in the peer region is created with a provider for that region
+    const peer = regions
+      ? {
+          provider: useProvider(
+            plain(
+              regions.peer,
+              `The "regions.peer" of the "${name}" DSQL cluster`,
+            ) as Region,
+          ),
+        }
+      : undefined;
+
+    // A cluster that's already deployed, and its peer when it has one
+    if (this.existingPart("cluster")) {
+      const peerCluster = args.existing?.peerCluster;
+      if (peerCluster === undefined) return;
+      if (!peer && !(peerCluster instanceof dsql.Cluster))
+        throw new VisibleError(
+          `The "${name}" DSQL cluster is given the id of an existing "peerCluster", which is in another region. Set "regions.peer" to that region, or pass the cluster itself.`,
+        );
+      this.part("peerCluster", {}, peer);
       return;
     }
 
-    const parent = this;
-    const regions = args.regions;
-
-    if (regions && args.vpc)
+    const vpc = endpointsOf(name, args.vpc);
+    const backups = plain(
+      args.backup,
+      `The "backup" of the "${name}" DSQL cluster`,
+    );
+    if (regions && vpc)
       throw new VisibleError(
-        `Cannot use "vpc" with multi-region "regions". VPC endpoints are only supported for single-region clusters.`,
+        `"vpc" isn't an option for the "${name}" DSQL cluster, which has a peer in "regions". VPC endpoints are only for a cluster in one region.`,
+      );
+    if (
+      regions &&
+      typeof regions.witness === "string" &&
+      regions.witness === regions.peer
+    )
+      throw new VisibleError(
+        `The witness region of the "${name}" DSQL cluster is its peer region, "${regions.peer}". The witness has to be a third region.`,
       );
 
-    const vpc = normalizeVpc();
-    const backupConfig = normalizeBackup();
+    const cluster = this.part("cluster", {
+      multiRegionProperties: regions
+        ? { witnessRegion: regions.witness }
+        : undefined,
+    });
 
-    const cluster = createCluster();
-    const peerCluster = createPeerCluster();
-    const endpoints = createVpcEndpoints();
-    createBackup();
-
-    this.cluster = cluster;
-    this.peerCluster = peerCluster;
-    this.connectionEndpoint = endpoints?.connection;
-
-    function createCluster() {
-      return new dsql.Cluster(
-        ...transform(
-          args.transform?.cluster,
-          `${name}Cluster`,
-          {
-            multiRegionProperties: regions
-              ? { witnessRegion: regions.witness }
-              : undefined,
-          },
-          { parent },
-        ),
+    if (regions) {
+      const peerCluster = this.part(
+        "peerCluster",
+        { multiRegionProperties: { witnessRegion: regions.witness } },
+        peer,
       );
-    }
-
-    function createPeerCluster() {
-      if (!regions) return;
-
-      const peerProvider = useProvider(regions.peer as Region);
-
-      const peerCluster = new dsql.Cluster(
-        ...transform(
-          args.transform?.peerCluster,
-          `${name}PeerCluster`,
-          {
-            multiRegionProperties: {
-              witnessRegion: regions.witness,
-            },
-          },
-          { parent, provider: peerProvider },
-        ),
-      );
-
-      // DSQL requires both clusters to declare each other — two-way handshake.
-      new dsql.ClusterPeering(
-        `${name}Peering1`,
-        {
-          identifier: cluster.identifier,
-          clusters: [peerCluster.arn],
-          witnessRegion: regions.witness,
-        },
-        { parent },
-      );
-
-      new dsql.ClusterPeering(
-        `${name}Peering2`,
+      // DSQL requires both clusters to declare each other: a two-way handshake.
+      this.part("clusterPeering", {
+        identifier: cluster.identifier,
+        clusters: [peerCluster.arn],
+        witnessRegion: regions.witness,
+      });
+      this.part(
+        "peerClusterPeering",
         {
           identifier: peerCluster.identifier,
           clusters: [cluster.arn],
           witnessRegion: regions.witness,
         },
-        { parent, provider: peerProvider },
+        peer,
       );
-
-      return peerCluster;
     }
 
-    function createBackup() {
-      if (!backupConfig) return;
+    if (vpc) {
+      const { instance, management, connection } = vpc;
+      const fromVpc = (port: number) => ({
+        protocol: "tcp",
+        fromPort: port,
+        toPort: port,
+        cidrBlocks: [instance.nodes.vpc.cidrBlock],
+      });
+      const securityGroup = this.part("endpointSecurityGroup", {
+        vpcId: instance.id,
+        description: "Allow DSQL access to VPC endpoints",
+        ingress: [
+          ...(management ? [fromVpc(443)] : []),
+          ...(connection ? [fromVpc(5432)] : []),
+        ],
+        egress: [
+          {
+            protocol: "-1",
+            fromPort: 0,
+            toPort: 0,
+            cidrBlocks: ["0.0.0.0/0"],
+          },
+        ],
+      });
 
-      const role = new iam.Role(
-        `${name}BackupRole`,
-        {
-          assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
-            Service: "backup.amazonaws.com",
-          }),
-          managedPolicyArns: [
-            "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup",
-          ],
-        },
-        { parent },
+      const endpoint = (serviceName: Input<string>) => ({
+        vpcId: instance.id,
+        serviceName,
+        vpcEndpointType: "Interface",
+        subnetIds: subnetsOf(instance, "private"),
+        privateDnsEnabled: true,
+        securityGroupIds: [securityGroup.id],
+      });
+      // For control plane operations: creating, updating and deleting clusters
+      if (management)
+        this.part(
+          "managementEndpoint",
+          endpoint(
+            cluster.arn.apply(
+              (arn) => `com.amazonaws.${arn.split(":")[3]}.dsql`,
+            ),
+          ),
+        );
+      // For PostgreSQL client connections
+      if (connection)
+        this.part(
+          "connectionEndpoint",
+          endpoint(cluster.vpcEndpointServiceName),
+        );
+    }
+
+    if (backups) {
+      const config = backups === true ? {} : backups;
+      const schedule = withDefault(config.schedule, "cron(0 5 ? * * *)");
+      const retention = withDefault<DurationDays, number>(
+        config.retention,
+        "7 days",
+        toDays,
       );
 
-      const vault = createBackupVault();
-      const peerVault = regions
-        ? createBackupVault("Peer", useProvider(regions.peer as Region))
+      const role = this.part("backupRole", {
+        assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
+          Service: "backup.amazonaws.com",
+        }),
+        managedPolicyArns: [
+          "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup",
+        ],
+      });
+
+      const vault = this.part("backupVault", {});
+      // A multi-region cluster's backups are copied to a vault in the peer
+      // region. The vault's transform applies to that one as well.
+      const peerVault = peer
+        ? this.part(
+            "peerBackupVault",
+            ...peerVaultArgs(args.transform?.backupVault, peer),
+          )
         : undefined;
 
-      const plan = new backup.Plan(
-        ...transform(
-          args.transform?.backupPlan,
-          `${name}BackupPlan`,
+      const plan = this.part("backupPlan", {
+        rules: [
           {
-            rules: [
-              {
-                ruleName: `${name}BackupRule`,
-                targetVaultName: vault.name,
-                schedule: backupConfig.schedule,
-                scheduleExpressionTimezone: "UTC",
-                lifecycle: { deleteAfter: backupConfig.retention },
-                copyActions: peerVault
-                  ? [
-                      {
-                        destinationVaultArn: peerVault.arn,
-                        lifecycle: { deleteAfter: backupConfig.retention },
-                      },
-                    ]
-                  : undefined,
-              },
-            ],
+            ruleName: `${name}BackupRule`,
+            targetVaultName: vault.name,
+            schedule,
+            scheduleExpressionTimezone: "UTC",
+            lifecycle: { deleteAfter: retention },
+            copyActions: peerVault
+              ? [
+                  {
+                    destinationVaultArn: peerVault.arn,
+                    lifecycle: { deleteAfter: retention },
+                  },
+                ]
+              : undefined,
           },
-          { parent },
-        ),
+        ],
+      });
+
+      this.part("backupSelection", {
+        planId: plan.id,
+        iamRoleArn: role.arn,
+        resources: [cluster.arn],
+      });
+    }
+
+    function peerVaultArgs(
+      transform: NonNullable<DsqlArgs["transform"]>["backupVault"],
+      peer: { provider: ProviderResource },
+    ) {
+      const [, vaultArgs, vaultOpts] = transformPart<backup.VaultArgs>(
+        transform,
+        `${name}PeerBackupVault`,
+        {},
+        { parent: self, ...peer },
       );
-
-      new backup.Selection(
-        ...transform(
-          args.transform?.backupSelection,
-          `${name}BackupSelection`,
-          {
-            planId: plan.id,
-            iamRoleArn: role.arn,
-            resources: [cluster.arn],
-          },
-          { parent },
-        ),
-      );
+      return [vaultArgs, vaultOpts] as const;
     }
+  }
 
-    function createBackupVault(suffix = "", provider?: Provider) {
-      return new backup.Vault(
-        ...transform(
-          args.transform?.backupVault,
-          `${name}BackupVault${suffix}`,
-          {},
-          { parent, provider },
-        ),
-      );
-    }
-
-    function normalizeBackup() {
-      if (!args.backup) return;
-
-      const config = args.backup === true ? {} : args.backup;
-
-      return {
-        schedule: output(config.schedule).apply(
-          (v) => v ?? "cron(0 5 ? * * *)",
-        ),
-        retention: output(config.retention).apply((v) => toDays(v ?? "7 days")),
-      };
-    }
-
-    function normalizeVpc() {
-      if (!args.vpc) return undefined;
-
-      if (args.vpc instanceof Vpc) {
-        return {
-          instance: args.vpc,
-          endpoints: {
-            management: false,
-            connection: true,
-          },
-        };
-      }
-
-      return {
-        instance: args.vpc.instance,
-        endpoints: {
-          management: args.vpc.endpoints?.management ?? false,
-          connection: args.vpc.endpoints?.connection ?? true,
-        },
-      };
-    }
-
-    function createVpcEndpoints() {
-      if (!vpc) return;
-
-      const endpointSecurityGroup = new ec2.SecurityGroup(
-        ...transform(
-          args.transform?.endpointSecurityGroup,
-          `${name}DsqlEndpointSecurityGroup`,
-          {
-            vpcId: vpc.instance.id,
-            description: "Allow DSQL access to VPC endpoints",
-            ingress: [
-              ...(vpc.endpoints.management
-                ? [
-                    {
-                      protocol: "tcp",
-                      fromPort: 443,
-                      toPort: 443,
-                      cidrBlocks: [vpc.instance.nodes.vpc.cidrBlock],
-                    },
-                  ]
-                : []),
-              ...(vpc.endpoints.connection
-                ? [
-                    {
-                      protocol: "tcp",
-                      fromPort: 5432,
-                      toPort: 5432,
-                      cidrBlocks: [vpc.instance.nodes.vpc.cidrBlock],
-                    },
-                  ]
-                : []),
-            ],
-            egress: [
-              {
-                protocol: "-1",
-                fromPort: 0,
-                toPort: 0,
-                cidrBlocks: ["0.0.0.0/0"],
-              },
-            ],
-          },
-          { parent },
-        ),
-      );
-
-      let management, connection;
-
-      if (vpc.endpoints.management) {
-        management = new ec2.VpcEndpoint(
-          ...transform(
-            args.transform?.managementEndpoint,
-            `${name}ManagementEndpoint`,
-            {
-              vpcId: vpc.instance.id,
-              serviceName: cluster.arn.apply((arn) => {
-                const region = arn.split(":")[3];
-                return `com.amazonaws.${region}.dsql`;
-              }),
-              vpcEndpointType: "Interface",
-              subnetIds: vpc.instance.privateSubnets,
-              privateDnsEnabled: true,
-              securityGroupIds: [endpointSecurityGroup.id],
-            },
-            { parent },
-          ),
-        );
-      }
-
-      if (vpc.endpoints.connection) {
-        connection = new ec2.VpcEndpoint(
-          ...transform(
-            args.transform?.connectionEndpoint,
-            `${name}ConnectionEndpoint`,
-            {
-              vpcId: vpc.instance.id,
-              serviceName: cluster.vpcEndpointServiceName,
-              vpcEndpointType: "Interface",
-              subnetIds: vpc.instance.privateSubnets,
-              privateDnsEnabled: true,
-              securityGroupIds: [endpointSecurityGroup.id],
-            },
-            { parent },
-          ),
-        );
-      }
-
-      return { connection, management };
-    }
+  /** The identifier of the cluster. */
+  public get id() {
+    return this.nodes.cluster.identifier;
   }
 
   /** The region of the cluster. */
   public get region() {
-    return this.cluster.region;
+    return this.nodes.cluster.region;
   }
 
-  /** The endpoint of the cluster. */
+  /**
+   * The endpoint of the cluster. With a VPC connection endpoint, it's the endpoint's
+   * private name, so what connects from inside the VPC doesn't leave it.
+   */
   public get endpoint() {
     // Use the private VPC endpoint hostname when available so linked functions
     // inside the VPC don't route through the public IP.
-    return all([this.cluster.arn, this.connectionEndpoint?.dnsEntries]).apply(
-      ([arn, dns]) => {
-        if (!dns) {
-          return parseDsqlPublicEndpoint(arn);
-        }
-        return parseDsqlPrivateEndpoint(arn, dns);
-      },
+    return all([
+      this.nodes.cluster.arn,
+      this.nodes.connectionEndpoint?.dnsEntries,
+    ]).apply(([arn, dns]) =>
+      dns ? parseDsqlPrivateEndpoint(arn, dns) : parseDsqlPublicEndpoint(arn),
     );
   }
 
@@ -613,7 +586,7 @@ export class Dsql extends Component implements Link.Linkable {
    * @example
    * ```ts title="sst.config.ts"
    * const cluster = new sst.aws.Dsql("MyCluster", {
-   *   regions: { peer: "us-east-2" },
+   *   regions: { witness: "us-west-2", peer: "us-east-2" },
    * });
    *
    * return {
@@ -623,11 +596,11 @@ export class Dsql extends Component implements Link.Linkable {
    * ```
    */
   public get peer() {
-    if (!this.peerCluster)
+    const peerCluster = this.nodes.peerCluster;
+    if (!peerCluster)
       throw new VisibleError(
-        `Cannot access "peer" on "${this.constructorName}" because it is a single-region cluster. Set "regions.peer" to enable multi-region.`,
+        `The "${this.componentName}" DSQL cluster is in one region, so it has no "peer". Set "regions.peer" to give it one.`,
       );
-    const peerCluster = this.peerCluster;
     return {
       /** The region of the peer cluster. */
       region: peerCluster.region,
@@ -636,13 +609,26 @@ export class Dsql extends Component implements Link.Linkable {
     };
   }
 
-  /** The underlying [resources](/docs/components/#nodes) this component creates. */
-  public get nodes() {
+  /**
+   * Linking a cluster gives the linked resource its region and endpoint, and its
+   * peer's when it has one. It also lets the resource connect to the cluster.
+   */
+  public link() {
+    const { cluster, peerCluster } = this.nodes;
     return {
-      /** The DSQL cluster. */
-      cluster: this.cluster,
-      /** The peer DSQL cluster (multi-region only). */
-      peerCluster: this.peerCluster,
+      properties: {
+        region: this.region,
+        endpoint: this.endpoint,
+        peer: peerCluster ? this.peer : undefined,
+      },
+      include: [
+        permission({
+          actions: ["dsql:DbConnect", "dsql:DbConnectAdmin", "dsql:GetCluster"],
+          resources: peerCluster
+            ? [cluster.arn, peerCluster.arn]
+            : [cluster.arn],
+        }),
+      ],
     };
   }
 
@@ -653,6 +639,10 @@ export class Dsql extends Component implements Link.Linkable {
    * :::tip
    * You can use the `static get` method to share a cluster across stages.
    * :::
+   *
+   * @param name The name of the component.
+   * @param args The identifier of the cluster, and of its peer when it has one.
+   * @param opts Component resource options.
    *
    * @example
    *
@@ -667,75 +657,60 @@ export class Dsql extends Component implements Link.Linkable {
    *
    * ```ts title="sst.config.ts"
    * const cluster = sst.aws.Dsql.get("MyCluster", {
-   *   id: "app-dev-mycluster",
+   *   id: "kzttrvbdg4k2o5ze2m2rrwdj7u",
    *   peer: {
-   *     id: "kzttrvbdg4k2o5ze2m2rrwdj7u",
+   *     id: "abtrvbdg4k2o5ze2m2rrwdj7xy",
    *     region: "us-east-2",
    *   }
    * });
    * ```
+   *
+   * You can find the identifiers by outputting them in the stage that created the
+   * cluster.
+   *
+   * ```ts title="sst.config.ts"
+   * return {
+   *   id: cluster.id,
+   *   peerId: cluster.nodes.peerCluster?.identifier
+   * };
+   * ```
    */
   public static get(
     name: string,
-    args: {
-      id: Input<string>;
-      peer?: {
-        id: string;
-        region: string;
-      };
-    },
+    args: DsqlGetArgs,
     opts?: ComponentResourceOptions,
   ) {
-    const cluster = dsql.Cluster.get(
-      `${name}Cluster`,
-      args.id,
-      undefined,
-      opts,
-    );
-
-    const peerCluster = args.peer
-      ? dsql.Cluster.get(`${name}PeerCluster`, args.peer.id, undefined, {
-          ...opts,
-          provider: useProvider(args.peer.region as Region),
-        })
-      : undefined;
-
     return new Dsql(
       name,
-      {
-        ref: true,
-        cluster,
-        peerCluster,
-      } satisfies DsqlRef as unknown as DsqlArgs,
+      getArgs({
+        existing: {
+          cluster: args.id,
+          ...(args.peer ? { peerCluster: args.peer.id } : {}),
+        },
+        ...(args.peer ? { regions: { peer: args.peer.region } } : {}),
+      }) as DsqlArgs,
       opts,
     );
-  }
-
-  /** @internal */
-  public getSSTLink() {
-    return {
-      properties: {
-        region: this.region,
-        endpoint: this.endpoint,
-        peer: this.peerCluster
-          ? {
-              region: this.peerCluster.region,
-              endpoint: this.peerCluster.arn.apply(parseDsqlPublicEndpoint),
-            }
-          : undefined,
-      },
-      include: [
-        permission({
-          actions: ["dsql:DbConnect", "dsql:DbConnectAdmin", "dsql:GetCluster"],
-          resources: this.peerCluster
-            ? [this.cluster.arn, this.peerCluster.arn]
-            : [this.cluster.arn],
-        }),
-      ],
-    };
   }
 }
 
-const __pulumiType = "sst:aws:Dsql";
-// @ts-expect-error
-Dsql.__pulumiType = __pulumiType;
+// The VPC the endpoints are created in, and which of them are created
+function endpointsOf(name: string, vpc: DsqlArgs["vpc"]) {
+  const what = `the "${name}" DSQL cluster`;
+  const given = plain(vpc, `The "vpc" of ${what}`);
+  if (!given) return undefined;
+
+  const instance = isVpc(given) ? given : given.instance;
+  if (!isVpc(instance))
+    throw new VisibleError(
+      `The "vpc" of ${what} isn't a "Vpc" component. Pass a "Vpc", or one as "vpc.instance" with the endpoints to create.`,
+    );
+
+  const endpoints = isVpc(given) ? undefined : given.endpoints;
+  const of = `of the "vpc.endpoints" of ${what}`;
+  return {
+    instance,
+    management: plain(endpoints?.management, `The "management" ${of}`) ?? false,
+    connection: plain(endpoints?.connection, `The "connection" ${of}`) ?? true,
+  };
+}

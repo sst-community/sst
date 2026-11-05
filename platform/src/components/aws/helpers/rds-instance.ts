@@ -215,7 +215,7 @@ export interface RdsInstanceArgs
    * Create a `Vpc` component.
    *
    * ```ts title="sst.config.ts"
-   * const myVpc = new sst.aws.v5.Vpc("MyVpc");
+   * const myVpc = new sst.aws.Vpc("MyVpc");
    * ```
    *
    * And pass it in. The database will be placed in the private subnets.

@@ -1,11 +1,49 @@
-import { all, ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component.js";
-import { Input } from "../input.js";
+import {
+  ComponentResourceOptions,
+  type Output,
+  all,
+  output,
+} from "@pulumi/pulumi";
 import { ec2, efs } from "@pulumi/aws";
-import { Vpc } from "./vpc.js";
-import { VisibleError } from "../error.js";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+} from "../parts-component";
+import { notAnExistingPart, usedAsItIs, withDefault, getArgs } from "../args";
+import { VisibleError } from "../error";
+import type { Input } from "../input";
+import {
+  type AnyVpc,
+  assertVpcIds,
+  isVpc,
+  privateSubnetsOf,
+  subnetsByAz,
+} from "./helpers/vpc";
 
-export interface EfsArgs {
+const parts = {
+  /**
+   * The Amazon EFS file system.
+   */
+  fileSystem: efs.FileSystem,
+  /**
+   * The security group of the mount targets. It lets in traffic from inside the VPC.
+   */
+  securityGroup: ec2.SecurityGroup,
+  /**
+   * The mount targets of the file system, one in each availability zone. In a `Vpc` your
+   * app creates, they're kept by the AZ's number, as the VPC keeps its subnets. In any
+   * other VPC, one from `get` or one given by its ids, they're kept by the AZ's name.
+   */
+  mountTarget: many(deferred(efs.MountTarget)),
+  /**
+   * The Amazon EFS access point.
+   */
+  accessPoint: efs.AccessPoint,
+};
+
+export interface EfsArgs extends ComponentArgs<typeof parts> {
   /**
    * The throughput mode for the EFS file system.
    *
@@ -29,7 +67,7 @@ export interface EfsArgs {
    * The performance mode for the EFS file system.
    *
    * The `max-io` mode can support higher throughput, but with slightly higher latency. It's
-   * recommended for larger workloads like data analysis or meadia processing.
+   * recommended for larger workloads like data analysis or media processing.
    *
    * Both the modes are priced the same, but `general-purpose` is recommended for most use cases.
    *
@@ -43,7 +81,8 @@ export interface EfsArgs {
    */
   performance?: Input<"general-purpose" | "max-io">;
   /**
-   * The VPC to use for the EFS file system.
+   * The VPC to use for the EFS file system. A mount target is created in each private
+   * subnet of a `Vpc`, or in each subnet you give.
    *
    * @example
    * Create a VPC component.
@@ -60,56 +99,47 @@ export interface EfsArgs {
    * }
    * ```
    *
-   * Or pass in a custom VPC configuration.
+   * Or pass in the ids of a VPC.
    *
    * ```js
    * {
    *   vpc: {
-   *     subnets: ["subnet-0db7376a7ad4db5fd ", "subnet-06fc7ee8319b2c0ce"]
+   *     id: "vpc-0d19d2b8ca2b268a1",
+   *     subnets: ["subnet-0db7376a7ad4db5fd", "subnet-06fc7ee8319b2c0ce"]
    *   }
    * }
    * ```
+   *
+   * Keep giving the VPC the same way. The mount targets in a `Vpc` your app creates are
+   * kept by the AZ's number, and in any other VPC by the AZ's name, so passing the `Vpc`
+   * in place of its ids, or the other way around, makes them again, which EFS refuses
+   * while the old ones are there.
    */
   vpc:
-    | Vpc
+    | AnyVpc
     | Input<{
         /**
          * The ID of the VPC.
          */
         id: Input<string>;
         /**
-         * A list of subnet IDs in the VPC to create the EFS mount targets in.
+         * A list of subnet IDs in the VPC to create the EFS mount targets in, one in each
+         * availability zone.
+         *
+         * Each mount target is kept by its subnet's AZ, which is looked up, so the order of
+         * the list doesn't matter, and adding or removing a subnet changes only its AZ's.
+         * Subnets your app creates in the same deploy can't be looked up by a preview, so
+         * `sst diff` doesn't show their mount targets until they're there.
          */
         subnets: Input<Input<string>[]>;
       }>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the EFS file system.
-     */
-    fileSystem?: Transform<efs.FileSystemArgs>;
-    /**
-     * Transform the EFS access point.
-     */
-    accessPoint?: Transform<efs.AccessPointArgs>;
-    /**
-     * Transform the security group for the EFS mount targets.
-     */
-    securityGroup?: Transform<ec2.SecurityGroupArgs>;
-  };
-}
-
-interface EfsRef {
-  ref: boolean;
-  fileSystem: efs.FileSystem;
-  accessPoint: efs.AccessPoint;
 }
 
 /**
  * The `Efs` component lets you add [Amazon Elastic File System (EFS)](https://docs.aws.amazon.com/efs/latest/ug/whatisefs.html) to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -136,13 +166,10 @@ interface EfsRef {
  *
  * #### Attach it to a container
  *
- * ```ts title="sst.config.ts" {7}
+ * ```ts title="sst.config.ts" {4-6}
  * const cluster = new sst.aws.Cluster("MyCluster", { vpc });
  * new sst.aws.Service("MyService", {
  *   cluster,
- *   public: {
- *     ports: [{ listen: "80/http" }],
- *   },
  *   volumes: [
  *     { efs, path: "/mnt/efs" }
  *   ]
@@ -150,6 +177,35 @@ interface EfsRef {
  * ```
  *
  * Mounted at `/mnt/efs` in the container.
+ *
+ * #### Switch from SST 4's `sst.aws.Efs`
+ *
+ * Keep the name, and `sst migrate` moves it. The file system, its mount
+ * targets, their security group and the access point are kept.
+ *
+ * A few things work differently:
+ *
+ * - Switch what mounts the file system first, or along with it. A `sst.aws.Function`,
+ *   `sst.aws.Service` and `sst.aws.Task` take either one. A
+ *   [`sst.aws.Function`](/docs/component/aws/function),
+ *   [`sst.aws.Service`](/docs/component/aws/service) and
+ *   [`sst.aws.Task`](/docs/component/aws/task) only know `sst.aws.Efs`.
+ * - `nodes.fileSystem` and `nodes.accessPoint` are the resources, not outputs of them.
+ *   `nodes` also has the security group and the mount targets.
+ * - Each mount target is kept by its availability zone, where `sst.aws.Efs` kept it by
+ *   its subnet's id: by the AZ's number in a `Vpc` your app creates, and by the AZ's name
+ *   in any other VPC. So a subnet that's replaced replaces its mount target, removing the
+ *   old one first, since EFS allows one in each AZ. Switching keeps them all, and so does
+ *   switching the `Vpc` too.
+ * - The mount targets can be transformed. A transform function is also given the key
+ *   it's kept by.
+ * - The VPC given by its ids is looked up with a function, where `sst.aws.Efs` read it
+ *   into the state, so a deploy drops that read.
+ * - A file system from `get` is looked up inside the component, with its access point.
+ *   `sst.aws.Efs.get` looked them up at the top of the app, so a deploy drops those two
+ *   lookups from its state and reads the same resources again.
+ * - If you set part of the access point's `posixUser` or `rootDirectory` with an object
+ *   in `transform`, the rest of it is kept.
  *
  * ---
  *
@@ -165,183 +221,175 @@ interface EfsRef {
  * The above are rough estimates for _us-east-1_, check out the
  * [EFS pricing](https://aws.amazon.com/efs/pricing/) for more details.
  */
-export class Efs extends Component {
-  private _fileSystem: Output<efs.FileSystem>;
-  private _accessPoint: Output<efs.AccessPoint>;
+export class Efs extends component("sst:aws:Efs", parts) {
+  // What mounts the file system reads these. They're known once it can be
+  // mounted: when its mount targets are there.
+  private mounted: { id: Output<string>; accessPoint: Output<string> };
+  // The subnet of each mount target, by its key
+  private subnets: Record<string, Input<string>> = {};
 
   constructor(name: string, args: EfsArgs, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = args as unknown as EfsRef;
-      this._fileSystem = output(ref.fileSystem);
-      this._accessPoint = output(ref.accessPoint);
+    const self = this;
+    const of = `the "${name}" file system`;
+
+    // A file system that's already deployed, with the access point it has
+    const existing = this.existingPart("fileSystem");
+    if (existing) {
+      usedAsItIs(args, ["throughput", "performance", "vpc"], "fileSystem", of);
+      for (const key of ["securityGroup", "mountTarget"])
+        notAnExistingPart(
+          args.existing,
+          key,
+          of,
+          `The "fileSystem" it's given has its mount targets already.`,
+        );
+      const accessPoint =
+        this.existingPart("accessPoint") ??
+        this.lookupPart("accessPoint", firstAccessPointOf(existing));
+      this.mounted = { id: existing.id, accessPoint: accessPoint.id };
       return;
     }
 
-    const parent = this;
-    const vpc = normalizeVpc();
-    const throughput = output(args.throughput ?? "elastic");
-    const performance = output(args.performance ?? "general-purpose");
+    const vpc = network();
 
-    const fileSystem = createFileSystem();
-    const securityGroup = createSecurityGroup();
-    const mountTargets = createMountTargets();
-    const accessPoint = createAccessPoint();
+    const fileSystem = this.part("fileSystem", {
+      performanceMode: withDefault(args.performance, "general-purpose", (v) =>
+        v === "general-purpose" ? "generalPurpose" : "maxIO",
+      ),
+      throughputMode: withDefault(args.throughput, "elastic"),
+      encrypted: true,
+    });
 
-    const waited = mountTargets.apply((targets) =>
-      all(targets.map((target) => target.urn)).apply(() => ({
-        fileSystem,
-        accessPoint,
-      })),
-    );
-    this._fileSystem = waited.fileSystem;
-    this._accessPoint = waited.accessPoint;
+    const securityGroup = this.part("securityGroup", {
+      description: "Managed by SST",
+      vpcId: vpc.id,
+      egress: [
+        {
+          fromPort: 0,
+          toPort: 0,
+          protocol: "-1",
+          cidrBlocks: ["0.0.0.0/0"],
+        },
+      ],
+      ingress: [
+        {
+          fromPort: 0,
+          toPort: 0,
+          protocol: "-1",
+          // Restricts inbound traffic to only within the VPC
+          cidrBlocks: [vpc.cidrBlock],
+        },
+      ],
+    });
 
-    function normalizeVpc() {
-      // "vpc" is a Vpc component
-      if (args.vpc instanceof Vpc) {
-        return output({
-          id: args.vpc.id,
-          subnets: args.vpc.privateSubnets,
-          cidrBlock: args.vpc.nodes.vpc.cidrBlock,
-        });
-      }
-
-      // "vpc" is object
-      return output(args.vpc).apply((vpc) => {
-        // Because `vpc.id` is newly required since v3.3.66, some people might not have
-        // it, and they should get a type error. We want to throw a descriptive error.
-        if (!vpc.id)
-          throw new VisibleError(
-            `Missing "vpc.id" for the "${name}" EFS component. The VPC id is required to create the security group for the EFS mount targets.`,
-          );
-
-        const vpcRef = ec2.Vpc.get(`${name}Vpc`, vpc.id, undefined, {
-          parent,
-        });
-        return {
-          id: vpc.id,
-          subnets: vpc.subnets,
-          cidrBlock: vpcRef.cidrBlock,
-        };
-      });
-    }
-
-    function createFileSystem() {
-      return new efs.FileSystem(
-        ...transform(
-          args.transform?.fileSystem,
-          `${name}FileSystem`,
-          {
-            performanceMode: performance.apply((v) =>
-              v === "general-purpose" ? "generalPurpose" : "maxIO",
-            ),
-            throughputMode: throughput,
-            encrypted: true,
-          },
-          { parent },
-        ),
-      );
-    }
-
-    function createSecurityGroup() {
-      return new ec2.SecurityGroup(
-        ...transform(
-          args.transform?.securityGroup,
-          `${name}SecurityGroup`,
-          {
-            description: "Managed by SST",
-            vpcId: vpc.id,
-            egress: [
-              {
-                fromPort: 0,
-                toPort: 0,
-                protocol: "-1",
-                cidrBlocks: ["0.0.0.0/0"],
-              },
-            ],
-            ingress: [
-              {
-                fromPort: 0,
-                toPort: 0,
-                protocol: "-1",
-                // Restricts inbound traffic to only within the VPC
-                cidrBlocks: [vpc.cidrBlock],
-              },
-            ],
-          },
-          { parent },
-        ),
-      );
-    }
-
-    function createMountTargets() {
-      return vpc.subnets.apply((subnets) =>
-        subnets.map(
-          (subnet) =>
-            new efs.MountTarget(
-              `${name}MountTarget${subnet}`,
-              {
-                fileSystemId: fileSystem.id,
-                subnetId: subnet,
-                securityGroups: [securityGroup.id],
-              },
-              { parent },
-            ),
-        ),
-      );
-    }
-
-    function createAccessPoint() {
-      return new efs.AccessPoint(
-        ...transform(
-          args.transform?.accessPoint,
-          `${name}AccessPoint`,
+    // One in each AZ. Where the subnets are known as the program runs,
+    // they're created with the rest; otherwise once a preview knows them.
+    const mountTargets = (subnets: Record<string, Input<string>> = {}) =>
+      Object.entries(subnets).map(([key, subnet]) => {
+        this.subnets[key] = subnet;
+        return this.part(
+          "mountTarget",
+          key,
           {
             fileSystemId: fileSystem.id,
-            posixUser: {
-              uid: 0,
-              gid: 0,
-            },
-            rootDirectory: {
-              path: "/",
-            },
+            subnetId: subnet,
+            securityGroups: [securityGroup.id],
           },
-          { parent },
-        ),
-      );
+          // EFS allows one in each AZ, so a new one can't be made beside it
+          { deleteBeforeReplace: true },
+        );
+      });
+    const mounts =
+      vpc.subnets instanceof Promise
+        ? output(this.after(vpc.subnets, mountTargets))
+        : mountTargets(vpc.subnets);
+
+    // A function can't be created with a file system that has no mount target
+    // in its subnets yet. The access point waits for them, so whatever mounts
+    // it does too.
+    const accessPoint = this.part(
+      "accessPoint",
+      {
+        fileSystemId: fileSystem.id,
+        posixUser: { uid: 0, gid: 0 },
+        rootDirectory: { path: "/" },
+      },
+      { dependsOn: mounts },
+    );
+
+    this.mounted = {
+      id: all([fileSystem.id, accessPoint.id]).apply(([id]) => id),
+      accessPoint: accessPoint.id,
+    };
+
+    // Where the mount targets go: the private subnets of a `Vpc`, or the
+    // subnets that were given
+    function network() {
+      if (isVpc(args.vpc))
+        return {
+          id: args.vpc.id,
+          cidrBlock: args.vpc.nodes.vpc.cidrBlock,
+          subnets: privateSubnetsOf(args.vpc, self, of),
+        };
+
+      assertVpcIds(args.vpc, of);
+      const vpc = output(args.vpc).apply((vpc) => {
+        // `vpc.id` wasn't always required, so a config can be without it
+        if (!vpc.id)
+          throw new VisibleError(
+            `The "vpc" of ${of} has no "id". Its mount targets' security group is created in it.`,
+          );
+        if (!vpc.subnets)
+          throw new VisibleError(
+            `The "vpc" of ${of} has no "subnets". Its mount targets are created in them.`,
+          );
+        return vpc;
+      });
+      return {
+        id: vpc.id,
+        cidrBlock: ec2.getVpcOutput({ id: vpc.id }, { parent: self }).cidrBlock,
+        subnets: subnetsByAz(vpc.subnets, self, of),
+      };
     }
+
+    function firstAccessPointOf(fileSystem: efs.FileSystem) {
+      return efs
+        .getAccessPointsOutput(
+          { fileSystemId: fileSystem.id },
+          { parent: self },
+        )
+        .apply((found) => {
+          if (!found.ids.length)
+            throw new VisibleError(
+              `The "fileSystem" ${of} is given has no access point. Create one, and pass it in "existing.accessPoint".`,
+            );
+          return found.ids[0];
+        });
+    }
+  }
+
+  /**
+   * The subnet of a mount target, by the key it's kept by.
+   * @internal
+   */
+  public subnetOf(key: string): Input<string> | undefined {
+    return this.subnets[key];
   }
 
   /**
    * The ID of the EFS file system.
    */
   public get id() {
-    return this._fileSystem.id;
+    return this.mounted.id;
   }
 
   /**
    * The ID of the EFS access point.
    */
   public get accessPoint() {
-    return this._accessPoint.id;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon EFS file system.
-       */
-      fileSystem: this._fileSystem,
-      /**
-       * The Amazon EFS access point.
-       */
-      accessPoint: this._accessPoint,
-    };
+    return this.mounted.accessPoint;
   }
 
   /**
@@ -382,29 +430,10 @@ export class Efs extends Component {
     fileSystemID: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    const fileSystem = efs.FileSystem.get(
-      `${name}FileSystem`,
-      fileSystemID,
-      undefined,
+    return new Efs(
+      name,
+      getArgs({ existing: { fileSystem: fileSystemID } }) as EfsArgs,
       opts,
     );
-    const accessPointId = efs
-      .getAccessPointsOutput({ fileSystemId: fileSystem.id }, opts)
-      .apply((accessPoints) => accessPoints.ids[0]);
-    const accessPoint = efs.AccessPoint.get(
-      `${name}AccessPoint`,
-      accessPointId,
-      undefined,
-      opts,
-    );
-    return new Efs(name, {
-      ref: true,
-      fileSystem,
-      accessPoint,
-    } satisfies EfsRef as unknown as EfsArgs);
   }
 }
-
-const __pulumiType = "sst:aws:Efs";
-// @ts-expect-error
-Efs.__pulumiType = __pulumiType;

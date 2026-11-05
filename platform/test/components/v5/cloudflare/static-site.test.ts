@@ -52,19 +52,19 @@ const pulumi = mockPulumi({
 });
 
 type V5Class =
-  typeof import("../../../../src/components/cloudflare/v5/static-site").StaticSite;
+  typeof import("../../../../src/components/cloudflare/static-site").StaticSite;
 type OriginalClass =
-  typeof import("../../../../src/components/cloudflare/static-site-v2").StaticSiteV2;
+  typeof import("../../../fixtures/v4/components/cloudflare/static-site-v2").StaticSiteV2;
 type AnyClass = V5Class | OriginalClass;
 
 let Site: V5Class;
 let OriginalSite: OriginalClass;
 
 beforeAll(async () => {
-  Site = (await import("../../../../src/components/cloudflare/v5/static-site"))
+  Site = (await import("../../../../src/components/cloudflare/static-site"))
     .StaticSite;
   OriginalSite = (
-    await import("../../../../src/components/cloudflare/static-site-v2")
+    await import("../../../fixtures/v4/components/cloudflare/static-site-v2")
   ).StaticSiteV2;
   await import("../../../../src/components/cloudflare/takeover/index");
 });

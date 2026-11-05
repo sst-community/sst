@@ -1,14 +1,12 @@
-import { Cluster as OriginalCluster } from "../cluster";
-import { Cluster } from "../v5/cluster";
+import { Cluster } from "../cluster";
 
 /**
- * A `Cluster` component: the 4.x one or the V5 one. A V5 `Service` and `Task`
- * take either, and read its `nodes.cluster` and `vpc`, which the two give
- * alike.
+ * A `Cluster` component. A `Service` and a `Task` read its `nodes.cluster` and
+ * `vpc`.
  */
-export type AnyCluster = OriginalCluster | Cluster;
+export type AnyCluster = Cluster;
 
 /** Whether a `cluster` arg is a `Cluster` component. */
 export function isCluster(value: unknown): value is AnyCluster {
-  return value instanceof OriginalCluster || value instanceof Cluster;
+  return value instanceof Cluster;
 }

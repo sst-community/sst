@@ -2,9 +2,9 @@ import { interpolate } from "@pulumi/pulumi";
 import { takeover } from "../../takeover";
 import { outputId } from "../../component";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { ApiGatewayRest } from "../v5/apigateway-rest";
-import { ApiGatewayRestUsagePlan } from "../v5/apigateway-rest-usage-plan";
-import { ApiGatewayRestApiKey } from "../v5/apigateway-rest-api-key";
+import { ApiGatewayRest } from "../apigateway-rest";
+import { ApiGatewayRestUsagePlan } from "../apigateway-rest-usage-plan";
+import { ApiGatewayRestApiKey } from "../apigateway-rest-api-key";
 import { childOf } from "./helpers";
 
 // The 4.x `ApiGatewayV1` keeps each route in a component of its own, at the

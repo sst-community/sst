@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Bus } from "../v5/bus";
+import { Bus } from "../bus";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Bus` keeps each subscription in a component of its own, at the top

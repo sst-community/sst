@@ -1,17 +1,57 @@
-import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component";
-import { Link } from "../link";
+import {
+  ComponentResourceOptions,
+  interpolate,
+  output,
+} from "@pulumi/pulumi";
+import { cloudwatch, lambda, sqs } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+} from "../parts-component";
+import { usedAsItIs, getArgs } from "../args";
 import type { Input } from "../input";
-import { Function, FunctionArgs, FunctionArn } from "./function.js";
-import { Workflow } from "./workflow.js";
+import { VisibleError } from "../error";
+import { Function } from "./function";
 import { parseEventBusArn } from "./helpers/arn";
-import { BusLambdaSubscriber } from "./bus-lambda-subscriber";
-import { cloudwatch } from "@pulumi/aws";
+import { enabledState, ruleFunctionTarget } from "./helpers/eventbridge";
+import { type FunctionInput, plainFunction } from "./helpers/function-part";
+import { sendPolicy } from "./helpers/queue-policy";
+import { type AnyQueue, queueArnOf } from "./helpers/queue";
 import { permission } from "./permission";
-import { Queue } from "./queue";
-import { BusQueueSubscriber } from "./bus-queue-subscriber";
 
-export interface BusArgs {
+const parts = () => ({
+  /**
+   * The EventBridge event bus.
+   */
+  bus: cloudwatch.EventBus,
+  /**
+   * The functions subscribed to the bus, by subscriber name.
+   */
+  subscriber: many(deferred(Function)),
+  /**
+   * The permission that lets EventBridge invoke each function subscriber, by
+   * subscriber name.
+   */
+  permission: many(lambda.Permission),
+  /**
+   * The rule that matches the events of each subscriber, by subscriber name.
+   */
+  rule: many(cloudwatch.EventRule),
+  /**
+   * The target that sends what each rule matches to its subscriber, by
+   * subscriber name.
+   */
+  target: many(cloudwatch.EventTarget),
+  /**
+   * The policy that lets EventBridge send to each queue subscriber, by
+   * subscriber name.
+   */
+  queuePolicy: many(sqs.QueuePolicy),
+});
+
+export interface BusArgs extends ComponentArgs<typeof parts> {
   /**
    * Configure logging for the EventBus.
    *
@@ -37,16 +77,6 @@ export interface BusArgs {
      */
     detail?: Input<boolean>;
   }>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the EventBus resource.
-     */
-    bus?: Transform<cloudwatch.EventBusArgs>;
-  };
 }
 
 export interface BusSubscriberArgs {
@@ -144,58 +174,47 @@ export interface BusSubscriberArgs {
      */
     detailType?: (string | any)[];
   }>;
-  /**
-   * [Transform](/docs/components#transform) how this subscription creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the EventBus rule resource.
-     */
-    rule?: Transform<cloudwatch.EventRuleArgs>;
-    /**
-     * Transform the EventBus target resource.
-     */
-    target?: Transform<cloudwatch.EventTargetArgs>;
-  };
 }
 
-interface BusRef {
-  ref: true;
-  busName: Input<string>;
-}
 
 /**
  * The `Bus` component lets you add an [Amazon EventBridge Event Bus](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html) to your app.
+ *
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have. That includes the resources of
+ * each subscriber, which are kept inside the bus.
  *
  * @example
  *
  * #### Create a bus
  *
- * ```ts
+ * ```ts title="sst.config.ts"
  * const bus = new sst.aws.Bus("MyBus");
  * ```
  *
  * #### Add a subscriber
  *
- * ```ts
- * bus.subscribe("MySubscriber", "src/subscriber.handler");
+ * Each subscriber has a name.
+ *
+ * ```ts title="sst.config.ts"
+ * bus.subscribe("MySubscriber", "src/subscriber.handler", {
+ *   pattern: { detailType: ["order.created"] }
+ * });
  * ```
  *
- * #### Customize the subscriber
+ * #### Subscribe to a bus that isn't in your app
  *
- * ```ts
- * bus.subscribe("MySubscriber", {
- *   handler: "src/subscriber.handler",
- *   timeout: "60 seconds"
- * });
+ * Reference it with `get`, by its name or ARN, then subscribe to it.
+ *
+ * ```ts title="sst.config.ts"
+ * sst.aws.Bus.get("Shared", "my-shared-bus").subscribe("MySubscriber", "src/subscriber.handler");
  * ```
  *
  * #### Link the bus to a resource
  *
  * You can link the bus to other resources, like a function or your Next.js app.
  *
- * ```ts
+ * ```ts title="sst.config.ts"
  * new sst.aws.Nextjs("MyWeb", {
  *   link: [bus]
  * });
@@ -219,412 +238,256 @@ interface BusRef {
  *   ]
  * }));
  * ```
+ *
+ * #### Use a bus you already have
+ *
+ * Pass the bus, or its name. The bus is used the way it is: the component doesn't
+ * configure it, and refuses `logging` next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.Bus("MyBus", {
+ *   existing: {
+ *     bus: "my-shared-bus"
+ *   }
+ * });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Bus`
+ *
+ * Keep the name, and `sst migrate` moves it. The bus and the subscribers
+ * you've deployed are kept.
+ *
+ * A few things work differently:
+ *
+ * - `sst.aws.Bus.subscribe` and `sst.aws.Bus.subscribeQueue`, which took the ARN of a bus
+ *   that isn't in your app, are `get` followed by `subscribe` or `subscribeQueue`, and are
+ *   refused with what to write. `get` takes the bus's ARN, or its name. What they created
+ *   is kept, as long as `get` isn't given a provider, directly, through its `parent`, or
+ *   in `providers`: `sst.aws.Bus` created it with your app's, and another one replaces
+ *   it, a function's log group included.
+ *
+ *   ```ts title="sst.config.ts" del={1} ins={2}
+ *   sst.aws.Bus.subscribe("MySubscriber", busArn, "src/subscriber.handler");
+ *   sst.aws.Bus.get("Shared", busArn).subscribe("MySubscriber", "src/subscriber.handler");
+ *   ```
+ *
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - `subscribe` and `subscribeQueue` return the bus, where they returned the subscriber:
+ *   what each one created is in the bus's `nodes`, by the subscriber's name, like
+ *   `bus.nodes.rule.MySubscriber`.
+ * - A subscriber's `transform` is the bus's: its `rule` and `target` apply to every
+ *   subscriber, and a function there is given the subscriber's name.
+ * - A subscriber is created with the provider the bus has. `sst.aws.Bus` gave a function
+ *   subscriber only a `provider` passed to the bus itself, and a queue subscriber your
+ *   app's provider, whatever the bus had. So if your bus has a `provider` and a queue
+ *   subscribed to it, or takes its provider from a parent component or from `providers`,
+ *   the switch gives those subscribers the bus's provider and keeps them, with the
+ *   provider's default tags.
  */
-export class Bus extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorOpts: ComponentResourceOptions;
-  private bus: cloudwatch.EventBus;
-
+export class Bus extends component("sst:aws:Bus", parts) {
   constructor(
     name: string,
     args: BusArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    const self = this;
-    this.constructorName = name;
-    this.constructorOpts = opts;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this.bus = ref.bus;
-      return;
-    }
+    // A bus that's already there is used the way it is
+    if (this.existingPart("bus"))
+      usedAsItIs(args, ["logging"], "bus", `the "${name}" bus`);
 
-    const bus = createBus();
-    this.bus = bus;
-
-    function reference() {
-      const ref = args as BusRef;
-      const bus = cloudwatch.EventBus.get(
-        `${name}Bus`,
-        ref.busName,
-        undefined,
-        {
-          parent: self,
-        },
-      );
-      return { bus };
-    }
-
-    function createBus() {
-      return new cloudwatch.EventBus(
-        ...transform(
-          args.transform?.bus,
-          `${name}Bus`,
-          {
-            logConfig: args.logging && output(args.logging).apply((l) => ({
-              level: l.level.toUpperCase(),
-              includeDetail: l.detail ? "FULL" : "NONE",
-            })),
-          },
-          { parent: self },
-        ),
-      );
-    }
+    this.part("bus", {
+      logConfig:
+        args.logging &&
+        output(args.logging).apply((logging) => ({
+          level: logging.level.toUpperCase(),
+          includeDetail: logging.detail ? "FULL" : "NONE",
+        })),
+    });
   }
 
   /**
    * The ARN of the EventBus.
    */
   public get arn() {
-    return this.bus.arn;
+    return this.nodes.bus.arn;
   }
 
   /**
    * The name of the EventBus.
    */
   public get name() {
-    return this.bus.name;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon EventBus resource.
-       */
-      bus: this.bus,
-    };
+    return this.nodes.bus.name;
   }
 
   /**
    * Subscribe to this EventBus with a function.
    *
-   * @param name The name of the subscription.
-   * @param subscriber The function that'll be notified.
+   * @param name The name of the subscriber.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
    *
    * ```js title="sst.config.ts"
-   * bus.subscribe("MySubscription", "src/subscriber.handler");
+   * bus.subscribe("MySubscriber", "src/subscriber.handler");
    * ```
    *
-   * You can add a pattern to the subscription.
-   *
-   * ```js
-   * bus.subscribe("MySubscription", "src/subscriber.handler", {
-   *   pattern: {
-   *     source: ["my.source", "my.source2"],
-   *     price_usd: [{numeric: [">=", 100]}]
-   *   }
-   * });
-   * ```
-   *
-   * To customize the subscriber function:
-   *
-   * ```js
-   * bus.subscribe("MySubscription", {
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds"
-   * });
-   * ```
-   *
-   * Or pass in the ARN of an existing Lambda function.
+   * Only receive some events with a pattern.
    *
    * ```js title="sst.config.ts"
-   * bus.subscribe("MySubscription", "arn:aws:lambda:us-east-1:123456789012:function:my-function");
+   * bus.subscribe("MySubscriber", "src/subscriber.handler", {
+   *   pattern: {
+   *     detailType: ["order.created", "order.updated"]
+   *   }
+   * });
    * ```
    */
   public subscribe(
     name: string,
-    subscriber: Input<
-      string | Workflow | Function | FunctionArgs | FunctionArn
-    >,
+    subscriber: FunctionInput,
     args: BusSubscriberArgs = {},
   ) {
-    return Bus._subscribeFunction(
-      this.constructorName,
+    this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);
+    const rule = this.subscriberRule(name, args);
+    ruleFunctionTarget(
+      this.builder(),
+      { subscriber: "subscriber", permission: "permission", target: "target" },
       name,
-      this.nodes.bus.name,
-      this.nodes.bus.arn,
-      subscriber,
-      args,
-      { provider: this.constructorOpts.provider },
-    );
-  }
-
-  /**
-   * Subscribe to an EventBus that was not created in your app with a function.
-   *
-   * @param name The name of the subscription.
-   * @param busArn The ARN of the EventBus to subscribe to.
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing EventBus with the following ARN.
-   *
-   * ```js title="sst.config.ts"
-   * const busArn = "arn:aws:events:us-east-1:123456789012:event-bus/my-bus";
-   * ```
-   *
-   * You can subscribe to it by passing in the ARN.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bus.subscribe("MySubscription", busArn, "src/subscriber.handler");
-   * ```
-   *
-   * To add a pattern to the subscription.
-   *
-   * ```js
-   * sst.aws.Bus.subscribe("MySubscription", busArn, "src/subscriber.handler", {
-   *   pattern: {
-   *     price_usd: [{numeric: [">=", 100]}]
-   *   }
-   * });
-   * ```
-   *
-   * Or customize the subscriber function.
-   *
-   * ```js
-   * sst.aws.Bus.subscribe("MySubscription", busArn, {
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds"
-   * });
-   * ```
-   */
-  public static subscribe(
-    name: string,
-    busArn: Input<string>,
-    subscriber: Input<
-      string | Workflow | Function | FunctionArgs | FunctionArn
-    >,
-    args?: BusSubscriberArgs,
-  ) {
-    return output(busArn).apply((busArn) => {
-      const busName = parseEventBusArn(busArn).busName;
-      return this._subscribeFunction(
-        busName,
-        name,
-        busName,
-        busArn,
-        subscriber,
-        args,
-      );
-    });
-  }
-
-  private static _subscribeFunction(
-    name: string,
-    subscriberName: string,
-    busName: Input<string>,
-    busArn: string | Output<string>,
-    subscriber: Input<
-      string | Workflow | Function | FunctionArgs | FunctionArn
-    >,
-    args: BusSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return output(args).apply((args) => {
-      return new BusLambdaSubscriber(
-        `${name}Subscriber${subscriberName}`,
-        {
-          bus: { name: busName, arn: busArn },
+      rule,
+      {
+        bus: this.name,
+        subscriber: plainFunction(
           subscriber,
-          ...args,
-        },
-        opts,
-      );
-    });
+          `The subscriber "${name}" of the "${this.componentName}" bus`,
+        ),
+        description: interpolate`Subscribed to ${this.name}`,
+      },
+    );
+    return this;
   }
 
   /**
    * Subscribe to this EventBus with an SQS Queue.
    *
-   * @param name The name of the subscription.
-   * @param queue The queue that'll be notified.
+   * @param name The name of the subscriber.
+   * @param queue The queue that'll be notified: a queue component, or the ARN of a queue.
    * @param args Configure the subscription.
    *
    * @example
    *
-   * For example, let's say you have a queue.
-   *
    * ```js title="sst.config.ts"
    * const queue = new sst.aws.Queue("MyQueue");
-   * ```
    *
-   * You can subscribe to this bus with it.
-   *
-   * ```js title="sst.config.ts"
-   * bus.subscribeQueue("MySubscription", queue);
-   * ```
-   *
-   * You can also add a filter to the subscription.
-   *
-   * ```js
-   * bus.subscribeQueue("MySubscription", queue, {
-   *   filter: {
-   *     price_usd: [{numeric: [">=", 100]}]
-   *   }
-   * });
-   * ```
-   *
-   * Or pass in the ARN of an existing SQS queue.
-   *
-   * ```js
-   * bus.subscribeQueue("MySubscription", "arn:aws:sqs:us-east-1:123456789012:my-queue");
+   * bus.subscribeQueue("MyQueue", queue);
    * ```
    */
   public subscribeQueue(
     name: string,
-    queue: Input<string | Queue>,
+    queue: Input<string | AnyQueue>,
     args: BusSubscriberArgs = {},
   ) {
-    return Bus._subscribeQueue(
-      this.constructorName,
-      name,
-      this.nodes.bus.arn,
-      this.nodes.bus.name,
-      queue,
-      args,
+    this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);
+    const queueArn = queueArnOf(queue);
+    this.part("queuePolicy", name, ...sendPolicy(queueArn));
+    const rule = this.subscriberRule(name, args);
+    this.part("target", name, {
+      arn: queueArn,
+      rule: rule.name,
+      eventBusName: this.name,
+    });
+    return this;
+  }
+
+  // The rule that picks a subscriber's events off the bus: all of them,
+  // without a pattern
+  private subscriberRule(name: string, args: BusSubscriberArgs) {
+    return this.part("rule", name, {
+      eventBusName: this.name,
+      state: enabledState(args.enabled),
+      eventPattern: args.pattern
+        ? output(args.pattern).apply((pattern) =>
+            JSON.stringify({
+              "detail-type": pattern.detailType,
+              source: pattern.source,
+              detail: pattern.detail,
+            }),
+          )
+        : JSON.stringify({ source: [{ prefix: "" }] }),
+    });
+  }
+
+  /**
+   * `sst.aws.Bus.subscribe` subscribed to a bus by its ARN. Reference the bus with `get`
+   * and subscribe to that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to a bus that isn't in your app, reference it with "get" and subscribe to that: sst.aws.Bus.get("MyBus", busArn).subscribe("MySubscriber", "src/subscriber.handler").`,
     );
   }
 
   /**
-   * Subscribe to an existing EventBus with an SQS Queue.
+   * `sst.aws.Bus.subscribeQueue` subscribed a queue to a bus by its ARN. Reference the
+   * bus with `get` and subscribe the queue to that.
    *
-   * @param name The name of the subscription.
-   * @param busArn The ARN of the EventBus to subscribe to.
-   * @param queue The queue that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing EventBus and an SQS Queue.
-   *
-   * ```js title="sst.config.ts"
-   * const busArn = "arn:aws:events:us-east-1:123456789012:event-bus/MyBus";
-   * const queue = new sst.aws.Queue("MyQueue");
-   * ```
-   *
-   * You can subscribe to the bus with the queue.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bus.subscribeQueue("MySubscription", busArn, queue);
-   * ```
-   *
-   * Add a filter to the subscription.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.Bus.subscribeQueue(MySubscription, busArn, queue, {
-   *   filter: {
-   *     price_usd: [{numeric: [">=", 100]}]
-   *   }
-   * });
-   * ```
-   *
-   * Or pass in the ARN of an existing SQS queue.
-   *
-   * ```js
-   * sst.aws.Bus.subscribeQueue("MySubscription", busArn, "arn:aws:sqs:us-east-1:123456789012:my-queue");
-   * ```
+   * @internal
    */
-  public static subscribeQueue(
-    name: string,
-    busArn: Input<string>,
-    queue: Input<string | Queue>,
-    args?: BusSubscriberArgs,
-  ) {
-    return output(busArn).apply((busArn) => {
-      const busName = parseEventBusArn(busArn).busName;
-      return this._subscribeQueue(busName, name, busArn, busName, queue, args);
-    });
-  }
-
-  private static _subscribeQueue(
-    name: string,
-    subscriberName: string,
-    busArn: Input<string>,
-    busName: Input<string>,
-    queue: Input<string | Queue>,
-    args: BusSubscriberArgs = {},
-  ) {
-    return output(args).apply((args) => {
-      return new BusQueueSubscriber(`${name}Subscriber${subscriberName}`, {
-        bus: { name: busName, arn: busArn },
-        queue,
-        ...args,
-      });
-    });
-  }
-
-  /** @internal */
-  public getSSTLink() {
-    return {
-      properties: {
-        name: this.name,
-        arn: this.arn,
-      },
-      include: [
-        permission({
-          actions: ["events:*"],
-          resources: [this.nodes.bus.arn],
-        }),
-      ],
-    };
+  public static subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe a queue to a bus that isn't in your app, reference the bus with "get" and subscribe the queue to that: sst.aws.Bus.get("MyBus", busArn).subscribeQueue("MySubscriber", queue).`,
+    );
   }
 
   /**
-   * Reference an existing EventBus with its ARN. This is useful when you create a
-   * bus in one stage and want to share it in another stage. It avoids having to create
-   * a new bus in the other stage.
-   *
-   * :::tip
-   * You can use the `static get` method to share EventBus across stages.
-   * :::
+   * Reference an existing EventBus with its name or ARN. This is useful when you create a
+   * bus in one stage and want to share it in another, or to subscribe to a bus that isn't
+   * in your app. The bus is used the way it is: it isn't configured here.
    *
    * @param name The name of the component.
-   * @param busName The name of the existing EventBus.
-   * @param opts Resource options.
+   * @param bus The name of the existing EventBus, or its ARN.
+   * @param opts Component resource options.
    *
    * @example
-   * Imagine you create a bus in the `dev` stage. And in your personal stage `frank`,
-   * instead of creating a new bus, you want to share the bus from `dev`.
    *
    * ```ts title="sst.config.ts"
    * const bus = $app.stage === "frank"
    *   ? sst.aws.Bus.get("MyBus", "app-dev-MyBus")
    *   : new sst.aws.Bus("MyBus");
    * ```
-   *
-   * Here `app-dev-MyBus` is the name of the bus created in the `dev` stage. You can find
-   * this by outputting the bus name in the `dev` stage.
-   *
-   * ```ts title="sst.config.ts"
-   * return bus.name;
-   * ```
    */
   public static get(
     name: string,
-    busName: Input<string>,
+    bus: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new Bus(
-      name,
-      {
-        ref: true,
-        busName,
-      } as BusArgs,
-      opts,
+    // A bus is looked up by its name
+    const busName = output(bus).apply((id) =>
+      id.startsWith("arn:") ? parseEventBusArn(id).busName : id,
     );
+    return new Bus(name, getArgs({ existing: { bus: busName } }), opts);
+  }
+
+  /**
+   * Linking a bus gives the linked resource its name and ARN, and permission
+   * to use it.
+   */
+  public link() {
+    return {
+      properties: { name: this.name, arn: this.arn },
+      include: [permission({ actions: ["events:*"], resources: [this.arn] })],
+    };
   }
 }
-
-const __pulumiType = "sst:aws:Bus";
-// @ts-expect-error
-Bus.__pulumiType = __pulumiType;

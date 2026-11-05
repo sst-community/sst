@@ -2,12 +2,17 @@ import {
   all,
   ComponentResourceOptions,
   interpolate,
+  Output,
   output,
 } from "@pulumi/pulumi";
-import { Component, Transform, transform } from "../component";
 import { cloudwatch, iam, sfn } from "@pulumi/aws";
-import { Link } from "../link";
+import { type ComponentArgs, component, optional } from "../parts-component";
+import { notAnExistingPart, plain } from "../args";
+import type { Input } from "../input";
+import { VisibleError } from "../error";
+import { physicalName } from "../naming";
 import { permission } from "./permission";
+import { RETENTION } from "./logging";
 import { State } from "./step-functions/state";
 import { Choice, ChoiceArgs } from "./step-functions/choice";
 import { Fail, FailArgs } from "./step-functions/fail";
@@ -15,23 +20,39 @@ import { Map, MapArgs } from "./step-functions/map";
 import { Parallel, ParallelArgs } from "./step-functions/parallel";
 import { Pass, PassArgs } from "./step-functions/pass";
 import { Succeed, SucceedArgs } from "./step-functions/succeed";
-import {
-  Task,
-  TaskArgs,
-  LambdaInvokeArgs,
-  SnsPublishArgs,
-  SqsSendMessageArgs,
-  EcsRunTaskArgs,
-  EventBridgePutEventsArgs,
-} from "./step-functions/task";
+import { Task, TaskArgs, TaskBaseArgs } from "./step-functions/task";
 import { Wait, WaitArgs } from "./step-functions/wait";
-import { Input } from "../input";
-import { RETENTION } from "./logging";
-import { physicalName } from "../naming";
-import { functionBuilder } from "./helpers/function-builder";
-import { Function } from "./function.js";
+import { JSONata } from "./step-functions/state";
+import { Function, FunctionArgs } from "./function";
+import {
+  type AnyFunction,
+  type FunctionInput,
+  plainFunction,
+} from "./helpers/function-part";
+import type { AnyBus } from "./helpers/bus";
+import type { AnyQueue } from "./helpers/queue";
+import type { AnySnsTopic } from "./helpers/sns-topic";
+import type { AnyTask } from "./helpers/task";
+import { rolesToPass } from "./helpers/fargate";
 
-export interface StepFunctionsArgs {
+const parts = () => ({
+  /**
+   * The CloudWatch log group the state machine writes its execution logs to, unless
+   * `logging` is `false`. One you pass in `existing` is used the way it is, so `logging`
+   * doesn't set its `retention`.
+   */
+  logGroup: optional(cloudwatch.LogGroup),
+  /**
+   * The IAM role the state machine runs as, with the permissions its states need.
+   */
+  role: iam.Role,
+  /**
+   * The Step Functions state machine.
+   */
+  stateMachine: sfn.StateMachine,
+});
+
+export interface StepFunctionsArgs extends ComponentArgs<typeof parts> {
   /**
    * The type of state machine workflow to create.
    *
@@ -73,6 +94,10 @@ export interface StepFunctionsArgs {
   definition: State;
   /**
    * Configure the execution logs in CloudWatch. Or pass in `false` to disable writing logs.
+   *
+   * Whether there are logs decides whether the log group is created, so `logging`
+   * itself has to be a plain value, not an output. What's in it can be an output.
+   *
    * @default `{retention: "1 month", level: "error", includeData: false}`
    * @example
    * ```js
@@ -81,7 +106,7 @@ export interface StepFunctionsArgs {
    * }
    * ```
    */
-  logging?: Input<
+  logging?:
     | false
     | {
         /**
@@ -127,21 +152,216 @@ export interface StepFunctionsArgs {
          * ```
          */
         level?: Input<"all" | "error" | "fatal">;
-      }
-  >;
+      };
+}
+
+export interface LambdaInvokeArgs extends TaskBaseArgs {
   /**
-   * [Transform](/docs/components#transform) how this component creates its underlying resources.
+   * The function to invoke: the handler of one to create, its args, a `Function`
+   * component, or the ARN of an existing Lambda function.
+   *
+   * A function created from a handler or its args is named after the state, with
+   * `Function` added: `InvokeMyFunctionFunction` for the state `InvokeMyFunction`. A
+   * handler or the args have to be plain values, since whether a function is created is
+   * decided from them. A function you have, or its ARN, can be an output.
    */
-  transform?: {
+  function: Input<string> | FunctionArgs | Input<AnyFunction>;
+  /**
+   * The payload to send to the Lambda function. Values can include outputs from
+   * other resources and JSONata expressions.
+   * @example
+   *
+   * ```ts
+   * {
+   *   payload: {
+   *     env: "{% $states.input.foo %}",
+   *     url: api.url,
+   *     key: 1
+   *   }
+   * }
+   * ```
+   *
+   * Or, you can pass in a JSONata expression that evaluates to the full payload.
+   *
+   * ```ts
+   * {
+   *   payload: "{% $states.input %}"
+   * }
+   * ```
+   */
+  payload?: Input<JSONata | Record<string, Input<unknown>>>;
+}
+
+export interface SnsPublishArgs extends TaskBaseArgs {
+  /**
+   * The `SnsTopic` component to publish the message to.
+   */
+  topic: AnySnsTopic;
+  /**
+   * The message to send to the SNS topic.
+   */
+  message: Input<string>;
+  /**
+   * The message attributes to send to the SNS topic. Values can include outputs
+   * from other resources and JSONata expressions.
+   * @example
+   *
+   * ```ts
+   * {
+   *   messageAttributes: {
+   *     env: "{% $states.input.foo %}",
+   *     url: api.url,
+   *     key: 1
+   *   }
+   * }
+   * ```
+   */
+  messageAttributes?: Input<Record<string, Input<string>>>;
+  /**
+   * The message deduplication ID to send to the SNS topic. This applies to FIFO
+   * topics only.
+   *
+   * This is a string that's used to deduplicate messages sent within the minimum
+   * 5 minute interval.
+   */
+  messageDeduplicationId?: Input<string>;
+  /**
+   * The message group ID to send to the SNS topic. This only applies to FIFO
+   * topics.
+   */
+  messageGroupId?: Input<string>;
+  /**
+   * An optional subject line when the message is delivered to email endpoints.
+   */
+  subject?: Input<string>;
+}
+
+export interface SqsSendMessageArgs extends TaskBaseArgs {
+  /**
+   * The `Queue` component to send the message to.
+   */
+  queue: AnyQueue;
+  /**
+   * The message body to send to the SQS queue. The maximum size is 256KB.
+   */
+  messageBody: Input<string | Record<string, Input<unknown>>>;
+  /**
+   * The message attributes to send to the SQS queue. Values can include outputs
+   * from other resources and JSONata expressions.
+   * @example
+   *
+   * ```ts
+   * {
+   *   messageAttributes: {
+   *     env: "{% $states.input.foo %}",
+   *     url: api.url,
+   *     key: 1
+   *   }
+   * }
+   * ```
+   */
+  messageAttributes?: Input<Record<string, Input<string>>>;
+  /**
+   * The message deduplication ID to send to the SQS queue. This applies to FIFO
+   * queues only.
+   *
+   * This is a string that's used to deduplicate messages sent within the minimum
+   * 5 minute interval.
+   */
+  messageDeduplicationId?: Input<string>;
+  /**
+   * The message group ID to send to the SQS queue. This only applies to FIFO
+   * queues.
+   */
+  messageGroupId?: Input<string>;
+}
+
+export interface EcsRunTaskArgs extends TaskBaseArgs {
+  /**
+   * The ECS `Task` to run.
+   *
+   * ```ts title="sst.config.ts" {6}
+   * const myCluster = new sst.aws.Cluster("MyCluster");
+   * const myTask = new sst.aws.Task("MyTask", { cluster: myCluster });
+   *
+   * sst.aws.StepFunctions.ecsRunTask({
+   *   name: "RunTask",
+   *   task: myTask
+   * });
+   * ```
+   */
+  task: AnyTask;
+  /**
+   * The environment variables to apply to the ECS task. Values can include outputs
+   * from other resources and JSONata expressions.
+   * @example
+   *
+   * ```ts
+   * {
+   *   environment: {
+   *     MY_ENV: "{% $states.input.foo %}",
+   *     MY_URL: api.url,
+   *     MY_KEY: 1
+   *   }
+   * }
+   * ```
+   */
+  environment?: Input<Record<string, Input<string>>>;
+}
+
+export interface EventBridgePutEventsArgs extends TaskBaseArgs {
+  /**
+   * A list of events to send to the EventBridge.
+   *
+   * @example
+   * ```ts
+   * {
+   *   events: [
+   *     {
+   *       bus: myBus,
+   *       source: "my-application",
+   *       detailType: "order-created",
+   *       detail: {
+   *         orderId: "{% $states.input.orderId %}",
+   *         customerId: "{% $states.input.customer.id %}",
+   *         items: "{% $states.input.items %}"
+   *       }
+   *     }
+   *   ]
+   * }
+   * ```
+   */
+  events: {
     /**
-     * Transform the Step Functions StateMachine resource.
+     * The `Bus` component to send the event to.
      */
-    stateMachine?: Transform<sfn.StateMachineArgs>;
+    bus: AnyBus;
     /**
-     * Transform the Step Functions LogGroup resource.
+     * The source of the event. This string or JSONata expression identifies the
+     * service or component that generated it.
      */
-    logGroup?: Transform<cloudwatch.LogGroupArgs>;
-  };
+    source?: Input<string>;
+    /**
+     * The detail type of the event. This helps subscribers filter and route events.
+     * This can be a string or JSONata expression.
+     */
+    detailType?: Input<string>;
+    /**
+     * The event payload containing the event details as a JSON object.
+     * Values can also include a JSONata expression.
+     *
+     * @example
+     * ```ts
+     * {
+     *   detail: {
+     *     type: "order",
+     *     message: "{% $states.input.message %}"
+     *   }
+     * }
+     * ```
+     */
+    detail?: Input<Record<string, Input<unknown>>>;
+  }[];
 }
 
 /**
@@ -203,135 +423,135 @@ export interface StepFunctionsArgs {
  *   definition: foo.next(bar)
  * });
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.StepFunctions`
+ *
+ * Keep the name, and `sst migrate` moves it, its static methods too,. The state machine, its role and its log group are kept. A few things are
+ * written differently:
+ *
+ * - `logging` has to be a plain value, not an output: it decides whether the log group is
+ *   created. What's in it can still be an output.
+ * - `lambdaInvoke` creates a V5 `Function` from a handler or the function's args, with the
+ *   name `sst.aws.StepFunctions` gave its function. Switch from `sst.aws.Function` the
+ *   same way as that function: its own "Switch from" says what changes. A handler or the
+ *   args have to be plain values; a function you have, or its ARN, can be an output.
+ * - `snsPublish`, `sqsSendMessage`, `ecsRunTask` and `eventBridgePutEvents` take the V5
+ *   `SnsTopic`, `Queue`, `Task` and `Bus`, as well as the 4.x ones.
+ * - `nodes` has the role and the log group too.
+ * - With `logging: false`, the state machine deploys. `sst.aws.StepFunctions` gave it a log
+ *   destination of `undefined:*`, which AWS turns down.
  */
-export class StepFunctions extends Component implements Link.Linkable {
-  private stateMachine: sfn.StateMachine;
-
+export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
   constructor(
     name: string,
     args: StepFunctionsArgs,
     opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
+    const self = this;
 
-    const parent = this;
-
-    const type = output(args.type ?? "standard");
-    const logging = normalizeLogging();
-    const logGroup = createLogGroup();
-    const role = createRole();
-    const stateMachine = createStateMachine();
-
-    this.stateMachine = stateMachine;
-
-    function normalizeLogging() {
-      return output(args.logging).apply((logging) => {
-        if (logging === false) return undefined;
-
-        return {
-          retention: logging?.retention ?? "1 month",
-          level: logging?.level ?? "error",
-          includeData: logging?.includeData ?? false,
-        };
-      });
-    }
-
-    function createLogGroup() {
-      return logging.apply((logging) => {
-        if (!logging) return;
-
-        return new cloudwatch.LogGroup(
-          ...transform(
-            args.transform?.logGroup,
-            `${name}LogGroup`,
-            {
-              name: interpolate`/aws/states/${physicalName(
-                64,
-                `${name}StateMachine`,
-              )}`,
-              retentionInDays: RETENTION[logging.retention],
-            },
-            { parent, ignoreChanges: ["name"] },
-          ),
-        );
-      });
-    }
-
-    function createRole() {
-      return new iam.Role(
-        `${name}Role`,
-        {
-          assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
-            Service: "states.amazonaws.com",
-          }),
-          inlinePolicies: [
-            {
-              name: "inline",
-              policy: iam.getPolicyDocumentOutput({
-                statements: [
-                  {
-                    actions: ["events:*"],
-                    resources: ["*"],
-                  },
-                  {
-                    actions: [
-                      "logs:CreateLogDelivery",
-                      "logs:CreateLogStream",
-                      "logs:GetLogDelivery",
-                      "logs:UpdateLogDelivery",
-                      "logs:DeleteLogDelivery",
-                      "logs:ListLogDeliveries",
-                      "logs:PutLogEvents",
-                      "logs:PutResourcePolicy",
-                      "logs:DescribeResourcePolicies",
-                      "logs:DescribeLogGroups",
-                    ],
-                    resources: ["*"],
-                  },
-                  {
-                    actions: [
-                      "states:StartExecution",
-                      "states:DescribeExecution",
-                    ],
-                    resources: ["*"],
-                  },
-                  ...args.definition.getRoot().getPermissions(opts),
-                ],
-              }).json,
-            },
-          ],
-        },
-        { parent },
-      );
-    }
-
-    function createStateMachine() {
-      const root = args.definition.getRoot();
-      root.assertStateNameUnique();
-      root.assertStateNotReused();
-
-      return new sfn.StateMachine(
-        ...transform(
-          args.transform?.stateMachine,
-          `${name}StateMachine`,
+    const logging = loggingOf();
+    const logGroup = logging
+      ? this.part(
+          "logGroup",
           {
-            type: type.apply((type) => type.toUpperCase()),
-            definition: $jsonStringify({
-              StartAt: root.name,
-              States: root.serialize(),
-            }),
-            roleArn: role.arn,
-            loggingConfiguration: all([logging, logGroup]).apply(
-              ([logging, logGroup]) => ({
-                includeExecutionData: logging?.includeData ?? false,
-                level: (logging?.level ?? "off").toUpperCase(),
-                logDestination: interpolate`${logGroup?.arn}:*`,
-              }),
+            name: interpolate`/aws/states/${physicalName(
+              64,
+              `${name}StateMachine`,
+            )}`,
+            retentionInDays: output(logging.retention).apply(
+              (retention) => RETENTION[retention],
             ),
           },
-          { parent },
+          { ignoreChanges: ["name"] },
+        )
+      : undefined;
+
+    const root = args.definition.getRoot();
+    root.assertStateNameUnique();
+    root.assertStateNotReused();
+
+    const role = this.part("role", {
+      assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
+        Service: "states.amazonaws.com",
+      }),
+      inlinePolicies: [
+        {
+          name: "inline",
+          policy: iam.getPolicyDocumentOutput({
+            statements: [
+              {
+                actions: ["events:*"],
+                resources: ["*"],
+              },
+              {
+                actions: [
+                  "logs:CreateLogDelivery",
+                  "logs:CreateLogStream",
+                  "logs:GetLogDelivery",
+                  "logs:UpdateLogDelivery",
+                  "logs:DeleteLogDelivery",
+                  "logs:ListLogDeliveries",
+                  "logs:PutLogEvents",
+                  "logs:PutResourcePolicy",
+                  "logs:DescribeResourcePolicies",
+                  "logs:DescribeLogGroups",
+                ],
+                resources: ["*"],
+              },
+              {
+                actions: ["states:StartExecution", "states:DescribeExecution"],
+                resources: ["*"],
+              },
+              // A lookup a state makes for its permissions, like a map's
+              // bucket's partition, uses the component's provider
+              ...root.getPermissions({ parent: self }),
+            ],
+          }).json,
+        },
+      ],
+    });
+
+    this.part("stateMachine", {
+      type: output(args.type ?? "standard").apply((type) => type.toUpperCase()),
+      definition: $jsonStringify({
+        StartAt: root.name,
+        States: root.serialize(),
+      }),
+      roleArn: role.arn,
+      loggingConfiguration: {
+        includeExecutionData: output(logging?.includeData ?? false),
+        level: output(logging?.level ?? "off").apply((level) =>
+          level.toUpperCase(),
         ),
-      );
+        // Left out without logs. SST 4 wrote `undefined:*`, which AWS turns
+        // down, so no state machine of its had it.
+        logDestination: logGroup && interpolate`${logGroup.arn}:*`,
+      },
+    });
+
+    function loggingOf() {
+      const owner = `the "${name}" state machine`;
+      const logging = plain(args.logging, `The "logging" of ${owner}`);
+      if (logging === false) {
+        notAnExistingPart(
+          args.existing,
+          "logGroup",
+          owner,
+          `Its logs go to a log group only with "logging": remove "logging: false".`,
+        );
+        return;
+      }
+      // A log group that's there already keeps its retention
+      if (args.existing?.logGroup !== undefined && logging?.retention)
+        throw new VisibleError(
+          `The "${name}" state machine is given an existing "logGroup", which it uses the way it is. Remove "retention" from its "logging".`,
+        );
+      return {
+        retention: logging?.retention ?? "1 month",
+        level: logging?.level ?? "error",
+        includeData: logging?.includeData ?? false,
+      };
     }
   }
 
@@ -339,19 +559,7 @@ export class StepFunctions extends Component implements Link.Linkable {
    * The State Machine ARN.
    */
   public get arn() {
-    return this.stateMachine.arn;
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Step Function State Machine resource.
-       */
-      stateMachine: this.stateMachine,
-    };
+    return this.nodes.stateMachine.arn;
   }
 
   /**
@@ -362,8 +570,14 @@ export class StepFunctions extends Component implements Link.Linkable {
    * ```ts title="sst.config.ts"
    * const processPayment = sst.aws.StepFunctions.choice({ name: "ProcessPayment" });
    *
-   * const makePayment = sst.aws.StepFunctions.lambdaInvoke({ name: "MakePayment" });
-   * const sendReceipt = sst.aws.StepFunctions.lambdaInvoke({ name: "SendReceipt" });
+   * const makePayment = sst.aws.StepFunctions.lambdaInvoke({
+   *   name: "MakePayment",
+   *   function: "src/pay.handler"
+   * });
+   * const sendReceipt = sst.aws.StepFunctions.lambdaInvoke({
+   *   name: "SendReceipt",
+   *   function: "src/receipt.handler"
+   * });
    * const failure = sst.aws.StepFunctions.fail({ name: "Failure" });
    *
    * processPayment.when("{% $states.input.status === 'unpaid' %}", makePayment);
@@ -543,8 +757,8 @@ export class StepFunctions extends Component implements Link.Linkable {
    * sst.aws.StepFunctions.lambdaInvoke({
    *   name: "LambdaInvoke",
    *   function: {
-   *     handler: "src/index.handler"
-   *     timeout: "60 seconds",
+   *     handler: "src/index.handler",
+   *     timeout: "60 seconds"
    *   }
    * });
    * ```
@@ -572,22 +786,18 @@ export class StepFunctions extends Component implements Link.Linkable {
    * ```
    */
   public static lambdaInvoke(args: LambdaInvokeArgs) {
-    const fn =
-      args.function instanceof Function
-        ? args.function
-        : functionBuilder(`${args.name}Function`, args.function, {});
-
+    const target = invokedArn(args.name, args.function);
     return new Task({
       ...args,
       resource: "arn:aws:states:::lambda:invoke",
       arguments: {
-        FunctionName: fn.targetArn,
+        FunctionName: target,
         Payload: args.payload,
       },
       permissions: [
         {
           actions: ["lambda:InvokeFunction"],
-          resources: [fn.targetArn],
+          resources: [target],
         },
       ],
     });
@@ -663,7 +873,7 @@ export class StepFunctions extends Component implements Link.Linkable {
   }
 
   /**
-   * Create a `Task` state that runs an ECS task using the [`Task`](/docs/component/aws/task) component. [Learn more](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html).
+   * Create a `Task` state that runs an ECS task using the [`Task`](/docs/component/aws/v5/task) component. [Learn more](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_RunTask.html).
    *
    * @example
    * ```ts title="sst.config.ts"
@@ -677,46 +887,46 @@ export class StepFunctions extends Component implements Link.Linkable {
    * ```
    */
   public static ecsRunTask(args: EcsRunTaskArgs) {
+    const task = args.task;
     return new Task({
       ...args,
       resource: "arn:aws:states:::ecs:runTask",
       arguments: {
-        Cluster: args.task.cluster,
-        TaskDefinition: args.task.taskDefinition,
+        Cluster: task.cluster,
+        TaskDefinition: task.taskDefinition,
         LaunchType: "FARGATE",
         NetworkConfiguration: {
           AwsvpcConfiguration: {
-            Subnets: args.task.subnets,
-            SecurityGroups: args.task.securityGroups,
-            AssignPublicIp: args.task.assignPublicIp.apply((v) =>
+            Subnets: task.subnets,
+            SecurityGroups: task.securityGroups,
+            AssignPublicIp: output(task.assignPublicIp).apply((v) =>
               v ? "ENABLED" : "DISABLED",
             ),
           },
         },
         Overrides:
           args.environment &&
-          all([args.environment, args.task.containers]).apply(
-            ([environment, containers]) => ({
-              ContainerOverrides: containers.map((name) => ({
+          all([
+            args.environment,
+            output(task.containers as Input<string[]>),
+          ]).apply(([environment, containers]) => ({
+            ContainerOverrides: containers.map((name: string) => ({
+              Name: name,
+              Environment: Object.entries(environment).map(([name, value]) => ({
                 Name: name,
-                Environment: Object.entries(environment).map(
-                  ([name, value]) => ({ Name: name, Value: value }),
-                ),
+                Value: value,
               })),
-            }),
-          ),
+            })),
+          })),
       },
       permissions: [
         {
           actions: ["ecs:RunTask"],
-          resources: [args.task.nodes.taskDefinition.arn],
+          resources: [task.nodes.taskDefinition.arn],
         },
         {
           actions: ["iam:PassRole"],
-          resources: [
-            args.task.nodes.executionRole.arn,
-            args.task.nodes.taskRole.arn,
-          ],
+          resources: rolesToPass(task.nodes.taskDefinition),
         },
       ],
     });
@@ -724,11 +934,11 @@ export class StepFunctions extends Component implements Link.Linkable {
 
   /**
    * Create a `Task` state that sends custom events to one or more EventBridge buses
-   * using the [`Bus`](/docs/component/aws/bus) component. [Learn more](https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_PutEvents.html).
+   * using the [`Bus`](/docs/component/aws/v5/bus) component. [Learn more](https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_PutEvents.html).
    *
    * @example
    * ```ts title="sst.config.ts"
-   * const myBus = new sst.aws.EventBus("MyBus");
+   * const myBus = new sst.aws.Bus("MyBus");
    *
    * sst.aws.StepFunctions.eventBridgePutEvents({
    *   name: "EventBridgePutEvents",
@@ -770,8 +980,7 @@ export class StepFunctions extends Component implements Link.Linkable {
     });
   }
 
-  /** @internal */
-  public getSSTLink() {
+  link() {
     return {
       properties: {
         arn: this.arn,
@@ -799,6 +1008,29 @@ export class StepFunctions extends Component implements Link.Linkable {
   }
 }
 
-const __pulumiType = "sst:aws:StepFunctions";
-// @ts-expect-error
-StepFunctions.__pulumiType = __pulumiType;
+/**
+ * The ARN a `lambdaInvoke` state invokes: of the function it's given, or of
+ * one it creates at the top of the app from a handler or args, named after
+ * the state as SST 4 named it.
+ */
+function invokedArn(
+  state: string,
+  fn: LambdaInvokeArgs["function"],
+): Output<string> {
+  const definition = plainFunction(
+    fn as FunctionInput,
+    `The "function" of the "${state}" state`,
+  );
+  if (Output.isInstance(definition))
+    return (definition as Output<string | AnyFunction>).apply((value) =>
+      typeof value === "string" ? value : value.targetArn,
+    ) as Output<string>;
+  if (typeof definition === "string")
+    return definition.startsWith("arn:")
+      ? output(definition)
+      : new Function(`${state}Function`, { handler: definition }).targetArn;
+  // A function, either kind, or the args of one to create
+  if (definition instanceof Function || "targetArn" in (definition as object))
+    return output((definition as AnyFunction).targetArn) as Output<string>;
+  return new Function(`${state}Function`, definition as FunctionArgs).targetArn;
+}

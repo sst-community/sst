@@ -1,17 +1,25 @@
-import fs from "fs/promises";
+import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output } from "@pulumi/pulumi";
-import { VisibleError } from "../error.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
-import { existsAsync } from "../../util/fs.js";
-import { isALteB } from "../../util/compare-semver.js";
-import { getPackageVersion } from "../../util/package.js";
+import type { ComponentResourceOptions, Input, Output } from "@pulumi/pulumi";
+import { type ComponentArgs, component } from "../parts-component";
+import { VisibleError } from "../error";
+import { isALteB } from "../../util/compare-semver";
+import { getPackageVersion } from "../../util/package";
 import {
   validateFrameworkConfig,
   validateNoWranglerFile,
-} from "./helpers/validation.js";
+} from "./helpers/validation";
+import {
+  type SsrFramework,
+  type SsrSiteArgs,
+  ssrSite,
+  ssrSiteParts,
+} from "./helpers/ssr-site";
+import type { WorkerArgs } from "./worker";
 
-export interface AstroArgs extends SsrSiteArgs {
+const parts = ssrSiteParts;
+
+export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -25,9 +33,41 @@ export interface AstroArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
   /**
-   * Path to the directory where your Astro site is located.  This path is relative to your `sst.config.ts`.
+   * Path to the directory where your Astro site is located. This path is relative to your `sst.config.ts`.
    *
    * By default it assumes your Astro site is in the root of your SST app.
    * @default `"."`
@@ -42,7 +82,7 @@ export interface AstroArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  path?: SsrSiteArgs["path"];
+  path?: string;
   /**
    * [Link resources](/docs/linking/) to your Astro site. This will:
    *
@@ -51,7 +91,7 @@ export interface AstroArgs extends SsrSiteArgs {
    *
    * @example
    *
-   * Takes a list of resources to link to the function.
+   * Takes a list of resources to link to the site.
    *
    * ```js
    * {
@@ -70,9 +110,8 @@ export interface AstroArgs extends SsrSiteArgs {
    * const files = await Resource.MyBucket.list();
    * ---
    * ```
-   *
    */
-  link?: SsrSiteArgs["link"];
+  link?: any[];
   /**
    * Set [environment variables](https://docs.astro.build/en/guides/environment-variables/) in your Astro site.
    *
@@ -93,9 +132,13 @@ export interface AstroArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  environment?: SsrSiteArgs["environment"];
+  environment?: Input<Record<string, Input<string>>>;
   /**
-   * Set a custom domain for your Astro site.
+   * Set a custom domain for your Astro site. Supports domains hosted on Cloudflare.
+   *
+   * A domain given as an object is a plain value, not an output: each of
+   * its `aliases` and `redirects` creates resources of its own. Its `name`
+   * can be an output, and so can a domain given as a string.
    *
    * @example
    *
@@ -127,11 +170,11 @@ export interface AstroArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  domain?: SsrSiteArgs["domain"];
+  domain?: WorkerArgs["domain"];
   /**
    * The command used internally to build your Astro site.
    *
-   * @default `"npm run build"`
+   * @default The `build` script in your `package.json`, run with the package manager whose lockfile is there, like `"npm run build"`.
    *
    * @example
    *
@@ -142,8 +185,67 @@ export interface AstroArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  buildCommand?: SsrSiteArgs["buildCommand"];
+  buildCommand?: string;
 }
+
+// Astro's build, as Cloudflare's adapter writes it
+const astro: SsrFramework = {
+  label: "Astro",
+  check(site, owner) {
+    // Astro 6 and later read SST's Wrangler config. Without a version in the
+    // site's `package.json`, it's taken as one of them.
+    const version = getPackageVersion(site, "astro");
+    if (!version || isALteB("6.0.0", version))
+      validateFrameworkConfig({
+        sitePath: site,
+        configName: "astro.config",
+        componentName: owner,
+      });
+    validateNoWranglerFile(site, owner);
+  },
+  async load(site, owner) {
+    const dist = path.join(site, "dist");
+    const relative = (file: string) => path.relative(site, file);
+
+    // Astro 5 writes the Worker and its files into `dist/`, so the Worker's
+    // own code is left out of the files it serves
+    const legacy = path.join(dist, "_worker.js", "index.js");
+    if (fs.existsSync(legacy)) {
+      const ignoreFile = path.join(dist, ".assetsignore");
+      const ignored = fs.existsSync(ignoreFile)
+        ? fs.readFileSync(ignoreFile, "utf-8").split("\n")
+        : [];
+      if (!ignored.includes("_worker.js") || !ignored.includes("_routes.json"))
+        fs.appendFileSync(ignoreFile, "\n_worker.js\n_routes.json");
+      return { server: relative(legacy), assets: relative(dist) };
+    }
+
+    // Astro 6 and later write a Wrangler config next to the Worker
+    const wranglerFile = path.join(dist, "server", "wrangler.json");
+    if (fs.existsSync(wranglerFile)) {
+      const wrangler = JSON.parse(fs.readFileSync(wranglerFile, "utf-8")) as {
+        main?: string;
+        assets?: { directory?: string };
+      };
+      const serverDir = path.dirname(wranglerFile);
+      const server = path.resolve(serverDir, wrangler.main ?? "entry.mjs");
+      const assets = wrangler.assets?.directory
+        ? path.resolve(serverDir, wrangler.assets.directory)
+        : path.join(dist, "client");
+      if (fs.existsSync(server))
+        return { server: relative(server), assets: relative(assets) };
+    }
+
+    throw new VisibleError(
+      [
+        `The build of ${owner} has no Worker in "${dist}".`,
+        "",
+        "Astro 5 writes it to `dist/_worker.js/index.js`, and Astro 6 and later to the `main` of `dist/server/wrangler.json`.",
+        "If your Astro site is entirely pre-rendered, use `sst.cloudflare.StaticSite` instead.",
+      ].join("\n"),
+    );
+  },
+};
 
 /**
  * The `Astro` component lets you deploy an [Astro](https://astro.build) site to Cloudflare.
@@ -245,99 +347,41 @@ export interface AstroArgs extends SsrSiteArgs {
  * ```
  *
  * [Check out the full example](/docs/examples/#cloudflare-astro).
+ *
+ * #### Switch from SST 4's `sst.cloudflare.Astro`
+ *
+ * Keep the name, and `sst migrate` moves it. The site's
+ * Worker, its URL and its custom domains are kept. A few things are written differently:
+ *
+ * - The site is built in the deploy itself, once, with the values of what it's linked to.
+ *   `sst.cloudflare.Astro` built it with a command it kept in the state, which goes.
+ * - `sst diff` builds the site too, and writes the Wrangler config its build reads. Values
+ *   that aren't known until the deploy, like those of what the same deploy creates on a new
+ *   stage, are left out of that build and of that config, and so is the binding to something
+ *   that isn't created yet, like a new KV namespace. `sst.cloudflare.Astro` skipped its build
+ *   in `sst diff` then.
+ * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
+ *   pack, build the site twice: in the preview, and in the deploy.
+ * - `sst refresh` doesn't build the site, where `sst.cloudflare.Astro` did. Its Worker stays as
+ *   it is, and isn't listed while it runs.
+ * - `path`, `buildCommand` and `link` have to be plain values, not outputs: the build reads
+ *   them, or they decide what's created. A `domain` given as an object is a plain value
+ *   too. Its `name` can be an output, and so can a domain given as a string.
+ * - `compatibility` sets the Worker's compatibility date and flags, and the Wrangler config's.
+ *   One set in `transform.server` still reaches both.
+ * - In `sst dev`, reading `nodes.server` says the site runs on your machine, where
+ *   `sst.cloudflare.Astro` gave `undefined`.
  */
-export class Astro extends SsrSite {
+export class Astro extends component("sst:cloudflare:Astro", parts) {
+  private readonly siteUrl: Output<string | undefined>;
+
   constructor(
     name: string,
     args: AstroArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected validate(sitePath: string): void {
-    // Only validate configPath requirement for Astro v6+
-    // If version cannot be determined, default to v6+ (validate)
-    const astroVersion = getPackageVersion(sitePath, "astro");
-    const isV6Plus = !astroVersion || isALteB("6.0.0", astroVersion);
-
-    if (isV6Plus) {
-      validateFrameworkConfig({
-        sitePath,
-        configName: "astro.config",
-        componentName: "Astro",
-      });
-    }
-    validateNoWranglerFile(sitePath, "Astro");
-  }
-
-  protected buildPlan(outputPath: Output<string>): Output<Plan> {
-    return outputPath.apply(async (outputPath) => {
-      const distPath = path.join(outputPath, "dist");
-      const legacyServer = path.join(distPath, "_worker.js", "index.js");
-      if (await existsAsync(legacyServer)) {
-        // Astro v5 writes both the Worker bundle and assets into `dist/`.
-        const ignorePath = path.join(distPath, ".assetsignore");
-        const ignorePatterns = (await existsAsync(ignorePath))
-          ? (await fs.readFile(ignorePath, "utf-8")).split("\n")
-          : [];
-        let dirty = false;
-        ["_worker.js", "_routes.json"].forEach((pattern) => {
-          if (ignorePatterns.includes(pattern)) return;
-          ignorePatterns.push(pattern);
-          dirty = true;
-        });
-
-        if (dirty) {
-          await fs.appendFile(ignorePath, "\n_worker.js\n_routes.json");
-        }
-
-        return {
-          server: "./dist/_worker.js/index.js",
-          assets: "./dist",
-        };
-      }
-
-      const wranglerPath = path.join(distPath, "server", "wrangler.json");
-      if (await existsAsync(wranglerPath)) {
-        type WranglerConfig = {
-          main?: string;
-          assets?: {
-            directory?: string;
-          };
-        };
-
-        const serverPath = path.dirname(wranglerPath);
-        const wrangler = JSON.parse(
-          await fs.readFile(wranglerPath, "utf-8"),
-        ) as WranglerConfig;
-        const main = wrangler.main ?? "entry.mjs";
-        const serverEntry = path.resolve(serverPath, main);
-        const assetsDirectory = wrangler.assets?.directory;
-        const assetsPath = assetsDirectory
-          ? path.resolve(serverPath, assetsDirectory)
-          : path.join(distPath, "client");
-
-        if (await existsAsync(serverEntry)) {
-          return {
-            server: toRelativePath(serverEntry),
-            assets: toRelativePath(assetsPath),
-          };
-        }
-      }
-
-      throw new VisibleError(
-        `SSR server bundle not found in the build output at:\n` +
-          `  "${path.resolve(distPath)}".\n\n` +
-          `Expected either Astro v5 output in \`dist/_worker.js/index.js\` or Astro v6+ output in \`dist/server/wrangler.json\`.\n` +
-          `If your Astro project is entirely pre-rendered, use the \`sst.cloudflare.StaticSite\` component instead of \`sst.cloudflare.Astro\`.`,
-      );
-
-      function toRelativePath(filePath: string) {
-        const relative = path.relative(outputPath, filePath);
-        return relative.startsWith(".") ? relative : `./${relative}`;
-      }
-    });
+    super(name, args, opts);
+    this.siteUrl = ssrSite(this.builder(), name, args, astro).url;
   }
 
   /**
@@ -347,9 +391,14 @@ export class Astro extends SsrSite {
    * Otherwise, it's the auto-generated Worker URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
+  }
+
+  link() {
+    return {
+      properties: {
+        url: this.url,
+      },
+    };
   }
 }
-const __pulumiType = "sst:cloudflare:Astro";
-// @ts-expect-error
-Astro.__pulumiType = __pulumiType;

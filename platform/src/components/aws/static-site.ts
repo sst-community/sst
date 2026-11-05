@@ -1,47 +1,126 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { globSync } from "glob";
 import {
   ComponentResourceOptions,
+  Input,
   Output,
-  Resource,
   all,
   interpolate,
   output,
 } from "@pulumi/pulumi";
-import { Cdn, CdnArgs } from "./cdn.js";
-import { Bucket, BucketArgs } from "./bucket.js";
-import { Component, Prettify, Transform, transform } from "../component.js";
-import { Link } from "../link.js";
-import { Input } from "../input.js";
-import { globSync } from "glob";
-import { BucketFile, BucketFiles } from "./providers/bucket-files.js";
-import { getContentType, BaseSiteDev } from "../base/base-site.js";
-import {
-  BaseStaticSiteArgs,
-  BaseStaticSiteAssets,
-  buildApp,
-  prepare,
-} from "../base/base-static-site.js";
 import { cloudfront, getRegionOutput, s3 } from "@pulumi/aws";
-import { URL_UNAVAILABLE } from "./linkable.js";
-import { KvKeys } from "./providers/kv-keys.js";
+import {
+  type ComponentArgs,
+  component,
+  named,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import { notAnOption, plain, plainDeep } from "../args";
+import { context } from "../contract";
+import { VisibleError } from "../error";
+import { physicalName } from "../naming";
+import { toPosix } from "../path";
+import { type BaseSiteFileOptions, getContentType } from "../base/base-site";
+import {
+  edgeOf,
+  routingStore,
+  viewerResponseFunction,
+} from "./helpers/distribution";
+import type { SiteRouteArgs } from "./helpers/router";
+import {
+  BUILD_READS_IT,
+  URL_UNAVAILABLE,
+  capitalized,
+  refreshing,
+  rejectSst4SiteArgs,
+  siteDev,
+  siteRouteOf,
+  siteRoutesUpdateArgs,
+  sitePathOf,
+} from "./helpers/site";
+import { buildSite, writeViteTypes } from "./helpers/site-build";
+import { siteRequestCode } from "./helpers/ssr-site";
+import { type BucketFile, BucketFiles } from "./resources/bucket-files";
+import { hashFiles } from "./helpers/file-hashes";
+import { KvKeys } from "./resources/kv-keys";
+import { DistributionInvalidation } from "./resources/distribution-invalidation";
+import { KvRoutesUpdate } from "./resources/kv-routes-update";
+import { OriginAccessControl } from "./resources/origin-access-control";
 import {
   CF_BLOCK_CLOUDFRONT_URL_INJECTION,
-  CF_ROUTER_INJECTION,
-  KV_SITE_METADATA,
-  normalizeRouteArgs,
-  RouterRouteArgs,
-  RouterRouteArgsDeprecated,
-} from "./router.js";
-import { DistributionInvalidation } from "./providers/distribution-invalidation.js";
-import { VisibleError } from "../error.js";
-import { KvRoutesUpdate } from "./providers/kv-routes-update.js";
-import { OriginAccessControl } from "./providers/origin-access-control.js";
-import { physicalName } from "../naming.js";
-import { toPosix } from "../path.js";
+  type KV_SITE_METADATA,
+  kvNamespace,
+} from "./router-code";
+import { Bucket } from "./bucket";
+import { Cdn, type CdnDomainArgs, cdnDomain } from "./cdn";
 
-export interface StaticSiteArgs extends BaseStaticSiteArgs {
+// CloudFront's managed CachingOptimized policy
+const CACHING_OPTIMIZED = "658327ea-f89d-4fab-a63d-7e88639e58f6";
+
+const parts = () => ({
+  /**
+   * The Amazon S3 bucket that holds the site's files, unless `assets.bucket`
+   * names one.
+   */
+  assets: optional(Bucket),
+  /**
+   * The files uploaded to the bucket.
+   */
+  assetFiles: BucketFiles,
+  /**
+   * What the site keeps in the CloudFront key-value store that routes its
+   * requests: its files, and where they are. Not with `edgeRouting: false`.
+   */
+  kvKeys: optional(KvKeys),
+  /**
+   * The site's entry in the routes of the `Router` it's served through.
+   */
+  routesUpdate: optional(KvRoutesUpdate),
+  /**
+   * The CloudFront cache invalidation made on a deploy that changes the site.
+   */
+  invalidation: optional(DistributionInvalidation),
+  /**
+   * The Amazon CloudFront CDN that serves the site, when it isn't served
+   * through a `Router`. It can't be given in `existing`: to serve the site
+   * through a distribution that's deployed, serve it through a `Router`.
+   */
+  cdn: optional(Cdn),
+  /**
+   * The CloudFront key-value store the site's requests are routed with, when
+   * it isn't served through a `Router` and isn't given one. Not with
+   * `edgeRouting: false`.
+   */
+  kvStore: optional(cloudfront.KeyValueStore),
+  /**
+   * The CloudFront function that routes viewer requests, when the site isn't
+   * served through a `Router`. With `edgeRouting: false`, it's created only for
+   * `edge.viewerRequest.injection` or a `domain`.
+   */
+  requestFunction: named(
+    optional(cloudfront.Function),
+    "CloudfrontFunctionRequest",
+  ),
+  /**
+   * The CloudFront function that runs on viewer responses, with
+   * `edge.viewerResponse`.
+   */
+  responseFunction: named(
+    optional(cloudfront.Function),
+    "CloudfrontFunctionResponse",
+  ),
+  /**
+   * The CloudFront origin access control that lets the site's own
+   * distribution read the bucket, when it serves files from the bucket itself:
+   * with an `errorPage`, or `edgeRouting: false`. Not behind a `Router`.
+   */
+  accessControl: named(optional(OriginAccessControl), "S3AccessControl"),
+});
+
+export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -55,7 +134,39 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: false | Prettify<BaseSiteDev>;
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
   /**
    * Path to the directory where your static site is located. By default this assumes your static site is in the root of your SST app.
    *
@@ -79,11 +190,137 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    * }
    * ```
    */
-  path?: BaseStaticSiteArgs["path"];
+  path?: string;
+  /**
+   * The name of the index page of the site. This is a path relative to the root of your site, or the `path`.
+   *
+   * The index page only applies to the root of your site. By default this is set to `index.html`. So if a visitor goes to your site, let's say `example.com`, `example.com/index.html` will be served.
+   *
+   * @default `"index.html"`
+   * @example
+   * ```js
+   * {
+   *   indexPage: "home.html"
+   * }
+   * ```
+   */
+  indexPage?: string;
+  /**
+   * The error page to display on a 403 or 404 error. This is a path relative to the root of your site, or the `path`.
+   * @default The `indexPage` of your site.
+   * @example
+   * ```js
+   * {
+   *   errorPage: "404.html"
+   * }
+   * ```
+   */
+  errorPage?: string;
+  /**
+   * Set environment variables for your static site. These are made available:
+   *
+   * 1. Locally while running your site through `sst dev`.
+   * 2. In the build process when running `build.command`.
+   *
+   * @example
+   * ```js
+   * environment: {
+   *   API_URL: api.url
+   *   STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   * }
+   * ```
+   *
+   * Some static site generators like Vite have their [concept of environment variables](https://vitejs.dev/guide/env-and-mode), and you can use this option to set them.
+   *
+   * :::note
+   * The types for the Vite environment variables are generated automatically. You can change their location through `vite.types`.
+   * :::
+   *
+   * These can be accessed as `import.meta.env` in your site. And only the ones prefixed with `VITE_` can be accessed in the browser.
+   *
+   * ```js
+   * environment: {
+   *   API_URL: api.url
+   *   // Accessible in the browser
+   *   VITE_STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   * }
+   * ```
+   */
+  environment?: Input<Record<string, Input<string>>>;
+  /**
+   * Configure if your static site needs to be built. This is useful if you are using a static site generator.
+   *
+   * The `build.output` directory will be uploaded to S3 instead.
+   *
+   * @example
+   * For a Vite project using npm this might look like this.
+   *
+   * ```js
+   * {
+   *   build: {
+   *     command: "npm run build",
+   *     output: "dist"
+   *   }
+   * }
+   * ```
+   */
+  build?: {
+    /**
+     * The command that builds the static site. It's run in your static site directory.
+     *
+     * @example
+     * ```js
+     * {
+     *   build: {
+     *     command: "npm run build"
+     *   }
+     * }
+     * ```
+     */
+    command: string;
+    /**
+     * The directory where the build output of your static site is generated. This will be uploaded.
+     *
+     * The path is relative to the root directory of your static site.
+     *
+     * @example
+     * ```js
+     * {
+     *   build: {
+     *     output: "build"
+     *   }
+     * }
+     * ```
+     */
+    output: string;
+  };
+  /**
+   * Configure [Vite](https://vitejs.dev) related options.
+   *
+   * :::tip
+   * If a `vite.config.ts` or `vite.config.js` file is detected in the `path`, then these options will be used during the build and deploy process.
+   * :::
+   */
+  vite?: {
+    /**
+     * The path where the type definition for the `environment` variables are generated. This is relative to the `path`. [Read more](https://vitejs.dev/guide/env-and-mode#intellisense-for-typescript).
+     *
+     * @default `"src/sst-env.d.ts"`
+     * @example
+     * ```js
+     * {
+     *   vite: {
+     *     types: "other/path/sst-env.d.ts"
+     *   }
+     * }
+     * ```
+     */
+    types?: string;
+  };
   /**
    * Configure CloudFront Functions to customize the behavior of HTTP requests and responses at the edge.
    */
-  edge?: Input<{
+  edge?: {
     /**
      * Configure the viewer request function.
      *
@@ -128,7 +365,7 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
      *
      * You can use this add basic auth, [check out an example](/docs/examples/#aws-static-site-basic-auth).
      */
-    viewerRequest?: Input<{
+    viewerRequest?: {
       /**
        * The code to inject into the viewer request function.
        *
@@ -165,11 +402,7 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
        * ```
        */
       kvStore?: Input<string>;
-      /**
-       * @deprecated Use `kvStore` instead because CloudFront Functions only support one KV store.
-       */
-      kvStores?: Input<Input<string>[]>;
-    }>;
+    };
     /**
      * Configure the viewer response function.
      *
@@ -205,7 +438,7 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
      * }
      * ```
      */
-    viewerResponse?: Input<{
+    viewerResponse?: {
       /**
        * The code to inject into the viewer response function.
        *
@@ -229,40 +462,17 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
        * @example
        * ```js
        * {
-       *   server: {
-       *     edge: {
-       *       viewerResponse: {
-       *         kvStore: "arn:aws:cloudfront::123456789012:key-value-store/my-store"
-       *       }
+       *   edge: {
+       *     viewerResponse: {
+       *       kvStore: "arn:aws:cloudfront::123456789012:key-value-store/my-store"
        *     }
        *   }
        * }
        * ```
        */
       kvStore?: Input<string>;
-      /**
-       * @deprecated Use `kvStore` instead because CloudFront Functions only support one KV store.
-       */
-      kvStores?: Input<Input<string>[]>;
-    }>;
-  }>;
-  /**
-   * Configure if your static site needs to be built. This is useful if you are using a static site generator.
-   *
-   * The `build.output` directory will be uploaded to S3 instead.
-   * @example
-   * For a Vite project using npm this might look like this.
-   *
-   * ```js
-   * {
-   *   build: {
-   *     command: "npm run build",
-   *     output: "dist"
-   *   }
-   * }
-   * ```
-   */
-  build?: BaseStaticSiteArgs["build"];
+    };
+  };
   /**
    * Configure how the static site's assets are uploaded to S3.
    *
@@ -286,118 +496,206 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    * ```
    * @default `Object`
    */
-  assets?: Prettify<
-    BaseStaticSiteAssets & {
-      /**
-       * The name of the S3 bucket to upload the assets to.
-       * @default Creates a new bucket
-       * @example
-       * ```js
-       * {
-       *   assets: {
-       *     bucket: "my-existing-bucket"
-       *   }
-       * }
-       * ```
-       *
-       * :::note
-       * The bucket must allow CloudFront to access the bucket.
-       * :::
-       *
-       * When using an existing bucket, ensure that the bucket has a policy that allows CloudFront to access the bucket.
-       * For example, the bucket policy might look like this:
-       * ```json
-       * {
-       *   "Version": "2012-10-17",
-       *   "Statement": [
-       *     {
-       *       "Effect": "Allow",
-       *       "Principal": {
-       *         "Service": "cloudfront.amazonaws.com"
-       *       },
-       *       "Action": "s3:GetObject",
-       *       "Resource": "arn:aws:s3:::my-existing-bucket/*",
-       *       "Condition": {
-       *         "StringLike": {
-       *           "aws:SourceArn": "arn:aws:cloudfront::ACCOUNT_ID:distribution/*"
-       *         }
-       *       }
-       *     }
-       *   ]
-       * }
-       * ```
-       *
-       * The `Condition` limits it to the CloudFront distributions in your own AWS account.
-       * Without it, a distribution in any account can read the bucket.
-       */
-      bucket?: Input<string>;
-      /**
-       * The path into the S3 bucket where the assets should be uploaded.
-       * @default Root of the bucket
-       * @example
-       * ```js
-       * {
-       *   assets: {
-       *     path: "websites/my-website"
-       *   }
-       * }
-       * ```
-       */
-      path?: Input<string>;
-      /**
-       * Configure if files from previous deployments should be purged from the bucket.
-       * @default `true`
-       * @example
-       * ```js
-       * {
-       *   assets: {
-       *     purge: false
-       *   }
-       * }
-       * ```
-       */
-      purge?: Input<boolean>;
-      /**
-       * Configure additional asset routes for serving files directly from the S3 bucket.
-       *
-       * These routes allow files stored in specific S3 bucket paths to be served under the
-       * same domain as your site. This is particularly useful for handling user-uploaded
-       * content.
-       *
-       * @example
-       * If user-uploaded files are stored in the `uploads` directory, and no `routes` are
-       * configured, these files will return 404 errors or display the `errorPage` if set.
-       * By including `uploads` in `routes`, all files in that folder will be served
-       * directly from the S3 bucket.
-       *
-       * ```js
-       * {
-       *   assets: {
-       *     routes: ["uploads"]
-       *   }
-       * }
-       * ```
-       *
-       * Has no effect with [`edgeRouting`](#edgerouting) set to `false`, which serves every
-       * file under `assets.path` at its exact path.
-       */
-      routes?: Input<Input<string>[]>;
-    }
-  >;
+  assets?: {
+    /**
+     * Character encoding for text based assets uploaded to S3, like HTML, CSS, JS. This is
+     * used to set the `Content-Type` header when these files are served out.
+     *
+     * If set to `"none"`, then no charset will be returned in header.
+     * @default `"utf-8"`
+     * @example
+     * ```js
+     * {
+     *   assets: {
+     *     textEncoding: "iso-8859-1"
+     *   }
+     * }
+     * ```
+     */
+    textEncoding?: Input<
+      "utf-8" | "iso-8859-1" | "windows-1252" | "ascii" | "none"
+    >;
+    /**
+     * Specify the `Content-Type` and `Cache-Control` headers for specific files. This allows
+     * you to override the default behavior for specific files using glob patterns.
+     *
+     * By default, this is set to cache CSS/JS files for 1 year and not cache HTML files.
+     *
+     * ```js
+     * {
+     *   assets: {
+     *     fileOptions: [
+     *       {
+     *         files: "**",
+     *         cacheControl: "max-age=31536000,public,immutable"
+     *       },
+     *       {
+     *         files: "**\/*.html",
+     *         cacheControl: "max-age=0,no-cache,no-store,must-revalidate"
+     *       }
+     *     ]
+     *   }
+     * }
+     * ```
+     *
+     * @default `Object[]`
+     * @example
+     * You can change the default options. For example, apply `Cache-Control` and `Content-Type` to all zip files.
+     * ```js
+     * {
+     *   assets: {
+     *     fileOptions: [
+     *       {
+     *         files: "**\/*.zip",
+     *         contentType: "application/zip",
+     *         cacheControl: "private,no-cache,no-store,must-revalidate"
+     *       }
+     *     ]
+     *   }
+     * }
+     * ```
+     * Apply `Cache-Control` to all CSS and JS files except for CSS files with `index-`
+     * prefix in the `main/` directory.
+     * ```js
+     * {
+     *   assets: {
+     *     fileOptions: [
+     *       {
+     *         files: ["**\/*.css", "**\/*.js"],
+     *         ignore: "main\/index-*.css",
+     *         cacheControl: "private,no-cache,no-store,must-revalidate"
+     *       }
+     *     ]
+     *   }
+     * }
+     * ```
+     */
+    fileOptions?: Input<Prettify<BaseSiteFileOptions>[]>;
+    /**
+     * The name of the S3 bucket to upload the assets to.
+     * @default Creates a new bucket
+     * @example
+     * ```js
+     * {
+     *   assets: {
+     *     bucket: "my-existing-bucket"
+     *   }
+     * }
+     * ```
+     *
+     * :::note
+     * The bucket must allow CloudFront to access the bucket.
+     * :::
+     *
+     * When using an existing bucket, ensure that the bucket has a policy that allows CloudFront to access the bucket.
+     * For example, the bucket policy might look like this:
+     * ```json
+     * {
+     *   "Version": "2012-10-17",
+     *   "Statement": [
+     *     {
+     *       "Effect": "Allow",
+     *       "Principal": {
+     *         "Service": "cloudfront.amazonaws.com"
+     *       },
+     *       "Action": "s3:GetObject",
+     *       "Resource": "arn:aws:s3:::my-existing-bucket/*",
+     *       "Condition": {
+     *         "StringLike": {
+     *           "aws:SourceArn": "arn:aws:cloudfront::ACCOUNT_ID:distribution/*"
+     *         }
+     *       }
+     *     }
+     *   ]
+     * }
+     * ```
+     *
+     * The `Condition` limits it to the CloudFront distributions in your own AWS account.
+     * Without it, a distribution in any account can read the bucket.
+     */
+    bucket?: string;
+    /**
+     * The path into the S3 bucket where the assets should be uploaded.
+     * @default Root of the bucket
+     * @example
+     * ```js
+     * {
+     *   assets: {
+     *     path: "websites/my-website"
+     *   }
+     * }
+     * ```
+     */
+    path?: Input<string>;
+    /**
+     * Configure if files from previous deployments should be purged from the bucket.
+     * @default `true`
+     * @example
+     * ```js
+     * {
+     *   assets: {
+     *     purge: false
+     *   }
+     * }
+     * ```
+     */
+    purge?: Input<boolean>;
+    /**
+     * Configure additional asset routes for serving files directly from the S3 bucket.
+     *
+     * These routes allow files stored in specific S3 bucket paths to be served under the
+     * same domain as your site. This is particularly useful for handling user-uploaded
+     * content.
+     *
+     * @example
+     * If user-uploaded files are stored in the `uploads` directory, and no `routes` are
+     * configured, these files will return 404 errors or display the `errorPage` if set.
+     * By including `uploads` in `routes`, all files in that folder will be served
+     * directly from the S3 bucket.
+     *
+     * ```js
+     * {
+     *   assets: {
+     *     routes: ["uploads"]
+     *   }
+     * }
+     * ```
+     *
+     * Has no effect with [`edgeRouting`](#edgerouting) set to `false`, which serves every
+     * file under `assets.path` at its exact path.
+     */
+    routes?: Input<Input<string>[]>;
+  };
   /**
-   * Set a custom domain for your static site. Supports domains hosted either on
-   * [Route 53](https://aws.amazon.com/route53/) or outside AWS.
+   * Set a custom domain for your static site.
+   *
+   * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
+   * providers, you'll need to pass in a `cert` that validates domain ownership and add the
+   * DNS records.
    *
    * :::tip
-   * You can also migrate an externally hosted domain to Amazon Route 53 by
-   * [following this guide](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/MigratingDNS.html).
+   * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
+   * providers.
    * :::
    *
    * @example
    *
+   * By default this assumes the domain is hosted on Route 53.
+   *
    * ```js
    * {
-   *   domain: "domain.com"
+   *   domain: "example.com"
+   * }
+   * ```
+   *
+   * For domains hosted on Cloudflare.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com",
+   *     dns: sst.cloudflare.dns()
+   *   }
    * }
    * ```
    *
@@ -412,12 +710,7 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    * }
    * ```
    */
-  domain?: CdnArgs["domain"];
-  /**
-   * @deprecated The `router` prop is now the recommended way to serve your site
-   * through a `Router` component.
-   */
-  route?: Prettify<RouterRouteArgsDeprecated>;
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Serve your static site through a `Router` instead of a standalone CloudFront
    * distribution.
@@ -455,8 +748,8 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    * config.
    *
    * :::caution
-   * If routing to a path, you need to configure that as the base path in your
-   * static site generator as well.
+   * If routing to a path, you need to configure that as the base path in your static
+   * site generator as well.
    * :::
    *
    * For Vite, set the `base` option in your `vite.config.ts`. It should end with
@@ -519,7 +812,7 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    * Also, make sure to set the base path in your static site generator
    * configuration, like above.
    */
-  router?: Prettify<RouterRouteArgs>;
+  router?: SiteRouteArgs;
   /**
    * Configure how the CloudFront cache invalidations are handled. This is run after your static site has been deployed.
    * :::tip
@@ -543,50 +836,49 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    * }
    * ```
    */
-  invalidation?: Input<
+  invalidation?:
     | false
     | {
-      /**
-       * Configure if `sst deploy` should wait for the CloudFront cache invalidation to finish.
-       *
-       * :::tip
-       * For non-prod environments it might make sense to pass in `false`.
-       * :::
-       *
-       * Waiting for the CloudFront cache invalidation process to finish ensures that the new content will be served once the deploy finishes. However, this process can sometimes take more than 5 mins.
-       * @default `false`
-       * @example
-       * ```js
-       * {
-       *   invalidation: {
-       *     wait: true
-       *   }
-       * }
-       * ```
-       */
-      wait?: Input<boolean>;
-      /**
-       * The paths to invalidate.
-       *
-       * You can either pass in an array of glob patterns to invalidate specific files. Or you can use the built-in option `all` to invalidation all files when any file changes.
-       *
-       * :::note
-       * Invalidating `all` counts as one invalidation, while each glob pattern counts as a single invalidation path.
-       * :::
-       * @default `"all"`
-       * @example
-       * Invalidate the `index.html` and all files under the `products/` route.
-       * ```js
-       * {
-       *   invalidation: {
-       *     paths: ["/index.html", "/products/*"]
-       *   }
-       * }
-       * ```
-       */
-      paths?: Input<"all" | string[]>;
-    }
-  >;
+        /**
+         * Configure if `sst deploy` should wait for the CloudFront cache invalidation to finish.
+         *
+         * :::tip
+         * For non-prod environments it might make sense to pass in `false`.
+         * :::
+         *
+         * Waiting for the CloudFront cache invalidation process to finish ensures that the new content will be served once the deploy finishes. However, this process can sometimes take more than 5 mins.
+         * @default `false`
+         * @example
+         * ```js
+         * {
+         *   invalidation: {
+         *     wait: true
+         *   }
+         * }
+         * ```
+         */
+        wait?: boolean;
+        /**
+         * The paths to invalidate.
+         *
+         * You can either pass in an array of glob patterns to invalidate specific files. Or you can use the built-in option `all` to invalidation all files when any file changes.
+         *
+         * :::note
+         * Invalidating `all` counts as one invalidation, while each glob pattern counts as a single invalidation path.
+         * :::
+         * @default `"all"`
+         * @example
+         * Invalidate the `index.html` and all files under the `products/` route.
+         * ```js
+         * {
+         *   invalidation: {
+         *     paths: ["/index.html", "/products/*"]
+         *   }
+         * }
+         * ```
+         */
+        paths?: "all" | string[];
+      };
   /**
    * Route requests with a CloudFront Function and a KeyValueStore that lists the site's
    * files. This is what lets `/about` serve `about.html` or `about/index.html`.
@@ -623,31 +915,6 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
    * ```
    */
   edgeRouting?: boolean;
-  /**
-   * @deprecated The `route.path` prop is now the recommended way to configure the base
-   * path for the site.
-   */
-  base?: Input<string>;
-  /**
-   * @deprecated The `route` prop is now the recommended way to use the `Router` component
-   * to serve your site. Setting `route` will not create a standalone CloudFront
-   * distribution.
-   */
-  cdn?: Input<boolean>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Bucket resource used for uploading the assets.
-     */
-    assets?: Transform<BucketArgs>;
-    /**
-     * Transform the CloudFront CDN resource.
-     */
-    cdn?: Transform<CdnArgs>;
-  };
 }
 
 /**
@@ -804,657 +1071,440 @@ export interface StaticSiteArgs extends BaseStaticSiteArgs {
  *   }
  * });
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.StaticSite`
+ *
+ * Keep the name, and `sst migrate` moves it. The site's
+ * bucket, its CloudFront distribution and functions, or its entry in the router are kept.
+ * Its files, its entries in the key-value store and its route in the router's list are
+ * written again by resources of a new type, which the `sst` binary serves, and `sst migrate`
+ * takes the old ones out of the state without deleting what they wrote. Its CloudFront
+ * invalidation runs once more, and its origin access control is kept, by its id. A few
+ * things are written differently:
+ *
+ * - With `build`, the site is built in the deploy itself, once. `sst.aws.StaticSite`
+ *   built it with a command it kept in the state, which goes.
+ * - `sst diff` builds the site too, to see what it uploads. Values that aren't known until
+ *   the deploy, like those of what the same deploy creates on a new stage, are left out of
+ *   that build's `environment`. `sst.aws.StaticSite` skipped its build in `sst diff` then.
+ * - The build gets `SST=1` and `SST_RESOURCE_App` in its environment, as the other sites'
+ *   builds do, and not what the CLI is given for its own calls to Cloudflare.
+ * - `sst migrate`, and a deploy that previews first, on a stage with checks or with a policy
+ *   pack, build the site twice: in the preview, and in the deploy.
+ * - `sst refresh` doesn't build the site, where `sst.aws.StaticSite` did. Its files stay as
+ *   they are.
+ * - `path`, `build`, `vite`, `indexPage`, `errorPage`, `edge`, `edgeRouting`, `router`,
+ *   `invalidation` and `assets.bucket` have to be plain values, not outputs: they decide
+ *   what's created, or what's built. So do the `name`, `aliases` and `redirects` of
+ *   `domain`.
+ * - `route`, `base` and `cdn` are gone. Serve the site through a Router with `router`.
+ * - `router` takes `instance`, `path` and `domain`. `rewrite`, `readTimeout`,
+ *   `keepAliveTimeout`, `connectionTimeout` and `connectionAttempts` in it are refused:
+ *   `sst.aws.StaticSite` ignored them.
+ * - `edge.viewerRequest.kvStores` and `edge.viewerResponse.kvStores` are gone, and refused.
+ *   Use `kvStore`. `sst.aws.StaticSite` gave the viewer response function the first of
+ *   `kvStores`.
+ * - A viewer request or response function is created when its `injection` is given. An
+ *   `injection` given as an output that turns out empty still creates one, where
+ *   `sst.aws.StaticSite` created none.
+ * - `assets.textEncoding` sets the charset of text files. `sst.aws.StaticSite` ignored it
+ *   and wrote `UTF-8`.
+ * - Vite's types are written when the keys of `environment` are known, in `sst diff` too.
+ *   `sst.aws.StaticSite` waited for every value.
+ * - The bucket an `assets.bucket` names is looked up with a function, not a resource of the
+ *   state. `sst migrate` takes SST 4's lookup out of the state, which changes nothing in AWS.
+ * - `nodes` has a key for each resource the site creates, like `nodes.kvKeys`.
+ *   `nodes.assets` is `undefined` when `assets.bucket` names a bucket. In `sst dev`, reading
+ *   `nodes` says the site runs on your machine, where `sst.aws.StaticSite` gave `undefined`.
+ * - `transform.cdn` is given the distribution's `customErrorResponses`, its
+ *   `defaultRootObject` and its `defaultCacheBehavior.functionAssociations` as plain values,
+ *   not outputs.
+ * - If you set the `defaultCacheBehavior` of `transform.cdn` with an object, it's merged
+ *   with the one the site sets: it keeps the functions the site associates with it, where
+ *   `sst.aws.StaticSite` replaced it whole.
  */
-export class StaticSite extends Component implements Link.Linkable {
-  private cdn?: Cdn;
-  private bucket?: Bucket;
-  private devUrl?: Output<string>;
-  private prodUrl?: Output<string | undefined>;
+export class StaticSite extends component("sst:aws:StaticSite", parts) {
+  private readonly siteUrl: Output<string>;
 
   constructor(
     name: string,
     args: StaticSiteArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
+    this.siteUrl = this.create(name, args);
+  }
+
+  private create(name: string, args: StaticSiteArgs): Output<string> {
     const self = this;
+    const owner = `the "${name}" static site`;
+    const option = (arg: string) => `The "${arg}" of ${owner}`;
+    const root = context().paths.root;
 
-    validateDeprecatedProps();
-    const { sitePath, environment, indexPage } = prepare(args);
-    const dev = normalizeDev();
+    rejectSst4SiteArgs(args, owner);
+    notAnOption(
+      args,
+      "base",
+      `Set the path it's served under with "router": { instance: router, path }.`,
+      owner,
+    );
+    const sitePath = sitePathOf(args.path, owner);
+    const vite = plainDeep(args.vite, option("vite"), BUILD_READS_IT);
 
-    if (dev.enabled) {
-      this.devUrl = dev.url;
-      this.registerOutputs({
-        _metadata: {
-          mode: "placeholder",
-          path: sitePath,
-          environment,
-          url: this.url,
-        },
-        _dev: dev.outputs,
-      });
-      return;
-    }
-
-    const route = normalizeRoute();
-    const edgeRouting = args.edgeRouting ?? true;
-    const errorPage = normalizeErrorPage();
-    const assets = normalizeAsssets();
-    const outputPath = buildApp(self, name, args.build, sitePath, environment);
-    const bucket = createBucket();
-    const { bucketName, bucketDomain } = getBucketDetails();
-    const assetsUploaded = uploadAssets();
-    const kvNamespace = buildKvNamespace();
-
-    let originAccessControl: OriginAccessControl | undefined;
-    let distribution: Cdn | undefined;
-    let distributionId: Output<string>;
-    let kvStoreArn: Output<string> | undefined;
-    let invalidationDependsOn: Resource[] = [];
-    let prodUrl: Output<string | undefined>;
-    if (route) {
-      kvStoreArn = route.routerKvStoreArn;
-      distributionId = route.routerDistributionId;
-      invalidationDependsOn = [updateRouterKvRoutes()];
-      prodUrl = route.routerUrl;
-    } else {
-      if (edgeRouting) kvStoreArn = createRequestKvStore();
-      distribution = createDistribution();
-      distributionId = distribution.nodes.distribution.id;
-      prodUrl = distribution.domainUrl.apply((domainUrl) =>
-        output(domainUrl ?? distribution!.url),
-      );
-    }
-
-    const kvUpdated = edgeRouting ? createKvEntries() : undefined;
-    if (kvUpdated) invalidationDependsOn.push(kvUpdated);
-    createInvalidation();
-
-    this.bucket = bucket;
-    this.cdn = distribution;
-    this.prodUrl = prodUrl;
-
-    this.registerOutputs({
-      _hint: this.url,
-      _metadata: {
-        mode: "deployed",
-        path: sitePath,
-        environment,
-        url: this.url,
-      },
-    });
-
-    function validateDeprecatedProps() {
-      if (args.base !== undefined)
-        throw new VisibleError(
-          `"base" prop is deprecated. Use the "route.path" prop instead to set the base path of the site.`,
-        );
-
-      if (args.cdn !== undefined)
-        throw new VisibleError(
-          `"cdn" prop is deprecated. Use the "route.router" prop instead to use an existing "Router" component to serve your site.`,
-        );
-    }
-
-    function normalizeRoute() {
-      if (args.edgeRouting === false && (args.router || args.route))
-        throw new VisibleError(
-          `Cannot provide both "edgeRouting: false" and "router" (or the deprecated "route"). An SST "Router" finds and serves its sites through its KeyValueStore, so a site behind one needs edge routing. Remove "router" or "route" to serve the site from its own distribution without edge routing.`,
-        );
-
-      const route = normalizeRouteArgs(args.router, args.route);
-
-      if (route) {
-        if (args.domain)
-          throw new VisibleError(
-            `Cannot provide both "domain" and "route". Use the "domain" prop on the "Router" component when serving your site through a Router.`,
-          );
-
-        if (args.edge)
-          throw new VisibleError(
-            `Cannot provide both "edge" and "route". Use the "edge" prop on the "Router" component when serving your site through a Router.`,
-          );
-      }
-
-      return route;
-    }
-
-    function normalizeDev() {
-      const enabled = $dev && args.dev !== false;
-      const devArgs = args.dev || {};
-
-      return {
-        enabled,
-        url: output(devArgs.url ?? URL_UNAVAILABLE),
-        outputs: {
-          title: devArgs.title,
-          environment,
-          command: output(devArgs.command ?? "npm run dev"),
-          autostart: output(devArgs.autostart ?? true),
-          directory: output(devArgs.directory ?? sitePath),
-        },
-      };
-    }
-
-    function normalizeErrorPage() {
-      return all([indexPage, args.errorPage]).apply(
-        ([indexPage, errorPage]) => {
-          return "/" + (errorPage ?? indexPage).replace(/^\//, "");
-        },
-      );
-    }
-
-    function normalizeAsssets() {
-      return {
-        ...args.assets,
-        // remove leading and trailing slashes from the path
-        path: args.assets?.path
-          ? output(args.assets?.path).apply((v) =>
-            v.replace(/^\//, "").replace(/\/$/, ""),
-          )
-          : undefined,
-        purge: output(args.assets?.purge ?? true),
-        // normalize to /path format
-        routes: args.assets?.routes
-          ? output(args.assets?.routes).apply((v) =>
-            v.map(
-              (route) => "/" + route.replace(/^\//, "").replace(/\/$/, ""),
-            ),
-          )
-          : [],
-      };
-    }
-
-    function createBucket() {
-      if (assets.bucket) return;
-
-      return new Bucket(
-        ...transform(
-          args.transform?.assets,
-          `${name}Assets`,
-          { access: "cloudfront" },
-          { parent: self, retainOnDelete: false },
+    // In `sst dev` the site runs on your machine, in a pane of its own
+    const dev = plain(args.dev, option("dev"));
+    if (context().dev && dev !== false) {
+      this.runsLocally();
+      // The environment, once Vite's types for it are written
+      const environment = output(
+        writeViteTypes(sitePath, vite?.types, args.environment).then(
+          () => args.environment ?? {},
         ),
       );
+      this.report({ dev: { ...siteDev(dev, sitePath), environment } });
+      return output(dev?.url ?? URL_UNAVAILABLE);
     }
 
-    function getBucketDetails() {
-      const s3Bucket = bucket
-        ? bucket.nodes.bucket
-        : s3.Bucket.get(`${name}Assets`, assets.bucket!, undefined, {
-          parent: self,
-        });
+    // The args that decide which resources are created are read first
+    const edgeRouting = plain(args.edgeRouting, option("edgeRouting")) ?? true;
+    const indexPage =
+      plain(args.indexPage, option("indexPage")) ?? "index.html";
+    const errorPageArg = plain(args.errorPage, option("errorPage"));
+    // The page a path with no file serves: the error page, or the index page
+    const errorPage = "/" + (errorPageArg ?? indexPage).replace(/^\//, "");
+    const build = plainDeep(args.build, option("build"), BUILD_READS_IT);
+    const invalidation = plainDeep(args.invalidation, option("invalidation"));
+    const givenBucket = plain(args.assets?.bucket, option("assets.bucket"));
+    const assetsPath = output(args.assets?.path).apply((p) =>
+      p ? p.replace(/^\//, "").replace(/\/$/, "") : undefined,
+    );
+    const purge = output(args.assets?.purge ?? true);
+    const namespace = kvNamespace(name);
 
+    const bucket = givenBucket
+      ? undefined
+      : this.part(
+          "assets",
+          { access: "cloudfront" },
+          { retainOnDelete: false },
+        );
+    const bucketName = bucket ? bucket.name : output(givenBucket!);
+    const bucketDomain = bucket
+      ? bucket.nodes.bucket.bucketRegionalDomainName
+      : s3.getBucketOutput({ bucket: givenBucket! }, { parent: self })
+          .bucketRegionalDomainName;
+
+    const routing = router();
+
+    if (refreshing()) {
+      this.report({ hint: routing.url });
+      return routing.url;
+    }
+
+    // The folder that's uploaded, from the app's folder, once it's built
+    const built = build
+      ? writeViteTypes(sitePath, vite?.types, args.environment)
+          .then(() =>
+            buildSite({
+              name,
+              sitePath,
+              command: build.command,
+              environment: args.environment,
+            }),
+          )
+          .then(() => {
+            const outputPath = path.join(sitePath, build.output);
+            if (!fs.existsSync(path.resolve(root, outputPath)))
+              throw new VisibleError(
+                `${capitalized(owner)} has no build output at "${path.resolve(
+                  root,
+                  outputPath,
+                )}". Set "build.output" to the folder its build writes.`,
+              );
+            return outputPath;
+          })
+      : writeViteTypes(sitePath, vite?.types, args.environment).then(
+          () => sitePath,
+        );
+    const outputDir = output(built).apply((p) => path.resolve(root, p));
+
+    const assetFiles = this.part("assetFiles", {
+      bucketName,
+      files: all([
+        outputDir,
+        args.assets,
+        assetsPath,
+        routing.pathPrefix,
+      ]).apply(([outputDir, assets, assetsPath, pathPrefix]) =>
+        filesOf({
+          outputDir,
+          fileOptions: assets?.fileOptions as BaseSiteFileOptions[],
+          textEncoding: assets?.textEncoding ?? "UTF-8",
+          assetsPath,
+          pathPrefix,
+        }),
+      ),
+      purge,
+      region: getRegionOutput({}, { parent: self }).region,
+    });
+
+    const kvKeys = routing.kvStoreArn
+      ? this.part("kvKeys", {
+          store: routing.kvStoreArn,
+          namespace,
+          entries: all([
+            outputDir,
+            args.assets?.routes,
+            assetsPath,
+            bucketDomain,
+            routing.pathPrefix,
+          ]).apply(
+            ([outputDir, routes, assetsPath, bucketDomain, pathPrefix]) =>
+              kvEntriesOf({
+                outputDir,
+                routes: (routes ?? []).map(
+                  (route) => "/" + route.replace(/^\//, "").replace(/\/$/, ""),
+                ),
+                assetsPath,
+                bucketDomain,
+                errorPage,
+                hasErrorPage: Boolean(errorPageArg),
+                pathPrefix,
+              }),
+          ),
+          purge,
+        })
+      : undefined;
+
+    const routesUpdate = routing.route
+      ? this.part(
+          "routesUpdate",
+          siteRoutesUpdateArgs(routing.route, namespace),
+        )
+      : undefined;
+
+    createInvalidation();
+
+    this.report({ hint: routing.url });
+    return routing.url;
+
+    // How the site is served: through a router, or a distribution of its own
+    function router() {
+      if (args.router !== undefined && !edgeRouting)
+        throw new VisibleError(
+          `${capitalized(
+            owner,
+          )} can't have both "edgeRouting: false" and "router". A Router finds and serves its sites through its key-value store, so a site behind one needs edge routing. Remove "router" to serve the site from its own distribution without edge routing.`,
+        );
+      const routed = siteRouteOf(
+        {
+          router: args.router,
+          existing: args.existing,
+          routerHas: { domain: args.domain, edge: args.edge },
+        },
+        owner,
+        ["kvStore", "requestFunction", "responseFunction", "accessControl"],
+      );
+      if (!routed) return standalone();
+
+      const { route, pathPrefix } = routed;
       return {
-        bucketName: s3Bucket.bucket,
-        bucketDomain: s3Bucket.bucketRegionalDomainName,
+        route,
+        pathPrefix,
+        kvStoreArn: route.routerKvStoreArn as Output<string> | undefined,
+        distributionId: route.routerDistributionId,
+        url: route.routerUrl,
       };
     }
 
-    function uploadAssets() {
-      return all([outputPath, assets, route]).apply(
-        async ([outputPath, assets, route]) => {
-          const bucketFiles: BucketFile[] = [];
-
-          // Build fileOptions
-          const fileOptions = assets?.fileOptions ?? [
-            {
-              files: "**",
-              cacheControl: "max-age=31536000,public,immutable",
-            },
-            {
-              files: "**/*.html",
-              cacheControl: "max-age=0,no-cache,no-store,must-revalidate",
-            },
-          ];
-
-          // Upload files based on fileOptions
-          const filesProcessed: string[] = [];
-          for (const fileOption of fileOptions.reverse()) {
-            const files = globSync(fileOption.files, {
-              cwd: path.resolve(outputPath),
-              nodir: true,
-              dot: true,
-              ignore: [
-                ".sst/**",
-                ...(typeof fileOption.ignore === "string"
-                  ? [fileOption.ignore]
-                  : fileOption.ignore ?? []),
-              ],
-            }).filter((file) => !filesProcessed.includes(file));
-
-            bucketFiles.push(
-              ...(await Promise.all(
-                files.map(async (file) => {
-                  const source = path.resolve(outputPath, file);
-                  const content = await fs.promises.readFile(source, "utf-8");
-                  const hash = crypto
-                    .createHash("sha256")
-                    .update(content)
-                    .digest("hex");
-                  return {
-                    source,
-                    key: toPosix(
-                      path.join(
-                        assets.path ?? "",
-                        route?.pathPrefix?.replace(/^\//, "") ?? "",
-                        file,
-                      ),
-                    ),
-                    hash,
-                    cacheControl: fileOption.cacheControl,
-                    contentType:
-                      fileOption.contentType ?? getContentType(file, "UTF-8"),
-                  };
-                }),
-              )),
-            );
-            filesProcessed.push(...files);
-          }
-
-          return new BucketFiles(
-            `${name}AssetFiles`,
-            {
-              bucketName,
-              files: bucketFiles,
-              purge: assets.purge,
-              region: getRegionOutput(undefined, { parent: self }).region,
-            },
-            { parent: self },
-          );
-        },
+    function standalone() {
+      cdnDomain(args.domain, owner);
+      const edge = edgeOf(args.edge, option, owner);
+      const builder = self.builder();
+      const kvStoreArn = edgeRouting
+        ? routingStore(builder, edge, args.existing, owner)
+        : undefined;
+      const requestFunction = requestFunctionOf(kvStoreArn, edge.viewerRequest);
+      const responseFunction = viewerResponseFunction(
+        builder,
+        edge.viewerResponse,
       );
-    }
 
-    function buildKvNamespace() {
-      // In the case multiple sites use the same kv store, we need to namespace the keys
-      return crypto
-        .createHash("md5")
-        .update(`${$app.name}-${$app.stage}-${name}`)
-        .digest("hex")
-        .substring(0, 4);
-    }
-
-    function createKvEntries() {
-      const entries = all([
-        outputPath,
-        assets,
-        bucketDomain,
-        errorPage,
-        route,
-        args.errorPage,
-      ]).apply(async ([
-        outputPath,
-        assets,
-        bucketDomain,
-        errorPage,
-        route,
-        hasErrorPage,
-      ]) => {
-        const kvEntries: Record<string, string> = {};
-        const dirs: string[] = [];
-        // Router append .html and index.html suffixes to requests to s3 routes:
-        // - `.well-known` contain files without suffix, hence will be appended .html
-        // - in the future, it might make sense for each dir to have props that controls
-        //   the suffixes ie. "handleTrailingSlashse"
-        const expandDirs = [".well-known"];
-
-        const processDir = (childPath = "", level = 0) => {
-          const currentPath = path.join(outputPath, childPath);
-          fs.readdirSync(currentPath, { withFileTypes: true }).forEach(
-            (item) => {
-              // File: add to kvEntries
-              if (item.isFile()) {
-                kvEntries[toPosix(path.join("/", childPath, item.name))] = "s3";
-                return;
-              }
-              // Directory + expand: recursively process it
-              if (level === 0 && expandDirs.includes(item.name)) {
-                processDir(path.join(childPath, item.name), level + 1);
-                return;
-              }
-              // Directory + NOT expand: add to route
-              dirs.push(toPosix(path.join("/", childPath, item.name)));
-            },
-          );
-        };
-        processDir();
-
-        kvEntries["metadata"] = JSON.stringify({
-          base: route?.pathPrefix === "/" ? undefined : route?.pathPrefix,
-          custom404: hasErrorPage ? undefined : errorPage,
-          errorResponseCode: hasErrorPage ? 404 : undefined,
-          s3: {
-            domain: bucketDomain,
-            dir: assets.path ? "/" + assets.path : "",
-            prefix:
-              route?.pathPrefix && route.pathPrefix !== "/"
-                ? route.pathPrefix
-                : "",
-            routes: [...assets.routes, ...dirs],
-          },
-        } satisfies KV_SITE_METADATA);
-
-        return kvEntries;
+      const cdn = self.part("cdn", {
+        comment: `${name} site`,
+        domain: args.domain,
+        origins: originsOf(),
+        defaultCacheBehavior: {
+          targetOriginId: "default",
+          viewerProtocolPolicy: "redirect-to-https",
+          allowedMethods: [
+            "DELETE",
+            "GET",
+            "HEAD",
+            "OPTIONS",
+            "PATCH",
+            "POST",
+            "PUT",
+          ],
+          cachedMethods: ["GET", "HEAD"],
+          compress: true,
+          cachePolicyId: CACHING_OPTIMIZED,
+          functionAssociations: [
+            ...(requestFunction
+              ? [
+                  {
+                    eventType: "viewer-request",
+                    functionArn: requestFunction.arn,
+                  },
+                ]
+              : []),
+            ...(responseFunction
+              ? [
+                  {
+                    eventType: "viewer-response",
+                    functionArn: responseFunction.arn,
+                  },
+                ]
+              : []),
+          ],
+        },
+        // With `edgeRouting: false`, CloudFront serves the index page for `/`
+        defaultRootObject: edgeRouting
+          ? undefined
+          : indexPage.replace(/^\//, ""),
+        customErrorResponses: errorResponsesOf(),
       });
 
-      return new KvKeys(
-        `${name}KvKeys`,
-        {
-          store: kvStoreArn!,
-          namespace: kvNamespace,
-          entries,
-          purge: assets.purge,
-        },
-        { parent: self },
-      );
+      return {
+        route: undefined,
+        pathPrefix: output(undefined as string | undefined),
+        kvStoreArn,
+        distributionId: cdn.nodes.distribution.id,
+        url: all([cdn.domainUrl, cdn.url]).apply(
+          ([domainUrl, url]) => (domainUrl ?? url) as string,
+        ),
+      };
     }
 
-    function updateRouterKvRoutes() {
-      return new KvRoutesUpdate(
-        `${name}RoutesUpdate`,
-        {
-          store: route!.routerKvStoreArn,
-          namespace: route!.routerKvNamespace,
-          key: "routes",
-          entry: route!.apply((route) =>
-            ["site", kvNamespace, route!.hostPattern, route!.pathPrefix].join(
-              ",",
-            ),
+    // The viewer request function: the one that routes each request, or with
+    // `edgeRouting: false`, one that only runs the user's code and blocks
+    // the CloudFront URL, and only when there's something to run
+    function requestFunctionOf(
+      kvStoreArn: Output<string> | undefined,
+      viewerRequest:
+        | { injection: Input<string>; kvStore?: Input<string> }
+        | undefined,
+    ) {
+      if (kvStoreArn)
+        return self.part("requestFunction", {
+          runtime: "cloudfront-js-2.0",
+          keyValueStoreAssociations: [kvStoreArn],
+          code: siteRequestCode(
+            namespace,
+            viewerRequest?.injection,
+            Boolean(args.domain),
           ),
-        },
-        { parent: self },
-      );
-    }
-
-    function createRequestKvStore() {
-      return output(args.edge).apply((edge) => {
-        const viewerRequest = edge?.viewerRequest;
-        if (viewerRequest?.kvStore) return output(viewerRequest?.kvStore);
-
-        return new cloudfront.KeyValueStore(
-          `${name}KvStore`,
-          {},
-          { parent: self },
-        ).arn;
-      });
-    }
-
-    function createRequestFunction() {
-      if (!edgeRouting) return createInjectionRequestFunction();
-
-      return output(args.edge).apply((edge) => {
-        const userInjection = edge?.viewerRequest?.injection ?? "";
-        const blockCloudfrontUrlInjection = args.domain
-          ? CF_BLOCK_CLOUDFRONT_URL_INJECTION
-          : "";
-        return new cloudfront.Function(
-          `${name}CloudfrontFunctionRequest`,
-          {
-            runtime: "cloudfront-js-2.0",
-            keyValueStoreAssociations: kvStoreArn ? [kvStoreArn] : [],
-            code: interpolate`
+        });
+      if (!viewerRequest?.injection && !args.domain) return;
+      return self.part("requestFunction", {
+        runtime: "cloudfront-js-2.0",
+        keyValueStoreAssociations: viewerRequest?.kvStore
+          ? [viewerRequest.kvStore]
+          : [],
+        code: interpolate`
 import cf from "cloudfront";
 async function handler(event) {
-  ${userInjection}
-  ${blockCloudfrontUrlInjection}
-  ${CF_ROUTER_INJECTION}
-
-  const kvNamespace = "${kvNamespace}";
-
-  // Load metadata
-  let metadata;
-  try {
-    const v = await cf.kvs().get(kvNamespace + ":metadata");
-    metadata = JSON.parse(v);
-  } catch (e) {}
-
-  const response = await routeSite(kvNamespace, metadata);
-  return response || event.request;
-}`,
-          },
-          { parent: self },
-        );
-      });
-    }
-
-    // With `edgeRouting: false`, the function only runs the injections, and is
-    // skipped without any.
-    function createInjectionRequestFunction() {
-      return output(args.edge).apply((edge) => {
-        const userInjection = edge?.viewerRequest?.injection ?? "";
-        const userKvStore = edge?.viewerRequest?.kvStore;
-        const blockCloudfrontUrlInjection = args.domain
-          ? CF_BLOCK_CLOUDFRONT_URL_INJECTION
-          : "";
-        if (!userInjection && !blockCloudfrontUrlInjection) return;
-
-        return new cloudfront.Function(
-          `${name}CloudfrontFunctionRequest`,
-          {
-            runtime: "cloudfront-js-2.0",
-            keyValueStoreAssociations: userKvStore ? [userKvStore] : [],
-            code: `
-import cf from "cloudfront";
-async function handler(event) {
-  ${userInjection}
-  ${blockCloudfrontUrlInjection}
+  ${viewerRequest?.injection ?? ""}
+  ${args.domain ? CF_BLOCK_CLOUDFRONT_URL_INJECTION : ""}
   return event.request;
 }`,
-          },
-          { parent: self },
-        );
       });
     }
 
-    function createResponseFunction() {
-      return output(args.edge).apply((edge) => {
-        const userConfig = edge?.viewerResponse;
-        const userInjection = userConfig?.injection;
-        const kvStoreArn = userConfig?.kvStore ?? userConfig?.kvStores?.[0];
-
-        if (!userInjection) return;
-
-        return new cloudfront.Function(
-          `${name}CloudfrontFunctionResponse`,
+    // The default origin. CloudFront fetches custom error pages without
+    // running the viewer request function, so a site with an error page, or
+    // with `edgeRouting: false` (no function to set the origin), uses the
+    // bucket, not a placeholder. Otherwise it's the placeholder, with no
+    // access control.
+    function originsOf() {
+      if (edgeRouting && !errorPageArg)
+        return [
           {
-            runtime: "cloudfront-js-2.0",
-            keyValueStoreAssociations: kvStoreArn ? [kvStoreArn] : [],
-            code: `
-import cf from "cloudfront";
-async function handler(event) {
-  ${userInjection}
-  return event.response;
-}`,
+            originId: "default",
+            domainName: "placeholder.sst.dev",
+            customOriginConfig: {
+              httpPort: 80,
+              httpsPort: 443,
+              originProtocolPolicy: "https-only",
+              originReadTimeout: 20,
+              originSslProtocols: ["TLSv1.2"],
+            },
           },
-          { parent: self },
-        );
-      });
-    }
-
-    function createOriginAccessControl() {
-      return (originAccessControl ??= new OriginAccessControl(
-        `${name}S3AccessControl`,
+        ];
+      const accessControl = self.part(
+        "accessControl",
         { name: physicalName(64, name) },
-        { parent: self, ignoreChanges: ["name"] },
-      ));
-    }
-
-    // The default origin. CloudFront fetches custom error pages without running
-    // the viewer request function, so a site with an error page, or with
-    // `edgeRouting: false` (no function to set the origin), uses the bucket, not a
-    // placeholder. Otherwise it's the placeholder, with no access control. A plain
-    // array unless `errorPage` is an Output, so `transform.cdn` gets an array.
-    function createDefaultOrigins() {
-      const placeholder = () => [
-        {
-          originId: "default",
-          domainName: "placeholder.sst.dev",
-          customOriginConfig: {
-            httpPort: 80,
-            httpsPort: 443,
-            originProtocolPolicy: "https-only" as const,
-            originReadTimeout: 20,
-            originSslProtocols: ["TLSv1.2"],
-          },
-        },
-      ];
-      const bucketOrigin = () => [
+        { ignoreChanges: ["name"] },
+      );
+      return [
         {
           originId: "default",
           domainName: bucketDomain,
-          originAccessControlId: createOriginAccessControl().id,
-        },
-      ];
-
-      if (!edgeRouting)
-        return [
-          {
-            ...bucketOrigin()[0],
-            originPath: assets.path?.apply((assetsPath) =>
-              assetsPath ? "/" + assetsPath : "",
-            ),
-          },
-        ];
-      if (!args.errorPage) return placeholder();
-      if (!Output.isInstance(args.errorPage)) return bucketOrigin();
-      return args.errorPage.apply((errorPage) =>
-        errorPage ? bucketOrigin() : placeholder(),
-      );
-    }
-
-    function createDistribution() {
-      return new Cdn(
-        ...transform(
-          args.transform?.cdn,
-          `${name}Cdn`,
-          {
-            comment: `${name} site`,
-            domain: args.domain,
-            origins: createDefaultOrigins(),
-            defaultCacheBehavior: {
-              targetOriginId: "default",
-              viewerProtocolPolicy: "redirect-to-https",
-              allowedMethods: [
-                "DELETE",
-                "GET",
-                "HEAD",
-                "OPTIONS",
-                "PATCH",
-                "POST",
-                "PUT",
-              ],
-              cachedMethods: ["GET", "HEAD"],
-              compress: true,
-              // CloudFront's managed CachingOptimized policy
-              cachePolicyId: "658327ea-f89d-4fab-a63d-7e88639e58f6",
-              functionAssociations: all([
-                createRequestFunction(),
-                createResponseFunction(),
-              ]).apply(([reqFn, resFn]) => [
-                ...(reqFn
-                  ? [{ eventType: "viewer-request", functionArn: reqFn.arn }]
-                  : []),
-                ...(resFn
-                  ? [{ eventType: "viewer-response", functionArn: resFn.arn }]
-                  : []),
-              ]),
-            },
-            // With `edgeRouting: false`, CloudFront serves the index page for `/`
-            defaultRootObject: edgeRouting
-              ? undefined
-              : indexPage.apply((indexPage) => indexPage.replace(/^\//, "")),
-            customErrorResponses: all([
-              args.errorPage,
-              errorPage,
-              assets.path,
-            ]).apply(([hasCustomErrorPage, errorPage, assetsPath]) => {
-              // Error page, or index page with a 200 for a SPA. The origin path
-              // already has the assets path.
-              if (!edgeRouting)
-                return [403, 404].map((errorCode) => ({
-                  errorCode,
-                  responseCode: hasCustomErrorPage ? 404 : 200,
-                  responsePagePath: errorPage,
-                  errorCachingMinTtl: 0,
-                }));
-              if (!hasCustomErrorPage) return [];
-              // Error page fetches skip the viewer request function, which is
-              // what prepends the assets path for every other request. (This
-              // runs only for a site with its own distribution, so there is no
-              // Router path to add.)
-              const pagePath = path.posix.join("/", assetsPath ?? "", errorPage);
-
-              return [
-                {
-                  errorCode: 403,
-                  responseCode: 404,
-                  responsePagePath: pagePath,
-                  errorCachingMinTtl: 0,
-                },
-                {
-                  errorCode: 404,
-                  responseCode: 404,
-                  responsePagePath: pagePath,
-                  errorCachingMinTtl: 0,
-                },
-              ];
+          originAccessControlId: accessControl.id,
+          // Without edge routing, nothing adds the assets' path to a request
+          ...(!edgeRouting &&
+            args.assets?.path && {
+              originPath: assetsPath.apply((p) => (p ? "/" + p : "")),
             }),
         },
-        { parent: self },
-      ),
-    );
-  }
+      ];
+    }
+
+    function errorResponsesOf() {
+      // Error page, or index page with a 200 for a SPA. The origin path
+      // already has the assets' path.
+      if (!edgeRouting)
+        return [403, 404].map((errorCode) => ({
+          errorCode,
+          responseCode: errorPageArg ? 404 : 200,
+          responsePagePath: errorPage,
+          errorCachingMinTtl: 0,
+        }));
+      if (!errorPageArg) return [];
+      // Error page fetches skip the viewer request function, which is what
+      // adds the assets' path to every other request
+      return [403, 404].map((errorCode) => ({
+        errorCode,
+        responseCode: 404,
+        responsePagePath: assetsPath.apply((p) =>
+          path.posix.join("/", p ?? "", errorPage),
+        ),
+        errorCachingMinTtl: 0,
+      }));
+    }
 
     function createInvalidation() {
-      all([outputPath, args.assets, args.invalidation]).apply(
-        ([outputPath, assets, invalidationRaw]) => {
-          // Normalize invalidation
-          if (invalidationRaw === false) return;
-          const invalidation = {
-            wait: false,
-            paths: "all" as const,
-            ...invalidationRaw,
-          };
+      if (invalidation === false) return;
+      const paths = invalidation?.paths ?? "all";
+      const invalidationPaths = paths === "all" ? ["/*"] : paths;
+      if (invalidationPaths.length === 0) return;
 
-          // Build invalidation paths
-          const invalidationPaths =
-            invalidation.paths === "all" ? ["/*"] : invalidation.paths;
-          if (invalidationPaths.length === 0) return;
-
-          // Calculate a hash based on the contents of the S3 files. This will be
-          // used to determine if we need to invalidate our CloudFront cache.
-          //
-          // The below options are needed to support following symlinks when building zip files:
-          // - nodir: This will prevent symlinks themselves from being copied into the zip.
-          // - follow: This will follow symlinks and copy the files within.
-          const hash = crypto.createHash("md5");
-          hash.update(JSON.stringify(assets ?? {}));
-          globSync("**", {
-            dot: true,
-            nodir: true,
-            follow: true,
-            cwd: path.resolve(outputPath),
-          }).forEach((filePath) =>
-            hash.update(
-              fs.readFileSync(path.resolve(outputPath, filePath), "utf-8"),
-            ),
-          );
-
-          new DistributionInvalidation(
-            `${name}Invalidation`,
-            {
-              distributionId,
-              paths: invalidationPaths,
-              version: hash.digest("hex"),
-              wait: invalidation.wait,
-            },
-            {
-              parent: self,
-              dependsOn: [assetsUploaded, ...invalidationDependsOn],
-            },
-          );
+      self.part(
+        "invalidation",
+        {
+          distributionId: routing.distributionId,
+          paths: invalidationPaths,
+          version: all([outputDir, args.assets]).apply(([outputDir, assets]) =>
+            versionOf(outputDir, assets),
+          ),
+          wait: invalidation?.wait ?? false,
+        },
+        {
+          dependsOn: [
+            assetFiles,
+            ...(routesUpdate ? [routesUpdate] : []),
+            ...(kvKeys ? [kvKeys] : []),
+          ],
         },
       );
     }
@@ -1467,29 +1517,10 @@ async function handler(event) {
    * Otherwise, it's the auto-generated CloudFront URL.
    */
   public get url() {
-    return all([this.prodUrl, this.devUrl]).apply(
-      ([prodUrl, devUrl]) => (prodUrl ?? devUrl)!,
-    );
+    return this.siteUrl;
   }
 
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon S3 Bucket that stores the assets.
-       */
-      assets: this.bucket,
-      /**
-       * The Amazon CloudFront CDN that serves the site.
-       */
-      cdn: this.cdn,
-    };
-  }
-
-  /** @internal */
-  public getSSTLink() {
+  link() {
     return {
       properties: {
         url: this.url,
@@ -1498,6 +1529,143 @@ async function handler(event) {
   }
 }
 
-const __pulumiType = "sst:aws:StaticSite";
-// @ts-expect-error
-StaticSite.__pulumiType = __pulumiType;
+/**
+ * The files a static site uploads, with their headers: the first of the file
+ * options that matches a file decides its headers, counting from the last.
+ *
+ * @param outputDir The folder that's uploaded, on this machine.
+ * @param assetsPath Where in the bucket they go.
+ * @param pathPrefix The path the site is routed under, when it's served
+ * through a router.
+ */
+async function filesOf(input: {
+  outputDir: string;
+  fileOptions?: BaseSiteFileOptions[];
+  textEncoding: string;
+  assetsPath?: string;
+  pathPrefix?: string;
+}): Promise<BucketFile[]> {
+  const { outputDir, assetsPath, pathPrefix } = input;
+  const fileOptions = [
+    ...(input.fileOptions ?? [
+      {
+        files: "**",
+        cacheControl: "max-age=31536000,public,immutable",
+      },
+      {
+        files: "**/*.html",
+        cacheControl: "max-age=0,no-cache,no-store,must-revalidate",
+      },
+    ]),
+  ].reverse();
+
+  const bucketFiles: BucketFile[] = [];
+  const filesProcessed = new Set<string>();
+  for (const fileOption of fileOptions) {
+    const files = globSync(fileOption.files, {
+      cwd: outputDir,
+      nodir: true,
+      dot: true,
+      ignore: [
+        ".sst/**",
+        ...(typeof fileOption.ignore === "string"
+          ? [fileOption.ignore]
+          : fileOption.ignore ?? []),
+      ],
+    }).filter((file) => !filesProcessed.has(file));
+
+    const sources = files.map((file) => path.resolve(outputDir, file));
+    const hashes = await hashFiles(sources);
+    bucketFiles.push(
+      ...files.map((file, i) => ({
+        source: sources[i],
+        key: toPosix(
+          path.join(
+            assetsPath ?? "",
+            pathPrefix?.replace(/^\//, "") ?? "",
+            file,
+          ),
+        ),
+        hash: hashes[i],
+        cacheControl: fileOption.cacheControl,
+        contentType:
+          fileOption.contentType ?? getContentType(file, input.textEncoding),
+      })),
+    );
+    for (const file of files) filesProcessed.add(file);
+  }
+  return bucketFiles;
+}
+
+/**
+ * What a static site keeps in the key-value store its CloudFront function
+ * reads: its top-level files, and its metadata, with the folders that go to
+ * S3.
+ *
+ * @param routes The `assets.routes`, each as `/uploads`.
+ * @param errorPage The page a path with no file serves, as `/404.html`.
+ * @param hasErrorPage Whether that's an `errorPage` the site was given, which
+ * CloudFront serves with a 404. Otherwise the router serves it.
+ */
+function kvEntriesOf(input: {
+  outputDir: string;
+  routes: string[];
+  assetsPath?: string;
+  bucketDomain: string;
+  errorPage: string;
+  hasErrorPage: boolean;
+  pathPrefix?: string;
+}) {
+  const { outputDir, assetsPath, pathPrefix, hasErrorPage } = input;
+  const entries: Record<string, string> = {};
+  const dirs: string[] = [];
+  // The router adds `.html` and `index.html` to a request that goes to S3, so
+  // the files in `.well-known`, which have no suffix, are listed one by one
+  const expandDirs = [".well-known"];
+
+  const processDir = (childPath = "", level = 0) => {
+    const currentPath = path.join(outputDir, childPath);
+    fs.readdirSync(currentPath, { withFileTypes: true }).forEach((item) => {
+      if (item.isFile()) {
+        entries[toPosix(path.join("/", childPath, item.name))] = "s3";
+        return;
+      }
+      if (level === 0 && expandDirs.includes(item.name)) {
+        processDir(path.join(childPath, item.name), level + 1);
+        return;
+      }
+      dirs.push(toPosix(path.join("/", childPath, item.name)));
+    });
+  };
+  processDir();
+
+  entries["metadata"] = JSON.stringify({
+    base: pathPrefix === "/" ? undefined : pathPrefix,
+    custom404: hasErrorPage ? undefined : input.errorPage,
+    errorResponseCode: hasErrorPage ? 404 : undefined,
+    s3: {
+      domain: input.bucketDomain,
+      dir: assetsPath ? "/" + assetsPath : "",
+      prefix: pathPrefix && pathPrefix !== "/" ? pathPrefix : "",
+      routes: [...input.routes, ...dirs],
+    },
+  } satisfies KV_SITE_METADATA);
+  return entries;
+}
+
+// The invalidation's version: it changes when a file, or how the files are
+// uploaded, does. Each file is read as bytes, one at a time: a file that isn't
+// text read as text can hash the same after a change.
+function versionOf(outputDir: string, assets: unknown) {
+  const hash = crypto.createHash("md5");
+  hash.update(JSON.stringify(assets ?? {}));
+  globSync("**", {
+    dot: true,
+    nodir: true,
+    follow: true,
+    cwd: outputDir,
+  }).forEach((file) =>
+    hash.update(fs.readFileSync(path.resolve(outputDir, file))),
+  );
+  return hash.digest("hex");
+}

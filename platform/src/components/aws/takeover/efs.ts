@@ -1,6 +1,6 @@
 import { output } from "@pulumi/pulumi";
 import { takeover } from "../../takeover";
-import { Efs } from "../v5/efs";
+import { Efs } from "../efs";
 
 takeover(Efs, {
   moved: {

@@ -73,9 +73,9 @@ ssrSiteSuite(
     name: "React",
     site: "Web",
     load: async () => ({
-      original: (await import("../../../src/components/aws/react"))
+      original: (await import("../../fixtures/v4/components/aws/react"))
         .React as any,
-      v5: (await import("../../../src/components/aws/v5/react")).React as any,
+      v5: (await import("../../../src/components/aws/react")).React as any,
     }),
     paths: { site, based, app },
     // In SPA mode there's no server
@@ -125,9 +125,7 @@ ssrSiteSuite(
       });
 
       it("reads the base path from configs in another extension", async () => {
-        const { Router } = await import(
-          "../../../src/components/aws/v5/router"
-        );
+        const { Router } = await import("../../../src/components/aws/router");
         new (Site())("Web", {
           path: "js",
           buildCommand: "true",

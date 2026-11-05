@@ -1,18 +1,50 @@
-import { ComponentResourceOptions, Output, all, output } from "@pulumi/pulumi";
-import { Component, outputId, Transform, transform } from "../component";
-import { Link } from "../link";
+import { ComponentResourceOptions, jsonStringify } from "@pulumi/pulumi";
+import { lambda, sns, sqs } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  many,
+} from "../parts-component";
+import { usedAsItIs, withDefault, getArgs } from "../args";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
-import { hashStringToPrettyString, logicalName } from "../naming";
-import { parseTopicArn } from "./helpers/arn";
-import { SnsTopicLambdaSubscriber } from "./sns-topic-lambda-subscriber";
-import { SnsTopicQueueSubscriber } from "./sns-topic-queue-subscriber";
-import { sns } from "@pulumi/aws";
+import { VisibleError } from "../error";
+import { Function } from "./function";
+import {
+  type FunctionInput,
+  functionPart,
+  plainFunction,
+} from "./helpers/function-part";
+import { invokePermissionArgs } from "./helpers/function-permission";
+import { assertNamedSubscriber } from "./helpers/event-source";
+import { sendPolicy } from "./helpers/queue-policy";
+import { type AnyQueue, queueArnOf } from "./helpers/queue";
 import { permission } from "./permission";
-import { isFunctionSubscriber, isQueueSubscriber } from "./helpers/subscriber";
-import { Queue } from "./queue";
 
-export interface SnsTopicArgs {
+const parts = () => ({
+  /**
+   * The Amazon SNS Topic.
+   */
+  topic: sns.Topic,
+  /**
+   * The functions subscribed to the topic, by subscriber name.
+   */
+  subscriber: many(deferred(Function)),
+  /**
+   * The permissions that let the topic invoke each subscriber function, by subscriber name.
+   */
+  permission: many(lambda.Permission),
+  /**
+   * The topic's subscriptions, by subscriber name.
+   */
+  subscription: many(sns.TopicSubscription),
+  /**
+   * The policies that let the topic send to each subscribed queue, by subscriber name.
+   */
+  queuePolicy: many(sqs.QueuePolicy),
+});
+
+export interface SnsTopicArgs extends ComponentArgs<typeof parts> {
   /**
    * FIFO (First-In-First-Out) topics are designed to provide strict message ordering.
    *
@@ -29,16 +61,6 @@ export interface SnsTopicArgs {
    * ```
    */
   fifo?: Input<boolean>;
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the SNS Topic resource.
-     */
-    topic?: Transform<sns.TopicArgs>;
-  };
 }
 
 export interface SnsTopicSubscriberArgs {
@@ -85,29 +107,13 @@ export interface SnsTopicSubscriberArgs {
    * ```
    */
   filter?: Input<Record<string, any>>;
-  /**
-   * [Transform](/docs/components#transform) how this subscription creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the SNS Topic Subscription resource.
-     */
-    subscription?: Transform<sns.TopicSubscriptionArgs>;
-  };
-}
-
-interface SnsTopicRef {
-  ref: true;
-  topicArn: Input<string>;
 }
 
 /**
  * The `SnsTopic` component lets you add an [Amazon SNS Topic](https://docs.aws.amazon.com/sns/latest/dg/sns-create-topic.html) to your app.
  *
- * :::note
- * The difference between an `SnsTopic` and a `Queue` is that with a topic you can deliver messages to multiple subscribers.
- * :::
+ * It's built from parts, so every resource it creates can be transformed, is available in
+ * `nodes`, and can be swapped for one you already have.
  *
  * @example
  *
@@ -119,7 +125,7 @@ interface SnsTopicRef {
  *
  * #### Make it a FIFO topic
  *
- * You can optionally make it a FIFO topic.
+ * You can optionally make this a FIFO topic.
  *
  * ```ts {2} title="sst.config.ts"
  * new sst.aws.SnsTopic("MyTopic", {
@@ -127,10 +133,13 @@ interface SnsTopicRef {
  * });
  * ```
  *
- * #### Add a subscriber
+ * #### Add subscribers
+ *
+ * Each subscriber has a name.
  *
  * ```ts title="sst.config.ts"
- * topic.subscribe("MySubscriber", "src/subscriber.handler");
+ * topic.subscribe("Emailer", "src/emailer.handler");
+ * topic.subscribeQueue("Orders", queue);
  * ```
  *
  * #### Link the topic to a resource
@@ -156,90 +165,98 @@ interface SnsTopicRef {
  *   Message: "Hello from Next.js!"
  * }));
  * ```
+ *
+ * #### Use a topic you already have
+ *
+ * Pass the topic, or its ARN. The topic is used the way it is: the component doesn't
+ * configure it, and refuses `fifo` next to it.
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.aws.SnsTopic("MyTopic", {
+ *   existing: {
+ *     topic: "arn:aws:sns:us-east-1:123456789012:my-topic"
+ *   }
+ * });
+ * ```
+ *
+ * #### Switch from SST 4's `sst.aws.SnsTopic`
+ *
+ * Keep the name, and `sst migrate` moves it. The topic and the
+ * subscribers you've deployed are kept, as long as the subscribers have names.
+ *
+ * A few things work differently:
+ *
+ * - `subscribe` and `subscribeQueue` take a name first. Without one, they're refused:
+ *   `sst.aws.SnsTopic` named such a subscriber after what it subscribed and its filter,
+ *   so a switch can't find it. Remove the subscriber and deploy before you switch, then add it back
+ *   with a name.
+ * - A subscriber's handler or function args have to be a plain value, not an output:
+ *   they decide what's created. A function you already have, or its ARN, can still be an
+ *   output.
+ * - A function's args are typed as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function)'s; args written the way
+ *   `sst.aws.Function` takes them, like `role` or `live`, still work, but don't
+ *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
+ *   and what decides what's created, like `url` or `logging`, are plain values, as
+ *   [`sst.aws.Function`](/docs/component/aws/v5/function) takes them.
+ * - A subscriber's function is described after the component, `Subscribed to MyTopic`,
+ *   where `sst.aws.SnsTopic` named the component it kept the subscriber in: an update in
+ *   place.
+ * - `subscribe` and `subscribeQueue` return the topic, where they returned the
+ *   subscriber: what each one created is in the topic's `nodes`, by the subscriber's
+ *   name, like `topic.nodes.subscription.Emailer`.
+ * - The `transform` of `subscribe` and `subscribeQueue` becomes the topic's `transform`,
+ *   whose function form is given the subscriber's name.
+ * - `sst.aws.SnsTopic.subscribe(name, topicArn, subscriber)` becomes
+ *   `sst.aws.SnsTopic.get("SharedEvents", topicArn).subscribe(name, subscriber)`, and
+ *   the same for `subscribeQueue`. Each is refused with what to write. What those created
+ *   is kept, as long as `get` isn't
+ *   given a provider, directly, through its `parent`, or in `providers`:
+ *   `sst.aws.SnsTopic` created them with your app's, and another one replaces them, a
+ *   function's log group included.
+ * - A subscriber is created with the provider the topic has. `sst.aws.SnsTopic` gave a
+ *   function subscriber only a `provider` passed to the topic itself, and a queue
+ *   subscriber your app's provider, whatever the topic had. So if your topic has a
+ *   `provider` and a queue subscribed to it, or takes its provider from a parent component
+ *   or from `providers`, the switch gives those subscribers the topic's provider and keeps
+ *   them, with the provider's default tags.
  */
-export class SnsTopic extends Component implements Link.Linkable {
-  private constructorName: string;
-  private constructorOpts: ComponentResourceOptions;
-  private topic: sns.Topic;
-
+export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
   constructor(
     name: string,
     args: SnsTopicArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-    const self = this;
-    this.constructorName = name;
-    this.constructorOpts = opts;
+    super(name, args, opts);
 
-    if (args && "ref" in args) {
-      const ref = reference();
-      this.topic = ref.topic;
-      return;
-    }
+    // A topic that's already there is used the way it is
+    if (this.existingPart("topic"))
+      usedAsItIs(args, ["fifo"], "topic", `the "${name}" topic`);
 
-    const fifo = normalizeFifo();
-
-    this.topic = createTopic();
-
-    function reference() {
-      const ref = args as SnsTopicRef;
-      const topic = sns.Topic.get(`${name}Topic`, ref.topicArn, undefined, {
-        parent: self,
-      });
-
-      return { topic };
-    }
-
-    function normalizeFifo() {
-      return output(args.fifo).apply((v) => v ?? false);
-    }
-
-    function createTopic() {
-      return new sns.Topic(
-        ...transform(
-          args.transform?.topic,
-          `${name}Topic`,
-          {
-            fifoTopic: fifo,
-          },
-          { parent: self },
-        ),
-      );
-    }
+    this.part("topic", { fifoTopic: withDefault(args.fifo, false) });
   }
 
   /**
    * The ARN of the SNS Topic.
    */
   public get arn() {
-    return this.topic.arn;
+    return this.nodes.topic.arn;
   }
 
   /**
    * The name of the SNS Topic.
    */
   public get name() {
-    return this.topic.name;
+    return this.nodes.topic.name;
   }
 
   /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Amazon SNS Topic.
-       */
-      topic: this.topic,
-    };
-  }
-
-  /**
-   * Subscribe to this SNS Topic.
+   * Subscribe a function to this topic.
    *
    * @param name The name of the subscriber.
-   * @param subscriber The function that'll be notified.
+   * @param subscriber The function that'll be notified: the handler of one to create, its
+   * args, a function component, or the ARN of a function you have. Only a function you
+   * have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
@@ -272,207 +289,82 @@ export class SnsTopic extends Component implements Link.Linkable {
    * ```js title="sst.config.ts"
    * topic.subscribe("MySubscriber", "arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
-   */
-  public subscribe(
-    name: string,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicLambdaSubscriber>;
-  /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
-   */
-  public subscribe(
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicLambdaSubscriber>;
-
-  public subscribe(nameOrSubscriber: any, subscriberOrArgs?: any, args?: any) {
-    return isFunctionSubscriber(subscriberOrArgs).apply((v) =>
-      v
-        ? SnsTopic._subscribeFunction(
-            nameOrSubscriber, // name
-            this.constructorName,
-            this.arn,
-            subscriberOrArgs, // subscriber
-            args,
-            { provider: this.constructorOpts.provider },
-          )
-        : SnsTopic._subscribeFunctionV1(
-            this.constructorName,
-            this.arn,
-            nameOrSubscriber, // subscriber
-            subscriberOrArgs, // args
-            { provider: this.constructorOpts.provider },
-          ),
-    );
-  }
-
-  /**
-   * Subscribe to an SNS Topic that was not created in your app.
    *
-   * @param name The name of the subscriber.
-   * @param topicArn The ARN of the SNS Topic to subscribe to.
-   * @param subscriber The function that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing SNS Topic with the following ARN.
+   * To change how one subscriber is created, use the topic's `transform`. Its function form
+   * is given the subscriber's name.
    *
    * ```js title="sst.config.ts"
-   * const topicArn = "arn:aws:sns:us-east-1:123456789012:MyTopic";
-   * ```
-   *
-   * You can subscribe to it by passing in the ARN.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.SnsTopic.subscribe("MySubscriber", topicArn, "src/subscriber.handler");
-   * ```
-   *
-   * Add a filter to the subscription.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.SnsTopic.subscribe("MySubscriber", topicArn, "src/subscriber.handler", {
-   *   filter: {
-   *     price_usd: [{numeric: [">=", 100]}]
+   * new sst.aws.SnsTopic("MyTopic", {
+   *   transform: {
+   *     subscription: (args, opts, name, subscriber) => {
+   *       if (subscriber === "MySubscriber") args.rawMessageDelivery = true;
+   *     }
    *   }
    * });
    * ```
-   *
-   * Customize the subscriber function.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.SnsTopic.subscribe("MySubscriber", topicArn, {
-   *   handler: "src/subscriber.handler",
-   *   timeout: "60 seconds"
-   * });
-   * ```
    */
-  public static subscribe(
+  public subscribe(
     name: string,
-    topicArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicLambdaSubscriber>;
-  /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
-   */
-  public static subscribe(
-    topicArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicLambdaSubscriber>;
-
-  public static subscribe(
-    nameOrTopicArn: any,
-    topicArnOrSubscriber: any,
-    subscriberOrArgs?: any,
-    args?: any,
-  ) {
-    return isFunctionSubscriber(subscriberOrArgs).apply((v) =>
-      v
-        ? output(topicArnOrSubscriber).apply((topicArn) =>
-            this._subscribeFunction(
-              nameOrTopicArn, // name
-              logicalName(parseTopicArn(topicArn).topicName),
-              topicArn,
-              subscriberOrArgs, // subscriber
-              args,
-            ),
-          )
-        : output(nameOrTopicArn).apply((topicArn) =>
-            this._subscribeFunctionV1(
-              logicalName(parseTopicArn(topicArn).topicName),
-              topicArn,
-              topicArnOrSubscriber, // subscriber
-              subscriberOrArgs, // args
-            ),
-          ),
-    );
-  }
-
-  private static _subscribeFunction(
-    subscriberName: string,
-    name: string,
-    topicArn: string | Output<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: FunctionInput,
     args: SnsTopicSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
   ) {
-    return output(args).apply(
-      (args) =>
-        new SnsTopicLambdaSubscriber(
-          `${name}Subscriber${subscriberName}`,
-          {
-            topic: { arn: topicArn },
-            subscriber,
-            ...args,
-          },
-          opts,
-        ),
+    assertNamedSubscriber(
+      `the "${this.componentName}" topic`,
+      "subscribe",
+      name,
+      subscriber,
     );
-  }
+    this.assertNew("subscriber", "subscription", name, args);
 
-  private static _subscribeFunctionV1(
-    name: string,
-    topicArn: string | Output<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
-    args: SnsTopicSubscriberArgs = {},
-    opts: ComponentResourceOptions = {},
-  ) {
-    return all([subscriber, args]).apply(([subscriber, args]) => {
-      const suffix = logicalName(
-        hashStringToPrettyString(
-          [
-            typeof topicArn === "string" ? topicArn : outputId,
-            JSON.stringify(args.filter ?? {}),
-            typeof subscriber === "string" ? subscriber : subscriber.handler,
-          ].join(""),
-          6,
-        ),
-      );
+    const fn = functionPart(
+      this,
+      "subscriber",
+      name,
+      plainFunction(
+        subscriber,
+        `The subscriber "${name}" of the "${this.componentName}" topic`,
+      ),
+      { description: `Subscribed to ${this.componentName}` },
+    );
+    const permission = this.part(
+      "permission",
+      name,
+      invokePermissionArgs(fn, "sns.amazonaws.com", this.arn),
+    );
+    this.part(
+      "subscription",
+      name,
+      {
+        topic: this.arn,
+        protocol: "lambda",
+        endpoint: fn.targetArn,
+        filterPolicy: args.filter && jsonStringify(args.filter),
+      },
+      { dependsOn: [permission] },
+    );
 
-      return new SnsTopicLambdaSubscriber(
-        `${name}Subscriber${suffix}`,
-        {
-          topic: { arn: topicArn },
-          subscriber,
-          ...args,
-        },
-        opts,
-      );
-    });
+    return this;
   }
 
   /**
-   * Subscribe to this SNS Topic with an SQS Queue.
+   * Subscribe a queue to this topic.
    *
    * @param name The name of the subscriber.
-   * @param queue The ARN of the queue or `Queue` component that'll be notified.
+   * @param queue The queue that'll be notified, or its ARN.
    * @param args Configure the subscription.
    *
    * @example
    *
-   * For example, let's say you have a queue.
-   *
    * ```js title="sst.config.ts"
-   * const queue = sst.aws.Queue("MyQueue");
-   * ```
+   * const queue = new sst.aws.Queue("MyQueue");
    *
-   * You can subscribe to this topic with it.
-   *
-   * ```js title="sst.config.ts"
-   * topic.subscribeQueue("MySubscriber", queue.arn);
+   * topic.subscribeQueue("MySubscriber", queue);
    * ```
    *
    * Add a filter to the subscription.
    *
    * ```js title="sst.config.ts"
-   * topic.subscribeQueue("MySubscriber", queue.arn, {
+   * topic.subscribeQueue("MySubscriber", queue, {
    *   filter: {
    *     price_usd: [{numeric: [">=", 100]}]
    *   }
@@ -481,187 +373,44 @@ export class SnsTopic extends Component implements Link.Linkable {
    */
   public subscribeQueue(
     name: string,
-    queue: Input<string | Queue>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicQueueSubscriber>;
-  /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
-   */
-  public subscribeQueue(
-    queue: Input<string>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicQueueSubscriber>;
-
-  public subscribeQueue(nameOrQueue: any, queueOrArgs?: any, args?: any) {
-    return isQueueSubscriber(queueOrArgs).apply((v) =>
-      v
-        ? SnsTopic._subscribeQueue(
-            nameOrQueue, // name
-            this.constructorName,
-            this.arn,
-            queueOrArgs, // queue
-            args,
-          )
-        : SnsTopic._subscribeQueueV1(
-            this.constructorName,
-            this.arn,
-            nameOrQueue, // queue
-            queueOrArgs, // args
-          ),
-    );
-  }
-
-  /**
-   * Subscribe to an existing SNS Topic with a previously created SQS Queue.
-   *
-   * @param name The name of the subscriber.
-   * @param topicArn The ARN of the SNS Topic to subscribe to.
-   * @param queue The ARN of the queue or `Queue` component that'll be notified.
-   * @param args Configure the subscription.
-   *
-   * @example
-   *
-   * For example, let's say you have an existing SNS Topic and SQS Queue with the following ARNs.
-   *
-   * ```js title="sst.config.ts"
-   * const topicArn = "arn:aws:sns:us-east-1:123456789012:MyTopic";
-   * const queueArn = "arn:aws:sqs:us-east-1:123456789012:MyQueue";
-   * ```
-   *
-   * You can subscribe to the topic with the queue.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.SnsTopic.subscribeQueue("MySubscriber", topicArn, queueArn);
-   * ```
-   *
-   * Add a filter to the subscription.
-   *
-   * ```js title="sst.config.ts"
-   * sst.aws.SnsTopic.subscribeQueue("MySubscriber", topicArn, queueArn, {
-   *   filter: {
-   *     price_usd: [{numeric: [">=", 100]}]
-   *   }
-   * });
-   * ```
-   */
-  public static subscribeQueue(
-    name: string,
-    topicArn: Input<string>,
-    queue: Input<string | Queue>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicQueueSubscriber>;
-  /**
-   * @deprecated The subscribe function now requires a `name` parameter as the first argument.
-   * To migrate, remove the current subscriber, deploy the changes, and then add the subscriber
-   * back with the new `name` argument.
-   */
-  public static subscribeQueue(
-    topicArn: Input<string>,
-    queue: Input<string>,
-    args?: SnsTopicSubscriberArgs,
-  ): Output<SnsTopicQueueSubscriber>;
-  public static subscribeQueue(
-    nameOrTopicArn: any,
-    topicArnOrQueue: any,
-    queueOrArgs?: any,
-    args?: any,
-  ) {
-    return isQueueSubscriber(queueOrArgs).apply((v) =>
-      v
-        ? output(topicArnOrQueue).apply((topicArn) =>
-            this._subscribeQueue(
-              nameOrTopicArn, // name
-              logicalName(parseTopicArn(topicArn).topicName),
-              topicArn,
-              queueOrArgs, // queue
-              args,
-            ),
-          )
-        : output(nameOrTopicArn).apply((topicArn) =>
-            this._subscribeQueueV1(
-              logicalName(parseTopicArn(topicArn).topicName),
-              topicArn,
-              topicArnOrQueue, // queue
-              queueOrArgs, // args
-            ),
-          ),
-    );
-  }
-
-  private static _subscribeQueue(
-    subscriberName: string,
-    name: string,
-    topicArn: string | Output<string>,
-    queue: Input<string | Queue>,
+    queue: Input<string | AnyQueue>,
     args: SnsTopicSubscriberArgs = {},
   ) {
-    return output(args).apply(
-      (args) =>
-        new SnsTopicQueueSubscriber(`${name}Subscriber${subscriberName}`, {
-          topic: { arn: topicArn },
-          queue,
-          ...args,
-        }),
+    assertNamedSubscriber(
+      `the "${this.componentName}" topic`,
+      "subscribeQueue",
+      name,
+      queue,
     );
-  }
+    this.assertNew("subscriber", "subscription", name, args);
 
-  private static _subscribeQueueV1(
-    name: string,
-    topicArn: string | Output<string>,
-    queueArn: Input<string>,
-    args: SnsTopicSubscriberArgs = {},
-  ) {
-    return all([queueArn, args]).apply(([queueArn, args]) => {
-      const suffix = logicalName(
-        hashStringToPrettyString(
-          [
-            typeof topicArn === "string" ? topicArn : outputId,
-            JSON.stringify(args.filter ?? {}),
-            queueArn,
-          ].join(""),
-          6,
-        ),
-      );
-
-      return new SnsTopicQueueSubscriber(`${name}Subscriber${suffix}`, {
-        topic: { arn: topicArn },
-        queue: queueArn,
-        disableParent: true,
-        ...args,
-      });
+    const queueArn = queueArnOf(queue);
+    this.part("queuePolicy", name, ...sendPolicy(queueArn));
+    this.part("subscription", name, {
+      topic: this.arn,
+      protocol: "sqs",
+      endpoint: queueArn,
+      filterPolicy: args.filter && jsonStringify(args.filter),
     });
+
+    return this;
   }
 
   /**
    * Reference an existing SNS topic with its topic ARN. This is useful when you create a
-   * topic in one stage and want to share it in another stage. It avoids having to create
-   * a new topic in the other stage.
-   *
-   * :::tip
-   * You can use the `static get` method to share SNS topics across stages.
-   * :::
+   * topic in one stage and want to share it in another stage, or to subscribe to a topic
+   * that isn't in your app.
    *
    * @param name The name of the component.
    * @param topicArn The ARN of the existing SNS Topic.
-   * @param opts Resource options.
+   * @param opts Component resource options.
    *
    * @example
-   * Imagine you create a topic in the `dev` stage. And in your personal stage `frank`,
-   * instead of creating a new topic, you want to share the topic from `dev`.
    *
    * ```ts title="sst.config.ts"
    * const topic = $app.stage === "frank"
    *   ? sst.aws.SnsTopic.get("MyTopic", "arn:aws:sns:us-east-1:123456789012:MyTopic")
    *   : new sst.aws.SnsTopic("MyTopic");
-   * ```
-   *
-   * Here `arn:aws:sns:us-east-1:123456789012:MyTopic` is the ARN of the topic created in
-   * the `dev` stage. You can find this by outputting the topic ARN in the `dev` stage.
-   *
-   * ```ts title="sst.config.ts"
-   * return topic.arn;
    * ```
    */
   public static get(
@@ -669,32 +418,41 @@ export class SnsTopic extends Component implements Link.Linkable {
     topicArn: Input<string>,
     opts?: ComponentResourceOptions,
   ) {
-    return new SnsTopic(
-      name,
-      {
-        ref: true,
-        topicArn,
-      } as SnsTopicArgs,
-      opts,
+    return new SnsTopic(name, getArgs({ existing: { topic: topicArn } }), opts);
+  }
+
+  /**
+   * `sst.aws.SnsTopic.subscribe` subscribed to a topic by its ARN. Reference the topic
+   * with `get` and subscribe to that.
+   *
+   * @internal
+   */
+  public static subscribe(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe to a topic that isn't in your app, reference it with "get" and subscribe to that: sst.aws.SnsTopic.get("MyTopic", topicArn).subscribe("MySubscriber", "src/subscriber.handler").`,
     );
   }
 
-  /** @internal */
-  public getSSTLink() {
+  /**
+   * `sst.aws.SnsTopic.subscribeQueue` subscribed a queue to a topic by its ARN. Reference
+   * the topic with `get` and subscribe the queue to that.
+   *
+   * @internal
+   */
+  public static subscribeQueue(..._args: unknown[]): never {
+    throw new VisibleError(
+      `To subscribe a queue to a topic that isn't in your app, reference the topic with "get" and subscribe the queue to that: sst.aws.SnsTopic.get("MyTopic", topicArn).subscribeQueue("MySubscriber", queue).`,
+    );
+  }
+
+  /**
+   * Linking a topic gives the linked resource the topic's ARN and permission
+   * to use it.
+   */
+  public link() {
     return {
-      properties: {
-        arn: this.arn,
-      },
-      include: [
-        permission({
-          actions: ["sns:*"],
-          resources: [this.arn],
-        }),
-      ],
+      properties: { arn: this.arn },
+      include: [permission({ actions: ["sns:*"], resources: [this.arn] })],
     };
   }
 }
-
-const __pulumiType = "sst:aws:SnsTopic";
-// @ts-expect-error
-SnsTopic.__pulumiType = __pulumiType;

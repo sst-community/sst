@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { hashStringToPrettyString, logicalName } from "../../naming";
-import { Queue } from "../v5/queue";
+import { Queue } from "../queue";
 import { parseQueueArn } from "../helpers/arn";
 import { childOf, subscriberFunction } from "./helpers";
 

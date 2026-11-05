@@ -1,6 +1,6 @@
 import { takeover } from "../../takeover";
 import { logicalName } from "../../naming";
-import { Dynamo } from "../v5/dynamo";
+import { Dynamo } from "../dynamo";
 import { childOf, subscriberFunction } from "./helpers";
 
 // The 4.x `Dynamo` keeps each subscription in a component of its own, at the

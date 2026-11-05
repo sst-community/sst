@@ -46,7 +46,7 @@ import { toGBs, toMBs } from "../../size";
 import { transformPart } from "../../transform";
 import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
-import type { FunctionPermissionArgs } from "../v5/function";
+import type { FunctionPermissionArgs } from "../function";
 import type { DurationMinutes } from "../../duration";
 import { bootstrap } from "./bootstrap";
 import { type AnyCluster, isCluster } from "./cluster";
@@ -334,8 +334,8 @@ export interface FargateArgs {
    * The ECS Cluster to use. Create one in your app, if you haven't already.
    *
    * ```js title="sst.config.ts"
-   * const vpc = new sst.aws.v5.Vpc("MyVpc");
-   * const myCluster = new sst.aws.v5.Cluster("MyCluster", { vpc });
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const myCluster = new sst.aws.Cluster("MyCluster", { vpc });
    * ```
    *
    * And pass it in.
@@ -354,8 +354,8 @@ export interface FargateArgs {
    * Create an EFS file system.
    *
    * ```ts title="sst.config.ts"
-   * const vpc = new sst.aws.v5.Vpc("MyVpc");
-   * const fileSystem = new sst.aws.v5.Efs("MyFileSystem", { vpc });
+   * const vpc = new sst.aws.Vpc("MyVpc");
+   * const fileSystem = new sst.aws.Efs("MyFileSystem", { vpc });
    * ```
    *
    * And pass it in.
@@ -727,7 +727,7 @@ export interface FargateBaseArgs extends FargateArgs {
    * Create an S3 bucket and upload an environment file.
    *
    * ```ts title="sst.config.ts"
-   * const bucket = new sst.aws.v5.Bucket("EnvBucket");
+   * const bucket = new sst.aws.Bucket("EnvBucket");
    * const file = new aws.s3.BucketObjectv2("EnvFile", {
    *   bucket: bucket.name,
    *   key: "test.env",

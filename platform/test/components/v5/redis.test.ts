@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 
 const CLUSTER = "aws:elasticache/replicationGroup:ReplicationGroup";
 const SERVERLESS = "aws:elasticache/serverlessCache:ServerlessCache";
@@ -42,20 +42,28 @@ const pulumi = mockPulumi({
 const vpc = { subnets: ["subnet-1", "subnet-2"], securityGroups: ["sg-1"] };
 
 type RedisClass =
-  | typeof import("../../../src/components/aws/redis").Redis
-  | typeof import("../../../src/components/aws/v5/redis").Redis;
+  | typeof import("../../fixtures/v4/components/aws/redis").Redis
+  | typeof import("../../../src/components/aws/redis").Redis;
 
 describe("Redis", () => {
-  let OriginalRedis: typeof import("../../../src/components/aws/redis").Redis;
-  let Redis: typeof import("../../../src/components/aws/v5/redis").Redis;
-  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
+  let OriginalRedis: typeof import("../../fixtures/v4/components/aws/redis").Redis;
+  let Redis: typeof import("../../../src/components/aws/redis").Redis;
+  let OriginalVpc: typeof import("../../fixtures/v4/components/aws/vpc").Vpc;
+  let SidedVpc: any;
+  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
-    OriginalRedis = (await import("../../../src/components/aws/redis")).Redis;
-    Redis = (await import("../../../src/components/aws/v5/redis")).Redis;
-    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    OriginalRedis = (await import("../../fixtures/v4/components/aws/redis")).Redis;
+    Redis = (await import("../../../src/components/aws/redis")).Redis;
+    OriginalVpc = (await import("../../fixtures/v4/components/aws/vpc")).Vpc;
+    // SST 4's for SST 4's side, SST 5's for SST 5's
+    SidedVpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/redis");
     await import("../../../src/components/aws/takeover/vpc");
   });
@@ -161,7 +169,7 @@ describe("Redis", () => {
         // group has nothing to do with it; the cluster still does.
         "in a Vpc": {
           create: (Redis, opts) => {
-            new Redis("MyRedis", { vpc: new OriginalVpc("MyVpc") }, opts);
+            new Redis("MyRedis", { vpc: new SidedVpc("MyVpc") }, opts);
           },
           unordered: ["MyRedisSubnetGroup before MyVpcSecurityGroup"],
         },
@@ -379,12 +387,9 @@ describe("Redis", () => {
   });
 
   describe("in a Vpc", () => {
-    it("is in the private subnets of either kind", async () => {
-      const { Vpc: OriginalVpc } = await import(
-        "../../../src/components/aws/vpc"
-      );
-      const { Vpc } = await import("../../../src/components/aws/v5/vpc");
-      for (const [i, VpcClass] of [OriginalVpc, Vpc].entries()) {
+    it("is in the private subnets of a Vpc", async () => {
+      const { Vpc } = await import("../../../src/components/aws/vpc");
+      for (const [i, VpcClass] of [Vpc].entries()) {
         pulumi.reset();
         const net = new VpcClass(`Net${i}`);
         new Redis("MyRedis", { vpc: net });

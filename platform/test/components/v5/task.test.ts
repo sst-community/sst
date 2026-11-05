@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, setSide, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
 const TASK_DEFINITION = "aws:ecs/taskDefinition:TaskDefinition";
@@ -56,28 +56,44 @@ const pulumi = mockPulumi({
 });
 
 type TaskClass =
-  | typeof import("../../../src/components/aws/task").Task
-  | typeof import("../../../src/components/aws/v5/task").Task;
+  | typeof import("../../fixtures/v4/components/aws/task").Task
+  | typeof import("../../../src/components/aws/task").Task;
 
 describe("Task", () => {
-  let OriginalTask: typeof import("../../../src/components/aws/task").Task;
-  let Task: typeof import("../../../src/components/aws/v5/task").Task;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let ClusterClass: typeof import("../../../src/components/aws/cluster").Cluster;
-  let Efs: typeof import("../../../src/components/aws/efs").Efs;
-  let Bucket: typeof import("../../../src/components/aws/v5/bucket").Bucket;
+  let OriginalTask: typeof import("../../fixtures/v4/components/aws/task").Task;
+  let Task: typeof import("../../../src/components/aws/task").Task;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Vpc: any;
+  let ClusterClass: any;
+  let Efs: any;
+  let Bucket: typeof import("../../../src/components/aws/bucket").Bucket;
   // Where the Dockerfiles are. Building an image adds `.sst` to the ignore
   // file next to its Dockerfile.
   let app: string;
   let admin: string;
 
   beforeAll(async () => {
-    OriginalTask = (await import("../../../src/components/aws/task")).Task;
-    Task = (await import("../../../src/components/aws/v5/task")).Task;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    ClusterClass = (await import("../../../src/components/aws/cluster")).Cluster;
-    Efs = (await import("../../../src/components/aws/efs")).Efs;
-    Bucket = (await import("../../../src/components/aws/v5/bucket")).Bucket;
+    OriginalTask = (await import("../../fixtures/v4/components/aws/task")).Task;
+    Task = (await import("../../../src/components/aws/task")).Task;
+    Vpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    ClusterClass = await sidedClass(
+      "Cluster",
+      import("../../fixtures/v4/components/aws/cluster"),
+      import("../../../src/components/aws/cluster"),
+      import("../../../src/components/aws/takeover/cluster"),
+    );
+    Efs = await sidedClass(
+      "Efs",
+      import("../../fixtures/v4/components/aws/efs"),
+      import("../../../src/components/aws/efs"),
+      import("../../../src/components/aws/takeover/efs"),
+    );
+    Bucket = (await import("../../../src/components/aws/bucket")).Bucket;
     await import("../../../src/components/aws/takeover/task");
     await import("../../../src/components/aws/takeover/bucket");
 
@@ -513,7 +529,11 @@ describe("Task", () => {
           new Task("MyTask", { cluster: cluster() });
 
         expect(await takesOver(create(OriginalTask), create(Task))).toEqual({
-          unclaimed: [],
+          // SST 4's version markers, of the cluster and the VPC
+          unclaimed: [
+            "sst:sst:Version::MyClusterVersion",
+            "sst:sst:Version::MyVpcVersion",
+          ],
           changed: [],
         });
         expect(resource("MyTaskImageMyTask").inputs).toMatchObject({
@@ -591,8 +611,10 @@ describe("Task", () => {
           );
         };
 
+        setSide("original");
         const original = await read(create(OriginalTask));
         pulumi.reset();
+        setSide("v5");
         expect(await read(create(Task))).toEqual(original);
         expect(original.containers.length).toBeGreaterThan(0);
       });
@@ -610,6 +632,7 @@ describe("Task", () => {
           ],
         });
 
+      setSide("original");
       create(OriginalTask);
       await pulumi.settle();
       const original = pulumi.graph();
@@ -625,6 +648,7 @@ describe("Task", () => {
       ]);
 
       pulumi.reset();
+      setSide("v5");
       create(Task);
       await pulumi.settle();
       expect(named("MyTask")).toEqual([
@@ -638,7 +662,11 @@ describe("Task", () => {
         "MyTaskTaskRole",
       ]);
       expect(pulumi.takeover(original)).toEqual({
-        unclaimed: [],
+        // SST 4's version markers, of the cluster and the VPC
+        unclaimed: [
+          "sst:sst:Version::MyClusterVersion",
+          "sst:sst:Version::MyVpcVersion",
+        ],
         changed: [],
         unordered: [],
         revealed: [],
@@ -961,7 +989,7 @@ describe("Task", () => {
   });
 
   it("is run by a cron job", async () => {
-    const { Cron } = await import("../../../src/components/aws/v5/cron");
+    const { Cron } = await import("../../../src/components/aws/cron");
     await import("../../../src/components/aws/takeover/cron");
     new Cron("MyCronJob", {
       task: new Task("MyTask", { cluster: cluster(), image: "nginx:latest" }),
@@ -986,34 +1014,6 @@ describe("Task", () => {
 
   // The 4.x CronV2 reads a task through its getters, which the V5 Task has
   // too. Its type only names the 4.x Task.
-  it("is run by a 4.x CronV2 the way a 4.x Task is", async () => {
-    const { CronV2: OriginalCronV2 } = await import(
-      "../../../src/components/aws/cron-v2"
-    );
-    const target = async (Task: TaskClass) => {
-      pulumi.reset();
-      new OriginalCronV2("MyCronJob", {
-        task: new Task("MyTask", {
-          cluster: cluster(),
-          image: "nginx:latest",
-        }) as any,
-        schedule: "rate(1 day)",
-        event: { foo: "bar" },
-      });
-      await pulumi.settle();
-      return JSON.parse(
-        JSON.stringify([
-          resource("MyCronJobSchedule").inputs.target,
-          resource("MyCronJobRole").inputs.inlinePolicies,
-        ]).replaceAll("MyTaskTaskDefinition", "MyTaskTask"),
-      );
-    };
-
-    const original = await target(OriginalTask);
-    expect(original[0].ecsParameters.taskDefinitionArn).toMatch(/MyTaskTask$/);
-    expect(await target(Task)).toEqual(original);
-  });
-
   // It's run the way it is: nothing it would be made with is created
   describe("with a task definition you already have", () => {
     const ARN = "arn:aws:ecs:us-east-1:123456789012:task-definition/theirs:3";
@@ -1296,7 +1296,7 @@ describe("Task", () => {
 
     it("refuses what isn't a cluster", async () => {
       const { Cluster: ClusterV1 } = await import(
-        "../../../src/components/aws/cluster-v1"
+        "../../fixtures/v4/components/aws/cluster-v1"
       );
       expect(
         () =>

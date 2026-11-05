@@ -1,82 +1,97 @@
 import fs from "fs";
 import path from "path";
-import { ComponentResourceOptions, Output, all, output } from "@pulumi/pulumi";
-import { Size } from "../size.js";
-import { Function, FunctionArgs } from "./function.js";
-import { VisibleError } from "../error.js";
-import type { Input } from "../input.js";
-import { Queue } from "./queue.js";
+import crypto from "crypto";
+import { globSync } from "glob";
+import {
+  ComponentResourceOptions,
+  Input,
+  Output,
+  interpolate,
+} from "@pulumi/pulumi";
 import { dynamodb, getRegionOutput, lambda } from "@pulumi/aws";
-import { isALteB, isALtB } from "../../util/compare-semver.js";
-import { Plan, SsrSite, SsrSiteArgs } from "./ssr-site.js";
-import { Bucket, BucketArgs } from "./bucket.js";
-import { CdnArgs } from "./cdn.js";
-import { transform, Transform } from "../component.js";
+import {
+  type ComponentArgs,
+  type PartsBuilder,
+  component,
+  deferred,
+  named,
+  optional,
+} from "../parts-component";
+import type { Prettify } from "../component";
+import { plain, plainDeep } from "../args";
+import { context } from "../contract";
+import { VisibleError } from "../error";
+import type { Size } from "../size";
+import { isALteB, isALtB } from "../../util/compare-semver";
+import type { SiteRouteArgs } from "./helpers/router";
+import { BUILD_READS_IT } from "./helpers/site";
+import {
+  type SiteBuild,
+  type SsrFramework,
+  type SsrSiteArgs,
+  createSsrSite,
+  ssrSiteParts,
+  urlAccessArgs,
+} from "./helpers/ssr-site";
+import type { SitePlan } from "./site-code";
+import type { CdnDomainArgs } from "./cdn";
+import { Function, type FunctionArgs } from "./function";
+import { Queue } from "./queue";
 
 const DEFAULT_OPEN_NEXT_VERSION = "3.9.14";
 const DEFAULT_OPEN_NEXT_VERSION_NEXT14 = "3.6.6";
 
-type BaseFunction = {
-  handler: string;
-  bundle: string;
-};
+const parts = () => ({
+  ...ssrSiteParts(),
+  /**
+   * The AWS Lambda function that optimizes images.
+   */
+  imageOptimizer: deferred(Function),
+  /**
+   * The Amazon SQS queue that triggers the ISR revalidator, which is its
+   * subscriber. `undefined` when the build turns the incremental cache off.
+   */
+  revalidationQueue: named(deferred(optional(Queue)), "RevalidationEvents"),
+  /**
+   * The Amazon DynamoDB table that holds the ISR revalidation data. `undefined`
+   * when the build turns the tag cache off.
+   */
+  revalidationTable: deferred(optional(dynamodb.Table)),
+  /**
+   * The AWS Lambda function that seeds the revalidation table from the build.
+   */
+  revalidationSeeder: deferred(optional(Function)),
+  /**
+   * The call to the seeder, made when what it seeds changes.
+   */
+  revalidationSeed: deferred(optional(lambda.Invocation)),
+  /**
+   * The permission for anyone to call the image optimizer's URL, when
+   * CloudFront doesn't sign its requests.
+   */
+  imageOptimizerUrlAccess: named(
+    deferred(optional(lambda.Permission)),
+    "ImageOptimizerPublicFunctionUrlAccess",
+  ),
+  /**
+   * The permission for CloudFront to call the image optimizer's URL, when it
+   * signs its requests.
+   */
+  imageOptimizerCloudFrontUrlAccess: named(
+    deferred(optional(lambda.Permission)),
+    "ImageOptimizerCloudFrontFunctionUrlAccess",
+  ),
+  /**
+   * The permission for CloudFront to invoke the image optimizer through its
+   * URL, when it signs its requests.
+   */
+  imageOptimizerCloudFrontInvoke: named(
+    deferred(optional(lambda.Permission)),
+    "ImageOptimizerCloudFrontInvokeFunction",
+  ),
+});
 
-type OpenNextFunctionOrigin = {
-  type: "function";
-  streaming?: boolean;
-  wrapper: string;
-  converter: string;
-} & BaseFunction;
-
-type OpenNextServerFunctionOrigin = OpenNextFunctionOrigin & {
-  queue: string;
-  incrementalCache: string;
-  tagCache: string;
-};
-
-type OpenNextImageOptimizationOrigin = OpenNextFunctionOrigin & {
-  imageLoader: string;
-};
-
-type OpenNextS3Origin = {
-  type: "s3";
-  originPath: string;
-  copy: {
-    from: string;
-    to: string;
-    cached: boolean;
-    versionedSubDir?: string;
-  }[];
-};
-
-interface OpenNextOutput {
-  edgeFunctions: {
-    [key: string]: BaseFunction;
-  } & {
-    middleware?: BaseFunction & { pathResolver: string };
-  };
-  origins: {
-    s3: OpenNextS3Origin;
-    default: OpenNextServerFunctionOrigin;
-    imageOptimizer: OpenNextImageOptimizationOrigin;
-  } & {
-    [key: string]: OpenNextServerFunctionOrigin | OpenNextS3Origin;
-  };
-  behaviors: {
-    pattern: string;
-    origin?: string;
-    edgeFunction?: string;
-  }[];
-  additionalProps?: {
-    disableIncrementalCache?: boolean;
-    disableTagCache?: boolean;
-    initializationFunction?: BaseFunction;
-    warmer?: BaseFunction;
-    revalidationFunction?: BaseFunction;
-  };
-}
-
-export interface NextjsArgs extends SsrSiteArgs {
+export interface NextjsArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
    * Configure how this component works in `sst dev`.
    *
@@ -90,7 +105,97 @@ export interface NextjsArgs extends SsrSiteArgs {
    *
    * To disable dev mode, pass in `false`.
    */
-  dev?: SsrSiteArgs["dev"];
+  dev?:
+    | false
+    | {
+        /**
+         * The `url` when this is running in dev mode.
+         *
+         * Since this component is not deployed in `sst dev`, there is no real URL. But if you are
+         * using this component's `url` or linking to this component's `url`, it can be useful to
+         * have a placeholder URL. It avoids having to handle it being `undefined`.
+         * @default `"http://url-unavailable-in-dev.mode"`
+         */
+        url?: Input<string>;
+        /**
+         * The command that `sst dev` runs to start this in dev mode.
+         * @default `"npm run dev"`
+         */
+        command?: Input<string>;
+        /**
+         * Configure if you want to automatically start this when `sst dev` starts. You can still
+         * start it manually later.
+         * @default `true`
+         */
+        autostart?: Input<boolean>;
+        /**
+         * Change the directory from where the `command` is run.
+         * @default Uses the `path`
+         */
+        directory?: Input<string>;
+        /**
+         * The title of the tab in the multiplexer.
+         */
+        title?: Input<string>;
+      };
+  /**
+   * Path to the directory where your Next.js app is located. This path is relative to your `sst.config.ts`.
+   *
+   * By default this assumes your Next.js app is in the root of your SST app.
+   * @default `"."`
+   *
+   * @example
+   *
+   * If your Next.js app is in a package in your monorepo.
+   *
+   * ```js
+   * {
+   *   path: "packages/web"
+   * }
+   * ```
+   */
+  path?: string;
+  /**
+   * [Link resources](/docs/linking/) to your Next.js app. This will:
+   *
+   * 1. Grant the permissions needed to access the resources.
+   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of resources to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: FunctionArgs["link"];
+  /**
+   * Set [environment variables](https://nextjs.org/docs/pages/building-your-application/configuring/environment-variables) in your Next.js app. These are made available:
+   *
+   * 1. In `next build`, they are loaded into `process.env`.
+   * 2. Locally while running through `sst dev`.
+   *
+   * :::tip
+   * You can also `link` resources to your Next.js app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
+   * :::
+   *
+   * Recall that in Next.js, you need to prefix your environment variables with `NEXT_PUBLIC_` to access these in the browser. [Read more here](https://nextjs.org/docs/pages/building-your-application/configuring/environment-variables#bundling-environment-variables-for-the-browser).
+   *
+   * @example
+   * ```js
+   * {
+   *   environment: {
+   *     API_URL: api.url,
+   *     // Accessible in the browser
+   *     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   *   }
+   * }
+   * ```
+   */
+  environment?: FunctionArgs["environment"];
   /**
    * Permissions and the resources that the [server function](#nodes-server) in your Next.js app needs to access. These permissions are used to create the function's IAM role.
    *
@@ -138,65 +243,7 @@ export interface NextjsArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  permissions?: SsrSiteArgs["permissions"];
-  /**
-   * Path to the directory where your Next.js app is located. This path is relative to your `sst.config.ts`.
-   *
-   * By default this assumes your Next.js app is in the root of your SST app.
-   * @default `"."`
-   *
-   * @example
-   *
-   * If your Next.js app is in a package in your monorepo.
-   *
-   * ```js
-   * {
-   *   path: "packages/web"
-   * }
-   * ```
-   */
-  path?: SsrSiteArgs["path"];
-  /**
-   * [Link resources](/docs/linking/) to your Next.js app. This will:
-   *
-   * 1. Grant the permissions needed to access the resources.
-   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
-   *
-   * @example
-   *
-   * Takes a list of resources to link to the function.
-   *
-   * ```js
-   * {
-   *   link: [bucket, stripeKey]
-   * }
-   * ```
-   */
-  link?: SsrSiteArgs["link"];
-  /**
-   * Configure how the CloudFront cache invalidations are handled. This is run after your Next.js app has been deployed.
-   * :::tip
-   * You get 1000 free invalidations per month. After that you pay $0.005 per invalidation path. [Read more here](https://aws.amazon.com/cloudfront/pricing/).
-   * :::
-   * @default `{paths: "all", wait: false}`
-   * @example
-   * Turn off invalidations.
-   * ```js
-   * {
-   *   invalidation: false
-   * }
-   * ```
-   * Wait for all paths to be invalidated.
-   * ```js
-   * {
-   *   invalidation: {
-   *     paths: "all",
-   *     wait: true
-   *   }
-   * }
-   * ```
-   */
-  invalidation?: SsrSiteArgs["invalidation"];
+  permissions?: FunctionArgs["permissions"];
   /**
    * The command used internally to build your Next.js app. It uses OpenNext with the `openNextVersion`.
    *
@@ -212,31 +259,73 @@ export interface NextjsArgs extends SsrSiteArgs {
    * }
    * ```
    */
-  buildCommand?: SsrSiteArgs["buildCommand"];
+  buildCommand?: string;
   /**
-   * Set [environment variables](https://nextjs.org/docs/pages/building-your-application/configuring/environment-variables) in your Next.js app. These are made available:
+   * Configure the [OpenNext](https://opennext.js.org) version used to build the Next.js app.
    *
-   * 1. In `next build`, they are loaded into `process.env`.
-   * 2. Locally while running through `sst dev`.
-   *
-   * :::tip
-   * You can also `link` resources to your Next.js app and access them in a type-safe way with the [SDK](/docs/reference/sdk/). We recommend linking since it's more secure.
+   * :::note
+   * The default OpenNext version is auto-detected based on your Next.js version and pinned to the version of SST you have.
    * :::
    *
-   * Recall that in Next.js, you need to prefix your environment variables with `NEXT_PUBLIC_` to access these in the browser. [Read more here](https://nextjs.org/docs/pages/building-your-application/configuring/environment-variables#bundling-environment-variables-for-the-browser).
+   * By default, SST auto-detects the Next.js version from your `package.json` and picks a compatible OpenNext version. For Next.js 15+, it uses `3.9.14`. For Next.js 14, it uses `3.6.6` since newer versions of OpenNext dropped Next.js 14 support. If set, this overrides the auto-detection.
    *
+   * The defaults are kept in this component's source, `platform/src/components/aws/v5/nextjs.ts`, as `DEFAULT_OPEN_NEXT_VERSION`.
+   * OpenNext changed its package name from `open-next` to `@opennextjs/aws` in version `3.1.4`. SST will choose the correct one based on the version you provide.
+   *
+   * @default Auto-detected based on your Next.js version.
    * @example
    * ```js
    * {
-   *   environment: {
-   *     API_URL: api.url,
-   *     // Accessible in the browser
-   *     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_123"
+   *   openNextVersion: "3.4.1"
+   * }
+   * ```
+   */
+  openNextVersion?: string;
+  /**
+   * Set a custom domain for your Next.js app.
+   *
+   * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
+   * providers, you'll need to pass in a `cert` that validates domain ownership and add the
+   * DNS records.
+   *
+   * :::tip
+   * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
+   * providers.
+   * :::
+   *
+   * @example
+   *
+   * By default this assumes the domain is hosted on Route 53.
+   *
+   * ```js
+   * {
+   *   domain: "example.com"
+   * }
+   * ```
+   *
+   * For domains hosted on Cloudflare.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com",
+   *     dns: sst.cloudflare.dns()
+   *   }
+   * }
+   * ```
+   *
+   * Specify a `www.` version of the custom domain.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "domain.com",
+   *     redirects: ["www.domain.com"]
    *   }
    * }
    * ```
    */
-  environment?: SsrSiteArgs["environment"];
+  domain?: string | Prettify<CdnDomainArgs>;
   /**
    * Serve your Next.js app through a `Router` instead of a standalone CloudFront
    * distribution.
@@ -335,77 +424,10 @@ export interface NextjsArgs extends SsrSiteArgs {
    * Also, make sure to set this as the `basePath` in your `next.config.js`, like
    * above.
    */
-  router?: SsrSiteArgs["router"];
-  /**
-   * Set a custom domain for your Next.js app.
-   *
-   * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
-   * providers, you'll need to pass in a `cert` that validates domain ownership and add the
-   * DNS records.
-   *
-   * :::tip
-   * Built-in support for AWS Route 53, Cloudflare, and Vercel. And manual setup for other
-   * providers.
-   * :::
-   *
-   * @example
-   *
-   * By default this assumes the domain is hosted on Route 53.
-   *
-   * ```js
-   * {
-   *   domain: "example.com"
-   * }
-   * ```
-   *
-   * For domains hosted on Cloudflare.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "example.com",
-   *     dns: sst.cloudflare.dns()
-   *   }
-   * }
-   * ```
-   *
-   * Specify a `www.` version of the custom domain.
-   *
-   * ```js
-   * {
-   *   domain: {
-   *     name: "domain.com",
-   *     redirects: ["www.domain.com"]
-   *   }
-   * }
-   * ```
-   */
-  domain?: SsrSiteArgs["domain"];
-
-  /**
-   * Configure the [OpenNext](https://opennext.js.org) version used to build the Next.js app.
-   *
-   * :::note
-   * The default OpenNext version is auto-detected based on your Next.js version and pinned to the version of SST you have.
-   * :::
-   *
-   * By default, SST auto-detects the Next.js version from your `package.json` and picks a compatible OpenNext version. For Next.js 15+, it uses `3.9.14`. For Next.js 14, it uses `3.6.6` since newer versions of OpenNext dropped Next.js 14 support. If set, this overrides the auto-detection.
-   *
-   * You can [find the defaults in the source](https://github.com/sst-community/sst/blob/main/platform/src/components/aws/nextjs.ts#L16) under `DEFAULT_OPEN_NEXT_VERSION`.
-   * OpenNext changed its package name from `open-next` to `@opennextjs/aws` in version `3.1.4`. SST will choose the correct one based on the version you provide.
-   *
-   * @default Auto-detected based on your Next.js version.
-   * @example
-   * ```js
-   * {
-   *   openNextVersion: "3.4.1"
-   * }
-   * ```
-   */
-  openNextVersion?: Input<string>;
+  router?: SiteRouteArgs;
   /**
    * Configure the Lambda function used for image optimization.
-   * @default `{memory: "1024 MB"}`
+   * @default `{memory: "1536 MB"}`
    */
   imageOptimization?: {
     /**
@@ -442,58 +464,85 @@ export interface NextjsArgs extends SsrSiteArgs {
      */
     staticEtag?: boolean;
   };
-  /**
-   * Configure the Next.js app to use an existing CloudFront cache policy.
-   *
-   * :::note
-   * CloudFront has a limit of 20 cache policies per account, though you can request a limit
-   * increase.
-   * :::
-   *
-   * By default, a new cache policy is created for it. This allows you to reuse an existing
-   * policy instead of creating a new one.
-   *
-   * @default A new cache policy is created
-   *
-   * @example
-   * ```js
-   * {
-   *   cachePolicy: "658327ea-f89d-4fab-a63d-7e88639e58f6"
-   * }
-   * ```
-   */
-  cachePolicy?: SsrSiteArgs["cachePolicy"];
-  /**
-   * [Transform](/docs/components#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Bucket resource used for uploading the assets.
-     */
-    assets?: Transform<BucketArgs>;
-    /**
-     * Transform the server Function resource.
-     */
-    server?: Transform<FunctionArgs>;
-    /**
-     * Transform the image optimizer Function resource.
-     */
-    imageOptimizer?: Transform<FunctionArgs>;
-    /**
-     * Transform the CloudFront CDN resource.
-     */
-    cdn?: Transform<CdnArgs>;
-    /**
-     * Transform the revalidation seeder Function resource used for ISR.
-     */
-    revalidationSeeder?: Transform<FunctionArgs>;
-    /**
-     * Transform the revalidation events subscriber Function resource used for ISR.
-     */
-    revalidationEventsSubscriber?: Transform<FunctionArgs>;
+}
+
+// What OpenNext's build says it made, in `.open-next/open-next.output.json`
+type BaseFunction = {
+  handler: string;
+  bundle: string;
+};
+
+type OpenNextFunctionOrigin = {
+  type: "function";
+  streaming?: boolean;
+  wrapper: string;
+  converter: string;
+} & BaseFunction;
+
+type OpenNextServerFunctionOrigin = OpenNextFunctionOrigin & {
+  queue: string;
+  incrementalCache: string;
+  tagCache: string;
+};
+
+type OpenNextImageOptimizationOrigin = OpenNextFunctionOrigin & {
+  imageLoader: string;
+};
+
+type OpenNextS3Origin = {
+  type: "s3";
+  originPath: string;
+  copy: {
+    from: string;
+    to: string;
+    cached: boolean;
+    versionedSubDir?: string;
+  }[];
+};
+
+interface OpenNextOutput {
+  edgeFunctions: {
+    [key: string]: BaseFunction;
+  } & {
+    middleware?: BaseFunction & { pathResolver: string };
+  };
+  origins: {
+    s3: OpenNextS3Origin;
+    default: OpenNextServerFunctionOrigin;
+    imageOptimizer: OpenNextImageOptimizationOrigin;
+  } & {
+    [key: string]: OpenNextServerFunctionOrigin | OpenNextS3Origin;
+  };
+  behaviors: {
+    pattern: string;
+    origin?: string;
+    edgeFunction?: string;
+  }[];
+  additionalProps?: {
+    disableIncrementalCache?: boolean;
+    disableTagCache?: boolean;
+    initializationFunction?: BaseFunction;
+    warmer?: BaseFunction;
+    revalidationFunction?: BaseFunction;
   };
 }
+
+// What the site serves from S3, wherever OpenNext built it
+const ASSETS: Pick<SitePlan, "assets" | "isrCache"> = {
+  assets: [
+    {
+      from: ".open-next/assets",
+      to: "_assets",
+      cached: true,
+      versionedSubDir: "_next",
+      deepRoute: "_next",
+    },
+  ],
+  isrCache: {
+    from: ".open-next/cache",
+    to: "_cache",
+  },
+};
 
 /**
  * The `Nextjs` component lets you deploy [Next.js](https://nextjs.org) apps on AWS. It uses
@@ -564,455 +613,49 @@ export interface NextjsArgs extends SsrSiteArgs {
  *
  * console.log(Resource.MyBucket.name);
  * ```
+ *
+ * #### Switch from SST 4's `sst.aws.Nextjs`
+ *
+ * Keep the name, and `sst migrate` moves it. The site's bucket, its
+ * functions, its ISR queue and table, and its CloudFront distribution or its entry in the
+ * router are kept. Its files, its entries in the key-value store and its route in the
+ * router's list are written again by resources of a new type, which the `sst` binary
+ * serves, and `sst migrate` takes the old ones out of the state without deleting what they
+ * wrote. Its CloudFront invalidation runs once more. A few things are written differently:
+ *
+ * - `nodes.server` holds the server of each region, by region, each an output:
+ *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. When the site
+ *   is given an AWS provider of its own, the server is listed once it's created; set
+ *   `regions` to have it from the start.
+ * - The ISR data is seeded again when it changes, and with `warm` the server is warmed
+ *   again when it's built. `sst.aws.Nextjs` did both on every deploy. The data is keyed by
+ *   the build's id, which Next.js makes new on every build unless the app sets
+ *   `generateBuildId`, so it's most often seeded on every deploy all the same. The switch
+ *   does both once.
+ * - `imageOptimization` and `openNextVersion` have to be plain values, not outputs: the
+ *   first decides what's created, and the build reads the second.
+ * - `nodes.revalidationQueue` and `nodes.revalidationTable` are outputs that are
+ *   `undefined` when the build turns ISR off, and the revalidation function is the queue's
+ *   `nodes.subscriber`.
+ * - `transform.revalidationEventsSubscriber` becomes the `subscriber` in the queue's own
+ *   `transform`: `transform: { revalidationQueue: { transform: { subscriber } } }`.
  */
-export class Nextjs extends SsrSite {
-  private declare revalidationQueue?: Output<Queue | undefined>;
-  private declare revalidationTable?: Output<dynamodb.Table | undefined>;
-  private declare revalidationFunction?: Output<Function | undefined>;
+export class Nextjs extends component("sst:aws:Nextjs", parts) {
+  private readonly siteUrl: Output<string>;
 
   constructor(
     name: string,
     args: NextjsArgs = {},
-    opts: ComponentResourceOptions = {},
+    opts?: ComponentResourceOptions,
   ) {
-    super(__pulumiType, name, args, opts);
-  }
-
-  protected normalizeBuildCommand(args: NextjsArgs) {
-    return all([args?.buildCommand, args?.openNextVersion, args?.path]).apply(
-      ([buildCommand, openNextVersion, sitePath]) => {
-        if (buildCommand) return buildCommand;
-
-        function detectDefaultOpenNextVersion() {
-          try {
-            const pkgPath = path.join(sitePath ?? ".", "package.json");
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-            const nextVersion =
-              pkg.dependencies?.next ?? pkg.devDependencies?.next;
-            if (nextVersion && isALtB(nextVersion, "15.0.0")) {
-              return DEFAULT_OPEN_NEXT_VERSION_NEXT14;
-            }
-          } catch {
-            console.warn(`Failed to detect Next.js version. Using OpenNext v${DEFAULT_OPEN_NEXT_VERSION} as default.`);
-          }
-          return DEFAULT_OPEN_NEXT_VERSION;
-        }
-
-        const version = openNextVersion ?? detectDefaultOpenNextVersion();
-        const packageName = isALteB(version, "3.1.3")
-          ? "open-next"
-          : "@opennextjs/aws";
-        return `npx --yes ${packageName}@${version} build`;
-      },
-    );
-  }
-
-  protected buildPlan(
-    outputPath: Output<string>,
-    name: string,
-    args: NextjsArgs,
-    { bucket }: { bucket: Bucket },
-  ): Output<Plan> {
-    const parent = this;
-
-    const ret = all([outputPath, args?.imageOptimization]).apply(
-      ([outputPath, imageOptimization]) => {
-        const { openNextOutput, buildId, prerenderManifest, base } =
-          loadBuildOutput();
-
-        if (Object.entries(openNextOutput.edgeFunctions).length) {
-          throw new VisibleError(
-            `Lambda@Edge runtime is deprecated. Update your OpenNext configuration to use the standard Lambda runtime and deploy to multiple regions using the "regions" option in your Nextjs component.`,
-          );
-        }
-
-        const { revalidationQueue, revalidationFunction } =
-          createRevalidationQueue();
-        const revalidationTable = createRevalidationTable();
-        createRevalidationTableSeeder();
-
-        const serverOrigin = openNextOutput.origins["default"];
-        const imageOptimizerOrigin = openNextOutput.origins["imageOptimizer"];
-        const s3Origin = openNextOutput.origins["s3"];
-        const plan = all([
-          revalidationTable?.arn,
-          revalidationTable?.name,
-          bucket.arn,
-          bucket.name,
-          getRegionOutput(undefined, { parent: bucket }).region,
-          revalidationQueue?.arn,
-          revalidationQueue?.url,
-          getRegionOutput(undefined, { parent: revalidationQueue }).region,
-        ]).apply(
-          ([
-            tableArn,
-            tableName,
-            bucketArn,
-            bucketName,
-            bucketRegion,
-            queueArn,
-            queueUrl,
-            queueRegion,
-          ]) => ({
-            base,
-            server: {
-              description: `${name} server`,
-              bundle: path.join(outputPath, serverOrigin.bundle),
-              handler: serverOrigin.handler,
-              streaming: serverOrigin.streaming,
-              runtime: "nodejs24.x" as const,
-              environment: {
-                CACHE_BUCKET_NAME: bucketName,
-                CACHE_BUCKET_KEY_PREFIX: "_cache",
-                CACHE_BUCKET_REGION: bucketRegion,
-                ...(queueUrl && {
-                  REVALIDATION_QUEUE_URL: queueUrl,
-                  REVALIDATION_QUEUE_REGION: queueRegion,
-                }),
-                ...(tableName && {
-                  CACHE_DYNAMO_TABLE: tableName,
-                }),
-              },
-              permissions: [
-                // access to the cache data
-                {
-                  actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                  resources: [`${bucketArn}/*`],
-                },
-                {
-                  actions: ["s3:ListBucket"],
-                  resources: [bucketArn],
-                },
-                ...(queueArn
-                  ? [
-                    {
-                      actions: [
-                        "sqs:SendMessage",
-                        "sqs:GetQueueAttributes",
-                        "sqs:GetQueueUrl",
-                      ],
-                      resources: [queueArn],
-                    },
-                  ]
-                  : []),
-                ...(tableArn
-                  ? [
-                    {
-                      actions: [
-                        "dynamodb:BatchGetItem",
-                        "dynamodb:GetRecords",
-                        "dynamodb:GetShardIterator",
-                        "dynamodb:Query",
-                        "dynamodb:GetItem",
-                        "dynamodb:Scan",
-                        "dynamodb:ConditionCheckItem",
-                        "dynamodb:BatchWriteItem",
-                        "dynamodb:PutItem",
-                        "dynamodb:UpdateItem",
-                        "dynamodb:DeleteItem",
-                        "dynamodb:DescribeTable",
-                      ],
-                      resources: [tableArn, `${tableArn}/*`],
-                    },
-                  ]
-                  : []),
-              ],
-              injections: [
-                [
-                  `outer:if (process.env.SST_KEY_FILE) {`,
-                  `  const { readFileSync } = await import("fs")`,
-                  `  const { createDecipheriv } = await import("crypto")`,
-                  `  const key = Buffer.from(process.env.SST_KEY, "base64");`,
-                  `  const encryptedData = readFileSync(process.env.SST_KEY_FILE);`,
-                  `  const nonce = Buffer.alloc(12, 0);`,
-                  `  const decipher = createDecipheriv("aes-256-gcm", key, nonce);`,
-                  `  const authTag = encryptedData.slice(-16);`,
-                  `  const actualCiphertext = encryptedData.slice(0, -16);`,
-                  `  decipher.setAuthTag(authTag);`,
-                  `  let decrypted = decipher.update(actualCiphertext);`,
-                  `  decrypted = Buffer.concat([decrypted, decipher.final()]);`,
-                  `  const decryptedData = JSON.parse(decrypted.toString());`,
-                  `  globalThis.SST_KEY_FILE_DATA = decryptedData;`,
-                  `}`,
-                ].join("\n"),
-              ],
-            },
-            imageOptimizer: {
-              prefix: "/_next/image",
-              function: {
-                description: `${name} image optimizer`,
-                handler: imageOptimizerOrigin.handler,
-                bundle: path.join(outputPath, imageOptimizerOrigin.bundle),
-                runtime: "nodejs24.x" as const,
-                architecture: "arm64" as const,
-                environment: {
-                  BUCKET_NAME: bucketName,
-                  BUCKET_KEY_PREFIX: "_assets",
-                  ...(imageOptimization?.staticEtag
-                    ? { OPENNEXT_STATIC_ETAG: "true" }
-                    : {}),
-                },
-                memory: imageOptimization?.memory ?? "1536 MB",
-              },
-            },
-            assets: [
-              {
-                from: ".open-next/assets",
-                to: "_assets",
-                cached: true,
-                versionedSubDir: "_next",
-                deepRoute: "_next",
-              },
-            ],
-            isrCache: {
-              from: ".open-next/cache",
-              to: "_cache",
-            },
-            buildId,
-          }),
-        );
-
-        return {
-          plan,
-          revalidationQueue,
-          revalidationTable,
-          revalidationFunction,
-        };
-
-        function loadBuildOutput() {
-          const openNextOutputPath = path.join(
-            outputPath,
-            ".open-next",
-            "open-next.output.json",
-          );
-          if (!fs.existsSync(openNextOutputPath)) {
-            throw new VisibleError(
-              `Could not load OpenNext output file at "${openNextOutputPath}". Make sure your Next.js app was built correctly with OpenNext.`,
-            );
-          }
-          const content = fs.readFileSync(openNextOutputPath).toString();
-          const json = JSON.parse(content) as OpenNextOutput;
-          // Currently open-next.output.json's initializationFunction value
-          // is wrong, it is set to ".open-next/initialization-function"
-          if (json.additionalProps?.initializationFunction) {
-            json.additionalProps.initializationFunction = {
-              handler: "index.handler",
-              bundle: ".open-next/dynamodb-provider",
-            };
-          }
-          return {
-            openNextOutput: json,
-            base: loadBasePath(),
-            buildId: loadBuildId(),
-            prerenderManifest: loadPrerenderManifest(),
-          };
-        }
-
-        function loadBuildId() {
-          try {
-            return fs
-              .readFileSync(path.join(outputPath, ".next/BUILD_ID"))
-              .toString();
-          } catch (e) {
-            console.error(e);
-            throw new VisibleError(
-              `Build ID not found in ".next/BUILD_ID" for site "${name}". Ensure your Next.js app was built successfully.`,
-            );
-          }
-        }
-
-        function loadBasePath() {
-          try {
-            const content = fs.readFileSync(
-              path.join(outputPath, ".next", "routes-manifest.json"),
-              "utf-8",
-            );
-            const json = JSON.parse(content) as {
-              basePath: string;
-            };
-            return json.basePath === "" ? undefined : json.basePath;
-          } catch (e) {
-            console.error(e);
-            throw new VisibleError(
-              `Base path configuration not found in ".next/routes-manifest.json" for site "${name}". Check your Next.js configuration.`,
-            );
-          }
-        }
-
-        function loadPrerenderManifest() {
-          try {
-            const content = fs
-              .readFileSync(
-                path.join(outputPath, ".next/prerender-manifest.json"),
-              )
-              .toString();
-            return JSON.parse(content) as {
-              version: number;
-              routes: Record<string, unknown>;
-            };
-          } catch (e) {
-            console.debug("Failed to load prerender-manifest.json", e);
-          }
-        }
-
-        function createRevalidationQueue() {
-          if (openNextOutput.additionalProps?.disableIncrementalCache)
-            return {};
-
-          const revalidationFunction =
-            openNextOutput.additionalProps?.revalidationFunction;
-          if (!revalidationFunction) return {};
-
-          const queue = new Queue(
-            `${name}RevalidationEvents`,
-            {
-              fifo: true,
-              transform: {
-                queue: (args) => {
-                  args.receiveWaitTimeSeconds = 20;
-                },
-              },
-            },
-            { parent },
-          );
-          const subscriber = queue.subscribe(
-            {
-              description: `${name} ISR revalidator`,
-              handler: revalidationFunction.handler,
-              bundle: path.join(outputPath, revalidationFunction.bundle),
-              runtime: "nodejs24.x",
-              timeout: "30 seconds",
-              permissions: [
-                {
-                  actions: [
-                    "sqs:ChangeMessageVisibility",
-                    "sqs:DeleteMessage",
-                    "sqs:GetQueueAttributes",
-                    "sqs:GetQueueUrl",
-                    "sqs:ReceiveMessage",
-                  ],
-                  resources: [queue.arn],
-                },
-              ],
-              dev: false,
-              _skipMetadata: true,
-            },
-            {
-              transform: {
-                eventSourceMapping: (args) => {
-                  args.batchSize = 5;
-                },
-                function: args.transform?.revalidationEventsSubscriber,
-              },
-            },
-            { parent },
-          );
-          return {
-            revalidationQueue: queue,
-            revalidationFunction: subscriber.nodes.function,
-          };
-        }
-
-        function createRevalidationTable() {
-          if (openNextOutput.additionalProps?.disableTagCache) return;
-
-          return new dynamodb.Table(
-            `${name}RevalidationTable`,
-            {
-              attributes: [
-                { name: "tag", type: "S" },
-                { name: "path", type: "S" },
-                { name: "revalidatedAt", type: "N" },
-              ],
-              hashKey: "tag",
-              rangeKey: "path",
-              pointInTimeRecovery: {
-                enabled: true,
-              },
-              billingMode: "PAY_PER_REQUEST",
-              globalSecondaryIndexes: [
-                {
-                  name: "revalidate",
-                  hashKey: "path",
-                  rangeKey: "revalidatedAt",
-                  projectionType: "ALL",
-                },
-              ],
-            },
-            { parent, retainOnDelete: false },
-          );
-        }
-
-        function createRevalidationTableSeeder() {
-          if (openNextOutput.additionalProps?.disableTagCache) return;
-          if (!openNextOutput.additionalProps?.initializationFunction) return;
-
-          // Provision 128MB of memory for every 4,000 prerendered routes,
-          // 1GB per 40,000, up to 10GB. This tends to use ~70% of the memory
-          // provisioned when testing.
-          const prerenderedRouteCount = Object.keys(
-            prerenderManifest?.routes ?? {},
-          ).length;
-          const seedFn = new Function(
-            ...transform(
-              args.transform?.revalidationSeeder,
-              `${name}RevalidationSeeder`,
-              {
-                description: `${name} ISR revalidation data seeder`,
-                handler:
-                  openNextOutput.additionalProps.initializationFunction.handler,
-                bundle: path.join(
-                  outputPath,
-                  openNextOutput.additionalProps.initializationFunction.bundle,
-                ),
-                runtime: "nodejs24.x",
-                timeout: "900 seconds",
-                memory: `${Math.min(
-                  10240,
-                  Math.max(128, Math.ceil(prerenderedRouteCount / 4000) * 128),
-                )} MB`,
-                permissions: [
-                  {
-                    actions: [
-                      "dynamodb:BatchWriteItem",
-                      "dynamodb:PutItem",
-                      "dynamodb:DescribeTable",
-                    ],
-                    resources: [revalidationTable!.arn],
-                  },
-                ],
-                environment: {
-                  CACHE_DYNAMO_TABLE: revalidationTable!.name,
-                },
-                dev: false,
-                _skipMetadata: true,
-                _skipHint: true,
-              },
-              { parent },
-            ),
-          );
-          new lambda.Invocation(
-            `${name}RevalidationSeed`,
-            {
-              functionName: seedFn.nodes.function.name,
-              triggers: {
-                version: Date.now().toString(),
-              },
-              input: JSON.stringify({
-                RequestType: "Create",
-              }),
-            },
-            { parent },
-          );
-        }
-      },
-    );
-
-    this.revalidationQueue = ret.revalidationQueue;
-    this.revalidationTable = ret.revalidationTable;
-    this.revalidationFunction = output(ret.revalidationFunction);
-
-    return ret.plan;
+    super(name, args, opts);
+    const builder = this.builder();
+    this.siteUrl = createSsrSite(
+      builder,
+      name,
+      args,
+      nextjsFramework(builder, name, args),
+    ).url;
   }
 
   /**
@@ -1022,31 +665,434 @@ export class Nextjs extends SsrSite {
    * Otherwise, it's the auto-generated CloudFront URL.
    */
   public get url() {
-    return super.url;
+    return this.siteUrl;
   }
 
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
+  link() {
     return {
-      ...super.nodes,
-      /**
-       * The Amazon SQS queue that triggers the ISR revalidator.
-       */
-      revalidationQueue: this.revalidationQueue,
-      /**
-       * The Amazon DynamoDB table that stores the ISR revalidation data.
-       */
-      revalidationTable: this.revalidationTable,
-      /**
-       * The Lambda function that processes the ISR revalidation.
-       */
-      revalidationFunction: this.revalidationFunction,
+      properties: {
+        url: this.url,
+      },
     };
   }
 }
 
-const __pulumiType = "sst:aws:Nextjs";
-// @ts-expect-error
-Nextjs.__pulumiType = __pulumiType;
+// A Next.js site's build, as OpenNext made it
+interface NextBuild extends SiteBuild {
+  openNext: OpenNextOutput;
+  buildId: string;
+  prerenderedRoutes: number;
+}
+
+// How a Next.js site is built, with OpenNext, and what it adds to what every
+// site creates: ISR's queue, table and seed, and the image optimizer
+function nextjsFramework(
+  builder: PartsBuilder<ReturnType<typeof parts>>,
+  name: string,
+  args: NextjsArgs,
+): SsrFramework<NextBuild> {
+  const self = builder.component;
+  let imageOptimization: NextjsArgs["imageOptimization"];
+
+  return {
+    label: "Nextjs",
+    alwaysServes: true,
+    check(option) {
+      imageOptimization = plainDeep(
+        args.imageOptimization,
+        option("imageOptimization"),
+      );
+    },
+    buildCommand(sitePath, option) {
+      const version =
+        plain(
+          args.openNextVersion,
+          option("openNextVersion"),
+          BUILD_READS_IT,
+        ) ?? defaultOpenNextVersion(sitePath);
+      const packageName = isALteB(version, "3.1.3")
+        ? "open-next"
+        : "@opennextjs/aws";
+      return `npx --yes ${packageName}@${version} build`;
+    },
+    load: loadBuild,
+    server(build, site) {
+      const queue = createRevalidationQueue(build);
+      const table = createRevalidationTable(build);
+      createRevalidationSeeder(build, table);
+
+      const origin = build.openNext.origins["default"];
+      const region = getRegionOutput({}, { parent: self }).region;
+      return {
+        bundle: path.join(build.sitePath, origin.bundle),
+        handler: origin.handler,
+        streaming: origin.streaming,
+        environment: {
+          CACHE_BUCKET_NAME: site.bucket.name,
+          CACHE_BUCKET_KEY_PREFIX: "_cache",
+          CACHE_BUCKET_REGION: region,
+          ...(queue && {
+            REVALIDATION_QUEUE_URL: queue.url,
+            REVALIDATION_QUEUE_REGION: region,
+          }),
+          ...(table && {
+            CACHE_DYNAMO_TABLE: table.name,
+          }),
+        },
+        permissions: [
+          // access to the cache data
+          {
+            actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            resources: [interpolate`${site.bucket.arn}/*`],
+          },
+          {
+            actions: ["s3:ListBucket"],
+            resources: [site.bucket.arn],
+          },
+          ...(queue
+            ? [
+                {
+                  actions: [
+                    "sqs:SendMessage",
+                    "sqs:GetQueueAttributes",
+                    "sqs:GetQueueUrl",
+                  ],
+                  resources: [queue.arn],
+                },
+              ]
+            : []),
+          ...(table
+            ? [
+                {
+                  actions: [
+                    "dynamodb:BatchGetItem",
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator",
+                    "dynamodb:Query",
+                    "dynamodb:GetItem",
+                    "dynamodb:Scan",
+                    "dynamodb:ConditionCheckItem",
+                    "dynamodb:BatchWriteItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:DescribeTable",
+                  ],
+                  resources: [table.arn, interpolate`${table.arn}/*`],
+                },
+              ]
+            : []),
+        ],
+        injections: [KEY_FILE_INJECTION],
+      };
+    },
+    extras(build, site) {
+      const origin = build.openNext.origins["imageOptimizer"];
+      const imageOptimizer = builder.part("imageOptimizer", {
+        timeout: "25 seconds",
+        logging: {
+          retention: "3 days",
+        },
+        permissions: [
+          {
+            actions: ["s3:GetObject"],
+            resources: [interpolate`${site.bucket.arn}/*`],
+          },
+        ],
+        description: `${name} image optimizer`,
+        handler: origin.handler,
+        bundle: path.join(build.sitePath, origin.bundle),
+        runtime: "nodejs24.x",
+        architecture: "arm64",
+        environment: {
+          BUCKET_NAME: site.bucket.name,
+          BUCKET_KEY_PREFIX: "_assets",
+          ...(imageOptimization?.staticEtag
+            ? { OPENNEXT_STATIC_ETAG: "true" }
+            : {}),
+        },
+        memory: imageOptimization?.memory ?? "1536 MB",
+        url: { authorization: site.signs ? "iam" : "none" },
+        dev: false,
+        _skipMetadata: true,
+        _skipHint: true,
+      });
+
+      // Who may call its URL
+      const access = urlAccessArgs(imageOptimizer, site.distributionArn);
+      const afterUrl = {
+        dependsOn: imageOptimizer.nodes.url ? [imageOptimizer.nodes.url] : [],
+      };
+      if (!site.signs)
+        builder.part("imageOptimizerUrlAccess", access.public, afterUrl);
+      else {
+        builder.part(
+          "imageOptimizerCloudFrontUrlAccess",
+          access.cloudFrontUrl,
+          afterUrl,
+        );
+        builder.part(
+          "imageOptimizerCloudFrontInvoke",
+          access.cloudFrontInvoke,
+          afterUrl,
+        );
+      }
+      return { imageOptimizer };
+    },
+  };
+
+  // OpenNext dropped Next.js 14 after 3.6.6
+  function defaultOpenNextVersion(sitePath: string) {
+    try {
+      const pkg = JSON.parse(
+        fs.readFileSync(
+          path.resolve(context().paths.root, sitePath, "package.json"),
+          "utf-8",
+        ),
+      );
+      const nextVersion = pkg.dependencies?.next ?? pkg.devDependencies?.next;
+      if (nextVersion && isALtB(nextVersion, "15.0.0"))
+        return DEFAULT_OPEN_NEXT_VERSION_NEXT14;
+    } catch {
+      console.warn(
+        `Failed to detect Next.js version. Using OpenNext v${DEFAULT_OPEN_NEXT_VERSION} as default.`,
+      );
+    }
+    return DEFAULT_OPEN_NEXT_VERSION;
+  }
+
+  // Reads what OpenNext built
+  function loadBuild(builtPath: string): NextBuild {
+    const outputPath = path.resolve(context().paths.root, builtPath);
+    const openNextOutputPath = path.join(
+      outputPath,
+      ".open-next",
+      "open-next.output.json",
+    );
+    if (!fs.existsSync(openNextOutputPath))
+      throw new VisibleError(
+        `Could not load OpenNext output file at "${openNextOutputPath}". Make sure your Next.js app was built correctly with OpenNext.`,
+      );
+    const openNext = JSON.parse(
+      fs.readFileSync(openNextOutputPath).toString(),
+    ) as OpenNextOutput;
+    // open-next.output.json says the initialization function is at
+    // ".open-next/initialization-function", which isn't where it is
+    if (openNext.additionalProps?.initializationFunction)
+      openNext.additionalProps.initializationFunction = {
+        handler: "index.handler",
+        bundle: ".open-next/dynamodb-provider",
+      };
+    if (Object.entries(openNext.edgeFunctions).length)
+      throw new VisibleError(
+        `Lambda@Edge runtime is deprecated. Update your OpenNext configuration to use the standard Lambda runtime and deploy to multiple regions using the "regions" option in your Nextjs component.`,
+      );
+
+    let buildId: string;
+    try {
+      buildId = fs
+        .readFileSync(path.join(outputPath, ".next/BUILD_ID"))
+        .toString();
+    } catch (e) {
+      throw new VisibleError(
+        `Build ID not found in ".next/BUILD_ID" for site "${name}". Ensure your Next.js app was built successfully.`,
+      );
+    }
+
+    let base: string | undefined;
+    try {
+      const routes = JSON.parse(
+        fs.readFileSync(
+          path.join(outputPath, ".next", "routes-manifest.json"),
+          "utf-8",
+        ),
+      ) as { basePath: string };
+      base = routes.basePath === "" ? undefined : routes.basePath;
+    } catch (e) {
+      throw new VisibleError(
+        `Base path configuration not found in ".next/routes-manifest.json" for site "${name}". Check your Next.js configuration.`,
+      );
+    }
+
+    let prerenderedRoutes = 0;
+    try {
+      const manifest = JSON.parse(
+        fs
+          .readFileSync(path.join(outputPath, ".next/prerender-manifest.json"))
+          .toString(),
+      ) as { routes?: Record<string, unknown> };
+      prerenderedRoutes = Object.keys(manifest.routes ?? {}).length;
+    } catch (e) {}
+
+    return {
+      sitePath: builtPath,
+      outputPath,
+      openNext,
+      buildId,
+      prerenderedRoutes,
+      serves: true,
+      plan: {
+        ...ASSETS,
+        imageOptimizer: { prefix: "/_next/image" },
+        buildId,
+        ...(base !== undefined && { base }),
+      },
+    };
+  }
+
+  function createRevalidationQueue(build: NextBuild) {
+    const props = build.openNext.additionalProps;
+    if (props?.disableIncrementalCache) return;
+    const revalidationFunction = props?.revalidationFunction;
+    if (!revalidationFunction) return;
+
+    const queue = builder.part("revalidationQueue", {
+      fifo: true,
+      transform: {
+        queue: {
+          receiveWaitTimeSeconds: 20,
+        },
+      },
+    });
+    queue.subscribe(
+      {
+        description: `${name} ISR revalidator`,
+        handler: revalidationFunction.handler,
+        bundle: path.join(build.sitePath, revalidationFunction.bundle),
+        runtime: "nodejs24.x",
+        timeout: "30 seconds",
+        permissions: [
+          {
+            actions: [
+              "sqs:ChangeMessageVisibility",
+              "sqs:DeleteMessage",
+              "sqs:GetQueueAttributes",
+              "sqs:GetQueueUrl",
+              "sqs:ReceiveMessage",
+            ],
+            resources: [queue.arn],
+          },
+        ],
+        dev: false,
+        _skipMetadata: true,
+      },
+      { batch: { size: 5 } },
+    );
+    return queue;
+  }
+
+  function createRevalidationTable(build: NextBuild) {
+    if (build.openNext.additionalProps?.disableTagCache) return;
+    return builder.part(
+      "revalidationTable",
+      {
+        attributes: [
+          { name: "tag", type: "S" },
+          { name: "path", type: "S" },
+          { name: "revalidatedAt", type: "N" },
+        ],
+        hashKey: "tag",
+        rangeKey: "path",
+        pointInTimeRecovery: {
+          enabled: true,
+        },
+        billingMode: "PAY_PER_REQUEST",
+        globalSecondaryIndexes: [
+          {
+            name: "revalidate",
+            hashKey: "path",
+            rangeKey: "revalidatedAt",
+            projectionType: "ALL",
+          },
+        ],
+      },
+      { retainOnDelete: false },
+    );
+  }
+
+  function createRevalidationSeeder(
+    build: NextBuild,
+    table: dynamodb.Table | undefined,
+  ) {
+    const initializationFunction =
+      build.openNext.additionalProps?.initializationFunction;
+    if (!table || !initializationFunction) return;
+
+    // Provision 128MB of memory for every 4,000 prerendered routes,
+    // 1GB per 40,000, up to 10GB. This tends to use ~70% of the memory
+    // provisioned when testing.
+    const seeder = builder.part("revalidationSeeder", {
+      description: `${name} ISR revalidation data seeder`,
+      handler: initializationFunction.handler,
+      bundle: path.join(build.sitePath, initializationFunction.bundle),
+      runtime: "nodejs24.x",
+      timeout: "900 seconds",
+      memory: `${Math.min(
+        10240,
+        Math.max(128, Math.ceil(build.prerenderedRoutes / 4000) * 128),
+      )} MB`,
+      permissions: [
+        {
+          actions: [
+            "dynamodb:BatchWriteItem",
+            "dynamodb:PutItem",
+            "dynamodb:DescribeTable",
+          ],
+          resources: [table.arn],
+        },
+      ],
+      environment: {
+        CACHE_DYNAMO_TABLE: table.name,
+      },
+      dev: false,
+      _skipMetadata: true,
+      _skipHint: true,
+    });
+    builder.part("revalidationSeed", {
+      functionName: seeder.nodes.function.name,
+      // Seeded again when what it seeds changes
+      triggers: {
+        version: hashOf(
+          path.join(build.outputPath, initializationFunction.bundle),
+        ),
+      },
+      input: JSON.stringify({
+        RequestType: "Create",
+      }),
+    });
+  }
+}
+
+// The server reads the values of its links from an encrypted file, when it
+// has one
+const KEY_FILE_INJECTION = [
+  `outer:if (process.env.SST_KEY_FILE) {`,
+  `  const { readFileSync } = await import("fs")`,
+  `  const { createDecipheriv } = await import("crypto")`,
+  `  const key = Buffer.from(process.env.SST_KEY, "base64");`,
+  `  const encryptedData = readFileSync(process.env.SST_KEY_FILE);`,
+  `  const nonce = Buffer.alloc(12, 0);`,
+  `  const decipher = createDecipheriv("aes-256-gcm", key, nonce);`,
+  `  const authTag = encryptedData.slice(-16);`,
+  `  const actualCiphertext = encryptedData.slice(0, -16);`,
+  `  decipher.setAuthTag(authTag);`,
+  `  let decrypted = decipher.update(actualCiphertext);`,
+  `  decrypted = Buffer.concat([decrypted, decipher.final()]);`,
+  `  const decryptedData = JSON.parse(decrypted.toString());`,
+  `  globalThis.SST_KEY_FILE_DATA = decryptedData;`,
+  `}`,
+].join("\n");
+
+// A hash of the files in a folder, and their names
+function hashOf(dir: string) {
+  const hash = crypto.createHash("sha256");
+  for (const file of globSync("**", {
+    cwd: dir,
+    nodir: true,
+    dot: true,
+  }).sort()) {
+    hash.update(file);
+    hash.update(fs.readFileSync(path.join(dir, file)));
+  }
+  return hash.digest("hex");
+}

@@ -1,0 +1,1085 @@
+import fs from "fs/promises";
+import path from "path";
+import crypto from "crypto";
+import {
+  ComponentResourceOptions,
+  output,
+  all,
+  jsonStringify,
+  interpolate,
+} from "@pulumi/pulumi";
+import * as cf from "@pulumi/cloudflare";
+import type { Loader } from "esbuild";
+import type { EsbuildOptions } from "../../../../../src/components/esbuild.js";
+import {
+  Component,
+  Prettify,
+  Transform,
+  transform,
+} from "../../../../../src/components/component";
+import { WorkerUrl } from "./providers/worker-url.js";
+import { WorkerPlacement } from "./providers/worker-placement.js";
+import { Link } from "../../../../../src/components/link.js";
+import type { Input } from "../../../../../src/components/input.js";
+import { ZoneLookup } from "../../../../../src/components/cloudflare/providers/zone-lookup.js";
+import { iam } from "@pulumi/aws";
+import { Permission } from "../../../../../src/components/aws/permission.js";
+import { binding } from "../../../../../src/components/cloudflare/binding.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../../../src/components/cloudflare/account-id.js";
+import { rpc } from "../../../../../src/components/rpc/rpc.js";
+import { getContentType } from "../../../../../src/components/base/base-site";
+import { prefixName } from "../../../../../src/components/naming";
+import { existsAsync } from "../../../../../src/util/fs";
+import { normalizeCompatibility } from "../../../../../src/components/cloudflare/helpers/compatibility.js";
+import { cfFetch } from "../../../../../src/components/cloudflare/helpers/fetch.js";
+
+export interface WorkerDurableObjectMigration {
+  /**
+   * A unique identifier for this migration.
+   */
+  tag: Input<string>;
+  /**
+   * New Durable Object classes backed by the legacy KV storage backend.
+   */
+  newClasses?: Input<Input<string>[]>;
+  /**
+   * New Durable Object classes backed by the SQLite storage backend.
+   */
+  newSqliteClasses?: Input<Input<string>[]>;
+  /**
+   * Durable Object classes to delete.
+   */
+  deletedClasses?: Input<Input<string>[]>;
+  /**
+   * Durable Object classes to rename.
+   */
+  renamedClasses?: Input<
+    Input<{
+      from: Input<string>;
+      to: Input<string>;
+    }>[]
+  >;
+  /**
+   * Durable Object classes to transfer from another script.
+   */
+  transferredClasses?: Input<
+    Input<{
+      from: Input<string>;
+      fromScript: Input<string>;
+      to: Input<string>;
+    }>[]
+  >;
+}
+
+export interface WorkerDomainArgs {
+  /**
+   * The custom domain you want to use.
+   *
+   * @example
+   * ```js
+   * {
+   *   domain: {
+   *     name: "example.com"
+   *   }
+   * }
+   * ```
+   */
+  name: Input<string>;
+  /**
+   * Alternate domains to be used. Visitors to the alternate domains will be redirected to the
+   * main `name`.
+   *
+   * :::note
+   * Unlike the `aliases` option, this will redirect visitors back to the main `name`.
+   * :::
+   *
+   * @example
+   * Use this to create a `www.` version of your domain and redirect visitors to the apex domain.
+   * ```js {4}
+   * {
+   *   domain: {
+   *     name: "domain.com",
+   *     redirects: ["www.domain.com"]
+   *   }
+   * }
+   * ```
+   */
+  redirects?: Input<string>[];
+  /**
+   * Alias domains that should be used. Unlike the `redirects` option, this keeps your visitors
+   * on this alias domain.
+   *
+   * @example
+   * So if your users visit `app2.domain.com`, they will stay on `app2.domain.com` in their
+   * browser.
+   * ```js {4}
+   * {
+   *   domain: {
+   *     name: "app1.domain.com",
+   *     aliases: ["app2.domain.com"]
+   *   }
+   * }
+   * ```
+   */
+  aliases?: Input<string>[];
+}
+
+export interface WorkerArgs {
+  /**
+   * Path to the handler file for the worker.
+   *
+   * The handler path is relative to the root your repo or the `sst.config.ts`.
+   *
+   * @example
+   *
+   * ```js
+   * {
+   *   handler: "packages/functions/src/worker.ts"
+   * }
+   * ```
+   */
+  handler: Input<string>;
+  /**
+   * Enable a dedicated endpoint for your Worker.
+   * @default `false`
+   */
+  url?: Input<boolean>;
+  /**
+   * Set a custom domain for your Worker. Supports domains hosted on Cloudflare.
+   *
+   * :::tip
+   * You can migrate an externally hosted domain to Cloudflare by
+   * [following this guide](https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/).
+   * :::
+   *
+   * @example
+   *
+   * ```js
+   * {
+   *   domain: "domain.com"
+   * }
+   * ```
+   *
+   * You can also redirect alternate domains to the main domain.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "domain.com",
+   *     redirects: ["www.domain.com"]
+   *   }
+   * }
+   * ```
+   *
+   * Or keep visitors on alternate domains with aliases.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "app1.domain.com",
+   *     aliases: ["app2.domain.com"]
+   *   }
+   * }
+   * ```
+   */
+  domain?: Input<string> | Prettify<WorkerDomainArgs>;
+  /**
+   * Configure how your function is bundled.
+   *
+   * SST bundles your worker code using [esbuild](https://esbuild.github.io/). This tree shakes your code to only include what's used.
+   */
+  build?: Input<{
+    /**
+     * Configure additional esbuild loaders for other file extensions. This is useful
+     * when your code is importing non-JS files like `.png`, `.css`, etc.
+     *
+     * @example
+     * ```js
+     * {
+     *   build: {
+     *     loader: {
+     *      ".png": "file"
+     *     }
+     *   }
+     * }
+     * ```
+     */
+    loader?: Input<Record<string, Loader>>;
+    /**
+     * Use this to insert a string at the beginning of the generated JS file.
+     *
+     * @example
+     * ```js
+     * {
+     *   build: {
+     *     banner: "console.log('Function starting')"
+     *   }
+     * }
+     * ```
+     */
+    banner?: Input<string>;
+    /**
+     * This allows you to customize esbuild config that is used.
+     *
+     * :::tip
+     * Check out the _JS tab_ in the code snippets in the esbuild docs for the
+     * [`BuildOptions`](https://esbuild.github.io/api/#build).
+     * :::
+     *
+     */
+    esbuild?: Input<EsbuildOptions>;
+    /**
+     * Disable if the worker code should be minified when bundled.
+     *
+     * @default `true`
+     *
+     * @example
+     * ```js
+     * {
+     *   build: {
+     *     minify: false
+     *   }
+     * }
+     * ```
+     */
+    minify?: Input<boolean>;
+  }>;
+  /**
+   * Configure Cloudflare compatibility for the Worker.
+   */
+  compatibility?: Input<{
+    /**
+     * The Cloudflare compatibility date for the Worker.
+     *
+     * SST uses this for both the uploaded Worker and for deciding which native
+     * Node.js modules should stay external during bundling.
+     *
+     * @default `"2025-05-05"`
+     */
+    date?: Input<string>;
+    /**
+     * The Cloudflare compatibility flags for the Worker.
+     *
+     * SST uses this for both the uploaded Worker and for deciding which native
+     * Node.js modules should stay external during bundling.
+     *
+     * @default `["nodejs_compat"]`
+     */
+    flags?: Input<Input<string>[]>;
+  }>;
+  /**
+   * [Link resources](/docs/linking/) to your worker. This will:
+   *
+   * 1. Handle the credentials needed to access the resources.
+   * 2. Allow you to access it in your site using the [SDK](/docs/reference/sdk/).
+   *
+   * @example
+   *
+   * Takes a list of components to link to the function.
+   *
+   * ```js
+   * {
+   *   link: [bucket, stripeKey]
+   * }
+   * ```
+   */
+  link?: Input<any[]>;
+  /**
+   * Key-value pairs that are set as [Worker environment variables](https://developers.cloudflare.com/workers/configuration/environment-variables/).
+   *
+   * They can be accessed in your worker through `env.<key>`.
+   *
+   * @example
+   *
+   * ```js
+   * {
+   *   environment: {
+   *     DEBUG: "true"
+   *   }
+   * }
+   * ```
+   */
+  environment?: Input<Record<string, Input<string>>>;
+  /**
+   * Durable Object migrations for this worker.
+   *
+   * This follows Wrangler's top-level `migrations` config. Keep the full,
+   * ordered migration history here; SST reads the Worker's current migration
+   * tag and uploads the pending migrations as Cloudflare's `oldTag`, `newTag`,
+   * and `steps` payload. If there is no current tag, SST uploads the full
+   * history as the initial migration payload. If the current tag is not in the
+   * configured history, SST follows Wrangler and uploads all configured
+   * migrations with the current tag as `oldTag`.
+   *
+   * Each migration needs a unique `tag`. Add a migration when you create,
+   * rename, delete, or transfer a Durable Object class. Updating code for an
+   * existing class does not require one.
+   *
+   * On the first deploy, add each new class with `newSqliteClasses`. For a
+   * rename, keep the original migration and append a new migration with
+   * `renamedClasses`. Do not declare the renamed class as a new class, or
+   * Cloudflare will reject the deploy or create a separate namespace.
+   *
+   * @example
+   * ```ts
+   * {
+   *   migrations: [{
+   *     tag: "v1",
+   *     newSqliteClasses: ["Counter"]
+   *   }]
+   * }
+   * ```
+   *
+   * @example
+   * ```ts
+   * {
+   *   migrations: [
+   *     {
+   *       tag: "v1",
+   *       newSqliteClasses: ["Counter"],
+   *     },
+   *     {
+   *       tag: "v2",
+   *       renamedClasses: [{ from: "Counter", to: "CounterV2" }],
+   *     },
+   *   ]
+   * }
+   * ```
+   */
+  migrations?: Input<Input<WorkerDurableObjectMigration>[]>;
+  /** @internal */
+  assets?: Input<{
+    directory: Input<string>;
+    htmlHandling?: Input<
+      | "auto-trailing-slash"
+      | "force-trailing-slash"
+      | "drop-trailing-slash"
+      | "none"
+    >;
+    notFoundHandling?: Input<"404-page" | "single-page-application" | "none">;
+    runWorkerFirst?: Input<boolean | Input<string>[]>;
+  }>;
+  /**
+   * Configure [placement](https://developers.cloudflare.com/workers/configuration/placement/)
+   * for your Worker.
+   *
+   * @example
+   *
+   * #### Smart Placement
+   * ```js
+   * {
+   *   placement: {
+   *     mode: "smart"
+   *   }
+   * }
+   * ```
+   *
+   * #### Explicit region
+   * ```js
+   * {
+   *   placement: {
+   *     region: "aws:us-east-1"
+   *   }
+   * }
+   * ```
+   */
+  placement?: Input<{
+    mode?: Input<string>;
+    region?: Input<string>;
+    host?: Input<string>;
+    hostname?: Input<string>;
+  }>;
+  /**
+   * [Transform](/docs/components/#transform) how this component creates its underlying
+   * resources.
+   */
+  transform?: {
+    /**
+     * Transform the Worker resource.
+     */
+    worker?: Transform<cf.WorkersScriptArgs>;
+  };
+  /**
+   * The Cloudflare account ID to use for this Worker and all its sub-resources.
+   * Overrides the default account ID set via `CLOUDFLARE_DEFAULT_ACCOUNT_ID`.
+   * @internal
+   */
+  accountId?: Input<string>;
+  /**
+   * @internal
+   * Placehodler for future feature.
+   */
+  dev?: boolean;
+}
+
+/**
+ * The `Worker` component lets you create a Cloudflare Worker.
+ *
+ * @example
+ *
+ * #### Minimal example
+ *
+ * ```ts title="sst.config.ts"
+ * new sst.cloudflare.Worker("MyWorker", {
+ *   handler: "src/worker.handler"
+ * });
+ * ```
+ *
+ * #### Link resources
+ *
+ * [Link resources](/docs/linking/) to the Worker. This will handle the credentials
+ * and allow you to access it in your handler.
+ *
+ * ```ts {5} title="sst.config.ts"
+ * const bucket = new sst.aws.Bucket("MyBucket");
+ *
+ * new sst.cloudflare.Worker("MyWorker", {
+ *   handler: "src/worker.handler",
+ *   link: [bucket]
+ * });
+ * ```
+ *
+ * You can use the [SDK](/docs/reference/sdk/) to access the linked resources
+ * in your handler.
+ *
+ * ```ts title="src/worker.ts" {3}
+ * import { Resource } from "sst";
+ *
+ * console.log(Resource.MyBucket.name);
+ * ```
+ *
+ * #### Enable URLs
+ *
+ * Enable worker URLs to invoke the worker over HTTP.
+ *
+ * ```ts {3} title="sst.config.ts"
+ * new sst.cloudflare.Worker("MyWorker", {
+ *   handler: "src/worker.handler",
+ *   url: true
+ * });
+ * ```
+ *
+ * #### Bundling
+ *
+ * Customize how SST uses [esbuild](https://esbuild.github.io/) to bundle your worker code with the `build` property.
+ *
+ * ```ts title="sst.config.ts" {3-5}
+ * new sst.cloudflare.Worker("MyWorker", {
+ *   handler: "src/worker.handler",
+ *   build: {
+ *     install: ["pg"]
+ *   }
+ * });
+ * ```
+ */
+export class Worker extends Component implements Link.Linkable {
+  private script: cf.WorkersScript;
+  private workerUrl: WorkerUrl;
+  private workerPlacement?: WorkerPlacement;
+  private workerDomain?: cf.WorkersCustomDomain;
+
+  constructor(name: string, args: WorkerArgs, opts?: ComponentResourceOptions) {
+    super(__pulumiType, name, args, opts);
+
+    const parent = this;
+
+    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
+    const dev = normalizeDev();
+    const urlEnabled = normalizeUrl();
+    const compatibility = normalizeCompatibility(args);
+    const domain = normalizeDomain();
+
+    const bindings = buildBindings();
+    const iamCredentials = createAwsCredentials();
+    const buildInput = all([
+      name,
+      args.handler,
+      args.build,
+      compatibility,
+    ]).apply(async ([name, handler, build, compatibility]) => {
+      return {
+        functionID: name,
+        links: {},
+        handler,
+        runtime: "worker",
+        properties: {
+          accountID: accountId,
+          build,
+          compatibility,
+        },
+      };
+    });
+    const build = buildHandler();
+    const script = createScript();
+    const workerUrl = createWorkersUrl();
+    const workerPlacement = createWorkerPlacement();
+    const workerDomain = createWorkersDomain();
+    createAliases();
+    createRedirects();
+
+    this.script = script;
+    this.workerUrl = workerUrl;
+    this.workerPlacement = workerPlacement;
+    this.workerDomain = workerDomain;
+
+    all([dev, buildInput, script.scriptName]).apply(
+      async ([dev, buildInput, scriptName]) => {
+        if (!dev) return undefined;
+        await rpc.call("Runtime.AddTarget", {
+          ...buildInput,
+          properties: {
+            ...buildInput.properties,
+            scriptName,
+          },
+        });
+      },
+    );
+    this.registerOutputs({
+      _live: all([name, args.handler, args.build, compatibility, dev]).apply(
+        ([name, handler, build, compatibility, dev]) => {
+          if (!dev) return undefined;
+          return {
+            functionID: name,
+            links: [],
+            handler,
+            runtime: "worker",
+            properties: {
+              accountID: accountId,
+              scriptName: script.scriptName,
+              build,
+              compatibility,
+            },
+          };
+        },
+      ),
+      _metadata: {
+        handler: args.handler,
+      },
+    });
+
+    function normalizeDev() {
+      return output(args.dev).apply((v) => $dev && v !== false);
+    }
+
+    function normalizeUrl() {
+      return output(args.url).apply((v) => v ?? false);
+    }
+
+    function normalizeDomain() {
+      if (!args.domain) return;
+
+      if (
+        typeof args.domain === "object" &&
+        args.domain !== null &&
+        "name" in args.domain
+      ) {
+        return {
+          name: args.domain.name,
+          aliases: args.domain.aliases ?? [],
+          redirects: args.domain.redirects ?? [],
+        };
+      }
+
+      return {
+        name: args.domain,
+        aliases: [],
+        redirects: [],
+      };
+    }
+
+    function buildBindings() {
+      const result = [
+        {
+          type: "plain_text",
+          name: "SST_RESOURCE_App",
+          text: jsonStringify({
+            name: $app.name,
+            stage: $app.stage,
+          }),
+        },
+      ] as cf.types.input.WorkerScriptBinding[];
+      if (!args.link) return result;
+      return output(args.link).apply((links) => {
+        for (let link of links) {
+          if (!Link.isLinkable(link)) continue;
+          const name = output(link.urn).apply((uri) => uri.split("::").at(-1)!);
+          const item = link.getSSTLink();
+          const b = item.include?.find(
+            (i) => i.type === "cloudflare.binding",
+          ) as ReturnType<typeof binding>;
+          result.push(
+            b
+              ? {
+                  type: {
+                    aiBindings: "ai",
+                    plainTextBindings: "plain_text",
+                    secretTextBindings: "secret_text",
+                    queueBindings: "queue",
+                    serviceBindings: "service",
+                    durableObjectNamespaceBindings: "durable_object_namespace",
+                    kvNamespaceBindings: "kv_namespace",
+                    d1DatabaseBindings: "d1",
+                    r2BucketBindings: "r2_bucket",
+                    hyperdriveBindings: "hyperdrive",
+                    versionMetadataBindings: "version_metadata",
+                    workflowBindings: "workflow",
+                    rateLimitBindings: "ratelimit",
+                  }[b.binding],
+                  name,
+                  ...b.properties,
+                }
+              : {
+                  type: "secret_text",
+                  name: output(name).apply((name) => `SST_RESOURCE_${name}`),
+                  text: jsonStringify(item.properties),
+                },
+          );
+        }
+        return result;
+      });
+    }
+
+    function createAwsCredentials() {
+      return output(
+        Link.getInclude<Permission>("aws.permission", args.link),
+      ).apply((permissions) => {
+        if (permissions.length === 0) return;
+
+        const user = new iam.User(
+          `${name}AwsUser`,
+          { forceDestroy: true },
+          { parent },
+        );
+
+        new iam.UserPolicy(
+          `${name}AwsPolicy`,
+          {
+            user: user.name,
+            policy: jsonStringify({
+              Statement: permissions.map((p) => ({
+                Effect: (() => {
+                  const effect = p.effect ?? "allow";
+                  return effect.charAt(0).toUpperCase() + effect.slice(1);
+                })(),
+                Action: p.actions,
+                Resource: p.resources,
+                ...("conditions" in p && p.conditions
+                  ? {
+                      Condition: Object.fromEntries(
+                        p.conditions.map((c) => [
+                          c.test,
+                          { [c.variable]: c.values },
+                        ]),
+                      ),
+                    }
+                  : {}),
+              })),
+            }),
+          },
+          { parent },
+        );
+
+        const keys = new iam.AccessKey(
+          `${name}AwsCredentials`,
+          { user: user.name },
+          { parent },
+        );
+
+        return keys;
+      });
+    }
+
+    function buildHandler() {
+      const buildResult = buildInput.apply(async (input) => {
+        const result = await rpc.call<{
+          handler: string;
+          out: string;
+          errors: string[];
+        }>("Runtime.Build", input);
+        if (result.errors.length > 0) {
+          throw new Error(result.errors.join("\n"));
+        }
+        return result;
+      });
+      return buildResult;
+    }
+
+    function createScript() {
+      // workers.dev URLs fail above 54 chars when previews are enabled
+      const scriptName = prefixName(54, `${name}Script`).toLowerCase();
+      const durableObjectMigrationState = args.migrations
+        ? all([args.migrations, accountId]).apply(
+            async ([migrations, accountId]) => {
+              const latest = migrations.at(-1);
+              if (!latest) {
+                return {
+                  migrationTag: undefined,
+                  migrations: undefined,
+                };
+              }
+
+              let currentTag: string | undefined;
+              try {
+                const published = await cfFetch<
+                  {
+                    id?: string;
+                    migration_tag?: string;
+                  }[]
+                >(`/accounts/${accountId}/workers/scripts`);
+                currentTag = published.result.find(
+                  (script) => script.id === scriptName,
+                )?.migration_tag;
+              } catch (error) {
+                const code =
+                  typeof error === "object" &&
+                  error !== null &&
+                  "errors" in error &&
+                  Array.isArray(error.errors) &&
+                  typeof error.errors[0]?.code === "number"
+                    ? error.errors[0].code
+                    : undefined;
+                // workers.api.error.service_not_found
+                const serviceNotFound = code === 10090;
+                // workers.api.error.environment_not_found
+                const environmentNotFound = code === 10092;
+
+                // Wrangler suppresses these not-found cases when reading the
+                // current migration tag; they mean this is the first deploy for
+                // the script/environment, so there is no remote tag yet.
+                if (!serviceNotFound && !environmentNotFound) {
+                  throw error;
+                }
+              }
+
+              if (currentTag) {
+                const foundIndex = migrations.findIndex(
+                  (migration) => migration.tag === currentTag,
+                );
+
+                if (foundIndex === migrations.length - 1) {
+                  return {
+                    migrationTag: currentTag,
+                    migrations: undefined,
+                  };
+                }
+
+                const pending =
+                  foundIndex === -1
+                    ? migrations
+                    : migrations.slice(foundIndex + 1);
+                const steps = pending.map(({ tag: _tag, ...step }) => step);
+
+                return {
+                  migrationTag: currentTag,
+                  migrations: {
+                    oldTag: currentTag,
+                    newTag: latest.tag,
+                    steps,
+                  },
+                };
+              }
+
+              const steps = migrations.map(({ tag: _tag, ...step }) => step);
+
+              return {
+                migrationTag: "",
+                migrations: {
+                  newTag: latest.tag,
+                  steps,
+                },
+              };
+            },
+          )
+        : undefined;
+      const contentFilePath = build.apply((build) =>
+        path.join(build.out, build.handler),
+      );
+      return new cf.WorkersScript(
+        ...transform(
+          args.transform?.worker as Transform<cf.WorkersScriptArgs>,
+          `${name}Script`,
+          {
+            scriptName,
+            mainModule: "placeholder",
+            accountId,
+            contentFile: contentFilePath,
+            contentSha256: contentFilePath.apply(async (p) =>
+              crypto
+                .createHash("sha256")
+                .update(await fs.readFile(p, "utf-8"))
+                .digest("hex"),
+            ),
+            compatibilityDate: compatibility.apply((value) => value.date),
+            compatibilityFlags: compatibility.apply((value) => value.flags),
+            ...(durableObjectMigrationState
+              ? {
+                  migrations: durableObjectMigrationState.apply(
+                    (state) => state.migrations,
+                  ) as Input<cf.types.input.WorkersScriptMigrations>,
+                  migrationTag: durableObjectMigrationState.apply(
+                    (state) => state.migrationTag,
+                  ) as Input<string>,
+                }
+              : {}),
+            assets: args.assets
+              ? output(args.assets).apply(async (assets) => {
+                  const directory = path.isAbsolute(assets.directory)
+                    ? assets.directory
+                    : path.join($cli.paths.root, assets.directory);
+
+                  let headers;
+                  let redirects;
+                  try {
+                    headers = await fs.readFile(
+                      path.join(directory, "_headers"),
+                      "utf-8",
+                    );
+                  } catch (e) {}
+
+                  try {
+                    redirects = await fs.readFile(
+                      path.join(directory, "_redirects"),
+                      "utf-8",
+                    );
+                  } catch (e) {}
+                  return {
+                    directory,
+                    config: {
+                      headers,
+                      redirects,
+                      htmlHandling: assets.htmlHandling,
+                      notFoundHandling: assets.notFoundHandling,
+                      runWorkerFirst: assets.runWorkerFirst,
+                    },
+                  };
+                })
+              : undefined,
+
+            bindings: all([args.environment, iamCredentials, bindings]).apply(
+              ([environment, iamCredentials, bindings]) => [
+                ...bindings,
+                ...(iamCredentials
+                  ? [
+                      {
+                        type: "plain_text",
+                        name: "AWS_ACCESS_KEY_ID",
+                        text: iamCredentials.id,
+                      },
+                      {
+                        type: "secret_text",
+                        name: "AWS_SECRET_ACCESS_KEY",
+                        text: iamCredentials.secret,
+                      },
+                    ]
+                  : []),
+                ...(args.assets
+                  ? [
+                      {
+                        type: "assets",
+                        name: "ASSETS",
+                      },
+                    ]
+                  : []),
+                ...Object.entries(environment ?? {}).map(([key, value]) => ({
+                  type: "plain_text",
+                  name: key,
+                  text: value,
+                })),
+              ],
+            ),
+          },
+          { parent, ignoreChanges: ["scriptName"] },
+        ),
+      );
+    }
+
+    function createWorkersUrl() {
+      return new WorkerUrl(
+        `${name}Url`,
+        {
+          accountId: accountId,
+          scriptName: script.scriptName,
+          enabled: urlEnabled,
+          etag: script.etag,
+        },
+        { parent },
+      );
+    }
+
+    // workaround: pulumi cloudflare provider marks placement as read-only,
+    // so we use the CF API directly until upstream support lands
+    function createWorkerPlacement() {
+      if (!args.placement) return;
+
+      return new WorkerPlacement(
+        `${name}Placement`,
+        {
+          accountId: accountId,
+          scriptName: script.scriptName,
+          // Reapply placement after each script update. Asset-backed SSR workers
+          // can rewrite script settings and reset placement back to the default.
+          etag: script.etag,
+          ...args.placement,
+        },
+        { parent },
+      );
+    }
+
+    function createWorkersDomain() {
+      if (!domain) return;
+
+      const zone = new ZoneLookup(
+        `${name}ZoneLookup`,
+        {
+          accountId: accountId,
+          domain: domain.name,
+        },
+        { parent },
+      );
+
+      return new cf.WorkersCustomDomain(
+        `${name}Domain`,
+        {
+          accountId: accountId,
+          service: script.scriptName,
+          hostname: domain.name,
+          zoneId: zone.id,
+          environment: "production",
+        },
+        { parent },
+      );
+    }
+
+    function createAliases() {
+      if (!domain) return;
+
+      for (const [i, hostname] of domain.aliases.entries()) {
+        const zone = new ZoneLookup(
+          `${name}Alias${i}ZoneLookup`,
+          {
+            accountId,
+            domain: hostname,
+          },
+          { parent },
+        );
+
+        new cf.WorkersCustomDomain(
+          `${name}Alias${i}Domain`,
+          {
+            accountId,
+            service: script.scriptName,
+            hostname,
+            zoneId: zone.id,
+            environment: "production",
+          },
+          { parent },
+        );
+      }
+    }
+
+    function createRedirects() {
+      if (!domain) return;
+
+      for (const [i, hostname] of domain.redirects.entries()) {
+        const resourceName = `${name}Redirect${i}`;
+        const zone = new ZoneLookup(
+          `${resourceName}ZoneLookup`,
+          {
+            accountId,
+            domain: hostname,
+          },
+          { parent },
+        );
+
+        new cf.DnsRecord(
+          `${resourceName}Record`,
+          {
+            zoneId: zone.id,
+            name: hostname,
+            type: "AAAA",
+            content: "100::",
+            proxied: true,
+            ttl: 1,
+          },
+          { parent },
+        );
+
+        new cf.PageRule(
+          `${resourceName}Rule`,
+          {
+            zoneId: zone.id,
+            target: interpolate`${hostname}/*`,
+            priority: i + 1,
+            status: "active",
+            actions: {
+              forwardingUrl: {
+                statusCode: 301,
+                url: output(domain.name).apply(
+                  (domainName) => `https://${domainName}/$1`,
+                ),
+              },
+            },
+          },
+          { parent },
+        );
+      }
+    }
+  }
+
+  /**
+   * The Worker URL if `url` is enabled.
+   */
+  public get url() {
+    return this.workerDomain
+      ? interpolate`https://${this.workerDomain.hostname}`
+      : this.workerUrl.url.apply((url) => (url ? `https://${url}` : url));
+  }
+
+  /**
+   * The underlying [resources](/docs/components/#nodes) this component creates.
+   */
+  public get nodes() {
+    return {
+      /**
+       * The Cloudflare Worker script.
+       */
+      worker: this.script,
+    };
+  }
+
+  /**
+   * When you link a worker, say WorkerA, to another worker, WorkerB; it automatically creates
+   * a service binding between the workers. It allows WorkerA to call WorkerB without going
+   * through a publicly-accessible URL.
+   *
+   * @example
+   * ```ts title="index.ts" {3}
+   * import { Resource } from "sst";
+   *
+   * await Resource.WorkerB.fetch(request);
+   * ```
+   *
+   * Read more about [binding Workers](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/).
+   *
+   * @internal
+   */
+  getSSTLink() {
+    return {
+      properties: {
+        url: this.url,
+      },
+      include: [
+        binding({
+          type: "serviceBindings",
+          properties: {
+            service: this.script.id,
+          },
+        }),
+      ],
+    };
+  }
+}
+
+const __pulumiType = "sst:cloudflare:Worker";
+// @ts-expect-error
+Worker.__pulumiType = __pulumiType;

@@ -35,17 +35,17 @@ const pulumi = mockPulumi({
 });
 
 type OpenSearchClass =
-  | typeof import("../../../src/components/aws/open-search").OpenSearch
-  | typeof import("../../../src/components/aws/v5/open-search").OpenSearch;
+  | typeof import("../../fixtures/v4/components/aws/open-search").OpenSearch
+  | typeof import("../../../src/components/aws/open-search").OpenSearch;
 
 describe("OpenSearch", () => {
-  let Original: typeof import("../../../src/components/aws/open-search").OpenSearch;
-  let OpenSearch: typeof import("../../../src/components/aws/v5/open-search").OpenSearch;
+  let Original: typeof import("../../fixtures/v4/components/aws/open-search").OpenSearch;
+  let OpenSearch: typeof import("../../../src/components/aws/open-search").OpenSearch;
 
   beforeAll(async () => {
-    Original = (await import("../../../src/components/aws/open-search"))
+    Original = (await import("../../fixtures/v4/components/aws/open-search"))
       .OpenSearch;
-    OpenSearch = (await import("../../../src/components/aws/v5/open-search"))
+    OpenSearch = (await import("../../../src/components/aws/open-search"))
       .OpenSearch;
     await import("../../../src/components/aws/takeover/index");
   });

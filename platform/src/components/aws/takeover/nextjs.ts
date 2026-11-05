@@ -1,5 +1,5 @@
 import { takeover } from "../../takeover";
-import { Nextjs } from "../v5/nextjs";
+import { Nextjs } from "../nextjs";
 import { ssrSiteTakeover } from "./ssr-site";
 
 const site = ssrSiteTakeover("Nextjs", "when the site is built");

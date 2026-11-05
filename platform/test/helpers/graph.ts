@@ -9,6 +9,73 @@ import { adoptable, deployedIn, stateGraph } from "../../src/testing/state";
 
 export type { RecordedResource };
 
+/**
+ * Which side of a takeover case is being created: SST 4's component, from the
+ * fixtures, or SST 5's. A case's helpers give what they create to the same
+ * side, like the `Vpc` a `Service` is put in, as SST 5's components take only
+ * SST 5's.
+ */
+let creating: "original" | "v5" = "v5";
+// The types of what a case's component is given from `sided()`: each moves in
+// its own suite, so what's in them isn't compared here
+const alongside = new Set<string>();
+// The types a resource is in, outermost first, and its own
+const typesOf = (r: RecordedResource) => [
+  ...(r.parent ? r.parent.split("::")[2].split("$") : []),
+  r.type,
+];
+export function side() {
+  return creating;
+}
+
+/**
+ * `sided()` for a class from its module on each side, with the takeover of
+ * SST 5's loaded, so it moves as it would in an app.
+ */
+export async function sidedClass(
+  name: string,
+  original: Promise<any>,
+  v5: Promise<any>,
+  takeover?: Promise<unknown>,
+) {
+  const [a, b] = await Promise.all([original, v5, takeover]);
+  return sided(
+    () => a[name],
+    () => b[name],
+  );
+}
+
+/** Say which side is being created, for a test that creates both itself. */
+export function setSide(next: "original" | "v5") {
+  creating = next;
+}
+
+/**
+ * A class that's SST 4's or SST 5's by the side being created: `new`, a
+ * static method and `instanceof` reach the one for that side. For what a
+ * case's component is given, like `new Vpc("MyVpc")` for a `Service`.
+ */
+export function sided(original: () => any, v5: () => any): any {
+  const now = () => {
+    const chosen = creating === "original" ? original() : v5();
+    if (chosen?.__pulumiType) alongside.add(chosen.__pulumiType);
+    return chosen;
+  };
+  // The class's own `new.target`, as the component finds its version by it
+  const proxy: any = new Proxy(function () {}, {
+    construct: (_, args, newTarget) => {
+      const cls = now();
+      return Reflect.construct(
+        cls,
+        args,
+        newTarget === proxy ? cls : newTarget,
+      );
+    },
+    get: (_, key) => now()[key],
+  });
+  return proxy;
+}
+
 /** The ways a takeover case is run. */
 export type TakeoverWay =
   | "as it is"
@@ -248,6 +315,11 @@ export function mockPulumi(input?: MockInput) {
 
   return {
     ...engine,
+    /** A test starts on SST 5's side, as one that creates nothing of SST 4's. */
+    reset() {
+      creating = "v5";
+      engine.reset();
+    },
     /**
      * Runs what replaces a deployed graph as the stage moves, as the
      * takeover tests do, so each part tells the core what it releases.
@@ -278,6 +350,7 @@ export function mockPulumi(input?: MockInput) {
     ) {
       if (!input?.recorded) throw new Error("The mock has no recorded state");
       await newRun();
+      creating = "original";
       original();
       await engine.settle();
       const before = deployed(engine.graph());
@@ -288,6 +361,7 @@ export function mockPulumi(input?: MockInput) {
 
       await newRun();
       await asMove(before, async () => {
+        creating = "v5";
         v5();
         await engine.settle();
       });
@@ -302,6 +376,7 @@ export function mockPulumi(input?: MockInput) {
      */
     async takesOver(original: () => unknown, v5: () => unknown) {
       await newRun();
+      creating = "original";
       original();
       await engine.settle();
       const before = deployed(engine.graph());
@@ -309,6 +384,7 @@ export function mockPulumi(input?: MockInput) {
 
       await newRun();
       await asMove(before, async () => {
+        creating = "v5";
         v5();
         await engine.settle();
       });
@@ -384,6 +460,7 @@ export function mockPulumi(input?: MockInput) {
                 strict: boolean,
               ) => {
                 await newRun();
+                creating = Component === suite.original() ? "original" : "v5";
                 // A case may be async, to import what it creates
                 if (written) await written(opts());
                 else if (test.create) await test.create(Component, opts());
@@ -401,13 +478,37 @@ export function mockPulumi(input?: MockInput) {
                   );
               };
 
+              alongside.clear();
               await deploy(suite.original(), test.original, false);
               const before = deployed(mock.graph());
               if (before.length === 0)
                 throw new Error("The original created nothing");
 
               await asMove(before, () => deploy(suite.v5(), test.v5, true));
-              const result = mock.takeover(before);
+              const own = new Set(
+                [suite.original(), suite.v5()].map((c: any) => c.__pulumiType),
+              );
+              const alongsideNames = new Set(
+                before
+                  .filter((r) =>
+                    typesOf(r).some((t) => alongside.has(t) && !own.has(t)),
+                  )
+                  .map((r) => r.name),
+              );
+              const compared = mock.takeover(before);
+              const result = {
+                ...compared,
+                unclaimed: compared.unclaimed.filter(
+                  (r) =>
+                    !alongsideNames.has(r.substring(r.lastIndexOf("::") + 2)),
+                ),
+                changed: compared.changed.filter(
+                  (c) => !alongsideNames.has(c.name),
+                ),
+                unordered: compared.unordered.filter(
+                  (order) => !alongsideNames.has(order.split(" before ")[0]),
+                ),
+              };
               const wrappers = expected(test.wrappers);
               const isWrapper = (r: string) =>
                 wrappers !== undefined && (input?.wrappers?.test(r) ?? false);

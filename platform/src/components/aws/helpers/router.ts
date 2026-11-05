@@ -2,14 +2,10 @@ import { Input, Output, all, output } from "@pulumi/pulumi";
 import { DurationSeconds } from "../../duration";
 import { plain } from "../../args";
 import { VisibleError } from "../../error";
-import type { Router as OriginalRouter } from "../router";
-import type { Router } from "../v5/router";
-import { type ProtectionConfig, isSigning } from "../router-code";
+import type { Router } from "../router";
 
-/**
- * A `Router` component: the 4.x one or the V5 one.
- */
-export type AnyRouter = OriginalRouter | Router;
+/** A `Router` component. */
+export type AnyRouter = Router;
 
 /**
  * How a site is served through a router: which router, and the domain and path
@@ -26,7 +22,7 @@ export interface SiteRouteArgs {
    * Let's say you have a Router component.
    *
    * ```ts title="sst.config.ts"
-   * const router = new sst.aws.v5.Router("MyRouter", {
+   * const router = new sst.aws.Router("MyRouter", {
    *   domain: "example.com"
    * });
    * ```
@@ -50,7 +46,7 @@ export interface SiteRouteArgs {
    * domain or a wildcard.
    *
    * ```ts {2} title="sst.config.ts"
-   * const router = new sst.aws.v5.Router("MyRouter", {
+   * const router = new sst.aws.Router("MyRouter", {
    *   domain: "*.example.com"
    * });
    * ```
@@ -196,10 +192,9 @@ export interface RouteArgs extends SiteRouteArgs {
  * its requests to the component (`signs`). The router has to be a plain
  * value.
  *
- * A V5 `Router` says whether it signs as a plain value, from its settings, so
- * what depends on it can be created directly. A 4.x one, or one referenced
- * with `get`, says it as an output: from its settings, or a tag that's looked
- * up, which a preview knows either way.
+ * A `Router` says whether it signs as a plain value, from its settings, so
+ * what depends on it can be created directly, or as an output when it's
+ * referenced with `get`: from a tag that's looked up, which a preview knows.
  *
  * @param what The route's `instance`, as the start of the error message when
  * it isn't a plain value: `The "router.instance" of the "Web" Astro site`.
@@ -207,10 +202,7 @@ export interface RouteArgs extends SiteRouteArgs {
 export function routeOf(route: RouteArgs, what = `The router's "instance"`) {
   const { instance, ...rest } = route;
   const router = plain(instance, what);
-  const signs: boolean | Output<boolean> =
-    "_signs" in router
-      ? router._signs
-      : router._protection.apply((p: ProtectionConfig) => isSigning(p.mode));
+  const signs: boolean | Output<boolean> = router._signs;
   return {
     /** The path it's served under, like `/docs`, without what the router gives. */
     pathPrefix: output(rest.path).apply(pathPrefixOf),

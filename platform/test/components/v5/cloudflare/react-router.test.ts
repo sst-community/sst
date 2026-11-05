@@ -15,11 +15,10 @@ ssrSiteSuite(
     label: "React Router",
     load: async () => ({
       original: (
-        await import("../../../../src/components/cloudflare/react-router")
+        await import("../../../fixtures/v4/components/cloudflare/react-router")
       ).ReactRouter as any,
-      v5: (
-        await import("../../../../src/components/cloudflare/v5/react-router")
-      ).ReactRouter as any,
+      v5: (await import("../../../../src/components/cloudflare/react-router"))
+        .ReactRouter as any,
     }),
     write: (dir) => {
       write(dir, "package.json", JSON.stringify({ name: "web" }));

@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
 const STATE_MACHINE = "aws:sfn/stateMachine:StateMachine";
@@ -15,46 +15,63 @@ const pulumi = mockPulumi({
 });
 
 type Module =
-  | typeof import("../../../src/components/aws/step-functions")
-  | typeof import("../../../src/components/aws/v5/step-functions");
+  | typeof import("../../fixtures/v4/components/aws/step-functions")
+  | typeof import("../../../src/components/aws/step-functions");
 type SfnClass = Module["StepFunctions"];
 
 describe("StepFunctions", () => {
-  let Original: typeof import("../../../src/components/aws/step-functions").StepFunctions;
-  let StepFunctions: typeof import("../../../src/components/aws/v5/step-functions").StepFunctions;
-  let OriginalFunction: typeof import("../../../src/components/aws/function").Function;
-  let Function: typeof import("../../../src/components/aws/v5/function").Function;
-  let OriginalQueue: typeof import("../../../src/components/aws/queue").Queue;
-  let Queue: typeof import("../../../src/components/aws/v5/queue").Queue;
-  let OriginalTopic: typeof import("../../../src/components/aws/sns-topic").SnsTopic;
-  let SnsTopic: typeof import("../../../src/components/aws/v5/sns-topic").SnsTopic;
-  let OriginalBus: typeof import("../../../src/components/aws/bus").Bus;
-  let Bus: typeof import("../../../src/components/aws/v5/bus").Bus;
-  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let Cluster: typeof import("../../../src/components/aws/cluster").Cluster;
-  let OriginalTask: typeof import("../../../src/components/aws/task").Task;
+  let Original: typeof import("../../fixtures/v4/components/aws/step-functions").StepFunctions;
+  let StepFunctions: typeof import("../../../src/components/aws/step-functions").StepFunctions;
+  let OriginalFunction: typeof import("../../fixtures/v4/components/aws/function").Function;
+  let Function: typeof import("../../../src/components/aws/function").Function;
+  let OriginalQueue: typeof import("../../fixtures/v4/components/aws/queue").Queue;
+  let Queue: typeof import("../../../src/components/aws/queue").Queue;
+  let OriginalTopic: typeof import("../../fixtures/v4/components/aws/sns-topic").SnsTopic;
+  let SnsTopic: typeof import("../../../src/components/aws/sns-topic").SnsTopic;
+  let OriginalBus: typeof import("../../fixtures/v4/components/aws/bus").Bus;
+  let Bus: typeof import("../../../src/components/aws/bus").Bus;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let Vpc: any;
+  let Cluster: any;
+  let OriginalTask: typeof import("../../fixtures/v4/components/aws/task").Task;
+  let SidedTask: any;
 
   beforeAll(async () => {
-    Original = (await import("../../../src/components/aws/step-functions"))
+    Original = (await import("../../fixtures/v4/components/aws/step-functions"))
       .StepFunctions;
-    StepFunctions = (
-      await import("../../../src/components/aws/v5/step-functions")
-    ).StepFunctions;
-    OriginalFunction = (await import("../../../src/components/aws/function"))
-      .Function;
-    Function = (await import("../../../src/components/aws/v5/function"))
-      .Function;
-    OriginalQueue = (await import("../../../src/components/aws/queue")).Queue;
-    Queue = (await import("../../../src/components/aws/v5/queue")).Queue;
-    OriginalTopic = (await import("../../../src/components/aws/sns-topic"))
+    StepFunctions = (await import("../../../src/components/aws/step-functions"))
+      .StepFunctions;
+    OriginalFunction = (
+      await import("../../fixtures/v4/components/aws/function")
+    ).Function;
+    Function = (await import("../../../src/components/aws/function")).Function;
+    OriginalQueue = (await import("../../fixtures/v4/components/aws/queue"))
+      .Queue;
+    Queue = (await import("../../../src/components/aws/queue")).Queue;
+    OriginalTopic = (await import("../../fixtures/v4/components/aws/sns-topic"))
       .SnsTopic;
-    SnsTopic = (await import("../../../src/components/aws/v5/sns-topic"))
-      .SnsTopic;
-    OriginalBus = (await import("../../../src/components/aws/bus")).Bus;
-    Bus = (await import("../../../src/components/aws/v5/bus")).Bus;
-    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    Cluster = (await import("../../../src/components/aws/cluster")).Cluster;
-    OriginalTask = (await import("../../../src/components/aws/task")).Task;
+    SnsTopic = (await import("../../../src/components/aws/sns-topic")).SnsTopic;
+    OriginalBus = (await import("../../fixtures/v4/components/aws/bus")).Bus;
+    Bus = (await import("../../../src/components/aws/bus")).Bus;
+    Vpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
+    );
+    Cluster = await sidedClass(
+      "Cluster",
+      import("../../fixtures/v4/components/aws/cluster"),
+      import("../../../src/components/aws/cluster"),
+      import("../../../src/components/aws/takeover/cluster"),
+    );
+    OriginalTask = (await import("../../fixtures/v4/components/aws/task")).Task;
+    SidedTask = await sidedClass(
+      "Task",
+      import("../../fixtures/v4/components/aws/task"),
+      import("../../../src/components/aws/task"),
+      import("../../../src/components/aws/takeover/task"),
+    );
     await import("../../../src/components/aws/takeover/index");
   });
 
@@ -241,7 +258,7 @@ describe("StepFunctions", () => {
           },
         },
         "running an ECS task, with its environment": (S, opts) => {
-          const task = new OriginalTask("MyTask", {
+          const task = new SidedTask("MyTask", {
             cluster: new Cluster("MyCluster", { vpc: new Vpc("MyVpc") }),
             image: "nginx:latest",
           });
@@ -432,7 +449,7 @@ describe("StepFunctions", () => {
   });
 
   it("runs a V5 task", async () => {
-    const { Task } = await import("../../../src/components/aws/v5/task");
+    const { Task } = await import("../../../src/components/aws/task");
     const task = new Task("MyTask", {
       cluster: new Cluster("MyCluster", { vpc: new Vpc("MyVpc") }),
       image: "nginx:latest",
@@ -451,8 +468,8 @@ describe("StepFunctions", () => {
     expect(policy).toContain("iam:PassRole");
   });
 
-  it("invokes a 4.x Function, and one given as an output", async () => {
-    const fn = new OriginalFunction("Old", { handler: "src/old.handler" });
+  it("invokes a Function, and one given as an output", async () => {
+    const fn = new Function("Mine", { handler: "src/mine.handler" });
     const a = StepFunctions.lambdaInvoke({ name: "A", function: fn });
     const b = StepFunctions.lambdaInvoke({ name: "B", function: output(fn) });
     new StepFunctions("MyMachine", { definition: a.next(b) });
@@ -460,7 +477,7 @@ describe("StepFunctions", () => {
     expect(names()).not.toContain("AFunction");
     expect(names()).not.toContain("BFunction");
     const definition = await definitionOf("MyMachine");
-    expect(definition.States.A.Arguments.FunctionName).toMatch(/Old/);
-    expect(definition.States.B.Arguments.FunctionName).toMatch(/Old/);
+    expect(definition.States.A.Arguments.FunctionName).toMatch(/Mine/);
+    expect(definition.States.B.Arguments.FunctionName).toMatch(/Mine/);
   });
 });

@@ -1,40 +1,31 @@
-import { all, ComponentResourceOptions, Output } from "@pulumi/pulumi";
+import { type ComponentResourceOptions, output } from "@pulumi/pulumi";
 import * as cf from "@pulumi/cloudflare";
-import * as cloudflare from "@pulumi/cloudflare";
-import { Component, Transform, transform } from "../component";
-import { WorkerArgs } from "./worker";
-import { DEFAULT_ACCOUNT_ID } from "./account-id.js";
-import { Input } from "../input.js";
-import { WorkerBuilder, workerBuilder } from "./helpers/worker-builder";
-import { VisibleError } from "../error";
+import { type ComponentArgs, component, named } from "../parts-component";
+import type { Input } from "../input";
+import { notAnExistingPart, notAnOption } from "../args";
+import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { workerArgsOf } from "./helpers/worker-part";
+import { Worker, type WorkerArgs } from "./worker";
 
-export interface CronArgs {
+const parts = () => ({
   /**
-   * The worker that'll be executed when the cron job runs.
-   * @deprecated Use `worker` instead.
-   *
-   * @example
-   *
-   * ```ts
-   * {
-   *   job: "src/cron.ts"
-   * }
-   * ```
-   *
-   * You can pass in the full worker props.
-   *
-   * ```ts
-   * {
-   *   job: {
-   *     handler: "src/cron.ts",
-   *     link: [bucket]
-   *   }
-   * }
-   * ```
+   * The Worker that runs on the schedules. Its script is named after it,
+   * `MyCronJobHandlerScript`.
    */
-  job?: Input<string | WorkerArgs>;
+  worker: named(Worker, "Handler"),
   /**
-   * The worker that'll be executed when the cron job runs.
+   * The Cloudflare Worker Cron Trigger that runs the Worker on the schedules.
+   */
+  trigger: cf.WorkersCronTrigger,
+});
+
+export interface CronArgs extends ComponentArgs<typeof parts> {
+  /**
+   * The worker that'll be executed when the cron job runs: the path to its
+   * handler, or the Worker's args.
+   *
+   * It decides how the Worker is created, so it's a plain value, not an
+   * output. What's in the Worker's args can be an output.
    *
    * @example
    *
@@ -55,7 +46,7 @@ export interface CronArgs {
    * }
    * ```
    */
-  worker?: Input<string | WorkerArgs>;
+  worker: string | WorkerArgs;
   /**
    * The schedule for the cron job.
    *
@@ -86,16 +77,6 @@ export interface CronArgs {
    * @internal
    */
   accountId?: Input<string>;
-  /**
-   * [Transform](/docs/components/#transform) how this component creates its underlying
-   * resources.
-   */
-  transform?: {
-    /**
-     * Transform the Worker Cron Trigger resource.
-     */
-    trigger?: Transform<cloudflare.WorkerCronTriggerArgs>;
-  };
 }
 
 /**
@@ -135,73 +116,63 @@ export interface CronArgs {
  *   }
  * });
  * ```
+ *
+ * #### Switch from SST 4's `sst.cloudflare.Cron`
+ *
+ * Keep the name, and `sst migrate` moves it.
+ * The Worker and the trigger are kept.
+ *
+ * - `job`, which SST 4 deprecated, is refused: use `worker`.
+ * - `worker` is a plain value, not an output: whether it's a handler or the
+ *   Worker's args decides how the Worker is created. Inside the args, `link`
+ *   and `domain` are plain values too, as
+ *   [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker) takes
+ *   them, and what else is in them can be an output.
+ * - The Worker is [`sst.cloudflare.Worker`](/docs/component/cloudflare/v5/worker),
+ *   inside the cron job, where SST 4 created it at the top of your app. It
+ *   keeps its name. You can change it in `transform.worker` now.
+ * - `nodes.worker` is the Worker component, where it was the Worker's script:
+ *   the script is `nodes.worker.nodes.worker`. `nodes.trigger` is the trigger,
+ *   where it was an output of it.
+ * - The trigger is created directly, where SST 4 created it once `schedules`
+ *   was known. So a function in `transform.trigger` is given its `schedules`
+ *   as an output, where SST 4 gave it a plain array.
+ * - The Worker is created with the provider the cron job has. SST 4 created
+ *   it with your app's provider, whatever the cron job had, so if your cron
+ *   job has a `provider`, or takes one from a parent component or from
+ *   `providers`, the switch gives its Worker that provider and keeps it.
  */
-export class Cron extends Component {
-  private worker: WorkerBuilder;
-  private trigger: Output<cf.WorkerCronTrigger>;
-
+export class Cron extends component("sst:cloudflare:Cron", parts) {
   constructor(name: string, args: CronArgs, opts?: ComponentResourceOptions) {
-    super(__pulumiType, name, args, opts);
+    super(name, args, opts);
 
-    const parent = this;
+    const owner = `the "${name}" cron job`;
+    notAnOption(args, "job", `Use "worker": "job" was its old name.`, owner);
+    notAnExistingPart(
+      args.existing,
+      "worker",
+      owner,
+      `Pass the handler or the Worker's args in "worker": the cron job creates the Worker it runs.`,
+    );
+    notAnExistingPart(
+      args.existing,
+      "trigger",
+      owner,
+      `The trigger is the cron job's own: set when it runs with "schedules".`,
+    );
 
-    const workerArgs = normalizeWorker();
-    const worker = createWorker();
-    const trigger = createTrigger();
-    this.worker = worker;
-    this.trigger = trigger;
+    const worker = workerArgsOf(args.worker, `"worker"`, owner);
 
-    function normalizeWorker() {
-      if (args.job && args.worker)
-        throw new VisibleError(
-          `You cannot provide both "job" and "worker" in the "${name}" Cron component. The "job" property has been deprecated. Use "worker" instead.`,
-        );
-      return args.worker ?? args.job;
-    }
-
-    function createWorker() {
-      if (!workerArgs)
-        throw new VisibleError(
-          `You must provide a "worker" for the "${name}" Cron component.`,
-        );
-      return workerBuilder(`${name}Handler`, workerArgs, undefined, undefined, args.accountId);
-    }
-
-    function createTrigger() {
-      return all([args.schedules]).apply(([schedules]) => {
-        return new cloudflare.WorkersCronTrigger(
-          ...transform(
-            args.transform?.trigger,
-            `${name}Trigger`,
-            {
-              accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
-              scriptName: worker.script.scriptName,
-              schedules: schedules.map((s) => ({ cron: s })),
-            },
-            { parent },
-          ),
-        );
-      });
-    }
-  }
-
-  /**
-   * The underlying [resources](/docs/components/#nodes) this component creates.
-   */
-  public get nodes() {
-    return {
-      /**
-       * The Cloudflare Worker.
-       */
-      worker: this.worker.script,
-      /**
-       * The Cloudflare Worker Cron Trigger.
-       */
-      trigger: this.trigger,
-    };
+    const script = this.part("worker", {
+      accountId: args.accountId,
+      ...worker,
+    }).nodes.worker;
+    this.part("trigger", {
+      accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
+      scriptName: script.scriptName,
+      schedules: output(args.schedules).apply((schedules) =>
+        schedules.map((cron) => ({ cron })),
+      ),
+    });
   }
 }
-
-const __pulumiType = "sst:cloudflare:Cron";
-// @ts-expect-error
-Cron.__pulumiType = __pulumiType;

@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output, type Output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../helpers/graph";
 import { SECRET, SIG } from "../../../src/testing/state";
-import type { VpcArgs } from "../../../src/components/aws/v5/vpc";
+import type { VpcArgs } from "../../../src/components/aws/vpc";
 
 const INSTANCE = "aws:ec2/instance:Instance";
 const NAT_GATEWAY = "aws:ec2/natGateway:NatGateway";
@@ -113,12 +113,12 @@ const pulumi = mockPulumi({
 });
 
 describe("Vpc", () => {
-  let OriginalVpc: typeof import("../../../src/components/aws/vpc").Vpc;
-  let Vpc: typeof import("../../../src/components/aws/v5/vpc").Vpc;
+  let OriginalVpc: typeof import("../../fixtures/v4/components/aws/vpc").Vpc;
+  let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
 
   beforeAll(async () => {
-    OriginalVpc = (await import("../../../src/components/aws/vpc")).Vpc;
-    Vpc = (await import("../../../src/components/aws/v5/vpc")).Vpc;
+    OriginalVpc = (await import("../../fixtures/v4/components/aws/vpc")).Vpc;
+    Vpc = (await import("../../../src/components/aws/vpc")).Vpc;
     await import("../../../src/components/aws/takeover/vpc");
   });
 
@@ -691,16 +691,10 @@ describe("Vpc", () => {
 
   describe("is taken by the V5 components that take a VPC", () => {
     it("as the 4.x one is", async () => {
-      const { Cluster } = await import(
-        "../../../src/components/aws/v5/cluster"
-      );
-      const { Service } = await import(
-        "../../../src/components/aws/v5/service"
-      );
-      const { Efs } = await import("../../../src/components/aws/v5/efs");
-      const { Function } = await import(
-        "../../../src/components/aws/v5/function"
-      );
+      const { Cluster } = await import("../../../src/components/aws/cluster");
+      const { Service } = await import("../../../src/components/aws/service");
+      const { Efs } = await import("../../../src/components/aws/efs");
+      const { Function } = await import("../../../src/components/aws/function");
       const vpc = new Vpc("MyVpc", { nat: "managed" });
       const cluster = new Cluster("MyCluster", { vpc });
       new Service("MyService", { cluster, image: "nginx" });
@@ -726,7 +720,7 @@ describe("Vpc", () => {
 
     it("and an API's VPC link is in the public subnets", async () => {
       const { ApiGatewayHttp } = await import(
-        "../../../src/components/aws/v5/apigateway-http"
+        "../../../src/components/aws/apigateway-http"
       );
       const vpc = new Vpc("MyVpc");
       new ApiGatewayHttp("MyApi", { vpc });
@@ -738,9 +732,7 @@ describe("Vpc", () => {
     });
 
     it("from another stage, with what it looked up", async () => {
-      const { Function } = await import(
-        "../../../src/components/aws/v5/function"
-      );
+      const { Function } = await import("../../../src/components/aws/function");
       const vpc = Vpc.get("MyVpc", SHARED);
       new Function("MyFunction", { handler: "src/index.handler", vpc });
       await pulumi.settle();

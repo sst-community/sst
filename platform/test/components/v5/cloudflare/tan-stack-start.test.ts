@@ -18,10 +18,12 @@ ssrSiteSuite(
     label: "TanStack Start",
     load: async () => ({
       original: (
-        await import("../../../../src/components/cloudflare/tan-stack-start")
+        await import(
+          "../../../fixtures/v4/components/cloudflare/tan-stack-start"
+        )
       ).TanStackStart as any,
       v5: (
-        await import("../../../../src/components/cloudflare/v5/tan-stack-start")
+        await import("../../../../src/components/cloudflare/tan-stack-start")
       ).TanStackStart as any,
     }),
     write: (dir) => {
