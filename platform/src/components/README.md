@@ -144,11 +144,11 @@ the component reads its args.
     part is listed by id as it's created; when the ids are known before, like a site's
     regions, name them with `this.willCreate(key, ids)` so `nodes` has them from the
     start.
-  - A failure the user should read is a `VisibleError`. Its message is shown once and as
-    it's written, however many resources wait on what failed. It names the component
-    the way the rest do, `the "${name}" queue`, with the kind in lower case and args in
-    double quotes, so an app with several knows which one failed. An option that's
-    refused goes through `notAnOption(args, option, instead, owner)`.
+  - A failure the user should read is a `VisibleError`, from `sst/components`. Its
+    message is shown once and as it's written, however many resources wait on what
+    failed. It names the component the way the rest do, `the "${name}" queue`, with the
+    kind in lower case and args in double quotes, so an app with several knows which
+    one failed. An option that's refused says what to write instead.
   - A list another component counts, like a `Vpc`'s subnets, is a list of known length
     with an output in each place, not one output of a list.
   - Some of SST's components still create parts inside `.apply()` with `optional`,
@@ -197,23 +197,20 @@ the component reads its args.
 - **A part the user can switch off gets its own arg** (`publicAccessBlock: false`).
   `transform` changes a part; it doesn't remove one.
 - **For a resource the user already has, use `existing`**, not an arg of your own.
-  A static `get` is one line: `return new Uploads(name, getArgs({ existing: { bucket: id } }), opts)`.
+  A static `get` is one line: `return new Uploads(name, { existing: { bucket: id } }, opts)`.
   When the component has required args, return before reading them:
   `if (this.existingPart("table")) return;`. `get` then passes only `existing`, with a
-  cast to the args type. Args that would configure the resource are refused next to it,
-  with `usedAsItIs(args, keys, "table", owner)`: it's used the way it is, and they'd be
-  dropped without a word. So is an `existing` entry the component wouldn't use, with
-  `notAnExistingPart(args.existing, key, owner, instead)` or `onlyExisting()`. `getArgs()`
-  marks what `get` passes, which a `$transform` for the component runs on too: what it
-  adds there isn't refused.
+  cast to the args type. Refuse args that would configure a resource given in
+  `existing`: it's used the way it is, and they'd be dropped without a word. Refuse an
+  `existing` entry the component wouldn't use, too.
 - **A check that needs a deployed value** goes in the output that everything depending
   on it reads, so the error stops what would have used it. The `Dynamo` checks that
   the table's stream is enabled inside the stream ARN its subscribers are given, and
   the `Service` checks that an `Alb` is in the cluster's VPC inside the VPC id its
   target groups are given.
 - **An arg a resource is named after is plain all the way down.** A rule of a service's
-  load balancer is: its listener rule is named after its conditions. Check it with
-  `plainDeep(value, what)`.
+  load balancer is: its listener rule is named after its conditions. Refuse an output
+  anywhere inside it, and say which arg it was.
 
 ## Linking, dev mode, naming
 

@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-05: step 5, the API reports
+
+What a package builds on, reported for each entry point, as [goal 8](goals.md#8-what-a-package-builds-on-holds-still-within-5x) asks, now that the swap has made the names final ([decision](plan.md#decisions)).
+
+- **A report for each of the five entry points** in `platform/api/`: `sst/components`, `sst/components/aws`, `sst/components/cloudflare`, `sst/components/vercel` and `sst/testing`, which is promised too now ([decision](plan.md#decisions)). They're made by API Extractor 7.59.4, a month old (7.60 is less than two weeks old), from the platform's types, about 7,700 lines in all.
+- **`bun run api` in `platform/`** builds the types and checks the reports, and fails on a change they don't have, naming the entry point and what to run; `bun run api:update` writes them. `check.yml` runs the check after the platform's build. The types' build moved out of `scripts/build` into `scripts/build-types`, which both run, and which `CODEOWNERS` lists beside it.
+- **A type a package can't import is in the report too** (`includeForgottenExports`), so a change to a component's parts, or to a helper's args like `FunctionInput`, shows. Without it, a report has `ComponentArgs<typeof parts_5>` and no parts. API Extractor's warning on each of them, 345, is left out; so are its warnings on release tags, on `@internal` names without an underscore, on `{@link}`s meant for the docs site, and on what has no doc comment.
+- **`VisibleError` is exported from `sst/components`** ([decision](plan.md#decisions)). The components' README told an author to use it and six of the helpers in `args.ts`, none of which could be imported. It now says what to refuse, and `CONTRIBUTING.md` names SST's helpers.
+- **`MAINTAINING.md` has "The public API (v5)"**: what holds still, how to update a report, what a report's diff means, and that a renumbered name is a rename in the report, not a change. `CONTRIBUTING.md` says a change to the exports updates the reports.
+
+**Checked:** the check passes on the reports it wrote, twice; with a getter added to `Queue`, it fails and names `sst/components/aws`. `tsc`; the platform's suite; the Go tests; the docs generator; the template package against `sst` packed from this tree.
+
 ## 2026-11-05: step 5, the swap: SST 5's components take SST 4's places
 
 The first part of [the swap](plan.md#5-moving-an-app): the files move, and what reaches SST 4's components from SST 5's code goes.

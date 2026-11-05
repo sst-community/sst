@@ -5,6 +5,7 @@
 
 export * from "./secret";
 export * from "./linkable";
+export { VisibleError } from "./error";
 export { takeover, type Takeover, type OldAddress } from "./takeover";
 export { Component, type NamingRule, type Transform } from "./component";
 export { runtime, type Runtime, type RuntimeSettings } from "./runtime";

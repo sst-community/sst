@@ -29,6 +29,15 @@ tests. It's written for AWS; for Cloudflare, read `cloudflare/` for `aws/` and
   creates: it's what SST 4 deployed. In prose, say "SST 4's `Queue`"; in what the docs
   are generated from, name SST 4's only in the "Switch from" section.
 - **A component owns its args.** It builds on no type of SST 4's, docs included.
+- **What a component refuses, SST's say with the helpers in `args.ts`.** They aren't
+  exported, so a package's components say it their own way (`README.md`). An option
+  that isn't taken: `notAnOption(args, option, instead, owner)`. Settings next to a
+  resource given in `existing`: `usedAsItIs(args, keys, part, owner)`. An `existing`
+  entry the component won't use: `notAnExistingPart(args.existing, part, owner,
+  instead)`, or `onlyExisting()`. An output inside an arg a resource is named after:
+  `plainDeep(value, what)`. A static `get` passes `getArgs({ existing })`, which marks
+  what it passes: a `$transform` for the component runs on it too, and what that adds
+  isn't refused.
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`src/util/lazy.ts`), not a static of a class: the CLI's run

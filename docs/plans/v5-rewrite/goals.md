@@ -112,14 +112,14 @@ Breaking changes are allowed in 5.0: args, defaults, names, how a component is b
 
 ## 8. What a package builds on holds still within 5.x
 
-`sst/components` and its groups (`sst/components/aws` and the rest), the program contract, and `sst.target`, `sst.runtime` and `sst.check` change only in a major version. Adding to them is fine. Removing an export, or changing what one accepts, waits for a major. So 5.0's breaking changes happen once, at 5.0 ([Packages](plan.md#packages)).
+`sst/components` and its groups (`sst/components/aws` and the rest), `sst/testing`, the program contract, and `sst.target`, `sst.runtime` and `sst.check` change only in a major version (`sst/testing` added 2026-11-05: packages test with it). Adding to them is fine. Removing an export, or changing what one accepts, waits for a major. So 5.0's breaking changes happen once, at 5.0 ([Packages](plan.md#packages)).
 
 **How it's checked:**
 
 - A report of the API for each entry point, made with [API Extractor](https://api-extractor.com/), is checked in. A pull request shows each change to it, and CI fails on one nobody meant.
 - The template package builds and tests against the branch in CI.
 
-**Where it stands (2026-10-31):** not started.
+**Where it stands (2026-11-05):** the reports are made, one for each of the five entry points, in `platform/api/`, and `check.yml` fails on a change they don't have (`bun run api` in `platform/`). They show each component's parts and the types a package can't import too, so a change to those shows. The template package builds and tests against the branch in `check.yml`. Both wait on CI's first run on this branch.
 
 ## Not goals
 

@@ -39,6 +39,8 @@ bun run test:platform
 
 The components' tests need Node 22 or later.
 
+On `v5`, a change to what `sst/components`, its groups or `sst/testing` export changes the API reports in `platform/api/`. Run `bun run api:update` in `platform/` and commit them with the change. The `check` workflow fails when they're out of date.
+
 If the change affects what gets deployed or how `sst dev` behaves, try it on an example app and say what you ran in the pull request.
 
 ## Pull requests

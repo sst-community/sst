@@ -13,6 +13,7 @@
 # The release build and the container image it pushes.
 /.goreleaser.yml @the-human-mustachio
 /platform/scripts/build @the-human-mustachio
+/platform/scripts/build-types @the-human-mustachio
 
 # The npm package: what's published, and what runs when it's installed.
 /sdk/js/package.json @the-human-mustachio

@@ -67,6 +67,12 @@ jobs:
         env:
           DOCKER_PUSH: false
 
+      # What a package builds on, as API Extractor reports it for each entry
+      # point. A change to it that isn't in platform/api/ fails here
+      # (MAINTAINING.md, "The public API (v5)").
+      - name: Check the API reports
+        run: cd platform && bun run api
+
       - name: Setup uv
         uses: astral-sh/setup-uv@v4
         with:

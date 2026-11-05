@@ -158,6 +158,16 @@ npm install -D <folder>/sst-0.0.0.tgz
 - The pack stops if one of the package's exports doesn't load in plain Node.
 - An app doesn't use these: its deploy bundles the copy of the platform in `.sst/platform`.
 
+## The public API (v5)
+
+What a component package builds on holds still for all of 5.x: `sst/components`, its groups (`sst/components/aws`, `sst/components/cloudflare` and `sst/components/vercel`), and `sst/testing`. Adding to it is fine in a minor. Removing an export, or changing what one takes or gives, waits for a major version. Until 5.0.0, a pre-release can still break it, and its notes say so. The program contract between the CLI and the platform has a version of its own (`ContractVersion` in `pkg/project/report.go`).
+
+- **`platform/api/` has a report of each entry point,** made by [API Extractor](https://api-extractor.com/) from the platform's types (`platform/scripts/api.ts`). `check.yml` fails when the API changes and its report doesn't. After a change that's meant, run `bun run api:update` in `platform/` and commit the reports with it.
+- **The report's diff is what to review.** A line removed, or a type that takes less or gives more than it did, breaks a package. A line added doesn't.
+- **A type a package can't import is in the report too,** like a component's parts (`parts_5`), so a change to it shows. API Extractor numbers a name used twice (`Queue_2` is Pulumi's), so adding one can renumber others: that's a rename in the report, not a change to the API. Export a type only when a package has to name it, since each export is more to hold still.
+- **`@internal` keeps something off the docs site,** not out of the API: it's in the report, as apps use some of it.
+- **A Pulumi or provider update can change the reports,** which import the providers' types by file. Update them with it.
+
 ## Updating Pulumi and the providers
 
 The versions are pinned in two places: the `@pulumi/*` packages in `platform/package.json`, and `pulumi/pkg/v3` and `pulumi/sdk/v3` in `go.mod`.
