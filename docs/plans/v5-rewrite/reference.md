@@ -147,7 +147,7 @@ Deleting the old ones carelessly would remove a site's files (`BucketFiles` dele
 
 - **Types are made after every run, from the values in the state** (`pkg/project/run.go`, `pkg/types/typescript/typescript.go`). The generator writes each value's shape: a string becomes `string`, a number `number`.
 - **One `sst-env.d.ts` at the root holds every link in the app.** Every folder with a `package.json` gets a file that points to it, so `Resource` shows every resource everywhere.
-- **At run time,** a deployed function reads the encrypted file (`SST_KEY`, `SST_KEY_FILE`), and a process on the developer's machine `SST_RESOURCE_<Name>` and `SST_RESOURCES_JSON` (`sdk/js/src/resource/node.ts`, `pkg/project/env.go`). SST's JavaScript, Python, Go and Rust SDKs all read the encrypted file and `SST_RESOURCE_<Name>`. Only the JavaScript one reads `SST_RESOURCES_JSON`. SST publishes the Python, Go and Rust SDKs, not the fork.
+- **At run time,** a deployed function reads the encrypted file (`SST_KEY`, `SST_KEY_FILE`), and a process on the developer's machine `SST_RESOURCE_<Name>` and `SST_RESOURCES_JSON` (`sdk/js/src/resource/node.ts`, `pkg/project/env.go`). SST's JavaScript, Python, Go and Rust SDKs all read the encrypted file, `SST_RESOURCE_<Name>` and `SST_RESOURCES_JSON`. Since SST's #6830 the CLI writes `SST_RESOURCES_JSON` in place of the others on Windows, which makes variable names upper case (corrected 2026-11-04: this said only the JavaScript SDK read it). SST publishes the Python, Go and Rust SDKs, not the fork.
 
 What goes wrong, from SST's issues:
 

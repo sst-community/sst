@@ -2,6 +2,19 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-04: step 5, Linking's new types tried, and not kept
+
+New types for linked resources were built, measured and taken out the same day; `sst-env.d.ts` stays as SST 4 writes it ([decision](plan.md#decisions), [Linking](plan.md#linking)).
+
+**What was tried:**
+
+- **First,** what TypeScript infers in the config: the program found each link, its keys, where it was made (from the stack) and which code reads it, and sent it to the CLI before anything deployed; the CLI ran TypeScript's checker over the config and wrote a file for each package with only the links of the code in it. `sst install` ran the config offline, as a new stage's preview under the platform's mock. A double check measured the checker at about 2.7 seconds and 1 GB on every run, found a component made from the template package typed `any`, and found a monorepo's shared package and scripts would lose their types.
+- **Then,** each component type's link read once, SST's when the platform is built and a custom one's (a published package's, a workspace package's, the app's own) when its files change, kept by their contents; a `Linkable` by its values; and every package given a file, a package with linked code only its own links, one it depends on theirs, any other every link. On a monorepo with a workspace component package, a component of the app's own and a shared package, it typed the custom components exactly and failed a function's package naming a resource it isn't linked to. `sst install` took 1.3 seconds with the cache, and `sst dev` rewrote the types 2.1 seconds after a save.
+
+**Why it isn't kept:** what it gained didn't pay for what it added. An app with one package, the most common kind, gets nothing from each package having only its own links, and in a monorepo a shared package used by anything but linked code saw every link anyway. Committing `sst-env.d.ts`, as SST's docs advise, and `sst dev` give most of what types before a deploy would. It added `sst install` running the config, the platform's mock in a command that isn't a test, a table and a cache, a report of each component's code in the program contract, a change to `component()`'s type, and rules for package authors.
+
+**Found on the way, and kept:** SST's JavaScript, Python, Go and Rust SDKs all read `SST_RESOURCES_JSON`, which the CLI writes on Windows in place of `SST_RESOURCE_<Name>` since SST's #6830; the reference said only the JavaScript SDK read it.
+
 ## 2026-11-04: step 5, the migration guide
 
 The migration guide (`www/src/content/docs/docs/migrate-from-v4.mdx`) rewritten for 5.0's path, beside its section for package authors.
