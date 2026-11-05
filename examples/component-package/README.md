@@ -8,7 +8,7 @@ The component is `Webhook`: a function URL that takes webhook deliveries and put
 const { Webhook } = await import("@acme/webhook");
 
 const hook = new Webhook("Payments");
-new sst.aws.v5.Function("Worker", {
+new sst.aws.Function("Worker", {
   handler: "src/worker.handler",
   link: [hook],
 });
@@ -18,7 +18,7 @@ new sst.aws.v5.Function("Worker", {
 
 | File | What it is |
 | --- | --- |
-| `src/index.ts` | The component. Its parts are a provider's resource (`aws.sqs.Queue`) and one of SST's components (`v5.Function`). |
+| `src/index.ts` | The component. Its parts are a provider's resource (`aws.sqs.Queue`) and one of SST's components (`Function`). |
 | `src/receiver.ts` | The handler the package ships, which the function runs |
 | `test/webhook.test.ts` | Tests with `mock()` from `sst/testing`. Nothing is deployed. |
 | `tsconfig.json` | Type-checks `src` and `test`. It's what your editor reads. |

@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { component, type ComponentArgs, type LinkDefinition } from "sst/components";
-import { permission, v5 } from "sst/components/aws";
+import { Function, permission } from "sst/components/aws";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 
@@ -13,7 +13,7 @@ const handler = createRequire(import.meta.url)
 
 const parts = {
   queue: aws.sqs.Queue,
-  receiver: v5.Function,
+  receiver: Function,
 };
 
 export interface WebhookArgs extends ComponentArgs<typeof parts> {
@@ -33,7 +33,7 @@ export interface WebhookArgs extends ComponentArgs<typeof parts> {
  * const { Webhook } = await import("@acme/webhook");
  *
  * const hook = new Webhook("Payments");
- * new sst.aws.v5.Function("Worker", {
+ * new sst.aws.Function("Worker", {
  *   handler: "src/worker.handler",
  *   link: [hook],
  * });

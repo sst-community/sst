@@ -1,13 +1,14 @@
-# Writing V5 components
+# Writing components
 
-A V5 component is built from **parts**: a declared list of the resources it creates. From
+A component is built from **parts**: a declared list of the resources it creates. From
 that one list the component gets a typed `transform`, `existing` and `nodes`, consistent
 resource names, and a check that nothing is created outside the list.
 
 This guide is for writing **your own component**, in an app or as a package. SST's own
-components are written the same way. **Porting one of SST's 4.x components** to V5, as a
-person or an agent, has rules of its own on top of these, in `PORTING.md` beside this
-file, with a checklist. That file goes once 5.0 has no 4.x components.
+components are written the same way. **Changing or adding one of SST's**, as a person or
+an agent, has rules of its own on top of these, in `CONTRIBUTING.md` beside this file,
+with a checklist: the helpers they share, the takeover maps `sst migrate` uses, and
+their tests.
 
 This file ships with the CLI, so in an app it's at `.sst/platform/src/components/README.md`.
 The first half is also on the docs site as "Write a Local Component"
@@ -91,7 +92,7 @@ uploads.nodes.bucket; // the aws.s3.Bucket
 uploads.nodes.audit; // undefined when it wasn't created
 uploads.nodes.reader.legal; // by id
 
-new sst.aws.v5.Function("Api", { handler: "src/api.handler", link: [uploads] });
+new sst.aws.Function("Api", { handler: "src/api.handler", link: [uploads] });
 ```
 
 A `transform` or `existing` key that isn't one of the parts is an error, with the list of
@@ -110,9 +111,9 @@ the component reads its args.
     An id can be any string, like the route `"GET /users/{id}"`. A plain id is used in the
     name as it is; any other gets a short hash added so two similar ids don't collide.
     `id in this.nodes.reader` tells you whether one exists.
-  - `deferred(sst.aws.v5.Function)`: a function that's built later, or not at all when the
+  - `deferred(sst.aws.Function)`: a function that's built later, or not at all when the
     user passes an ARN. Create it with `sst.aws.functionPart(this, key, definition,
-    defaults)`, or with an id for `many(deferred(sst.aws.v5.Function))`. Its `nodes` entry is
+    defaults)`, or with an id for `many(deferred(sst.aws.Function))`. Its `nodes` entry is
     an `Output`. The user's `transform` for it takes the function's args, including the
     function's own `transform` and `existing`. Any part can be deferred: one that's made
     from a build is created with `this.part()` in what `this.after()` runs (below).
@@ -123,7 +124,7 @@ the component reads its args.
     how a deployed app knows the resource, so it's permanent. It wraps a class or
     another marker: `named(optional(aws.ec2.SecurityGroup), "NatInstanceSecurityGroup")`.
     Use it when the name a resource has to keep isn't the key you want.
-- **An SST component can be a part**, like `sst.aws.v5.Function` or a certificate. If the
+- **An SST component can be a part**, like `sst.aws.Function` or a certificate. If the
   component's own file imports yours, declare the parts in a function so they're read
   late: `component("acme:index:Uploads", () => ({ ... }))`.
 - **A part is never created inside an `.apply()`.** A preview skips an `.apply()` whose
@@ -150,9 +151,9 @@ the component reads its args.
     refused goes through `notAnOption(args, option, instead, owner)`.
   - A list another component counts, like a `Vpc`'s subnets, is a list of known length
     with an output in each place, not one output of a list.
-  - Some V5 components still create parts inside `.apply()` with `optional`, `many` or
-    `deferred` (the V5 `Service`'s Cloud Map service, through `this.partHandle()` and
-    `defer()`). They're what the 5.0 components change.
+  - Some of SST's components still create parts inside `.apply()` with `optional`,
+    `many` or `deferred` (the `Service`'s Cloud Map service, for a VPC given by its
+    ids, through `this.partHandle()` and `defer()`). Don't take them as the pattern.
   - Test it: a new stage's preview, where nothing AWS gives back is known yet,
     registers what a deploy does (`test/components/v5/function-preview.test.ts`).
 - **A part is created once.** Creating it a second time is an error.
@@ -161,7 +162,7 @@ the component reads its args.
   `this.part()` already returns it instead of creating one.
 - **`this.lookupPart(key, [id], resourceId)`** looks a part's resource up in place of
   creating it, when the component references something that's already deployed and
-  works out the ids of its other parts itself: from a tag, or a data source. The V5
+  works out the ids of its other parts itself: from a tag, or a data source. The
   `Aurora` is given a cluster and finds its instance, secret and proxy this way. A
   resource the user passed in `existing` for the part is used instead of the lookup.
   For an id passed there, write `this.existingPart(key) ?? this.lookupPart(...)`.
@@ -175,11 +176,11 @@ the component reads its args.
   A DNS adapter (`DnsAdapter`, in `dns-adapter.ts`) creates its records directly and names
   them from plain values: a record whose name in DNS is only known once something is
   deployed, like a certificate's validation record, is given a `key` to be named after.
-  Where such a resource had another name in 4.x, the takeover map's `delegated` gives its
-  old address, by the name and type it has now.
+  Where such a resource had another name in SST 4, the takeover map's `delegated` gives
+  its old address, by the name and type it has now.
 - **An arg the user's `transform` must not change** goes in a Pulumi transformation on
   the part: `this.part(key, args, { transformations: [({ props, opts }) => ({ props: {
-  ...props, runtime }, opts })] })`. It runs after the user's `transform`. The V5
+  ...props, runtime }, opts })] })`. It runs after the user's `transform`. The
   `Function` does this for the stub it deploys in `sst dev`.
 
 ## Args
@@ -191,7 +192,7 @@ the component reads its args.
   created directly instead of inside `.apply()`, and lets `nodes` hold resources, not
   outputs of resources.
   The same goes for a list with a part per item, and for the field each part is
-  named after: the V5 `Postgres` takes the proxy's `credentials` and each `username`
+  named after: the `Postgres` takes the proxy's `credentials` and each `username`
   as plain values, and the passwords as inputs.
 - **A part the user can switch off gets its own arg** (`publicAccessBlock: false`).
   `transform` changes a part; it doesn't remove one.
@@ -206,9 +207,9 @@ the component reads its args.
   marks what `get` passes, which a `$transform` for the component runs on too: what it
   adds there isn't refused.
 - **A check that needs a deployed value** goes in the output that everything depending
-  on it reads, so the error stops what would have used it. The V5 `Dynamo` checks that
+  on it reads, so the error stops what would have used it. The `Dynamo` checks that
   the table's stream is enabled inside the stream ARN its subscribers are given, and
-  the V5 `Service` checks that an `Alb` is in the cluster's VPC inside the VPC id its
+  the `Service` checks that an `Alb` is in the cluster's VPC inside the VPC id its
   target groups are given.
 - **An arg a resource is named after is plain all the way down.** A rule of a service's
   load balancer is: its listener rule is named after its conditions. Check it with
@@ -234,19 +235,18 @@ the component reads its args.
   `this.report({ ... })` in the constructor, before `registerOutputs()`; a report after
   it is an error. Pulumi registers a component's outputs a moment after its
   constructor, so a report from a method can come too late once the config awaits. A
-  component whose report waits on a method the app calls, like the V5
-  `ApiGatewayRest`'s hint on `deploy()`, overrides `registerOutputs()` to do nothing
-  until then, and the method reports and registers them. Don't name an output for the CLI. `context()` from `sst/components`
-  gives the app, the stage, whether it's `sst dev`, the command and the paths. A
-  component reads them there, not from `$app`, `$dev` or `$cli`, which are for an app's
-  config. In a
-  test, `app.reportOf(name)` is what a component reported.
+  component whose report waits on a method the app calls, like the `ApiGatewayRest`'s
+  hint on `deploy()`, overrides `registerOutputs()` to do nothing until then, and the
+  method reports and registers them. Don't name an output for the CLI. `context()`
+  from `sst/components` gives the app, the stage, whether it's `sst dev`, the command
+  and the paths. A component reads them there, not from `$app`, `$dev` or `$cli`,
+  which are for an app's config. In a test, `app.reportOf(name)` is what a component
+  reported.
   A component doesn't create a `DevCommand` for a command of its own: it reports
-  `dev`. A report holds one pane, so a component with one per item, like the V5
-  `Service`'s pane for each container, creates them as a `many(DevCommand)` part. The 5.0 `DevCommand` (`sst.x.v5.DevCommand`, in `experimental/v5/`) is for
-  an app's own commands, and reports the same way. It has no takeover map, so SST 4's
-  `DevCommand` isn't refused on a new stage: SST 4's components still create it inside
-  them.
+  `dev`. A report holds one pane, so a component with one per item, like the
+  `Service`'s pane for each container, creates them as a `many(DevCommand)` part. The
+  `DevCommand` (`sst.x.DevCommand`, in `experimental/`) is for an app's own commands,
+  and reports the same way.
 - **Physical names.** SST knows how to name the resource types its own components use.
   For another type, `sst.Component.naming("aws:athena/workgroup:Workgroup", { field:
   "name", max: 128 })`, or `false` to leave it to the provider. A resource that's looked

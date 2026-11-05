@@ -36,10 +36,10 @@ This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST rel
 5. Don't clean up unless told to
 6. `sst dev --mode=basic` for dev mode
 
-## V5 components
+## Components
 
-`platform/src/components/README.md` is the guide to writing a V5 component: parts, args, linking, dev mode, versions and tests. `platform/src/components/PORTING.md` has the rules for porting one of SST's 4.x components: takeover maps, helpers, tests and a checklist. Read both before touching a file in `platform/src/components/aws/v5/`. Edit a 4.x component file only where it changes nothing for an app that uses it (see the rulebook).
+`platform/src/components/README.md` is the guide to writing a component: parts, args, linking, dev mode, versions and tests. `platform/src/components/CONTRIBUTING.md` has the rules for changing or adding one of SST's own: the helpers they share, the takeover maps `sst migrate` uses, their tests, and a checklist. Read both before touching a component in `platform/src/components/`. SST 4's components are frozen in `platform/test/fixtures/v4/components/` for the tests: edit one only to keep it loading.
 
 ## Plans and progress
 
-What's been done, what's next and what's undecided is in `docs/plans/`, not in this file. Every v5 change is held to the goals in `docs/plans/v5-goals.md`. Then start with `docs/plans/v5-components.md`. When a piece of work lands, add it to `docs/plans/v5-progress.md` and update the status in the plan. Keep this file to how to work in the repo.
+What's been done, what's next and what's undecided is in `docs/plans/`, not in this file. Every 5.0 change is held to the goals in `docs/plans/v5-rewrite/goals.md`. Then start with `docs/plans/v5-rewrite/plan.md`. When a piece of work lands, add it to `docs/plans/v5-rewrite/progress.md` and update the status in the plan. Keep this file to how to work in the repo.

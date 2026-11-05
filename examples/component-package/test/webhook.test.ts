@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { v5 } from "sst/components/aws";
+import { Function } from "sst/components/aws";
 import { mock } from "sst/testing";
 
 // Nothing is deployed, so a resource has only its inputs, an id and an ARN.
@@ -36,7 +36,7 @@ test("runs the handler the package ships", async () => {
 test("lets a function that links it read the queue", async () => {
   app.reset();
   const hook = new Webhook("Payments");
-  new v5.Function("Worker", { handler: "src/worker.handler", link: [hook] });
+  new Function("Worker", { handler: "src/worker.handler", link: [hook] });
   await app.settle();
 
   const role = app.resources.find((r) => r.name === "WorkerRole");

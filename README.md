@@ -22,7 +22,7 @@ In version 4, each component decides for itself which of its resources you can c
 v5 rebuilds the components on one foundation. A component declares every resource it creates as a **part**, and from that one list every component gives you the same three things:
 
 ```ts
-const redis = new sst.aws.v5.Redis("MyRedis", {
+const redis = new sst.aws.Redis("MyRedis", {
   vpc,
   // Change how any resource is created
   transform: { cluster: { snapshotRetentionLimit: 7 } },
@@ -118,7 +118,7 @@ That builds `dist/sst5`, which runs next to a stable `sst`. Use it in an app in 
 
 ## Working on it
 
-- [Writing V5 components](platform/src/components/README.md) is the guide: parts, args, tests, and how to port a version 4 component.
+- [Writing components](platform/src/components/README.md) is the guide: parts, args and tests. [CONTRIBUTING.md](platform/src/components/CONTRIBUTING.md) beside it has the rules for changing or adding one of SST's own.
 - [Write a Local Component](www/src/content/docs/docs/write-a-local-component.mdx) is the same for a component in your own app, and [Write a Package Component](www/src/content/docs/docs/write-a-package-component.mdx) for one published to npm.
 
 ```bash
