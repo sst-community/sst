@@ -195,9 +195,6 @@ export interface HyperdriveGetArgs {
  * })
  * ```
  *
- * [Check out the PlanetScale](/docs/examples/#cloudflare-hyperdrive-planetscale)
- * or the [AWS RDS Postgres](/docs/examples/#cloudflare-hyperdrive-with-aws-postgres) examples for a complete guide.
- *
  * #### MySQL example
  *
  * ```ts title="sst.config.ts"

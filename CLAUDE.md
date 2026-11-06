@@ -5,7 +5,7 @@ This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST rel
 ## Layout
 
 - `platform/` — TS Pulumi components embedded via `//go:embed` (`platform/platform.go:16`)
-- `examples/` — sample apps
+- `examples/` — `component-package`, the package an author copies. SST 5's example apps come back one at a time, each deployed first
 - `cmd/sst/` — Go CLI entry, orchestrates everything
 - `cmd/sst/mosaic/` — live dev TUI
 - `pkg/server/` — JSON-RPC bridge for custom Pulumi dynamic providers (`rpc/rpc.ts` ↔ `pkg/server`)
@@ -21,7 +21,7 @@ This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST rel
 - **Setup**: `bun run setup`
 - **Build platform**: `bun run build:platform`
 - **Build CLI**: `bun run build:cli`
-- **Run CLI locally**: `cd examples/<app> && go run ../../cmd/sst <command>`
+- **Run CLI locally**: in a test app, `go run <this repo>/cmd/sst <command>`
 - **Go tests**: `bun run test:cli`
 - **Typecheck**: `bun run typecheck`
 - **Generate docs**: `bun run docs:generate`
@@ -30,8 +30,8 @@ This is sst-community, a fork of SST. `MAINTAINING.md` covers merging an SST rel
 ## Verification
 
 1. Build the platform
-2. `cd examples/<app> && bun install`
-3. `go run ../../cmd/sst deploy`
+2. In a test app, `bun install`
+3. `go run <this repo>/cmd/sst deploy`
 4. Verify with `curl` or AWS CLI
 5. Don't clean up unless told to
 6. `sst dev --mode=basic` for dev mode

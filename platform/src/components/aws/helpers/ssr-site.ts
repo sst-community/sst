@@ -375,8 +375,6 @@ export interface SsrSiteArgs {
        *   }
        * }
        * ```
-       *
-       * You can use this to add basic auth, [check out an example](/docs/examples/#aws-nextjs-basic-auth).
        */
       injection: Input<string>;
       /**

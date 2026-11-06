@@ -4,6 +4,7 @@ import * as TypeDoc from "typedoc";
 import ts from "typescript";
 import config from "./config";
 import { componentFiles } from "./src/component-files.mjs";
+import { exampleDirs } from "./src/examples.mjs";
 
 process.on("uncaughtException", (err) => {
   restoreCode();
@@ -162,8 +163,14 @@ if (!cmd || cmd === "components") {
 }
 if (!cmd || cmd === "cli") await generateCliDoc();
 if (!cmd || cmd === "examples") {
-  await generateExamplesDocs();
-  await generateIndividualExampleDocs();
+  if (exampleDirs().length) {
+    await generateExamplesDocs();
+    await generateIndividualExampleDocs();
+  } else {
+    // No example apps, so no Examples page (src/examples.mjs)
+    fs.rmSync("src/content/docs/docs/examples.mdx", { force: true });
+    fs.rmSync("src/content/docs/docs/examples", { recursive: true, force: true });
+  }
 }
 if (!cmd || cmd === "changelog") await generateChangelog();
 restoreCode();

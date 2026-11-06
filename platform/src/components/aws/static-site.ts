@@ -362,8 +362,6 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts> {
      *   }
      * }
      * ```
-     *
-     * You can use this add basic auth, [check out an example](/docs/examples/#aws-static-site-basic-auth).
      */
     viewerRequest?: {
       /**

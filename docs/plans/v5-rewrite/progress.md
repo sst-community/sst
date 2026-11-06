@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-05: step 5, the examples removed
+
+SST 5 has no example apps until each is brought back, deployed ([decision](plan.md#decisions)). 190 apps are deleted; `main` keeps them for SST 4.
+
+- **Kept:** `examples/component-package`, the package an author copies, which `check.yml` tests, and `examples/tsconfig.json`, which the docs generator reads when there's an example again.
+- **Moved:** the Python apps the Go tests build (`python-modern-uv`, `python-layouts`) are in `pkg/runtime/python/testdata/`, so the tests keep building them instead of skipping.
+- **The docs without them:** the Examples page, and its links in the header and the sidebar, are there only when `examples/` has an app with an `sst.config.ts` (`www/src/examples.mjs`), and the generator skips the examples' pages without one. The guides' "View source" tips and lists of examples are gone, and so are the links to an example in 14 components' docs.
+- **Running the CLI from source** is in an app of your own (`CONTRIBUTING.md`, `CLAUDE.md`).
+
+**Checked:** the type check, the API reports (unchanged), the platform's tests (102 files, 4057 tests), the Python runtime's tests on their new fixtures and `pkg/js`'s. The docs build: no page links an example but SST's blog posts, which `docs.yml` leaves out.
+
 ## 2026-11-05: step 5, the examples moved with the codemod
 
 The codemod, run over the 194 examples with a config, writes its changes in place: 48 files, 49 changes, most of them a service's `ports` (31) and the four renamed components' names (12). What it listed was done by hand:

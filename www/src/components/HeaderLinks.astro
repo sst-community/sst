@@ -1,9 +1,11 @@
 ---
+import { hasExamples } from "../examples.mjs";
+
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 ---
 
 <a class="links" href={`${base}/docs/`}>Docs</a>
-<a class="links sm" href={`${base}/docs/examples/`}>Examples</a>
+{hasExamples && <a class="links sm" href={`${base}/docs/examples/`}>Examples</a>}
 
 <style>
   a.links {

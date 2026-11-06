@@ -214,7 +214,7 @@ const engine: RdsEngine = {
  * ```
  *
  * This will skip deploying an RDS database and link to the locally running Postgres database
- * instead. [Check out the full example](/docs/examples/#aws-postgres-local).
+ * instead.
  *
  * #### Switch from SST 4's `sst.aws.Postgres`
  *

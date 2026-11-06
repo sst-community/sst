@@ -225,8 +225,6 @@ export interface WorkflowArgs
  * });
  * ```
  *
- * [Check out the full example](/docs/examples/#aws-workflow-cron).
- *
  * #### Subscribe to a bus
  *
  * ```ts {6-9} title="sst.config.ts"
@@ -265,8 +263,6 @@ export interface WorkflowArgs
  *   });
  * });
  * ```
- *
- * [Check out the full example](/docs/examples/#aws-workflow-bus).
  *
  * #### Switch from SST 4's `sst.aws.Workflow`
  *

@@ -346,8 +346,6 @@ const astro: SsrFramework = {
  * ---
  * ```
  *
- * [Check out the full example](/docs/examples/#cloudflare-astro).
- *
  * #### Switch from SST 4's `sst.cloudflare.Astro`
  *
  * Keep the name, and `sst migrate` moves it. The site's

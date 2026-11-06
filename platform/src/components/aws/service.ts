@@ -1344,8 +1344,6 @@ export interface ServiceArgs
  * await fetch(`http://${Resource.MyService.service}`);
  * ```
  *
- * [Check out an example](/docs/examples/#aws-cluster-service-discovery).
- *
  * #### Use roles you already have
  *
  * Pass the role, or its name.
@@ -1499,9 +1497,6 @@ export interface ServiceArgs
  * [API Gateway HTTP API](https://aws.amazon.com/api-gateway/pricing/#HTTP_APIs) as well.
  * For services that don't get a lot of traffic, this ends up being a lot cheaper since API
  * Gateway is pay per request.
- *
- * Learn more about using
- * [Cluster with API Gateway](/docs/examples/#aws-cluster-with-api-gateway).
  *
  * #### Application Load Balancer
  *

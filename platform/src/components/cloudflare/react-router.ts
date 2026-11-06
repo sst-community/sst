@@ -337,8 +337,6 @@ const reactRouter: SsrFramework = {
  * }
  * ```
  *
- * [Check out the full example](/docs/examples/#cloudflare-react-router).
- *
  * #### Switch from SST 4's `sst.cloudflare.ReactRouter`
  *
  * Keep the name, and `sst migrate` moves it.

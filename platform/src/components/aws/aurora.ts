@@ -593,7 +593,7 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  * ```
  *
  * This will skip deploying the database and link to the locally running Postgres database
- * instead. [Check out the full example](/docs/examples/#aws-aurora-local).
+ * instead.
  *
  * #### Switch from SST 4's `sst.aws.Aurora`
  *

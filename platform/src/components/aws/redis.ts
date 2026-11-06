@@ -412,8 +412,7 @@ interface Connection {
  * #### Create a serverless Redis
  *
  * You can also create a serverless Redis instance that automatically scales based on usage.
- * Check out the [serverless example](/docs/examples/#aws-redis-serverless). It connects with the same
- * `username` and `password` as a provisioned Redis.
+ * It connects with the same `username` and `password` as a provisioned Redis.
  *
  * ```js title="sst.config.ts"
  * const vpc = new sst.aws.Vpc("MyVpc");
@@ -493,7 +492,7 @@ interface Connection {
  * ```
  *
  * This will skip deploying a Redis ElastiCache cluster and link to the locally running Redis
- * server instead. [Check out the full example](/docs/examples/#aws-redis-local).
+ * server instead.
  *
  * #### Switch from SST 4's `sst.aws.Redis`
  *

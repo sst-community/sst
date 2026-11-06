@@ -1,7 +1,0 @@
-{
-  "name": "aws-base",
-  "version": "0.0.0",
-  "dependencies": {
-    "sst": "file:../../sdk/js"
-  }
-}

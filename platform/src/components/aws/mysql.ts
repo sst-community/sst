@@ -214,7 +214,7 @@ const engine: RdsEngine = {
  * ```
  *
  * This will skip deploying an RDS database and link to the locally running MySQL database
- * instead. [Check out the full example](/docs/examples/#aws-mysql-local).
+ * instead.
  *
  * #### Switch from SST 4's `sst.aws.Mysql`
  *

@@ -373,8 +373,6 @@ const tanStackStart: SsrFramework = {
  * const files = await Resource.MyBucket.list();
  * ```
  *
- * [Check out the full example](/docs/examples/#cloudflare-tanstack-start).
- *
  * #### Switch from SST 4's `sst.cloudflare.TanStackStart`
  *
  * Keep the name, and `sst migrate` moves it. The app's Worker, its URL and its custom domains are kept. A few things are written

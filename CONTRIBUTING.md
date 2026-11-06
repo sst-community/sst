@@ -18,11 +18,11 @@ You need [Go](https://go.dev/) and [Bun](https://bun.sh/).
 bun run setup
 ```
 
-Run the CLI from source in one of the `examples/` apps:
+Run the CLI from source in an app of your own:
 
 ```bash
-cd examples/aws-api
-go run ../../cmd/sst <command>
+cd my-app
+go run <path to this repo>/cmd/sst <command>
 ```
 
 For the docs site, run `bun run docs:generate` and then `bun run docs:dev`.

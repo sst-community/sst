@@ -548,8 +548,6 @@ export interface FunctionPythonArgs {
    *         └── function
    *             └── api.py
    * ```
-   *
-   * You can refer to [this example of using a container image](/docs/examples/#aws-lambda-python-container).
    */
   container?:
     | boolean
@@ -877,8 +875,6 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    *
    * For large dependencies like numpy or pandas, deploy as a container. See [`python.container`](#functionpythonargs).
    *
-   * For common project layouts, check out the [Python examples](https://github.com/sst-community/sst/tree/main/examples/python-layouts).
-   *
    * ##### Golang
    *
    * For Golang the handler looks like.
@@ -893,8 +889,6 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    * includes the name of the module in your `go.mod`. So in this case your `go.mod`
    * might be in `packages/functions/go` and `some_module` is the name of the
    * module.
-   *
-   * You can refer to [this example of deploying a Go function](/docs/examples/#aws-lambda-go).
    *
    * ##### Rust
    *
@@ -1080,9 +1074,6 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    * not supported with API Gateway HTTP API (V2).
    *
    * You'll also need to [wrap your handler](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html) with `awslambda.streamifyResponse` to enable streaming.
-   *
-   * Check out the [AWS Lambda streaming example](/docs/examples/#aws-lambda-streaming) for more
-   * details.
    *
    * @default `false`
    * @example
