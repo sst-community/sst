@@ -560,11 +560,10 @@ export interface BucketArgs {
     /**
      * Transform the public access block resource that's attached to the Bucket.
      *
-     * The block is deleted with the bucket: when the bucket is removed, its block
-     * isn't deleted first, so the bucket is never left without it. Removing the
-     * block on its own, for example by setting this to `false`, still deletes it.
+     * The public access block is deleted together with the Bucket, so the Bucket is
+     * never left without it while it's being removed.
      *
-     * Set this to `false` if the public access block resource should not be created.
+     * Returns `false` if the public access block resource should not be created.
      */
     publicAccessBlock?: Transform<s3.BucketPublicAccessBlockArgs> | false;
   };

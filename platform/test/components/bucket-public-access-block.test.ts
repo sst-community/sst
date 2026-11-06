@@ -73,26 +73,41 @@ describe("Bucket public access block lifecycle", () => {
     ).toBeFalsy();
   });
 
-  it("follows the bucket's retention", async () => {
-    const bucket = new Bucket("RetainedBucket", {}, { retainOnDelete: true });
+  // `removal: "retain"` sets `retainOnDelete` on the S3 bucket alone
+  // (auto/run.ts), so the block has none of its own and stays because it is
+  // deleted with the bucket.
+  it("stays with a bucket that is retained", async () => {
+    const bucket = new Bucket("RetainedBucket", {
+      transform: {
+        bucket: (_args, opts) => {
+          opts.retainOnDelete = true;
+        },
+      },
+    });
     await resolveOutput(bucket.name);
 
     expect(options.get("RetainedBucketBucket")?.retainOnDelete).toBe(true);
+    expect(
+      options.get("RetainedBucketPublicAccessBlock")?.retainOnDelete,
+    ).toBeFalsy();
     expect(
       nameOf(options.get("RetainedBucketPublicAccessBlock")?.deletedWith),
     ).toBe("RetainedBucketBucket");
   });
 
   it("lets a transform delete the block on its own again", async () => {
+    let before: pulumi.Resource | undefined;
     const bucket = new Bucket("OverrideBucket", {
       transform: {
         publicAccessBlock: (_args, opts) => {
+          before = opts.deletedWith;
           opts.deletedWith = undefined;
         },
       },
     });
     await resolveOutput(bucket.name);
 
+    expect(nameOf(before)).toBe("OverrideBucketBucket");
     expect(
       options.get("OverrideBucketPublicAccessBlock")?.deletedWith,
     ).toBeUndefined();
