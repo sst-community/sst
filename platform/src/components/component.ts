@@ -152,6 +152,8 @@ export class Component extends ComponentResource {
               "aws:lambda/functionUrl:FunctionUrl",
               "aws:lambda/invocation:Invocation",
               "aws:lambda/permission:Permission",
+              "aws:lambdaweb/functionRevision:FunctionRevision",
+              "aws:lambdaweb/resourcePolicy:ResourcePolicy",
               "aws:lambda/provisionedConcurrencyConfig:ProvisionedConcurrencyConfig",
               "aws:lb/listener:Listener",
               "aws:lb/listenerRule:ListenerRule",
@@ -284,6 +286,8 @@ export class Component extends ComponentResource {
             // ie. "-1234567" is automatically added
             "aws:lb/loadBalancer:LoadBalancer": ["name", 24],
             "aws:lambda/function:Function": ["name", 64],
+            "aws:lambdaweb/function:Function": ["functionName", 64],
+            "aws:lambdaweb/functionEndpoint:FunctionEndpoint": ["endpointName", 64],
             "aws:lambdamicrovms/image:Image": ["name", 64],
             "aws:lambda/coreNetworkConnector:CoreNetworkConnector": ["name", 64],
             "aws:opensearch/domain:Domain": ["domainName", 28, { lower: true }],

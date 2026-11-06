@@ -20,6 +20,7 @@ export * from "./dynamo.js";
 export * from "./efs.js";
 export * from "./email.js";
 export * from "./function.js";
+export * from "./web-function.js";
 export * from "./kinesis-stream.js";
 export * from "./microvm.js";
 export * from "./nextjs.js";
