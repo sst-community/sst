@@ -48,7 +48,7 @@ import { Vpc } from "./vpc.js";
 import { Image } from "@pulumi/docker-build";
 import { rpc } from "../rpc/rpc.js";
 import { parseRoleArn, splitQualifiedFunctionArn } from "./helpers/arn.js";
-import { RandomBytes } from "@pulumi/random";
+import { functionEncryptionKey } from "./function-encryption-key.js";
 import { lazy } from "../../util/lazy.js";
 import { Efs } from "./efs.js";
 import { FunctionEnvironmentUpdate } from "./providers/function-environment-update.js";
@@ -1774,13 +1774,6 @@ export class Function extends Component implements Link.Linkable {
   private urlResource: Output<lambda.FunctionUrl | undefined>;
   private eventInvokeConfig?: lambda.FunctionEventInvokeConfig;
 
-  private static readonly encryptionKey = lazy(
-    () =>
-      new RandomBytes("LambdaEncryptionKey", {
-        length: 32,
-      }),
-  );
-
   private static readonly devBridgeCode = lazy(
     () => new Map<string, Promise<s3.BucketObjectv2>>(),
   );
@@ -1875,7 +1868,7 @@ export class Function extends Component implements Link.Linkable {
       handler: args.handler,
       bundle: args.bundle,
       logGroup: logGroup.apply((l) => l?.name),
-      encryptionKey: Function.encryptionKey().base64,
+      encryptionKey: functionEncryptionKey().base64,
       runtime,
       links: output(linkData).apply((input) =>
         Object.fromEntries(input.map((item) => [item.name, item.properties])),
@@ -1964,7 +1957,7 @@ export class Function extends Component implements Link.Linkable {
         args.environment,
         dev,
         bootstrapData,
-        Function.encryptionKey().base64,
+        functionEncryptionKey().base64,
         args.link,
         args.streaming,
         args.bundle,

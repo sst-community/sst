@@ -4,7 +4,7 @@ This example deploys a Node.js 24 HTTP server with `sst.aws.WebFunction`. It sta
 
 The component uses the classic `@pulumi/aws` provider's native `lambdaweb.Function`, `FunctionRevision`, and `FunctionEndpoint` resources, available from version 7.54.0. It creates an immutable revision and explicitly routes 100% of endpoint traffic to it.
 
-**This component and example have not been validated against real AWS.** Component tests use mocked Pulumi and AWS APIs, and HTTP checks run locally. Deployment, IAM authorization, revision updates, streaming through AWS, and billing still require real AWS validation.
+The PR records local, CI, and AWS validation separately. Maintainers use a test account to validate deployment and replacement ordering before merge.
 
 ## Run locally
 
@@ -61,7 +61,7 @@ go run ../../cmd/sst dev --mode=basic
 go run ../../cmd/sst deploy --stage test
 ```
 
-`url.authorization: "none"` creates a public endpoint. Use `"iam"` when callers must authenticate with SigV4-signed HTTP requests; an unsigned `curl` request will not pass IAM authorization.
+`url.authorization: "none"` creates a public endpoint. Use `"iam"` when callers must authenticate with SigV4-signed HTTP requests including the `X-Amz-Content-SHA256` header (the payload hash); AWS returns `403` without that header. An unsigned `curl` request will not pass IAM authorization.
 
 Code or service-configuration changes create a new immutable revision. The endpoint keeps its identity and moves its explicit revision weight to the new revision; the resource dependency graph is configured to update the endpoint before removing the old revision. Actual replacement ordering still requires AWS validation. The component adds no HTTP health gate or application-level rollback. An AWS revision reaching `Active` does not verify that the application is listening correctly. Check the deployed HTTP endpoint before directing traffic to it.
 
@@ -71,8 +71,8 @@ Validate creation, revision replacement, streaming, IAM requests, and removal ag
 
 - Deploy a Node HTTP server, including frameworks such as Hono or Express, without adapting requests to Lambda events.
 - Handle concurrent requests within an execution environment and implement HTTP streaming, including SSE.
-- Use SST's `environment`, `link`, and `permissions` arguments. Linked properties are available through the `Resource` SDK, and linked AWS permissions are added to the execution role. Environment values remain secret Pulumi inputs. The CloudFormation parameter-count and per-value 4,096-byte limits do not apply to the native API. The component validates nonempty values and AWS's 32 KiB aggregate limit, including keys, linked values, and the managed entrypoint. Values above 4,096 bytes follow the published native API contract; their acceptance in AWS remains unverified.
-- Store code in a dedicated private, versioned S3 bucket, with each revision pinned to an object version. Keep versions referenced by revisions.
+- Use SST's `environment`, `link`, and `permissions` arguments. Linked properties are available through the `Resource` SDK, and linked AWS permissions are added to the execution role. Linked properties are encrypted into `resource.enc` using the same key as `Function`; the runtime reads it through `SST_KEY` and `SST_KEY_FILE`. Linked property values do not consume the 32 KiB environment budget. Application environment values remain secret Pulumi inputs. The native API has no CloudFormation parameter-count or per-value 4,096-byte ceiling; the component retains nonempty-string and aggregate-size checks for the environment it sends.
+- Store each build under `code/<hash>.zip` in a dedicated private, versioned S3 bucket, with each revision pinned to an object version. Pulumi manages artifact replacement and deletion after dependent revisions; maintainers verify that order in AWS.
 - Manage the function, revision, and endpoint through `nodes.function`, `nodes.revision`, and `nodes.endpoint`, with matching `transform.function`, `transform.revision`, and `transform.endpoint` hooks.
 
 The supported configuration is Node.js 24 on Arm64 with fixed 2 vCPU and 2GB memory. Existing Lambda memory/CPU choices and event-source handlers cannot be carried over directly. Applications that mutate shared logging context or other process-level data must isolate request state. The `/json` response's `activeRequests` field observes this server process only; it is neither a global AWS concurrency count nor durable state.

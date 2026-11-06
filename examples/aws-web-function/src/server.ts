@@ -10,12 +10,33 @@ const EVENT_COUNT = 3;
 // Lambda supplies both the host and port. Binding to localhost or assuming a
 // fixed port in the cloud prevents the runtime from reaching this server.
 const listenAddress = process.env.AWS_LAMBDA_HTTP_ENDPOINT ?? LOCAL_ENDPOINT;
-const endpoint = new URL(`http://${listenAddress}`);
-const hostname = endpoint.hostname.replace(/^\[|\]$/g, "");
-// URL.port normalizes :80 to an empty string; keep the explicit runtime port.
-const port = Number(listenAddress.slice(listenAddress.lastIndexOf(":") + 1));
-if (!hostname || !Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error("AWS_LAMBDA_HTTP_ENDPOINT must contain a host and port");
+const { hostname, port } = parseListenAddress(listenAddress);
+
+function parseListenAddress(address: string) {
+  const message = "AWS_LAMBDA_HTTP_ENDPOINT must contain a host and port";
+  let endpoint: URL;
+  try {
+    endpoint = new URL(`http://${address}`);
+  } catch {
+    throw new Error(message);
+  }
+  const hostname = endpoint.hostname.replace(/^\[|\]$/g, "");
+  // URL.port normalizes :80 to an empty string; keep the explicit runtime port.
+  const port = Number(address.slice(address.lastIndexOf(":") + 1));
+  if (
+    !hostname ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.pathname !== "/" ||
+    endpoint.search ||
+    endpoint.hash
+  ) {
+    throw new Error(message);
+  }
+  return { hostname, port };
 }
 
 let activeRequests = 0;

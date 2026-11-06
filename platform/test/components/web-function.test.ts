@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import * as pulumi from "@pulumi/pulumi";
 import { lambdaweb } from "@pulumi/aws";
+import { functionEncryptionKey } from "../../src/components/aws/function-encryption-key";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -28,9 +29,43 @@ vi.mock("../../src/components/rpc/rpc", () => ({
       if (method !== "Runtime.Build")
         throw new Error(`Unexpected RPC: ${method}`);
       build(input);
+      if (
+        !input ||
+        typeof input !== "object" ||
+        !("functionID" in input) ||
+        typeof input.functionID !== "string" ||
+        !("encryptionKey" in input) ||
+        typeof input.encryptionKey !== "string" ||
+        !("links" in input) ||
+        !input.links ||
+        typeof input.links !== "object"
+      )
+        throw new Error("Invalid Runtime.Build input");
+      const bundle =
+        "bundle" in input && typeof input.bundle === "string"
+          ? input.bundle
+          : undefined;
+      const directory = bundle ?? fixture.out;
+      const resourceFile = bundle
+        ? `.sst/${input.functionID}/resource.enc`
+        : "resource.enc";
+      const cipher = crypto.createCipheriv(
+        "aes-256-gcm",
+        Buffer.from(input.encryptionKey, "base64"),
+        Buffer.alloc(12),
+      );
+      const ciphertext = Buffer.concat([
+        cipher.update(JSON.stringify(input.links)),
+        cipher.final(),
+        cipher.getAuthTag(),
+      ]);
+      fs.mkdirSync(path.dirname(path.join(directory, resourceFile)), {
+        recursive: true,
+      });
+      fs.writeFileSync(path.join(directory, resourceFile), ciphertext);
       return {
-        handler: "index.main",
-        out: fixture.out,
+        handler: bundle && "handler" in input ? input.handler : "index.main",
+        out: directory,
         errors: fixture.errors,
         sourcemaps: [],
       };
@@ -98,6 +133,9 @@ pulumi.runtime.setMocks(
         name: args.inputs.name ?? args.name,
         bucket: args.inputs.bucket ?? args.name.toLowerCase(),
         versionId: `${args.name}-version`,
+        ...(args.type === "random:index/randomBytes:RandomBytes"
+          ? { base64: Buffer.alloc(32, 7).toString("base64") }
+          : {}),
         ...(args.type === "aws:lambdaweb/functionRevision:FunctionRevision"
           ? { revisionId: `${args.name}-revision` }
           : args.type === "aws:lambdaweb/functionEndpoint:FunctionEndpoint"
@@ -198,7 +236,11 @@ function revisionInputs(name: string): CreatedResource["inputs"] {
     `${name}Revision`,
     "aws:lambdaweb/functionRevision:FunctionRevision",
   ).inputs;
-  return { ...inputs, serviceConfig: unwrapSecret(inputs.serviceConfig) };
+  return {
+    ...inputs,
+    buildConfig: unwrapSecret(inputs.buildConfig),
+    serviceConfig: unwrapSecret(inputs.serviceConfig),
+  };
 }
 
 function endpointInputs(name: string) {
@@ -219,7 +261,7 @@ function unwrapSecret(value: any): any {
 
 async function archive(name: string) {
   const code = named(`${name}Code`, "aws:s3/bucketObjectv2:BucketObjectv2");
-  const zip = fs.readFileSync(await code.inputs.source.path);
+  const zip = fs.readFileSync(await unwrapSecret(code.inputs.source).path);
   // Read the central directory; no system unzip or provider/network calls.
   const names: string[] = [];
   const contents = new Map<string, Buffer>();
@@ -273,6 +315,25 @@ function environment(name: string) {
   return unwrapSecret(revisionInputs(name).serviceConfig.environmentVariables);
 }
 
+async function linkedResources(name: string) {
+  const zipped = await archive(name);
+  const variables = environment(name);
+  const ciphertext = zipped.contents.get(variables.SST_KEY_FILE);
+  expect(ciphertext).toBeDefined();
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    Buffer.from(variables.SST_KEY, "base64"),
+    Buffer.alloc(12),
+  );
+  decipher.setAuthTag(ciphertext!.subarray(-16));
+  return JSON.parse(
+    Buffer.concat([
+      decipher.update(ciphertext!.subarray(0, -16)),
+      decipher.final(),
+    ]).toString(),
+  );
+}
+
 function fixtureFile(file: string, content = "excluded") {
   const target = path.join(out, file);
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -294,7 +355,6 @@ async function buildFailureHarness() {
       resolveDir: platformRoot,
       contents: `
         import * as pulumi from "@pulumi/pulumi";
-import { lambdaweb } from "@pulumi/aws";
         import { WebFunction } from "./src/components/aws/web-function";
         const root = process.argv[2];
         const mode = process.argv[3];
@@ -308,7 +368,7 @@ import { lambdaweb } from "@pulumi/aws";
         pulumi.runtime.setMocks({
           newResource(args) {
             registered.push(args.type);
-            return {id:args.name,state:{...args.inputs,arn:"arn:aws:test:::"+args.name,bucket:args.name,versionId:"v1"}};
+            return {id:args.name,state:{...args.inputs,arn:"arn:aws:test:::"+args.name,bucket:args.name,versionId:"v1",base64:Buffer.alloc(32,7).toString("base64")}};
           },
           call(args) {
             if(args.token.includes("getRegion")) return {region:"us-east-1",name:"us-east-1"};
@@ -348,8 +408,14 @@ import { lambdaweb } from "@pulumi/aws";
         name: "offline-rpc",
         setup(plugin) {
           plugin.onLoad({ filter: /components\/rpc\/rpc\.ts$/ }, () => ({
-            contents: `export const rpc={call:async(method)=>{
+            contents: `import fs from "node:fs"; import path from "node:path";
+            export const rpc={call:async(method,input)=>{
             if(method!=="Runtime.Build")throw new Error("Unexpected RPC: "+method);
+            if(input.bundle){
+              const resource=path.join(input.bundle,".sst",input.functionID,"resource.enc");
+              fs.mkdirSync(path.dirname(resource),{recursive:true});fs.writeFileSync(resource,"encrypted-fixture");
+              return {handler:input.handler,out:input.bundle,errors:[],sourcemaps:[]};
+            }
             return {handler:"index.main",out:"",errors:["Cannot resolve dependency"],sourcemaps:[]};
           }};`,
             loader: "ts",
@@ -404,10 +470,13 @@ describe("WebFunction", () => {
     expect(
       ofType("aws:lambdaweb/functionEndpoint:FunctionEndpoint"),
     ).toHaveLength(1);
-    expect(functionInputs("Http").tags).toMatchObject({
-      "sst:app": "app",
-      "sst:stage": "test",
-    });
+    expect(functionInputs("Http").functionName).toMatch(
+      /^app-test-HttpFunction-/,
+    );
+    expect(functionInputs("Http").functionName).not.toBe(
+      named("HttpCodeBucket", "aws:s3/bucket:Bucket").inputs.bucket,
+    );
+    expect(functionInputs("Http")).not.toHaveProperty("tags");
     expect(revisionInputs("Http")).not.toHaveProperty("tags");
     expect(endpointInputs("Http")).not.toHaveProperty("tags");
     expect(endpointInputs("Http")).toMatchObject({
@@ -429,7 +498,12 @@ describe("WebFunction", () => {
     expect(ofType("aws:lambdaweb/resourcePolicy:ResourcePolicy")).toHaveLength(
       0,
     );
-    expect(build).not.toHaveBeenCalled();
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(build.mock.calls[0][0]).toMatchObject({
+      bundle: out,
+      encryptionKey: Buffer.alloc(32, 7).toString("base64"),
+      links: {},
+    });
     expect(await resolved(fn.arn)).toBe(await resolved(fn.nodes.function!.arn));
     expect(await resolved(fn.endpointArn)).toBe(
       await resolved(fn.nodes.endpoint!.arn),
@@ -561,7 +635,10 @@ describe("WebFunction", () => {
     });
     await resolved(fn.url);
     const bucket = named("CustomLogGroupCodeBucket", "aws:s3/bucket:Bucket");
-    expect(functionInputs("CustomLogGroup").functionName).toBe(
+    expect(functionInputs("CustomLogGroup").functionName).toMatch(
+      /^app-test-CustomLogGroupFunction-/,
+    );
+    expect(functionInputs("CustomLogGroup").functionName).not.toBe(
       bucket.inputs.bucket,
     );
     expect(
@@ -644,11 +721,13 @@ describe("WebFunction", () => {
       restrictPublicBuckets: true,
     });
     expect(code.inputs.bucket).toBe(versioning.inputs.bucket);
-    expect(code.inputs.key).toBe("code.zip");
+    expect(unwrapSecret(code.inputs.key)).toBe(
+      `code/${(await archive("Pinned")).hash}.zip`,
+    );
     expect(revisionInputs("Pinned").buildConfig.codeConfig).toEqual({
       s3Object: {
         bucket: code.inputs.bucket,
-        key: "code.zip",
+        key: unwrapSecret(code.inputs.key),
         versionId: "PinnedCode-version",
       },
     });
@@ -677,13 +756,13 @@ describe("WebFunction", () => {
       expect.arrayContaining(["s3:GetObject", "s3:GetObjectVersion"]),
     );
     expect(statements[0].Resource).toBe(
-      `arn:aws:s3:::${bucket.inputs.bucket}/code.zip`,
+      `arn:aws:s3:::${bucket.inputs.bucket}/code/*`,
     );
     expect(statements[0].Condition.StringEquals["aws:SourceAccount"]).toBe(
       "111111111111",
     );
     expect(statements[0].Condition.ArnLike["aws:SourceArn"]).toBe(
-      `arn:aws:lambda:us-east-1:111111111111:web-function/${bucket.inputs.bucket}/revision/*`,
+      `${await resolved(fn.arn)}/revision/*`,
     );
     expect(
       registrations.indexOf("ArtifactAccessCodeBucketPolicy"),
@@ -742,7 +821,7 @@ describe("WebFunction", () => {
       ),
     });
     await resolved(fn.url);
-    expect(Object.keys(environment("EnvironmentLimits"))).toHaveLength(252);
+    expect(Object.keys(environment("EnvironmentLimits"))).toHaveLength(254);
     expect(
       Buffer.byteLength(environment("EnvironmentLimits").KEY0, "utf8"),
     ).toBe(5100);
@@ -763,25 +842,44 @@ describe("WebFunction", () => {
 
   it("keeps ZIP bytes stable across timestamps and changes them when code changes", async () => {
     const first = new WebFunction("ZipFirst", {
-      entrypoint: "index.mjs",
-      bundle: out,
+      entrypoint: "src/server.ts",
     });
     await resolved(first.url);
     const firstHash = (await archive("ZipFirst")).hash;
     fs.utimesSync(path.join(out, "index.mjs"), new Date(), new Date());
     const second = new WebFunction("ZipSecond", {
-      entrypoint: "index.mjs",
-      bundle: out,
+      entrypoint: "src/server.ts",
     });
     await resolved(second.url);
     expect((await archive("ZipSecond")).hash).toBe(firstHash);
+    expect(
+      unwrapSecret(
+        named("ZipSecondCode", "aws:s3/bucketObjectv2:BucketObjectv2").inputs
+          .key,
+      ),
+    ).toBe(
+      unwrapSecret(
+        named("ZipFirstCode", "aws:s3/bucketObjectv2:BucketObjectv2").inputs
+          .key,
+      ),
+    );
     fixtureFile("index.mjs", "console.log('changed');\n");
     const third = new WebFunction("ZipChanged", {
-      entrypoint: "index.mjs",
-      bundle: out,
+      entrypoint: "src/server.ts",
     });
     await resolved(third.url);
     expect((await archive("ZipChanged")).hash).not.toBe(firstHash);
+    expect(
+      unwrapSecret(
+        named("ZipChangedCode", "aws:s3/bucketObjectv2:BucketObjectv2").inputs
+          .key,
+      ),
+    ).not.toBe(
+      unwrapSecret(
+        named("ZipFirstCode", "aws:s3/bucketObjectv2:BucketObjectv2").inputs
+          .key,
+      ),
+    );
   });
 
   it("excludes SST metadata and Git files without dropping application assets", async () => {
@@ -798,6 +896,7 @@ describe("WebFunction", () => {
     });
     await resolved(fn.url);
     expect((await archive("Filtered")).names.sort()).toEqual([
+      ".sst/Filtered/resource.enc",
       "index.mjs",
       "public/logo.svg",
     ]);
@@ -918,7 +1017,8 @@ describe("WebFunction", () => {
     });
     await resolved(fn.url);
     const linkedEnvironment = environment("Linked");
-    expect(JSON.parse(linkedEnvironment.SST_RESOURCE_Files)).toMatchObject({
+    expect(linkedEnvironment).not.toHaveProperty("SST_RESOURCE_Files");
+    expect((await linkedResources("Linked")).Files).toMatchObject({
       name: "files-bucket",
       type: "sst.sst.Linkable",
     });
@@ -944,6 +1044,89 @@ describe("WebFunction", () => {
       ),
     ).toBe(false);
   });
+
+  it("encrypts large linked values outside environment limits and isolates shared prebuilt bundles", async () => {
+    const sensitive = "linked-secret-value-".repeat(3000);
+    const linked = (name: string, value: string) => ({
+      urn: pulumi.output(
+        `urn:pulumi:stack::project::sst:sst:Linkable::${name}`,
+      ),
+      getSSTLink: () => ({ properties: { value: pulumi.secret(value) } }),
+    });
+    const first = new WebFunction("SharedFirst", {
+      entrypoint: "index.mjs",
+      bundle: out,
+      link: [linked("LargeSecret", sensitive)],
+    });
+    const second = new WebFunction("SharedSecond", {
+      entrypoint: "index.mjs",
+      bundle: out,
+      link: [linked("OtherSecret", "other-function-secret")],
+    });
+    await Promise.all([resolved(first.url), resolved(second.url)]);
+    const firstEnvironment = environment("SharedFirst");
+    const secondEnvironment = environment("SharedSecond");
+    expect(firstEnvironment).not.toHaveProperty("SST_RESOURCE_LargeSecret");
+    expect(firstEnvironment.SST_KEY).toBe(
+      await resolved(functionEncryptionKey().base64),
+    );
+    expect(secondEnvironment.SST_KEY).toBe(firstEnvironment.SST_KEY);
+    expect(functionEncryptionKey()).toBe(functionEncryptionKey());
+    expect(await resolved(functionEncryptionKey().urn)).toContain(
+      "::LambdaEncryptionKey",
+    );
+    expect(await pulumi.isSecret(first.nodes.revision!.serviceConfig)).toBe(
+      true,
+    );
+    expect(firstEnvironment.SST_KEY_FILE).toBe(".sst/SharedFirst/resource.enc");
+    expect(secondEnvironment.SST_KEY_FILE).toBe(
+      ".sst/SharedSecond/resource.enc",
+    );
+    expect((await linkedResources("SharedFirst")).LargeSecret.value).toBe(
+      sensitive,
+    );
+    expect(await linkedResources("SharedFirst")).not.toHaveProperty(
+      "OtherSecret",
+    );
+    expect((await linkedResources("SharedSecond")).OtherSecret.value).toBe(
+      "other-function-secret",
+    );
+    const zipped = await archive("SharedFirst");
+    expect(zipped.names).toContain(".sst/SharedFirst/resource.enc");
+    expect(zipped.names).not.toContain(".sst/SharedSecond/resource.enc");
+    expect(zipped.names).not.toContain("resource.enc");
+    for (const content of zipped.contents.values()) {
+      expect(content.toString()).not.toContain(sensitive);
+      expect(content.toString()).not.toContain(firstEnvironment.SST_KEY);
+    }
+    expect(
+      Buffer.byteLength(JSON.stringify(firstEnvironment), "utf8"),
+    ).toBeLessThan(32 * 1024);
+  });
+
+  it.each([false, true])(
+    "does not let copyFiles replace the managed encrypted resource file with prebuilt=%s",
+    async (prebuilt) => {
+      const name = prebuilt ? "ManagedPrebuilt" : "ManagedBuilt";
+      const untrusted = path.join(root, "untrusted-resource.enc");
+      fs.writeFileSync(untrusted, "untrusted ciphertext");
+      const fn = new WebFunction(name, {
+        entrypoint: prebuilt ? "index.mjs" : "src/server.ts",
+        ...(prebuilt ? { bundle: out } : {}),
+        copyFiles: [
+          {
+            from: untrusted,
+            to: prebuilt ? `.sst/${name}/resource.enc` : "resource.enc",
+          },
+        ],
+      });
+      await resolved(fn.url);
+      expect(await linkedResources(name)).toEqual({});
+      expect(environment(name).SST_KEY_FILE).toBe(
+        prebuilt ? `.sst/${name}/resource.enc` : "resource.enc",
+      );
+    },
+  );
 
   it("trusts Lambda in a deployment and adds account trust only in sst dev", async () => {
     const deployed = new WebFunction("CloudTrust", {
@@ -980,6 +1163,14 @@ describe("WebFunction", () => {
     const fn = new WebFunction("Local", {
       entrypoint: "src/server.ts",
       environment: { MESSAGE: "local" },
+      link: [
+        {
+          urn: pulumi.output(
+            "urn:pulumi:stack::project::sst:sst:Linkable::LocalValue",
+          ),
+          getSSTLink: () => ({ properties: { value: "local-value" } }),
+        },
+      ],
       dev: {
         url: "http://localhost:3000",
         command: "node --experimental-strip-types src/server.ts",
@@ -1010,6 +1201,16 @@ describe("WebFunction", () => {
     expect(ofType("aws:s3/bucketObjectv2:BucketObjectv2")).toHaveLength(0);
     expect(ofType("aws:cloudwatch/logGroup:LogGroup")).toHaveLength(1);
     expect(build).not.toHaveBeenCalled();
+    const command = componentOutputs.mock.calls
+      .map(([value]) => value)
+      .find((value) => "_dev" in value);
+    expect(command).toBeDefined();
+    const commandEnvironment = await resolved(command!._dev.environment);
+    expect(
+      JSON.parse(commandEnvironment.SST_RESOURCE_LocalValue),
+    ).toMatchObject({ value: "local-value" });
+    expect(commandEnvironment).not.toHaveProperty("SST_KEY");
+    expect(commandEnvironment).not.toHaveProperty("SST_KEY_FILE");
     const hint = componentOutputs.mock.calls
       .map(([value]) => value)
       .find((value) => "_hint" in value);
