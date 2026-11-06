@@ -67,11 +67,10 @@ type VT struct {
 }
 
 type selection struct {
-	content strings.Builder
-	startX  int
-	startY  int
-	endX    int
-	endY    int
+	startX int
+	startY int
+	endX   int
+	endY   int
 }
 
 type cursorState struct {
@@ -562,7 +561,6 @@ func (vt *VT) Draw() {
 		return
 	}
 	offset := 0
-	vt.selection.content = strings.Builder{}
 	if vt.IsScrolling() {
 		for x := vt.scroll; x < len(vt.primaryScrollback); x += 1 {
 			if offset >= vt.height() {
@@ -586,7 +584,6 @@ func (vt *VT) drawRow(row int, cols []cell) {
 	if vt.scroll != -1 {
 		scrollOffset = vt.scroll
 	}
-	builder := strings.Builder{}
 	for col := 0; col < len(cols); {
 		cell := cols[col]
 		w := cell.width
@@ -598,7 +595,6 @@ func (vt *VT) drawRow(row int, cols []cell) {
 		style := cell.attrs
 		if vt.selection != nil && isCellSelected(col, row+scrollOffset, vt.selection.startX, vt.selection.startY, vt.selection.endX, vt.selection.endY) {
 			style = style.Reverse(true)
-			builder.WriteRune(content)
 		}
 		vt.surface.SetContent(col, row, content, cell.combining, style)
 		if w == 0 {
@@ -609,10 +605,6 @@ func (vt *VT) drawRow(row int, cols []cell) {
 	// a row from the scrollback has no blank cells at its end
 	for col := len(cols); col < vt.width(); col++ {
 		vt.surface.SetContent(col, row, ' ', nil, tcell.StyleDefault)
-	}
-	if builder.Len() > 0 {
-		vt.selection.content.WriteString(strings.TrimRight(builder.String(), " "))
-		vt.selection.content.WriteRune('\n')
 	}
 }
 
@@ -646,10 +638,43 @@ func (vt *VT) Clear() {
 }
 
 func (vt *VT) Copy() string {
-	return strings.TrimRightFunc(vt.selection.content.String(), unicode.IsSpace)
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	s := vt.selection
+	if s == nil || s.endX < 0 || s.endY < 0 {
+		return ""
+	}
+	minY, maxY := s.startY, s.endY
+	if maxY < minY {
+		minY, maxY = maxY, minY
+	}
+	minY = max(minY, 0)
+	scrollback := len(vt.primaryScrollback)
+	maxY = min(maxY, scrollback+len(vt.activeScreen)-1)
+	builder := strings.Builder{}
+	for y := minY; y <= maxY; y++ {
+		var cols []cell
+		if y < scrollback {
+			cols = vt.primaryScrollback[y]
+		} else {
+			cols = vt.activeScreen[y-scrollback]
+		}
+		line := strings.Builder{}
+		for x, c := range cols {
+			if !isCellSelected(x, y, s.startX, s.startY, s.endX, s.endY) {
+				continue
+			}
+			line.WriteRune(c.rune())
+		}
+		builder.WriteString(strings.TrimRight(line.String(), " "))
+		builder.WriteRune('\n')
+	}
+	return strings.TrimRightFunc(builder.String(), unicode.IsSpace)
 }
 
 func (vt *VT) SelectStart(x int, y int) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
 	scrollOffset := len(vt.primaryScrollback)
 	if vt.scroll != -1 {
 		scrollOffset = vt.scroll
@@ -664,6 +689,8 @@ func (vt *VT) SelectStart(x int, y int) {
 }
 
 func (vt *VT) SelectEnd(x int, y int) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
 	scrollOffset := len(vt.primaryScrollback)
 	if vt.scroll != -1 {
 		scrollOffset = vt.scroll
@@ -674,10 +701,14 @@ func (vt *VT) SelectEnd(x int, y int) {
 }
 
 func (vt *VT) HasSelection() bool {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
 	return vt.selection.endX != -1 && vt.selection.endY != -1
 }
 
 func (vt *VT) ClearSelection() {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
 	vt.selection.startX = 0
 	vt.selection.startY = 0
 	vt.selection.endX = -1
