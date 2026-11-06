@@ -2,6 +2,19 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-05: step 5, SST 5's docs on their own
+
+The docs site gets a version for each major version of SST, each built from its own branch ([decision](plan.md#decisions)).
+
+- **The versions** are in `www/src/versions.mjs`: SST 4 from `main` at `/sst/`, SST 5 from `v5` at `/sst/v5/`. Each branch says which one it is in one line, so a merge from `main` doesn't change it. The site's base path, the "Edit page" links and the links to the repo (`tree/main`, `blob/main`) follow it.
+- **The switcher**, in the header next to the title, opens the same page in the other version, keeping the heading it was on, or that version's docs home when it has no such page, as for `CronV2`.
+- **A pre-release's pages** have a banner that stays in sight under the header, a short one on a phone, and ask search engines to leave them out.
+- **SST 5's changelog** lists its own releases, pre-releases included. **"Migrate From v2" and "Migrate From v3"** are on SST 4's docs only; "Migrate From v4" points a reader on SST 2 or 3 there.
+- **Custom Domains** uses `ApiGatewayHttp`, and a `Service` for the load balancer, as SST 5 has it. `FunctionEnvironmentUpdate` is back in the sidebar.
+- **The deploy** (`docs.yml`) has to change on `main`, as Pages deploys only from `main` and each deploy replaces the site: it builds both branches and publishes them together. That change and the switcher's files go to `main` in a pull request, after `v5` has them.
+
+**Checked:** both versions built and served together on a local server, `main`'s from a worktree with the same files: in a browser, the switcher in both directions, the fallback, the banner at desktop and phone widths, and the links. Custom Domains' code type-checks against SST 5's types. The docs build: 181 pages for SST 5.
+
 ## 2026-11-05: step 5, the examples removed
 
 SST 5 has no example apps until each is brought back, deployed ([decision](plan.md#decisions)). 190 apps are deleted; `main` keeps them for SST 4.

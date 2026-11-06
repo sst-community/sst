@@ -8,11 +8,13 @@ import SiteTitle from "@astrojs/starlight/components/SiteTitle.astro";
 import config from '../../config';
 
 import HeaderLinks from "./HeaderLinks.astro";
+import VersionSelect from "./VersionSelect.astro";
 ---
 
 <div class="header sl-flex">
-  <div class="sl-flex">
+  <div class="sl-flex title-group">
     <SiteTitle {...Astro.props} />
+    <VersionSelect />
   </div>
   <div class="middle-group">
     <div class="sl-flex">
@@ -52,6 +54,10 @@ import HeaderLinks from "./HeaderLinks.astro";
 
 .header > div:first-child {
   flex: 0 0 auto;
+}
+.title-group {
+  align-items: center;
+  gap: 1.25rem;
 }
 
 .middle-group {

@@ -5,6 +5,7 @@ import ts from "typescript";
 import config from "./config";
 import { componentFiles } from "./src/component-files.mjs";
 import { exampleDirs } from "./src/examples.mjs";
+import { current } from "./src/versions.mjs";
 
 process.on("uncaughtException", (err) => {
   restoreCode();
@@ -396,11 +397,13 @@ function generateCliDoc() {
 async function generateChangelog() {
   console.info(`Generating changelog...`);
 
-  // The fork's releases, then SST's own from before the fork's first one.
-  // SST's later releases are merged into the fork's, whose notes name them.
+  // The fork's releases of this docs version's major, then SST's own from
+  // before the fork's first one. SST's later releases are merged into the
+  // fork's, whose notes name them. A pre-release's docs list its
+  // pre-releases (src/versions.mjs).
   const REPO = "sst-community/sst";
   const UPSTREAM = "anomalyco/sst";
-  const MIN_MAJOR = 4;
+  const MAJOR = Number(current.id);
   const PER_PAGE = 100;
   const outputFilePath = `src/data/changelog.json`;
 
@@ -468,21 +471,18 @@ async function generateChangelog() {
       releases.push(...batch);
       if (batch.length < PER_PAGE) break;
 
-      // Stop early once we've gone past the v4 cutoff to save calls.
+      // Stop early once we've gone past the major's releases to save calls.
       const passedCutoff = batch.every((r) => {
         const major = parseMajor(r.tag_name);
-        return major !== null && major < MIN_MAJOR;
+        return major !== null && major < MAJOR;
       });
       if (passedCutoff) break;
     }
     console.debug(` - fetched ${releases.length} releases of ${repo}`);
 
     return releases
-      .filter((r) => !r.draft && !r.prerelease)
-      .filter((r) => {
-        const major = parseMajor(r.tag_name);
-        return major !== null && major >= MIN_MAJOR;
-      });
+      .filter((r) => !r.draft && (current.prerelease || !r.prerelease))
+      .filter((r) => parseMajor(r.tag_name) === MAJOR);
   }
 
   function publishedAt(r: GithubRelease) {

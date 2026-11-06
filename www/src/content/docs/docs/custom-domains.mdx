@@ -23,19 +23,24 @@ By default, these components auto-generate a URL. You can pass in the `domain` t
   </TabItem>
   <TabItem label="API">
   ```ts title="sst.config.ts" {2}
-  new sst.aws.ApiGatewayV2("MyApi", {
+  new sst.aws.ApiGatewayHttp("MyApi", {
     domain: "api.example.com"
   });
   ```
   </TabItem>
   <TabItem label="Service">
-  ```ts title="sst.config.ts" {6}
+  ```ts title="sst.config.ts" {7}
   const vpc = new sst.aws.Vpc("MyVpc");
+  const cluster = new sst.aws.Cluster("MyCluster", { vpc });
 
-  new sst.aws.Cluster("MyCluster", {
-    vpc,
+  new sst.aws.Service("MyService", {
+    cluster,
     loadBalancer: {
-      domain: "example.com"
+      domain: "example.com",
+      rules: [
+        { listen: "80/http", redirect: "443/https" },
+        { listen: "443/https", forward: "80/http" }
+      ]
     }
   });
   ```
@@ -240,7 +245,7 @@ To manually set up a domain on an unsupported provider, you'll need to:
 
    If you are configuring a custom domain for a CloudFront distribution, the ACM certificate that's used to prove that you own the domain needs be created in the `us-east-1` region.
 
-   For all the other components, like ApiGatewayV2 or Cluster, can be created in any region.
+   For all the other components, like ApiGatewayHttp or Service, it can be created in any region.
 
 2. Once validated, set the certificate ARN as the `cert` and set `dns` to `false`.
 

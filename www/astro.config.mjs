@@ -3,6 +3,7 @@ import starlight from "@astrojs/starlight";
 import sitemap from "@astrojs/sitemap";
 import config from "./config";
 import forkLinks from "./src/fork-links.mjs";
+import { current, versions } from "./src/versions.mjs";
 import { componentFiles, internal } from "./src/component-files.mjs";
 import { hasExamples } from "./src/examples.mjs";
 import { rehypeHeadingIds } from "@astrojs/markdown-remark";
@@ -68,8 +69,6 @@ const sidebar = [
       { label: "Policy Packs", slug: "docs/policy-packs" },
       { label: "AWS Accounts", slug: "docs/aws-accounts" },
       { label: "IAM Credentials", slug: "docs/iam-credentials" },
-      { label: "Migrate From v2", slug: "docs/migrate-from-v2" },
-      { label: "Migrate From v3", slug: "docs/migrate-from-v3" },
       { label: "Migrate From v4", slug: "docs/migrate-from-v4" },
       { label: "Custom Domains", slug: "docs/custom-domains" },
       { label: "Import Resources", slug: "docs/import-resources" },
@@ -98,6 +97,7 @@ const sidebar = [
             collapsed: true,
             items: [
               ...internal.aws.map((name) => `docs/component/aws/${name}`),
+              "docs/component/aws/resources/function-environment-update",
               {
                 label: "StepFunctions",
                 collapsed: true,
@@ -199,9 +199,10 @@ if (import.meta.env.DEV) {
   });
 }
 
-// The sst-community docs are a static site on GitHub Pages, under this path.
+// The sst-community docs are a static site on GitHub Pages. Each version of
+// them is under its own path (src/versions.mjs).
 const site = "https://sst-community.github.io";
-const base = "/sst";
+const base = current.base;
 
 // https://astro.build/config
 export default defineConfig({
@@ -256,9 +257,10 @@ export default defineConfig({
         { icon: "discord", label: "Discord", href: config.forkDiscord },
       ],
       editLink: {
-        baseUrl: "https://github.com/sst-community/sst/edit/main/www",
+        baseUrl: `${config.fork}/edit/${current.branch}/www`,
       },
       components: {
+        Banner: "./src/components/Banner.astro",
         Hero: "./src/components/Hero.astro",
         Head: "./src/components/Head.astro",
         Header: "./src/components/Header.astro",
@@ -304,7 +306,15 @@ export default defineConfig({
           behavior: "wrap",
         },
       ],
-      [forkLinks, { base }],
+      [
+        forkLinks,
+        {
+          base,
+          bases: versions.map((version) => version.base),
+          fork: config.fork,
+          branch: current.branch,
+        },
+      ],
     ],
   },
 });
