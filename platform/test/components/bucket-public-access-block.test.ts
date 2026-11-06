@@ -5,7 +5,8 @@ import * as pulumi from "@pulumi/pulumi";
 global.$app = { name: "app", stage: "test" };
 global.$util = pulumi;
 
-const retention = new Map<string, boolean | undefined>();
+// The resource options each resource is registered with, by name.
+const options = new Map<string, pulumi.CustomResourceOptions>();
 const resources = new Map<string, pulumi.runtime.MockResourceArgs>();
 
 function resolveOutput<T>(value: pulumi.Output<T>) {
@@ -15,6 +16,11 @@ function resolveOutput<T>(value: pulumi.Output<T>) {
       return resolved;
     });
   });
+}
+
+// The name a resource was registered with.
+function nameOf(resource: pulumi.Resource | undefined) {
+  return (resource as any)?.__name as string | undefined;
 }
 
 describe("Bucket public access block lifecycle", () => {
@@ -37,7 +43,7 @@ describe("Bucket public access block lifecycle", () => {
     );
     await pulumi.runtime.runInPulumiStack(async () => {
       pulumi.runtime.registerStackTransformation((args) => {
-        retention.set(args.name, args.opts.retainOnDelete);
+        options.set(args.name, args.opts as pulumi.CustomResourceOptions);
         return undefined;
       });
       Bucket = (await import("../../src/components/aws/bucket")).Bucket;
@@ -45,46 +51,55 @@ describe("Bucket public access block lifecycle", () => {
     });
   });
 
-  it.each([false, true])(
-    "retains the block without changing bucket retention %s",
-    async (retainOnDelete) => {
-      const name = retainOnDelete ? "RetainedBucket" : "RemovedBucket";
-      const bucket = new Bucket(name, {}, { retainOnDelete });
-      await resolveOutput(bucket.name);
-
-      expect(retention.get(`${name}PublicAccessBlock`)).toBe(true);
-      expect(retention.get(`${name}Bucket`)).toBe(retainOnDelete);
-    },
-  );
-
-  it("retains the block when no parent retention option is provided", async () => {
+  // Deleting the bucket doesn't delete its block first, so a bucket being
+  // removed is never left without it.
+  it("is deleted with its bucket", async () => {
     const bucket = new Bucket("DefaultBucket");
     await resolveOutput(bucket.name);
 
-    expect(retention.get("DefaultBucketPublicAccessBlock")).toBe(true);
-    expect(retention.get("DefaultBucketBucket")).toBeUndefined();
+    expect(
+      nameOf(options.get("DefaultBucketPublicAccessBlock")?.deletedWith),
+    ).toBe("DefaultBucketBucket");
   });
 
-  it("lets a transform explicitly opt into deleting the block", async () => {
-    const bucket = new Bucket(
-      "OverrideBucket",
-      {
-        transform: {
-          publicAccessBlock: (_args, opts) => {
-            opts.retainOnDelete = false;
-          },
-        },
-      },
-      { retainOnDelete: true },
-    );
+  // `deletedWith` only applies when the bucket is deleted too. Removing the
+  // block alone still deletes it, so nothing that works today changes.
+  it("is not retained on its own", async () => {
+    const bucket = new Bucket("PlainBucket");
     await resolveOutput(bucket.name);
 
-    expect(retention.get("OverrideBucketPublicAccessBlock")).toBe(false);
-    expect(retention.get("OverrideBucketBucket")).toBe(true);
+    expect(
+      options.get("PlainBucketPublicAccessBlock")?.retainOnDelete,
+    ).toBeFalsy();
+  });
+
+  it("follows the bucket's retention", async () => {
+    const bucket = new Bucket("RetainedBucket", {}, { retainOnDelete: true });
+    await resolveOutput(bucket.name);
+
+    expect(options.get("RetainedBucketBucket")?.retainOnDelete).toBe(true);
+    expect(
+      nameOf(options.get("RetainedBucketPublicAccessBlock")?.deletedWith),
+    ).toBe("RetainedBucketBucket");
+  });
+
+  it("lets a transform delete the block on its own again", async () => {
+    const bucket = new Bucket("OverrideBucket", {
+      transform: {
+        publicAccessBlock: (_args, opts) => {
+          opts.deletedWith = undefined;
+        },
+      },
+    });
+    await resolveOutput(bucket.name);
+
+    expect(
+      options.get("OverrideBucketPublicAccessBlock")?.deletedWith,
+    ).toBeUndefined();
   });
 
   it.each(["cloudfront", "public"] as const)(
-    "preserves the public access block settings for %s access",
+    "keeps the public access block settings for %s access",
     async (access) => {
       const name = access === "public" ? "PublicBucket" : "CloudfrontBucket";
       const bucket = new Bucket(name, { access });
@@ -99,7 +114,18 @@ describe("Bucket public access block lifecycle", () => {
         ignorePublicAcls: true,
         restrictPublicBuckets: access !== "public",
       });
-      expect(retention.get(`${name}PublicAccessBlock`)).toBe(true);
+      expect(nameOf(options.get(`${name}PublicAccessBlock`)?.deletedWith)).toBe(
+        `${name}Bucket`,
+      );
     },
   );
+
+  it("creates no block when the transform is false", async () => {
+    const bucket = new Bucket("NoBlockBucket", {
+      transform: { publicAccessBlock: false },
+    });
+    await resolveOutput(bucket.name);
+
+    expect(options.has("NoBlockBucketPublicAccessBlock")).toBe(false);
+  });
 });

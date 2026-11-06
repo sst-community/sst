@@ -560,24 +560,11 @@ export interface BucketArgs {
     /**
      * Transform the public access block resource that's attached to the Bucket.
      *
-     * The resource defaults to `retainOnDelete: true`, so its configuration stays
-     * on the bucket until S3 deletes the bucket. This also preserves the block on
-     * retained buckets. Deploy existing stacks once for this default to take effect.
+     * The block is deleted with the bucket: when the bucket is removed, its block
+     * isn't deleted first, so the bucket is never left without it. Removing the
+     * block on its own, for example by setting this to `false`, still deletes it.
      *
      * Set this to `false` if the public access block resource should not be created.
-     * Removing only the resource leaves its configuration on an existing bucket.
-     * To intentionally delete it, deploy the following override before removing
-     * the resource:
-     *
-     * ```js
-     * {
-     *   transform: {
-     *     publicAccessBlock: (args, opts) => {
-     *       opts.retainOnDelete = false;
-     *     }
-     *   }
-     * }
-     * ```
      */
     publicAccessBlock?: Transform<s3.BucketPublicAccessBlockArgs> | false;
   };
@@ -1174,7 +1161,9 @@ export class Bucket extends Component implements Link.Linkable {
             ignorePublicAcls: true,
             restrictPublicBuckets: access.apply((v) => v !== "public"),
           },
-          { parent, retainOnDelete: true },
+          // Not deleted on its own when the bucket is deleted too, so the bucket
+          // doesn't go without its block while it is being removed.
+          { parent, deletedWith: bucket },
         ),
       );
     }
