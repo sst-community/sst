@@ -20,18 +20,18 @@ import {
   lambdaweb,
   s3,
 } from "@pulumi/aws";
-import { Component, Transform, transform } from "../component";
-import { DurationMinutes, toSeconds } from "../duration";
-import { VisibleError } from "../error";
-import { DevCommand } from "../experimental/dev-command";
-import { Input } from "../input";
-import { Link } from "../link";
-import { physicalName } from "../naming";
-import { rpc } from "../rpc/rpc";
-import { FunctionArgs } from "./function";
+import { Component, Transform, transform } from "../component.js";
+import { DurationMinutes, toSeconds } from "../duration.js";
+import { VisibleError } from "../error.js";
+import { DevCommand } from "../experimental/dev-command.js";
+import { Input } from "../input.js";
+import { Link } from "../link.js";
+import { physicalName } from "../naming.js";
+import { rpc } from "../rpc/rpc.js";
+import { FunctionArgs } from "./function.js";
 import { functionEncryptionKey } from "./function-encryption-key.js";
-import { RETENTION } from "./logging";
-import { Permission, permission } from "./permission";
+import { RETENTION } from "./logging.js";
+import { Permission, permission } from "./permission.js";
 
 export interface WebFunctionArgs {
   /**
@@ -261,7 +261,9 @@ export interface WebFunctionArgs {
          */
         directory?: Input<string>;
         /**
-         * The local server URL returned by this component.
+         * The local server URL returned by this component. Its path and query are
+         * preserved in the returned URL. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the
+         * hostname and port, since an HTTP listener cannot bind to a URL path.
          * @default `"http://localhost:8080"`
          * @example
          * ```js
