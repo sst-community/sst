@@ -33,9 +33,8 @@ export class DnsRecord extends dynamic.Resource {
         ...args,
         recordId: undefined,
         accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
-        apiToken:
-          $app.providers?.cloudflare?.apiToken ||
-          process.env.CLOUDFLARE_API_TOKEN!,
+        // The CLI calls Cloudflare's API with its own credentials: inputs are
+        // saved to the state.
       },
       opts,
     );
