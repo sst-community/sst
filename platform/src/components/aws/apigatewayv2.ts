@@ -1,3 +1,4 @@
+import { ApiGatewayLambdaHandler } from "./helpers/apigateway-lambda-handler";
 import { ComponentResourceOptions, Output, all, output } from "@pulumi/pulumi";
 import {
   Component,
@@ -690,6 +691,7 @@ export interface ApiGatewayV2RouteArgs {
  * With this we set the `memory` if it's not overridden by the route.
  */
 export class ApiGatewayV2 extends Component implements Link.Linkable {
+  private readonly sharedHandlerNames = new Set<string>();
   private constructorName: string;
   private constructorArgs: ApiGatewayV2Args;
   private constructorOpts: ComponentResourceOptions;
@@ -1031,6 +1033,54 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
   }
 
   /**
+   * Register a Lambda ARN once and share its invocation permission across routes.
+   * Use a stable name and reuse the returned handler for every route with this target.
+   * The ARN can reference a function, alias, or version, including one created in this app.
+   * For a versioned or durable SST Function, pass `fn.nodes.function.qualifiedArn`
+   * to preserve the version used by `route(..., fn)`. `fn.arn` is unqualified.
+   * This grants the same API-wide access as ordinary routes, without a policy statement
+   * per route. Authentication and authorization settings on the routes are unchanged.
+   *
+   * The permission belongs to this API and remains until this call is removed, even when
+   * no routes use it. Different aliases or versions need separate named handlers.
+   *
+   * To consolidate existing routes, add the handler, pass it to the routes, and deploy.
+   * Integrations depend on the replacement permissions before old grants are removed.
+   * To switch back, pass the Lambda ARN to the routes, remove the unused handler, and
+   * deploy. No intermediate deployment is needed when both policy forms fit the quota.
+   *
+   * If the Lambda policy is already full, first remove a redundant API-wide statement
+   * through its owning infrastructure while retaining a working grant. Switching back
+   * to per-route grants also needs enough policy space; use batches or keep sharing.
+   *
+   * @param name A unique, stable name starting with a letter and containing only letters and numbers.
+   * @param arn The Lambda ARN to invoke. Use `fn.arn` for an unversioned function, or a qualified Lambda ARN for an alias or version.
+   * @example
+   * ```js
+   * const handler = api.addHandler("Backend", fn.arn);
+   * api.route("GET /items", handler);
+   * api.route("POST /items", handler);
+   * ```
+   */
+  public addHandler(name: string, arn: Input<string>) {
+    if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name))
+      throw new VisibleError(
+        "A shared handler name must start with a letter and contain only letters and numbers.",
+      );
+    if (this.sharedHandlerNames.has(name))
+      throw new VisibleError(
+        `The shared handler "${name}" already exists in this API.`,
+      );
+    this.sharedHandlerNames.add(name);
+    return new ApiGatewayLambdaHandler(
+      `${this.constructorName}Handler${name}Permission`,
+      arn,
+      this,
+      this.api.executionArn,
+    );
+  }
+
+  /**
    * Add a route to the API Gateway HTTP API. The route is a combination of
    * - An HTTP method and a path, `{METHOD} /{path}`.
    * - Or a `$default` route.
@@ -1066,7 +1116,7 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
    * :::
    *
    * @param rawRoute The path for the route.
-   * @param handler The function that'll be invoked.
+   * @param handler The function, Lambda ARN, or shared handler returned by `addHandler()` that'll be invoked.
    * @param args Configure the route.
    *
    * @example
@@ -1131,7 +1181,9 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
    */
   public route(
     rawRoute: string,
-    handler: Input<string | FunctionArgs | FunctionArn>,
+    handler:
+      | Input<string | FunctionArgs | FunctionArn>
+      | ApiGatewayLambdaHandler,
     args: ApiGatewayV2RouteArgs = {},
   ) {
     const route = this.parseRoute(rawRoute);
@@ -1150,7 +1202,14 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
           executionArn: this.api.executionArn,
         },
         route,
-        handler,
+        handler:
+          handler instanceof ApiGatewayLambdaHandler
+            ? handler.forApi(this)
+            : handler,
+        sharedPermission:
+          handler instanceof ApiGatewayLambdaHandler
+            ? handler.permission
+            : undefined,
         handlerLink: this.constructorArgs.link,
         handlerTransform: this.constructorArgs.transform?.route?.handler,
         ...transformed[1],
