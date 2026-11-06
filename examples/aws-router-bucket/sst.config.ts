@@ -29,13 +29,9 @@ export default $config({
       source: $asset("spongebob.svg"),
     });
 
-    const router = new sst.aws.Router("MyRouter", {
-      routes: {
-        "/*": {
-          bucket,
-          rewrite: { regex: "^/(.*)$", to: "/public/$1" },
-        },
-      },
+    const router = new sst.aws.Router("MyRouter");
+    router.routeBucket("/", bucket, {
+      rewrite: { regex: "^/(.*)$", to: "/public/$1" },
     });
 
     return {

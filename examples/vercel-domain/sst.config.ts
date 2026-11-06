@@ -23,10 +23,8 @@ export default $config({
         name: "ion.sst.moe",
         dns: sst.vercel.dns({ domain: "sst.moe" }),
       },
-      routes: {
-        "/*": "https://sst.dev",
-      },
     });
+    router.route("/", "https://sst.dev");
     return {
       router: router.url,
     };

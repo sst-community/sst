@@ -177,7 +177,7 @@ export default $config({
     });
 
     new aws.lambda.FunctionEventInvokeConfig("eventConfig", {
-      functionName: $resolve([busSubscriber.nodes.function.name]).apply(
+      functionName: $resolve([bus.nodes.subscriber["busSubscriber"].name]).apply(
         ([name]) => name,
       ),
       maximumRetryAttempts: 1,
@@ -190,7 +190,7 @@ export default $config({
 
     retryQueue.subscribe({
       handler: "src/retry.handler",
-      link: [busSubscriber.nodes.function, retryQueue, dlq],
+      link: [bus.nodes.subscriber["busSubscriber"], retryQueue, dlq],
       timeout: "30 seconds",
       environment: {
         RETRIER_QUEUE_URL: retryQueue.url,

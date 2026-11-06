@@ -30,11 +30,9 @@ export default $config({
       url: true,
     });
     const router = new sst.aws.Router("SwiftRouter", {
-      routes: {
-        "/*": swift.url,
-      },
       domain: "swift.dev.sst.dev",
     });
+    router.route("/", swift.url);
     return {
       url: router.url,
     };

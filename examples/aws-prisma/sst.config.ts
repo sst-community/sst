@@ -21,7 +21,7 @@ export default $config({
       link: [rds],
       environment: { DATABASE_URL },
       loadBalancer: {
-        ports: [{ listen: "80/http" }],
+        rules: [{ listen: "80/http" }],
       },
       dev: {
         command: "node --watch index.mjs",

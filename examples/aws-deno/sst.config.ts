@@ -18,7 +18,7 @@ export default $config({
       cluster,
       link: [bucket],
       loadBalancer: {
-        ports: [{ listen: "80/http", forward: "8000/http" }],
+        rules: [{ listen: "80/http", forward: "8000/http" }],
       },
       dev: {
         command: "deno task dev",

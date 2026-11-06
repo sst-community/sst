@@ -17,7 +17,7 @@ export default $config({
     };
   },
   async run() {
-    const vpc = new sst.aws.Vpc("MyVpc", { nat: "gateway" });
+    const vpc = new sst.aws.Vpc("MyVpc", { nat: "managed" });
     const cluster = new sst.aws.Cluster("MyCluster", { vpc });
 
     const service = new sst.aws.Service("MyService", {
@@ -28,7 +28,7 @@ export default $config({
       },
       loadBalancer: {
         domain: "rust.dockerfile.dev.sst.dev",
-        ports: [
+        rules: [
           { listen: "80/http" },
           { listen: "443/https", forward: "80/http" },
         ],

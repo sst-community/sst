@@ -24,7 +24,7 @@ export default $config({
       cluster,
       loadBalancer: {
         public: false,
-        ports: [{ listen: "80/http" }],
+        rules: [{ listen: "80/http" }],
       },
     });
   },

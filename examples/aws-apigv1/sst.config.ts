@@ -9,7 +9,7 @@ export default $config({
     };
   },
   async run() {
-    const api = new sst.aws.ApiGatewayV1("MyApi");
+    const api = new sst.aws.ApiGatewayRest("MyApi");
     const authorizer = api.addAuthorizer({
       name: "MyAuthorizer",
       tokenFunction: "index.authorizer",

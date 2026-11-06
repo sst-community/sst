@@ -337,7 +337,15 @@ describe("more args", () => {
         `const cluster = new sst.aws.Cluster("C", { vpc }, { provider: east });\ncluster.addService("Web", { image: "nginx" });`,
       ).text,
     ).toBe(
-      `const cluster = new sst.aws.Cluster("C", { vpc }, { provider: east });\nnew sst.aws.Service("Web", { cluster: cluster, image: "nginx" }, { provider: east });`,
+      `const cluster = new sst.aws.Cluster("C", { vpc }, { provider: east });\nnew sst.aws.Service("Web", { cluster, image: "nginx" }, { provider: east });`,
+    );
+    // Args written one to a line get the cluster on a line of its own
+    expect(
+      config(
+        `const c = new sst.aws.Cluster("C", { vpc });\nc.addService("Web", {\n  image: "nginx",\n});`,
+      ).text,
+    ).toBe(
+      `const c = new sst.aws.Cluster("C", { vpc });\nnew sst.aws.Service("Web", {\n  cluster: c,\n  image: "nginx",\n});`,
     );
   });
 

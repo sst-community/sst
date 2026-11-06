@@ -786,20 +786,26 @@ export const rules: Rule[] = [
       const [name, args, opts] = node.arguments;
       if (!name) return;
       const cluster = ctx.text(receiver);
+      const entry = cluster === "cluster" ? "cluster" : `cluster: ${cluster}`;
       ctx.edit(
         node.getStart(ctx.sf),
         name.getStart(ctx.sf),
         `new ${ctx.qualified({ group: "aws", five: component })}(`,
       );
-      if (!args)
-        ctx.edit(name.getEnd(), name.getEnd(), `, { cluster: ${cluster} }`);
-      else if (ts.isObjectLiteralExpression(args))
-        ctx.edit(
-          args.getStart(ctx.sf) + 1,
-          args.getStart(ctx.sf) + 1,
-          ` cluster: ${cluster},`,
-        );
-      else ctx.replace(args, `{ cluster: ${cluster}, ...${ctx.text(args)} }`);
+      if (!args) ctx.edit(name.getEnd(), name.getEnd(), `, { ${entry} }`);
+      else if (ts.isObjectLiteralExpression(args)) {
+        // On a line of its own where the args are written one to a line,
+        // indented as the first is
+        const open = args.getStart(ctx.sf) + 1;
+        const first = args.properties[0];
+        const line = (pos: number) =>
+          ctx.sf.getLineAndCharacterOfPosition(pos).line;
+        if (first && line(first.getStart(ctx.sf)) > line(open)) {
+          const start = ctx.sf.getLineStarts()[line(first.getStart(ctx.sf))];
+          const indent = ctx.sf.text.slice(start, first.getStart(ctx.sf));
+          ctx.edit(open, open, `\n${indent}${entry},`);
+        } else ctx.edit(open, open, ` ${entry},`);
+      } else ctx.replace(args, `{ ${entry}, ...${ctx.text(args)} }`);
       // The cluster's provider, which SST 4 gave what it added
       const created = ref.created;
       const clusterOpts = created?.arguments?.[2];

@@ -16,7 +16,7 @@ export default $config({
   },
   async run() {
     const cron = new sst.cloudflare.Cron("Cron", {
-      job: "index.ts",
+      worker: "index.ts",
       schedules: ["* * * * *"]
     });
 

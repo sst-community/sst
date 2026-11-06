@@ -41,7 +41,7 @@ export default $config({
     new sst.aws.Service("MyService", {
       cluster,
       loadBalancer: {
-        ports: [{ listen: "80/http", forward: "3000/http" }],
+        rules: [{ listen: "80/http", forward: "3000/http" }],
       },
       dev: {
         command: "npm run dev",

@@ -19,7 +19,8 @@ export default $config({
   async run() {
     const vpc = new sst.aws.Vpc("MyVpc");
     const cluster = new sst.aws.Cluster("MyCluster", { vpc });
-    const service = cluster.addService("MyAppService", {
+    const service = new sst.aws.Service("MyAppService", {
+      cluster,
       image: {
         context: "./",
         dockerfile: "packages/server/Dockerfile",

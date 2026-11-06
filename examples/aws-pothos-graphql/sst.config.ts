@@ -18,7 +18,7 @@ export default $config({
       });
     }
 
-    const api = new sst.aws.ApiGatewayV2("Api");
+    const api = new sst.aws.ApiGatewayHttp("Api");
     api.route("POST /graphql", "pothos/graphql.handler");
 
     const client = new sst.aws.Function("Client", {

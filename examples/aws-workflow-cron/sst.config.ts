@@ -32,7 +32,7 @@ export default $config({
       handler: "src/workflow.handler",
     });
 
-    const cron = new sst.aws.CronV2("MyCron", {
+    const cron = new sst.aws.Cron("MyCron", {
       schedule: "rate(1 minute)",
       function: workflow,
     });

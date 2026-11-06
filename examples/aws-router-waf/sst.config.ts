@@ -26,9 +26,6 @@ export default $config({
     });
 
     const router = new sst.aws.Router("MyRouter", {
-      routes: {
-        "/*": api.url,
-      },
       waf: {
         rateLimitPerIp: 1000,
         managedRules: {
@@ -39,6 +36,7 @@ export default $config({
         logging: true,
       },
     });
+    router.route("/", api.url);
 
     return {
       url: router.url,

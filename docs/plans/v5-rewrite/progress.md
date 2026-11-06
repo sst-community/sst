@@ -2,6 +2,19 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-05: step 5, the examples moved with the codemod
+
+The codemod, run over the 194 examples with a config, writes its changes in place: 48 files, 49 changes, most of them a service's `ports` (31) and the four renamed components' names (12). What it listed was done by hand:
+
+- **The five `Router`s with `routes`** (`aws-router`, `aws-router-bucket`, `aws-router-waf`, `aws-swift`, `vercel-domain`) add each route with `route()` or `routeBucket()`, `/api/*` as `/api` and `/*` as `/`, the bucket's rewrite kept.
+- **The three that use a component 5.0 leaves out are deleted** ([decision](plan.md#decisions)): `aws-vector`, `cloudflare-auth` and `cloudflare-solid`.
+- **The codemod writes a cluster's `addService` the way a person would:** the `cluster` it adds to the args is on a line of its own where they're written one to a line, and short (`cluster`) where the variable is named so. It wrote `{ cluster: cluster,` in front of the first line before. Run again, it changes nothing and lists nothing.
+- **Two values SST 4 refused too are fixed:** `aws-rust-cluster`'s `nat: "gateway"`, which is `"managed"`, and `sst-transform`'s `nodejs14.x`, which is `nodejs22.x`.
+
+**Checked:** the 191 configs type-check against SST 5's types with no error they didn't have against SST 4's, and without those two; what's left is theirs, like a provider's package that isn't installed. The examples still install `sst` from `sdk/js`, so they follow the branch.
+
+**The docs:** the examples page is made from them, so it shows SST 5's names and the routes the new way, and no longer lists the vector search. The generator now makes the examples' pages again each run, so a deleted example leaves no page behind locally. `components.mdx`'s "Versioning" said to keep a component's old version with `Vpc.v1`; it says how a stage moves to a component's new version with `sst migrate` now. The site builds, 315 pages. Left for the docs of `v5`: they link the examples and the repo on `main` (`www/generate.ts`).
+
 ## 2026-11-05: step 5, the tombstone
 
 A stage on SST 5's components keeps SST 4's CLI off it ([The move](plan.md#the-move)).

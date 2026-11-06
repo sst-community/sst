@@ -60,7 +60,7 @@ export default $config({
       cluster,
       link: [redis],
       loadBalancer: {
-        ports: [{ listen: "80/http", forward: "4321/http" }],
+        rules: [{ listen: "80/http", forward: "4321/http" }],
       },
       dev: {
         command: "npm run dev",

@@ -59,9 +59,7 @@ export default $config({
     );
 
     new sst.aws.Nextjs("MyWeb", {
-      server: {
-        // Don't password protect prod
-        edge: $app.stage !== "production"
+      edge: $app.stage !== "production"
           ? {
             viewerRequest: {
               injection: $interpolate`
@@ -79,7 +77,6 @@ export default $config({
             },
           }
           : undefined,
-      },
     });
   },
 });

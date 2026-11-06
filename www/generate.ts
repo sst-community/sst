@@ -665,6 +665,8 @@ async function generateIndividualExampleDocs() {
   }
   const modules = await buildExamples();
   const outputDir = `src/content/docs/docs/examples`;
+  // Made again each time, so an example that's gone leaves no page behind
+  fs.rmSync(outputDir, { recursive: true, force: true });
   fs.mkdirSync(outputDir, { recursive: true });
 
   for (const module of modules) {

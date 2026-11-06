@@ -21,12 +21,9 @@ export default $config({
     const bucket = new sst.aws.Bucket("MyBucket", {
       access: "public",
     });
-    const router = new sst.aws.Router("MyRouter", {
-      routes: {
-        "/api/*": api.url,
-        "/*": $interpolate`https://${bucket.domain}`,
-      },
-    });
+    const router = new sst.aws.Router("MyRouter");
+    router.route("/api", api.url);
+    router.route("/", $interpolate`https://${bucket.domain}`);
 
     return {
       router: router.url,

@@ -45,7 +45,7 @@ export default $config({
     };
   },
   async run() {
-    const api = new sst.aws.ApiGatewayV1("MyApi");
+    const api = new sst.aws.ApiGatewayRest("MyApi");
     api.route("GET /", {
       handler: "index.handler",
       streaming: true,

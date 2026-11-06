@@ -15,7 +15,7 @@ export default $config({
   },
   async run() {
     $transform(sst.aws.Function, (args) => {
-      args.runtime = "nodejs14.x";
+      args.runtime = "nodejs22.x";
       args.environment = {
         FOO: "BAR",
       };

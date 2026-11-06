@@ -62,7 +62,7 @@ export default $config({
       },
     });
 
-    const api = new sst.aws.ApiGatewayV2("MyApi", { vpc });
+    const api = new sst.aws.ApiGatewayHttp("MyApi", { vpc });
     api.routePrivate("$default", service.nodes.cloudmapService.arn);
   },
 });

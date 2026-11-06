@@ -41,7 +41,7 @@ export default $config({
       scaling: { min: 2, max: 4 },
       command: ["start"],
       loadBalancer: {
-        ports: [{ listen: "80/http", forward: "5150/http" }],
+        rules: [{ listen: "80/http", forward: "5150/http" }],
       },
       environment: {
         DATABASE_URL,

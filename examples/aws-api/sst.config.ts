@@ -10,7 +10,7 @@ export default $config({
   },
   async run() {
     const bucket = new sst.aws.Bucket("MyBucket");
-    const api = new sst.aws.ApiGatewayV2("MyApi");
+    const api = new sst.aws.ApiGatewayHttp("MyApi");
     api.route("GET /", {
       link: [bucket],
       handler: "index.upload",

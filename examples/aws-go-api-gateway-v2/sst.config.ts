@@ -44,7 +44,7 @@ export default $config({
     };
   },
   async run() {
-    const api = new sst.aws.ApiGatewayV2("GoApi");
+    const api = new sst.aws.ApiGatewayHttp("GoApi");
     
     api.route("$default", {
       handler: "src/",

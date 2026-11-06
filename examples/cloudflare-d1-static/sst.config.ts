@@ -10,7 +10,7 @@ export default $config({
   },
   async run() {
     const db = $app.stage !== "production"
-      ? sst.cloudflare.D1.get("MyDatabase", "a928590c-34cc-49fd-b3cf-db643db54e9c")
+      ? sst.cloudflare.D1.get("MyDatabase", { databaseId: "a928590c-34cc-49fd-b3cf-db643db54e9c" })
       : new sst.cloudflare.D1("MyDatabase");
 
     const worker = new sst.cloudflare.Worker("Worker", {

@@ -9,7 +9,7 @@ export default $config({
     };
   },
   async run() {
-    const api = new sst.aws.ApiGatewayV2("MyApi");
+    const api = new sst.aws.ApiGatewayHttp("MyApi");
     api.route("GET /", {
       runtime: "provided.al2023",
       architecture: process.arch === "arm64" ? "arm64" : "x86_64",

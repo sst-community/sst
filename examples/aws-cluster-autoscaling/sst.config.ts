@@ -108,7 +108,7 @@ export default $config({
     const service = new sst.aws.Service("MyService", {
       cluster,
       loadBalancer: {
-        ports: [{ listen: "80/http" }],
+        rules: [{ listen: "80/http" }],
       },
       scaling: {
         min: 1,
