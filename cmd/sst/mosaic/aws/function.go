@@ -25,6 +25,7 @@ import (
 	"github.com/sst/sst/v3/pkg/id"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/project/provider"
 	"github.com/sst/sst/v3/pkg/runtime"
 	"github.com/sst/sst/v3/pkg/server"
 )
@@ -579,6 +580,10 @@ func function(ctx context.Context, input input) {
 		// recorded, and put back if it doesn't start
 		stopped, wasStopped := stoppedAt[workerID]
 		delete(stoppedAt, workerID)
+		env := workerEnv[workerID]
+		if input.project.Floci() {
+			env = provider.FlociEnvironment(env, input.project.Env()["SST_FLOCI_ENDPOINT"])
+		}
 		worker, err := input.project.Runtime.Run(ctx, &runtime.RunInput{
 			CfgPath:    input.project.PathConfig(),
 			Runtime:    target.Runtime,
@@ -586,7 +591,7 @@ func function(ctx context.Context, input input) {
 			WorkerID:   workerID,
 			FunctionID: functionID,
 			Build:      build,
-			Env:        workerEnv[workerID],
+			Env:        env,
 		})
 		if err != nil {
 			stateMu.Lock()

@@ -464,6 +464,7 @@ var root = &cli.Command{
 				}, "\n"),
 			},
 			Flags: []cli.Flag{
+				{Name: "floci", Type: "bool", Description: cli.Description{Short: "Run against the local Floci emulator"}},
 				{
 					Name: "mode",
 					Type: "string",
@@ -512,6 +513,7 @@ var root = &cli.Command{
 			Run: CmdMosaic,
 		},
 		CmdDeploy,
+		CmdFloci,
 		CmdDiff,
 		{
 			Name: "add",

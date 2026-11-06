@@ -56,7 +56,7 @@ type BucketFilesOutputs struct {
 }
 
 func (r *BucketFiles) Create(input *BucketFilesInputs, output *CreateResult[BucketFilesOutputs]) error {
-	cfg, err := r.config()
+	cfg, err := r.configForRegion(input.Region)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (r *BucketFiles) Create(input *BucketFilesInputs, output *CreateResult[Buck
 }
 
 func (r *BucketFiles) Update(input *UpdateInput[BucketFilesInputs, BucketFilesOutputs], output *UpdateResult[BucketFilesOutputs]) error {
-	cfg, err := r.config()
+	cfg, err := r.configForRegion(input.News.Region)
 	if err != nil {
 		return err
 	}
@@ -118,7 +118,7 @@ func (r *BucketFiles) Delete(input *DeleteInput[BucketFilesOutputs], output *int
 		return nil
 	}
 
-	cfg, err := r.config()
+	cfg, err := r.configForRegion(input.Outs.Region)
 	if err != nil {
 		return err
 	}

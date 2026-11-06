@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -34,7 +35,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (p *Project) Run(ctx context.Context, input *StackInput) error {
+func (p *Project) runStack(ctx context.Context, input *StackInput) error {
 	log := slog.Default().With("service", "project.run")
 	log.Info("running stack command", "cmd", input.Command)
 
@@ -57,7 +58,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	if input.Command != "diff" {
 		update, err = p.Lock(input.Command)
 		if err != nil {
-			if err == provider.ErrLockExists {
+			if err == provider.ErrLockExists && !p.Floci() {
 				bus.Publish(&ConcurrentUpdateEvent{})
 			}
 			return err
@@ -108,7 +109,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 			cmd.Stdout = pulumiStdout
 			cmd.Stderr = pulumiStderr
 			cmd.Dir = workdir.path
-			cmd.Env = os.Environ()
+			cmd.Env = p.commandEnv()
 			cmd.Env = append(cmd.Env,
 				"PULUMI_BACKEND_URL="+filepath.ToSlash("file://"+workdir.Backend()),
 				"PULUMI_CONFIG_PASSPHRASE="+passphrase,
@@ -248,7 +249,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		return err
 	}
 
-	env := os.Environ()
+	env := p.commandEnv()
 	for key, value := range p.Env() {
 		env = append(env, fmt.Sprintf("%v=%v", key, value))
 	}
@@ -277,6 +278,12 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	if input.ServerPort != 0 {
 		env = append(env, "SST_SERVER=http://127.0.0.1:"+fmt.Sprint(input.ServerPort))
 	}
+	if p.Floci() {
+		env = provider.FlociEnvironment(env, p.floci.Endpoint)
+		if p.FlociPreflight() {
+			env = append(env, "SST_FLOCI_PREFLIGHT=1")
+		}
+	}
 	pulumiPath := global.PulumiPath()
 	if flag.SST_PULUMI_PATH != "" {
 		pulumiPath = flag.SST_PULUMI_PATH
@@ -303,30 +310,11 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	}
 
 	if input.Command == "deploy" || input.Command == "diff" || input.Command == "refresh" {
-		for provider, opts := range p.app.Providers {
-			for key, value := range opts.(map[string]interface{}) {
-				// Skip SST-only fields that Pulumi doesn't understand
-				if key == "package" {
-					continue
-				}
-				switch v := value.(type) {
-				case map[string]interface{}:
-					bytes, err := json.Marshal(v)
-					if err != nil {
-						return err
-					}
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
-				case []interface{}:
-					bytes, err := json.Marshal(v)
-					if err != nil {
-						return err
-					}
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
-				case string:
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, v))
-				}
-			}
+		configArgs, err := providerConfigArgs(p.app.Providers)
+		if err != nil {
+			return err
 		}
+		args = append(args, configArgs...)
 	}
 
 	switch input.Command {
@@ -712,6 +700,12 @@ loop:
 		}
 	}
 
+	if p.FlociPreflight() {
+		if cmd.ProcessState.ExitCode() > 0 {
+			return ErrStackRunFailed
+		}
+		return nil
+	}
 	log.Info("parsing state")
 	complete, err := getCompletedEvent(context.Background(), passphrase, workdir)
 	if err != nil {
@@ -852,4 +846,29 @@ func (p *Project) removeAppSync() {
 // be rewritten empty, and the developer still needs the types they had.
 func generatesTypes(input *StackInput, complete *CompleteEvent) bool {
 	return !(input.Command == "remove" && len(complete.Links) == 0)
+}
+
+func providerConfigArgs(providers map[string]interface{}) ([]string, error) {
+	var args []string
+	for provider, opts := range providers {
+		for key, value := range opts.(map[string]interface{}) {
+			// Skip SST-only fields that Pulumi doesn't understand
+			if key == "package" {
+				continue
+			}
+			switch v := value.(type) {
+			case map[string]interface{}, []interface{}:
+				bytes, err := json.Marshal(v)
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
+			case string, bool:
+				args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, v))
+			case float64:
+				args = append(args, "--config", fmt.Sprintf("%v:%v=%s", provider, key, strconv.FormatFloat(v, 'f', -1, 64)))
+			}
+		}
+	}
+	return args, nil
 }

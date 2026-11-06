@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/appsync"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/local"
 	"github.com/sst/sst/v3/pkg/id"
 )
 
@@ -34,6 +35,8 @@ var SST_APPSYNC_REALTIME = os.Getenv("SST_APPSYNC_REALTIME")
 var SST_FUNCTION_STREAMING = os.Getenv("SST_FUNCTION_STREAMING")
 
 var ENV_BLACKLIST = map[string]bool{
+	"SST_FLOCI_BRIDGE":                true,
+	"SST_FLOCI_TOKEN":                 true,
 	"SST_DEBUG_ENDPOINT":              true,
 	"SST_DEBUG_SRC_HANDLER":           true,
 	"SST_DEBUG_SRC_PATH":              true,
@@ -86,15 +89,23 @@ func run() error {
 	defer cancel()
 
 	logStreamName := os.Getenv("AWS_LAMBDA_LOG_STREAM_NAME")
-	workerID := logStreamName[len(logStreamName)-32:]
+	workerID := id.Ascending()
+	if len(logStreamName) >= 32 {
+		workerID = logStreamName[len(logStreamName)-32:]
+	}
 	prefix := fmt.Sprintf("/sst/%s/%s", SST_APP, SST_STAGE)
 	fmt.Println("prefix", prefix)
-	config, err := config.LoadDefaultConfig(ctx, config.WithRegion(SST_REGION))
-	if err != nil {
-		return err
+	var conn bridge.Connection
+	var err error
+	if endpoint := os.Getenv("SST_FLOCI_BRIDGE"); endpoint != "" {
+		conn, err = local.Dial(endpoint, os.Getenv("SST_FLOCI_TOKEN"))
+	} else {
+		cfg, configErr := config.LoadDefaultConfig(ctx, config.WithRegion(SST_REGION))
+		if configErr != nil {
+			return configErr
+		}
+		conn, err = appsync.Dial(ctx, cfg, SST_APPSYNC_HTTP, SST_APPSYNC_REALTIME)
 	}
-
-	conn, err := appsync.Dial(ctx, config, SST_APPSYNC_HTTP, SST_APPSYNC_REALTIME)
 	if err != nil {
 		return err
 	}
@@ -403,7 +414,7 @@ func deadlineOf(resp *http.Response) time.Time {
 // AppSync drops events that have no live subscriber, and after a Lambda freeze
 // the websocket can be dead without any error. A new subscription can also miss
 // events for a moment after subscribe_success.
-func waitForSubscription(ctx context.Context, conn *appsync.Connection, client *bridge.Client, channel string) {
+func waitForSubscription(ctx context.Context, conn bridge.Connection, client *bridge.Client, channel string) {
 	sent := map[string]bool{}
 	for attempt := 1; attempt <= 15; attempt++ {
 		if attempt == 4 || attempt == 10 {

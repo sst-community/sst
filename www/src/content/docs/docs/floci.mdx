@@ -1,0 +1,178 @@
+---
+title: Floci
+description: Run supported SST apps locally with Floci and SST live development.
+---
+
+Run a supported AWS app locally with [Floci](https://github.com/floci-io/floci), using SST's live function development loop.
+
+```bash
+sst dev --floci
+```
+
+This is an explicit target for each run. It is not selected by your stage name or by `sst.config.ts`. Commands without Floci continue to use your normal cloud configuration.
+
+:::caution
+Floci support is experimental and limited to the compatibility profile below. Floci does not reproduce every AWS behavior, including IAM enforcement. Test against AWS before relying on cloud-specific behavior.
+:::
+
+## Requirements
+
+Install and start Docker. Floci uses Docker to run Lambda bridge containers, and SST runs your function handlers locally. Node.js must support [`--use-env-proxy`](https://nodejs.org/api/cli.html#--use-env-proxy); use Node.js 24.5 or later. SST checks the Node executable selected by your `PATH` before starting Docker and reports an upgrade instruction if it lacks this capability. SST manages its own Bun and Pulumi installations.
+
+The managed Floci instance uses version **2.3.0**, pinned to Docker manifest digest `sha256:e0b292df4dc9559b7b1bf4f51bdda4bb8e269276236438cd03cae661260ea8a9`. SST checks the emulator's readiness and version before proceeding.
+
+## Start developing
+
+Run the [Floci example](https://github.com/sst-community/sst/tree/main/examples/aws-floci), or use an app containing supported components.
+
+```bash
+sst dev --floci --stage local
+```
+
+SST starts its managed Floci container automatically, pulling the pinned image when needed. It prints the endpoint, profile, local state location, and stage. Your AWS profile, SSO, credential process, and assumed roles are not used. The region is `us-east-1`.
+
+Before creating app resources or bootstrap resources, SST previews the whole app against its compatibility profile. Unsupported components, options, resources, or invokes stop the run. The error names the unsupported operation and says that no AWS fallback was attempted. Remove or change those parts before retrying; SST does not silently skip them.
+
+After the check succeeds, function URLs and queue subscribers use a direct connection from Floci's Lambda containers to `sst dev`. Your handler code runs locally and reloads when you edit it. AppSync Events remains the transport for normal AWS development.
+
+### Try it from this repository
+
+Build the CLI and its embedded platform, then install the example's dependencies:
+
+```bash
+bun run setup
+go build -o /tmp/sst-floci ./cmd/sst
+cd examples/aws-floci
+bun install
+/tmp/sst-floci dev --floci --stage local --mode=basic
+```
+
+Invoke the function URL printed by SST with `curl`. The example writes an S3 object and a DynamoDB record, sends an SQS message, and processes that message with a live queue subscriber. Its response is `{"message":"hello from local SST"}`. Docker must be running, and port `4566` must be available for the managed instance. If you already run a separately configured Floci instance, select it with `SST_FLOCI_ENDPOINT` as described below.
+
+### Check hot reload
+
+Leave `sst dev` running, change the response text in `api.ts`, and invoke the URL again. The response should reflect the edit without restarting the dev session. Edit `subscriber.ts` and invoke the API to enqueue another message; the subscriber uses the new handler code on the next invocation. SST's terminal shows handler builds and invocation logs.
+
+Handler edits use live reload. Changes to `sst.config.ts` run the compatibility preview and update local infrastructure. The integration tests exercise live reload and returning to an existing local stage; the round-trip test below exercises both AWS and Floci when explicitly configured.
+
+### Compatibility profile
+
+The initial profile is `floci-2.3.0-v1` and requires AWS provider `7.48.0` (set `providers: { aws: { version: "7.48.0" } }` in your app configuration). It covers these building blocks, with explicit option and resource allowlists:
+
+| Component | Initial scope |
+| --- | --- |
+| `sst.aws.Function` | Node.js handlers, function URLs, environment variables, permissions, and links |
+| `sst.aws.Bucket` | S3 storage, bucket policy, public access settings, and CORS |
+| `sst.aws.Dynamo` | Tables, keys, indexes, and TTL; no streams |
+| `sst.aws.Queue` | Queues and Lambda subscribers |
+
+The profile also permits the IAM, logging, SSM, ECR, and KMS resources needed by supported apps and SST bootstrap. Raw `aws.*` resources and provider invokes are checked too; supporting a service does not mean every resource or operation in that service is allowed. Other providers, other regions, AWS profiles, and role assumption are rejected.
+
+VPC networking, container functions, sites, routers, databases, CloudFront, and AppSync Events are outside this initial profile. The [profile source](https://github.com/sst-community/sst/blob/main/platform/src/floci/profile.ts) lists the exact allowed components, options, child resources, and invokes.
+
+### SDK calls
+
+SST supplies dummy credentials, the region, and `AWS_ENDPOINT_URL` to local handlers and child processes. For S3, configure your SDK client to use path-style requests:
+
+```ts
+const s3 = new S3Client({
+  forcePathStyle: true,
+});
+```
+
+Use SDK versions that honor `AWS_ENDPOINT_URL`. A client that explicitly overrides its endpoint can bypass that setting.
+
+Path-style S3 addressing works in both environments, so the example uses the same handler code on Floci and AWS.
+
+SST routes its AWS clients and Pulumi provider to Floci and blocks unmapped endpoints. Its child processes also receive a dead HTTPS proxy and a local-host exception list. These guards are not a sandbox for arbitrary user code or third-party SDKs. For a strict network boundary, run in an isolated Docker network; the repository's Floci integration job exercises that setup.
+
+In Floci mode, SST's dev HTTP and HTTPS APIs listen only on loopback because they expose local development state. The separate live-function bridge remains reachable by Docker and requires a random bearer token. The bridge port stays reserved for the lifetime of the dev session.
+
+## Manage Floci
+
+```bash
+sst floci install # Pull the pinned image
+sst floci start   # Start or reuse the managed container
+sst floci status  # Check readiness and version
+sst floci stop    # Stop without deleting data
+```
+
+`sst floci` is equivalent to `sst floci start`. The container is named `sst-floci`, listens on `127.0.0.1:4566`, and persists data in the Docker volume `sst-floci-data`. Returned service URLs use `localhost.floci.io`; Lambda containers use `host.docker.internal` to reach the local development bridge. SST refuses to modify a container or data volume it does not own.
+
+### Reset and recovery
+
+For a handler syntax error, correct the source and invoke it again while `sst dev` stays running. For a failed infrastructure update, fix the error and rerun `sst dev --floci`; existing local resources are retained.
+
+If an abruptly terminated update leaves a lock, first stop every dev or update process for that app and stage. Then unlock the explicitly selected local target and restart development:
+
+```bash
+SST_FLOCI_ENDPOINT=http://127.0.0.1:4566 sst unlock --stage local
+sst dev --floci --stage local
+```
+
+Use your custom endpoint in both commands when applicable. Unlocking clears the update lock and retains resources; never unlock an active update. If Docker stopped, start Docker and Floci again before retrying. The managed instance retains its data volume.
+
+**Reset is a deliberate wipe, not the first recovery step.**
+
+```bash
+sst floci reset
+```
+
+Reset asks you to type `reset` before deleting the managed container's data and matching local state. This is the deliberate wipe; stopping the container preserves resources.
+
+```bash
+sst floci reset --stage local
+```
+
+`--stage` limits which **local state** is cleared. It still deletes **all resources in the managed emulator**, so other stages need recovery before they can run again. Stage cleanup applies to every matching app on that endpoint.
+
+Each emulator has an instance UUID stored in SSM. Local state is separated by that identity. If you delete or replace the emulator data outside SST, the next run detects the missing or changed identity and tells you to reset the affected stage. Cloud state is not used for Floci stages.
+
+### Custom instances
+
+To use a separately managed Floci 2.3.0 instance:
+
+```bash
+SST_FLOCI_ENDPOINT=http://127.0.0.1:4567 sst dev --floci --stage local
+```
+
+Only HTTP loopback endpoints are accepted. SST checks a custom instance but does not start, stop, or wipe it. You must configure persistent storage, Lambda networking, returned service URLs, and host callbacks yourself. Separate instances get separate state identities.
+
+To recover local state after resetting that custom emulator:
+
+```bash
+SST_FLOCI_ENDPOINT=http://127.0.0.1:4567 sst floci reset --stage local
+```
+
+This clears local state and its marker only. Manage the custom emulator's resources separately.
+
+## Other commands
+
+### Switch between Floci and AWS
+
+Keep one app configuration and use the command to select its target. Stop the current dev session before switching:
+
+```bash
+sst dev --floci --stage development
+AWS_PROFILE=my-development-profile sst dev --stage development
+sst dev --floci --stage development
+```
+
+Use a normal terminal for the AWS command, outside a Floci `sst shell`, and unset any exported `SST_FLOCI` or `SST_FLOCI_ENDPOINT` settings. For custom instances, set the endpoint on the individual Floci command.
+
+The same stage name has independent local and AWS state. Switching targets does not copy data between them or remove either environment's resources. Returning to the same Floci instance reuses its state. AWS uses its normal credentials, provider endpoints, and AppSync live-development transport.
+
+Repository development tests cover target switching and credential isolation. The opt-in `scripts/floci/roundtrip.mjs` test runs the same example in Floci dev, AWS dev, a real AWS deployment with dev workers stopped, and then Floci dev again. It checks function responses, S3, DynamoDB, queue delivery, packaged Lambda configuration, and local resource reuse. See [the test instructions](https://github.com/sst-community/sst/blob/main/scripts/floci/README.md) for its explicit profile and stage inputs. The isolated CI job covers Floci; it does not establish AWS service parity.
+
+### Target restrictions
+
+`sst deploy`, `sst diff`, and `sst refresh` refuse a Floci target: **Floci is only for `sst dev`**. There is no Floci deploy flag.
+
+For a shell or local state removal, select the existing Floci endpoint explicitly:
+
+```bash
+SST_FLOCI=1 SST_FLOCI_ENDPOINT=http://127.0.0.1:4566 sst shell --stage local
+SST_FLOCI=1 SST_FLOCI_ENDPOINT=http://127.0.0.1:4566 sst remove --stage local
+```
+
+Removal only clears local state. Use `sst floci reset` for the deliberate emulator wipe.

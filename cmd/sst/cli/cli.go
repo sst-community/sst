@@ -77,6 +77,10 @@ func New(ctx context.Context, cancel context.CancelFunc, root *Command, version 
 
 func (c *Cli) Run() error {
 	active := c.path[len(c.path)-1]
+	command := active.Name
+	if len(c.path) > 1 && c.path[1].Name == "floci" {
+		command = "floci"
+	}
 	required := 0
 	for _, arg := range active.Args {
 		if !arg.Required {
@@ -87,8 +91,25 @@ func (c *Cli) Run() error {
 	if c.Bool("help") || active.Run == nil || len(c.arguments) < required {
 		return c.PrintHelp()
 	} else {
-		return active.Run(c)
+		if err := flociCommandAllowed(command, c.Bool("floci"), os.Getenv("SST_FLOCI") != "" || os.Getenv("SST_FLOCI_ENDPOINT") != ""); err != nil {
+			return util.NewReadableError(err, err.Error())
+		}
+		err := active.Run(c)
+		if command == "floci" && err != nil {
+			return util.NewReadableError(err, err.Error())
+		}
+		return err
 	}
+}
+
+func flociCommandAllowed(command string, flag, inherited bool) error {
+	if flag && command != "dev" {
+		return fmt.Errorf("--floci is only for sst dev; for local shell, remove, or unlock, set SST_FLOCI_ENDPOINT to the local emulator endpoint")
+	}
+	if inherited && command != "dev" && command != "shell" && command != "remove" && command != "unlock" && command != "floci" && command != "ui" && command != "version" {
+		return fmt.Errorf("Floci is only for sst dev")
+	}
+	return nil
 }
 
 func (c *Cli) Cancel() {

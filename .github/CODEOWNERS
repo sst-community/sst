@@ -9,6 +9,7 @@
 
 # Workflows, their scripts, the automatic review's rules, and this file.
 /.github/ @the-human-mustachio
+/scripts/floci/** @the-human-mustachio
 
 # The release build and the container image it pushes.
 /.goreleaser.yml @the-human-mustachio

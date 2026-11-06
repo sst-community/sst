@@ -147,6 +147,10 @@ func CmdShell(c *cli.Cli) error {
 			}
 		}
 	}
+	if p.Floci() {
+		cmd.Env = provider.FlociEnvironment(cmd.Env, p.Env()["SST_FLOCI_ENDPOINT"])
+		cmd.Env = append(cmd.Env, "SST_FLOCI=1", "SST_FLOCI_ENDPOINT="+p.Env()["SST_FLOCI_ENDPOINT"])
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin

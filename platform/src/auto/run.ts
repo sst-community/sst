@@ -1,3 +1,4 @@
+import { registerFlociChecks } from "../floci/check";
 import { Link } from "../components/link";
 import {
   ResourceTransformationArgs,
@@ -12,6 +13,7 @@ import { Function } from "../components/aws/function";
 export async function run(program: automation.PulumiFn) {
   process.chdir($cli.paths.root);
 
+  registerFlociChecks();
   addTransformationToRetainResourcesOnDelete();
   addTransformationToAddTags();
   addTransformationToCheckBucketsHaveMultiplePolicies();

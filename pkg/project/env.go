@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -17,7 +18,7 @@ func (p *Project) EnvFor(ctx context.Context, complete *CompleteEvent, name stri
 	log := slog.Default().With("service", "project.env").With("resource", name)
 	dev := complete.Devs[name]
 	env := map[string]string{}
-	if dev.Aws != nil && dev.Aws.Role != "" {
+	if !p.Floci() && dev.Aws != nil && dev.Aws.Role != "" {
 		log.Info("loading aws credentials", "role", dev.Aws.Role)
 		prov, _ := p.Provider("aws")
 		awsProvider := prov.(*provider.AwsProvider)
@@ -72,6 +73,14 @@ func (p *Project) EnvFor(ctx context.Context, complete *CompleteEvent, name stri
 	for _, key := range []string{"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL", "CLOUDFLARE_DEFAULT_ACCOUNT_ID"} {
 		if val := os.Getenv(key); val != "" {
 			env[key] = val
+		}
+	}
+	if p.Floci() {
+		env["SST_FLOCI"] = "1"
+		env["SST_FLOCI_ENDPOINT"] = p.floci.Endpoint
+		for _, entry := range provider.FlociEnvironment(nil, p.floci.Endpoint) {
+			key, value, _ := strings.Cut(entry, "=")
+			env[key] = value
 		}
 	}
 	return env, nil

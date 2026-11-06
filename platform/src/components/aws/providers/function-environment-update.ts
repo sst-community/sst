@@ -1,3 +1,4 @@
+import { flociDynamicOptions } from "../../../floci/check";
 import { CustomResourceOptions, Input, dynamic } from "@pulumi/pulumi";
 import { rpc } from "../../rpc/rpc.js";
 
@@ -40,7 +41,7 @@ export class FunctionEnvironmentUpdate extends dynamic.Resource {
       new rpc.Provider("Aws.FunctionEnvironmentUpdate"),
       `${name}.sst.aws.FunctionEnvironmentUpdate`,
       args,
-      opts,
+      flociDynamicOptions(opts),
     );
   }
 }

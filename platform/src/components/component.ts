@@ -1,3 +1,4 @@
+import { checkFlociComponent } from "../floci/check";
 import {
   ComponentResource,
   ComponentResourceOptions,
@@ -62,6 +63,7 @@ export class Component extends ComponentResource {
     for (const transform of transforms) {
       transform({ name, props: args, opts });
     }
+    checkFlociComponent(type, name, args);
     super(type, name, {}, {
       transformations: [
         // Ensure logical and physical names are prefixed

@@ -61,7 +61,7 @@ func (r *FunctionCodeUpdater) Update(input *UpdateInput[FunctionCodeUpdaterInput
 }
 
 func (r *FunctionCodeUpdater) updateCode(input *FunctionCodeUpdaterInputs) (string, error) {
-	cfg, err := r.config()
+	cfg, err := r.configForRegion(input.Region)
 	if err != nil {
 		return "", err
 	}
@@ -102,7 +102,7 @@ func (r *FunctionCodeUpdater) updateCode(input *FunctionCodeUpdaterInputs) (stri
 }
 
 func (r *FunctionCodeUpdater) waitForUpdate(input *FunctionCodeUpdaterInputs) error {
-	cfg, err := r.config()
+	cfg, err := r.configForRegion(input.Region)
 	if err != nil {
 		return err
 	}
@@ -133,4 +133,3 @@ func (r *FunctionCodeUpdater) waitForUpdate(input *FunctionCodeUpdaterInputs) er
 		time.Sleep(300 * time.Millisecond)
 	}
 }
-

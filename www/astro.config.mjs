@@ -50,6 +50,7 @@ const sidebar = [
     label: "Concepts",
     items: [
       "docs/live",
+      "docs/floci",
       "docs/state",
       "docs/linking",
       "docs/console",

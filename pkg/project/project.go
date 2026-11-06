@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/evanw/esbuild/pkg/api"
 	"github.com/sst/sst/v3/internal/fs"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/flag"
+	"github.com/sst/sst/v3/pkg/floci"
 	"github.com/sst/sst/v3/pkg/js"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project/provider"
@@ -128,6 +130,8 @@ func (w *Watch) UnmarshalJSON(data []byte) error {
 }
 
 type Project struct {
+	floci           *floci.Config
+	flociChecking   atomic.Bool
 	version         string
 	lock            ProviderLock
 	root            string
@@ -169,6 +173,7 @@ func ResolveLogDir(cfgPath string) string {
 }
 
 type ProjectConfig struct {
+	Floci   *floci.Config
 	Version string
 	Stage   string
 	Config  string
@@ -212,6 +217,7 @@ func New(input *ProjectConfig) (*Project, error) {
 	pythonRuntime := python.New()
 
 	proj := &Project{
+		floci:   input.Floci,
 		version: input.Version,
 		root:    rootPath,
 		config:  input.Config,
@@ -271,6 +277,10 @@ console.log("~j" + JSON.stringify(await mod.app({
 
 	slog.Info("evaluating config")
 	node := process.Command("node", "--no-warnings", string(buildResult.OutputFiles[1].Path))
+	if proj.Floci() {
+		node = process.Command("node", "--use-env-proxy", "--no-warnings", string(buildResult.OutputFiles[1].Path))
+	}
+	node.Env = proj.commandEnv()
 	output, err := node.CombinedOutput()
 	slog.Info("config evaluated")
 	if err != nil {
@@ -403,6 +413,9 @@ console.log("~j" + JSON.stringify(await mod.app({
 }
 
 func (proj *Project) LoadHome() error {
+	if proj.Floci() {
+		return proj.loadFlociHome()
+	}
 	slog.Info("loading home")
 	loadedProviders := make(map[string]provider.Provider)
 
@@ -455,45 +468,45 @@ func (proj *Project) LoadHome() error {
 	return nil
 }
 
-func (p Project) getPath(path ...string) string {
+func (p *Project) getPath(path ...string) string {
 	paths := append([]string{p.PathWorkingDir()}, path...)
 	return filepath.Join(paths...)
 }
 
-func (p Project) PathWorkingDir() string {
+func (p *Project) PathWorkingDir() string {
 	return filepath.Join(p.root, ".sst")
 }
 
-func (p Project) PathPlatformDir() string {
+func (p *Project) PathPlatformDir() string {
 	return filepath.Join(p.PathWorkingDir(), "platform")
 }
 
-func (p Project) PathRoot() string {
+func (p *Project) PathRoot() string {
 	return p.root
 }
 
-func (p Project) PathConfig() string {
+func (p *Project) PathConfig() string {
 	return p.config
 }
 
-func (p Project) Version() string {
+func (p *Project) Version() string {
 	return p.version
 }
 
-func (p Project) App() *App {
+func (p *Project) App() *App {
 	return p.app
 }
 
 // NodeVersion is the version of the Node.js that evaluated the config.
-func (p Project) NodeVersion() string {
+func (p *Project) NodeVersion() string {
 	return p.nodeVersion
 }
 
-func (p Project) Backend() provider.Home {
+func (p *Project) Backend() provider.Home {
 	return p.home
 }
 
-func (p Project) Env() map[string]string {
+func (p *Project) Env() map[string]string {
 	return p.env
 }
 

@@ -73,13 +73,19 @@ type Message struct {
 	LogsFollow bool
 }
 
-// Conn is what the bridge needs from its AppSync connection.
+// Conn is the publish/subscribe transport used by the bridge.
 type Conn interface {
 	Publish(ctx context.Context, channel string, event interface{}) error
 	Subscribe(ctx context.Context, channel string) (chan string, error)
 }
 
-var _ Conn = (*appsync.Connection)(nil)
+// Connection also supports recovering a subscription after Lambda freezes.
+type Connection interface {
+	Conn
+	Reconnect(context.Context)
+}
+
+var _ Connection = (*appsync.Connection)(nil)
 
 // socketConn is a Conn that can publish over its WebSocket, which is faster.
 type socketConn interface {
