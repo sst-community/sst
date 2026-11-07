@@ -21,6 +21,7 @@ write("public/index.html", "<p>hi</p>\n");
 write("src/caller.ts", "export const handler = () => {};\n");
 
 const ROLE = "aws:iam/role:Role";
+const CONNECTOR = "aws:lambda/coreNetworkConnector:CoreNetworkConnector";
 
 // As the CLI builds a web function: the server, and its links encrypted into
 // `resource.enc`, in the bundle when it's given one. What's in the file
@@ -29,10 +30,22 @@ const builds = path.join(root, ".builds");
 const pulumi = mockPulumi({
   root,
   // The key the links are encrypted with
+  // The key the links are encrypted with, a role's creation time, which the
+  // network connector waits on, and the connector's version
   state: (args) =>
     args.type === "random:index/randomBytes:RandomBytes"
       ? { base64: Buffer.alloc(32, 1).toString("base64") }
-      : {},
+      : args.type === ROLE
+        ? { createDate: new Date(0).toISOString() }
+        : args.type === CONNECTOR
+          ? {
+              latestVersionArn: `arn:aws:lambda:us-east-1:123456789012:network-connector:${args.name}:1`,
+            }
+          : {},
+  call: (args) =>
+    args.token === "aws:index/getAvailabilityZones:getAvailabilityZones"
+      ? { names: ["us-east-1a", "us-east-1b"] }
+      : undefined,
   cli: (method, args) => {
     if (method !== "Runtime.Build" || args.runtime !== "nodejs24.x")
       return undefined;
@@ -71,6 +84,7 @@ describe("WebFunction", () => {
   let OriginalWebFunction: typeof import("../../fixtures/v4/components/aws/web-function").WebFunction;
   let WebFunction: typeof import("../../../src/components/aws/web-function").WebFunction;
   let SidedFunction: any;
+  let SidedVpc: any;
 
   beforeAll(async () => {
     OriginalWebFunction = (
@@ -84,6 +98,12 @@ describe("WebFunction", () => {
       "Function",
       import("../../fixtures/v4/components/aws/function"),
       import("../../../src/components/aws/function"),
+    );
+    SidedVpc = await sidedClass(
+      "Vpc",
+      import("../../fixtures/v4/components/aws/vpc"),
+      import("../../../src/components/aws/vpc"),
+      import("../../../src/components/aws/takeover/vpc"),
     );
   });
 
@@ -193,6 +213,50 @@ describe("WebFunction", () => {
         // In `sst dev`, only the log group and the role are deployed. SST 4's
         // created a component for the pane `sst dev` shows; SST 5's reports
         // it in its outputs.
+        "in a VPC, by its ids": (WebFunction, opts) => {
+          new WebFunction(
+            "Web",
+            {
+              entrypoint: "src/server.ts",
+              vpc: {
+                privateSubnets: ["subnet-1", "subnet-2"],
+                securityGroups: ["sg-1"],
+              },
+            },
+            opts,
+          );
+        },
+        "in a Vpc": (WebFunction, opts) => {
+          new WebFunction(
+            "Web",
+            {
+              entrypoint: "src/server.ts",
+              vpc: new SidedVpc("MyVpc", { nat: "managed" }),
+              transform: {
+                networkConnector: { timeouts: { create: "20m" } },
+                operatorRole: { description: "connects the server" },
+              },
+            },
+            opts,
+          );
+        },
+        "in sst dev, in a VPC": {
+          create: (WebFunction, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new WebFunction(
+              "Web",
+              {
+                entrypoint: "src/server.ts",
+                vpc: { privateSubnets: ["subnet-1"], securityGroups: ["sg-1"] },
+              },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::WebDev"],
+          changed: [["Web", ["outputs"]]],
+          check: () => expect(ofType(CONNECTOR)).toEqual([]),
+        },
         "linked from a function": (WebFunction, opts) => {
           const web = new WebFunction(
             "Web",
@@ -282,10 +346,20 @@ describe("WebFunction", () => {
       "function",
       "localLogGroup",
       "logGroup",
+      "networkConnector",
+      "operatorRole",
       "revision",
       "role",
       "versioning",
     ]);
+    expect(web.nodes.networkConnector).toBeUndefined();
+    expect(ofType(CONNECTOR)).toEqual([]);
+    expect(
+      resource("WebRevision").inputs.serviceConfig.environmentVariables,
+    ).toBeDefined();
+    expect(
+      resource("WebRevision").inputs.serviceConfig.egressNetworkConnectorArn,
+    ).toBeUndefined();
     // Named as SST 4 named them
     expect(
       pulumi.resources
@@ -428,6 +502,38 @@ describe("WebFunction", () => {
     ).toThrow(/permissions/);
   });
 
+  it("sends its outbound traffic through a VPC with a network connector", async () => {
+    const web = new WebFunction("Web", {
+      entrypoint: "src/server.ts",
+      vpc: {
+        privateSubnets: ["subnet-1", "subnet-2"],
+        securityGroups: ["sg-1"],
+      },
+    });
+    await pulumi.settle();
+
+    expect(resource("WebNetworkConnector").inputs.configuration).toEqual({
+      vpcEgressConfiguration: {
+        associatedComputeResourceTypes: ["WebFunction"],
+        networkProtocol: "IPv4",
+        subnetIds: ["subnet-1", "subnet-2"],
+        securityGroupIds: ["sg-1"],
+      },
+    });
+    expect(resource("WebOperatorRole").inputs.assumeRolePolicy).toMatchObject({
+      Statement: [
+        { Principal: { Service: "network-connectors.lambda.amazonaws.com" } },
+      ],
+    });
+    // The revision takes the connector's version
+    expect(
+      resource("WebRevision").inputs.serviceConfig.egressNetworkConnectorArn,
+    ).toBe(
+      "arn:aws:lambda:us-east-1:123456789012:network-connector:WebNetworkConnector:1",
+    );
+    expect(web.nodes.networkConnector).toBeDefined();
+  });
+
   it("refuses the parts it creates from its code in existing", () => {
     for (const key of [
       "logGroup",
@@ -435,6 +541,7 @@ describe("WebFunction", () => {
       "codeObject",
       "function",
       "endpoint",
+      "networkConnector",
     ]) {
       pulumi.reset();
       expect(

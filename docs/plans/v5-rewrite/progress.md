@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-06: step 5, the `WebFunction`'s `vpc`, from sst-community/sst#236
+
+sst-community/sst#236 (for #235) gives SST 4's `WebFunction` a `vpc`, as `Function` and `MicroVm` have: its revision sends its outbound traffic through a Lambda network connector. The maintainer asked for it on this branch too, before it merges.
+
+- **SST 4's `WebFunction` in the fixtures is #236's.** If #236 changes before it merges, the fixture and the 5.0 form follow, and the next merge of `main` keeps this branch's files for it.
+- **The 5.0 `WebFunction`** has two optional parts, `operatorRole` and `networkConnector`, created the way the 5.0 `MicroVm` creates its own, with the `WebFunction` compute type, from either kind of `Vpc` or its ids (`privateNetworkOf()`). The revision takes the connector's `latestVersionArn`. They have SST 4's names, so the takeover map stays empty. In `existing`, both are refused.
+- **Tests:** three takeover cases, each run the three ways: by ids, in a `Vpc` with both new parts transformed, and in `sst dev`, where no connector is created; and the connector's inputs and the revision's ARN.
+
+**Checked:** the type check; the platform's tests (103 files, 4113 tests); the API report (the two parts and `vpc`); the docs' page. In the lab, a stage that a CLI built from #236 deployed with a `Vpc` with NAT instances: the server's outbound IP was one of the NAT's. `sst migrate` kept all 66 resources, the connector and its operator role among them, and updated nothing; SST 4's `Vpc` version record left the state. After it, the revision had the same connector version, the outbound IP was still the NAT's, and `sst diff` showed no changes. Removed with the VPC attached, and nothing left: no network interface, address, instance or log group, and its state versions and passphrase deleted.
+
 ## 2026-11-06: the platform's build, without the `Vector`'s handler
 
 `platform/scripts/build` stopped at the `Vector`'s handler (`functions/vector-handler`) after the swap: it imports a helper the swap removed, and 5.0 has no `Vector`. So `check.yml`'s first run on this branch would have failed there. The handler and its line in `scripts/build.mjs` are gone. SST 4's `Vector` in the fixtures still names the handler's folder, and nothing under the mock builds it.

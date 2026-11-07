@@ -15,12 +15,19 @@ import {
 import {
   cloudwatch,
   getCallerIdentityOutput,
+  getPartitionOutput,
   getRegionOutput,
   iam,
+  lambda,
   lambdaweb,
   s3,
 } from "@pulumi/aws";
-import { type ComponentArgs, component, named } from "../parts-component";
+import {
+  type ComponentArgs,
+  component,
+  named,
+  optional,
+} from "../parts-component";
 import { context } from "../contract";
 import { Link } from "../link";
 import type { Input } from "../input";
@@ -39,6 +46,8 @@ import { linkEncryptionKey } from "./helpers/function-shared";
 import { RETENTION } from "./logging";
 import { Permission, permission } from "./permission";
 import type { FunctionArgs } from "./function";
+import type { Vpc } from "./vpc";
+import { privateNetworkOf } from "./helpers/vpc";
 
 const parts = {
   /**
@@ -95,6 +104,16 @@ const parts = {
    * The HTTPS endpoint, which sends every request to the revision.
    */
   endpoint: lambdaweb.FunctionEndpoint,
+  /**
+   * The IAM role Lambda uses to create the network connector's network interfaces in the
+   * VPC. Only created when `vpc` is set, with the connector.
+   */
+  operatorRole: optional(iam.Role),
+  /**
+   * The Lambda network connector the revision sends its outbound traffic through.
+   * Created when `vpc` is set, and not in `sst dev` while the server runs locally.
+   */
+  networkConnector: optional(lambda.CoreNetworkConnector),
 };
 
 export interface WebFunctionArgs extends ComponentArgs<typeof parts> {
@@ -363,6 +382,57 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts> {
     systemLogLevel?: Input<"DEBUG" | "INFO" | "WARN">;
   }>;
   /**
+   * Send your server's outbound traffic through the private subnets of a VPC, so it can
+   * reach private resources, like a database.
+   *
+   * Requests still come in through the HTTPS endpoint. Only outbound traffic goes through
+   * the VPC, and it reaches the internet only through the VPC's NAT. Let the resources
+   * your server calls take traffic from the security groups you give.
+   *
+   * This creates a Lambda network connector, which each revision is created with. Creating
+   * it takes about 5 minutes. Adding, changing or removing `vpc` makes a new revision. In
+   * `sst dev`, your server runs locally and no connector is created, so it reaches the VPC
+   * only through `sst tunnel`.
+   *
+   * @example
+   * Create a `Vpc` component, with a NAT if your server needs the internet.
+   *
+   * ```js title="sst.config.ts"
+   * const myVpc = new sst.aws.Vpc("MyVpc", { nat: "ec2" });
+   * ```
+   *
+   * And pass it in.
+   *
+   * ```js
+   * {
+   *   vpc: myVpc
+   * }
+   * ```
+   *
+   * Or pass in the subnets and security groups of an existing VPC.
+   *
+   * ```js
+   * {
+   *   vpc: {
+   *     privateSubnets: ["subnet-0b6a2b73896dc8c4c", "subnet-021389ebee680c2f0"],
+   *     securityGroups: ["sg-0399348378a4c256c"]
+   *   }
+   * }
+   * ```
+   */
+  vpc?:
+    | Vpc
+    | Input<{
+        /**
+         * A list of VPC security group IDs.
+         */
+        securityGroups: Input<Input<string>[]>;
+        /**
+         * A list of VPC subnet IDs.
+         */
+        privateSubnets: Input<Input<string>[]>;
+      }>;
+  /**
    * Run your server locally in `sst dev`, in a pane of its own, in place of a deployed
    * web function. The command is given the links, the environment variables, AWS
    * credentials for the role, and `AWS_LAMBDA_HTTP_ENDPOINT` from `dev.url`.
@@ -447,9 +517,9 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts> {
 /**
  * The `WebFunction` component deploys an HTTP server to
  * [AWS Lambda web functions](https://docs.aws.amazon.com/lambda/latest/dg/web-functions.html).
- * It uses Node.js 24 on Arm64 and a HomeRegion HTTPS endpoint. MultiRegion endpoints,
- * custom runtimes, VPC connectors, domains and event-source subscriptions aren't
- * supported.
+ * It uses Node.js 24 on Arm64 and a HomeRegion HTTPS endpoint. With `vpc`, its outbound
+ * traffic goes through a VPC. MultiRegion endpoints, custom runtimes, domains and
+ * event-source subscriptions aren't supported.
  *
  * Unlike `Function`, your entrypoint starts an HTTP listener; Lambda doesn't call an
  * exported handler. Each environment can serve concurrent requests and stay active
@@ -464,8 +534,10 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts> {
  * The role you deploy with needs permission to manage Lambda web functions, revisions
  * and endpoints, and the IAM, S3 and CloudWatch Logs resources. The provider creates the
  * web function through Cloud Control, so it also needs `cloudformation:CreateResource`
- * and `cloudformation:GetResourceRequestStatus`. These are for the role you deploy with,
- * not the role the web function runs with.
+ * and `cloudformation:GetResourceRequestStatus`. With `vpc`, it also needs to manage
+ * Lambda network connectors, with `lambda:PassNetworkConnector`, and `iam:PassRole` on
+ * the operator role. These are for the role you deploy with, not the role the web
+ * function runs with.
  *
  * The web function and its code bucket keep their names across deploys. SST manages
  * both log groups with the retention you give, and the role it creates may write only to
@@ -503,8 +575,8 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts> {
  * #### Switch from SST 4's `sst.aws.WebFunction`
  *
  * Keep the name, and `sst migrate` moves it. The web function, its revision, its
- * endpoint and URL, its code and code bucket, its role and its log groups are kept, and
- * nothing is updated.
+ * endpoint and URL, its code and code bucket, its role, its log groups and its network
+ * connector are kept, and nothing is updated.
  *
  * A few things work differently:
  *
@@ -539,6 +611,7 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
       throw new VisibleError(`The "${name}" web function needs an entrypoint.`);
     super(name, args, opts);
 
+    const self = this;
     const owner = `the "${name}" web function`;
     const option = (arg: string) =>
       `The "${arg}" of the "${name}" web function`;
@@ -561,6 +634,10 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
       [
         ["function", "revision", "endpoint"],
         `It creates the web function, its revision and its endpoint from its code. Change them in "transform".`,
+      ],
+      [
+        ["operatorRole", "networkConnector"],
+        `It creates its network connector, and the role Lambda creates the connector's network interfaces with, from "vpc". Change them in "transform".`,
       ],
     ] as const)
       for (const key of keys) notAnExistingPart(existing, key, owner, instead);
@@ -1019,6 +1096,7 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
     );
     // The name is filled in from the component's, as for any part
     const fn = this.part("function", { functionName: "" });
+    const networkConnector = createNetworkConnector();
     const codeBucketPolicy = this.part(
       "codeBucketPolicy",
       {
@@ -1066,6 +1144,9 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
         },
         serviceConfig: {
           executionRoleArn: role.arn,
+          // A revision takes a version of the connector: a change to the
+          // connector publishes a new one, and makes a new revision
+          egressNetworkConnectorArn: networkConnector?.latestVersionArn,
           environmentVariables: secret(cloudEnvironment),
           timeoutSeconds: settings.seconds,
           maxConcurrencyPerEnvironment: settings.maximum,
@@ -1104,6 +1185,77 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
       deployed: true,
     };
     this.report({ hint: this.run.url });
+
+    function createNetworkConnector() {
+      if (!args.vpc) return;
+      // The subnets and security groups the connector puts the server's
+      // outbound traffic through
+      const vpc = privateNetworkOf(
+        args.vpc,
+        owner,
+        (id) =>
+          `\nWarning: The "${name}" web function is in the "${id}" VPC, which does not have a NAT gateway. Its server can't reach the internet. To let it, set the "nat" prop on the "Vpc" component.\n`,
+      );
+      const partition = getPartitionOutput({}, { parent: self }).partition;
+
+      const operatorRole = self.part("operatorRole", {
+        assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
+          Service: "network-connectors.lambda.amazonaws.com",
+        }),
+        inlinePolicies: [
+          {
+            name: "inline",
+            policy: iam.getPolicyDocumentOutput({
+              statements: [
+                {
+                  actions: ["ec2:CreateNetworkInterface"],
+                  resources: [
+                    interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
+                    interpolate`arn:${partition}:ec2:*:*:subnet/*`,
+                    interpolate`arn:${partition}:ec2:*:*:security-group/*`,
+                  ],
+                },
+                {
+                  actions: ["ec2:CreateTags"],
+                  resources: [
+                    interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
+                  ],
+                  conditions: [
+                    {
+                      test: "StringEquals",
+                      variable: "ec2:ManagedResourceOperator",
+                      values: ["network-connectors.lambda.amazonaws.com"],
+                    },
+                  ],
+                },
+              ],
+            }).json,
+          },
+        ],
+      });
+
+      return self.part("networkConnector", {
+        configuration: {
+          vpcEgressConfiguration: {
+            associatedComputeResourceTypes: ["WebFunction"],
+            networkProtocol: "IPv4",
+            subnetIds: vpc.privateSubnets,
+            securityGroupIds: vpc.securityGroups,
+          },
+        },
+        // Lambda checks the operator role as soon as the connector is
+        // created. A role IAM hasn't finished propagating fails that check,
+        // and leaves a FAILED connector behind, so wait until the role is 20
+        // seconds old.
+        operatorRole: all([operatorRole.arn, operatorRole.createDate]).apply(
+          async ([arn, created]) => {
+            const wait = Date.parse(created) + 20_000 - Date.now();
+            if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+            return arn;
+          },
+        ),
+      });
+    }
 
     function integer(
       property: string,

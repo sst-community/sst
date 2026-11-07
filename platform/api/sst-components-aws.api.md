@@ -3550,6 +3550,8 @@ const parts_48: {
     codeBucketPolicy: BucketPolicy;
     revision: FunctionRevision;
     endpoint: FunctionEndpoint;
+    operatorRole: OptionalPart<Role>;
+    networkConnector: OptionalPart<CoreNetworkConnector>;
 };
 
 // @public (undocumented)
@@ -5339,6 +5341,8 @@ function: Function_6;
 codeBucketPolicy: BucketPolicy;
 revision: FunctionRevision;
 endpoint: FunctionEndpoint;
+operatorRole: OptionalPart<Role>;
+networkConnector: OptionalPart<CoreNetworkConnector>;
 }>;
 
 // @public (undocumented)
@@ -5369,6 +5373,10 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts_48> {
     timeout?: Input<DurationMinutes>;
     url?: Input<{
         authorization?: Input<"none" | "iam">;
+    }>;
+    vpc?: Vpc | Input<{
+        securityGroups: Input<Input<string>[]>;
+        privateSubnets: Input<Input<string>[]>;
     }>;
 }
 
