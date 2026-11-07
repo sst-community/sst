@@ -86,10 +86,6 @@ export function createManagedLinkPermissions(
     ([links, groups]) => selectManagedLinks(links, groups),
   );
   return {
-    // An exact duplicate avoids the provider's unsafe empty-inline-policy transition.
-    fallback: selection.apply(({ permissions }) =>
-      names.length ? permissions[names[0]].slice(0, 1) : [],
-    ),
     inline: config.retainInline
       ? Link.getInclude<Permission>("aws.permission", links)
       : selection.apply(({ remaining }) =>
