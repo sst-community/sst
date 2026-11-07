@@ -31,7 +31,7 @@ jobs:
   review:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
@@ -57,20 +57,21 @@ jobs:
 
       # opencode starts from a list of models that can be older than MODEL,
       # and then doesn't find it. This fetches the current list from
-      # models.dev. No token here either.
+      # models.dev, for every provider, so opencode-go's models too. No token
+      # here either.
       - name: Refresh opencode's models
         continue-on-error: true
         timeout-minutes: 5
         run: npx -y "$OPENCODE" models opencode --refresh >/dev/null
 
-      # review-run.sh tries the free models with OPENCODE_API_KEY, 7 minutes
-      # each, then a paid model of the key's OpenCode Go plan, and moves on
-      # within seconds when a model doesn't answer.
+      # review-run.sh picks the free models by the diff's size, tries them with
+      # OPENCODE_API_KEY, then a paid model of the key's OpenCode Go plan, and
+      # moves on within seconds when a model doesn't answer.
       # A failure still posts the checks.
       - name: Review with opencode
         id: opencode
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 23
         run: .github/scripts/review-run.sh
         env:
           OPENCODE_CONFIG: .github/review/opencode.json

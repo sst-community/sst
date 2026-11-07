@@ -2,41 +2,47 @@
 # Runs the review with opencode and writes it to $OUT/review.raw. Exits 0 when
 # a review was written, 1 when no model gave one.
 #
+# The models depend on the diff's size. DeepSeek V4.1 Flash Free writes good
+# reviews of a small diff fast but runs out of time on a large one, so a diff
+# under 15 KB goes to DeepSeek and then GLM-5.3-Flash Free, and a larger one to
+# GLM alone. They're tried with OPENCODE_API_KEY, which has the project's own
+# quota, and share 13 minutes. Then GLM-5.3-Flash on the key's OpenCode Go
+# plan, which costs money, gets the rest of the budget, so it runs only when
+# no free model wrote a review. When the key fails or isn't set, the first
+# free model is tried without a key.
+#
 # Each attempt first asks the model for one word, with a 25-second limit, so a
-# model that doesn't answer costs seconds, not the step's timeout. The free
-# models are tried first, with OPENCODE_API_KEY, which has the project's own
-# quota, and each gets 7 minutes for the review. The last attempt is a model
-# of the key's OpenCode Go plan, which costs money, so it runs only when no
-# free model wrote a review, and 8 minutes are kept for it. Without the key,
-# the free models are tried without one. A review counts only when it has the
-# Summary and Version sections. A review that contains the key is dropped, so
-# the key can't reach the comment.
+# model that doesn't answer costs seconds, not the step's timeout. A review
+# counts only when it has the Summary and Version sections. A review that
+# contains the key is dropped, so the key can't reach the comment.
 #
 # Needs OUT, OPENCODE and OPENCODE_CONFIG. REVIEW_OPENCODE_API_KEY is optional.
 # Writes the model that wrote the review to $GITHUB_ENV as MODEL.
 set -uo pipefail
 
 key="${REVIEW_OPENCODE_API_KEY:-}"
-deadline=$(($(date +%s) + ${REVIEW_BUDGET:-1080}))
+budget=${REVIEW_BUDGET:-1260}
+deadline=$(($(date +%s) + budget))
 paid="opencode-go/glm-5.3-flash"
-free=(
-  opencode/glm-5.3-flash-free
-  opencode/iceman-free
-  opencode/beam-free
-)
-if [ -n "$key" ]; then
-  auth=key
-  attempts=("${free[@]}" "$paid")
-  reserve=480
+if [ "$(wc -c <"$OUT/pr.diff")" -lt 15000 ]; then
+  free=(opencode/deepseek-v4.1-flash-free opencode/glm-5.3-flash-free)
 else
-  auth=none
-  attempts=("${free[@]}")
-  reserve=0
+  free=(opencode/glm-5.3-flash-free)
 fi
+# What's kept for the paid model, and each free model's share of the rest.
+reserve=480
+share=$(((budget - reserve) / ${#free[@]}))
+
+attempts=()
+if [ -n "$key" ]; then
+  for model in "${free[@]}"; do attempts+=("$model key"); done
+  attempts+=("$paid key")
+fi
+attempts+=("${free[0]} none")
 
 # Runs opencode with a time limit. opencode never sees REVIEW_OPENCODE_API_KEY,
-# and sees OPENCODE_API_KEY only when there is a key. The key isn't put on a
-# command line.
+# and sees OPENCODE_API_KEY only on an attempt that uses the key. The key isn't
+# put on a command line.
 oc() {
   local seconds=$1
   shift
@@ -47,13 +53,15 @@ oc() {
   )
 }
 
-for model in "${attempts[@]}"; do
+for attempt in "${attempts[@]}"; do
+  model=${attempt% *}
+  auth=${attempt#* }
   left=$((deadline - $(date +%s)))
-  if [ "$model" = "$paid" ]; then
+  if [ "$model" = "$paid" ] || [ "$auth" = none ]; then
     limit=$left
   else
     left=$((left - reserve))
-    limit=$((left < 420 ? left : 420))
+    limit=$((left < share ? left : share))
   fi
   [ "$limit" -gt 60 ] || continue
 
