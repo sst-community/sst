@@ -1024,32 +1024,30 @@ export class StaticSite extends Component implements Link.Linkable {
               ],
             }).filter((file) => !filesProcessed.includes(file));
 
-            bucketFiles.push(
-              ...(await Promise.all(
-                files.map(async (file) => {
-                  const source = path.resolve(outputPath, file);
-                  const content = await fs.promises.readFile(source, "utf-8");
-                  const hash = crypto
-                    .createHash("sha256")
-                    .update(content)
-                    .digest("hex");
-                  return {
-                    source,
-                    key: toPosix(
-                      path.join(
-                        assets.path ?? "",
-                        route?.pathPrefix?.replace(/^\//, "") ?? "",
-                        file,
-                      ),
-                    ),
-                    hash,
-                    cacheControl: fileOption.cacheControl,
-                    contentType:
-                      fileOption.contentType ?? getContentType(file, "UTF-8"),
-                  };
-                }),
-              )),
-            );
+            // Hash one file at a time, so a large site doesn't hold every
+            // file in memory at once.
+            for (const file of files) {
+              const source = path.resolve(outputPath, file);
+              const content = await fs.promises.readFile(source, "utf-8");
+              const hash = crypto
+                .createHash("sha256")
+                .update(content)
+                .digest("hex");
+              bucketFiles.push({
+                source,
+                key: toPosix(
+                  path.join(
+                    assets.path ?? "",
+                    route?.pathPrefix?.replace(/^\//, "") ?? "",
+                    file,
+                  ),
+                ),
+                hash,
+                cacheControl: fileOption.cacheControl,
+                contentType:
+                  fileOption.contentType ?? getContentType(file, "UTF-8"),
+              });
+            }
             filesProcessed.push(...files);
           }
 

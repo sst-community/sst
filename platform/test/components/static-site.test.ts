@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -199,6 +200,65 @@ describe("StaticSite", function () {
       "/web/404.html",
       "/web/404.html",
     ]);
+  });
+
+  it("hashes the files one at a time, with the same hashes", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sst-static-hash-"));
+    fs.mkdirSync(path.join(dir, "assets"));
+    const contents: Record<string, Buffer> = {
+      "index.html": Buffer.from("<h1>index</h1>"),
+      "about.html": Buffer.from("<h1>über</h1>"),
+      "assets/app.js": Buffer.from("console.log(1);"),
+      // Not valid UTF-8: the hash is of the decoded string, as before
+      "assets/logo.bin": Buffer.from([0x89, 0x50, 0xff, 0xfe, 0x00, 0xc3]),
+    };
+    for (const [file, content] of Object.entries(contents))
+      fs.writeFileSync(path.join(dir, file), content);
+
+    const readFile = fs.promises.readFile;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const spy = vi
+      .spyOn(fs.promises, "readFile")
+      .mockImplementation(async (...args: any[]) => {
+        const counted = String(args[0]).startsWith(dir);
+        if (counted) maxInFlight = Math.max(maxInFlight, ++inFlight);
+        try {
+          return await (readFile as any)(...args);
+        } finally {
+          if (counted) inFlight--;
+        }
+      });
+
+    try {
+      new StaticSite("HashSite", { path: dir });
+      let files: any[] | undefined;
+      for (let i = 0; i < 100 && !files; i++) {
+        await settle();
+        files = createdResources.find((r) =>
+          r.name.startsWith("HashSiteAssetFiles"),
+        )?.inputs.files;
+      }
+
+      expect(maxInFlight).toBe(1);
+      const sha256 = (file: string) =>
+        crypto
+          .createHash("sha256")
+          .update(contents[file].toString("utf-8"))
+          .digest("hex");
+      // The "**/*.html" option is processed first. Within an option the
+      // files keep the glob's order, which isn't sorted.
+      expect(
+        files!.slice(0, 2).every((f: any) => f.key.endsWith(".html")),
+      ).toBe(true);
+      expect(files!.map((f: any) => [f.key, f.hash]).sort()).toEqual(
+        Object.keys(contents)
+          .map((file) => [file, sha256(file)])
+          .sort(),
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   describe("with edgeRouting: false", () => {
