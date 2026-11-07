@@ -1,4 +1,5 @@
 import {
+  all,
   ComponentResourceOptions,
   Input,
   Output,
@@ -6,9 +7,11 @@ import {
 } from "@pulumi/pulumi";
 import { Component, transform, Transform } from "../component";
 import { Function, FunctionArgs } from "./function.js";
+import { Workflow } from "./workflow.js";
+import { VisibleError } from "../error";
 import { QueueSubscriberArgs } from "./queue";
 import { lambda } from "@pulumi/aws";
-import { toSeconds } from "../duration";
+import { Duration, toSeconds } from "../duration";
 import { FunctionBuilder, functionBuilder } from "./helpers/function-builder";
 
 export interface Args extends QueueSubscriberArgs {
@@ -24,7 +27,7 @@ export interface Args extends QueueSubscriberArgs {
   /**
    * The subscriber function.
    */
-  subscriber: Input<string | FunctionArgs>;
+  subscriber: Input<string | Workflow | FunctionArgs>;
   /**
    * [Transform](/docs/components#transform) how this component creates its underlying
    * resources.
@@ -81,6 +84,15 @@ export class QueueLambdaSubscriber extends Component {
       );
     }
 
+    function checkWorkflowTimeout() {
+      return output(args.subscriber).apply((subscriber) => {
+        if (!(subscriber instanceof Workflow)) return;
+        return subscriber
+          .getExecutionTimeout()
+          .apply((timeout) => checkQueueWorkflowTimeout(name, timeout));
+      });
+    }
+
     function createEventSourceMapping() {
       return new lambda.EventSourceMapping(
         ...transform(
@@ -95,7 +107,9 @@ export class QueueLambdaSubscriber extends Component {
               batch?.window ? toSeconds(batch.window) : 0,
             ),
             eventSourceArn: queue.arn,
-            functionName: fn.targetArn,
+            functionName: all([fn.targetArn, checkWorkflowTimeout()]).apply(
+              ([arn]) => arn,
+            ),
             filterCriteria: args.filters && {
               filters: output(args.filters).apply((filters) =>
                 filters.map((filter) => ({
@@ -128,6 +142,19 @@ export class QueueLambdaSubscriber extends Component {
       eventSourceMapping: this.eventSourceMapping,
     };
   }
+}
+
+/**
+ * A queue invokes a workflow synchronously, and AWS refuses to create the event
+ * source mapping if the whole execution may take longer than a synchronous
+ * invocation can. Say why, instead of with AWS's error.
+ * @internal
+ */
+export function checkQueueWorkflowTimeout(name: string, timeout: Duration) {
+  if (toSeconds(timeout) <= 15 * 60) return;
+  throw new VisibleError(
+    `The "${name}" queue subscriber is a workflow with an execution timeout of "${timeout}". A queue waits for a workflow to finish, so its "timeout.execution" can be at most "15 minutes". For a longer workflow, subscribe a function that starts it with "workflow.dispatcher()".`,
+  );
 }
 
 const __pulumiType = "sst:aws:QueueLambdaSubscriber";
