@@ -537,6 +537,34 @@ describe("Bucket", () => {
     });
   });
 
+  describe("public access block", () => {
+    // Deleted with the bucket, the block isn't taken off first, so a bucket
+    // being removed, or kept by `removal: "retain"`, keeps it.
+    it("is deleted with its bucket", async () => {
+      new Bucket("MyBucket");
+      await pulumi.settle();
+
+      const block = resource("MyBucketPublicAccessBlock").options;
+      expect(block.deletedWith).toMatch(/::MyBucketBucket$/);
+      expect(block.retainOnDelete).toBeUndefined();
+    });
+
+    it("lets a transform delete it on its own again", async () => {
+      new Bucket("MyBucket", {
+        transform: {
+          publicAccessBlock: (_args, opts) => {
+            opts.deletedWith = undefined;
+          },
+        },
+      });
+      await pulumi.settle();
+
+      expect(
+        resource("MyBucketPublicAccessBlock").options.deletedWith,
+      ).toBeUndefined();
+    });
+  });
+
   it("makes what uses the bucket wait for its policy", async () => {
     const aws = await import("@pulumi/aws");
     const bucket = new Bucket("MyBucket");

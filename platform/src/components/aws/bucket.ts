@@ -56,7 +56,8 @@ const parts = () => ({
   versioning: optional(s3.BucketVersioning),
   /**
    * The bucket's public access block. It isn't created when
-   * `publicAccessBlock` is `false`.
+   * `publicAccessBlock` is `false`. It's deleted together with the bucket, so
+   * the bucket is never without it while it's being removed.
    */
   publicAccessBlock: optional(s3.BucketPublicAccessBlock),
   /**
@@ -1082,13 +1083,19 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
         `The "publicAccessBlock" of the "${name}" bucket`,
       ) === false
         ? undefined
-        : this.part("publicAccessBlock", {
-            bucket: bucket.bucket,
-            blockPublicAcls: true,
-            blockPublicPolicy: isPrivate,
-            ignorePublicAcls: true,
-            restrictPublicBuckets: isPrivate,
-          });
+        : this.part(
+            "publicAccessBlock",
+            {
+              bucket: bucket.bucket,
+              blockPublicAcls: true,
+              blockPublicPolicy: isPrivate,
+              ignorePublicAcls: true,
+              restrictPublicBuckets: isPrivate,
+            },
+            // Not deleted on its own when the bucket is deleted too, or kept
+            // with it, so the bucket doesn't go without its block meanwhile.
+            { deletedWith: bucket },
+          );
 
     this.part(
       "policy",

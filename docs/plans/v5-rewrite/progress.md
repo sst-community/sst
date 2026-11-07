@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-07: `main` merged in again, and the `Bucket`'s public access block
+
+The maintainer said to bring `main`'s fixes onto this branch, by merging where that brings them over and another way where that fits better.
+
+- **`main` merged into `v5-rewrite`,** with the `Bucket`'s public access block kept until the bucket is deleted (#223), the `WebFunction`'s `vpc` as it merged (#236), the `StaticSite` hashing one file at a time (#240), the site builder's environment kept out of the state (#242) and the automatic review's models (#245). This branch keeps its own `bucket.ts`, `static-site.ts` and `web-function.ts`, and SST 4's tests that the swap removed stay removed, with `main`'s new test of SST 4's `Bucket`.
+- **#223's bug is in the 5.0 `Bucket` too:** its `publicAccessBlock` part was deleted before the bucket on a remove, so the bucket was without its block for a while, and lost it for good with `removal: "retain"`. The part is now created with `deletedWith` its bucket, as SST 4's is on `main`, and a transform can still take that off. `deletedWith` changes only what a remove does, so a move doesn't compare it, and #223 found no change in `sst diff` on a stage deployed before it. SST 4's `Bucket` in the fixtures follows `main`.
+- **#236 was already here;** its last commit's two corrections to the docs (a web function with `dev: false` creates its connector in `sst dev`, and what the deploy role needs for one) are in SST 4's `WebFunction` in the fixtures, which is `main`'s again, and in the 5.0 one.
+- **#242 and #240 need nothing for 5.0.** The site builder is used here only by SST 4's sites in the fixtures, so its fix and its test came in as they are; SST 5's sites build in the program and keep no build command in the state. SST 5's `StaticSite` already hashes a few files at a time, streamed, since 2026-11-04.
+
+**Checked:** the type check; the platform's tests (104 files, 4116 tests), with the two new ones for the `Bucket` failing without its fix; the API reports, unchanged.
+
 ## 2026-11-06: step 5, the `WebFunction`'s `vpc`, from sst-community/sst#236
 
 sst-community/sst#236 (for #235) gives SST 4's `WebFunction` a `vpc`, as `Function` and `MicroVm` have: its revision sends its outbound traffic through a Lambda network connector. The maintainer asked for it on this branch too, before it merges.
