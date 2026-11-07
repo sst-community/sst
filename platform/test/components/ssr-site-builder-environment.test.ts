@@ -57,8 +57,6 @@ describe("SSR site builder", () => {
     // The build still gets the same variables
     const values = pulumi.runtime.unwrapRpcSecret(environment);
     expect(values.SST).toBe("1");
-    expect(values.SST_AWS_SECRET_ACCESS_KEY).toBe(
-      ENV.SST_AWS_SECRET_ACCESS_KEY,
-    );
+    expect(values).toMatchObject(ENV);
   });
 });
