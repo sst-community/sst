@@ -202,6 +202,8 @@ pulumi.runtime.setMocks(
               ),
             }),
           };
+        case "aws:index/getAvailabilityZones:getAvailabilityZones":
+          return { names: ["us-east-1a", "us-east-1b"] };
         default:
           throw new Error(`Unexpected AWS invoke: ${args.token}`);
       }
@@ -1380,6 +1382,46 @@ describe("WebFunction", () => {
     expect(fn.nodes.networkConnector).toBeDefined();
     expect(fn.nodes.operatorRole).toBeDefined();
   });
+
+  it.each([
+    { nat: undefined, warns: true },
+    { nat: "managed" as const, warns: false },
+  ])(
+    "takes a Vpc's private subnets and security groups (nat: $nat)",
+    async ({ nat, warns }) => {
+      const { Vpc } = await import("../../src/components/aws/vpc");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const name = nat ? "NatNet" : "Net";
+        const vpc = new Vpc(`${name}Vpc`, { nat });
+        const fn = new WebFunction(`${name}Server`, {
+          entrypoint: "index.mjs",
+          bundle: out,
+          vpc,
+        });
+        await resolved(fn.url);
+
+        const egress = named(
+          `${name}ServerNetworkConnector`,
+          "aws:lambda/coreNetworkConnector:CoreNetworkConnector",
+        ).inputs.configuration.vpcEgressConfiguration;
+        expect(egress.subnetIds).toEqual(await resolved(vpc.privateSubnets));
+        expect(egress.securityGroupIds).toEqual(
+          await resolved(vpc.securityGroups),
+        );
+        expect(egress.subnetIds).toHaveLength(2);
+        const warnings = warn.mock.calls
+          .map(([message]) => String(message))
+          .filter((message) => message.includes(`"${name}Server" WebFunction`));
+        if (warns) {
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toMatch(/does not have a NAT gateway/);
+        } else expect(warnings).toEqual([]);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
 
   it("creates no network connector without vpc", async () => {
     const fn = new WebFunction("Public", {
