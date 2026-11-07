@@ -2,8 +2,8 @@ name: review
 
 # A first-pass review of each pull request to main, before a committer looks:
 # checks that don't need a model (review-prepare.sh), then a review by opencode
-# with one of its free models, posted as one comment, a risk label and a
-# `review` status (review-post.sh).
+# with one of its free models, or a paid one when no free model writes it,
+# posted as one comment, a risk label and a `review` status (review-post.sh).
 #
 # pull_request_target runs this file from main with a token that can comment,
 # for pull requests from forks too. That's safe only because nothing from the
@@ -40,7 +40,7 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number }}
-      MODEL: opencode/deepseek-v4.1-flash-free
+      MODEL: opencode/glm-5.3-flash-free
       OPENCODE: opencode-ai@1.19.3
     steps:
       - name: Checkout main
@@ -63,9 +63,9 @@ jobs:
         timeout-minutes: 5
         run: npx -y "$OPENCODE" models opencode --refresh >/dev/null
 
-      # review-run.sh tries the free models with OPENCODE_API_KEY, then without
-      # a key, gives each review 5 minutes at most, and moves on within seconds
-      # when a model doesn't answer.
+      # review-run.sh tries the free models with OPENCODE_API_KEY, 7 minutes
+      # each, then a paid model of the key's OpenCode Go plan, and moves on
+      # within seconds when a model doesn't answer.
       # A failure still posts the checks.
       - name: Review with opencode
         id: opencode
