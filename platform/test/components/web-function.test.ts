@@ -136,6 +136,11 @@ pulumi.runtime.setMocks(
         ...(args.type === "random:index/randomBytes:RandomBytes"
           ? { base64: Buffer.alloc(32, 7).toString("base64") }
           : {}),
+        ...(args.type === "aws:lambda/coreNetworkConnector:CoreNetworkConnector"
+          ? {
+              latestVersionArn: `arn:aws:lambda:us-east-1:111111111111:network-connector:${args.name}:1`,
+            }
+          : {}),
         ...(args.type === "aws:lambdaweb/functionRevision:FunctionRevision"
           ? { revisionId: `${args.name}-revision` }
           : args.type === "aws:lambdaweb/functionEndpoint:FunctionEndpoint"
@@ -197,6 +202,8 @@ pulumi.runtime.setMocks(
               ),
             }),
           };
+        case "aws:index/getAvailabilityZones:getAvailabilityZones":
+          return { names: ["us-east-1a", "us-east-1b"] };
         default:
           throw new Error(`Unexpected AWS invoke: ${args.token}`);
       }
@@ -1323,6 +1330,131 @@ describe("WebFunction", () => {
       ).toThrow(/copyFiles|bundle/);
     },
   );
+
+  it("sends outbound traffic through a VPC with a network connector", async () => {
+    const fn = new WebFunction("Private", {
+      entrypoint: "index.mjs",
+      bundle: out,
+      vpc: {
+        privateSubnets: ["subnet-1", "subnet-2"],
+        securityGroups: ["sg-1"],
+      },
+      transform: {
+        networkConnector: { timeouts: { create: "20m" } },
+        operatorRole: { description: "connects the server" },
+      },
+    });
+    await resolved(fn.url);
+
+    const connector = named(
+      "PrivateNetworkConnector",
+      "aws:lambda/coreNetworkConnector:CoreNetworkConnector",
+    ).inputs;
+    expect(connector.configuration.vpcEgressConfiguration).toEqual({
+      associatedComputeResourceTypes: ["WebFunction"],
+      networkProtocol: "IPv4",
+      subnetIds: ["subnet-1", "subnet-2"],
+      securityGroupIds: ["sg-1"],
+    });
+    expect(connector.timeouts).toEqual({ create: "20m" });
+    const operatorRole = named("PrivateOperatorRole", "aws:iam/role:Role");
+    expect(connector.operatorRole).toBe(
+      "arn:aws:test:us-east-1:111111111111:PrivateOperatorRole",
+    );
+    expect(operatorRole.inputs.description).toBe("connects the server");
+    expect(operatorRole.inputs.assumeRolePolicy).toMatchObject({
+      Statement: [
+        {
+          Principal: { Service: "network-connectors.lambda.amazonaws.com" },
+        },
+      ],
+    });
+    const actions = JSON.parse(
+      operatorRole.inputs.inlinePolicies[0].policy,
+    ).Statement.flatMap((statement: any) => statement.Action);
+    expect(actions).toEqual(["ec2:CreateNetworkInterface", "ec2:CreateTags"]);
+    // The revision takes the connector's version
+    expect(
+      revisionInputs("Private").serviceConfig.egressNetworkConnectorArn,
+    ).toBe(
+      "arn:aws:lambda:us-east-1:111111111111:network-connector:PrivateNetworkConnector:1",
+    );
+    expect(fn.nodes.networkConnector).toBeDefined();
+    expect(fn.nodes.operatorRole).toBeDefined();
+  });
+
+  it.each([
+    { nat: undefined, warns: true },
+    { nat: "managed" as const, warns: false },
+  ])(
+    "takes a Vpc's private subnets and security groups (nat: $nat)",
+    async ({ nat, warns }) => {
+      const { Vpc } = await import("../../src/components/aws/vpc");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const name = nat ? "NatNet" : "Net";
+        const vpc = new Vpc(`${name}Vpc`, { nat });
+        const fn = new WebFunction(`${name}Server`, {
+          entrypoint: "index.mjs",
+          bundle: out,
+          vpc,
+        });
+        await resolved(fn.url);
+
+        const egress = named(
+          `${name}ServerNetworkConnector`,
+          "aws:lambda/coreNetworkConnector:CoreNetworkConnector",
+        ).inputs.configuration.vpcEgressConfiguration;
+        expect(egress.subnetIds).toEqual(await resolved(vpc.privateSubnets));
+        expect(egress.securityGroupIds).toEqual(
+          await resolved(vpc.securityGroups),
+        );
+        expect(egress.subnetIds).toHaveLength(2);
+        const warnings = warn.mock.calls
+          .map(([message]) => String(message))
+          .filter((message) => message.includes(`"${name}Server" WebFunction`));
+        if (warns) {
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toMatch(/does not have a NAT gateway/);
+        } else expect(warnings).toEqual([]);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it("creates no network connector without vpc", async () => {
+    const fn = new WebFunction("Public", {
+      entrypoint: "index.mjs",
+      bundle: out,
+    });
+    await resolved(fn.url);
+    expect(
+      ofType("aws:lambda/coreNetworkConnector:CoreNetworkConnector"),
+    ).toEqual([]);
+    expect(
+      revisionInputs("Public").serviceConfig.egressNetworkConnectorArn,
+    ).toBeUndefined();
+    expect(fn.nodes.networkConnector).toBeUndefined();
+    expect(fn.nodes.operatorRole).toBeUndefined();
+  });
+
+  it("creates no network connector in sst dev while the server runs locally", async () => {
+    // @ts-ignore
+    global.$dev = true;
+    const fn = new WebFunction("LocalPrivate", {
+      entrypoint: "index.mjs",
+      bundle: out,
+      vpc: { privateSubnets: ["subnet-1"], securityGroups: ["sg-1"] },
+    });
+    await resolved(fn.url);
+    expect(
+      ofType("aws:lambda/coreNetworkConnector:CoreNetworkConnector"),
+    ).toEqual([]);
+    expect(
+      resources.filter((r) => r.name === "LocalPrivateOperatorRole"),
+    ).toEqual([]);
+  });
 
   it("rejects a missing copyFiles source", () => {
     expect(
