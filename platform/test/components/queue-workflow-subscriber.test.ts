@@ -175,3 +175,68 @@ describe("checkQueueWorkflowTimeout", () => {
     );
   });
 });
+
+describe("fair-queue in-flight warning", () => {
+  beforeEach(() => {
+    registered = [];
+  });
+
+  it("warns when a capped workflow subscriber has too few messages in flight", async () => {
+    const { queueWorkflowInFlightWarning, FAIR_QUEUE_MIN_IN_FLIGHT } =
+      await import("../../src/components/aws/queue-lambda-subscriber");
+
+    expect(queueWorkflowInFlightWarning("Jobs", 5, 1)).toContain(
+      "at most 5 messages in flight",
+    );
+    expect(
+      queueWorkflowInFlightWarning("Jobs", FAIR_QUEUE_MIN_IN_FLIGHT - 1, 1),
+    ).toContain(`about ${FAIR_QUEUE_MIN_IN_FLIGHT} in flight`);
+    // At the minimum, by concurrency or by batch size.
+    expect(
+      queueWorkflowInFlightWarning("Jobs", FAIR_QUEUE_MIN_IN_FLIGHT, 1),
+    ).toBeUndefined();
+    expect(
+      queueWorkflowInFlightWarning("Jobs", 5, FAIR_QUEUE_MIN_IN_FLIGHT),
+    ).toBeUndefined();
+    // No cap: Lambda scales up while there's a backlog.
+    expect(queueWorkflowInFlightWarning("Jobs", undefined, 1)).toBeUndefined();
+  });
+
+  it("checks the maximum concurrency set with a transform, for a workflow only", async () => {
+    const { Workflow } = await import("../../src/components/aws/workflow");
+    const { QueueLambdaSubscriber } = await import(
+      "../../src/components/aws/queue-lambda-subscriber"
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const transform = {
+      eventSourceMapping: (args: any) => {
+        args.scalingConfig = { maximumConcurrency: 5 };
+        return undefined;
+      },
+    };
+
+    new QueueLambdaSubscriber("CappedWorkflow", {
+      queue: { arn: "arn:aws:sqs:us-east-1:111111111111:jobs" },
+      subscriber: new Workflow("CappedWorkflowTarget", {
+        handler: "src/workflow.handler",
+        timeout: { execution: "15 minutes" },
+      }),
+      batch: { size: 1 },
+      transform,
+    });
+    new QueueLambdaSubscriber("CappedFunction", {
+      queue: { arn: "arn:aws:sqs:us-east-1:111111111111:jobs" },
+      subscriber: { handler: "src/handler.main" },
+      batch: { size: 1 },
+      transform,
+    });
+    await settle();
+
+    const warnings = warn.mock.calls.map((call) => String(call[0]));
+    warn.mockRestore();
+    expect(warnings.filter((w) => w.includes("CappedWorkflow"))).toHaveLength(
+      1,
+    );
+    expect(warnings.some((w) => w.includes("CappedFunction"))).toBe(false);
+  });
+});

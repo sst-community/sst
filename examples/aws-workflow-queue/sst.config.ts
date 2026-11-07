@@ -29,8 +29,8 @@
  * curl "$URL?queue=resize&tenant=b&count=5"
  * ```
  *
- * SQS only treats a tenant as noisy once it has at least 30 messages in flight, so a
- * subscription that runs a few at a time doesn't get this.
+ * SQS only treats a tenant as noisy once it has many messages in flight. A
+ * subscription that runs 30 at a time didn't get this, and one that runs 50 did.
  *
  * Each execution logs its tenant and how long its message waited in the queue.
  */

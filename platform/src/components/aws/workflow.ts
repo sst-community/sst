@@ -352,9 +352,11 @@ export interface WorkflowArgs
  * On a standard queue, SQS then
  * [delivers the messages of quieter tenants first](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fair-queues.html)
  * when one tenant has a backlog. There's nothing to turn on, and it's not a FIFO queue.
- * SQS only treats a tenant as noisy once it has at least 30 messages in flight, or
- * takes much of the consumer's time. So it helps more when the subscriber works on many
- * messages at once. Messages that a subscriber has already received aren't reordered.
+ * SQS only treats a tenant as noisy once it has many messages in flight, and messages
+ * that a subscriber has already received aren't reordered. So it needs a subscriber that
+ * works on many messages at once: about 50, as maximum concurrency times batch size.
+ * Without a `maximumConcurrency`, Lambda adds concurrency while there's a backlog. SST
+ * warns if a workflow subscriber is capped below that.
  * `dispatcher()` passes the `MessageGroupId` to the workflow as `tenant`. The
  * `ApproximateNumberOfNoisyGroups` and `ApproximateAgeOfOldestMessageInQuietGroups`
  * CloudWatch metrics show how it's working.
