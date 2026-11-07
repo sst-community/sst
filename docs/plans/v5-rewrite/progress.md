@@ -2,6 +2,22 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-06: `main` merged in, with v4.24.0
+
+The maintainer said to bring what v4.24.0 released onto this branch.
+
+- **`main` merged into `v5-rewrite`:** the release notes of v4.23.2 and v4.24.0, the dev pane copying all of a selection that runs past the screen (#232), the provider update (#233), `WebFunction` (#103), and the Cloudflare and Vercel credentials fix as `main` merged it (#228).
+- **#228 was here already,** merged from its branch on 2026-11-02, as the same change. It conflicts only where this branch has since moved SST's Cloudflare and Vercel resources into the `sst` binary, so the merge keeps this branch's files.
+- **The provider update:** `@pulumi/aws` 7.54.0 and Pulumi 3.270.0, in the platform, in `go.mod`, and in the template package (`examples/component-package`), which pins SST's versions. `go mod tidy` also drops `aws-sdk-go-v2/service/rdsdata`, which nothing on this branch imports.
+- **`WebFunction` has no 5.0 form yet.** SST 4's is frozen in `platform/test/fixtures/v4/components/aws/web-function.ts`, with its imports moved as the other fixtures' are. `main` moved SST 4's link encryption key to a file of its own so that `Function` and `WebFunction` share it; here the fixture takes the key from `helpers/function-shared.ts`, as SST 4's `Function` in the fixtures does. Its naming rules are in `naming-rules.ts`. Its example and the tests of SST 4's component are left out, as this branch has neither for SST 4's components. The Go test of a Web Function's build (`pkg/runtime/node/web_function_test.go`) is kept. Until it's ported, a stage with a `WebFunction` can't move to 5.0.
+
+**Checked:** the type check, with SST 4's `WebFunction` in the fixtures; the platform's tests (102 files, 4057 tests); the API reports (unchanged); the Go build, vet and tests, the Web Function's build test included; and the docs' generator.
+
+**Left:**
+
+- **The 5.0 `WebFunction`,** built the 5.0 way, with its map from SST 4's, its tests and its docs, and checked in the lab.
+- **A role's inline policies are limited to 10,240 characters in all,** and the 5.0 `Function`, `Task`, `Service` and `MicroVm` put every linked grant in one inline policy (`inlinePolicies()` in `helpers/iam.ts`), as SST 4's do. A function linked to about 80 buckets can't deploy. sst-community/sst#218 proposes managed policies for SST 4's `Function`; the fix for 5.0 goes in the helper once that design is settled.
+
 ## 2026-11-05: step 5, SST 5's docs on their own
 
 The docs site gets a version for each major version of SST, each built from its own branch ([decision](plan.md#decisions)).

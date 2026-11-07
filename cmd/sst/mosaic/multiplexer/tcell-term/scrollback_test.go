@@ -111,6 +111,55 @@ func TestScrollbackLinesAreDrawnAcross(t *testing.T) {
 	}
 }
 
+// Copying a selection gives its lines scrolled out of view too.
+func TestCopyIncludesLinesScrolledOutOfView(t *testing.T) {
+	vt := New()
+	vt.Resize(20, 3)
+	printLines(vt, 0, 10)
+	vt.SetSurface(&surface{w: 20, h: 3, cells: map[[2]int]rune{}})
+	vt.ScrollUp(5)
+	vt.SelectStart(0, 0)
+	vt.ScrollReset()
+	vt.SelectEnd(5, 1)
+	vt.Draw()
+	want := "line 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9"
+	if got := vt.Copy(); got != want {
+		t.Fatalf("copied %q, want %q", got, want)
+	}
+}
+
+// Selecting and copying don't race with output dropping old lines.
+func TestSelectingWhileOutputArrives(t *testing.T) {
+	defer func(n int) { maxScrollback = n }(maxScrollback)
+	maxScrollback = 20
+	vt := New()
+	vt.Resize(20, 3)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 2_000 {
+			for _, r := range fmt.Sprintf("line %d", i) {
+				vt.update(Print(r))
+			}
+			vt.update(C0('\r'))
+			vt.update(C0('\n'))
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			vt.SelectStart(0, 0)
+			vt.SelectEnd(5, 2)
+			if vt.HasSelection() {
+				vt.Copy()
+			}
+			vt.ClearSelection()
+		}
+	}
+}
+
 func rowText(row []cell) string {
 	text := []rune{}
 	for _, c := range row {

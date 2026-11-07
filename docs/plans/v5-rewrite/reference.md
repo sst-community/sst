@@ -64,7 +64,7 @@ Read from [v5-progress.md](../v5-progress.md), [v5-port-notes.md](../v5-port-not
 ## Today's program
 
 - **Pulumi is run as a command**, not through the Automation API, in `.sst/pulumi/<updateID>/` with a file backend. SST writes only `Pulumi.yaml` (`name: <app>`, `runtime: nodejs`). The stack is `organization/<app>/<stage>`, and the passphrase is given as `PULUMI_CONFIG_PASSPHRASE`. There's no stack config file, so the passphrase's salt is only in the checkpoint.
-- **Pulumi 3.267.0**, the CLI and `@pulumi/pulumi` at the same version, with `PULUMI_HOME` in SST's own folder and ambient plugins ignored.
+- **Pulumi 3.270.0**, the CLI and `@pulumi/pulumi` at the same version, with `PULUMI_HOME` in SST's own folder and ambient plugins ignored.
 - **Provider settings** from the config are passed as `--config`, after the AWS home adds `defaultTags` `sst:app` and `sst:stage` and the region, and moves `profile` to the environment. The default provider's address includes its version, so the versions in `.sst/provider-lock.json` and the platform's pins decide whether it changes.
 - **The environment:** the user's, the home's credentials as `SST_AWS_*`, each secret as `SST_SECRET_<name>`, `NODE_OPTIONS`, and `SST_SERVER`, the RPC the program calls back into.
 - **In, through globals.** `$app` (the config's `app()` as the CLI read it), `$cli` (the command, dev or not, paths, and the component versions read from `sst:sst:Version` outputs in the state), `$dev`, the `sst` global, and a global for each provider, defined with esbuild (`pkg/project/run.go`). SST's components read `$app`, `$dev` and `$cli` 226 times, in 80 files.
