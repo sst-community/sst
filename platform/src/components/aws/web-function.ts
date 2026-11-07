@@ -238,9 +238,9 @@ export interface WebFunctionArgs {
    * your server calls take traffic from the security groups you give.
    *
    * This creates a Lambda network connector, which each revision is created with.
-   * Adding, changing or removing `vpc` makes a new revision. In `sst dev`, your server
-   * runs locally and no connector is created, so it reaches the VPC only through
-   * `sst tunnel`.
+   * Creating one takes a few minutes. Adding, changing or removing `vpc` makes a new
+   * revision. In `sst dev`, unless `dev` is `false`, your server runs locally and no
+   * connector is created, so it reaches the VPC only through `sst tunnel`.
    *
    * @example
    * Create a `Vpc` component, with a NAT if your server needs the internet.
@@ -431,8 +431,9 @@ export interface WebFunctionArgs {
  * endpoints, plus IAM, S3, and Logs resources. The provider internally creates the bare
  * function through Cloud Control, so the deployment role also needs
  * `cloudformation:CreateResource` and `cloudformation:GetResourceRequestStatus`.
- * With `vpc`, it also needs to manage Lambda network connectors, with
- * `lambda:PassNetworkConnector`, and `iam:PassRole` on the operator role.
+ * With `vpc`, it also needs permission to create, update and delete Lambda network
+ * connectors, `lambda:PassNetworkConnector` to give a revision its connector, and
+ * `iam:PassRole` on the operator role.
  * These permissions belong to the deployment role, not the application execution role.
  * The function and code bucket names are retained across ordinary deployments.
  * SST manages both the central CloudWatch group and its HomeRegion `.local` group with
