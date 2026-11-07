@@ -202,7 +202,7 @@ describe("StaticSite", function () {
     ]);
   });
 
-  it("hashes the files one at a time, with the same hashes and order", async () => {
+  it("hashes the files one at a time, with the same hashes", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sst-static-hash-"));
     fs.mkdirSync(path.join(dir, "assets"));
     const contents: Record<string, Buffer> = {
@@ -246,9 +246,16 @@ describe("StaticSite", function () {
           .createHash("sha256")
           .update(contents[file].toString("utf-8"))
           .digest("hex");
+      // The "**/*.html" option is processed first. Within an option the
+      // files keep the glob's order, which isn't sorted.
       expect(
-        files!.map((f: any) => [f.key, f.hash]).sort(),
-      ).toEqual(Object.keys(contents).map((file) => [file, sha256(file)]).sort());
+        files!.slice(0, 2).every((f: any) => f.key.endsWith(".html")),
+      ).toBe(true);
+      expect(files!.map((f: any) => [f.key, f.hash]).sort()).toEqual(
+        Object.keys(contents)
+          .map((file) => [file, sha256(file)])
+          .sort(),
+      );
     } finally {
       spy.mockRestore();
     }
