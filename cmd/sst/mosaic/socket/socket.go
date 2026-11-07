@@ -104,7 +104,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		}
 	})
 	sockets := make(map[*websocket.Conn]struct{})
-	invocations := make(map[string]*Invocation)
+	invocations := newInvocationStore()
 
 	evts := bus.SubscribeAll()
 
@@ -130,15 +130,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		case <-ctx.Done():
 			return nil
 		case source := <-invocationClear:
-			if source == "all" {
-				invocations = map[string]*Invocation{}
-				break
-			}
-			for id, invocation := range invocations {
-				if invocation.Source == source {
-					delete(invocations, id)
-				}
-			}
+			invocations.clear(source)
 			break
 
 		case unknown := <-evts:
@@ -163,13 +155,14 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 					Errors: []InvocationError{},
 					Logs:   []InvocationLog{},
 				}
-				invocations[evt.RequestID] = invocation
+				invocations.add(invocation)
 				publishInvocation(invocation)
 				break
 			case *aws.FunctionResponseEvent:
-				invocation, ok := invocations[evt.RequestID]
+				invocation, ok := invocations.get(evt.RequestID)
 				if ok {
 					invocation.Output = json.RawMessage(evt.Output)
+					invocations.grow(evt.RequestID, len(evt.Output))
 					invocation.End = time.Now().UnixMilli()
 					invocation.Report = &InvocationReport{
 						Duration: invocation.End - invocation.Start,
@@ -178,7 +171,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 				}
 				break
 			case *aws.FunctionErrorEvent:
-				invocation, ok := invocations[evt.RequestID]
+				invocation, ok := invocations.get(evt.RequestID)
 				if ok {
 					invocation.End = time.Now().UnixMilli()
 					invocation.Report = &InvocationReport{
@@ -196,13 +189,14 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 						})
 					}
 					invocation.Errors = append(invocation.Errors, error)
+					invocations.grow(evt.RequestID, len(evt.ErrorMessage))
 					publishInvocation(invocation)
 				}
 				break
 			case *aws.FunctionLogEvent:
-				invocation, ok := invocations[evt.RequestID]
+				invocation, ok := invocations.get(evt.RequestID)
 				if ok {
-					invocation.Logs = append(invocation.Logs, InvocationLog{
+					invocations.log(evt.RequestID, InvocationLog{
 						ID:        time.Now().String(),
 						Timestamp: time.Now().UnixMilli(),
 						Message:   ansi.Strip(evt.Line),
@@ -221,10 +215,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 					Stage: p.App().Stage,
 				},
 			})
-			all := []*Invocation{}
-			for _, invocation := range invocations {
-				all = append(all, invocation)
-			}
+			all := invocations.list()
 			log.Info("sending invocations", "count", len(all))
 			ws.WriteJSON(map[string]interface{}{
 				"type":       "invocation",
