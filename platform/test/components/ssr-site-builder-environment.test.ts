@@ -48,6 +48,12 @@ describe("SSR site builder", () => {
     expect(builder?.type).toBe("command:local:Command");
     const environment = builder!.inputs.environment;
     expect(pulumi.runtime.isRpcSecret(environment)).toBe(true);
+    // and no other input carries the credentials
+    const { environment: _, ...others } = builder!.inputs;
+    const saved = JSON.stringify(others);
+    expect(Object.values(ENV).filter((value) => saved.includes(value))).toEqual(
+      [],
+    );
     // The build still gets the same variables
     const values = pulumi.runtime.unwrapRpcSecret(environment);
     expect(values.SST).toBe("1");
