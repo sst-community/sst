@@ -560,6 +560,9 @@ export interface BucketArgs {
     /**
      * Transform the public access block resource that's attached to the Bucket.
      *
+     * The public access block is deleted together with the Bucket, so the Bucket is
+     * never left without it while it's being removed.
+     *
      * Returns `false` if the public access block resource should not be created.
      */
     publicAccessBlock?: Transform<s3.BucketPublicAccessBlockArgs> | false;
@@ -1157,7 +1160,9 @@ export class Bucket extends Component implements Link.Linkable {
             ignorePublicAcls: true,
             restrictPublicBuckets: access.apply((v) => v !== "public"),
           },
-          { parent },
+          // Not deleted on its own when the bucket is deleted too, so the bucket
+          // doesn't go without its block while it is being removed.
+          { parent, deletedWith: bucket },
         ),
       );
     }
