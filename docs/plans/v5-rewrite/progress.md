@@ -17,6 +17,8 @@ The maintainer said to bring `main`'s fixes onto this branch, by merging where t
 
 **CI's second run** failed in the recorded router's case: the serverless group's case, just before it, was still registering its functions' source maps and its components' outputs when the router's began. The mock's `settle()` waited for nothing new to be sent, not for what was sent to be answered, and a source map waits for its function's log group to be answered, as its key holds the log group's ARN. On CI's slower runner, that took longer than the three quiet rounds. The mock now counts what the engine hasn't answered yet, and `settle()` waits for none; Pulumi's mock answers every request, with an error too. It didn't fail here, even with every core busy, so this follows from what the run showed. Checked: the platform's tests, three times, exit cleanly and take as long as before, and the recorded, moved and `Bucket` tests twice with every core busy.
 
+**CI's third run** passed the router's case, and timed out the serverless group's setup: Vitest gives a hook 10 seconds, and the setup deploys the recorded stage twice under the mock. The recorded tests took 28 seconds on CI's runner and 8 here, and the serverless group's setup about 3 here, so it was always near the limit there; the first run made it under. Each recorded case's setup now has two minutes. `settle()` waiting for answers changed the file's time here by about a tenth of a second.
+
 ## 2026-11-06: step 5, the `WebFunction`'s `vpc`, from sst-community/sst#236
 
 sst-community/sst#236 (for #235) gives SST 4's `WebFunction` a `vpc`, as `Function` and `MicroVm` have: its revision sends its outbound traffic through a Lambda network connector. The maintainer asked for it on this branch too, before it merges.

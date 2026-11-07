@@ -116,6 +116,11 @@ type Run = Awaited<ReturnType<ReturnType<typeof replay>["takesOverState"]>>;
 // A program runs in its app's folder, which a 4.x component reads files from
 process.chdir(app);
 
+// How long a case's setup may take: it deploys a recorded stage twice under
+// the mock, with SST 4's components and then with SST 5's, which took CI's
+// runner up to about 10 s, Vitest's default for a hook.
+const REPLAY = 120_000;
+
 describe("the lab's serverless group, as v4.23.1 deployed it", () => {
   let run: Run;
   beforeAll(async () => {
@@ -136,7 +141,7 @@ describe("the lab's serverless group, as v4.23.1 deployed it", () => {
           r.parent ? r.parent.split("::").at(-1)! : r.name,
         ),
     );
-  });
+  }, REPLAY);
 
   it("is what the 4.x components deploy", () => {
     const { deployed } = run;
@@ -297,7 +302,7 @@ describe("the lab's router, as v4.23.1 deployed it", () => {
         r.type === "sst:sst:LinkRef" ||
         !/^Router/.test(r.parent ? r.parent.split("::").at(-1)! : r.name),
     );
-  });
+  }, REPLAY);
 
   it("is what the 4.x Router deploys", () => {
     const { deployed } = run;
@@ -408,7 +413,7 @@ describe("the lab's Next.js site, as v4.23.1 deployed it", () => {
           r.parent ? r.parent.split("::").at(-1)! : r.name,
         ),
     );
-  });
+  }, REPLAY);
   afterAll(() =>
     fs.rmSync(path.join(app, "sites"), { recursive: true, force: true }),
   );
@@ -528,7 +533,7 @@ describe("the lab's Astro site, as v4.23.1 deployed it", () => {
           r.parent ? r.parent.split("::").at(-1)! : r.name,
         ),
     );
-  });
+  }, REPLAY);
   afterAll(() =>
     fs.rmSync(path.join(app, "sites"), { recursive: true, force: true }),
   );
@@ -626,7 +631,7 @@ describe("the lab's SvelteKit app, as v4.23.1 deployed it", () => {
           r.parent ? r.parent.split("::").at(-1)! : r.name,
         ),
     );
-  });
+  }, REPLAY);
   afterAll(() =>
     fs.rmSync(path.join(app, "sites"), { recursive: true, force: true }),
   );
@@ -704,7 +709,7 @@ describe("the lab's static sites, as v4.23.1 deployed them", () => {
           r.parent ? r.parent.split("::").at(-1)! : r.name,
         ),
     );
-  });
+  }, REPLAY);
   afterAll(() => fs.rmSync(sites, { recursive: true, force: true }));
 
   const fields = (changed: Run["result"]["changed"]) =>
@@ -755,7 +760,7 @@ describe("the lab's serverless group, as v4.23.1 deployed it in sst dev", () => 
     );
     // @ts-ignore
     global.$dev = false;
-  });
+  }, REPLAY);
 
   it("is what the 4.x components deploy", () => {
     const { deployed } = run;
@@ -873,7 +878,7 @@ describe("the lab's VPC groups, as v4.23.1 deployed them", () => {
       groups(aws),
       (r) => r.type === "sst:sst:LinkRef",
     );
-  });
+  }, REPLAY);
 
   it("is what the 4.x components deploy", () => {
     const { deployed } = run;
@@ -1025,7 +1030,7 @@ describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => 
       },
       (r) => r.type === "sst:sst:LinkRef",
     );
-  });
+  }, REPLAY);
   afterAll(() => {
     globalThis.fetch = realFetch;
     delete process.env.CLOUDFLARE_DEFAULT_ACCOUNT_ID;
