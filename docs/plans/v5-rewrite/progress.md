@@ -2,6 +2,12 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-06: the platform's build, without the `Vector`'s handler
+
+`platform/scripts/build` stopped at the `Vector`'s handler (`functions/vector-handler`) after the swap: it imports a helper the swap removed, and 5.0 has no `Vector`. So `check.yml`'s first run on this branch would have failed there. The handler and its line in `scripts/build.mjs` are gone. SST 4's `Vector` in the fixtures still names the handler's folder, and nothing under the mock builds it.
+
+**Checked:** `scripts/build.mjs` and the types' build run through, and the platform's tests pass.
+
 ## 2026-11-06: step 5, the `WebFunction` built the 5.0 way
 
 SST 4's `WebFunction`, new in v4.24.0, gets its 5.0 form, so a stage that has one can move.

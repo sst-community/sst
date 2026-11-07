@@ -134,7 +134,7 @@ Deleting the old ones carelessly would remove a site's files (`BucketFiles` dele
 - **The function worker in `sst dev`** (`nodejs-runtime`) **and esbuild plugins** (`plugin.mjs`). They run the app's own code.
 - **What AWS or Cloudflare only runs as JavaScript:** the CloudFront router functions (`cf-*-router-worker`), the Lambda@Edge signer (`oac-edge-signer`, since Lambda@Edge takes only Node or Python), the React and Remix servers, and Cloudflare workers.
 - **Editing the config:** `sst add` (`src/ast/add.mjs`), and the codemod. TypeScript source is best rewritten with TypeScript's own tools.
-- **The small handlers SST deploys** (`ssr-warmer`, `vector-handler`). Rewriting them would change deployed code for nothing a user notices.
+- **The small handlers SST deploys** (`ssr-warmer`; `vector-handler` went with the `Vector`, which 5.0 leaves out). Rewriting them would change deployed code for nothing a user notices.
 
 **Could move to Go:**
 
