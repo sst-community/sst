@@ -174,6 +174,27 @@ export function mockPulumi(input?: MockInput) {
   const resources: RecordedResource[] = [];
   // Counts what's sent to the engine, to tell when a deploy has gone quiet
   let activity = 0;
+  // What's been sent to the engine and not answered yet. A deploy hasn't gone
+  // quiet while one is owed: what waits on it comes after, like a function's
+  // source maps, whose keys hold its log group's ARN. The engine's mock calls
+  // back every time, with an error too.
+  let unanswered = 0;
+  const owed = (callback: any) => {
+    unanswered++;
+    let done = false;
+    const release = () => {
+      if (done) return;
+      done = true;
+      unanswered--;
+    };
+    return {
+      callback: (...args: any[]) => {
+        release();
+        return callback(...args);
+      },
+      release,
+    };
+  };
 
   // Generated names end in random characters. A deployed resource keeps the
   // name it has, so give every run the same ones.
@@ -400,8 +421,10 @@ export function mockPulumi(input?: MockInput) {
   process.env.SST_PREVIEW_FIRST = "1";
   // Every address each resource registered answers to, by its own
   const addresses = new Map<string, Set<string>>();
-  monitor.registerResource = (req: any, callback: any) => {
+  monitor.registerResource = (req: any, asked: any) => {
     activity++;
+    const answer = owed(asked);
+    const callback = answer.callback;
     const r: RecordedResource = {
       kind: "register",
       type: req.getType(),
@@ -451,6 +474,9 @@ export function mockPulumi(input?: MockInput) {
             ? [...answers, ...formerSstAddresses(r.type, answers)]
             : [],
         );
+      } catch (error) {
+        answer.release();
+        throw error;
       } finally {
         registering = importing = undefined;
       }
@@ -469,8 +495,9 @@ export function mockPulumi(input?: MockInput) {
     });
   };
   const readResource = monitor.readResource.bind(monitor);
-  monitor.readResource = (req: any, callback: any) => {
+  monitor.readResource = (req: any, asked: any) => {
     activity++;
+    const answer = owed(asked);
     resources.push({
       kind: "read",
       type: req.getType(),
@@ -480,19 +507,30 @@ export function mockPulumi(input?: MockInput) {
       inputs: req.getProperties()?.toJavaScript() ?? {},
       options: compact({ id: req.getId(), provider: req.getProvider() }),
     });
-    return send(readResource, req, callback, [
-      urn(req.getType(), req.getName(), req.getParent()),
-    ]);
+    try {
+      return send(readResource, req, answer.callback, [
+        urn(req.getType(), req.getName(), req.getParent()),
+      ]);
+    } catch (error) {
+      answer.release();
+      throw error;
+    }
   };
 
   // What a component registers as its outputs, by its URN. The CLI reads
   // some of them, like the command `sst dev` runs for a task.
   const registered = new Map<string, Record<string, any>>();
   const registerResourceOutputs = monitor.registerResourceOutputs.bind(monitor);
-  monitor.registerResourceOutputs = (req: any, callback: any) => {
+  monitor.registerResourceOutputs = (req: any, asked: any) => {
     activity++;
+    const answer = owed(asked);
     registered.set(req.getUrn(), req.getOutputs()?.toJavaScript() ?? {});
-    return registerResourceOutputs(req, callback);
+    try {
+      return registerResourceOutputs(req, answer.callback);
+    } catch (error) {
+      answer.release();
+      throw error;
+    }
   };
 
   const outputsOf = (r: RecordedResource): Record<string, any> =>
@@ -576,7 +614,8 @@ export function mockPulumi(input?: MockInput) {
         for (let i = 0; i < 50; i++)
           await new Promise((resolve) => setImmediate(resolve));
         await new Promise((resolve) => setTimeout(resolve, 2));
-        quiet = activity === seen && !busy() ? quiet + 1 : 0;
+        quiet =
+          activity === seen && unanswered === 0 && !busy() ? quiet + 1 : 0;
         seen = activity;
       }
     },
