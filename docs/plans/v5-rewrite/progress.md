@@ -13,6 +13,8 @@ The maintainer said to bring `main`'s fixes onto this branch, by merging where t
 
 **Checked:** the type check; the platform's tests (104 files, 4116 tests), with the two new ones for the `Bucket` failing without its fix; the API reports, unchanged.
 
+**CI's first run on this branch** (the push of `v5`) failed on two unhandled errors in `moved.test.ts`, though every test passed; the local run had them too, and they were missed. With `deletedWith`, the public access block registers only once its bucket has, so a test that ends without waiting left it registering into the next test, whose reset had cleared the mock's addresses. The mock now keeps a registration's addresses from when it was asked, so one still waiting across a reset finishes harmlessly. Checked: the platform's tests exit cleanly, three runs of the two files, and the steps after them, the component package template's tests, the CLI's build and the docs' build.
+
 ## 2026-11-06: step 5, the `WebFunction`'s `vpc`, from sst-community/sst#236
 
 sst-community/sst#236 (for #235) gives SST 4's `WebFunction` a `vpc`, as `Function` and `MicroVm` have: its revision sends its outbound traffic through a Lambda network connector. The maintainer asked for it on this branch too, before it merges.

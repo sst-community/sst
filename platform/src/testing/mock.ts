@@ -432,7 +432,11 @@ export function mockPulumi(input?: MockInput) {
     };
     resources.push(r);
     const own = urn(r.type, r.name, r.parent);
-    addresses.set(own, answersTo(r, addresses.get(r.parent)));
+    // Kept here, not read from the map later: a test's reset can clear the
+    // map while a registration is still waiting on its checks or on a
+    // resource it's deleted with.
+    const answers = answersTo(r, addresses.get(r.parent));
+    addresses.set(own, answers);
     // A component isn't in the engine's mock's state, and gets no answer.
     // What's imported keeps the id it's imported by, as in a deploy.
     const register = () => {
@@ -444,10 +448,7 @@ export function mockPulumi(input?: MockInput) {
           req,
           callback,
           r.custom
-            ? [
-                ...addresses.get(own)!,
-                ...formerSstAddresses(r.type, addresses.get(own)!),
-              ]
+            ? [...answers, ...formerSstAddresses(r.type, answers)]
             : [],
         );
       } finally {
