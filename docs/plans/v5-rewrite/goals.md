@@ -119,7 +119,7 @@ Breaking changes are allowed in 5.0: args, defaults, names, how a component is b
 - A report of the API for each entry point, made with [API Extractor](https://api-extractor.com/), is checked in. A pull request shows each change to it, and CI fails on one nobody meant.
 - The template package builds and tests against the branch in CI.
 
-**Where it stands (2026-11-05):** the reports are made, one for each of the five entry points, in `platform/api/`, and `check.yml` fails on a change they don't have (`bun run api` in `platform/`). They show each component's parts and the types a package can't import too, so a change to those shows. The template package builds and tests against the branch in `check.yml`. Both wait on CI's first run on this branch.
+**Where it stands (2026-11-07):** the reports are made, one for each of the five entry points, in `platform/api/`, and `check.yml` fails on a change they don't have (`bun run api` in `platform/`). They show each component's parts and the types a package can't import too, so a change to those shows. The template package builds and tests against the branch in `check.yml`. Both passed in CI's first green run, on `v5` on 2026-11-07 ([progress](progress.md)).
 
 ## Not goals
 

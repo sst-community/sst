@@ -21,6 +21,8 @@ The maintainer said to bring `main`'s fixes onto this branch, by merging where t
 
 **CI's fourth run** passed the platform's tests, and failed the component package template's, the first time CI ran them: `TypeError: c.g is not a function` in `google-protobuf` on every resource. CI tests the template inside the checkout, where Node finds a package the template doesn't install in the repo's own `node_modules`: `sst/testing` saw `@pulumi/cloudflare` and `@pulumiverse/vercel` there, loaded those groups, and their providers loaded the repo's second copy of Pulumi and of `google-protobuf`, whose namespaces clash. Run in place here, it failed the same way; copied out, it passed, here and in Linux with CI's Node 24.22.2. A package's own repo has one install, so it doesn't meet this. `check.yml` now tests the template in a copy outside the checkout.
 
+**CI's fifth run passed every step** ([run 42423907989](https://github.com/sst-community/sst/actions/runs/42423907989)): the types, the SDK's types, the platform's build, the API reports, the Go tests, the platform's tests, the component package template, the CLI's build and the docs' build.
+
 ## 2026-11-06: step 5, the `WebFunction`'s `vpc`, from sst-community/sst#236
 
 sst-community/sst#236 (for #235) gives SST 4's `WebFunction` a `vpc`, as `Function` and `MicroVm` have: its revision sends its outbound traffic through a Lambda network connector. The maintainer asked for it on this branch too, before it merges.
