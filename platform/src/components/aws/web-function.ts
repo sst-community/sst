@@ -391,8 +391,8 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts> {
    *
    * This creates a Lambda network connector, which each revision is created with. Creating
    * it takes about 5 minutes. Adding, changing or removing `vpc` makes a new revision. In
-   * `sst dev`, your server runs locally and no connector is created, so it reaches the VPC
-   * only through `sst tunnel`.
+   * `sst dev`, unless `dev` is `false`, your server runs locally and no connector is
+   * created, so it reaches the VPC only through `sst tunnel`.
    *
    * @example
    * Create a `Vpc` component, with a NAT if your server needs the internet.
@@ -534,10 +534,10 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts> {
  * The role you deploy with needs permission to manage Lambda web functions, revisions
  * and endpoints, and the IAM, S3 and CloudWatch Logs resources. The provider creates the
  * web function through Cloud Control, so it also needs `cloudformation:CreateResource`
- * and `cloudformation:GetResourceRequestStatus`. With `vpc`, it also needs to manage
- * Lambda network connectors, with `lambda:PassNetworkConnector`, and `iam:PassRole` on
- * the operator role. These are for the role you deploy with, not the role the web
- * function runs with.
+ * and `cloudformation:GetResourceRequestStatus`. With `vpc`, it also needs permission to
+ * create, update and delete Lambda network connectors, `lambda:PassNetworkConnector` to
+ * give a revision its connector, and `iam:PassRole` on the operator role. These are for
+ * the role you deploy with, not the role the web function runs with.
  *
  * The web function and its code bucket keep their names across deploys. SST manages
  * both log groups with the retention you give, and the role it creates may write only to
