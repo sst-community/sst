@@ -138,7 +138,9 @@ describe("SST's Cloudflare and Vercel resources", () => {
   it("don't pass the CLI's credentials on to a site's build", () => {
     const builder = created.find((r) => r.name === "SiteBuilder");
     expect(builder?.type).toBe("command:local:Command");
-    const environment = builder!.inputs.environment;
+    const environment = pulumi.runtime.unwrapRpcSecret(
+      builder!.inputs.environment,
+    );
     expect(environment.SST).toBe("1");
     expect(
       Object.keys(environment).filter((key) =>

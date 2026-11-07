@@ -1,4 +1,4 @@
-import { output, CustomResourceOptions } from "@pulumi/pulumi";
+import { output, secret, CustomResourceOptions } from "@pulumi/pulumi";
 import { Semaphore } from "../../../util/semaphore";
 import { local } from "@pulumi/command";
 
@@ -17,7 +17,13 @@ export function siteBuilder(
 
     let waitOn;
 
-    const command = new local.Command(name, args, opts);
+    // The environment has the process's own, with SST's AWS credentials and
+    // any CI secrets, so keep it out of the state and previews as plain text
+    const command = new local.Command(
+      name,
+      { ...args, environment: args.environment && secret(args.environment) },
+      opts,
+    );
     waitOn = command.urn;
 
     // When running `sst diff` or `sst refresh`, `local.Command`'s `create` and `update` are not called.
