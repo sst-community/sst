@@ -223,7 +223,7 @@ else:
     out += ["> [!NOTE]", f"> The AI review didn't run this time ([run]({RUN_URL})). The checks above still apply.", ""]
 
 out.append(
-    f"<sub>A first pass by [opencode](https://opencode.ai) with the free `{MODEL}` model ([run]({RUN_URL})). "
+    f"<sub>A first pass by [opencode](https://opencode.ai) with the `{MODEL}` model ([run]({RUN_URL})). "
     "It can be wrong. A committer still reviews and approves every pull request. "
     "Pushing, or editing the title or description, runs it again.</sub>"
 )
