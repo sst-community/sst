@@ -220,6 +220,8 @@ export const exports: Record<Group, string[]> = {
     "VpcArgs",
     "WafArgs",
     "WafLoggingArgs",
+    "WebFunction",
+    "WebFunctionArgs",
     "Workflow",
     "WorkflowArgs",
   ],

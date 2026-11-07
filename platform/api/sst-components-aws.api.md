@@ -65,7 +65,10 @@ import { FileSystem } from '@pulumi/aws/efs/fileSystem.js';
 import { Function as Function_3 } from '@pulumi/aws/lambda/function.js';
 import { Function as Function_4 } from '@pulumi/aws/cloudfront/function.js';
 import { Function as Function_5 } from '@pulumi/aws/appsync/function.js';
+import { Function as Function_6 } from '@pulumi/aws/lambdaweb/function.js';
+import { FunctionEndpoint } from '@pulumi/aws/lambdaweb/functionEndpoint.js';
 import { FunctionEventInvokeConfig } from '@pulumi/aws/lambda/functionEventInvokeConfig.js';
+import { FunctionRevision } from '@pulumi/aws/lambdaweb/functionRevision.js';
 import { FunctionUrl } from '@pulumi/aws/lambda/functionUrl.js';
 import { GraphQLApi } from '@pulumi/aws/appsync/graphQLApi.js';
 import { iam } from '@pulumi/aws';
@@ -3535,6 +3538,21 @@ const parts_47: () => {
 };
 
 // @public (undocumented)
+const parts_48: {
+    logGroup: LogGroup;
+    localLogGroup: LogGroup;
+    role: Role;
+    codeBucket: Bucket_2;
+    versioning: NamedPart<BucketVersioning>;
+    codePublicAccessBlock: BucketPublicAccessBlock;
+    codeObject: NamedPart<BucketObjectv2>;
+    function: Function_6;
+    codeBucketPolicy: BucketPolicy;
+    revision: FunctionRevision;
+    endpoint: FunctionEndpoint;
+};
+
+// @public (undocumented)
 const parts_5: () => {
     queue: Queue_2;
     subscriber: DeferredPart<typeof Function_2>;
@@ -5272,6 +5290,86 @@ class Wait extends State implements Nextable {
 interface WaitArgs extends StateArgs {
     time?: Input<JSONata | Duration>;
     timestamp?: Input<string>;
+}
+
+// @public
+export class WebFunction extends WebFunction_base {
+    constructor(name: string, args: WebFunctionArgs, opts?: ComponentResourceOptions);
+    get arn(): Output<string> | undefined;
+    get endpointArn(): Output<string> | undefined;
+    link(): {
+        properties: {
+            url: Output<string>;
+            arn?: undefined;
+            endpointArn?: undefined;
+        };
+        include?: undefined;
+    } | {
+        properties: {
+            url: Output<string>;
+            arn: Output<string>;
+            endpointArn: Output<string>;
+        };
+        include: {
+            effect?: "allow" | "deny" | undefined;
+            actions: string[];
+            resources: Input<Input<string>[]>;
+            conditions?: Input<Input<{
+                test: Input<string>;
+                variable: Input<string>;
+                values: Input<Input<string>[]>;
+            }>[]> | undefined;
+            type: "aws.permission";
+        }[];
+    };
+    get revisionArn(): Output<string> | undefined;
+    get url(): Output<string>;
+}
+
+// @public (undocumented)
+const WebFunction_base: ComponentClass<    {
+logGroup: LogGroup;
+localLogGroup: LogGroup;
+role: Role;
+codeBucket: Bucket_2;
+versioning: NamedPart<BucketVersioning>;
+codePublicAccessBlock: BucketPublicAccessBlock;
+codeObject: NamedPart<BucketObjectv2>;
+function: Function_6;
+codeBucketPolicy: BucketPolicy;
+revision: FunctionRevision;
+endpoint: FunctionEndpoint;
+}>;
+
+// @public (undocumented)
+export interface WebFunctionArgs extends ComponentArgs<typeof parts_48> {
+    bundle?: string;
+    copyFiles?: FunctionArgs["copyFiles"];
+    dev?: false | {
+        command?: Input<string>;
+        directory?: Input<string>;
+        url?: Input<string>;
+        autostart?: Input<boolean>;
+    };
+    entrypoint: string;
+    environment?: FunctionArgs["environment"];
+    link?: FunctionArgs["link"];
+    logging?: Input<{
+        retention?: Input<keyof typeof RETENTION>;
+        applicationLogLevel?: Input<"TRACE" | "DEBUG" | "INFO" | "WARN" | "ERROR" | "FATAL">;
+        systemLogLevel?: Input<"DEBUG" | "INFO" | "WARN">;
+    }>;
+    maxConcurrencyPerEnvironment?: Input<number>;
+    nodejs?: FunctionArgs["nodejs"];
+    permissions?: FunctionArgs["permissions"];
+    scaling?: Input<{
+        maxEnvironments?: Input<number>;
+        rateLimit?: Input<number>;
+    }>;
+    timeout?: Input<DurationMinutes>;
+    url?: Input<{
+        authorization?: Input<"none" | "iam">;
+    }>;
 }
 
 // @public (undocumented)

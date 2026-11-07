@@ -46,6 +46,7 @@ export * from "./svelte-kit";
 export * from "./tan-stack-start";
 export * from "./task";
 export * from "./vpc";
+export * from "./web-function";
 export * from "./workflow";
 export * from "./dns";
 export { linkable } from "./linkable";

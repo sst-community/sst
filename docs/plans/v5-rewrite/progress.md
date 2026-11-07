@@ -2,6 +2,21 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-06: step 5, the `WebFunction` built the 5.0 way
+
+SST 4's `WebFunction`, new in v4.24.0, gets its 5.0 form, so a stage that has one can move.
+
+- **Every part has SST 4's name and place,** so its takeover map is empty: the code's zip and the bucket's versioning keep theirs with `named()` (`Code`, `CodeVersioning`), and their keys are SST 4's `nodes` keys, `codeObject` and `versioning`. The inputs, the options (`dependsOn`, `deleteBeforeReplace`, `ignoreChanges`) and the zip are SST 4's, so a move updates nothing.
+- **The 5.0 contract:** `context()`, the pane in `sst dev` reported with `this.report({ dev })` where SST 4 created a `DevCommand` (`<name>Dev`), and the URL as its `hint`. `entrypoint`, `bundle`, `nodejs`, `copyFiles` and `dev` are plain values. A role can be given in `existing`, with `permissions` refused next to it; every other part is refused there. In `sst dev`, reading a part that isn't created throws.
+- **Its code no longer waits for what it's linked to.** SST 4's read each linked component's `urn` for the links' names, so its code waited for every resource of those components. In 5.0 a router's routes and a queue's subscribers are parts of the router and the queue, so a web function that links its router, or a queue whose subscriber links the web function back, would wait for itself and never deploy. The build goes through `withoutDependencies()`, as the `Function`'s does. Found by the review.
+- **The bundle's checks** (an entrypoint inside it, and a JavaScript file) run in the constructor, so `sst diff` reports them, where SST 4's ran only on a deploy.
+- **The pane's links** are given to the command by `sst dev` alone. SST 4's also put their properties in its environment, so they were set twice.
+- Exported from `sst.aws` and in the codemod's names; one row in the [breaking changes](plan.md#breaking-changes-so-far).
+
+**Checked:** the type check; the platform's tests (103 files, with 41 for the `WebFunction`: 9 takeover cases, each run the three ways, and its behaviour), and a broken code key failing every deployed case; the API reports; the docs' page. In the lab, a stage that SST 4.24.0 deployed with two web functions (one linked to a bucket, one behind IAM with a resource policy): `sst migrate --check` passed with 37 resources kept and nothing updated, and the move kept every resource by id, answered the same at the same URLs, and `sst diff` showed no changes. A code change made a new revision and moved the endpoint to it, leaving one version of the code in the bucket. `sst dev` ran the server locally as the role, with the link from `sst dev` and the S3 calls working, and a deploy afterwards created the web function again, with SST 5's code. Removed, and its state versions and passphrase deleted. The lab check was run before the review's fix to the build's dependencies.
+
+**Left:** the zip lists its files in the machine's locale's order (`localeCompare`), as SST 4's did, so two machines can give one code two hashes, and a new revision; changing it changes every stage's hash once.
+
 ## 2026-11-06: `main` merged in, with v4.24.0
 
 The maintainer said to bring what v4.24.0 released onto this branch.
@@ -15,7 +30,7 @@ The maintainer said to bring what v4.24.0 released onto this branch.
 
 **Left:**
 
-- **The 5.0 `WebFunction`,** built the 5.0 way, with its map from SST 4's, its tests and its docs, and checked in the lab.
+- **The 5.0 `WebFunction`,** built the 5.0 way, with its map from SST 4's, its tests and its docs, and checked in the lab: done the same day, in the entry above.
 - **A role's inline policies are limited to 10,240 characters in all,** and the 5.0 `Function`, `Task`, `Service` and `MicroVm` put every linked grant in one inline policy (`inlinePolicies()` in `helpers/iam.ts`), as SST 4's do. A function linked to about 80 buckets can't deploy. sst-community/sst#218 proposes managed policies for SST 4's `Function`; the fix for 5.0 goes in the helper once that design is settled.
 
 ## 2026-11-05: step 5, SST 5's docs on their own

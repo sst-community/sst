@@ -50,4 +50,5 @@ import "./svelte-kit";
 import "./tan-stack-start";
 import "./task";
 import "./vpc";
+import "./web-function";
 import "./workflow";
