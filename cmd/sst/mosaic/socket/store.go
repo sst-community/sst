@@ -12,6 +12,8 @@ const (
 	maxInvocationLogs = 1_000
 )
 
+// invocationStore isn't safe for concurrent use. socket.go calls it only from
+// its event loop.
 type invocationStore struct {
 	byID  map[string]*Invocation
 	order []string // oldest first
@@ -64,7 +66,8 @@ func (s *invocationStore) log(id string, line InvocationLog) {
 	n := len(line.Message)
 	if len(invocation.Logs) >= maxInvocationLogs {
 		n -= len(invocation.Logs[0].Message)
-		invocation.Logs = invocation.Logs[1:]
+		// copied, so the dropped lines aren't held by the old array
+		invocation.Logs = append(invocation.Logs[:0:0], invocation.Logs[1:]...)
 	}
 	invocation.Logs = append(invocation.Logs, line)
 	s.grow(id, n)

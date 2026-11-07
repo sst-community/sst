@@ -189,7 +189,11 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 						})
 					}
 					invocation.Errors = append(invocation.Errors, error)
-					invocations.grow(evt.RequestID, len(evt.ErrorMessage))
+					size := len(evt.ErrorMessage) + len(evt.ErrorType)
+					for _, frame := range evt.Trace {
+						size += len(frame)
+					}
+					invocations.grow(evt.RequestID, size)
 					publishInvocation(invocation)
 				}
 				break
