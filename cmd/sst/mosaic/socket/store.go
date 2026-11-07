@@ -1,10 +1,10 @@
 package socket
 
-// sst dev keeps the most recent invocations for the clients that connect to
-// it, such as the Console: up to maxInvocations of them, and about
+// sst dev keeps the most recent function calls for the tools that connect to
+// its local socket: up to maxInvocations of them, and about
 // maxInvocationBytes of their inputs, outputs and logs. The oldest go first.
-// Without a limit every invocation was kept until sst dev exited, so a long
-// session grew by the size of everything that passed through it.
+// Without a limit every call was kept until sst dev exited, so a long session
+// grew by the size of everything that passed through it.
 const (
 	maxInvocations     = 1_000
 	maxInvocationBytes = 64 << 20
