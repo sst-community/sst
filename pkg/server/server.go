@@ -115,10 +115,6 @@ func (s *Server) Start(ctx context.Context, p *project.Project) error {
 			keyPath,
 			proxy,
 		)
-		if err != nil {
-			log.Error("failed to start https server", "err", err)
-			return err
-		}
 	}
 
 	<-ctx.Done()
