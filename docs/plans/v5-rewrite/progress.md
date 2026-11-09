@@ -2,6 +2,14 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: the mock waits for every component's outputs
+
+A `Remix` takeover case ("on a distribution of its own", as it is) failed in two of three full runs with the day's changes, and passed in three of three on the commit before them and every time alone: SST 4's site had registered no outputs where SST 5's had its URL. Fully settled, both register the same URL. SST 4's site registers its outputs once its URL resolves, at the end of a chain of `apply`s after its build, and under a full run's load that came after `settle()` had seen three quiet rounds. The day's changes made SST 5's side quicker, not SST 4's slower; they only moved where the race fell.
+
+- **`settle()` waits for every component registered to register its outputs**, as Pulumi does once for each, as well as for what's sent to the engine and unanswered. One whose outputs never resolve, like one waiting on a call the mock doesn't answer, is waited on for two seconds with nothing else happening, then let be.
+
+**Checked:** the platform's tests, three full runs in a row, each passing (104 files, 4124 tests, no unhandled errors) in about the time they took before (80 seconds); the API reports, unchanged.
+
 ## 2026-11-09: `sst migrate --check` says what an object transform's merge keeps
 
 The review ranked first that an object in a `transform` is merged into SST's settings, nested objects included, where SST 4 put the nested object in their place. It came from the v5 alphas (2026-09-30), and is kept: SST 4's replace dropped settings SST needs, like a function's log group with `loggingConfig`, its subnets with `vpcConfig`, or a database's lookup tags. A move shows the change, as an update in place of the field, but not why, and where AWS won't take both, like an OpenSearch master user given by its ARN beside SST's username and password, the move's deploy fails on it. Of SST 4's examples and docs, two set a nested object in a transform, and neither has a setting of SST's beside it, so both deploy the same.
@@ -42,7 +50,7 @@ A review of 5.0 against SST 4 ranked the breaking changes, and the maintainer as
 - **A plain lifecycle rule is checked right away.** Two rules with the same `id` are refused when the `Bucket` is created, with the same message; one with an output in it, once it resolves, as before.
 - **What a transform is still given as an output** is in each component's "Switch from" and in the guide: what's only known once the deploy runs, and what follows from an arg the app set as an output, which SST 4 resolved first. The breaking change's row in [the plan](plan.md#breaking-changes-so-far) is narrowed to that.
 
-**Checked:** the type check; the platform's tests (104 files, 4120 tests, no unhandled errors), with a test for each of the four components, given a plain config, that its transform function sees plain values, each failing without the change; the takeover cases and the recorded states, which show nothing in a deployed stage changes; the API reports, unchanged. One full run failed a `Remix` takeover case on the component's outputs (the site's URL registered in the case's second run); it passed three times alone and in the next full run, so it's a timing flake of the mock, like CI's second run on 2026-11-07, and is left to look into.
+**Checked:** the type check; the platform's tests (104 files, 4120 tests, no unhandled errors), with a test for each of the four components, given a plain config, that its transform function sees plain values, each failing without the change; the takeover cases and the recorded states, which show nothing in a deployed stage changes; the API reports, unchanged. One full run failed a `Remix` takeover case on the component's outputs; that was the mock's `settle()`, fixed the same day (below).
 
 ## 2026-11-07: `main` merged in again, and the `Bucket`'s public access block
 

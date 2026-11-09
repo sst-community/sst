@@ -179,6 +179,11 @@ export function mockPulumi(input?: MockInput) {
   // source maps, whose keys hold its log group's ARN. The engine's mock calls
   // back every time, with an error too.
   let unanswered = 0;
+  // The components registered whose outputs aren't yet. Pulumi registers a
+  // component's outputs once each has resolved, which can be a while after
+  // the last thing sent to the engine, as for a site's URL, so a deploy
+  // hasn't gone quiet while one is waited on.
+  const awaitingOutputs = new Set<string>();
   const owed = (callback: any) => {
     unanswered++;
     let done = false;
@@ -455,6 +460,7 @@ export function mockPulumi(input?: MockInput) {
     };
     resources.push(r);
     const own = urn(r.type, r.name, r.parent);
+    if (!r.custom) awaitingOutputs.add(own);
     // Kept here, not read from the map later: a test's reset can clear the
     // map while a registration is still waiting on its checks or on a
     // resource it's deleted with.
@@ -523,6 +529,7 @@ export function mockPulumi(input?: MockInput) {
   const registerResourceOutputs = monitor.registerResourceOutputs.bind(monitor);
   monitor.registerResourceOutputs = (req: any, asked: any) => {
     activity++;
+    awaitingOutputs.delete(req.getUrn());
     const answer = owed(asked);
     registered.set(req.getUrn(), req.getOutputs()?.toJavaScript() ?? {});
     try {
@@ -577,6 +584,7 @@ export function mockPulumi(input?: MockInput) {
       findings.length = 0;
       moved.length = 0;
       registered.clear();
+      awaitingOutputs.clear();
       builds.clear();
       addresses.clear();
     },
@@ -610,12 +618,21 @@ export function mockPulumi(input?: MockInput) {
           .some((resource) =>
             /^(FSReq|FileHandle|Zlib|ProcessWrap)/i.test(resource),
           );
+      // A component whose outputs never resolve, as one waiting on a call
+      // the mock doesn't answer, isn't waited on for longer than this
+      const patience = 2000;
+      let changed = Date.now();
       for (let quiet = 0, seen = -1; quiet < 3; ) {
         for (let i = 0; i < 50; i++)
           await new Promise((resolve) => setImmediate(resolve));
         await new Promise((resolve) => setTimeout(resolve, 2));
+        if (activity !== seen) changed = Date.now();
+        const outputsIn =
+          awaitingOutputs.size === 0 || Date.now() - changed > patience;
         quiet =
-          activity === seen && unanswered === 0 && !busy() ? quiet + 1 : 0;
+          activity === seen && unanswered === 0 && !busy() && outputsIn
+            ? quiet + 1
+            : 0;
         seen = activity;
       }
     },
