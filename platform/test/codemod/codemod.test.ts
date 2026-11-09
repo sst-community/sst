@@ -446,6 +446,34 @@ describe("services, sites and nodes", () => {
     );
   });
 
+  it("keeps an apply on what nodes gives as the resource now, and reads a site's server by region", () => {
+    expect(
+      config(
+        `const router = new sst.aws.Router("R");\nrouter.nodes.cdn.apply((cdn) => cdn.nodes.distribution.arn);\nrouter.nodes.cdn.nodes.distribution;\nconst fn = new sst.aws.Function("F", { handler: "a.handler" });\nfn.nodes.function.apply((f) => f.name);\nfn.nodes.function.name;`,
+      ),
+    ).toEqual({
+      text: `const router = new sst.aws.Router("R");\n$output(router.nodes.cdn).apply((cdn) => cdn.nodes.distribution.arn);\nrouter.nodes.cdn.nodes.distribution;\nconst fn = new sst.aws.Function("F", { handler: "a.handler" });\n$output(fn.nodes.function).apply((f) => f.name);\nfn.nodes.function.name;`,
+      changes: [
+        "`Router`'s `nodes.cdn` is the resource, not an output of it: `$output()` keeps `apply` working",
+        "`Function`'s `nodes.function` is the resource, not an output of it: `$output()` keeps `apply` working",
+      ],
+      notes: [],
+    });
+    // What's still an output, as a `Cron`'s function, is left as it is
+    const cron = `const cron = new sst.aws.CronV2("C", { function: "a.handler", schedule: "rate(1 day)" });\ncron.nodes.function.apply((f) => f.name);`;
+    expect(config(cron).text).toContain(
+      `\ncron.nodes.function.apply((f) => f.name);`,
+    );
+
+    expect(
+      config(
+        `const web = new sst.aws.Nextjs("Web");\nweb.nodes.server.apply((s) => s?.name);\nf(web.nodes.server);\nweb.nodes.server["us-east-1"];`,
+      ).text,
+    ).toBe(
+      `const web = new sst.aws.Nextjs("Web");\nObject.values(web.nodes.server)[0].apply((s) => s?.name);\nf(Object.values(web.nodes.server)[0]);\nweb.nodes.server["us-east-1"];`,
+    );
+  });
+
   it("changes nothing a second time", () => {
     for (const text of [
       `new sst.aws.Service("Web", { cluster, public: { ports: [{ listen: "80/http", path: "/a" }] }, image: "x", containers: [] });`,
@@ -453,6 +481,8 @@ describe("services, sites and nodes", () => {
       `new sst.aws.Workflow("W", { handler: "a.h", role: "r", transform: { function: { role: x } } });`,
       `const vpc = new sst.aws.Vpc("V");\nvpc.nodes.privateSubnets[0];`,
       `const c = new sst.cloudflare.Cron("C", { worker: "a.ts" });\nc.nodes.worker.id;`,
+      `const r = new sst.aws.Router("R");\nr.nodes.cdn.apply((c) => c.urn);`,
+      `const web = new sst.aws.Astro("Web");\nf(web.nodes.server);`,
     ]) {
       const once = config(text).text;
       expect(once).not.toBe(text);

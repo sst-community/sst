@@ -30,6 +30,27 @@ const ssrSites = [
   "TanStackStart",
 ];
 
+// What each component's `nodes` gave as an output in SST 4 and gives as the
+// resource itself in 5.0, by its 5.0 name. Those it renamed, like the `Vpc`'s
+// lists, have rules of their own.
+const plainNodes: Record<string, string[]> = {
+  ApiGatewayHttp: ["domainName"],
+  ApiGatewayRest: ["domainName"],
+  ApiGatewayWebSocket: ["domainName"],
+  Bucket: ["bucket"],
+  Cdn: ["distribution"],
+  Cluster: ["cluster"],
+  CognitoUserPool: ["userPool"],
+  Dynamo: ["table"],
+  Efs: ["fileSystem", "accessPoint"],
+  Function: ["function", "logGroup", "url"],
+  Redis: ["cluster"],
+  Router: ["cdn"],
+  Service: ["service", "taskDefinition"],
+  Task: ["taskDefinition"],
+  Vpc: ["natSecurityGroup", "bastionInstance", "bastionSecurityGroup"],
+};
+
 export interface Rule {
   name: string;
   visit(ctx: FileContext, node: ts.Node): void;
@@ -1024,6 +1045,52 @@ export const rules: Rule[] = [
         node,
         "vpc-nodes",
         `\`Vpc\`'s \`nodes.${node.name.text}\` is \`nodes.${singular}\`, a record by the AZ's number from "1"`,
+      );
+    }),
+  },
+
+  // What `nodes` gave as an output in SST 4 and gives as the resource in 5.0:
+  // an `apply` on it is kept working by making it an output again, as
+  // `$output()` keeps a resource as it is
+  {
+    name: "nodes-apply",
+    visit: onNodes(Object.keys(plainNodes), (ctx, node, ref) => {
+      if (!plainNodes[ref.five].includes(node.name.text)) return;
+      const after = node.parent;
+      if (
+        !ts.isPropertyAccessExpression(after) ||
+        after.expression !== node ||
+        after.name.text !== "apply"
+      )
+        return;
+      ctx.replace(node, `$output(${ctx.text(node)})`);
+      ctx.change(
+        node,
+        "nodes-apply",
+        `\`${ref.five}\`'s \`nodes.${node.name.text}\` is the resource, not an output of it: \`$output()\` keeps \`apply\` working`,
+      );
+    }),
+  },
+
+  // A site's `nodes.server` is a record by region. SST 4's was the first
+  // region's, which is the first in the record.
+  {
+    name: "site-nodes-server",
+    visit: onNodes(ssrSites, (ctx, node, ref) => {
+      if (node.name.text !== "server") return;
+      const after = node.parent;
+      // Already read by region, or as the record
+      if (
+        (ts.isElementAccessExpression(after) && after.expression === node) ||
+        (ts.isCallExpression(after) &&
+          /^Object\.(values|keys|entries)$/.test(ctx.text(after.expression)))
+      )
+        return;
+      ctx.replace(node, `Object.values(${ctx.text(node)})[0]`);
+      ctx.change(
+        node,
+        "site-nodes-server",
+        `\`${ref.five}\`'s \`nodes.server\` is a record by region, and SST 4's was the first region's: \`Object.values(nodes.server)[0]\`, or \`nodes.server["us-east-1"]\` by its region`,
       );
     }),
   },

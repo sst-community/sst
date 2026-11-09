@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: the codemod keeps an `apply` on `nodes` working
+
+From the same review: a read of a `nodes` entry, like `fn.nodes.function.name`, works the same in 5.0, as Pulumi lifts a property of an output, but an `.apply()` on an entry SST 4 gave as an output and 5.0 gives as the resource fails, with a `TypeError` at `sst diff` when the config isn't type-checked. SST 4's own `Router` docs said to write `router.nodes.cdn.apply((cdn) => cdn.nodes.distribution.arn)`. A site's `nodes.server` changed shape, a record by region, with no rule.
+
+- **`nodes-apply`** wraps such an entry in `$output()` where `.apply` is called on it, which keeps a resource as it is, so the line runs as it did. The entries are those SST 4 typed as an output and 5.0 as the resource, found by reading both sides' types: the `Function`'s `function`, `logGroup` and `url`, the `Bucket`'s `bucket`, the `Dynamo`'s `table`, the `Cluster`'s and the `Redis`'s `cluster`, the `Cdn`'s `distribution`, the `Router`'s `cdn`, the `Service`'s `service` and `taskDefinition`, the `Task`'s `taskDefinition`, the `Efs`'s `fileSystem` and `accessPoint`, the `CognitoUserPool`'s `userPool`, the three API Gateways' `domainName`, and the `Vpc`'s `natSecurityGroup`, `bastionInstance` and `bastionSecurityGroup`. What's still an output, like a `Cron`'s function, is left as it is.
+- **`site-nodes-server`** writes a site's `nodes.server` as `Object.values(site.nodes.server)[0]`: SST 4's was the first region's server, and the record has the regions in the order they're given.
+- As with the codemod's other rules, only a component it can follow to where it's made is rewritten. The guide says what to write otherwise.
+
+**Checked:** the codemod's tests (52), with one for both rules and what they leave, and both in the test that a second run changes nothing.
+
 ## 2026-11-09: a component of SST 4's with no 5.0 form named from the state
 
 The same review found that a stage with one of SST 4's components that has no 5.0 form (the first `Cron`, `Vector`, `OpenControl`, the `.v1`s, Cloudflare's `Auth`, its first `StaticSite` and `x.SolidStart`) couldn't move, and nothing said which or why. The program failed with JavaScript's own `TypeError: sst.aws.Vector is not a constructor`, or, with the component taken out of the config, `--check` failed on each of its resources as a delete no map releases. The codemod couldn't always tell either: SST 4's first `Cron` with `function` and Cloudflare's first `StaticSite` are written the way their 5.0 forms are.
