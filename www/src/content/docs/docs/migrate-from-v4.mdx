@@ -45,7 +45,7 @@ Then the next stage: a dev stage first, and production last.
 
 ## Before you start
 
-1. **Every component you use has to have a 5.0 form.** These don't. Deal with each one with SST 4 and deploy, before you move a stage that has it.
+1. **Every component you use has to have a 5.0 form.** These don't. Deal with each one with SST 4 and deploy, before you move a stage that has it. `sst migrate --check` reads the stage's state and names each one it has, so you don't have to look for them. The codemod can't always tell from your config: the first `Cron` and Cloudflare's first `StaticSite` are written the way their 5.0 forms are.
 
    | Component | What to do |
    | --- | --- |

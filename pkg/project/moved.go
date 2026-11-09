@@ -48,6 +48,9 @@ type StageState struct {
 	// Adopt is the id of each of SST 4's provider resources a move adopts, by
 	// its name (move.Adoptable). The state has them until a move finishes.
 	Adopt map[string]string
+	// Stranded are the components of SST 4's that a stage it deployed has,
+	// which have no 5.0 form (move.FindStranded)
+	Stranded []move.Stranded
 }
 
 // stageState reads what the program is told from what the stage's state has.
@@ -60,6 +63,10 @@ func stageState(completed *CompleteEvent) StageState {
 		components[typ] = version
 	}
 	top, nested := componentTypes(completed.Resources)
+	var stranded []move.Stranded
+	if !completed.Moved {
+		stranded = move.FindStranded(completed.Resources)
+	}
 	return StageState{
 		Moved:      completed.Moved,
 		Components: components,
@@ -67,6 +74,7 @@ func stageState(completed *CompleteEvent) StageState {
 		Nested:     nested,
 		Empty:      !holdsResources(completed.Resources),
 		Adopt:      move.Adoptable(completed.Resources),
+		Stranded:   stranded,
 	}
 }
 
@@ -154,9 +162,24 @@ func holdsResources(resources []apitype.ResourceV3) bool {
 // serves, and that code takes a call this CLI doesn't serve as done: a remove
 // would leave them in the cloud and drop them from the state. A diff and a
 // refresh still run on it: a refresh's read keeps what the state has.
+//
+// It refuses the move, and its check, while the stage has a component of
+// SST 4's with no 5.0 form, naming each: the move can't take one over or
+// delete one, and an app's config can't create one, so the check would fail
+// without saying why.
 func (p *Project) refuseUnmoved(input *StackInput, state StageState) error {
-	if input.Move || state.Moved || state.Empty {
+	if state.Moved || state.Empty {
 		return nil
+	}
+	if input.Move {
+		if len(state.Stranded) == 0 {
+			return nil
+		}
+		return util.NewReadableError(nil, fmt.Sprintf(
+			"The stage %q can't move to SST 5's components yet. It has some of SST 4's that have no 5.0 form, and each has to be dealt with on SST 4 first, then deployed:%s",
+			p.app.Stage,
+			strandedList(state.Stranded),
+		))
 	}
 	if input.Command == "remove" {
 		return util.NewReadableError(nil, fmt.Sprintf(
@@ -167,10 +190,23 @@ func (p *Project) refuseUnmoved(input *StackInput, state StageState) error {
 	if input.Command != "deploy" {
 		return nil
 	}
-	return util.NewReadableError(nil, fmt.Sprintf(
+	message := fmt.Sprintf(
 		"The stage %q was deployed with SST 4's components, and hasn't moved to SST 5's. `sst migrate --check` shows what moving it does, and `sst migrate` moves it. Until then, it can't be deployed.",
 		p.app.Stage,
-	))
+	)
+	if len(state.Stranded) > 0 {
+		message += " Before it can move, each of these has to be dealt with on SST 4, then deployed:" + strandedList(state.Stranded)
+	}
+	return util.NewReadableError(nil, message)
+}
+
+// strandedList is a line for each stranded component, to end a message with
+func strandedList(stranded []move.Stranded) string {
+	lines := ""
+	for _, s := range stranded {
+		lines += "\n  - " + s.String()
+	}
+	return lines
 }
 
 // markerOf is the marker in a state, if it has one

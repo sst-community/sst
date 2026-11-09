@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: a component of SST 4's with no 5.0 form named from the state
+
+The same review found that a stage with one of SST 4's components that has no 5.0 form (the first `Cron`, `Vector`, `OpenControl`, the `.v1`s, Cloudflare's `Auth`, its first `StaticSite` and `x.SolidStart`) couldn't move, and nothing said which or why. The program failed with JavaScript's own `TypeError: sst.aws.Vector is not a constructor`, or, with the component taken out of the config, `--check` failed on each of its resources as a delete no map releases. The codemod couldn't always tell either: SST 4's first `Cron` with `function` and Cloudflare's first `StaticSite` are written the way their 5.0 forms are.
+
+- **`move.FindStranded`** reads them from a state SST 4 deployed, where the config can't say: each type with no 5.0 form; Cloudflare's first `StaticSite` by the `Kv` it keeps its files in, as `StaticSiteV2` has its type; and a `.v1` by its missing `sst:sst:Version`, as SST 4's current `Vpc`, `Cluster`, `Postgres`, `Redis` and `Auth` record their version 2 in one and share the `.v1`s' types. One inside another of SST's components moves with it, like the `Cron` that warms a site or the `Postgres.v1` inside a `Vector`, and isn't listed. A stage that moved isn't read this way, as SST 5's own components have the `.v1`s' types and no version marker.
+- **`sst migrate` and `--check` refuse such a stage before the preview**, naming each component with what to do with SST 4, in the codemod's words (`names.ts`'s `leftOut` and `v1`, kept in step by hand). A plain deploy's refusal names them too.
+- **`sst migrate`'s help said `sst remove` runs on a stage that hasn't moved;** it's refused since 2026-11-05. Corrected, and the guide says `--check` names what the stage has.
+
+**Checked:** the Go tests (36 packages), with new ones for what's listed and what isn't, the refusals and a moved stage, built without cgo while the Xcode license blocks it on this machine (CI builds with it). Not checked in the lab: a recorded SST 4 state with one of them.
+
 ## 2026-11-09: a `transform` function given plain values where the config is
 
 A review of 5.0 against SST 4 ranked the breaking changes, and the maintainer asked whether the riskiest were real and what 5.0 should do about each. One was that a `transform` function in a `Vpc`, `Bucket`, `Dynamo`, `Task` or `Redis` is given outputs where SST 4 gave plain values, so a function that compares one, like `args.availabilityZone === "us-east-1a"`, stops matching without a word.
