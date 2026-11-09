@@ -272,3 +272,37 @@ class Holder extends $util.ComponentResource {
     this.registerOutputs({ token });
   }
 }
+
+describe("settle()", () => {
+  beforeEach(() => app.reset());
+  const { ComponentResource } = require("@pulumi/pulumi") as typeof import("@pulumi/pulumi");
+
+  it("waits for a component's outputs, which resolve a while after anything else", async () => {
+    const { output } = require("@pulumi/pulumi") as typeof import("@pulumi/pulumi");
+    class Late extends ComponentResource {
+      constructor(name: string) {
+        super("acme:index:Late", name, {});
+        // Pulumi registers them once they've resolved
+        const later = new Promise((done) => setTimeout(() => done(true), 150));
+        this.registerOutputs({ done: output(later) });
+      }
+    }
+    new Late("Late");
+    await app.settle();
+    expect(app.outputsOf("Late")).toEqual({ done: true });
+  });
+
+  it("stops waiting soon for one whose outputs never come", async () => {
+    const { output } = require("@pulumi/pulumi") as typeof import("@pulumi/pulumi");
+    class Stuck extends ComponentResource {
+      constructor(name: string) {
+        super("acme:index:Stuck", name, {});
+        this.registerOutputs({ never: output(new Promise(() => {})) });
+      }
+    }
+    new Stuck("Stuck");
+    const started = Date.now();
+    await app.settle();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+});

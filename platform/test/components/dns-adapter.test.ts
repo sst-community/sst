@@ -212,3 +212,70 @@ describe("the DNS adapters", () => {
     });
   });
 });
+
+// What's given as `dns` is checked for each of SST 4's methods: one of the
+// app's in place of SST's is refused only where SST 5's method that would be
+// called in its place is still SST's own
+describe("checkAdapter", () => {
+  let checkAdapter: typeof import("../../src/components/dns-adapter").checkAdapter;
+  let dns: typeof import("../../src/components/aws/dns").dns;
+  const fn = (() => []) as any;
+
+  beforeEach(async () => {
+    pulumi.reset();
+    ({ checkAdapter } = await import("../../src/components/dns-adapter"));
+    ({ dns } = await import("../../src/components/aws/dns"));
+  });
+
+  it("takes one of SST's with both an SST 4 method and its SST 5 one replaced", () => {
+    const adapter = { ...dns(), createAlias: fn, alias: fn };
+    expect(checkAdapter(adapter, `"dns"`)).toBe(adapter);
+  });
+
+  it("refuses one of SST's with an SST 4 method replaced and its SST 5 one SST's, whatever else is replaced", () => {
+    expect(() =>
+      checkAdapter({ ...dns(), record: fn, createAlias: fn }, `"dns"`),
+    ).toThrow(
+      `"dns" is one of SST's adapters with "createAlias" replaced, which SST 5's components don't call: they call "alias". Replace that instead.`,
+    );
+  });
+
+  it("refuses what isn't an adapter, with what to write", () => {
+    for (const value of [null, "aws", 1])
+      expect(() => checkAdapter(value, `"dns"`)).toThrow(
+        /^"dns" isn't a DNS adapter\. Use sst\.aws\.dns\(\)/,
+      );
+    expect(checkAdapter(undefined, `"dns"`)).toBeUndefined();
+    expect(checkAdapter(false, `"dns"`)).toBe(false);
+  });
+
+  it("is applied by the certificate and the redirect, which take one too", async () => {
+    const { DnsValidatedCertificate } = await import(
+      "../../src/components/aws/dns-validated-certificate"
+    );
+    const { HttpsRedirect } = await import(
+      "../../src/components/aws/https-redirect"
+    );
+    const sst4 = {
+      provider: "aws",
+      createRecord: fn,
+      createAlias: fn,
+      createCaa: fn,
+    } as any;
+    expect(
+      () =>
+        new DnsValidatedCertificate("Cert", {
+          domainName: "example.com",
+          dns: sst4,
+        }),
+    ).toThrow(/is written the way SST 4's adapters were/);
+    expect(
+      () =>
+        new HttpsRedirect("Redirect", {
+          sourceDomains: ["www.example.com"],
+          targetDomain: "example.com",
+          dns: sst4,
+        }),
+    ).toThrow(/is written the way SST 4's adapters were/);
+  });
+});

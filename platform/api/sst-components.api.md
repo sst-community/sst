@@ -541,6 +541,8 @@ class PartsComponent<P extends Parts> extends Component {
     };
     protected registerOutputs(outputs?: Inputs | Promise<Inputs> | Output<Inputs>): void;
     protected report(report: Report): void;
+    // @internal
+    reportTransformMerge(urn: Input<string>, args: object, transform: unknown): void;
     protected runsLocally(): void;
     protected willCreate(key: ManyKeys<P>, ids: string[]): void;
 }

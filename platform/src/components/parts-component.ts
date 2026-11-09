@@ -384,11 +384,28 @@ export class PartsComponent<P extends Parts> extends Component {
         parent: this,
       }),
     );
-    // As the stage moves, what an object transform merged where SST 4's
-    // replaced the arg whole, which the move's check says
-    if (moving() && transform !== undefined && typeof transform !== "function")
-      reportMerged(resource.urn, keptByMerge(args, transform));
+    this.reportTransformMerge(resource.urn, args, transform);
     return resource;
+  }
+
+  /**
+   * As the stage moves, what an object transform merged into a part's args,
+   * where SST 4's replaced the arg whole, which `sst migrate --check` says.
+   * Only for SST's own components, as SST 4 had no others. `part()` reports
+   * its parts; a part whose transform is applied elsewhere, like a function
+   * part's, reports it here.
+   *
+   * @internal
+   */
+  public reportTransformMerge(
+    urn: Input<string>,
+    args: object,
+    transform: unknown,
+  ) {
+    if (!moving() || transform === undefined || typeof transform === "function")
+      return;
+    if (!this.componentType.startsWith("sst:")) return;
+    reportMerged(urn, keptByMerge(args, transform));
   }
 
   // The id of what a part takes the place of, when the core says a move adopts

@@ -618,21 +618,22 @@ export function mockPulumi(input?: MockInput) {
           .some((resource) =>
             /^(FSReq|FileHandle|Zlib|ProcessWrap)/i.test(resource),
           );
-      // A component whose outputs never resolve, as one waiting on a call
-      // the mock doesn't answer, isn't waited on for longer than this
-      const patience = 2000;
+      // A component whose outputs never register, as one whose constructor
+      // threw, or one waiting on a call the mock doesn't answer, is waited on
+      // only this long with nothing else going on. Time spent on a build, on
+      // disk or on a call owed isn't counted: what's waited on may be
+      // waiting on it.
+      const patience = 500;
       let changed = Date.now();
       for (let quiet = 0, seen = -1; quiet < 3; ) {
         for (let i = 0; i < 50; i++)
           await new Promise((resolve) => setImmediate(resolve));
         await new Promise((resolve) => setTimeout(resolve, 2));
-        if (activity !== seen) changed = Date.now();
+        const working = unanswered > 0 || busy();
+        if (activity !== seen || working) changed = Date.now();
         const outputsIn =
           awaitingOutputs.size === 0 || Date.now() - changed > patience;
-        quiet =
-          activity === seen && unanswered === 0 && !busy() && outputsIn
-            ? quiet + 1
-            : 0;
+        quiet = activity === seen && !working && outputsIn ? quiet + 1 : 0;
         seen = activity;
       }
     },

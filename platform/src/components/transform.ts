@@ -60,6 +60,12 @@ export type PartTransform<T> =
 /**
  * Applies a transform to one of a component's parts. Unlike `transform()`,
  * the object form is merged into nested defaults instead of replacing them.
+ *
+ * The function form is given the args the component made for the part, which
+ * it changes in place, so the component can read what it made of them. What's
+ * inside them is a copy of the arrays and plain objects, so what it changes
+ * there doesn't reach the app's config, or a default another part shares.
+ * SST 4's components gave a transform copies too, made by `output()`.
  */
 export function transformPart<T extends object>(
   transform: PartTransform<T> | undefined,
@@ -68,10 +74,32 @@ export function transformPart<T extends object>(
   opts: CustomResourceOptions,
 ) {
   if (typeof transform === "function") {
+    const copies = new Map<object, unknown>();
+    for (const [key, value] of Object.entries(args))
+      (args as Record<string, unknown>)[key] = copyArgs(value, copies);
     transform(args, opts, name);
     return [name, args, opts] as const;
   }
   return [name, mergeArgs(args, transform), opts] as const;
+}
+
+// A copy of the arrays and plain objects in a part's args. Anything else, an
+// output, a resource, an asset or a function, is kept as it is.
+function copyArgs<T>(value: T, copies = new Map<object, unknown>()): T {
+  if (value === null || typeof value !== "object") return value;
+  if (copies.has(value)) return copies.get(value) as T;
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+    copies.set(value, copy);
+    for (const item of value) copy.push(copyArgs(item, copies));
+    return copy as T;
+  }
+  if (!isPlainObject(value)) return value;
+  const copy: Record<string, unknown> = {};
+  copies.set(value, copy);
+  for (const [key, item] of Object.entries(value))
+    copy[key] = copyArgs(item, copies);
+  return copy as T;
 }
 
 /**
@@ -79,8 +107,9 @@ export function transformPart<T extends object>(
  *
  * Nested objects are merged key by key, so setting one nested value keeps its
  * siblings. Everything else replaces the default: arrays, strings, numbers,
- * outputs, assets and resources. To replace a nested object outright, use the
- * function form of the transform.
+ * outputs, assets and resources. A key set to `undefined` unsets the
+ * default's, as SST 4's `transform()` did. To replace a nested object
+ * outright, use the function form of the transform.
  */
 export function mergeArgs<T>(base: T, patch: PartialArgs<T> | undefined): T {
   if (patch === undefined) return base;
@@ -96,7 +125,8 @@ export function mergeArgs<T>(base: T, patch: PartialArgs<T> | undefined): T {
 
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
-    merged[key] = mergeArgs(merged[key], value as any);
+    merged[key] =
+      value === undefined ? undefined : mergeArgs(merged[key], value as any);
   }
   return merged as T;
 }
@@ -126,34 +156,47 @@ export function keptByMerge(
   const fields = Object.entries(patch)
     .filter(([key, value]) => isPlainObject(value) && defaults[key] != null)
     .map(([key, value]) =>
-      output(defaults[key] as object).apply((resolved: unknown) => ({
-        field: key,
-        kept: isPlainObject(resolved)
-          ? keptPaths(resolved, value as Record<string, unknown>)
-          : [],
-      })),
+      keptPaths(defaults[key], value as Record<string, unknown>).apply(
+        (kept) => ({ field: key, kept }),
+      ),
     );
   return all(fields).apply((fields) =>
     fields.filter((field) => field.kept.length > 0),
   ) as Output<MergedField[]>;
 }
 
-// The paths of the settings in `base` that `patch` doesn't set, within those
-// both set as objects
+// The paths of the settings in `base` that `patch` doesn't set, where
+// `mergeArgs()` merges the two: step for step as it does, so an output is
+// read once it resolves, and anything that isn't a plain object, like a
+// promise or an asset, is replaced, keeping nothing
 function keptPaths(
-  base: Record<string, unknown>,
+  base: unknown,
   patch: Record<string, unknown>,
   prefix = "",
-): string[] {
-  const kept: string[] = [];
-  for (const [key, value] of Object.entries(base)) {
-    if (value === undefined) continue;
-    const path = prefix + key;
-    if (!(key in patch)) kept.push(path);
-    else if (isPlainObject(value) && isPlainObject(patch[key]))
-      kept.push(...keptPaths(value, patch[key], `${path}.`));
-  }
-  return kept;
+): Output<string[]> {
+  if (Output.isInstance(base))
+    return (base as Output<unknown>).apply((resolved) =>
+      keptPaths(resolved, patch, prefix),
+    );
+  if (!isPlainObject(base)) return output([]);
+  const kept = Object.entries(base)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]): Output<string[]> => {
+      const path = prefix + key;
+      // Kept, unless it's an output that resolves to nothing, as `ifSet()`
+      // gives for an arg that isn't set
+      if (!(key in patch))
+        return Output.isInstance(value) || value instanceof Promise
+          ? (output(value) as Output<unknown>).apply((v) =>
+              v === undefined ? [] : [path],
+            )
+          : output([path]);
+      const set = patch[key];
+      return isPlainObject(set)
+        ? keptPaths(value, set, `${path}.`)
+        : output([]);
+    });
+  return all(kept).apply((lists) => lists.flat());
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

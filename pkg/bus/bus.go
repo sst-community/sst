@@ -225,6 +225,28 @@ func Stats() []Stat {
 	return stats
 }
 
+// DroppedFrom reports how many events one subscription has lost, by the
+// channel Subscribe or SubscribeAll returned: 0 once it's unsubscribed. A
+// caller that has to see every event it subscribed to reads it before it
+// unsubscribes.
+func DroppedFrom(ch <-chan interface{}) uint64 {
+	bus.mu.RLock()
+	defer bus.mu.RUnlock()
+	for _, s := range bus.all {
+		if s.recv() == ch {
+			return s.dropped.Load()
+		}
+	}
+	for _, subs := range bus.subscribers {
+		for _, s := range subs {
+			if s.recv() == ch {
+				return s.dropped.Load()
+			}
+		}
+	}
+	return 0
+}
+
 // Dropped reports how many deliveries have been dropped across all subscribers.
 func Dropped() uint64 {
 	return dropped.Load()

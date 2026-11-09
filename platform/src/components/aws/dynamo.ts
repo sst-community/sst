@@ -545,8 +545,8 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
       hashKey: mapArg(args.primaryIndex, (index) => index.hashKey),
       rangeKey: mapArg(args.primaryIndex, (index) => index.rangeKey),
       streamEnabled: mapArg(stream, (stream) => Boolean(stream)),
-      streamViewType: ifSet(stream, (stream) =>
-        stream.toUpperCase().replaceAll("-", "_"),
+      streamViewType: mapArg(stream, (stream) =>
+        stream ? stream.toUpperCase().replaceAll("-", "_") : undefined,
       ),
       pointInTimeRecovery: { enabled: true },
       ttl:

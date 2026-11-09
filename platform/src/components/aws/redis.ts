@@ -504,11 +504,12 @@ interface Connection {
  * - The deprecated `nodes` is gone. Where `cluster` isn't set, pass the same number as
  *   `cluster.nodes`. Where `cluster` or `serverless` is set, SST 4's `Redis` ignored it, so
  *   remove it. Either way nothing in AWS changes.
- * - Where `cluster`, `instance`, `engine` or `version` is an output, a `transform.cluster`
- *   function is given an output for what follows from it, like `numNodeGroups`, where
- *   SST 4's `Redis` gave the value it resolved to. A function that reads one of them to
- *   decide what to set has to decide inside an `apply`, or from your own config. Plain
- *   ones are given as they were.
+ * - A `transform.cluster` function is given what SST 4's `Redis` gave it: plain values for
+ *   `clusterMode`, `numNodeGroups`, `replicasPerNodeGroup` and `automaticFailoverEnabled`,
+ *   and outputs for `engine`, `engineVersion`, `nodeType` and `dataTieringEnabled`. Where
+ *   `cluster` is an output, the first four are outputs too, where SST 4's `Redis` gave the
+ *   values it resolved to: a function that reads one of them to decide what to set has to
+ *   decide inside an `apply`, or from your own config.
  * - With `dev` set, SST 4's `Redis` created a component for the pane `sst dev` shows, in
  *   every deploy. SST 5's tells `sst dev` itself, so a deploy drops that component. It
  *   has nothing in AWS behind it.
@@ -679,9 +680,9 @@ export class Redis extends component("sst:aws:Redis", parts) {
       dataTieringEnabled: mapArg(instance, (v) => v.startsWith("r6gd.")),
       port: 6379,
       clusterMode: mapArg(clustered, (v) => (v ? "enabled" : "disabled")),
-      numNodeGroups: ifSet(clustered, (v) => v.nodes),
-      replicasPerNodeGroup: ifSet(clustered, () => 0),
-      automaticFailoverEnabled: ifSet(clustered, () => true),
+      numNodeGroups: mapArg(clustered, (v) => (v ? v.nodes : undefined)),
+      replicasPerNodeGroup: mapArg(clustered, (v) => (v ? 0 : undefined)),
+      automaticFailoverEnabled: mapArg(clustered, (v) => (v ? true : undefined)),
       multiAzEnabled: false,
       applyImmediately: true,
       autoMinorVersionUpgrade: false,

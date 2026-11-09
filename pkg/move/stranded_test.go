@@ -62,6 +62,32 @@ func TestFindStranded(t *testing.T) {
 	assert.Nil(t, FindStranded(nil))
 }
 
+// SST 4's `Vector.get` looks up its database as a `Postgres.v1` beside it,
+// which the app didn't write: only the `Vector` is listed. Two listed with one
+// name say which component each is in.
+func TestFindStrandedVectorGetAndSameNames(t *testing.T) {
+	stack := "urn:pulumi:dev::app::pulumi:pulumi:Stack::app-dev"
+	vector := component("sst:aws:Vector", "Search", stack)
+	lookedUp := component("sst:aws:Postgres", "SearchDatabase", stack)
+	// A `Postgres.v1` the app wrote itself is still listed
+	own := component("sst:aws:Postgres", "Reports", stack)
+	api := component("acme:index:Api", "Api", stack)
+	worker := component("acme:index:Worker", "Worker", stack)
+	inApi := component("acme:index:Api$sst:aws:Cron", "Cleanup", string(api.URN))
+	inWorker := component("acme:index:Worker$sst:aws:Cron", "Cleanup", string(worker.URN))
+
+	found := FindStranded([]apitype.ResourceV3{vector, lookedUp, own, api, worker, inApi, inWorker})
+	lines := []string{}
+	for _, s := range found {
+		lines = append(lines, s.String())
+	}
+	assert.Len(t, lines, 4)
+	assert.True(t, strings.HasPrefix(lines[0], `"Cleanup", in "Api", is SST 4's first`), lines[0])
+	assert.True(t, strings.HasPrefix(lines[1], `"Cleanup", in "Worker", is SST 4's first`), lines[1])
+	assert.True(t, strings.HasPrefix(lines[2], `"Reports" is a `+"`Postgres.v1`"), lines[2])
+	assert.True(t, strings.HasPrefix(lines[3], `"Search" is a `+"`Vector`"), lines[3])
+}
+
 // Every type the codemod leaves out has a line here, as the two lists say the
 // same of a config and a state
 func TestStrandedTypes(t *testing.T) {
@@ -70,5 +96,21 @@ func TestStrandedTypes(t *testing.T) {
 	}
 	for _, typ := range []string{"sst:aws:Auth", "sst:aws:Vpc", "sst:aws:Cluster", "sst:aws:Postgres", "sst:aws:Redis"} {
 		assert.Contains(t, v1[typ], ".v1`", typ)
+	}
+}
+
+// Every `.v1` is told from its current version by the version marker the
+// current one records inside it
+func TestFindStrandedEachFirstVersion(t *testing.T) {
+	stack := "urn:pulumi:dev::app::pulumi:pulumi:Stack::app-dev"
+	for _, name := range []string{"Auth", "Vpc", "Cluster", "Postgres", "Redis"} {
+		old := component("sst:aws:"+name, "Old", stack)
+		current := component("sst:aws:"+name, "Current", stack)
+		marker := component("sst:aws:"+name+"$sst:sst:Version", "CurrentVersion", string(current.URN))
+		found := FindStranded([]apitype.ResourceV3{old, current, marker})
+		if assert.Len(t, found, 1, name) {
+			assert.Equal(t, "Old", found[0].Name, name)
+			assert.Contains(t, found[0].String(), "`"+name+".v1`", name)
+		}
 	}
 }

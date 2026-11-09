@@ -441,12 +441,16 @@ export class Queue extends component("sst:aws:Queue", parts) {
         toSeconds,
       ),
       delaySeconds: withDefault(args.delay, "0 seconds", toSeconds),
-      redrivePolicy: ifSet(dlq, (dlq) =>
-        jsonStringify({
-          deadLetterTargetArn: dlq.queue,
-          maxReceiveCount: dlq.retry,
-        }),
-      ),
+      // None without a dead-letter queue, as SST 4 gave a transform
+      redrivePolicy:
+        args.dlq === undefined
+          ? undefined
+          : ifSet(dlq, (dlq) =>
+              jsonStringify({
+                deadLetterTargetArn: dlq.queue,
+                maxReceiveCount: dlq.retry,
+              }),
+            ),
     });
   }
 

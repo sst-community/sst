@@ -10,6 +10,7 @@ import { plain } from "../args";
 import { VisibleError } from "../error";
 import { logicalName, physicalName } from "../naming";
 import type { DnsAdapter } from "../dns-adapter";
+import { checkAdapter } from "../dns-adapter";
 import { CF_BLOCK_CLOUDFRONT_URL_INJECTION } from "./router-code";
 import { useProvider } from "./helpers/provider";
 import { Bucket } from "./bucket";
@@ -98,7 +99,10 @@ export class HttpsRedirect extends component("sst:aws:HttpsRedirect", parts) {
       `The "sourceDomains" ${of}`,
       why,
     ).map((domain) => plain(domain, `The "sourceDomains" ${of}`, why));
-    const dns = plain(args.dns, `The "dns" ${of}`, why);
+    const dns = checkAdapter(
+      plain(args.dns, `The "dns" ${of}`, why),
+      `The "dns" ${of}`,
+    );
     if (!dns && !args.cert)
       throw new VisibleError(
         `The "${name}" redirect has "dns" set to false, so it can't validate a certificate of its own. Pass a validated one in "cert".`,

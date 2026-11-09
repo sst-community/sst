@@ -70,14 +70,15 @@ export interface DnsAdapter {
   ): Resource[];
 }
 
-// SST 4's adapter methods, which SST 5's components don't call
+// SST 4's adapter methods, which SST 5's components don't call, and the
+// method of SST 5's each became
 const sst4Methods = ["createRecord", "createAlias", "createCaa"] as const;
+const sst5Methods = ["record", "alias", "caa"] as const;
 
-// The SST 4 methods each of SST's own adapters has, for an app that calls
-// them, by the adapter's `record`, which a spread of it keeps. So one spread
-// with its own in their place is told apart: SST 5's components wouldn't call
-// it.
-const ownSst4 = new WeakMap<object, Record<string, unknown>>();
+// Every method of SST's own adapters, SST 5's and SST 4's, which they keep
+// for an app that calls them. A spread of one keeps them, so a method an app
+// put in place of one is told apart.
+const sstMethods = new WeakSet<object>();
 
 /**
  * Mark one of SST's adapters, with the SST 4 methods it has.
@@ -87,11 +88,10 @@ const ownSst4 = new WeakMap<object, Record<string, unknown>>();
 export function sstAdapter<
   T extends DnsAdapter & Record<(typeof sst4Methods)[number], unknown>,
 >(adapter: T): T {
-  ownSst4.set(adapter.record, {
-    createRecord: adapter.createRecord,
-    createAlias: adapter.createAlias,
-    createCaa: adapter.createCaa,
-  });
+  for (const method of [...sst5Methods, ...sst4Methods]) {
+    const fn = adapter[method];
+    if (typeof fn === "function") sstMethods.add(fn);
+  }
   return adapter;
 }
 
@@ -106,23 +106,31 @@ export function sstAdapter<
  */
 export function checkAdapter<T>(dns: T, what: string): T {
   if (dns === undefined || dns === false) return dns;
+  const instead = `Use sst.aws.dns(), sst.cloudflare.dns() or sst.vercel.dns(), or an adapter of your own with "record", "alias" and "caa", which SST 5's components call (DnsAdapter).`;
+  if (dns === null || typeof dns !== "object")
+    throw new VisibleError(`${what} isn't a DNS adapter. ${instead}`);
   const adapter = dns as Record<string | symbol, unknown>;
   const sst4 = sst4Methods.filter((m) => typeof adapter[m] === "function");
-  const missing = (["record", "alias", "caa"] as const).filter(
-    (m) => typeof adapter[m] !== "function",
-  );
-  const instead = `Use sst.aws.dns(), sst.cloudflare.dns() or sst.vercel.dns(), or an adapter of your own with "record", "alias" and "caa", which SST 5's components call (DnsAdapter).`;
+  const missing = sst5Methods.filter((m) => typeof adapter[m] !== "function");
   if (missing.length > 0)
     throw new VisibleError(
       sst4.length > 0
         ? `${what} is written the way SST 4's adapters were, with ${sst4.map((m) => `"${m}"`).join(", ")}. ${instead}`
         : `${what} isn't a DNS adapter: it has no ${missing.map((m) => `"${m}"`).join(", ")}. ${instead}`,
     );
-  const own = ownSst4.get(adapter.record as object);
-  const replaced = own ? sst4.filter((m) => adapter[m] !== own[m]) : [];
-  if (replaced.length > 0)
+  // One of SST's, spread, with an SST 4 method of the app's in place of its
+  // own, where SST 5's method that would be called is still SST's
+  const ignored = sst4Methods
+    .map((old, i) => [old, sst5Methods[i]] as const)
+    .filter(
+      ([old, now]) =>
+        typeof adapter[old] === "function" &&
+        !sstMethods.has(adapter[old] as object) &&
+        sstMethods.has(adapter[now] as object),
+    );
+  if (ignored.length > 0)
     throw new VisibleError(
-      `${what} is one of SST's adapters with ${replaced.map((m) => `"${m}"`).join(", ")} replaced, which SST 5's components don't call: they call "record", "alias" and "caa". Replace those instead.`,
+      `${what} is one of SST's adapters with ${ignored.map(([old]) => `"${old}"`).join(", ")} replaced, which SST 5's components don't call: they call ${ignored.map(([, now]) => `"${now}"`).join(", ")}. Replace ${ignored.length === 1 ? "that" : "those"} instead.`,
     );
   return dns;
 }

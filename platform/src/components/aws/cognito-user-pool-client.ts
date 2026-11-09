@@ -1,7 +1,7 @@
-import { ComponentResourceOptions } from "@pulumi/pulumi";
+import { ComponentResourceOptions, output } from "@pulumi/pulumi";
 import { cognito } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../parts-component";
-import { usedAsItIs, withDefault } from "../args";
+import { usedAsItIs } from "../args";
 import type { Input } from "../input";
 
 const parts = {
@@ -118,8 +118,13 @@ export class CognitoUserPoolClient extends component(
         "openid",
         "aws.cognito.signin.user.admin",
       ],
-      callbackUrls: withDefault(args.callbackUrls, ["https://example.com"]),
-      supportedIdentityProviders: withDefault(args.providers, ["COGNITO"]),
+      // As SST 4 gave a transform them: the default as it is, or an output
+      callbackUrls: args.callbackUrls
+        ? output(args.callbackUrls)
+        : ["https://example.com"],
+      supportedIdentityProviders: args.providers
+        ? output(args.providers)
+        : ["COGNITO"],
     });
   }
 

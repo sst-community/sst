@@ -446,6 +446,91 @@ describe("services, sites and nodes", () => {
     );
   });
 
+  it("leaves a note where nodes.server is empty while the config runs", () => {
+    const astro = config(
+      `const web = new sst.aws.Astro("Web");\nf(web.nodes.server);`,
+    );
+    expect(astro.text).toBe(
+      `const web = new sst.aws.Astro("Web");\nf(web.nodes.server);`,
+    );
+    expect(astro.notes).toEqual([
+      expect.stringMatching(
+        /^`Astro`'s `nodes.server` is a record by region, filled once the site is built/,
+      ),
+    ]);
+    const west = `const web = new sst.aws.Nextjs("Web", {}, { provider: west });\nf(web.nodes.server);`;
+    expect(config(west).text).toBe(west);
+    expect(config(west).notes).toEqual([
+      expect.stringMatching(
+        /With a provider of its own, .*set the site's `regions`/,
+      ),
+    ]);
+    // With its regions, it's listed from the start
+    expect(
+      config(
+        `const web = new sst.aws.Nextjs("Web", { regions: ["us-west-2"] }, { provider: west });\nf(web.nodes.server);`,
+      ).text,
+    ).toContain("f(Object.values(web.nodes.server)[0]);");
+    // An optional chain keeps giving `undefined` without the site
+    expect(
+      config(`const web = new sst.aws.Nextjs("Web");\nf(web?.nodes.server);`)
+        .text,
+    ).toContain("f(Object.values(web?.nodes.server ?? {})[0]);");
+    // ...and is left as it is a second time
+    const once = config(
+      `const web = new sst.aws.Nextjs("Web");\nf(web?.nodes.server);`,
+    ).text;
+    expect(config(once)).toMatchObject({ text: once, changes: [] });
+    // A provider the codemod can't rule out: options in a variable, a
+    // provider by name, or a parent's
+    for (const opts of [
+      "opts",
+      "{ providers: { aws: west } }",
+      "{ parent: app }",
+    ]) {
+      const text = `const web = new sst.aws.Nextjs("Web", {}, ${opts});\nf(web.nodes.server);`;
+      const out = config(text);
+      expect(out.text, opts).toBe(text);
+      expect(out.notes, opts).toEqual([
+        expect.stringMatching(
+          /from its options or a parent, the site's region is read in the deploy/,
+        ),
+      ]);
+    }
+    // Read by key, or destructured: a note
+    const read = config(
+      `const web = new sst.aws.Nextjs("Web");\nf(web.nodes["server"]);\nconst { server } = web.nodes;`,
+    );
+    expect(read.changes).toEqual([]);
+    expect(read.notes).toEqual([
+      expect.stringMatching(
+        /^`Nextjs`'s `nodes.server` is a record by region, and SST 4's was the first region's: read/,
+      ),
+      expect.stringMatching(
+        /^`Nextjs`'s `nodes.server` is a record by region, and SST 4's was the first region's: read/,
+      ),
+    ]);
+  });
+
+  it("keeps an apply on nodes read by key, and notes what it can't rewrite", () => {
+    const out = config(
+      `const fn = new sst.aws.Function("F", { handler: "a.handler" });\nfn.nodes["function"].apply((f) => f.name);\nfn?.nodes.function.apply((f) => f.name);\nconst { function: lambda, role } = fn.nodes;\nconst router = new sst.aws.Router("R");\nrouter.nodes.cdn.apply((cdn) => cdn.nodes.distribution.apply((d) => d.arn));`,
+    );
+    expect(out.text).toContain(
+      `$output(fn.nodes["function"]).apply((f) => f.name);`,
+    );
+    // Left as it is, with a note each
+    expect(out.text).toContain(`fn?.nodes.function.apply((f) => f.name);`);
+    expect(out.text).toContain(
+      `$output(router.nodes.cdn).apply((cdn) => cdn.nodes.distribution.apply((d) => d.arn));`,
+    );
+    expect(out.notes).toEqual([
+      "`Function`'s `nodes.function` is the resource, not an output of it, so it has no `apply`: read it directly, or wrap it in `$output()` where it's set",
+      "`Function`'s `nodes.function` is the resource, not an output of it: an `apply` on one needs `$output()`",
+      "If this is one of SST's components, its `nodes.distribution` may be the resource, not an output of it, so it has no `apply`: read it directly, or wrap it in `$output()`",
+    ]);
+  });
+
   it("keeps an apply on what nodes gives as the resource now, and reads a site's server by region", () => {
     expect(
       config(
@@ -482,7 +567,7 @@ describe("services, sites and nodes", () => {
       `const vpc = new sst.aws.Vpc("V");\nvpc.nodes.privateSubnets[0];`,
       `const c = new sst.cloudflare.Cron("C", { worker: "a.ts" });\nc.nodes.worker.id;`,
       `const r = new sst.aws.Router("R");\nr.nodes.cdn.apply((c) => c.urn);`,
-      `const web = new sst.aws.Astro("Web");\nf(web.nodes.server);`,
+      `const web = new sst.aws.Nextjs("Web");\nf(web.nodes.server);`,
     ]) {
       const once = config(text).text;
       expect(once).not.toBe(text);

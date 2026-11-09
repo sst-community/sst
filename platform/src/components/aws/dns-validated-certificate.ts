@@ -5,6 +5,7 @@ import { plain } from "../args";
 import { logicalName } from "../naming";
 import { VisibleError } from "../error";
 import type { DnsAdapter } from "../dns-adapter";
+import { checkAdapter } from "../dns-adapter";
 
 const parts = {
   /**
@@ -87,7 +88,10 @@ export class DnsValidatedCertificate extends component(
       `The "alternativeNames" ${of}`,
       why,
     ).map((alt) => plain(alt, `The "alternativeNames" ${of}`, why));
-    const dns = plain(args.dns, `The "dns" ${of}`, why);
+    const dns = checkAdapter(
+      plain(args.dns, `The "dns" ${of}`, why),
+      `The "dns" ${of}`,
+    );
 
     const certificate = this.part("certificate", {
       domainName,

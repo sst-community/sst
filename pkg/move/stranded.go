@@ -17,9 +17,15 @@ type Stranded struct {
 	Name string
 	Type string
 	What string
+	// In is the component it's inside, named when another one listed has the
+	// same name
+	In string
 }
 
 func (s Stranded) String() string {
+	if s.In != "" {
+		return fmt.Sprintf("%q, in %q, is %s", s.Name, s.In, s.What)
+	}
 	return fmt.Sprintf("%q is %s", s.Name, s.What)
 }
 
@@ -88,13 +94,45 @@ func FindStranded(resources []apitype.ResourceV3) []Stranded {
 			what, ok = v1[typ], true
 		}
 		if ok {
-			found = append(found, Stranded{Name: res.URN.Name(), Type: typ, What: what})
+			in := ""
+			if res.Parent != "" && res.Parent.QualifiedType() != "pulumi:pulumi:Stack" {
+				in = res.Parent.Name()
+			}
+			found = append(found, Stranded{Name: res.URN.Name(), Type: typ, What: what, In: in})
 		}
 	}
+	// SST 4's `Vector.get(name, id)` looks up its database as a `Postgres.v1`
+	// beside it, named after it. The app wrote the `Vector`, which is listed.
+	vectors := map[string]bool{}
+	for _, s := range found {
+		if s.Type == "sst:aws:Vector" {
+			vectors[s.Name] = true
+		}
+	}
+	named := map[string]int{}
+	listed := []Stranded{}
+	for _, s := range found {
+		if s.Type == "sst:aws:Postgres" && vectors[strings.TrimSuffix(s.Name, "Database")] && strings.HasSuffix(s.Name, "Database") {
+			continue
+		}
+		listed = append(listed, s)
+		named[s.Name]++
+	}
+	for i := range listed {
+		if named[listed[i].Name] < 2 {
+			listed[i].In = ""
+		}
+	}
+	found = listed
 	if len(found) == 0 {
 		return nil
 	}
-	sort.Slice(found, func(i, j int) bool { return found[i].Name < found[j].Name })
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].Name != found[j].Name {
+			return found[i].Name < found[j].Name
+		}
+		return found[i].In < found[j].In
+	})
 	return found
 }
 

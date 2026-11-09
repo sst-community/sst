@@ -834,13 +834,19 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
     for (let i = 0; i < replicas; i++) {
       // The instance's transform applies to each replica too, as it does in
       // `Aurora`. The replica's own transform is applied after it.
+      const replicaDefaults = { ...instanceArgs, promotionTier: 15 };
       const [, replicaArgs, replicaOpts] = transformPart(
         args.transform?.instance,
         `${name}Replica${i}`,
-        { ...instanceArgs, promotionTier: 15 },
+        replicaDefaults,
         { parent: self, ignoreChanges: pinned("engineVersion") },
       );
-      this.part("replica", `${i}`, replicaArgs, replicaOpts);
+      const replica = this.part("replica", `${i}`, replicaArgs, replicaOpts);
+      this.reportTransformMerge(
+        replica.urn,
+        replicaDefaults,
+        args.transform?.instance,
+      );
     }
 
     if (rdsProxy)

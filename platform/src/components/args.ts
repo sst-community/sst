@@ -17,8 +17,12 @@ export type Plain<T> = T extends Input<infer U> ? U : T;
  * no output or promise anywhere inside it, it's turned now, and the resource
  * is given a plain value. Otherwise it's turned once it resolves.
  *
- * A part's `transform` function sees what this gives, so an app whose config
- * is plain values gets plain values there, as SST 4 gave them.
+ * A part's `transform` function sees what this gives. Use it where SST 4's
+ * component gave that transform a plain value for a plain config, as it did
+ * where it created the resource inside an `apply`. Where SST 4 gave an output,
+ * as it did for an arg it turned with `.apply`, use `withDefault()`, `ifSet()`
+ * or `output().apply()`, which give one, so a transform written for SST 4
+ * gets what it got.
  *
  * ```ts
  * clusterMode: mapArg(args.cluster, (v) => (v ? "enabled" : "disabled")),
@@ -34,9 +38,9 @@ export function mapArg<T, R>(
 }
 
 /**
- * An arg's value, or `fallback` when the user left it out. Pass `convert` to
- * turn it into what the resource takes. It's a plain value when the arg is,
- * as `mapArg()` says.
+ * An arg's value, or `fallback` when the user left it out, as an output. Pass
+ * `convert` to turn it into what the resource takes. For a plain value where
+ * the arg is plain, use `mapArg()`.
  *
  * ```ts
  * withDefault(args.engine, "redis");
@@ -46,55 +50,59 @@ export function mapArg<T, R>(
 export function withDefault<T>(
   value: Input<T | undefined> | undefined,
   fallback: T,
-): Input<T>;
+): Output<T>;
 export function withDefault<T, R>(
   value: Input<T | undefined> | undefined,
   fallback: T,
   convert: (value: Unwrap<T>) => R,
-): Input<R>;
+): Output<R>;
 export function withDefault(
   value: any,
   fallback: unknown,
   convert?: (value: unknown) => unknown,
 ) {
-  return mapArg(value, (value: unknown) => {
+  return output(value).apply((value: unknown) => {
     const set = value ?? fallback;
     return convert ? convert(set) : set;
   });
 }
 
 /**
- * What a resource takes for an arg the user may have left out: the value
- * when they set it, and nothing when they didn't. Pass `convert` to turn the
- * value into what the resource takes. It's a plain value when the arg is, as
- * `mapArg()` says.
+ * What a resource takes for an arg the user may have left out, as an output:
+ * the value when they set it, and nothing when they didn't. Pass `convert` to
+ * turn the value into what the resource takes. For a plain value where the
+ * arg is plain, use `mapArg()`.
  *
  * ```ts
  * authorizerId: ifSet(auth.authorizer),
  * redrivePolicy: ifSet(args.dlq, (dlq) => jsonStringify({ ... })),
  * ```
  */
-export function ifSet<T>(value: Input<T | undefined> | undefined): Input<T>;
+export function ifSet<T>(value: Input<T | undefined> | undefined): Output<T>;
 export function ifSet<T, R>(
   value: Input<T | undefined> | undefined,
   convert: (value: Unwrap<T>) => Input<R>,
-): Input<R>;
+): Output<R>;
 export function ifSet(value: any, convert?: (value: unknown) => unknown) {
-  return mapArg(value, (value: unknown) =>
+  return output(value).apply((value: unknown) =>
     value === undefined || value === null || !convert ? value : convert(value),
   );
 }
 
-// Whether a value is known now: no output or promise anywhere inside it. A
-// resource or any other class instance counts as known, as `output()` keeps
-// one as it is.
-function known(value: unknown): boolean {
+// Whether a value is known now: no output or promise anywhere inside its
+// arrays and plain objects. Any other object counts as known and is handed
+// over as it is: a resource, as `output()` hands it over too, and an instance
+// of another class, which `output()` would copy with the outputs in it
+// resolved. None of SST's args is such an instance with an output inside.
+function known(value: unknown, seen = new Set<object>()): boolean {
   if (Output.isInstance(value) || value instanceof Promise) return false;
-  if (Array.isArray(value)) return value.every(known);
   if (value === null || typeof value !== "object") return true;
+  if (seen.has(value)) return true;
+  seen.add(value);
+  if (Array.isArray(value)) return value.every((v) => known(v, seen));
   const proto = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) return true;
-  return Object.values(value).every(known);
+  return Object.values(value).every((v) => known(v, seen));
 }
 
 /**

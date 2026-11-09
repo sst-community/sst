@@ -1449,9 +1449,11 @@ export interface ServiceArgs
  * - `nodes.taskRole`, `nodes.executionRole`, `nodes.taskDefinition` and
  *   `nodes.autoScalingTarget` may be `undefined`: they aren't created for an ECS service or
  *   a task definition you pass in `existing`.
- * - A `transform` function for `service`, `taskDefinition`, `logGroup`, `target` or
- *   `listener` is given outputs where SST 4's `Service` gave it plain values. For a part
- *   there are several of, it's also given which one.
+ * - A `transform` function for `service`, `taskDefinition`, `target` or `listener` is given
+ *   outputs where SST 4's `Service` gave it plain values. One for `logGroup` is given the
+ *   name SST makes up as an output, where SST 4's gave a string; a name you set, and the
+ *   retention, are given as you set them. For a part there are several of, it's also
+ *   given which one.
  * - `transform.listenerRule` applies to the rules of the service's own load balancer too,
  *   not only to the rules on an `Alb`.
  * - `loadBalancer.instance` takes an `Alb`, and `cluster` a `Cluster`. Each refuses

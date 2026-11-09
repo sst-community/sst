@@ -198,17 +198,13 @@ export function functionPart(
         `The "${part.name}" function has no handler. Pass a handler, the function's args with a "handler", a function, or the ARN of one.`,
       );
 
-    return use(
-      new Function(
-        ...transformPart(
-          part.transform,
-          part.name,
-          // Written the way SST 4's `Function` took it, or SST 5's
-          withDefaults(defaults, args),
-          part.opts,
-        ),
-      ),
+    // Written the way SST 4's `Function` took it, or SST 5's
+    const fnArgs = withDefaults(defaults, args);
+    const fn = new Function(
+      ...transformPart(part.transform, part.name, fnArgs, part.opts),
     );
+    component.reportTransformMerge(fn.urn, fnArgs, part.transform);
+    return use(fn);
   }
 }
 

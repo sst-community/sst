@@ -750,3 +750,45 @@ func TestExplain(t *testing.T) {
 	assert.Nil(t, result.Kept[1].Merged)
 	assert.Nil(t, result.Kept[2].Merged)
 }
+
+// A merge explains a replace that may not happen only through the fields the
+// replace is keyed on, and never one the move allows, which a map or the
+// cloud is why; a merge reported for a component, like a function part's,
+// explains a field of the same name a resource inside it updates.
+func TestExplainReplacedAndInside(t *testing.T) {
+	component := urn("sst:aws:Bus$sst:aws:Function", "BusSubscriber")
+	lambda := urn("sst:aws:Bus$sst:aws:Function$aws:lambda/function:Function", "BusSubscriberFunction")
+	role := urn("sst:aws:Bus$sst:aws:Function$aws:iam/role:Role", "BusSubscriberRole")
+	replaced := urn("sst:aws:Queue$aws:sqs/queue:Queue", "JobsQueue")
+	blocked := urn("sst:aws:Dynamo$aws:dynamodb/table:Table", "UsersTable")
+	other := urn("sst:aws:Dynamo$aws:dynamodb/table:Table", "OrdersTable")
+	result := &Result{
+		Kept: []Kept{
+			{URN: lambda, Fields: []string{"environment"}},
+			{URN: role, Fields: []string{"inlinePolicies"}},
+		},
+		Replaced: []Change{{URN: replaced}},
+		Problems: []Problem{
+			{URN: blocked, Does: "replace", Fields: []string{"pointInTimeRecovery"}},
+			// Replaced for another field than the one merged
+			{URN: other, Does: "replace", Fields: []string{"hashKey"}},
+			// Said under the kept resource already
+			{URN: lambda, Does: "update"},
+		},
+		parents: map[string]string{lambda: component, role: component},
+	}
+	env := MergedField{Field: "environment", Kept: []string{"SST_RESOURCE_App"}}
+	table := MergedField{Field: "pointInTimeRecovery", Kept: []string{"enabled"}}
+	result.Explain([]Merged{
+		{URN: component, Fields: []MergedField{env}},
+		{URN: replaced, Fields: []MergedField{{Field: "redrivePolicy", Kept: []string{"maxReceiveCount"}}}},
+		{URN: blocked, Fields: []MergedField{table}},
+		{URN: other, Fields: []MergedField{table}},
+	})
+	assert.Equal(t, []MergedField{env}, result.Kept[0].Merged)
+	// Inside the component, but it doesn't update what was merged
+	assert.Nil(t, result.Kept[1].Merged)
+	assert.Equal(t, []MergedField{table}, result.Problems[0].Merged)
+	assert.Nil(t, result.Problems[1].Merged)
+	assert.Nil(t, result.Problems[2].Merged)
+}

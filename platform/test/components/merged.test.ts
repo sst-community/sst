@@ -31,8 +31,9 @@ describe("An object transform merged where SST 4's replaced the arg, while the s
     merged.length = 0;
   });
 
-  function defineFn() {
-    return class Fn extends component("acme:index:Fn", {
+  // One of SST's: SST 4 had no other components
+  function defineFn(type = "sst:aws:TestFn") {
+    return class Fn extends component(type, {
       function: aws.lambda.Function,
     }) {
       constructor(name: string, args: { transform?: any } = {}) {
@@ -93,6 +94,78 @@ describe("An object transform merged where SST 4's replaced the arg, while the s
     expect(merged).toEqual([]);
   });
 
+  it("says nothing for an app's or a package's own component, which SST 4 didn't have", async () => {
+    const Fn = defineFn("acme:index:Fn");
+    new Fn("Api", {
+      transform: {
+        function: { loggingConfig: { applicationLogLevel: "DEBUG" } },
+      },
+    });
+    await pulumi.settle();
+    expect(merged).toEqual([]);
+  });
+
+  it("unsets a setting the object sets to undefined, as SST 4 did, keeping nothing of it", async () => {
+    const Fn = defineFn();
+    new Fn("Api", {
+      transform: {
+        function: {
+          timeout: undefined,
+          loggingConfig: { logGroup: undefined },
+        },
+      },
+    });
+    await pulumi.settle();
+
+    const fn = pulumi.resources.find((r) => r.name === "ApiFunction")!;
+    expect(fn.inputs.timeout).toBeUndefined();
+    expect(fn.inputs.loggingConfig).toEqual({ logFormat: "JSON" });
+    expect(merged).toEqual([
+      {
+        urn: expect.stringMatching(/::ApiFunction$/),
+        fields: [{ field: "loggingConfig", kept: ["logFormat"] }],
+      },
+    ]);
+  });
+
+  it("keeps nothing of a default that isn't a plain object, as the merge replaces it", async () => {
+    const asset = new (await import("@pulumi/pulumi")).asset.StringAsset("x");
+    const kept = await pulumi.resolve(
+      keptByMerge(
+        { later: Promise.resolve({ a: 1, b: 2 }), code: asset, list: [1, 2] },
+        { later: { b: 3 }, code: { x: 1 }, list: { 0: 5 } },
+      ),
+    );
+    expect(kept).toEqual([]);
+  });
+
+  it("doesn't say it keeps a setting that's an output of nothing, as ifSet() gives", async () => {
+    const kept = await pulumi.resolve(
+      keptByMerge(
+        { scaling: { target: 50, cooldown: output(undefined), metric: "cpu" } },
+        { scaling: { target: 70 } },
+      ),
+    );
+    expect(kept).toEqual([{ field: "scaling", kept: ["metric"] }]);
+  });
+
+  it("sends nothing when the stage isn't moving", async () => {
+    const cli = (globalThis as any).$cli;
+    cli.move = false;
+    try {
+      const Fn = defineFn();
+      new Fn("Api", {
+        transform: {
+          function: { loggingConfig: { applicationLogLevel: "DEBUG" } },
+        },
+      });
+      await pulumi.settle();
+    } finally {
+      cli.move = true;
+    }
+    expect(merged).toEqual([]);
+  });
+
   it("reads a default that's an output once it resolves", async () => {
     const kept = await pulumi.resolve(
       keptByMerge(
@@ -101,5 +174,29 @@ describe("An object transform merged where SST 4's replaced the arg, while the s
       ),
     );
     expect(kept).toEqual([{ field: "config", kept: ["a", "nested.c"] }]);
+  });
+});
+
+describe("A function part's object transform, while the stage moves", () => {
+  beforeEach(() => {
+    pulumi.reset();
+    merged.length = 0;
+  });
+
+  it("is said of the function the component creates", async () => {
+    const { Cron } = await import("../../src/components/aws/cron");
+    new Cron("Nightly", {
+      schedule: "rate(1 day)",
+      function: { handler: "src/job.handler", environment: { A: "1" } },
+      transform: { function: { environment: { B: "2" } } },
+    });
+    await pulumi.settle();
+
+    expect(merged).toContainEqual({
+      urn: expect.stringMatching(
+        /sst:aws:CronV2\$sst:aws:Function::NightlyFunction$/,
+      ),
+      fields: [{ field: "environment", kept: ["A"] }],
+    });
   });
 });

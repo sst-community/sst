@@ -437,7 +437,7 @@ describe("Redis", () => {
     expect(redis.nodes.cluster?.constructor.name).toBe("ReplicationGroup");
   });
 
-  it("gives a transform function plain values from a plain config, as SST 4 did", async () => {
+  it("gives a transform function what SST 4's gave: plain cluster settings, the rest as outputs", async () => {
     let seen: any;
     new Redis("MyRedis", {
       vpc,
@@ -459,11 +459,29 @@ describe("Redis", () => {
     });
     await pulumi.settle();
 
-    expect(seen).toEqual({
+    // SST 4's `Redis` created the cluster inside an `apply` of `cluster`, and
+    // turned the others with `.apply`
+    expect({
+      clusterMode: seen.clusterMode,
+      numNodeGroups: seen.numNodeGroups,
+      replicasPerNodeGroup: seen.replicasPerNodeGroup,
+      automaticFailoverEnabled: seen.automaticFailoverEnabled,
+    }).toEqual({
       clusterMode: "enabled",
       numNodeGroups: 2,
       replicasPerNodeGroup: 0,
       automaticFailoverEnabled: true,
+    });
+    const { Output } = await import("@pulumi/pulumi");
+    for (const key of ["nodeType", "dataTieringEnabled", "engineVersion"])
+      expect(Output.isInstance(seen[key]), key).toBe(true);
+    expect(
+      await pulumi.resolve({
+        nodeType: seen.nodeType,
+        dataTieringEnabled: seen.dataTieringEnabled,
+        engineVersion: seen.engineVersion,
+      }),
+    ).toEqual({
       nodeType: "cache.r6gd.xlarge",
       dataTieringEnabled: true,
       engineVersion: "7.1",

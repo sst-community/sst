@@ -2538,7 +2538,7 @@ export class Function extends component("sst:aws:Function", parts) {
         invokeMode: mapArg(streaming, (streaming) =>
           streaming ? "RESPONSE_STREAM" : "BUFFERED",
         ),
-        cors: ifSet(url.cors),
+        cors: mapArg(url.cors, (cors) => cors ?? undefined),
       });
 
       // Lambda takes one change to a function at a time, so a permission

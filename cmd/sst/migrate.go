@@ -31,7 +31,7 @@ var CmdMigrate = &cli.Command{
 			"- delete or replace a resource that holds data, like a bucket, a table, a database or a log group;",
 			"- create, delete or replace a resource no component's state map lists.",
 			"",
-			"Where a field is updated in place because an object in a `transform` is merged into SST's settings, where SST 4 replaced them, it says which of SST's settings are kept.",
+			"Where a resource changes because an object in a `transform` of one of SST's components is merged into the component's settings, where SST 4 put it in their place, it says which settings the merge keeps.",
 			"",
 			"Before it previews anything, it refuses a stage that has a component of SST 4's with no 5.0 form, like the first `Cron` or a `.v1`, and names each one with what to do about it with SST 4.",
 			"",
@@ -298,7 +298,7 @@ func checkMove(c *cli.Cli, p *project.Project, server string) (*move.Result, err
 		Dev:     c.Bool("dev"),
 		Verbose: c.Bool("verbose"),
 	})
-	lost := droppedFrom(collectedLabel)
+	lost := bus.DroppedFrom(collected)
 	bus.Unsubscribe(collected)
 	close(stop)
 	<-collecting
@@ -360,6 +360,9 @@ func renderMove(result *move.Result, u *ui.UI) {
 	for _, problem := range result.Problems {
 		fmt.Println(ui.TEXT_DANGER_BOLD.Render("✕") + "  " + ui.TEXT_NORMAL_BOLD.Render(u.FormatURN(problem.URN)) + ui.TEXT_DANGER.Render(" would be "+done(problem.Does)))
 		fmt.Println("   " + problem.Why)
+		for _, field := range problem.Merged {
+			fmt.Println("   " + ui.TEXT_DIM.Render(mergedLine(field)))
+		}
 	}
 	if result.OK() {
 		fmt.Println()
@@ -389,21 +392,9 @@ func count(n int, one, many string) string {
 	return fmt.Sprintf("%v %v", n, many)
 }
 
-// The label of the check's own subscription on the bus
-const collectedLabel = "*apitype.ResOutputsEvent,*move.Part,*apitype.SummaryEvent"
-
-// How many events a subscription on the bus has lost
-func droppedFrom(label string) uint64 {
-	for _, stat := range bus.Stats() {
-		if stat.Label == label {
-			return stat.Dropped
-		}
-	}
-	return 0
-}
-
 // mergedLine says why a field a transform sets changes: SST 5 merges the
-// transform's object into SST's settings, where SST 4 put it in their place
+// transform's object into the component's settings, where SST 4 put it in
+// their place
 func mergedLine(field move.MergedField) string {
 	kept := field.Kept
 	more := ""
@@ -412,7 +403,7 @@ func mergedLine(field move.MergedField) string {
 		kept = kept[:4]
 	}
 	return fmt.Sprintf(
-		"Your transform sets %q as an object, which SST 4 put in place of SST's. SST 5 merges it, keeping SST's %s%s. To keep SST 4's, set it in a function.",
+		"Your transform sets %q as an object, which SST 4 put in place of the component's settings. SST 5 merges it into them, keeping %s%s. To replace them as SST 4 did, set it in a function.",
 		field.Field, strings.Join(kept, ", "), more,
 	)
 }

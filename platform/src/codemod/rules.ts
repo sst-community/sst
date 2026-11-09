@@ -51,6 +51,36 @@ const plainNodes: Record<string, string[]> = {
   Vpc: ["natSecurityGroup", "bastionInstance", "bastionSecurityGroup"],
 };
 
+// Every name some component's `nodes` gives as the resource now
+const plainNames = new Set(Object.values(plainNodes).flat());
+
+// A read of one entry of a component's `nodes`: `x.nodes.bucket`, or
+// `x.nodes["bucket"]`
+function nodesEntry(
+  node: ts.Node,
+): { nodes: ts.PropertyAccessExpression; key: string } | undefined {
+  let nodes: ts.Expression | undefined;
+  let key: string | undefined;
+  if (ts.isPropertyAccessExpression(node)) {
+    nodes = node.expression;
+    key = node.name.text;
+  } else if (
+    ts.isElementAccessExpression(node) &&
+    ts.isStringLiteralLike(node.argumentExpression)
+  ) {
+    nodes = node.expression;
+    key = node.argumentExpression.text;
+  }
+  if (
+    !nodes ||
+    key === undefined ||
+    !ts.isPropertyAccessExpression(nodes) ||
+    nodes.name.text !== "nodes"
+  )
+    return undefined;
+  return { nodes, key };
+}
+
 export interface Rule {
   name: string;
   visit(ctx: FileContext, node: ts.Node): void;
@@ -1054,45 +1084,200 @@ export const rules: Rule[] = [
   // `$output()` keeps a resource as it is
   {
     name: "nodes-apply",
-    visit: onNodes(Object.keys(plainNodes), (ctx, node, ref) => {
-      if (!plainNodes[ref.five].includes(node.name.text)) return;
-      const after = node.parent;
-      if (
-        !ts.isPropertyAccessExpression(after) ||
-        after.expression !== node ||
-        after.name.text !== "apply"
-      )
+    visit: (ctx, node) => {
+      // `x.nodes.bucket` or `x.nodes["bucket"]`
+      const entry = nodesEntry(node);
+      if (entry) {
+        const ref = componentOf(ctx, entry.nodes.expression);
+        const after = node.parent;
+        const applied =
+          ts.isPropertyAccessExpression(after) &&
+          after.expression === node &&
+          after.name.text === "apply";
+        if (
+          ref &&
+          ref.group === "aws" &&
+          !ref.written5 &&
+          plainNodes[ref.five]?.includes(entry.key)
+        ) {
+          if (!applied) return;
+          // `x?.nodes.bucket.apply(...)` gives `undefined` without `x`, which
+          // an output of it wouldn't
+          if (ts.isOptionalChain(node) || ts.isOptionalChain(entry.nodes)) {
+            ctx.note(
+              node,
+              "nodes-apply",
+              `\`${ref.five}\`'s \`nodes.${entry.key}\` is the resource, not an output of it, so it has no \`apply\`: read it directly, or wrap it in \`$output()\` where it's set`,
+            );
+            return;
+          }
+          ctx.replace(node, `$output(${ctx.text(node)})`);
+          ctx.change(
+            node,
+            "nodes-apply",
+            `\`${ref.five}\`'s \`nodes.${entry.key}\` is the resource, not an output of it: \`$output()\` keeps \`apply\` working`,
+          );
+          return;
+        }
+        // An `apply` on an entry the codemod can't trace to a component, like
+        // a callback's argument, of a name some component gives as the
+        // resource now
+        if (applied && !ref && plainNames.has(entry.key))
+          ctx.note(
+            node,
+            "nodes-apply",
+            `If this is one of SST's components, its \`nodes.${entry.key}\` may be the resource, not an output of it, so it has no \`apply\`: read it directly, or wrap it in \`$output()\``,
+          );
         return;
-      ctx.replace(node, `$output(${ctx.text(node)})`);
-      ctx.change(
-        node,
-        "nodes-apply",
-        `\`${ref.five}\`'s \`nodes.${node.name.text}\` is the resource, not an output of it: \`$output()\` keeps \`apply\` working`,
-      );
-    }),
+      }
+      // `const { bucket } = x.nodes`
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isObjectBindingPattern(node.name) &&
+        node.initializer &&
+        ts.isPropertyAccessExpression(node.initializer) &&
+        node.initializer.name.text === "nodes"
+      ) {
+        const ref = componentOf(ctx, node.initializer.expression);
+        if (!ref || ref.group !== "aws" || ref.written5) return;
+        const plain = node.name.elements
+          .map((e) =>
+            e.propertyName && ts.isIdentifier(e.propertyName)
+              ? e.propertyName.text
+              : ts.isIdentifier(e.name)
+                ? e.name.text
+                : "",
+          )
+          .filter((key) => plainNodes[ref.five]?.includes(key));
+        if (plain.length > 0)
+          ctx.note(
+            node,
+            "nodes-apply",
+            `\`${ref.five}\`'s ${plain
+              .map((k) => `\`nodes.${k}\``)
+              .join(", ")} ${
+              plain.length === 1
+                ? "is the resource, not an output of it"
+                : "are the resources, not outputs of them"
+            }: an \`apply\` on one needs \`$output()\``,
+          );
+      }
+    },
   },
 
   // A site's `nodes.server` is a record by region. SST 4's was the first
-  // region's, which is the first in the record.
+  // region's, which is the first in the record, when the record has it while
+  // the config runs: not for a site that may have no server, or one that may
+  // have a provider of its own and no `regions`, which list it once it's
+  // created.
   {
     name: "site-nodes-server",
-    visit: onNodes(ssrSites, (ctx, node, ref) => {
-      if (node.name.text !== "server") return;
-      const after = node.parent;
-      // Already read by region, or as the record
+    visit: (ctx, node) => {
+      // `const { server } = site.nodes`, or `site.nodes["server"]`
+      const destructured =
+        ts.isVariableDeclaration(node) &&
+        ts.isObjectBindingPattern(node.name) &&
+        node.initializer &&
+        ts.isPropertyAccessExpression(node.initializer) &&
+        node.initializer.name.text === "nodes" &&
+        node.name.elements.some(
+          (e) => (e.propertyName ?? e.name).getText() === "server",
+        )
+          ? node.initializer
+          : undefined;
+      const byKey =
+        ts.isElementAccessExpression(node) &&
+        ts.isStringLiteralLike(node.argumentExpression) &&
+        node.argumentExpression.text === "server" &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === "nodes"
+          ? node.expression
+          : undefined;
+      const read = destructured ?? byKey;
+      if (read) {
+        const ref = componentOf(ctx, read.expression);
+        if (
+          ref &&
+          ref.group === "aws" &&
+          !ref.written5 &&
+          ssrSites.includes(ref.five)
+        )
+          ctx.note(
+            node,
+            "site-nodes-server",
+            `\`${ref.five}\`'s \`nodes.server\` is a record by region, and SST 4's was the first region's: read \`Object.values(nodes.server)[0]\`, or \`nodes.server["us-east-1"]\` by its region`,
+          );
+        return;
+      }
+      if (!ts.isPropertyAccessExpression(node) || node.name.text !== "server")
+        return;
+      const nodes = node.expression;
+      if (!ts.isPropertyAccessExpression(nodes) || nodes.name.text !== "nodes")
+        return;
+      const ref = componentOf(ctx, nodes.expression);
       if (
-        (ts.isElementAccessExpression(after) && after.expression === node) ||
+        !ref ||
+        ref.group !== "aws" ||
+        ref.written5 ||
+        !ssrSites.includes(ref.five)
+      )
+        return;
+      // Already read by region, or as the record, as this rule writes it too
+      let after: ts.Node = node.parent;
+      if (
+        ts.isBinaryExpression(after) &&
+        after.left === node &&
+        after.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      )
+        after = after.parent;
+      if (
+        (ts.isElementAccessExpression(node.parent) &&
+          node.parent.expression === node) ||
         (ts.isCallExpression(after) &&
           /^Object\.(values|keys|entries)$/.test(ctx.text(after.expression)))
       )
         return;
-      ctx.replace(node, `Object.values(${ctx.text(node)})[0]`);
+      if (ref.five === "Astro" || ref.five === "React") {
+        ctx.note(
+          node,
+          "site-nodes-server",
+          `\`${ref.five}\`'s \`nodes.server\` is a record by region, filled once the site is built, as a static site has no server: it's empty while your config runs. Rewrite this read by hand; the site's \`transform.server\` changes the server's args`,
+        );
+        return;
+      }
+      // A provider of its own, from the options or a parent, is read in the
+      // deploy, unless the site has its `regions`
+      const args = ref.created?.arguments?.[1];
+      const opts = ref.created?.arguments?.[2];
+      const regions =
+        args && ts.isObjectLiteralExpression(args) && prop(args, "regions");
+      const plainOpts =
+        !opts ||
+        (ts.isObjectLiteralExpression(opts) &&
+          !["provider", "providers", "parent"].some((k) => prop(opts, k)) &&
+          !opts.properties.some(ts.isSpreadAssignment));
+      if (!ref.created || (!plainOpts && !regions)) {
+        ctx.note(
+          node,
+          "site-nodes-server",
+          `\`${ref.five}\`'s \`nodes.server\` is a record by region. With a provider of its own, from its options or a parent, the site's region is read in the deploy, so the record is empty while your config runs: set the site's \`regions\` and read \`nodes.server["<region>"]\`; otherwise \`Object.values(nodes.server)[0]\` is SST 4's`,
+        );
+        return;
+      }
+      const optional =
+        ts.isOptionalChain(node) || ctx.text(node).includes("?.");
+      ctx.replace(
+        node,
+        optional
+          ? `Object.values(${ctx.text(node)} ?? {})[0]`
+          : `Object.values(${ctx.text(node)})[0]`,
+      );
       ctx.change(
         node,
         "site-nodes-server",
         `\`${ref.five}\`'s \`nodes.server\` is a record by region, and SST 4's was the first region's: \`Object.values(nodes.server)[0]\`, or \`nodes.server["us-east-1"]\` by its region`,
       );
-    }),
+    },
   },
 
   // Cloudflare's Cron: `nodes.worker` is the `Worker`, not its script

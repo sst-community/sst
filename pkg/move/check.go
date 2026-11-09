@@ -87,18 +87,43 @@ type MergedField struct {
 	Kept  []string `json:"kept"`
 }
 
-// Explain says which of the fields a kept resource changes are a transform's
-// object merged into SST's settings, where SST 4 replaced them.
+// Explain says which changes come from a transform's object merged into the
+// component's settings, where SST 4 replaced them: of a kept resource, the
+// fields it updates in place, and of one that would be replaced where it may
+// not be, the fields the replace is keyed on. A merge reported for a
+// component, like a function part's, explains a field of the same name that
+// a resource inside it changes. A replace the move allows isn't explained: a
+// map or the cloud is why.
 func (r *Result) Explain(merged []Merged) {
 	byURN := map[string][]MergedField{}
 	for _, m := range merged {
 		byURN[m.URN] = append(byURN[m.URN], m.Fields...)
 	}
-	for i, kept := range r.Kept {
-		for _, field := range byURN[kept.URN] {
-			if contains(kept.Fields, field.Field) {
-				r.Kept[i].Merged = append(r.Kept[i].Merged, field)
+	explain := func(urn string, fields []string) []MergedField {
+		found := []MergedField{}
+		seen := map[string]bool{}
+		for at := urn; at != "" && !seen[at]; at = r.parents[at] {
+			seen[at] = true
+			for _, field := range byURN[at] {
+				if contains(fields, field.Field) {
+					found = append(found, field)
+				}
 			}
+		}
+		if len(found) == 0 {
+			return nil
+		}
+		return found
+	}
+	for i, kept := range r.Kept {
+		if len(kept.Fields) > 0 {
+			r.Kept[i].Merged = explain(kept.URN, kept.Fields)
+		}
+	}
+	// An update that may not happen is the kept resource's, which says it
+	for i, problem := range r.Problems {
+		if problem.Does == "replace" && len(problem.Fields) > 0 {
+			r.Problems[i].Merged = explain(problem.URN, problem.Fields)
 		}
 	}
 }
@@ -119,6 +144,11 @@ type Problem struct {
 	// What the move would do: "create", "delete", "replace" or "update"
 	Does string
 	Why  string
+	// Fields are what a replace is keyed on, where it would replace it
+	Fields []string `json:",omitempty"`
+	// Merged are the fields of those a transform's object merged into the
+	// component's settings (Explain)
+	Merged []MergedField `json:",omitempty"`
 }
 
 // Result is what a move would do to a stage.
@@ -133,6 +163,8 @@ type Result struct {
 	Created  []Change
 	Replaced []Change
 	Problems []Problem
+	// The parent of each resource in the preview, by URN
+	parents map[string]string
 }
 
 // OK is whether the stage can move.
@@ -277,13 +309,17 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 		switch {
 		case isReplace(step.Op):
 			fields := replaceKeys(steps)
+			replaceProblem := func(fields []string, why string) {
+				problem(urn, step, "replace", why)
+				result.Problems[len(result.Problems)-1].Fields = fields
+			}
 			switch {
 			case data:
-				problem(urn, step, "replace", "It holds data."+changedBecause(fields))
+				replaceProblem(fields, "It holds data."+changedBecause(fields))
 			case setsExpiry(steps):
-				problem(urn, step, "replace", "It sets when what's stored expires."+changedBecause(fields))
+				replaceProblem(fields, "It sets when what's stored expires."+changedBecause(fields))
 			case custom && deletesFirst(steps):
-				problem(urn, step, "replace", "It would be deleted before what takes its place is created, so what uses it goes without it in between, and the cloud may refuse to delete it while it's in use. Its part has to be created first, with `deleteBeforeReplace: false`, under a name of its own."+changedBecause(fields))
+				replaceProblem(fields, "It would be deleted before what takes its place is created, so what uses it goes without it in between, and the cloud may refuse to delete it while it's in use. Its part has to be created first, with `deleteBeforeReplace: false`, under a name of its own."+changedBecause(fields))
 			case !custom:
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: "Nothing in the cloud is behind it."})
 			case replaced[urn].Replaced != "":
@@ -293,7 +329,7 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 			case calledAgain(steps) != "":
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: calledAgain(steps)})
 			default:
-				problem(urn, step, "replace", "No component's state map says it's replaced."+changedBecause(fields))
+				replaceProblem(fields, "No component's state map says it's replaced."+changedBecause(fields))
 			}
 
 		case step.Op == apitype.OpRead && step.Old != nil && !step.Old.External:
@@ -375,6 +411,7 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 	sort.Slice(result.Problems, func(i, j int) bool {
 		return result.Problems[i].URN < result.Problems[j].URN
 	})
+	result.parents = parentOf
 	return result
 }
 

@@ -1111,17 +1111,18 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
         bucket: bucket.bucket,
         corsRules: [
           {
-            allowedHeaders: withDefault(rule?.allowHeaders, ["*"]),
-            allowedMethods: withDefault(rule?.allowMethods, [
-              "DELETE",
-              "GET",
-              "HEAD",
-              "POST",
-              "PUT",
-            ]),
-            allowedOrigins: withDefault(rule?.allowOrigins, ["*"]),
-            exposeHeaders: withDefault(rule?.exposeHeaders, ["ETag"]),
-            maxAgeSeconds: withDefault(rule?.maxAge, "0 seconds", toSeconds),
+            // SST 4 built these from the plain config, so a transform is
+            // given plain values for one
+            allowedHeaders: mapArg(rule?.allowHeaders, (v) => v ?? ["*"]),
+            allowedMethods: mapArg(
+              rule?.allowMethods,
+              (v) => v ?? ["DELETE", "GET", "HEAD", "POST", "PUT"],
+            ),
+            allowedOrigins: mapArg(rule?.allowOrigins, (v) => v ?? ["*"]),
+            exposeHeaders: mapArg(rule?.exposeHeaders, (v) => v ?? ["ETag"]),
+            maxAgeSeconds: mapArg(rule?.maxAge, (v) =>
+              toSeconds(v ?? "0 seconds"),
+            ),
           },
         ],
       });
@@ -1321,7 +1322,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
         );
       }
 
-      const events = withDefault(n.events, EVENTS);
+      const events = mapArg(n.events, (v) => v ?? [...EVENTS]);
       const config = {
         id: n.name,
         events,
@@ -1394,9 +1395,10 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
       {
         bucket: this.name,
         eventbridge: args.eventBridge,
-        lambdaFunctions,
-        queues,
-        topics,
+        // Outputs, as SST 4 gave a transform them
+        lambdaFunctions: output(lambdaFunctions),
+        queues: output(queues),
+        topics: output(topics),
       },
       { dependsOn },
     );
