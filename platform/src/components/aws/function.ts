@@ -34,7 +34,7 @@ import {
   many,
   optional,
 } from "../parts-component";
-import { ifSet, plain, plainDeep, usedAsItIs, withDefault, withoutDependencies, getArgs } from "../args";
+import { ifSet, mapArg, plain, plainDeep, usedAsItIs, withDefault, withoutDependencies, getArgs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { Link } from "../link";
@@ -2535,7 +2535,7 @@ export class Function extends component("sst:aws:Function", parts) {
         authorizationType: output(isOac).apply((oac) =>
           oac || authorization === "iam" ? "AWS_IAM" : "NONE",
         ),
-        invokeMode: streaming.apply((streaming) =>
+        invokeMode: mapArg(streaming, (streaming) =>
           streaming ? "RESPONSE_STREAM" : "BUFFERED",
         ),
         cors: ifSet(url.cors),

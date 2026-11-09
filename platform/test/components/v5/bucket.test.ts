@@ -1007,24 +1007,53 @@ describe("Bucket", () => {
     ).toThrow(/"subscribeEventBridge" is a method of the bucket/);
   });
 
+  it("gives a transform function plain values from a plain config, as SST 4 did", async () => {
+    let origins: any, rules: any;
+    new Bucket("MyBucket", {
+      cors: { allowOrigins: ["https://example.com"] },
+      lifecycle: [{ id: "tmp", prefix: "tmp/", expiresIn: "1 day" }],
+      transform: {
+        cors: (args) => {
+          origins = (args.corsRules as any[])[0].allowedOrigins;
+        },
+        lifecycle: (args) => {
+          rules = args.rules;
+        },
+      },
+    });
+    await pulumi.settle();
+
+    expect(origins).toEqual(["https://example.com"]);
+    expect(rules).toEqual([
+      {
+        id: "tmp",
+        status: "Enabled",
+        expiration: { days: 1, date: undefined },
+        filter: { prefix: "tmp/" },
+      },
+    ]);
+  });
+
   it("names the bucket when a lifecycle rule's id is wrong", async () => {
     const { output } = await import("@pulumi/pulumi");
+    // Rules given as plain values are checked right away
+    expect(
+      () =>
+        new Bucket("MyBucket", {
+          lifecycle: [
+            { id: "same", expiresIn: "1 day" },
+            { id: "same", expiresIn: "2 days" },
+          ],
+        }),
+    ).toThrow(
+      'Lifecycle rules 0 and 1 of the "MyBucket" bucket have the same "id", "same".',
+    );
+    // and one with an output in it once it resolves
     const errors = await applyErrors(() => {
-      new Bucket("MyBucket", {
-        lifecycle: [
-          { id: "same", expiresIn: "1 day" },
-          { id: "same", expiresIn: "2 days" },
-        ],
-      });
       new Bucket("Other", {
         lifecycle: [{ id: output(" "), expiresIn: "1 day" }],
       });
     }, pulumi.settle);
-    expect(errors).toContainEqual(
-      expect.stringContaining(
-        'Lifecycle rules 0 and 1 of the "MyBucket" bucket have the same "id", "same".',
-      ),
-    );
     expect(errors).toContainEqual(
       expect.stringContaining(
         'Lifecycle rule 0 of the "Other" bucket has an empty "id".',

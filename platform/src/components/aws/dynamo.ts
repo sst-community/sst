@@ -11,7 +11,7 @@ import {
   deferred,
   many,
 } from "../parts-component";
-import { ifSet, usedAsItIs, getArgs } from "../args";
+import { ifSet, mapArg, usedAsItIs, getArgs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { Function } from "./function";
@@ -504,8 +504,10 @@ type IndexKey = string | string[];
  *   applies to the table's subscribers too. SST 4's `Dynamo.get` gave them to the table it
  *   looked up and to nothing else. If you pass `get` a `provider` and subscribe to that
  *   table, the switch gives the subscriber that provider and keeps it.
- * - A `transform` function for the table is given the table's keys, indexes, attributes
- *   and stream settings as outputs. To replace one, set it; to change it, use `.apply()`.
+ * - Where a field, key, index or `stream` is an output, a `transform` function for the
+ *   table is given an output for what follows from it, where SST 4's `Dynamo` gave the
+ *   value it resolved to. To replace one, set it; to change it, use `.apply()`. Plain
+ *   ones are given as they were.
  */
 export class Dynamo extends component("sst:aws:Dynamo", parts) {
   constructor(name: string, args: DynamoArgs, opts?: ComponentResourceOptions) {
@@ -530,20 +532,19 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
       return;
     }
 
-    const primaryIndex = output(args.primaryIndex);
-    const stream = output(args.stream);
+    const stream = args.stream;
 
     this.part("table", {
-      attributes: output(args.fields).apply((fields) =>
+      attributes: mapArg(args.fields, (fields) =>
         Object.entries(fields).map(([name, type]) => ({
           name,
           type: fieldType(type),
         })),
       ),
       billingMode: "PAY_PER_REQUEST",
-      hashKey: primaryIndex.hashKey,
-      rangeKey: ifSet(primaryIndex.rangeKey),
-      streamEnabled: stream.apply((stream) => Boolean(stream)),
+      hashKey: mapArg(args.primaryIndex, (index) => index.hashKey),
+      rangeKey: mapArg(args.primaryIndex, (index) => index.rangeKey),
+      streamEnabled: mapArg(stream, (stream) => Boolean(stream)),
       streamViewType: ifSet(stream, (stream) =>
         stream.toUpperCase().replaceAll("-", "_"),
       ),
@@ -552,14 +553,14 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
         args.ttl === undefined
           ? undefined
           : { attributeName: args.ttl, enabled: true },
-      globalSecondaryIndexes: output(args.globalIndexes).apply((indexes) =>
+      globalSecondaryIndexes: mapArg(args.globalIndexes, (indexes) =>
         Object.entries(indexes ?? {}).map(([name, index]) => ({
           name,
           ...indexKeys(index),
           ...projection(index.projection),
         })),
       ),
-      localSecondaryIndexes: output(args.localIndexes).apply((indexes) =>
+      localSecondaryIndexes: mapArg(args.localIndexes, (indexes) =>
         Object.entries(indexes ?? {}).map(([name, index]) => ({
           name,
           rangeKey: index.rangeKey,

@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: a `transform` function given plain values where the config is
+
+A review of 5.0 against SST 4 ranked the breaking changes, and the maintainer asked whether the riskiest were real and what 5.0 should do about each. One was that a `transform` function in a `Vpc`, `Bucket`, `Dynamo`, `Task` or `Redis` is given outputs where SST 4 gave plain values, so a function that compares one, like `args.availabilityZone === "us-east-1a"`, stops matching without a word.
+
+- **Most of it was the helpers, not the design.** `withDefault()` and `ifSet()` turned every arg into an output, a plain one too, and the components did the same with `output(arg).apply(...)`. SST 4 created those resources inside an `apply`, so it gave the resolved values. Only some values can't be known before the deploy: a `Vpc` subnet's `availabilityZone` when `az` is a number, which comes from a lookup, a `Task`'s container definitions, which hold the images' names, and the log group name SST makes up from the cluster's.
+- **`mapArg(value, convert)`** in `args.ts` converts an arg now when nothing inside it is an output or a promise, and once it resolves otherwise. `withDefault()` and `ifSet()` are built on it, so they give a plain value when the arg is one. The `Bucket`'s `cors` and `lifecycle`, the `Dynamo`'s fields, keys, indexes and stream, the `Redis` cluster's mode, nodes, type and version, and a `Task`'s log group, with a name or retention it's given, use it too. The six places that used a helper's result as an output (the `Alb`'s subnets, a notification's description, a function URL's invoke mode, the RDS instance's blue/green setting and engine, the `Redis`'s version) now use it as well.
+- **A plain lifecycle rule is checked right away.** Two rules with the same `id` are refused when the `Bucket` is created, with the same message; one with an output in it, once it resolves, as before.
+- **What a transform is still given as an output** is in each component's "Switch from" and in the guide: what's only known once the deploy runs, and what follows from an arg the app set as an output, which SST 4 resolved first. The breaking change's row in [the plan](plan.md#breaking-changes-so-far) is narrowed to that.
+
+**Checked:** the type check; the platform's tests (104 files, 4120 tests, no unhandled errors), with a test for each of the four components, given a plain config, that its transform function sees plain values, each failing without the change; the takeover cases and the recorded states, which show nothing in a deployed stage changes; the API reports, unchanged. One full run failed a `Remix` takeover case on the component's outputs (the site's URL registered in the case's second run); it passed three times alone and in the next full run, so it's a timing flake of the mock, like CI's second run on 2026-11-07, and is left to look into.
+
 ## 2026-11-07: `main` merged in again, and the `Bucket`'s public access block
 
 The maintainer said to bring `main`'s fixes onto this branch, by merging where that brings them over and another way where that fits better.

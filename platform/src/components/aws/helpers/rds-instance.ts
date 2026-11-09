@@ -6,7 +6,7 @@ import {
   many,
   optional,
 } from "../../parts-component";
-import { plain, withDefault, onlyExisting } from "../../args";
+import { mapArg, plain, withDefault, onlyExisting } from "../../args";
 import type { Input } from "../../input";
 import type { SizeGbTb } from "../../size";
 import { context } from "../../contract";
@@ -389,7 +389,7 @@ export function createRdsInstance(
 
   const parameterGroup = part(
     "parameterGroup",
-    engine.parameterGroup(engineVersion),
+    engine.parameterGroup(output(engineVersion)),
     {
       ignoreChanges: pinned("family"),
       // Necessary for the parameter group to be deleted AFTER upgrading the instance.
@@ -419,8 +419,10 @@ export function createRdsInstance(
       maxAllocatedStorage: maxStorage(args.storage, blueGreen, owner),
       multiAz: withDefault(args.multiAz, false),
       backupRetentionPeriod: 7,
-      performanceInsightsEnabled: engine.performanceInsights(instanceType),
-      blueGreenUpdate: blueGreen.apply((bg) => ({ enabled: bg })),
+      performanceInsightsEnabled: engine.performanceInsights(
+        output(instanceType),
+      ),
+      blueGreenUpdate: mapArg(blueGreen, (bg) => ({ enabled: bg })),
       tags: {
         "sst:component-version": engine.tags.version,
         [engine.tags.password]: secret.id,

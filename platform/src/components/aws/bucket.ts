@@ -27,7 +27,7 @@ import {
   optional,
 } from "../parts-component";
 import type { Prettify } from "../component";
-import { notAnOption, plain, usedAsItIs, withDefault, getArgs } from "../args";
+import { mapArg, notAnOption, plain, usedAsItIs, withDefault, getArgs } from "../args";
 import type { Plain } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
@@ -1017,9 +1017,10 @@ export interface BucketEventBridgeSubscriberArgs {
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
- * - A `transform` function for `cors` or `lifecycle` is given outputs where
- *   SST 4's `Bucket` gave it plain values, like `corsRules[0].allowedOrigins` and
- *   `rules`. Change them with `apply`, or set them with an object.
+ * - Where a setting of `cors` or a `lifecycle` rule is an output, a `transform` function
+ *   for it is given an output, where SST 4's `Bucket` gave the value it resolved to.
+ *   Change it with `apply`, or set it with an object. Plain settings are given as they
+ *   were.
  * - A notification's function is described after the component, `Notified by MyBucket on
  *   ...`, where SST 4's `Bucket` named the component it kept the notifications in: an
  *   update in place.
@@ -1133,7 +1134,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
     if (lifecycle && lifecycle.length > 0)
       this.part("lifecycle", {
         bucket: bucket.bucket,
-        rules: output(lifecycle).apply((rules) => {
+        rules: mapArg(lifecycle, (rules) => {
           const ids = lifecycleIds(name, rules);
           return rules.map((rule, index) => ({
             id: ids[index],
@@ -1338,7 +1339,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
             `The "function" of the "${n.name}" notification of the "${name}" bucket`,
           ),
           {
-            description: events.apply((events) =>
+            description: mapArg(events, (events) =>
               events.length < 5
                 ? `Notified by ${name} on ${events.join(", ")}`
                 : `Notified by ${name} on ${events.slice(0, 3).join(", ")}, and ${events.length - 3} more events`,

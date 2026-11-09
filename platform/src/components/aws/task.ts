@@ -357,9 +357,11 @@ export interface TaskArgs extends ComponentArgs<typeof parts>, FargateBaseArgs {
  *   outputs. They decide which log groups and images are created.
  * - `nodes.taskDefinition` is the task definition, not an output of it. `nodes` also has
  *   the log groups and the images, by container name.
- * - A `transform` function for `logGroup` or `taskDefinition` is given outputs where
- *   SST 4's `Task` gave it plain values. For `logGroup` and `image` it's also given the
- *   container's name.
+ * - A `transform` function for `taskDefinition` is given outputs where SST 4's `Task` gave
+ *   it plain values, like `containerDefinitions`, which has the images' and log groups'
+ *   names in it. One for `logGroup` is given the name SST makes up as an output, where
+ *   SST 4's gave a string; a name you set, and the retention, are given as you set them.
+ *   For `logGroup` and `image` it's also given the container's name.
  * - If you set part of the task definition's `runtimePlatform` with an object in
  *   `transform`, the rest of it is kept.
  * - `dev` is a plain value: it decides whether the stub is deployed.

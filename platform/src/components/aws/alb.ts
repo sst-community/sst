@@ -18,6 +18,7 @@ import {
   plainDeep,
   usedAsItIs,
   withDefault,
+  mapArg,
   getArgs,
 } from "../args";
 import { VisibleError } from "../error";
@@ -309,7 +310,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
         }
       : (assertVpcIds(args.vpc, of), output(args.vpc));
     const vpcId = output(vpc.id);
-    const subnets = isPublic.apply((isPublic) =>
+    const subnets = mapArg(isPublic, (isPublic) =>
       isPublic ? vpc.publicSubnets : vpc.privateSubnets,
     );
 
@@ -330,7 +331,7 @@ export class Alb extends component("sst:aws:Alb", parts) {
     const loadBalancer = this.part(
       "loadBalancer",
       {
-        internal: isPublic.apply((v) => !v),
+        internal: mapArg(isPublic, (v) => !v),
         loadBalancerType: "application",
         subnets,
         securityGroups: [securityGroup.id],

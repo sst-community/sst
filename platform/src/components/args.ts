@@ -13,8 +13,30 @@ import { VisibleError } from "./error";
 export type Plain<T> = T extends Input<infer U> ? U : T;
 
 /**
+ * Turn an arg into what a resource takes. When the arg is a plain value, with
+ * no output or promise anywhere inside it, it's turned now, and the resource
+ * is given a plain value. Otherwise it's turned once it resolves.
+ *
+ * A part's `transform` function sees what this gives, so an app whose config
+ * is plain values gets plain values there, as SST 4 gave them.
+ *
+ * ```ts
+ * clusterMode: mapArg(args.cluster, (v) => (v ? "enabled" : "disabled")),
+ * ```
+ */
+export function mapArg<T, R>(
+  value: Input<T>,
+  convert: (value: Unwrap<T>) => Input<R>,
+): Input<R> {
+  return known(value)
+    ? convert(value as Unwrap<T>)
+    : output(value).apply(convert as (value: Unwrap<T>) => R);
+}
+
+/**
  * An arg's value, or `fallback` when the user left it out. Pass `convert` to
- * turn it into what the resource takes.
+ * turn it into what the resource takes. It's a plain value when the arg is,
+ * as `mapArg()` says.
  *
  * ```ts
  * withDefault(args.engine, "redis");
@@ -24,18 +46,18 @@ export type Plain<T> = T extends Input<infer U> ? U : T;
 export function withDefault<T>(
   value: Input<T | undefined> | undefined,
   fallback: T,
-): Output<T>;
+): Input<T>;
 export function withDefault<T, R>(
   value: Input<T | undefined> | undefined,
   fallback: T,
   convert: (value: Unwrap<T>) => R,
-): Output<R>;
+): Input<R>;
 export function withDefault(
   value: any,
   fallback: unknown,
   convert?: (value: unknown) => unknown,
 ) {
-  return output(value).apply((value) => {
+  return mapArg(value, (value: unknown) => {
     const set = value ?? fallback;
     return convert ? convert(set) : set;
   });
@@ -44,22 +66,35 @@ export function withDefault(
 /**
  * What a resource takes for an arg the user may have left out: the value
  * when they set it, and nothing when they didn't. Pass `convert` to turn the
- * value into what the resource takes.
+ * value into what the resource takes. It's a plain value when the arg is, as
+ * `mapArg()` says.
  *
  * ```ts
  * authorizerId: ifSet(auth.authorizer),
  * redrivePolicy: ifSet(args.dlq, (dlq) => jsonStringify({ ... })),
  * ```
  */
-export function ifSet<T>(value: Input<T | undefined> | undefined): Output<T>;
+export function ifSet<T>(value: Input<T | undefined> | undefined): Input<T>;
 export function ifSet<T, R>(
   value: Input<T | undefined> | undefined,
   convert: (value: Unwrap<T>) => Input<R>,
-): Output<R>;
+): Input<R>;
 export function ifSet(value: any, convert?: (value: unknown) => unknown) {
-  return output(value).apply((value) =>
+  return mapArg(value, (value: unknown) =>
     value === undefined || value === null || !convert ? value : convert(value),
   );
+}
+
+// Whether a value is known now: no output or promise anywhere inside it. A
+// resource or any other class instance counts as known, as `output()` keeps
+// one as it is.
+function known(value: unknown): boolean {
+  if (Output.isInstance(value) || value instanceof Promise) return false;
+  if (Array.isArray(value)) return value.every(known);
+  if (value === null || typeof value !== "object") return true;
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return true;
+  return Object.values(value).every(known);
 }
 
 /**

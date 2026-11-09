@@ -922,6 +922,32 @@ describe("Task", () => {
     expect(await pulumi.resolve(task.containers)).toEqual(["app", "admin-panel"]);
   });
 
+  it("gives a log group's transform function plain values from a plain config, as SST 4 did", async () => {
+    const seen: Record<string, any> = {};
+    new Task("MyTask", {
+      cluster: cluster(),
+      containers: [
+        {
+          name: "app",
+          image: "nginx:latest",
+          logging: { name: "/my/app", retention: "1 week" },
+        },
+        { name: "worker", image: "nginx:latest" },
+      ],
+      transform: {
+        logGroup: (args, _opts, _name, container) => {
+          seen[container!] = [args.name, args.retentionInDays];
+        },
+      },
+    });
+    await pulumi.settle();
+
+    expect(seen.app).toEqual(["/my/app", 7]);
+    // The name SST makes up waits on the cluster's
+    expect(typeof seen.worker[0]).toBe("object");
+    expect(seen.worker[1]).toBe(30);
+  });
+
   it("opens a public task to the internet", async () => {
     const task = new Task("MyTask", {
       cluster: new ClusterClass("MyCluster", { vpc: customVpc }),

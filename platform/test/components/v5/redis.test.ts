@@ -437,6 +437,39 @@ describe("Redis", () => {
     expect(redis.nodes.cluster?.constructor.name).toBe("ReplicationGroup");
   });
 
+  it("gives a transform function plain values from a plain config, as SST 4 did", async () => {
+    let seen: any;
+    new Redis("MyRedis", {
+      vpc,
+      cluster: { nodes: 2 },
+      instance: "r6gd.xlarge",
+      transform: {
+        cluster: (args) => {
+          seen = {
+            clusterMode: args.clusterMode,
+            numNodeGroups: args.numNodeGroups,
+            replicasPerNodeGroup: args.replicasPerNodeGroup,
+            automaticFailoverEnabled: args.automaticFailoverEnabled,
+            nodeType: args.nodeType,
+            dataTieringEnabled: args.dataTieringEnabled,
+            engineVersion: args.engineVersion,
+          };
+        },
+      },
+    });
+    await pulumi.settle();
+
+    expect(seen).toEqual({
+      clusterMode: "enabled",
+      numNodeGroups: 2,
+      replicasPerNodeGroup: 0,
+      automaticFailoverEnabled: true,
+      nodeType: "cache.r6gd.xlarge",
+      dataTieringEnabled: true,
+      engineVersion: "7.1",
+    });
+  });
+
   it("lets the secret be transformed, which Redis doesn't", async () => {
     new Redis("MyRedis", {
       vpc,

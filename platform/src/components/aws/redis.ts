@@ -10,7 +10,7 @@ import {
 import { RandomPassword } from "@pulumi/random";
 import { elasticache, secretsmanager } from "@pulumi/aws";
 import { type ComponentArgs, component, optional } from "../parts-component";
-import { ifSet, notAnExistingPart, plain, withDefault, onlyExisting, getArgs } from "../args";
+import { ifSet, mapArg, notAnExistingPart, plain, withDefault, onlyExisting, getArgs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { toGBs } from "../size";
@@ -504,10 +504,11 @@ interface Connection {
  * - The deprecated `nodes` is gone. Where `cluster` isn't set, pass the same number as
  *   `cluster.nodes`. Where `cluster` or `serverless` is set, SST 4's `Redis` ignored it, so
  *   remove it. Either way nothing in AWS changes.
- * - A `transform.cluster` function is given `clusterMode`, `numNodeGroups`,
- *   `replicasPerNodeGroup` and `automaticFailoverEnabled` as outputs, where SST 4's `Redis`
- *   gave plain values. A function that reads one of them to decide what to set has to
- *   decide inside an `apply`, or from your own config.
+ * - Where `cluster`, `instance`, `engine` or `version` is an output, a `transform.cluster`
+ *   function is given an output for what follows from it, like `numNodeGroups`, where
+ *   SST 4's `Redis` gave the value it resolved to. A function that reads one of them to
+ *   decide what to set has to decide inside an `apply`, or from your own config. Plain
+ *   ones are given as they were.
  * - With `dev` set, SST 4's `Redis` created a component for the pane `sst dev` shows, in
  *   every deploy. SST 5's tells `sst dev` itself, so a deploy drops that component. It
  *   has nothing in AWS behind it.
@@ -599,7 +600,8 @@ export class Redis extends component("sst:aws:Redis", parts) {
     }
 
     const engine = withDefault(args.engine, "redis");
-    const version = all([engine, args.version]).apply(
+    const version = mapArg(
+      [engine, args.version],
       ([engine, v]) => v ?? (engine === "redis" ? "7.1" : "7.2"),
     );
     const vpc = subnetsAndSecurityGroupsOf(args.vpc, owner);
@@ -611,7 +613,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
     }
 
     const instance = withDefault(args.instance, "t4g.micro");
-    const clustered = output(args.cluster).apply((v) => {
+    const clustered = mapArg(args.cluster, (v) => {
       if (v === false) return undefined;
       if (v === true || v === undefined) return { nodes: 1 };
       return v;
@@ -673,10 +675,10 @@ export class Redis extends component("sst:aws:Redis", parts) {
       description: "Managed by SST",
       engine,
       engineVersion: version,
-      nodeType: interpolate`cache.${instance}`,
-      dataTieringEnabled: instance.apply((v) => v.startsWith("r6gd.")),
+      nodeType: mapArg(instance, (v) => `cache.${v}`),
+      dataTieringEnabled: mapArg(instance, (v) => v.startsWith("r6gd.")),
       port: 6379,
-      clusterMode: clustered.apply((v) => (v ? "enabled" : "disabled")),
+      clusterMode: mapArg(clustered, (v) => (v ? "enabled" : "disabled")),
       numNodeGroups: ifSet(clustered, (v) => v.nodes),
       replicasPerNodeGroup: ifSet(clustered, () => 0),
       automaticFailoverEnabled: ifSet(clustered, () => true),
@@ -736,7 +738,7 @@ export class Redis extends component("sst:aws:Redis", parts) {
       const cache = self.part("serverlessCache", {
         description: "Managed by SST",
         engine,
-        majorEngineVersion: version.apply((v) => {
+        majorEngineVersion: mapArg(version, (v) => {
           const major = v.split(".")[0];
           if (parseInt(major) < 7)
             throw new VisibleError(

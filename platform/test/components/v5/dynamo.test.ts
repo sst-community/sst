@@ -424,6 +424,39 @@ describe("Dynamo", () => {
     });
   });
 
+  it("gives a transform function plain values from a plain config, as SST 4 did", async () => {
+    let seen: any;
+    new Dynamo("MyTable", {
+      ...streaming,
+      globalIndexes: { ByNote: { hashKey: "noteId" } },
+      transform: {
+        table: (args) => {
+          seen = {
+            attributes: args.attributes,
+            hashKey: args.hashKey,
+            rangeKey: args.rangeKey,
+            streamEnabled: args.streamEnabled,
+            streamViewType: args.streamViewType,
+            indexes: (args.globalSecondaryIndexes as any[]).map((i) => i.name),
+          };
+        },
+      },
+    });
+    await pulumi.settle();
+
+    expect(seen).toEqual({
+      attributes: [
+        { name: "userId", type: "S" },
+        { name: "noteId", type: "S" },
+      ],
+      hashKey: "userId",
+      rangeKey: "noteId",
+      streamEnabled: true,
+      streamViewType: "NEW_AND_OLD_IMAGES",
+      indexes: ["ByNote"],
+    });
+  });
+
   it("holds the table and each subscriber's resources on nodes", async () => {
     const table = new Dynamo("MyTable", streaming);
     expect(table.nodes.table.constructor.name).toBe("Table");

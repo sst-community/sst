@@ -154,7 +154,7 @@ A few changes depend on what your values are, not on how they're written. Look f
   }
   ```
 
-- **A `transform` function can be given outputs** where SST 4 gave plain values, in a `Vpc`, a `Bucket`, a `Dynamo` table, a `Task` and a `Redis`. For a part a component has several of, like a route or a subscriber, it's called for each one, with its id last.
+- **A `transform` function can be given outputs** where SST 4 gave plain values: for what's only known once the deploy runs, like a `Vpc` subnet's `availabilityZone` when `az` is a number, or a `Task`'s container definitions, and for what follows from an arg you set as an output, which SST 4 resolved first. Where your config is plain, it's given plain values, as SST 4 gave them. For a part a component has several of, like a route or a subscriber, it's called for each one, with its id last.
 
 Each component's page has a "Switch from" section with everything that's written or works differently:
 

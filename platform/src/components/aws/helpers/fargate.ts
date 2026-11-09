@@ -22,6 +22,7 @@ import { Image, type ImageArgs, Platform } from "@pulumi/docker-build";
 import {
   notAnExistingPart,
   notAnOption,
+  mapArg,
   plain,
   usedAsItIs,
   withDefault,
@@ -1324,21 +1325,24 @@ export function logGroupArgs(
   cluster: Cluster,
   name: string,
 ): cloudwatch.LogGroupArgs {
-  const logging = all([container.logging, cluster.nodes.cluster.name]).apply(
-    ([logging, clusterName]) => ({
-      retention: logging?.retention ?? "1 month",
-      name:
+  // Plain values where the container's logging is, so a transform sees them
+  // as SST 4 gave them. Only the name SST makes up waits on the cluster's.
+  return {
+    name: mapArg(
+      container.logging,
+      (logging) =>
         logging?.name ??
         // In the case of shared Cluster across stage, log group name can thrash
         // if Task name is the same. Need to suffix the task name with random hash.
-        `/sst/cluster/${clusterName}/${physicalName(64, name)}/${
-          container.name
-        }`,
-    }),
-  );
-  return {
-    name: logging.name,
-    retentionInDays: logging.apply((logging) => RETENTION[logging.retention]),
+        interpolate`/sst/cluster/${cluster.nodes.cluster.name}/${physicalName(
+          64,
+          name,
+        )}/${container.name}`,
+    ),
+    retentionInDays: mapArg(
+      container.logging,
+      (logging) => RETENTION[logging?.retention ?? "1 month"],
+    ),
   };
 }
 
