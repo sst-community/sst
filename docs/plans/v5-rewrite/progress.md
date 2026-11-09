@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: the review's fixes checked in the lab
+
+On a stage of its own, with SST 4's first `Cron` and a `Function` whose object `transform.function` sets `loggingConfig` and `environment`, deployed with SST 4 (4.24.0). SST 4 had put the transform's objects in place of SST's: the function logged to Lambda's default log group, not SST's, and had none of SST's variables, so `Resource` couldn't have read its links.
+
+- **A plain `sst deploy` and `sst migrate --check` with a CLI from `v5` refused the stage,** naming the `Cron` as SST 4's first, with what to do: move it to `CronV2` with SST 4. Neither left the stage locked.
+- **Done as it said:** SST 4 deployed it as `CronV2`, its schedule in place of the rule.
+- **`--check` then passed,** and under the function it updated said why: its transform sets `loggingConfig` and `environment` as objects, which SST 5 merges, keeping SST's `logGroup`, and SST's `SST_RESOURCE_App`, `SST_KEY` and `SST_KEY_FILE`.
+- **`sst migrate`** moved it: the function logs to SST's log group again and has SST's variables beside the transform's, its URL answered, and the schedule is enabled. A diff then showed no changes, and a plain deploy ran.
+- **`sst remove`** removed it. Left behind, and deleted by hand: the log group Lambda made when SST 4's replace dropped SST's, which no remove deletes; and, as after every check, the stage's state files, its source maps and its passphrase.
+
 ## 2026-11-09: `main` merged in again, with #238
 
 The maintainer asked to bring in `main`'s new commit, sst-community/sst#238, which keeps only the most recent function calls `sst dev` holds for the Console. Its change is in `cmd/sst/mosaic/socket`, which `v5` removed with the Console's local connection on 2026-10-31, so the merge keeps the package removed and takes nothing of it. The [reference](reference.md#the-consoles-local-connection-removed) says to take its bound if the connection comes back.
