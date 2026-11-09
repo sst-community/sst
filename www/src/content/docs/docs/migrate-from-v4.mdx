@@ -139,6 +139,16 @@ It lists each change, and each thing it couldn't do, marked `!`, with what to wr
 
 Do what it lists, then run it again: it changes nothing a second time. Some of what it lists has to be done with SST 4 and deployed before the stage can move, like a `Router`'s `routes` or a subscriber without a name. It doesn't change a package's components, or anything in `node_modules`.
 
+Where the codemod wasn't run, or couldn't read the code, SST 4's names fail with what to write:
+- a component's name, like `new sst.aws.ApiGatewayV2(...)`, which says it's `sst.aws.ApiGatewayHttp`, in a `new`, a `get`, a `$transform` or `sst.Linkable.wrap`;
+- a `.v1`, like `sst.aws.Vpc.v1`, and `sst.linkable`;
+- a `nodes` name SST 5 renamed, like `vpc.nodes.privateSubnets`, which says to read `nodes.privateSubnet`, and a subscriber's or a route's function read on what `subscribe` or `route` gave, like `subscriber.nodes.function`, which is the component's `nodes.subscriber` in SST 5.
+
+Some reads fail without saying so, so look for them where the codemod wasn't run:
+- the other `nodes` of what `subscribe` or `route` gave, like `subscriber.nodes.rule`: SST 5's `subscribe` gives the component, whose `nodes.rule` is a record by the subscriber's name, so `.arn` on it is `undefined`;
+- `nodes` read on what `addAuthorizer`, `addDataSource` and `addIdentityProvider` give, which is the resource in SST 5, with no `nodes`;
+- a check written to tell SST 4 from SST 5 by whether a name exists, like `sst.aws.CronV2 ?? sst.aws.Cron`, which finds SST 4's name in SST 5 too.
+
 ### What the codemod can't see
 
 A few changes depend on what your values are, not on how they're written. Look for these yourself:

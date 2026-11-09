@@ -383,6 +383,9 @@ export class Linkable<T extends Record<string, any>> extends Component implement
     static wrappedResources: Set<string>;
 }
 
+// @public @deprecated (undocumented)
+export function linkable(..._args: unknown[]): never;
+
 // @public
 export interface LinkDefinition {
     include?: LinkInclude[];

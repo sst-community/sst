@@ -2,6 +2,7 @@ import { Output, output } from "@pulumi/pulumi";
 import { Link } from "./link";
 import { Component } from "./component";
 import { Input } from "./input";
+import { refuseSst4Name } from "./sst4";
 
 export interface Definition<
   Properties extends Record<string, any> = Record<string, any>,
@@ -279,6 +280,7 @@ export class Linkable<T extends Record<string, any>>
     cls: { new (...args: any[]): Resource },
     cb: (resource: Resource) => Definition,
   ) {
+    refuseSst4Name(cls);
     // @ts-expect-error
     this.wrappedResources.add(cls.__pulumiType);
 

@@ -3,6 +3,7 @@ import type { ComponentResourceOptions } from "@pulumi/pulumi";
 import { component } from "../parts-component";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { firstVersion } from "../sst4";
 import {
   createRdsInstance,
   type RdsConnection,
@@ -265,6 +266,14 @@ const engine: RdsEngine = {
  * [RDS Proxy pricing](https://aws.amazon.com/rds/proxy/pricing/) for more details.
  */
 export class Postgres extends component("sst:aws:Postgres", parts) {
+  /**
+   * @internal
+   * @deprecated SST 4's first version of the `Postgres`, which SST 5 doesn't have.
+   */
+  static get v1(): never {
+    return firstVersion("sst.aws.Postgres");
+  }
+
   private connection: RdsConnection;
 
   constructor(

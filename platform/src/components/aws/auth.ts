@@ -12,6 +12,7 @@ import {
 } from "../parts-component";
 import { notAnExistingPart, notAnOption, plain } from "../args";
 import { VisibleError } from "../error";
+import { firstVersion } from "../sst4";
 import type { Prettify } from "../component";
 import { functionPart } from "./helpers/function-part";
 import type { CdnDomainArgs } from "./cdn";
@@ -251,6 +252,17 @@ export interface AuthArgs extends ComponentArgs<typeof parts> {
  * - SST 4's `Auth.v1`, the auth server before OpenAuth, has no 5.0 form.
  */
 export class Auth extends component("sst:aws:Auth", parts) {
+  /**
+   * @internal
+   * @deprecated SST 4's first version of the `Auth`, which SST 5 doesn't have.
+   */
+  static get v1(): never {
+    return firstVersion(
+      "sst.aws.Auth",
+      `OpenAuth's "sst.aws.Auth", which works differently`,
+    );
+  }
+
   private readonly issuerUrl: Output<string>;
 
   constructor(name: string, args: AuthArgs, opts?: ComponentResourceOptions) {

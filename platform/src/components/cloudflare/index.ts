@@ -16,6 +16,8 @@ export * from "./tan-stack-start";
 export * from "./dns";
 export * from "./account-id";
 export { binding } from "./binding";
+// SST 4's names that SST 5 doesn't have, which say what to write
+export { StaticSiteV2, Auth, x } from "./sst4";
 
 // How SST 5's components take over from SST 4's
 import "./takeover/index";

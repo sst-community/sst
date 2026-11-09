@@ -45,6 +45,15 @@ describe("the codemod's names", () => {
       )!;
       const names = checker
         .getExportsOfModule(mod)
+        // Not SST 4's names, which say what to write: they're no component
+        .filter(
+          (s) =>
+            !(
+              s.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(s) : s
+            ).declarations?.some((d) =>
+              d.getSourceFile().fileName.endsWith("/sst4.ts"),
+            ),
+        )
         .map((s) => s.getName())
         .filter((n) => /^[A-Z]/.test(n))
         .sort();

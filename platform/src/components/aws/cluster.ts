@@ -4,6 +4,7 @@ import { ecs } from "@pulumi/aws";
 import { type ComponentArgs, component } from "../parts-component";
 import { notAnExistingPart, getArgs } from "../args";
 import { VisibleError } from "../error";
+import { firstVersion } from "../sst4";
 import type { Input } from "../input";
 import { assertVpcIds, isVpc } from "./helpers/vpc";
 
@@ -177,6 +178,14 @@ export interface ClusterGetArgs {
  *   sets next to yours. It's added back when you switch.
  */
 export class Cluster extends component("sst:aws:Cluster", parts) {
+  /**
+   * @internal
+   * @deprecated SST 4's first version of the `Cluster`, which SST 5 doesn't have.
+   */
+  static get v1(): never {
+    return firstVersion("sst.aws.Cluster");
+  }
+
   private network: ReturnType<typeof vpcOf>;
 
   constructor(

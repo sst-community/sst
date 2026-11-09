@@ -402,6 +402,29 @@ describe("Vpc", () => {
       );
     });
 
+    it("refuses SST 4's plural names in nodes, saying the new one", async () => {
+      const vpc = new Vpc("MyVpc");
+      await pulumi.settle();
+      const nodes = vpc.nodes as unknown as Record<string, unknown>;
+      expect(() => nodes.privateSubnets).toThrow(
+        '`nodes.privateSubnets` of "MyVpc" is SST 4\'s: read "nodes.privateSubnet", by the AZ\'s number: "Object.values(nodes.privateSubnet)" for the list.',
+      );
+      for (const key of [
+        "publicSubnets",
+        "publicRouteTables",
+        "privateRouteTables",
+        "elasticIps",
+        "natGateways",
+        "natInstances",
+      ])
+        expect(() => nodes[key], key).toThrow(
+          `is SST 4's: read "nodes.${key.slice(0, -1)}", by the AZ's number`,
+        );
+      // Not listed with the parts
+      expect(Object.keys(vpc.nodes)).not.toContain("privateSubnets");
+      expect({ ...vpc.nodes }).not.toHaveProperty("privateSubnets");
+    });
+
     it("no NAT and no bastion by default", async () => {
       const vpc = new Vpc("MyVpc");
       await pulumi.settle();

@@ -27,6 +27,7 @@ import {
 import { notAnExistingPart, plain, usedAsItIs, getArgs } from "../args";
 import { context } from "../contract";
 import { VisibleError } from "../error";
+import { firstVersion } from "../sst4";
 
 const parts = {
   /**
@@ -505,6 +506,14 @@ interface Network {
  * for more details.
  */
 export class Vpc extends component("sst:aws:Vpc", parts) {
+  /**
+   * @internal
+   * @deprecated SST 4's first version of the `Vpc`, which SST 5 doesn't have.
+   */
+  static get v1(): never {
+    return firstVersion("sst.aws.Vpc");
+  }
+
   private readonly network: Network;
 
   constructor(

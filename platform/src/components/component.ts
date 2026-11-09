@@ -27,6 +27,7 @@ import {
   oldFormCreated,
 } from "./move.js";
 import { VisibleError } from "./error.js";
+import { refuseSst4Name } from "./sst4.js";
 import { checkComponent } from "./check.js";
 import path from "path";
 import { statSync } from "fs";
@@ -213,8 +214,13 @@ export function $transform<T, Args, Options>(
   resource: { new (name: string, args: Args, opts?: Options): T },
   cb: (args: Args, opts: Options, name: string) => void,
 ) {
+  refuseSst4Name(resource);
   // @ts-expect-error
   const type = resource.__pulumiType;
+  if (typeof type !== "string")
+    throw new VisibleError(
+      "$transform takes a component's or a resource's class, like sst.aws.Function or aws.s3.Bucket.",
+    );
   // A component is given its args before it creates anything
   if (type.startsWith("sst:") || resource.prototype instanceof Component) {
     let transforms = ComponentTransforms.get(type);

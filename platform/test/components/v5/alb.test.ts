@@ -429,6 +429,15 @@ describe("Alb", () => {
       expect(Object.keys(alb.nodes.listener)).toEqual(["HTTP80", "HTTP8080"]);
     });
 
+    it("refuses SST 4's `nodes.listeners`, saying the new name", async () => {
+      const alb = new Alb("MyAlb", { vpc: customVpc, listeners: http });
+      await pulumi.settle();
+      expect(() => (alb.nodes as any).listeners).toThrow(
+        '`nodes.listeners` of "MyAlb" is SST 4\'s: read "nodes.listener", by the same keys.',
+      );
+      expect(Object.keys(alb.nodes)).not.toContain("listeners");
+    });
+
     it("transforms each listener, with its protocol and port", async () => {
       new Alb("MyAlb", {
         vpc: customVpc,

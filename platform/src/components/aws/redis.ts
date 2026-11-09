@@ -13,6 +13,7 @@ import { type ComponentArgs, component, optional } from "../parts-component";
 import { ifSet, mapArg, notAnExistingPart, plain, withDefault, onlyExisting, getArgs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { firstVersion } from "../sst4";
 import { toGBs } from "../size";
 import { context } from "../contract";
 import { subnetsAndSecurityGroupsOf } from "./helpers/vpc";
@@ -542,6 +543,14 @@ interface Connection {
  * [ElastiCache pricing](https://aws.amazon.com/elasticache/pricing/) for more details.
  */
 export class Redis extends component("sst:aws:Redis", parts) {
+  /**
+   * @internal
+   * @deprecated SST 4's first version of the `Redis`, which SST 5 doesn't have.
+   */
+  static get v1(): never {
+    return firstVersion("sst.aws.Redis");
+  }
+
   private connection: Connection;
 
   constructor(name: string, args: RedisArgs, opts?: ComponentResourceOptions) {

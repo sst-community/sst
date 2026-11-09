@@ -528,6 +528,12 @@ export interface ApiGatewayRestUsagePlanArgs {
     }>;
 }
 
+// @public @deprecated (undocumented)
+export const ApiGatewayV1: Sst4Name;
+
+// @public @deprecated (undocumented)
+export const ApiGatewayV2: Sst4Name;
+
 // @public
 export class ApiGatewayWebSocket extends ApiGatewayWebSocket_base {
     constructor(name: string, args?: ApiGatewayWebSocketArgs, opts?: ComponentResourceOptions);
@@ -823,6 +829,8 @@ export class Auth extends Auth_base {
         }[];
     };
     get url(): Output<string>;
+    // @internal @deprecated (undocumented)
+    static get v1(): never;
 }
 
 // @public (undocumented)
@@ -1172,6 +1180,8 @@ export class Cluster extends Cluster_base {
     addTask(name: string): never;
     static get(name: string, args: ClusterGetArgs, opts?: ComponentResourceOptions): Cluster;
     get id(): Output<string>;
+    // @internal @deprecated (undocumented)
+    static get v1(): never;
     // @internal
     get vpc(): Vpc | Output<UnwrappedObject<    {
     id: Input<string>;
@@ -1458,6 +1468,9 @@ export interface CronArgs extends ComponentArgs<typeof parts_29> {
     task?: Task;
     timezone?: Input<string>;
 }
+
+// @public @deprecated (undocumented)
+export const CronV2: Sst4Name;
 
 // @public (undocumented)
 interface D1DatabaseBinding {
@@ -2793,6 +2806,9 @@ export interface NuxtArgs extends SsrSiteArgs, ComponentArgs<typeof parts_36> {
     router?: SiteRouteArgs;
 }
 
+// @public @deprecated (undocumented)
+export const OpenControl: Sst4Name;
+
 // @public
 export class OpenSearch extends OpenSearch_base {
     constructor(name: string, args?: OpenSearchArgs, opts?: ComponentResourceOptions);
@@ -3735,6 +3751,8 @@ export class Postgres extends Postgres_base {
     get port(): OutputInstance<number>;
     get proxyId(): Output<string>;
     get username(): Output<string>;
+    // @internal @deprecated (undocumented)
+    static get v1(): never;
 }
 
 // @public (undocumented)
@@ -4067,6 +4085,8 @@ export class Redis extends Redis_base {
     get password(): Output<string> | undefined;
     get port(): OutputInstance<number>;
     get username(): Output<string>;
+    // @internal @deprecated (undocumented)
+    static get v1(): never;
 }
 
 // @public (undocumented)
@@ -4729,6 +4749,9 @@ interface SsrSiteArgs {
 }
 
 // @public
+type Sst4Name = new (...args: any[]) => never;
+
+// @public
 abstract class State {
     constructor(args: StateArgs);
     // (undocumented)
@@ -5180,6 +5203,9 @@ export interface UsagePlanArgs extends ApiGatewayRestUsagePlanArgs, ComponentArg
     apiStage: Input<string>;
 }
 
+// @public @deprecated (undocumented)
+export const Vector: Sst4Name;
+
 // @public (undocumented)
 interface VersionMetadataBinding {
     // (undocumented)
@@ -5207,6 +5233,8 @@ export class Vpc extends Vpc_base {
     get privateSubnetsByAz(): Record<string, Output<string>> | undefined;
     get publicSubnets(): Output<string[]>;
     get securityGroups(): Output<string[]>;
+    // @internal @deprecated (undocumented)
+    static get v1(): never;
 }
 
 // @public (undocumented)

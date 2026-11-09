@@ -21,7 +21,7 @@ export type Vpc = InstanceType<typeof aws.Vpc>;
  * version. 4.x's own `Cron` is the one `CronV2` replaced.
  */
 function cron(aws: Components): Components["Cron"] {
-  return (aws as { CronV2?: Components["Cron"] }).CronV2 ?? aws.Cron;
+  return sst4<Components["Cron"]>(aws, "CronV2") ?? aws.Cron;
 }
 
 /**
@@ -29,7 +29,7 @@ function cron(aws: Components): Components["Cron"] {
  */
 function httpApi(aws: Components): Components["ApiGatewayHttp"] {
   return (
-    (aws as { ApiGatewayV2?: Components["ApiGatewayHttp"] }).ApiGatewayV2 ??
+    sst4<Components["ApiGatewayHttp"]>(aws, "ApiGatewayV2") ??
     aws.ApiGatewayHttp
   );
 }
@@ -42,9 +42,20 @@ function staticSite(
   cf: CloudflareComponents,
 ): CloudflareComponents["StaticSite"] {
   return (
-    (cf as { StaticSiteV2?: CloudflareComponents["StaticSite"] })
-      .StaticSiteV2 ?? cf.StaticSite
+    sst4<CloudflareComponents["StaticSite"]>(cf, "StaticSiteV2") ??
+    cf.StaticSite
   );
+}
+
+/**
+ * SST 4's component of that name, when the group is SST 4's. SST 5 has the
+ * name too, as a stub that says what it's called now, which isn't a component.
+ */
+function sst4<T>(group: object, name: string): T | undefined {
+  const value = (group as Record<string, unknown>)[name];
+  return typeof (value as { __pulumiType?: unknown })?.__pulumiType === "string"
+    ? (value as T)
+    : undefined;
 }
 
 /** The domain the lab account has a hosted zone for, as scrubbed. */

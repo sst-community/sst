@@ -22,6 +22,12 @@ tests. It's written for AWS; for Cloudflare, read `cloudflare/` for `aws/` and
   `test/components/v5-components.test.ts`, by provider. That test expects each
   component to take the place of one of SST 4's, so a component SST 4 didn't have is
   added to it first.
+- **A name of SST 4's that an app writes, and SST 5 renamed or left out, says what to
+  write.** A component's name, like `CronV2`, is a stub in the group's `sst4.ts`; a
+  `nodes` name, like the `Alb`'s `listeners`, is in `renamedNodes` in
+  `components/sst4.ts`, by the component's type. Otherwise the config fails with
+  "is not a constructor", or reads `undefined`. `test/components/sst4-names.test.ts`
+  checks that every component SST 4 exported has its name in SST 5.
 - **SST 4's components are frozen** in `platform/test/fixtures/v4/components/`, laid
   out as they were. The takeover suites and the recorded states load them, and nothing
   else does: the platform has none of them and imports nothing from the tests

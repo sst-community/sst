@@ -43,6 +43,7 @@ import {
 import { adoptable, mapsFrom, moving, reportMerged, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
+import { renamedNodesOf } from "./sst4";
 import { isFromGet, notAnOption } from "./args";
 
 export {
@@ -326,6 +327,18 @@ export class PartsComponent<P extends Parts> extends Component {
         get: () => this.nodeOf(key),
       });
     }
+    // SST 4's names for what SST 5 renamed, which say the new name where
+    // they'd read `undefined`. Not enumerable, so they're not listed.
+    for (const [key, now] of Object.entries(renamedNodesOf(this.componentType)))
+      if (!(key in nodes))
+        Object.defineProperty(nodes, key, {
+          enumerable: false,
+          get: () => {
+            throw new VisibleError(
+              `\`nodes.${key}\` of "${this.componentName}" is SST 4's: read ${now}.`,
+            );
+          },
+        });
     return nodes as Nodes<P>;
   }
 

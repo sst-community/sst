@@ -100,6 +100,9 @@ export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts_11> {
     path?: string;
 }
 
+// @public @deprecated (undocumented)
+export const Auth: Sst4Name;
+
 // @public (undocumented)
 type Binding = AiBinding | KvBinding | SecretTextBinding | ServiceBinding | PlainTextBinding | QueueBinding | R2BucketBinding | D1DatabaseBinding | HyperdriveBinding | VersionMetadataBinding | WorkflowBinding | DurableObjectNamespaceBinding | RateLimitBinding;
 
@@ -964,6 +967,9 @@ interface SsrSiteArgs {
 }
 
 // @public
+type Sst4Name = new (...args: any[]) => never;
+
+// @public
 export class StaticSite extends StaticSite_base {
     constructor(name: string, args?: StaticSiteArgs, opts?: ComponentResourceOptions);
     // (undocumented)
@@ -1001,6 +1007,9 @@ export interface StaticSiteArgs extends ComponentArgs<typeof parts_10> {
     path?: string;
     trailingSlash?: Input_2<"auto" | "force" | "drop">;
 }
+
+// @public @deprecated (undocumented)
+export const StaticSiteV2: Sst4Name;
 
 // @public
 export class TanStackStart extends TanStackStart_base {
@@ -1258,6 +1267,13 @@ interface WorkflowBinding {
     // (undocumented)
     type: "workflowBindings";
 }
+
+// @public @deprecated (undocumented)
+export const x: {
+    Astro: Sst4Name;
+    StaticSite: Sst4Name;
+    SolidStart: Sst4Name;
+};
 
 // (No @packageDocumentation comment for this package)
 
