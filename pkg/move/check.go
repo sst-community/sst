@@ -66,6 +66,41 @@ type Kept struct {
 	From string
 	// Fields are what changes in place
 	Fields []string
+	// Merged are the fields that change because the object form of a
+	// transform is merged into SST's settings, where SST 4 replaced them
+	Merged []MergedField `json:",omitempty"`
+}
+
+// Merged is what the object form of a part's transform merged into its
+// defaults where SST 4's replaced the arg whole. The program reports it as the
+// stage moves (platform/src/components/move.ts, reportMerged).
+type Merged struct {
+	URN    string        `json:"urn"`
+	Fields []MergedField `json:"fields"`
+}
+
+// MergedField is an arg the transform sets as an object, and the paths of
+// SST's settings in it that 5.0 keeps beside what the transform sets. SST 4
+// put the transform's object in their place.
+type MergedField struct {
+	Field string   `json:"field"`
+	Kept  []string `json:"kept"`
+}
+
+// Explain says which of the fields a kept resource changes are a transform's
+// object merged into SST's settings, where SST 4 replaced them.
+func (r *Result) Explain(merged []Merged) {
+	byURN := map[string][]MergedField{}
+	for _, m := range merged {
+		byURN[m.URN] = append(byURN[m.URN], m.Fields...)
+	}
+	for i, kept := range r.Kept {
+		for _, field := range byURN[kept.URN] {
+			if contains(kept.Fields, field.Field) {
+				r.Kept[i].Merged = append(r.Kept[i].Merged, field)
+			}
+		}
+	}
 }
 
 // Change is a resource the move creates, takes out of the state or replaces,

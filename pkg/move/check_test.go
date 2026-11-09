@@ -730,3 +730,23 @@ func TestAdoptingAgain(t *testing.T) {
 		"WebS3AccessControl, in its place, doesn't adopt it by its id, so a second one would be made in the cloud and this one left there. The stage has more than one named WebS3AccessControl.sst.aws.OriginAccessControl, in different components, so the core can't tell which is whose.",
 	})
 }
+
+func TestExplain(t *testing.T) {
+	fn := urn("sst:aws:Function$aws:lambda/function:Function", "ApiFunction")
+	other := urn("sst:aws:Bucket$aws:s3/bucketV2:BucketV2", "FilesBucket")
+	result := &Result{Kept: []Kept{
+		{URN: fn, Fields: []string{"loggingConfig", "timeout"}},
+		{URN: other, Fields: []string{"tags"}},
+		{URN: urn("sst:aws:Queue$aws:sqs/queue:Queue", "JobsQueue")},
+	}}
+	result.Explain([]Merged{
+		{URN: fn, Fields: []MergedField{
+			{Field: "loggingConfig", Kept: []string{"logFormat", "logGroup"}},
+			// Merged, but nothing changes there: not why it updates
+			{Field: "environment", Kept: []string{"variables.SST_KEY"}},
+		}},
+	})
+	assert.Equal(t, []MergedField{{Field: "loggingConfig", Kept: []string{"logFormat", "logGroup"}}}, result.Kept[0].Merged)
+	assert.Nil(t, result.Kept[1].Merged)
+	assert.Nil(t, result.Kept[2].Merged)
+}

@@ -31,6 +31,8 @@ var CmdMigrate = &cli.Command{
 			"- delete or replace a resource that holds data, like a bucket, a table, a database or a log group;",
 			"- create, delete or replace a resource no component's state map lists.",
 			"",
+			"Where a field is updated in place because an object in a `transform` is merged into SST's settings, where SST 4 replaced them, it says which of SST's settings are kept.",
+			"",
 			"Before it previews anything, it refuses a stage that has a component of SST 4's with no 5.0 form, like the first `Cron` or a `.v1`, and names each one with what to do about it with SST 4.",
 			"",
 			"```bash frame=\"none\"",
@@ -253,14 +255,17 @@ var CmdMigrate = &cli.Command{
 func checkMove(c *cli.Cli, p *project.Project, server string) (*move.Result, error) {
 	steps := []apitype.StepEventMetadata{}
 	parts := []move.Part{}
+	merged := []move.Merged{}
 	var summary *apitype.SummaryEvent
-	collected := bus.Subscribe(&apitype.ResOutputsEvent{}, &move.Part{}, &apitype.SummaryEvent{})
+	collected := bus.Subscribe(&apitype.ResOutputsEvent{}, &move.Part{}, &move.Merged{}, &apitype.SummaryEvent{})
 	collect := func(evt interface{}) {
 		switch evt := evt.(type) {
 		case *apitype.ResOutputsEvent:
 			steps = append(steps, evt.Metadata)
 		case *move.Part:
 			parts = append(parts, *evt)
+		case *move.Merged:
+			merged = append(merged, *evt)
 		case *apitype.SummaryEvent:
 			summary = evt
 		}
@@ -306,7 +311,9 @@ func checkMove(c *cli.Cli, p *project.Project, server string) (*move.Result, err
 	if err := move.Seen(steps, summary); err != nil {
 		return nil, util.NewReadableError(err, "The move can't be checked: "+err.Error()+". Run it again.")
 	}
-	return move.Check(steps, parts), nil
+	result := move.Check(steps, parts)
+	result.Explain(merged)
+	return result, nil
 }
 
 func renderMove(result *move.Result, u *ui.UI) {
@@ -337,6 +344,9 @@ func renderMove(result *move.Result, u *ui.UI) {
 		}
 		fmt.Println(ui.TEXT_WARNING_BOLD.Render("*") + "  " + ui.TEXT_NORMAL_BOLD.Render(u.FormatURN(kept.URN)))
 		fmt.Println("   " + ui.TEXT_DIM.Render("Updated in place: "+strings.Join(kept.Fields, ", ")))
+		for _, field := range kept.Merged {
+			fmt.Println("   " + ui.TEXT_DIM.Render(mergedLine(field)))
+		}
 	}
 	changes := func(icon string, list []move.Change) {
 		for _, change := range list {
@@ -390,4 +400,19 @@ func droppedFrom(label string) uint64 {
 		}
 	}
 	return 0
+}
+
+// mergedLine says why a field a transform sets changes: SST 5 merges the
+// transform's object into SST's settings, where SST 4 put it in their place
+func mergedLine(field move.MergedField) string {
+	kept := field.Kept
+	more := ""
+	if len(kept) > 4 {
+		more = fmt.Sprintf(" and %d more", len(kept)-4)
+		kept = kept[:4]
+	}
+	return fmt.Sprintf(
+		"Your transform sets %q as an object, which SST 4 put in place of SST's. SST 5 merges it, keeping SST's %s%s. To keep SST 4's, set it in a function.",
+		field.Field, strings.Join(kept, ", "), more,
+	)
 }

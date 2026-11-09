@@ -13,7 +13,7 @@ import {
 } from "@pulumi/pulumi";
 import { Component } from "./component";
 import { hashStringToPrettyString, logicalName } from "./naming";
-import { type PartTransform, transformPart } from "./transform";
+import { type PartTransform, keptByMerge, transformPart } from "./transform";
 import {
   type CreatedKeys,
   type ManyKeys,
@@ -40,7 +40,7 @@ import {
   releasedAddresses,
   versionOf,
 } from "./takeover";
-import { adoptable, mapsFrom, moving, reportPart } from "./move";
+import { adoptable, mapsFrom, moving, reportMerged, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
 import { isFromGet, notAnOption } from "./args";
@@ -375,14 +375,20 @@ export class PartsComponent<P extends Parts> extends Component {
       );
 
     const name = this.nameOf(key, id);
-    return new cls(
-      ...transformPart(this.transformOf(key, id), name, args, {
+    const transform = this.transformOf(key, id);
+    const resource = new cls(
+      ...transformPart(transform, name, args, {
         ...opts,
         ...this.adoptedOf(key, id),
         aliases: [...(opts?.aliases ?? []), ...this.aliasesOf(key, name, id)],
         parent: this,
       }),
     );
+    // As the stage moves, what an object transform merged where SST 4's
+    // replaced the arg whole, which the move's check says
+    if (moving() && transform !== undefined && typeof transform !== "function")
+      reportMerged(resource.urn, keptByMerge(args, transform));
+    return resource;
   }
 
   // The id of what a part takes the place of, when the core says a move adopts

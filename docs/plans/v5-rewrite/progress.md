@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: `sst migrate --check` says what an object transform's merge keeps
+
+The review ranked first that an object in a `transform` is merged into SST's settings, nested objects included, where SST 4 put the nested object in their place. It came from the v5 alphas (2026-09-30), and is kept: SST 4's replace dropped settings SST needs, like a function's log group with `loggingConfig`, its subnets with `vpcConfig`, or a database's lookup tags. A move shows the change, as an update in place of the field, but not why, and where AWS won't take both, like an OpenSearch master user given by its ARN beside SST's username and password, the move's deploy fails on it. Of SST 4's examples and docs, two set a nested object in a transform, and neither has a setting of SST's beside it, so both deploy the same.
+
+- **`keptByMerge(args, transform)`** (`transform.ts`) works out, for each arg the object form sets as an object, the settings of SST's the merge keeps that SST 4 dropped, by their paths. A default that's an output is read once it resolves.
+- **A part reports it as the stage moves** (`reportMerged`, the contract's `Move.Merged`), with its address, from `part()`. A function's and an image's parts, made by their own helpers, don't yet.
+- **`sst migrate --check` says it under the resource it updates**, for the fields that change: "Your transform sets "loggingConfig" as an object, which SST 4 put in place of SST's. SST 5 merges it, keeping SST's logFormat, logGroup. To keep SST 4's, set it in a function." With `--json`, it's each kept resource's `Merged`.
+- The guide, the plan's row and `sst migrate`'s help say so.
+
+**Checked:** the type check; the platform's tests, with three new ones (what's reported, nothing for a function or an object that sets all of SST's, a default that's an output); the Go tests (36 packages), with the explanation attached only to a field that changes, and the line it prints.
+
 ## 2026-11-09: the codemod keeps an `apply` on `nodes` working
 
 From the same review: a read of a `nodes` entry, like `fn.nodes.function.name`, works the same in 5.0, as Pulumi lifts a property of an output, but an `.apply()` on an entry SST 4 gave as an output and 5.0 gives as the resource fails, with a `TypeError` at `sst diff` when the config isn't type-checked. SST 4's own `Router` docs said to write `router.nodes.cdn.apply((cdn) => cdn.nodes.distribution.arn)`. A site's `nodes.server` changed shape, a record by region, with no rule.

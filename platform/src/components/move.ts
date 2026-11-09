@@ -8,6 +8,7 @@ import { rpc } from "./rpc/rpc";
 import { perRun } from "../util/lazy";
 import { VisibleError } from "./error";
 import { takenOverTypes, versionedTypes } from "./takeover";
+import type { MergedField } from "./transform";
 
 /**
  * A part of a component that the component's state map says something about,
@@ -457,4 +458,29 @@ export function reportPart(
         ...(releases.length ? { releases: releases.flat() } : {}),
       } satisfies MovedPart),
   );
+}
+
+/**
+ * Tell the core what the object form of a part's transform merged into its
+ * defaults where SST 4's replaced the arg whole, once the part's address is
+ * known, so `sst migrate --check` can say why such an arg changes.
+ *
+ * @internal
+ */
+export function reportMerged(urn: Input<string>, merged: Input<MergedField[]>) {
+  all([urn, merged]).apply(([urn, fields]) => {
+    if (fields.length > 0)
+      rpc.call("Move.Merged", { urn, fields } satisfies MovedMerge);
+  });
+}
+
+/**
+ * What a part's object transform merged where SST 4's replaced the arg whole,
+ * as the core reads it (`move.Merged` in `pkg/move`).
+ *
+ * @internal
+ */
+export interface MovedMerge {
+  urn: string;
+  fields: MergedField[];
 }

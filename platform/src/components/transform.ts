@@ -3,6 +3,7 @@ import {
   type OutputInstance,
   type Resource,
   Output,
+  all,
   output,
 } from "@pulumi/pulumi";
 
@@ -98,6 +99,61 @@ export function mergeArgs<T>(base: T, patch: PartialArgs<T> | undefined): T {
     merged[key] = mergeArgs(merged[key], value as any);
   }
   return merged as T;
+}
+
+/**
+ * An arg the object form of a transform sets as an object, and the settings
+ * of the default's that `mergeArgs()` keeps beside it, by their paths. SST 4's
+ * `transform()` put the object in the default's place, without them.
+ */
+export interface MergedField {
+  field: string;
+  kept: string[];
+}
+
+/**
+ * What `mergeArgs()` keeps that SST 4's `transform()` dropped: for each arg
+ * the object form sets as an object, where the default is an object too, the
+ * default's settings it doesn't set. A default that's an output is read once
+ * it resolves; in a preview where it isn't known, it isn't listed.
+ */
+export function keptByMerge(
+  base: object,
+  patch: unknown,
+): Output<MergedField[]> {
+  if (!isPlainObject(patch)) return output([]);
+  const defaults = base as Record<string, unknown>;
+  const fields = Object.entries(patch)
+    .filter(([key, value]) => isPlainObject(value) && defaults[key] != null)
+    .map(([key, value]) =>
+      output(defaults[key] as object).apply((resolved: unknown) => ({
+        field: key,
+        kept: isPlainObject(resolved)
+          ? keptPaths(resolved, value as Record<string, unknown>)
+          : [],
+      })),
+    );
+  return all(fields).apply((fields) =>
+    fields.filter((field) => field.kept.length > 0),
+  ) as Output<MergedField[]>;
+}
+
+// The paths of the settings in `base` that `patch` doesn't set, within those
+// both set as objects
+function keptPaths(
+  base: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  prefix = "",
+): string[] {
+  const kept: string[] = [];
+  for (const [key, value] of Object.entries(base)) {
+    if (value === undefined) continue;
+    const path = prefix + key;
+    if (!(key in patch)) kept.push(path);
+    else if (isPlainObject(value) && isPlainObject(patch[key]))
+      kept.push(...keptPaths(value, patch[key], `${path}.`));
+  }
+  return kept;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

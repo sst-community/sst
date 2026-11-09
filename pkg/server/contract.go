@@ -48,3 +48,11 @@ func (m *moveContract) Part(input *move.Part, output *struct{}) error {
 	bus.Publish(input)
 	return nil
 }
+
+// Merged is what the object form of a part's transform merged into its
+// defaults where SST 4's replaced the arg whole. The command that moves the
+// stage reads it from the bus, to say why such a field changes.
+func (m *moveContract) Merged(input *move.Merged, output *struct{}) error {
+	bus.Publish(input)
+	return nil
+}

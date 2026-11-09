@@ -240,7 +240,7 @@ export function mockPulumi(input?: MockInput) {
     if (method === "Move.Part") moved.push(args);
     const answer = input?.cli?.(method, args);
     if (answer !== undefined) return answer;
-    if (method === "Move.Part") return {};
+    if (method === "Move.Part" || method === "Move.Merged") return {};
     // As the CLI builds a Node.js function: one file, named `bundle`, with
     // the handler's export
     if (method === "Runtime.Build")
