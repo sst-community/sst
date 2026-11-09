@@ -108,6 +108,7 @@ Read from [v5-progress.md](../v5-progress.md), [v5-port-notes.md](../v5-port-not
 - The socket takes only the Console's origin.
 - For Safari and Brave, the TLS listener is on `127.0.0.1` only, under the same token.
 - `sst dev` keeps no invocations while no Console is connected. The old code kept them until the Console cleared them.
+- Take `main`'s bound on what it keeps, from sst-community/sst#238 (2026-11-08): only the most recent calls, error details counted, `cmd/sst/mosaic/socket/store.go` with its tests. The merge of `main` into `v5` on 2026-11-09 left it out, as the package isn't here.
 
 ## SST's provider resources
 

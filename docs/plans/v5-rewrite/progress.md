@@ -2,6 +2,12 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: `main` merged in again, with #238
+
+The maintainer asked to bring in `main`'s new commit, sst-community/sst#238, which keeps only the most recent function calls `sst dev` holds for the Console. Its change is in `cmd/sst/mosaic/socket`, which `v5` removed with the Console's local connection on 2026-10-31, so the merge keeps the package removed and takes nothing of it. The [reference](reference.md#the-consoles-local-connection-removed) says to take its bound if the connection comes back.
+
+Also: SST 4's first `Cron`, `Vector` and the `.v1`s stay out ([decisions](plan.md#decisions)), and `v5-rewrite` is deleted, work going on on `v5`.
+
 ## 2026-11-09: what the review found in the messages and docs
 
 - **A DNS adapter written for SST 4's components is refused**, with what to write, where it failed with JavaScript's own `dns.record is not a function`. So is one of SST's spread with one of SST 4's methods replaced (`{ ...sst.aws.dns(), createRecord }`), which SST 5's components never called, without a word: they call `record`, `alias` and `caa`. SST's adapters are told apart by their `record`, which a spread keeps, so their type doesn't change. `checkAdapter()` in `dns-adapter.ts`, from `domainOf()` and the `Email`.
