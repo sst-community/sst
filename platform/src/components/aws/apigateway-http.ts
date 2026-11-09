@@ -687,9 +687,9 @@ export interface ApiGatewayHttpAuthorizerArgs {
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
- * - `domain.dns` is an adapter SST 5's components use, like SST 4's `dns()`,
- *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
- *   doesn't work.
+ * - `domain.dns` is an adapter SST 5's components use, from `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   adapters is refused.
  * - The DNS records that validate the certificate are named after the domain they
  *   validate, and a domain's hosted zone is found without a resource: SST 4's
  *   `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.

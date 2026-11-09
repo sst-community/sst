@@ -39,7 +39,7 @@ import { Transform, transform } from "../component";
 import { Input } from "../input";
 import { route53 } from "@pulumi/aws";
 import { VisibleError } from "../error";
-import type { DnsAdapter } from "../dns-adapter";
+import { type DnsAdapter, sstAdapter } from "../dns-adapter";
 import { awsDnsAdapter } from "./dns-adapter";
 
 export interface DnsArgs {
@@ -94,14 +94,14 @@ export interface DnsArgs {
 }
 
 export function dns(args: DnsArgs = {}) {
-  return {
+  return sstAdapter({
     // What SST 5's components use
     ...awsDnsAdapter(args),
     provider: "aws",
     createAlias,
     createCaa,
     createRecord,
-  } satisfies Dns & DnsAdapter;
+  } satisfies Dns & DnsAdapter);
 
   /**
    * Creates alias records in the hosted zone.

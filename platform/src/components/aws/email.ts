@@ -15,7 +15,7 @@ import {
 } from "../parts-component";
 import { plain, plainDeep, onlyExisting, getArgs } from "../args";
 import type { Input } from "../input";
-import type { DnsAdapter } from "../dns-adapter";
+import { type DnsAdapter, checkAdapter } from "../dns-adapter";
 import { VisibleError } from "../error";
 import { dns as awsDns } from "./dns";
 import { permission } from "./permission";
@@ -392,9 +392,9 @@ export interface EmailArgs extends ComponentArgs<typeof parts> {
  * - `dmarc` can only be set when `sender` is a domain, and that's checked even when
  *   it's given as an output.
  * - `transform` also takes `event` and `verification`.
- * - `dns` is an adapter SST 5's components use, like SST 4's `dns()`,
- *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
- *   doesn't work.
+ * - `dns` is an adapter SST 5's components use, from `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   adapters is refused.
  * - A domain's three DKIM records are named after their place, not after the tokens SES
  *   gives, so a preview shows them. A domain's hosted zone is found without a resource:
  *   SST 4's `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
@@ -506,6 +506,7 @@ export class Email extends component("sst:aws:Email", parts) {
     mailFrom: { domain: string } | undefined,
   ) {
     const name = this.componentName;
+    checkAdapter(dns, `The "dns" of the "${name}" email`);
     const adapter = dns === false ? undefined : dns ?? awsDns();
     if (adapter) {
       const record = (record: Parameters<DnsAdapter["record"]>[1]) =>

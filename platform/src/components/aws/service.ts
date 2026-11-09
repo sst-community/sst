@@ -1436,9 +1436,9 @@ export interface ServiceArgs
  * - A `loadBalancer.health` check on an `Alb` for a port no rule forwards to is refused.
  *   SST 4's `Service` dropped it.
  * - A `cpu`, `memory` or `storage` Fargate doesn't offer is refused as the config is read.
- * - A domain's `dns` is an adapter SST 5's components use, like SST 4's `dns()`,
- *   SST 4's `dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
- *   doesn't work. The DNS records that validate its certificate are named after the
+ * - A domain's `dns` is an adapter SST 5's components use, from `sst.aws.dns()`,
+ *   `sst.cloudflare.dns()` or `sst.vercel.dns()`. An object written by hand for SST 4's
+ *   adapters is refused. The DNS records that validate its certificate are named after the
  *   domains they validate, and a domain's hosted zone is found without a resource: SST
  *   4's `HostedZoneLookup`, and Cloudflare's `ZoneLookup`, leave the state.
  * - `nodes.service` and `nodes.taskDefinition` are the resources, not outputs of them.

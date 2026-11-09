@@ -1034,7 +1034,7 @@ export class Router extends component("sst:aws:Router", parts) {
     notAnOption(
       args,
       "routes",
-      `Add each route with "route(pattern, url)" or "routeBucket(pattern, bucket)". A Router that's deployed with "routes" switches to those on sst.aws.Router first, then to sst.aws.Router.`,
+      `Add each route with "route(pattern, url)" or "routeBucket(pattern, bucket)". A Router deployed with "routes" can't move with them: with SST 4, move them to those methods and deploy, then move the stage.`,
       owner,
     );
     notAnOption(

@@ -2,6 +2,16 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: what the review found in the messages and docs
+
+- **A DNS adapter written for SST 4's components is refused**, with what to write, where it failed with JavaScript's own `dns.record is not a function`. So is one of SST's spread with one of SST 4's methods replaced (`{ ...sst.aws.dns(), createRecord }`), which SST 5's components never called, without a word: they call `record`, `alias` and `caa`. SST's adapters are told apart by their `record`, which a spread keeps, so their type doesn't change. `checkAdapter()` in `dns-adapter.ts`, from `domainOf()` and the `Email`.
+- **`DnsAdapter`, `DnsRecord` and `DnsAliasRecord` are exported from `sst/components`.** The README said a package can write an adapter, and the type wasn't exported. The API report adds the three.
+- **The `Router`'s refusal of `routes`** said to switch "to those on sst.aws.Router first, then to sst.aws.Router", which stopped making sense at the swap, when both names became one. It, and the codemod's note, now say to move them to `route()` and `routeBucket()` with SST 4 and deploy, then move the stage.
+- **Nine components' "Switch from" said `domain.dns` was "like SST 4's `dns()`, SST 4's `dns()` or `sst.vercel.dns()`"**, from a rewrite that caught `sst.aws.dns()` and `sst.cloudflare.dns()`. Corrected, and it says an SST 4 adapter is refused.
+- **The guide:** plain values are refused by `sst diff` and `--check` too, not only a deploy; only the arg itself has to be plain; a value from a lookup is awaited in `run()`. And a line on DNS adapters, which it didn't have.
+
+**Checked:** the type check; the platform's tests, with a `Cdn` case for each adapter refused and SST's three, spread or not, taken; the codemod's tests; the API reports, with the three types added.
+
 ## 2026-11-09: the mock waits for every component's outputs
 
 A `Remix` takeover case ("on a distribution of its own", as it is) failed in two of three full runs with the day's changes, and passed in three of three on the commit before them and every time alone: SST 4's site had registered no outputs where SST 5's had its URL. Fully settled, both register the same URL. SST 4's site registers its outputs once its URL resolves, at the end of a chain of `apply`s after its build, and under a full run's load that came after `settle()` had seen three quiet rounds. The day's changes made SST 5's side quicker, not SST 4's slower; they only moved where the race fell.

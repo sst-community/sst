@@ -212,6 +212,30 @@ export interface DevReport {
     title?: Input<string | undefined>;
 }
 
+// @public
+export interface DnsAdapter {
+    alias(namePrefix: string, record: DnsAliasRecord, opts: ComponentResourceOptions): Resource_2[];
+    caa(namePrefix: string, domain: string, opts: ComponentResourceOptions): Resource_2[];
+    provider: string;
+    record(namePrefix: string, record: DnsRecord, opts: ComponentResourceOptions): Resource_2;
+}
+
+// @public
+export interface DnsAliasRecord {
+    aliasName: Input<string>;
+    aliasZone: Input<string>;
+    name: string;
+}
+
+// @public
+export interface DnsRecord {
+    key?: string;
+    name: Input<string>;
+    priority?: Input<number>;
+    type: string;
+    value: Input<string>;
+}
+
 // @public (undocumented)
 interface DurableObjectNamespaceBinding {
     // (undocumented)

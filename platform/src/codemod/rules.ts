@@ -993,7 +993,7 @@ export const rules: Rule[] = [
         ctx.note(
           routes,
           "router-routes",
-          "`Router`'s `routes` are gone. With SST 4, add each with `route()` or `routeBucket()` in place of `routes` and deploy; then switch the `Router`.",
+          "`Router`'s `routes` are gone. With SST 4, add each with `route()` or `routeBucket()` in place of `routes` and deploy; then move the stage.",
         );
         return;
       }

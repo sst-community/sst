@@ -44,7 +44,7 @@ import { ComponentResourceOptions, all } from "@pulumi/pulumi";
 import { Transform, transform } from "../component";
 import { Input } from "../input";
 import { DEFAULT_TEAM_ID } from "./account-id";
-import type { DnsAdapter } from "../dns-adapter";
+import { type DnsAdapter, sstAdapter } from "../dns-adapter";
 import { vercelDnsAdapter } from "./dns-adapter";
 
 export interface DnsArgs {
@@ -72,14 +72,14 @@ export interface DnsArgs {
 }
 
 export function dns(args: DnsArgs) {
-  return {
+  return sstAdapter({
     // What SST 5's components use
     ...vercelDnsAdapter(args),
     provider: "vercel",
     createAlias,
     createCaa,
     createRecord,
-  } satisfies Dns & DnsAdapter;
+  } satisfies Dns & DnsAdapter);
 
   function createAlias(
     namePrefix: string,

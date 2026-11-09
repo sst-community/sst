@@ -132,7 +132,7 @@ It lists each change, and each thing it couldn't do, marked `!`, with what to wr
 ✓  sst.config.ts:9   `sst.aws.CronV2` is `sst.aws.Cron`
 ✓  sst.config.ts:11  `Bus`'s `subscribe`'s `transform.rule` is the bus's `transform.rule`, for its id
 ✓  sst.config.ts:18  `Service`'s `public` is `loadBalancer`, with the same settings
-!  sst.config.ts:25  `Router`'s `routes` are gone. With SST 4, add each with `route()` or `routeBucket()` in place of `routes` and deploy; then switch the `Router`.
+!  sst.config.ts:25  `Router`'s `routes` are gone. With SST 4, add each with `route()` or `routeBucket()` in place of `routes` and deploy; then move the stage.
 
 3 changes, and 1 thing to do by hand, marked !. Then run `sst migrate --check` on a stage.
 ```
@@ -143,8 +143,9 @@ Do what it lists, then run it again: it changes nothing a second time. Some of w
 
 A few changes depend on what your values are, not on how they're written. Look for these yourself:
 
-- **Args that decide what gets created are plain values, not outputs.** A deploy refuses an output there, with the arg's name and why. Each component's docs say which args.
+- **Args that decide what gets created are plain values, not outputs.** `sst diff`, `sst migrate --check` and a deploy refuse an output there, with the arg's name and why. Only the arg itself has to be plain: what's inside it can be an output, and so can most args, like `link`, `environment` or a `vpc`. Each component's docs say which args. For a value from a lookup, like a domain from a hosted zone, `await` the lookup in `run()`, which gives a plain value: `const zone = await aws.route53.getZone({ zoneId: "Z123" });`.
 - **`nodes` has every resource a component creates**, and each is the resource itself, not an output of it. A read of one, like `fn.nodes.function.name`, works as it did. Where SST 4 gave an output and you called `.apply()` on it, the codemod wraps it in `$output()`, which keeps a resource as it is; or read it directly, as `router.nodes.cdn.nodes.distribution.arn`. A site's `nodes.server` is a record by region, and SST 4's was the first region's: the codemod writes `Object.values(site.nodes.server)[0]`. A function a component creates for each route, subscriber or region is still an output. Some may be `undefined`, like a service's `nodes.autoScalingTarget`, and each component's docs say which.
+- **A domain's `dns` is one of SST 5's adapters.** `sst.aws.dns()`, `sst.cloudflare.dns()` and `sst.vercel.dns()` work as they did. An object written by hand for SST 4's components, with `createRecord`, `createAlias` and `createCaa`, is refused, as SST 5's components call `record`, `alias` and `caa`. To write one for another provider, implement `DnsAdapter` from `sst/components`.
 - **An object in `transform` is merged in**, nested objects too. SST 4 replaced the nested object it named, without SST's settings in it, like a function's `loggingConfig` without its log group. Where that changes what's deployed, `sst migrate --check` says so under the resource it updates, with the settings of SST's it keeps. To replace one as SST 4 did, use a function. Where AWS won't take both, like an OpenSearch master user given by its ARN beside SST's username and password, the move's deploy fails on it, so check what `--check` lists.
 
   ```ts title="sst.config.ts"

@@ -1,5 +1,5 @@
 import type { Input } from "../../input";
-import type { DnsAdapter } from "../../dns-adapter";
+import { type DnsAdapter, checkAdapter } from "../../dns-adapter";
 import { plain } from "../../args";
 import { VisibleError } from "../../error";
 import { dns as awsDns } from "../dns";
@@ -139,6 +139,7 @@ export function domainOf(
   );
 
   plain(given.dns, `The domain's "dns" in ${owner}`);
+  checkAdapter(given.dns, `The domain's "dns" in ${owner}`);
   const dns = given.dns === false ? undefined : given.dns ?? awsDns();
   if (!dns && !given.cert)
     throw new VisibleError(

@@ -299,6 +299,55 @@ describe("Cdn", () => {
     ).toThrow(/"wait" of the "MyCdn" CDN has to be a plain value/);
   });
 
+  it("refuses a DNS adapter written for SST 4's components, and one of SST's with SST 4's methods replaced", async () => {
+    const { dns } = await import("../../../src/components/aws/dns");
+    const fn = () => output("x") as any;
+    // Written by hand the way SST 4's adapters were
+    expect(
+      () =>
+        new Cdn("MyCdn", {
+          ...origin,
+          domain: {
+            name: "example.com",
+            dns: { provider: "aws", createRecord: fn, createAlias: fn, createCaa: fn } as any,
+          },
+        }),
+    ).toThrow(
+      /"dns" in the "MyCdn" CDN is written the way SST 4's adapters were, with "createRecord", "createAlias", "createCaa"\. Use sst\.aws\.dns\(\)/,
+    );
+    expect(
+      () =>
+        new Cdn("MyCdn", {
+          ...origin,
+          domain: { name: "example.com", dns: { provider: "aws" } as any },
+        }),
+    ).toThrow(/isn't a DNS adapter: it has no "record", "alias", "caa"/);
+    // SST's, with SST 4's method replaced: SST 5 calls "record", not it
+    expect(
+      () =>
+        new Cdn("MyCdn", {
+          ...origin,
+          domain: { name: "example.com", dns: { ...dns(), createRecord: fn } as any },
+        }),
+    ).toThrow(/one of SST's adapters with "createRecord" replaced/);
+    // SST's own, spread, and with SST 5's method replaced, are taken
+    for (const adapter of [
+      dns(),
+      { ...dns() },
+      { ...dns(), record: ((...args: any[]) => (dns().record as any)(...args)) as any },
+    ])
+      expect(
+        () =>
+          new Cdn(`Cdn${Math.random().toString(36).slice(2, 8)}`, {
+            ...origin,
+            domain: { name: "example.com", dns: adapter },
+          }),
+      ).not.toThrow();
+    for (const other of [cloudflare.dns(), vercel.dns({ domain: "example.com" })])
+      expect(() => new Cdn("Other", { ...origin, domain: { name: "example.com", dns: other } })).not.toThrow();
+    await pulumi.settle();
+  });
+
   it("gives the distribution itself, and its URL once it's deployed", async () => {
     const cdn = new Cdn("MyCdn", { ...origin, domain: "example.com" });
     await pulumi.settle();
