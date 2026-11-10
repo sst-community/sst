@@ -87,6 +87,8 @@ We want to import this bucket into the [`Bucket`](/docs/component/aws/bucket/) c
       Set the following in your transform:
       - `args.bucket = "mybucket-xnbmhcvd";`
       - `args.forceDestroy = undefined;`
+
+      For more details, check: .sst/log/pulumi.log
    ```
 
    This is telling us that the resource that the `Bucket` component is trying to create does not match the one you are trying to import. This makes sense because you might've previously created this with a configuration that's different from what SST creates by default.
@@ -182,6 +184,8 @@ We want to import this bucket into the [`aws.s3.BucketV2`](https://www.pulumi.co
 
       Set the following:
       - `objectLockEnabled: undefined,`
+
+      For more details, check: .sst/log/pulumi.log
    ```
 
    This is telling us that the resource that the `BucketV2` component is trying to create does not match the one you are trying to import.
