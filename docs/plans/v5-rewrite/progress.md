@@ -2,6 +2,19 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-10: step 5's exit, Cloudflare
+
+The lab app's two Cloudflare groups through [the user's path](plan.md#5-moving-an-app), on a stage of its own, as recorded: a `Worker` with a URL, smart placement, a migration and bindings to a `Kv`, a `D1`, a `Queue` with a subscriber, an `Ai`, a `RateLimit`, a `DurableObject` and a `Workflow`; a `Cron`; a `StaticSiteV2`; and the three sites with a server, `Astro`, `ReactRouter` and `TanStackStart`, each counting its visits in a `Kv` of its own. It ran in one folder, as the `sst dev` run did.
+
+- **Deployed with SST 4** (4.24.0), the groups written with `sst.cloudflare.X`, and data written: the Durable Object counted to 2, each site counted its visits, and a table with a row was made in the D1 database through Cloudflare's API. SST 4's own `sst diff` then showed the three sites' builders run again and the API's and Astro's workers updated, its baseline.
+- **The codemod** renamed `StaticSiteV2` to `StaticSite`, and had nothing else to change in the groups.
+- **`sst migrate --check` passed**: 51 kept, 5 at a new address and 2 updated in place, the API's and Astro's workers, as SST 4's own diff updates them. SST 4's 9 worker URLs and placement were released to SST's provider, with as many created in their place, and 7 entries with nothing in the cloud were taken out of the state. Nothing was replaced.
+- **`sst migrate`** moved it. Compared by id, all 15 Cloudflare resources were kept, the queue's consumer at a new address. Every route answered the same, the Durable Object counted on from 2, each site's visits went on, and the D1 row was read back. The cron trigger, kept by id, fired about ten minutes after it was made, as a new one does. `sst diff` then showed only Astro's worker updated, as a build does.
+- **SST 4 was refused** on the moved stage.
+- **Going back, by the guide's steps:** SST 4's `sst diff` showed the same changes as its baseline, and `sst deploy` made them. Everything answered, the counts went on, the row was there, the cron kept firing, and SST 4's `sst refresh` passed, changing nothing in Cloudflare.
+- **Cleaned up:** the stage removed with SST 4, then its 117 state versions and markers, which have the API token SST 4's site builders store, and the passphrase. Cloudflare's API lists no worker, KV namespace, D1 database, queue or workflow of the stage, and the copy of the token the lab used was deleted. Nothing of the stage is left.
+- **The exit's run of the recorded apps is done:** each group moved, was compared by cloud id, had its data read back and went back with SST 4. Left: an app in daily use.
+
 ## 2026-11-10: step 5's exit, the serverless group by `sst dev`
 
 The lab app's serverless group, as in the first run, but deployed by SST 4's `sst dev`, with a stub in place of each function, on a stage of its own. It ran in one folder, as an app does: SST 4's commit, then SST 5's checked out and installed over it, then SST 4's again to go back.
