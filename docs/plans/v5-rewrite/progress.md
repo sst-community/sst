@@ -2,6 +2,20 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-10: step 5's exit, the containers group
+
+The lab app's containers group through [the user's path](plan.md#5-moving-an-app), on a stage of its own with the VPC, its managed NAT gateways and a bastion: a `Cluster`, an `Efs`, a `Service` with an image built from a Dockerfile, a load balancer and a domain of its own, scaling, a service registry and the file system mounted, an `Alb` with a domain and a `Service` on it, a `Task` run by a `CronV2`, and a function in the VPC that mounts the file system, counts its visits in it and links to the rest.
+
+- **Deployed with SST 4** (4.24.0), the group written with `sst.aws.X`, and a visit counted in the file system. SST 4's own `sst diff` then had no changes.
+- **The codemod** renamed the `CronV2` to `Cron`, and had nothing else to change in the group.
+- **`sst migrate --check` refused the move from another folder.** The lab keeps two copies of the app, one with SST 4 and one with SST 5. SST 4 keeps the full path of a container image's build context and Dockerfile, so from the other folder the image is built again, its task definition can't be known in the preview, and it shows as replaced, which no map explains. A stage last deployed by CI and moved from a laptop would be refused the same way, and so would one whose image's files changed since its last deploy.
+- **From the folder SST 4 had deployed from**, with SST 5 installed there as an app does, `--check` passed: 111 kept, 16 at a new address, nothing updated in place or replaced, SST 4's six zone lookups released, and 5 entries with nothing in the cloud taken out of the state.
+- **`sst migrate`** moved it, and `sst diff` then had no changes. All 89 cloud resources kept their ids. 14 are at a new address: the three task definitions, the two certificates with their validations and records, the file system's two mount targets, the shared load balancer's rule and the function URL's two permissions. The file system, the cluster, both services, both load balancers, both certificates, the VPC, its NAT gateways, the bastion and the service registry's service kept their ids and creation times. The routes answered the same, and the function counted on from the visit SST 4 recorded.
+- **SST 4 was refused** on the moved stage.
+- **Going back, by the guide's steps**, in the same folder, with SST 4's commit checked out and installed: SST 4's `sst diff` and `sst deploy` had no changes, the identities were the same, the count went on, and SST 4's `sst refresh` passed, updating only SST's dev command components.
+- **The guide** now says, in "Before you start", to deploy with SST 4 from where the move will run, with nothing changed in between, and why. The check stays as it is ([decision](plan.md#decisions)).
+- **Cleaned up:** the stage removed with SST 4, then its 160 state versions and markers, the passphrase, the function's source map, the three inactive task definitions, and the build cache this stage's build pushed to the asset registry, `Web-cache`. An untagged build cache from 2026-11-02, from before this stage, is left. Nothing of the stage is left.
+
 ## 2026-11-09: step 5's exit, the sites group
 
 The lab app's sites group through [the user's path](plan.md#5-moving-an-app), on a stage of its own: a `Router` on a domain, with a route to a URL and one to a `Bucket`, and behind it a `Nextjs` site at its root, an `Astro` site, a `SvelteKit` app and a `StaticSite` on paths; and a `StaticSite` with a distribution of its own. The recorded app has all of them but the router's two routes, which came after.

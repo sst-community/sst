@@ -57,7 +57,7 @@ Then the next stage: a dev stage first, and production last.
    | `sst.cloudflare.StaticSite`, the first one | Move to `sst.cloudflare.StaticSiteV2`, which is `StaticSite` in 5.0. |
    | `sst.cloudflare.Auth` and `sst.cloudflare.x.SolidStart` | Remove them, or keep the stage on SST 4. |
 
-2. **Update to the latest SST 4 and deploy.** Then what SST 4 changed since your version is deployed on its own, and not with the move.
+2. **Update to the latest SST 4 and deploy**, from where you'll move the stage, with nothing changed in between. Then what SST 4 changed since your version is deployed on its own, and not with the move. SST 4 keeps the full path of the folder a container's image is built from, so from another folder, like your CI's, or with the image's files changed, the image is built again and its task definition is replaced, and `sst migrate --check` refuses a move that replaces it.
 
 3. **Use Node.js 22 or later.**
 
