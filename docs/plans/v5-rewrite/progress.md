@@ -2,6 +2,20 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: step 5's exit, the databases group, and what holds data at a new address
+
+What's at a new address after a move is what SST 4 would try to create again and delete there, if the stage went back without the saved state. So it was listed for what holds data, every recorded group under the mock first, then the databases in the lab.
+
+- **Every recorded group, under the mock.** The recorded states (`testdata/states`) were replayed with SST 4's components and then SST 5's, and the two addresses of each resource compared. Every database keeps its address: Postgres with its proxy, MySQL, Aurora, Redis and DSQL, with their passwords and the bastion's key. So do the EFS file system, the tables, buckets, queues and user pools, and Cloudflare's D1 database, KV namespaces and queue. What moves: the log groups of the functions whose part has a new name (13 of the serverless group's 14, and the Next.js site's revalidation subscriber's), and the four databases' secrets in Secrets Manager, with their versions, from `<Name>ProxySecret` to `<Name>Secret`. For the serverless group, that's what the lab found.
+- **The databases group in the lab**, on a stage of its own: Postgres with a proxy, MySQL, Redis, Aurora and DSQL in a VPC, and a function linked to all five, deployed with SST 4 (4.24.0). The group was written as an app writes it, with `sst.aws.X`.
+- **The codemod**, from a CLI built from the branch, made 47 changes in the lab app and listed six things by hand, none of them in this group, whose names SST 5 keeps. Its new rules wrote the app's bare `sst.aws.v5` as `sst.aws`, and noted each renamed component it can't trace.
+- **`sst migrate --check` passed**: 87 kept, 11 at a new address, nothing updated in place or replaced, and SST 4's lookup of the proxy's role released to SST's provider.
+- **`sst migrate`** moved it, and `sst diff` then had no changes. Compared by cloud id, the 11 at a new address are the four secrets and their versions, Aurora's parameter group and the function URL's two permissions, as the mock said. Each RDS instance and cluster, the proxy, the Redis replication group and the secrets kept their resource id and creation time, and the function's links gave the same.
+- **SST 4 was refused** on the moved stage.
+- **Going back, by the guide's steps:** the saved copy over the state with `aws s3 cp`, then SST 4's `sst unlock`. SST 4's `sst diff` and `sst deploy` then had no changes, and the databases' identities were the same. SST 4's `sst refresh` passed here, where it fails in the serverless group. It read MySQL's `require_secure_transport` back from AWS as `0` where the config says `OFF`, which is SST 4's own drift.
+- **The guide's warning** about going back without the saved state now says the databases kept their addresses and their secrets moved.
+- **Cleaned up:** the stage removed with SST 4, then its 126 state versions and markers (under `app/`, `eventlog/`, `lock/`, `lock5/`, `migrate/`, `snapshot/` and `update/`), the proxy's log group, the passphrase and the function's source map. The DSQL cluster, which the installed AWS CLI can't look up, was checked through its API. Nothing of the stage is left.
+
 ## 2026-11-09: step 5's exit, the serverless group
 
 The first app through [the user's path](plan.md#5-moving-an-app) in the lab: the lab app's serverless group, on a stage of its own, from a copy of the app made a git repository, as the codemod wants. A `Bucket` with a notification, two `Queue`s with a dead-letter queue and a subscriber, an `SnsTopic` with a function and a queue subscriber, a `Dynamo` with a stream subscriber, a `CognitoUserPool` with a trigger and a client, a `Function` with a URL linked to them, an `ApiGatewayV2` on a domain with routes and a Lambda authorizer, an `AppSync` with a data source and a resolver, a `CronV2`, a `Bus` with a subscriber and an `Email` on a domain.
