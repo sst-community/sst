@@ -78,6 +78,8 @@ func (c *Cli) InitProject() (*project.Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Builds and the processes the command starts, like the one running the config's run(), read the stage from the environment
+	os.Setenv("SST_STAGE", p.App().Stage)
 	if version := p.NodeVersion(); project.NodeTooOld(version) {
 		fmt.Fprintln(os.Stderr, ui.TEXT_WARNING_BOLD.Render("Warning: ")+fmt.Sprintf("SST needs Node.js %d or later, and this is Node.js %s. Some features may fail until you upgrade.", project.MinNodeMajor, version))
 	}
