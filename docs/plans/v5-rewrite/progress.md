@@ -2,6 +2,13 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-10: the docs generator finds SST 4's deprecated components
+
+The review of the cron jobs found that the docs generator, looking for the component of SST 4's that a 5.0 one replaces, skipped every file of SST 4's with `@deprecated` in it, an arg's included. So 16 pages had no original: AWS's `ApiGatewayRest`, `ApiGatewayWebSocket`, `Bucket`, `Cron`, `CronV2`, `Dynamo`, `Function`, `KinesisStream`, `Router`, `SnsTopic`, `StaticSite` and `Task`, and Cloudflare's `Cron`, `D1`, `Kv` and `StaticSite`.
+
+- **Now only a class that's deprecated is passed over**, from its own doc comment, as the generator already did for the components it documents, and only when another class has its type, as Cloudflare's first `StaticSite` has `StaticSiteV2`'s. SST 4's first `Cron`, deprecated and alone with its type, is the 5.0 `Cron`'s original.
+- **Each of the 16 pages gains the note on merged transforms** in its "Switch from", naming SST 4's component, and nothing else changed on any page. The check that a renamed component's page names SST 4's only in "Switch from" now runs for `ApiGatewayRest` and Cloudflare's `StaticSite` too, and both pass it.
+
 ## 2026-11-10: SST 4's first `Cron` back, and both cron jobs under SST 4's names
 
 The maintainer asked to bring back SST 4's first `Cron`, with each cron job named as in SST 4, and to drop what told the two apart ([decision](plan.md#decisions)).
@@ -18,7 +25,7 @@ The maintainer asked to bring back SST 4's first `Cron`, with each cron job name
   - The docs' sidebar lists the first `Cron` under "Deprecated", as SST 4's did. The "Switch from" of each says how to replace a target's nested object as SST 4 did: with a function.
   - `Function`'s test of a `$transform` on what other components create uses `CronV2` again, as it did before the rename; two plan rows that still read as if `CronV2` were `Cron` say it came back; the `Cron` that warms a site no longer stands for what `--check` leaves unlisted; `CONTRIBUTING.md` points at `cron-v2.ts` as the one to copy.
 - **Left, older than this change:**
-  - The docs generator takes no file of SST 4's with `@deprecated` in it as a component's original, so 16 pages, both cron jobs' among them, get none of its notes for "Switch from", like the one on merged transforms, and the check that a page doesn't name SST 4's name.
+  - The docs generator takes no file of SST 4's with `@deprecated` in it as a component's original, so 16 pages, both cron jobs' among them, get none of its notes for "Switch from", like the one on merged transforms, and the check that a page doesn't name SST 4's name (fixed the same day, in the entry above).
   - A job that runs a task has no function, but `nodes.function` is typed as one, in both cron jobs.
   - A config that a CLI built from `v5` between 2026-11-03 and now rewrote, `CronV2` to `Cron`, would replace its schedule with a rule on its next deploy. No release had that codemod.
 

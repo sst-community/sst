@@ -108,17 +108,25 @@ if (!cmd || cmd === "components") {
     const name = useClassName(component);
     const group = sourceFile.split("/")[3];
     // SST 4's component of its type, which has no page now: find it in the
-    // fixtures, where SST 4's components are frozen
+    // fixtures, where SST 4's components are frozen. A deprecated class can
+    // share its type with what replaced it, as Cloudflare's first
+    // `StaticSite` does with `StaticSiteV2`: the original is the one that
+    // isn't, and a deprecated one only when no other has its type, as SST 4's
+    // first `Cron`. A deprecated arg doesn't count.
     const type = pulumiTypeOf(sourceFile)!;
     if (!originals.has(type)) {
       const dir = path.join("..", "platform/test/fixtures/v4/components", group);
+      let deprecatedClass: string | undefined;
       for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".ts"))) {
         const code = fs.readFileSync(path.join(dir, file), "utf8");
         const declared = code.match(/\b(?:__)?pulumiType = "(sst:[\w:]+)"/)?.[1];
         const cls = code.match(/^export class (\w+)/m)?.[1];
-        if (declared === type && cls && !/@deprecated/.test(code))
-          originals.set(type, cls);
+        if (declared !== type || !cls) continue;
+        if (classIsDeprecated(code)) deprecatedClass ??= cls;
+        else originals.set(type, cls);
       }
+      if (!originals.has(type) && deprecatedClass)
+        originals.set(type, deprecatedClass);
     }
     v5Classes.set(
       `${group}:${originals.get(pulumiTypeOf(sourceFile)!) ?? name}`,
@@ -1883,6 +1891,12 @@ function isV5Source(fileName: string) {
       )
     );
   return fiveSources.get(fileName)!;
+}
+// Whether the doc comment of the component's class in a file of SST 4's says
+// it's deprecated. A deprecated arg, like `CronV2`'s `job`, doesn't count.
+function classIsDeprecated(code: string) {
+  const doc = code.match(/\/\*\*((?:(?!\*\/)[\s\S])*)\*\/\s*export class \w+/)?.[1];
+  return !!doc && /@deprecated\b/.test(doc);
 }
 // SST 4's components were in the same namespace: `sst.aws`
 function originalNamespace(fullClassName: string) {
