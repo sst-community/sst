@@ -1,4 +1,4 @@
-<h1 align="center">sst-community v5</h1>
+<h1 align="center">sst-community 5.0</h1>
 
 <p align="center">The next major version of <a href="https://github.com/sst-community/sst">sst-community</a>, in development</p>
 
@@ -11,15 +11,15 @@
 ---
 
 > [!NOTE]
-> This is the `v5` branch. **It's in pre-release**: 5.x is on npm under the `next-experimental` tag, and an install without a version still gets 4.x. For the stable version, see the [`main` branch](https://github.com/sst-community/sst/tree/main).
+> This is the `v5` branch, where 5.0 is being built. **It isn't released yet**: an install without a version gets 4.x, and the `next-experimental` tag on npm is still `5.0.0-alpha.2`, from before the rewrite on this branch. For the stable version, see the [`main` branch](https://github.com/sst-community/sst/tree/main).
 >
 > sst-community is a community-maintained fork of [SST](https://github.com/anomalyco/sst). It is not affiliated with SST or Anomaly.
 
-## What v5 is for
+## What 5.0 is for
 
 In version 4, each component decides for itself which of its resources you can change. Some can be transformed and some can't. Some are in `nodes` and some aren't. Using a resource you already have is a different option on every component, where there is one.
 
-v5 rebuilds the components on one foundation. A component declares every resource it creates as a **part**, and from that one list every component gives you the same three things:
+5.0 rebuilds the components on one foundation. A component declares every resource it creates as a **part**, and from that one list every component gives you the same three things:
 
 ```ts
 const redis = new sst.aws.Redis("MyRedis", {
@@ -73,35 +73,40 @@ Whoever uses it gets what SST's components give, with nothing more to write: `tr
 
 Resources are named after the app and stage, as in SST's components. That list of resource types is still there, but it no longer limits you: a type that isn't on it is named by its provider, or you say which field holds its name with `sst.Component.naming()`.
 
+## Moving an app
+
+SST 5 doesn't run SST 4's components, so an app moves in one step, a stage at a time, and keeps what it has deployed:
+
+```bash
+sst migrate --codemod   # rewrite the config for SST 5's components
+sst migrate --check     # preview the move of a stage, and what it changes
+sst migrate             # move it, in one deploy
+```
+
+The check stops a move that would delete or replace anything that holds data, and names anything the stage has that SST 5 doesn't. [Migrate From v4](www/src/content/docs/docs/migrate-from-v4.mdx) has the steps, and every change the codemod can't make for you.
+
 ## Goals
 
-1. **A switch leaves the state as it was, or close to it.**
-2. **Moving to v5 never loses data.**
-3. **Anyone can write a component, and share it as a package.**
-4. **Installing v5 changes nothing until you switch a component.**
-5. **Every resource a component creates is yours to change.**
+1. **Every resource keeps its identity.**
+2. **Moving never loses data.**
+3. **What moves is mapped.**
+4. **The home stays compatible.**
+5. **Deployed code keeps working.**
 6. **`sst diff` shows what the deploy will do.**
+7. **Every breaking change has a way across.**
+8. **What a package builds on holds still within 5.x.**
 
-Every change to v5 is held to these. [v5-goals.md](docs/plans/v5-goals.md) says what each means, how it's checked, and where it stands.
+Every change to 5.0 is held to these. [goals.md](docs/plans/v5-rewrite/goals.md) says what each means, how it's checked, and where it stands, and [the plan](docs/plans/v5-rewrite/plan.md) has the rest.
 
 ## Status
 
-- **Ported:** `Alb`, `ApiGatewayV2`, `AppSync`, `Aurora`, `Bucket`, `Bus`, `Cluster`, `CognitoUserPool`, `CronV2`, `Dsql`, `Dynamo`, `Efs`, `Function`, `Mysql`, `Postgres`, `Queue`, `Redis`, `Service`, `SnsTopic` and `Task`.
-- **Not yet:** the sites (`Nextjs`, `Astro` and the rest), `Vpc`, `Router`, `StaticSite` and the others.
-- **Version 4 components are untouched.** Everything in `sst.aws.*` works as it does on `main`, so an app can mix the two.
-- **How it's been checked:** each port is tested against the component it replaces, under a mock of the deploy engine, to confirm a switch keeps what's deployed. The ported components have also been through it once in a real AWS account: deployed with version 4, switched to v5, and removed. Nothing was replaced on the switch except the uploaded code of functions that got a new name.
+- **Every component of SST 4 has a 5.0 form,** under the same name, but for four that are renamed (`ApiGatewayV1` and `ApiGatewayV2` are `ApiGatewayRest` and `ApiGatewayHttp`, `CronV2` is `Cron`, and Cloudflare's `StaticSiteV2` is `StaticSite`) and a few that are left out, like SST 4's first `Cron`, `Vector`, `OpenControl` and the `.v1`s. The guide says what to do with each before a move.
+- **How it's been checked:** each component's move is tested against the SST 4 component it replaces, under a mock of the deploy engine, and against states recorded from real deploys. Each was also moved from SST 4 in a real AWS or Cloudflare account as it was ported, but Cloudflare's `Bucket` and `Hyperdrive`, which need R2, checked under the mock only.
+- **Left before 5.0.0:** moving whole apps in a real account, with every resource compared by its cloud id, and releasing 5.0 next to 4.x.
 
 ## Try it
 
-Install the newest pre-release in an app, and use it on a stage of its own. It needs Node.js 22 or later, as on `main` since 4.18.0. A `version` rule in `sst.config.ts` has to allow 5.x: `">= 4"` does, and `"4.x"` doesn't. `5.0.0-alpha.1` only meets a rule that names a pre-release, such as `">= 5.0.0-0"`.
-
-```bash
-npm install sst@npm:@sst-community/sst@next-experimental
-```
-
-Each pre-release's notes are on the [releases page](https://github.com/sst-community/sst/releases). [Migrate From v4](www/src/content/docs/docs/migrate-from-v4.mdx) has the steps, and what to change when you switch a component.
-
-To build it from this branch instead, you need [Go](https://go.dev/) and [Bun](https://bun.sh/):
+There's no pre-release of 5.0 on npm yet, so build it from this branch, and use it on a stage of its own. You need [Go](https://go.dev/) and [Bun](https://bun.sh/), and the app needs Node.js 22 or later:
 
 ```bash
 git clone -b v5 https://github.com/sst-community/sst
@@ -113,8 +118,10 @@ bun run build:cli
 That builds `dist/sst5`, which runs next to a stable `sst`. Use it in an app in place of `sst`, on a stage of its own:
 
 ```bash
-/path/to/sst/dist/sst5 dev --stage v5
+/path/to/sst/dist/sst5 migrate --check --stage v5
 ```
+
+A stage deployed with SST 4 is moved with `sst migrate`: `sst deploy` and `sst dev` refuse it until then.
 
 ## Working on it
 
@@ -127,7 +134,7 @@ npx tsc --noEmit -p tsconfig.json   # typecheck
 npx vitest run --pool=forks         # tests
 ```
 
-Three test files (`alb`, `bucket`, `service-alb`) fail to load, as they do on `main`.
+The Go tests are `bun run test:cli`, from the repo root.
 
 For the docs, run `bun run docs:generate` and `bun run docs:dev` from the repo root.
 
