@@ -212,7 +212,7 @@ When the check passes, move the stage:
 sst migrate --stage dev
 ```
 
-It takes the stage's lock, checks the move again, and stops there if the check fails. Then it saves a copy of the stage's state in your app's home, takes out of the state what the components let go of, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so what it deploys is what it checked.
+It takes the stage's lock, checks the move again, and stops there if the check fails. Then it saves a copy of the stage's state in your app's home, takes out of the state what the components let go of, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so nothing else deploys the stage in between. The deploy runs your config again, so don't change it while the move runs, or what it deploys isn't what it checked.
 
 Then confirm. `sst diff` should show nothing to create or destroy:
 
@@ -225,7 +225,7 @@ From then on, the stage deploys with `sst deploy` and `sst dev` as before. Move 
 :::danger
 Don't deploy a stage that has moved with SST 4, like from an old branch or in CI. It would try to put back SST 4's resources in place of what moved.
 
-SST 5 keeps a lock on a stage that has moved, where SST 4 looks for one, so SST 4's `sst deploy`, `sst dev`, `sst refresh` and `sst remove` stop with "A concurrent update was detected". **Don't run SST 4's `sst unlock` on it**: that takes the lock out, and SST 4 would then deploy. SST 5's `sst unlock` leaves it. SST 4's `sst state` commands don't take the lock, so don't run them on a stage that has moved either.
+SST 5 keeps a lock on a stage that has moved, where SST 4 looks for one, so SST 4's `sst deploy`, `sst dev`, `sst refresh` and `sst remove` stop with "A concurrent update was detected". **Don't run SST 4's `sst unlock` on it**, except to [go back](#going-back) with the state copied back first: it takes the lock out, and SST 4 would then deploy. SST 5's `sst unlock` leaves it. SST 4's `sst state` commands don't take the lock, so don't run them on a stage that has moved either.
 :::
 
 Set a `version` rule, so that anyone on SST 4 is told their version doesn't match, before the config runs:
@@ -263,6 +263,28 @@ From 5.0 on, what a package builds on changes only in a major version.
 
 ## Going back
 
-**Before you deploy anything else to a stage that has moved,** you can put it back on SST 4 with the copy the move saved. In your app's home, the copy is at `migrate/<app>/<stage>/<id>.json`, next to the stage's state at `app/<app>/<stage>.json`; on AWS, the home is your account's SST state bucket. Copy it over the stage's state, take out the lock SST 5 keeps for SST 4 with SST 4's `sst unlock`, then deploy with SST 4 and the config from before the codemod. Going back this way hasn't been tried in AWS yet.
+You can put a stage that has moved back on SST 4, as long as nothing else has been deployed to it with SST 5. Going back takes three things from before the move: your config, SST 4, and the stage's state. Git has the first two, if you committed before the codemod, as [Before you start](#before-you-start) says. The move saved the third.
+
+1. **Check out the commit from before the codemod**, and install. It has SST 4 in your `package.json` and lockfile. With a global CLI, install SST 4 again.
+
+2. **Copy the saved state over the stage's state.** In your app's home, the copy is at `migrate/<app>/<stage>/<id>.json`, the newest one if you moved the stage more than once, and the stage's state is at `app/<app>/<stage>.json`. On AWS, the home is your account's SST state bucket, named in the SSM parameter `/sst/bootstrap`:
+
+   ```bash frame="none"
+   aws s3 cp s3://<bucket>/migrate/<app>/<stage>/<id>.json s3://<bucket>/app/<app>/<stage>.json
+   ```
+
+3. **Take out the lock** SST 5 keeps for SST 4, with SST 4's `sst unlock`.
+
+4. **Deploy with SST 4**:
+
+   ```bash frame="none"
+   sst deploy --stage dev
+   ```
+
+:::danger
+Copy the state back before you run SST 4's `sst unlock`. Without it, SST 4 reads SST 5's state, where much of what moved has a new address. SST 4 doesn't know those addresses, so it tries to create each of those resources again, and to delete the one at the new address. In a test of an app with an API, functions, queues, a table, a bucket and a user pool, that was 86 of its 117 resources, 13 log groups among them, with their logs. The table, the bucket, the queues and the user pool kept their addresses there, but anything that holds data at a new address would be deleted with what's in it.
+:::
+
+This was tried once in AWS, with SST 4.24.0: SST 4 deployed the stage, changing nothing, and later removed it. But the copy is the state from before the move, and the move changed some things in place. It uploaded each function's code again and updated some functions, so they keep what SST 5 gave them until SST 4 changes them. SST 4's `sst refresh` failed on the stage, for a reason that isn't known yet. So go back only to get a stage onto SST 4 again quickly, and move it again when you can.
 
 Once the stage has been deployed again with SST 5, the copy no longer matches what's deployed. Fix forward instead.

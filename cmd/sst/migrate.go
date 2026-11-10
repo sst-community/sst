@@ -39,7 +39,7 @@ var CmdMigrate = &cli.Command{
 			"sst migrate --check --stage dev",
 			"```",
 			"",
-			"Without `--check`, it moves the stage. It takes the stage's lock, checks the move, and stops there if the check fails. Then it saves a copy of the stage's state in its home, takes out of the state what the components' state maps release, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so what it deploys is what it checked:",
+			"Without `--check`, it moves the stage. It takes the stage's lock, checks the move, and stops there if the check fails. Then it saves a copy of the stage's state in its home, takes out of the state what the components' state maps release, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so nothing else deploys the stage in between. The deploy runs your config again, so don't change it while the move runs, or what it deploys isn't what it checked:",
 			"",
 			"```bash frame=\"none\"",
 			"sst migrate --stage dev",
@@ -182,8 +182,11 @@ var CmdMigrate = &cli.Command{
 			return err
 		}
 
-		// A move holds the stage's lock from its check to its end, so what's
-		// deployed is what was checked
+		// A move holds the stage's lock from its check to its end, so nothing
+		// else deploys the stage between them. The deploy runs the config
+		// again, which the guide and the help ask not to change meanwhile: a
+		// guard on the deploy itself was weighed and left out (plan.md,
+		// decisions, 2026-11-09)
 		var locked *provider.Update
 		if moving {
 			locked, err = p.Lock("deploy")

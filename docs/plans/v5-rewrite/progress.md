@@ -2,6 +2,24 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: step 5's exit, the serverless group
+
+The first app through [the user's path](plan.md#5-moving-an-app) in the lab: the lab app's serverless group, on a stage of its own, from a copy of the app made a git repository, as the codemod wants. A `Bucket` with a notification, two `Queue`s with a dead-letter queue and a subscriber, an `SnsTopic` with a function and a queue subscriber, a `Dynamo` with a stream subscriber, a `CognitoUserPool` with a trigger and a client, a `Function` with a URL linked to them, an `ApiGatewayV2` on a domain with routes and a Lambda authorizer, an `AppSync` with a data source and a resolver, a `CronV2`, a `Bus` with a subscriber and an `Email` on a domain.
+
+- **Deployed with SST 4** (4.24.0), and data written: an object in the bucket, an item in the table and a user in the pool.
+- **SST 5 installed:** its SDK, packed from the branch, as the app's `sst`, and the CLI built from it. There's no pre-release of the rewrite to install.
+- **The codemod** made 34 changes and listed 2 things by hand, both in groups not deployed. It hadn't renamed `ApiGatewayV2` and `CronV2` in the group's own file, which the lab app gives the group's components as an argument; SST 5 refused the config there with what to write. Written as an app writes it, `sst.aws.ApiGatewayV2`, the codemod renamed both.
+- **`sst migrate --check` passed.** What it lists goes: SST 4's components around each subscriber, route and data source, which have nothing in the cloud; its seven hosted zone lookups; and nine functions' code, uploaded again under new keys.
+- **`sst migrate`** moved it, and `sst diff` then had no changes. Compared by cloud id, 117 resources were kept, 71 of them under new names, and only the code objects and the lookups changed. The data was read back, the function URL, the API's routes and its authorizer answered, the functions read their links with SST 5's SDK, and the email domain stayed verified.
+- **SST 4's `sst deploy` and `sst refresh` were refused** on the moved stage: "A concurrent update was detected".
+- **Going back,** as the guide says: the saved copy over the state, SST 4's `sst unlock`, and a deploy with SST 4 and the config from before the codemod. SST 4 deployed, changing nothing, and later removed the stage. But its state isn't what's deployed: the move uploaded the code of nine functions again and deleted SST 4's, and changed four functions in place. SST 4's `sst refresh` fails on the stage, with Pulumi's "cannot complete a resource ... whose registration isn't pending" for the `Links` function's `LinkRef`, also with the deleted code objects taken out of the state. It passes on a stage of the same group that never moved. The cause isn't known. The guide's "Going back" now gives the steps, and warns to copy the state back before SST 4's `sst unlock`: without the copy, SST 4 would try to create again the 86 of the 117 resources that are at a new address, 13 of its 14 log groups among them, and delete them there. The bucket, the table, the two queues and the user pool kept their addresses.
+- **Found, besides:**
+  - The codemod left a bare `sst.aws.v5`, which the v5 alphas let a config pick a group's components by, like `const aws = v5 ? sst.aws.v5 : sst.aws`, and which is `undefined` in SST 5. It's written `sst.aws` now, and `sst.cloudflare.v5` `sst.cloudflare`. A renamed component it can't trace to `sst.aws`, like `new aws.ApiGatewayV2(...)` with `aws` an argument, gets a note.
+  - SST 5's state has a function's code object's `key` as a secret, where SST 4's had it plain.
+- **The move's deploy has no guard of its own** ([decision](plan.md#decisions)). The guide and `sst migrate`'s help said that holding the lock means what's deployed is what was checked. But the deploy runs the config again, so they now say not to change it while the move runs.
+- **Cleaned up:** the stages `exit`, `refr` (a small SST 4 stage, for the refresh) and `fresh` (the group, never moved, for the refresh) removed with SST 4, and the code SST 5 had uploaded, which SST 4's state didn't have, deleted by hand.
+- **Left for the exit:** the other recorded apps (the sites, the VPC groups, the serverless group by `sst dev`, and Cloudflare's), with which of their resources that hold data are at a new address after the move, why SST 4's refresh fails after going back, and an app in daily use.
+
 ## 2026-11-09: the docs' examples in SST 5's forms
 
 The 2026-11-07 review found the hand-written docs used forms SST 5 refuses. The codemod was run on each code block in the docs that uses SST's components, 712 of them, and every one it would change or notes was rewritten:
