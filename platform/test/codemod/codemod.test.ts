@@ -58,7 +58,6 @@ describe("names", () => {
     );
     expect(out.notes).toEqual([
       "If this is SST's `ApiGatewayV2`, it's `sst.aws.ApiGatewayHttp` in SST 5: the codemod can't tell what `aws` holds, so rename it by hand",
-      "If this is SST's `CronV2`, it's `sst.aws.Cron` in SST 5: the codemod can't tell what `aws` holds, so rename it by hand",
       "If this is SST's `StaticSiteV2`, it's `sst.cloudflare.StaticSite` in SST 5: the codemod can't tell what `acme` holds, so rename it by hand",
     ]);
     // SST's own, traced, is renamed and gets no note
@@ -69,10 +68,11 @@ describe("names", () => {
 
   it("gives a renamed component its 5.0 name, and its types", () => {
     const out = config(
-      `const api = new sst.aws.ApiGatewayV2("Api");\nconst a: sst.aws.ApiGatewayV2Args = {};\nnew sst.aws.CronV2("C", { function: "a.h", schedule: "rate(1 day)" });`,
+      `const api = new sst.aws.ApiGatewayV2("Api");\nconst a: sst.aws.ApiGatewayV2Args = {};\nnew sst.aws.CronV2("C", { function: "a.h", schedule: "rate(1 day)" });\nconst c: sst.aws.CronV2Args = { schedule: "rate(1 day)" };`,
     );
+    // Both of SST 4's cron jobs keep their names
     expect(out.text).toBe(
-      `const api = new sst.aws.ApiGatewayHttp("Api");\nconst a: sst.aws.ApiGatewayHttpArgs = {};\nnew sst.aws.Cron("C", { function: "a.h", schedule: "rate(1 day)" });`,
+      `const api = new sst.aws.ApiGatewayHttp("Api");\nconst a: sst.aws.ApiGatewayHttpArgs = {};\nnew sst.aws.CronV2("C", { function: "a.h", schedule: "rate(1 day)" });\nconst c: sst.aws.CronV2Args = { schedule: "rate(1 day)" };`,
     );
     expect(out.changes).toContain(
       "`sst.aws.ApiGatewayV2` is `sst.aws.ApiGatewayHttp`",
@@ -107,7 +107,6 @@ describe("names", () => {
     for (const text of [
       `new sst.aws.Vector("V", { dimension: 1536 });`,
       `new sst.aws.OpenControl("C", {});`,
-      `new sst.aws.Cron("C", { job: "a.handler", schedule: "rate(1 day)" });`,
       `new sst.aws.Vpc.v1("Net");`,
       `new sst.aws.Auth.v1("Auth", {});`,
       `new sst.cloudflare.Auth("Auth", {});`,
@@ -121,7 +120,7 @@ describe("names", () => {
     );
   });
 
-  it("knows the 5.0 Cron by its function, after the swap", () => {
+  it("keeps SST 4's first Cron, which has a 5.0 form", () => {
     const out = config(
       `new sst.aws.Cron("C", { function: "a.handler", schedule: "rate(1 day)" });`,
     );
@@ -182,23 +181,36 @@ describe("args", () => {
     );
   });
 
-  it("renames CronV2's job, and nodes.job wherever the cron is read", () => {
+  it("renames both Crons' job, and nodes.job wherever the cron is read", () => {
     const out = run({
       "sst.config.ts": [
         `export default $config({`,
         `  async run() {`,
-        `    const { cron } = await import("./infra/cron");`,
+        `    const { cron, nightly } = await import("./infra/cron");`,
         `    cron.nodes.job.name;`,
+        `    nightly.nodes.job.name;`,
         `  },`,
         `});`,
       ].join("\n"),
-      "infra/cron.ts": `export const cron = new sst.aws.CronV2("Cron", { job: "a.handler", schedule: "rate(1 day)" });`,
+      "infra/cron.ts": [
+        `export const cron = new sst.aws.CronV2("Cron", { job: "a.handler", schedule: "rate(1 day)" });`,
+        `export const nightly = new sst.aws.Cron("Nightly", { job: "a.handler", schedule: "rate(1 day)" });`,
+      ].join("\n"),
     });
     const files = Object.fromEntries(out.files.map((f) => [f.file, f.after]));
     expect(files["infra/cron.ts"]).toBe(
-      `export const cron = new sst.aws.Cron("Cron", { function: "a.handler", schedule: "rate(1 day)" });`,
+      [
+        `export const cron = new sst.aws.CronV2("Cron", { function: "a.handler", schedule: "rate(1 day)" });`,
+        `export const nightly = new sst.aws.Cron("Nightly", { function: "a.handler", schedule: "rate(1 day)" });`,
+      ].join("\n"),
     );
     expect(files["sst.config.ts"]).toContain(`cron.nodes.function.name;`);
+    expect(files["sst.config.ts"]).toContain(`nightly.nodes.function.name;`);
+    const changes = out.changes.map((c) => c.message);
+    expect(changes).toContain("`CronV2`'s `job` is `function`");
+    expect(changes).toContain("`Cron`'s `job` is `function`");
+    expect(changes).toContain("`Cron`'s `nodes.job` is `nodes.function`");
+    expect(out.notes).toEqual([]);
   });
 
   it("moves Redis's nodes into cluster, or drops it where SST 4 ignored it", () => {

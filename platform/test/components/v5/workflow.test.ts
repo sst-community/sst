@@ -39,7 +39,7 @@ describe("Workflow", () => {
   let Original: typeof import("../../fixtures/v4/components/aws/workflow").Workflow;
   let Workflow: typeof import("../../../src/components/aws/workflow").Workflow;
   let OriginalCronV2: typeof import("../../fixtures/v4/components/aws/cron-v2").CronV2;
-  let Cron: typeof import("../../../src/components/aws/cron").Cron;
+  let CronV2: typeof import("../../../src/components/aws/cron-v2").CronV2;
   let Function: typeof import("../../../src/components/aws/function").Function;
   let Bucket: typeof import("../../../src/components/aws/bucket").Bucket;
 
@@ -49,7 +49,7 @@ describe("Workflow", () => {
     Workflow = (await import("../../../src/components/aws/workflow")).Workflow;
     OriginalCronV2 = (await import("../../fixtures/v4/components/aws/cron-v2"))
       .CronV2;
-    Cron = (await import("../../../src/components/aws/cron")).Cron;
+    CronV2 = (await import("../../../src/components/aws/cron-v2")).CronV2;
     Function = (await import("../../../src/components/aws/function")).Function;
     Bucket = (await import("../../../src/components/aws/bucket")).Bucket;
     await import("../../../src/components/aws/takeover/index");
@@ -199,7 +199,7 @@ describe("Workflow", () => {
               opts,
             ),
           v5: (opts) =>
-            new Cron(
+            new CronV2(
               "MyCron",
               {
                 schedule: "rate(1 minute)",

@@ -56,7 +56,7 @@ const documentedSources = new Set<string>();
 const HELPERS = "platform/src/components/aws/helpers/";
 // The V5 components' class names, by the provider and name of the component
 // each replaces, the SST 4 one of its Pulumi type: its own, or another
-// (`aws:CronV2` for `Cron`).
+// (`aws:ApiGatewayV2` for `ApiGatewayHttp`).
 // The SST 4 components' names by their type. And the source file of the page
 // that's being written
 const v5Classes = new Map<string, string>();
@@ -934,7 +934,7 @@ async function generateComponentDoc(
   fs.mkdirSync(dir, { recursive: true });
 
   // The component a V5 component replaces is the SST 4 one of its Pulumi
-  // type, whatever it's named: `Cron` replaces `CronV2`
+  // type, whatever it's named: `ApiGatewayHttp` replaces `ApiGatewayV2`
   const original = isV5Source(sourceFile)
     ? originals.get(pulumiTypeOf(sourceFile)!)
     : undefined;
@@ -1007,7 +1007,7 @@ async function generateComponentDoc(
       .flat()
       .join("\n")
   );
-  // SST 4's name, when it isn't this one's, like `sst.aws.CronV2`
+  // SST 4's name, when it isn't this one's, like `sst.aws.ApiGatewayV2`
   if (original && `${originalNamespace(fullClassName)}.${original}` !== fullClassName)
     checkOriginalNotNamed(
       outputFilePath,
@@ -2909,7 +2909,7 @@ function renderExamples(
 // On a component's page, an arg it takes from a module that isn't a
 // component's comes with that module's docs. Where those name an SST 4
 // component by a name SST 5 changed, the page shows SST 5's:
-// `sst.aws.CronV2` is `sst.aws.Cron`. Docs written for the component, in its
+// `sst.aws.ApiGatewayV2` is `sst.aws.ApiGatewayHttp`. Docs written for the component, in its
 // file or a helper, are left as they are.
 function useV5Names(prop: TypeDoc.Reflection, text: string) {
   const file = (prop as TypeDoc.DeclarationReflection).sources?.[0]?.fileName;

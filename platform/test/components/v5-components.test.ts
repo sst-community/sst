@@ -35,7 +35,6 @@ const files = GROUPS.flatMap((group) =>
 // name of the SST 4 component each replaces. Each keeps that one's type.
 const RENAMED: Record<Group, Record<string, string>> = {
   aws: {
-    Cron: "CronV2",
     ApiGatewayRest: "ApiGatewayV1",
     ApiGatewayRestApiKey: "ApiGatewayV1ApiKey",
     ApiGatewayRestUsagePlan: "ApiGatewayV1UsagePlan",
@@ -91,7 +90,7 @@ describe("SST 5's components", () => {
     // A deployed component becomes the V5 one when the name is kept, because
     // the two have the same type. The class is named the same, and so is the
     // file, unless it's one of the names the maintainer chose to make clearer,
-    // which keep their type: `Cron` replaces `CronV2` as `sst:aws:CronV2`.
+    // which keep their type: `ApiGatewayHttp` replaces `ApiGatewayV2` as `sst:aws:ApiGatewayV2`.
     it("has the name and type of the component it replaces", async () => {
       const originalName = RENAMED[group][component.name] ?? component.name;
       const typeName = TYPE_NAMES[group][component.name] ?? originalName;

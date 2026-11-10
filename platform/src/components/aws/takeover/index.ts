@@ -21,6 +21,7 @@ import "./cognito-identity-pool";
 import "./cognito-user-pool";
 import "./cognito-user-pool-client";
 import "./cron";
+import "./cron-v2";
 import "./dns-validated-certificate";
 import "./dsql";
 import "./dynamo";

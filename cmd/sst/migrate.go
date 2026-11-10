@@ -33,7 +33,7 @@ var CmdMigrate = &cli.Command{
 			"",
 			"Where a resource changes because an object in a `transform` of one of SST's components is merged into the component's settings, where SST 4 put it in their place, it says which settings the merge keeps.",
 			"",
-			"Before it previews anything, it refuses a stage that has a component of SST 4's with no 5.0 form, like the first `Cron` or a `.v1`, and names each one with what to do about it with SST 4.",
+			"Before it previews anything, it refuses a stage that has a component of SST 4's with no 5.0 form, like a `Vector` or a `.v1`, and names each one with what to do about it with SST 4.",
 			"",
 			"```bash frame=\"none\"",
 			"sst migrate --check --stage dev",

@@ -4,7 +4,7 @@ import sitemap from "@astrojs/sitemap";
 import config from "./config";
 import forkLinks from "./src/fork-links.mjs";
 import { current, versions } from "./src/versions.mjs";
-import { componentFiles, internal } from "./src/component-files.mjs";
+import { componentFiles, deprecated, internal } from "./src/component-files.mjs";
 import { hasExamples } from "./src/examples.mjs";
 import { rehypeHeadingIds } from "@astrojs/markdown-remark";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
@@ -90,7 +90,10 @@ const sidebar = [
         collapsed: true,
         items: [
           ...componentFiles("aws")
-            .filter((name) => !internal.aws.includes(name))
+            .filter(
+              (name) =>
+                !internal.aws.includes(name) && !deprecated.aws.includes(name),
+            )
             .map((name) => `docs/component/aws/${name}`),
           {
             label: "Internal",
@@ -141,6 +144,11 @@ const sidebar = [
                 ],
               },
             ],
+          },
+          {
+            label: "Deprecated",
+            collapsed: true,
+            items: deprecated.aws.map((name) => `docs/component/aws/${name}`),
           },
         ],
       },

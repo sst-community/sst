@@ -16,14 +16,14 @@ tests. It's written for AWS; for Cloudflare, read `cloudflare/` for `aws/` and
   `aws/queue.ts` has SST 4's type, `sst:aws:Queue`, so a stage SST 4 deployed moves to
   it with `sst migrate`: the component, and each resource in it that has the name it
   had, are kept. A few have a clearer name than SST 4's, which the maintainer chose:
-  `Cron` (SST 4's `CronV2`), `ApiGatewayRest` (`ApiGatewayV1`), `ApiGatewayHttp`
-  (`ApiGatewayV2`), and Cloudflare's `StaticSite` (`StaticSiteV2`). Each keeps SST 4's
-  type (`sst:aws:CronV2`), and is listed in `RENAMED` in
+  `ApiGatewayRest` (SST 4's `ApiGatewayV1`), `ApiGatewayHttp` (`ApiGatewayV2`), and
+  Cloudflare's `StaticSite` (`StaticSiteV2`). Each keeps SST 4's type
+  (`sst:aws:ApiGatewayV2`), and is listed in `RENAMED` in
   `test/components/v5-components.test.ts`, by provider. That test expects each
   component to take the place of one of SST 4's, so a component SST 4 didn't have is
   added to it first.
 - **A name of SST 4's that an app writes, and SST 5 renamed or left out, says what to
-  write.** A component's name, like `CronV2`, is a stub in the group's `sst4.ts`; a
+  write.** A component's name, like `ApiGatewayV2`, is a stub in the group's `sst4.ts`; a
   `nodes` name, like the `Alb`'s `listeners`, is in `renamedNodes` in
   `components/sst4.ts`, by the component's type. Otherwise the config fails with
   "is not a constructor", or reads `undefined`. A method that gives a resource where
@@ -541,7 +541,7 @@ links the component.
    guide, or the `sst migrate --check` refusal.
 7. `cd www && bun ./generate.ts components` generates the page. The docs generator and
    the sidebar find every component in `aws/`, so there's nothing to add to either.
-   For a component SST 4 named otherwise (`sst.aws.CronV2`), it fails when the page
+   For a component SST 4 named otherwise (`sst.aws.ApiGatewayV2`), it fails when the page
    names SST 4's outside the "Switch from" section, other than as a link to its page.
 8. Typecheck, run the tests, and `bun run build:cli` from the repo root.
 9. Review before calling it done. Read SST 4's constructor and SST 5's side by side,
@@ -566,7 +566,7 @@ add a group of parts; `task.ts` for parts per item of a plain list (containers),
 that's built later, a stub in `sst dev`, and what it reports to the CLI; `service.ts`
 for groups of parts that depend on an arg (a load balancer of its own, or one it
 shares), parts made from a plain list of rules, a part that's read from `nodes` and
-only exists sometimes, and a part that's created in `sst dev` too; `cron.ts` for a
+only exists sometimes, and a part that's created in `sst dev` too; `cron-v2.ts` for a
 function the component may be given or may create, next to another component it's
 given (a `Task`); `dynamo.ts` for required args next to `get`, and a static method
 replaced by `get`; `function.ts` for a component SST 4 built almost entirely inside

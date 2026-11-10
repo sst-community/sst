@@ -3,7 +3,7 @@ import { Cron } from "../cron";
 
 takeover(Cron, {
   moved: {
-    // The 4.x `CronV2` calls the function the job's handler
+    // The 4.x `Cron` calls the function the job's handler
     function: "handler",
   },
 });

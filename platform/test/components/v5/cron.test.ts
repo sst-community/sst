@@ -3,11 +3,10 @@ import { output } from "@pulumi/pulumi";
 import { mockPulumi, sided, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 
-const SCHEDULE = "aws:scheduler/schedule:Schedule";
+const RULE = "aws:cloudwatch/eventRule:EventRule";
 const FUNCTION = "aws:lambda/function:Function";
 const FUNCTION_ARN =
   "arn:aws:lambda:us-east-1:123456789012:function:my-cron-job";
-const DLQ_ARN = "arn:aws:sqs:us-east-1:123456789012:dead-letters";
 
 const pulumi = mockPulumi({
   // A function that publishes versions, like a workflow's, is invoked by
@@ -31,11 +30,11 @@ const pulumi = mockPulumi({
 });
 
 type CronClass =
-  | typeof import("../../fixtures/v4/components/aws/cron-v2").CronV2
+  | typeof import("../../fixtures/v4/components/aws/cron").Cron
   | typeof import("../../../src/components/aws/cron").Cron;
 
 describe("Cron", () => {
-  let OriginalCronV2: typeof import("../../fixtures/v4/components/aws/cron-v2").CronV2;
+  let OriginalCron: typeof import("../../fixtures/v4/components/aws/cron").Cron;
   let Cron: typeof import("../../../src/components/aws/cron").Cron;
   let OriginalFunction: typeof import("../../fixtures/v4/components/aws/function").Function;
   let Function: typeof import("../../../src/components/aws/function").Function;
@@ -43,12 +42,11 @@ describe("Cron", () => {
   let Workflow: any;
   let Vpc: any;
   let Cluster: any;
-  let OriginalTask: typeof import("../../fixtures/v4/components/aws/task").Task;
   let SidedTask: any;
   let SidedFunction: any;
 
   beforeAll(async () => {
-    OriginalCronV2 = (await import("../../fixtures/v4/components/aws/cron-v2")).CronV2;
+    OriginalCron = (await import("../../fixtures/v4/components/aws/cron")).Cron;
     Cron = (await import("../../../src/components/aws/cron")).Cron;
     OriginalFunction = (await import("../../fixtures/v4/components/aws/function")).Function;
     Function = (await import("../../../src/components/aws/function")).Function;
@@ -70,10 +68,9 @@ describe("Cron", () => {
       import("../../../src/components/aws/cluster"),
       import("../../../src/components/aws/takeover/cluster"),
     );
-    OriginalTask = (await import("../../fixtures/v4/components/aws/task")).Task;
     await import("../../../src/components/aws/takeover/cron");
     await import("../../../src/components/aws/takeover/function");
-    // SST 4's for SST 4's CronV2, SST 5's for SST 5's Cron
+    // SST 4's for SST 4's Cron, SST 5's for SST 5's Cron
     SidedTask = await sidedClass(
       "Task",
       import("../../fixtures/v4/components/aws/task"),
@@ -105,29 +102,23 @@ describe("Cron", () => {
       image: "nginx:latest",
     });
 
-  // Each case deploys the 4.x CronV2, then the same thing as the V5 one.
+  // Each case deploys the 4.x Cron, then the same thing as the V5 one.
   // Everything the 4.x one created has to be kept by the V5 one, with the same
   // inputs.
-  describe("takes over a deployed CronV2", () => {
+  describe("takes over a deployed Cron", () => {
     pulumi.takeoverCases({
-      original: () => OriginalCronV2,
+      original: () => OriginalCron,
       v5: () => Cron,
-      check: () => {
-        expect(resource("MyCronJobSchedule").type).toBe(SCHEDULE);
-        expect(resource("MyCronJobRole").type).toBe("aws:iam/role:Role");
-      },
+      check: () => expect(resource("MyCronJobRule").type).toBe(RULE),
       cases: {
         "a function from a handler": (Cron, opts) => {
           new Cron(
             "MyCronJob",
-            {
-              function: "src/cron.handler",
-              schedule: "rate(1 minute)",
-            },
+            { function: "src/cron.handler", schedule: "rate(1 minute)" },
             opts,
           );
         },
-        "a function from its args": (Cron, opts) => {
+        "a function from its args, with an event": (Cron, opts) => {
           new Cron(
             "MyCronJob",
             {
@@ -137,6 +128,8 @@ describe("Cron", () => {
                 environment: { STAGE: "test" },
               },
               schedule: "cron(15 10 * * ? *)",
+              event: { foo: "bar", nested: { n: 1 } },
+              enabled: false,
             },
             opts,
           );
@@ -146,7 +139,7 @@ describe("Cron", () => {
         // from them, with outputs inside.
         "a function given as an output": {
           original: (opts) =>
-            new OriginalCronV2(
+            new OriginalCron(
               "MyCronJob",
               {
                 function: output({
@@ -173,20 +166,14 @@ describe("Cron", () => {
         "a function given as an arn": (Cron, opts) => {
           new Cron(
             "MyCronJob",
-            {
-              function: FUNCTION_ARN,
-              schedule: "rate(1 minute)",
-            },
+            { function: FUNCTION_ARN, schedule: "rate(1 minute)" },
             opts,
           );
         },
         "a version of a function given as an arn": (Cron, opts) => {
           new Cron(
             "MyCronJob",
-            {
-              function: `${FUNCTION_ARN}:live`,
-              schedule: "rate(1 minute)",
-            },
+            { function: `${FUNCTION_ARN}:live`, schedule: "rate(1 minute)" },
             opts,
           );
         },
@@ -214,31 +201,13 @@ describe("Cron", () => {
             opts,
           );
         },
-        "every schedule setting": (Cron, opts) => {
-          new Cron(
-            "MyCronJob",
-            {
-              function: "src/cron.handler",
-              schedule: "cron(15 10 * * ? *)",
-              timezone: "America/New_York",
-              enabled: false,
-              retries: 3,
-              dlq: DLQ_ARN,
-              event: { foo: "bar", nested: { n: 1 } },
-            },
-            opts,
-          );
-        },
         "settings given as outputs": (Cron, opts) => {
           new Cron(
             "MyCronJob",
             {
               function: "src/cron.handler",
-              schedule: output("at(2025-06-01T10:00:00)" as const),
-              timezone: output("Europe/Berlin"),
+              schedule: output("rate(1 day)" as const),
               enabled: output(true),
-              retries: output(5),
-              dlq: output(DLQ_ARN),
               event: output({ foo: output("bar") }),
             },
             opts,
@@ -251,62 +220,21 @@ describe("Cron", () => {
             opts,
           );
         },
-        "a task with an event, retries and a dead-letter queue": (
-          Cron,
-          opts,
-        ) => {
+        "a task with an event": (Cron, opts) => {
           new Cron(
             "MyCronJob",
             {
               task: task(),
               schedule: "rate(1 day)",
               event: { foo: "bar" },
-              retries: 2,
-              dlq: DLQ_ARN,
-              enabled: false,
-            },
-            opts,
-          );
-        },
-        transforms: (Cron, opts) => {
-          new Cron(
-            "MyCronJob",
-            {
-              function: "src/cron.handler",
-              schedule: "rate(1 minute)",
-              transform: {
-                schedule: { description: "Nightly cleanup", groupName: "jobs" },
-                role: (args, opts) => {
-                  args.description = "Runs the cleanup";
-                  opts.protect = true;
-                },
-              },
-            },
-            opts,
-          );
-        },
-        "a schedule transform as a function": (Cron, opts) => {
-          new Cron(
-            "MyCronJob",
-            {
-              task: task(),
-              schedule: "rate(1 day)",
-              transform: {
-                schedule: (args, opts) => {
-                  args.flexibleTimeWindow = {
-                    mode: "FLEXIBLE",
-                    maximumWindowInMinutes: 15,
-                  };
-                  opts.retainOnDelete = true;
-                },
-              },
+              enabled: output(false),
             },
             opts,
           );
         },
         "the deprecated job, written as function": {
           original: (opts) =>
-            new OriginalCronV2(
+            new OriginalCron(
               "MyCronJob",
               {
                 job: { handler: "src/cron.handler", timeout: "30 seconds" },
@@ -327,32 +255,51 @@ describe("Cron", () => {
               opts,
             ),
         },
-        // V5 merges an object transform into the defaults. 4.x
-        // replaced a nested object whole, which left the schedule with no
-        // target.
-        "an object transform that sets part of the target": {
+        transforms: (Cron, opts) => {
+          new Cron(
+            "MyCronJob",
+            {
+              function: "src/cron.handler",
+              schedule: "rate(1 minute)",
+              transform: {
+                rule: { description: "Nightly cleanup" },
+                target: (args, opts) => {
+                  args.retryPolicy = { maximumRetryAttempts: 2 };
+                  opts.retainOnDelete = true;
+                },
+              },
+            },
+            opts,
+          );
+        },
+        // V5 merges an object transform into the defaults. 4.x replaced a
+        // nested object whole, which left the target with no task to run.
+        "an object transform that sets part of the task's target": {
           create: (Cron, opts) => {
             new Cron(
               "MyCronJob",
               {
-                function: FUNCTION_ARN,
-                schedule: "rate(1 minute)",
+                task: task(),
+                schedule: "rate(1 day)",
                 transform: {
-                  schedule: {
-                    target: { input: '{"from":"transform"}' } as any,
-                  },
+                  target: { ecsTarget: { platformVersion: "1.4.0" } as any },
                 },
               },
               opts,
             );
           },
-          changed: [["MyCronJobSchedule", ["target"]]],
+          changed: [["MyCronJobTarget", ["ecsTarget"]]],
           check: () =>
-            expect(resource("MyCronJobSchedule").inputs.target).toEqual({
-              arn: FUNCTION_ARN,
-              roleArn: "arn:aws:mock:us-east-1:123456789012:MyCronJobRole",
-              input: '{"from":"transform"}',
-              retryPolicy: { maximumRetryAttempts: 0 },
+            expect(resource("MyCronJobTarget").inputs.ecsTarget).toEqual({
+              launchType: "FARGATE",
+              platformVersion: "1.4.0",
+              taskDefinitionArn:
+                "arn:aws:mock:us-east-1:123456789012:MyTaskTaskDefinition",
+              networkConfiguration: {
+                subnets: ["MyVpcPublicSubnet1_id", "MyVpcPublicSubnet2_id"],
+                securityGroups: ["MyVpcSecurityGroup_id"],
+                assignPublicIp: true,
+              },
             }),
         },
       },
@@ -367,7 +314,7 @@ describe("Cron", () => {
           schedule: "rate(1 minute)",
         });
 
-      create(OriginalCronV2);
+      create(OriginalCron);
       await pulumi.settle();
       const original = pulumi.graph();
       expect(named("MyCronJobHandler")).toEqual([
@@ -396,10 +343,9 @@ describe("Cron", () => {
         revealed: [],
       });
     });
-
   });
 
-  it("invokes a function on a schedule", async () => {
+  it("invokes a function on a schedule, with permission to", async () => {
     const cron = new Cron("MyCronJob", {
       function: "src/cron.handler",
       schedule: "rate(1 minute)",
@@ -410,62 +356,32 @@ describe("Cron", () => {
     const fn = resource("MyCronJobFunctionFunction");
     expect(fn.type).toBe(FUNCTION);
     expect(resource("MyCronJobFunction").type).toBe("sst:aws:Function");
-    expect(resource("MyCronJobSchedule").inputs).toMatchObject({
+    expect(resource("MyCronJobRule").inputs).toMatchObject({
       scheduleExpression: "rate(1 minute)",
-      flexibleTimeWindow: { mode: "OFF" },
       state: "ENABLED",
-      target: {
-        arn: "arn:aws:mock:us-east-1:123456789012:MyCronJobFunctionFunction",
-        roleArn: "arn:aws:mock:us-east-1:123456789012:MyCronJobRole",
-        input: '{"foo":"bar"}',
-        retryPolicy: { maximumRetryAttempts: 0 },
-      },
     });
-    expect(
-      JSON.parse(resource("MyCronJobRole").inputs.inlinePolicies[0].policy),
-    ).toEqual({
-      statements: [
-        {
-          actions: ["lambda:InvokeFunction"],
-          resources: [
-            "arn:aws:mock:us-east-1:123456789012:MyCronJobFunctionFunction",
-          ],
-        },
-      ],
+    expect(resource("MyCronJobTarget").inputs).toMatchObject({
+      arn: "arn:aws:mock:us-east-1:123456789012:MyCronJobFunctionFunction",
+      input: '{"foo":"bar"}',
     });
+    expect(resource("MyCronJobPermission").inputs).toMatchObject({
+      action: "lambda:InvokeFunction",
+      function: "arn:aws:mock:us-east-1:123456789012:MyCronJobFunctionFunction",
+      principal: "events.amazonaws.com",
+      sourceArn: "arn:aws:mock:us-east-1:123456789012:MyCronJobRule",
+    });
+    // A job that invokes a function needs no role
+    expect(named("MyCronJobTargetRole")).toEqual([]);
+    expect(cron.nodes.role).toBe(undefined);
     expect(await pulumi.resolve(cron.nodes.function.apply((fn) => fn.name))).toBe(
       await pulumi.resolve(fn.inputs.name),
     );
-    expect(cron.nodes.schedule).toBeDefined();
-    expect(cron.nodes.role).toBeDefined();
+    expect(cron.nodes.rule).toBeDefined();
+    expect(cron.nodes.target).toBeDefined();
+    expect(cron.nodes.permission).toBeDefined();
   });
 
-  it("lets the schedule send to the dead-letter queue", async () => {
-    new Cron("MyCronJob", {
-      function: FUNCTION_ARN,
-      schedule: "rate(1 minute)",
-      retries: 3,
-      dlq: DLQ_ARN,
-    });
-    await pulumi.settle();
-
-    expect(resource("MyCronJobSchedule").inputs.target).toMatchObject({
-      arn: FUNCTION_ARN,
-      retryPolicy: { maximumRetryAttempts: 3 },
-      deadLetterConfig: { arn: DLQ_ARN },
-    });
-    expect(
-      JSON.parse(resource("MyCronJobRole").inputs.inlinePolicies[0].policy)
-        .statements,
-    ).toEqual([
-      { actions: ["lambda:InvokeFunction"], resources: [FUNCTION_ARN] },
-      { actions: ["sqs:SendMessage"], resources: [DLQ_ARN] },
-    ]);
-    // Nothing is created for a function that's given as an ARN
-    expect(named("MyCronJobFunction")).toEqual([]);
-  });
-
-  it("runs a task on a schedule", async () => {
+  it("runs a task on a schedule, with a role of its own", async () => {
     const cron = new Cron("MyCronJob", {
       task: task(),
       schedule: "rate(1 day)",
@@ -473,9 +389,9 @@ describe("Cron", () => {
     });
     await pulumi.settle();
 
-    expect(resource("MyCronJobSchedule").inputs.target).toEqual({
+    expect(resource("MyCronJobTarget").inputs).toMatchObject({
       arn: "arn:aws:mock:us-east-1:123456789012:MyClusterCluster",
-      roleArn: "arn:aws:mock:us-east-1:123456789012:MyCronJobRole",
+      roleArn: "arn:aws:mock:us-east-1:123456789012:MyCronJobTargetRole",
       input: JSON.stringify({
         containerOverrides: [
           {
@@ -484,21 +400,21 @@ describe("Cron", () => {
           },
         ],
       }),
-      ecsParameters: {
-        taskDefinitionArn: "arn:aws:mock:us-east-1:123456789012:MyTaskTaskDefinition",
+      ecsTarget: {
         launchType: "FARGATE",
+        taskDefinitionArn: "arn:aws:mock:us-east-1:123456789012:MyTaskTaskDefinition",
         networkConfiguration: {
           subnets: ["MyVpcPublicSubnet1_id", "MyVpcPublicSubnet2_id"],
           securityGroups: ["MyVpcSecurityGroup_id"],
           assignPublicIp: true,
         },
       },
-      retryPolicy: { maximumRetryAttempts: 0 },
     });
-    expect(
-      JSON.parse(resource("MyCronJobRole").inputs.inlinePolicies[0].policy)
-        .statements,
-    ).toEqual([
+    const role = resource("MyCronJobTargetRole").inputs;
+    expect(JSON.stringify(role.assumeRolePolicy)).toContain(
+      '"Service":"events.amazonaws.com"',
+    );
+    expect(JSON.parse(role.inlinePolicies[0].policy).statements).toEqual([
       {
         actions: ["ecs:RunTask"],
         resources: ["arn:aws:mock:us-east-1:123456789012:MyTaskTaskDefinition"],
@@ -511,9 +427,11 @@ describe("Cron", () => {
         ],
       },
     ]);
-    // A job that runs a task has no function
+    // A job that runs a task has no function, and no permission for one
     expect(cron.nodes.function).toBe(undefined);
+    expect(cron.nodes.permission).toBe(undefined);
     expect(named("MyCronJobFunction")).toEqual([]);
+    expect(named("MyCronJobPermission")).toEqual([]);
   });
 
   // Whether a function is created is decided from what's given, which a
@@ -554,27 +472,12 @@ describe("Cron", () => {
     });
     await pulumi.settle();
 
-    expect(resource("ByArnSchedule").inputs.target.arn).toBe(FUNCTION_ARN);
-    expect(resource("ByFunctionSchedule").inputs.target.arn).toBe(
+    expect(resource("ByArnTarget").inputs.arn).toBe(FUNCTION_ARN);
+    expect(resource("ByFunctionTarget").inputs.arn).toBe(
       "arn:aws:mock:us-east-1:123456789012:MyFunctionFunction",
     );
     expect(named("ByArnFunction")).toEqual([]);
     expect(named("ByFunctionFunction")).toEqual([]);
-  });
-
-  it("invokes a V5 Function from elsewhere in the app", async () => {
-    const fn = new Function("MyFunction", { handler: "src/cron.handler" });
-    const cron = new Cron("MyCronJob", {
-      function: fn,
-      schedule: "rate(1 minute)",
-    });
-    await pulumi.settle();
-
-    expect(resource("MyCronJobSchedule").inputs.target.arn).toBe(
-      "arn:aws:mock:us-east-1:123456789012:MyFunctionFunction",
-    );
-    expect(named("MyCronJobFunction")).toEqual([]);
-    expect(await pulumi.resolve(cron.nodes.function)).toBe(fn);
   });
 
   it("invokes the published version of a workflow", async () => {
@@ -584,17 +487,12 @@ describe("Cron", () => {
     });
     await pulumi.settle();
 
-    const target = resource("MyCronJobSchedule").inputs.target.arn;
-    expect(target).toBe(
+    expect(resource("MyCronJobTarget").inputs.arn).toBe(
       "arn:aws:mock:us-east-1:123456789012:MyWorkflowHandlerFunction:3",
     );
-    expect(
-      JSON.parse(resource("MyCronJobRole").inputs.inlinePolicies[0].policy)
-        .statements[0].resources,
-    ).toEqual([target]);
   });
 
-  it("transforms the function it creates", async () => {
+  it("transforms the function, the permission and the task's role", async () => {
     new Cron("MyCronJob", {
       function: { handler: "src/cron.handler", environment: { A: "1" } },
       schedule: "rate(1 minute)",
@@ -603,7 +501,13 @@ describe("Cron", () => {
           timeout: "2 minutes",
           transform: { function: { environment: { variables: { B: "2" } } } },
         },
+        permission: { statementId: "AllowCron" },
       },
+    });
+    new Cron("TaskJob", {
+      task: task(),
+      schedule: "rate(1 day)",
+      transform: { role: { description: "Runs the task" } },
     });
     await pulumi.settle();
 
@@ -611,22 +515,9 @@ describe("Cron", () => {
       timeout: 120,
       environment: { variables: { A: "1", B: "2" } },
     });
-  });
-
-  it("uses a role you already have", async () => {
-    new Cron("MyCronJob", {
-      function: FUNCTION_ARN,
-      schedule: "rate(1 minute)",
-      existing: { role: "scheduler-role" },
-    });
-    await pulumi.settle();
-
-    expect(resource("MyCronJobRole")).toMatchObject({
-      kind: "read",
-      options: { id: "scheduler-role" },
-    });
-    expect(resource("MyCronJobSchedule").inputs.target.roleArn).toBe(
-      "arn:aws:mock:us-east-1:123456789012:MyCronJobRole",
+    expect(resource("MyCronJobPermission").inputs.statementId).toBe("AllowCron");
+    expect(resource("TaskJobTargetRole").inputs.description).toBe(
+      "Runs the task",
     );
   });
 
@@ -672,10 +563,8 @@ describe("Cron", () => {
         schedule: "rate(1 minute)",
       });
       await pulumi.settle();
-      expect(
-        pulumi.resources.find((r) => r.name === "MyCronJobSchedule")!.inputs
-          .target.arn,
-      ).toBe(fn);
+      expect(resource("MyCronJobTarget").inputs.arn).toBe(fn);
+      expect(resource("MyCronJobPermission").inputs.function).toBe(fn);
       expect(
         () =>
           new Cron("Other", {
@@ -697,6 +586,91 @@ describe("Cron", () => {
         'The "Third" cron job is given an existing "function" and a "task". A cron job runs one or the other.',
       );
       await pulumi.settle();
+    });
+
+    it("uses a rule, a target or a task's role you already have", async () => {
+      new Cron("ByRule", {
+        function: FUNCTION_ARN,
+        schedule: "rate(1 minute)",
+        existing: { rule: "my-rule" },
+      });
+      new Cron("ByTarget", {
+        function: FUNCTION_ARN,
+        schedule: "rate(1 minute)",
+        existing: { target: "my-rule/my-target" },
+      });
+      new Cron("ByRole", {
+        task: task(),
+        schedule: "rate(1 day)",
+        existing: { role: "events-role" },
+      });
+      await pulumi.settle();
+
+      expect(resource("ByRuleRule")).toMatchObject({
+        kind: "read",
+        options: { id: "my-rule" },
+      });
+      expect(resource("ByRuleTarget").inputs.rule).toBe(
+        await pulumi.resolve(resource("ByRuleRule").inputs.name),
+      );
+      expect(resource("ByTargetTarget")).toMatchObject({
+        kind: "read",
+        options: { id: "my-rule/my-target" },
+      });
+      expect(resource("ByRoleTargetRole")).toMatchObject({
+        kind: "read",
+        options: { id: "events-role" },
+      });
+      expect(resource("ByRoleTarget").inputs.roleArn).toBe(
+        "arn:aws:mock:us-east-1:123456789012:ByRoleTargetRole",
+      );
+    });
+
+    // Settings of a resource given in `existing` would be dropped, and so
+    // would a part the job doesn't have
+    it("refuses what an existing rule or target, or the job, wouldn't use", () => {
+      expect(
+        () =>
+          new Cron("Off", {
+            function: FUNCTION_ARN,
+            schedule: "rate(1 minute)",
+            enabled: false,
+            existing: { rule: "my-rule" },
+          }),
+      ).toThrow(
+        'The "Off" cron job is given an existing "rule", which it uses the way it is. Remove "enabled" from its args.',
+      );
+      expect(
+        () =>
+          new Cron("WithEvent", {
+            function: FUNCTION_ARN,
+            schedule: "rate(1 minute)",
+            event: { foo: "bar" },
+            existing: { target: "my-rule/my-target" },
+          }),
+      ).toThrow(
+        'The "WithEvent" cron job is given an existing "target", which it uses the way it is. Remove "event" from its args.',
+      );
+      expect(
+        () =>
+          new Cron("FunctionRole", {
+            function: FUNCTION_ARN,
+            schedule: "rate(1 minute)",
+            existing: { role: "events-role" },
+          }),
+      ).toThrow(
+        `"existing.role" isn't an option for the "FunctionRole" cron job. A cron job that invokes a function needs no role: the function's permission lets EventBridge invoke it.`,
+      );
+      expect(
+        () =>
+          new Cron("TaskPermission", {
+            task: task(),
+            schedule: "rate(1 day)",
+            existing: { permission: "my-permission" },
+          }),
+      ).toThrow(
+        `"existing.permission" isn't an option for the "TaskPermission" cron job. A cron job that runs a task gives no function permission to be invoked.`,
+      );
     });
 
     it("rejects a task given as an output", () => {

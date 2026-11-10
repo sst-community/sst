@@ -11,7 +11,6 @@ export const renamed: Record<Group, Record<string, string>> = {
   aws: {
     ApiGatewayV1: "ApiGatewayRest",
     ApiGatewayV2: "ApiGatewayHttp",
-    CronV2: "Cron",
   },
   cloudflare: {
     StaticSiteV2: "StaticSite",
@@ -24,13 +23,11 @@ export const renamed: Record<Group, Record<string, string>> = {
 
 /**
  * A 4.x component with no 5.0 form, and what to do instead. An app does it
- * with SST 4, or removes the component, before its stage moves. `Cron` and
- * Cloudflare's `StaticSite` name a 5.0 component too, so an app's is told
- * apart by its args.
+ * with SST 4, or removes the component, before its stage moves. Cloudflare's
+ * `StaticSite` names a 5.0 component too, so an app's is read as 5.0's.
  */
 export const leftOut: Record<Group, Record<string, string>> = {
   aws: {
-    Cron: "SST 4's first `Cron` has no 5.0 form: move to `sst.aws.CronV2` with SST 4 first, which is `Cron` in 5.0.",
     OpenControl:
       "`OpenControl` has no 5.0 form: remove it with SST 4, and run OpenControl outside of SST, before the stage moves.",
     Vector:
@@ -128,6 +125,8 @@ export const exports: Record<Group, string[]> = {
     "CognitoUserPoolTriggers",
     "Cron",
     "CronArgs",
+    "CronV2",
+    "CronV2Args",
     "DnsArgs",
     "DnsValidatedCertificate",
     "DnsValidatedCertificateArgs",

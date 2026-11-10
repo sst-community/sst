@@ -184,8 +184,8 @@ describe("A function part's object transform, while the stage moves", () => {
   });
 
   it("is said of the function the component creates", async () => {
-    const { Cron } = await import("../../src/components/aws/cron");
-    new Cron("Nightly", {
+    const { CronV2 } = await import("../../src/components/aws/cron-v2");
+    new CronV2("Nightly", {
       schedule: "rate(1 day)",
       function: { handler: "src/job.handler", environment: { A: "1" } },
       transform: { function: { environment: { B: "2" } } },

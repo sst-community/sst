@@ -139,19 +139,19 @@ func TestRefuseUnmoved(t *testing.T) {
 	// One with components of SST 4's that have no 5.0 form: the move and its
 	// check are refused, naming each, and a deploy's refusal names them too
 	stranded := StageState{Stranded: []move.Stranded{
-		{Name: "Nightly", Type: "sst:aws:Cron", What: "SST 4's first `Cron`, which has no 5.0 form: move it."},
+		{Name: "Control", Type: "sst:aws:OpenControl", What: "an `OpenControl`, which has no 5.0 form: remove it."},
 		{Name: "OldNet", Type: "sst:aws:Vpc", What: "a `Vpc.v1`, which has no 5.0 form: move it."},
 	}}
 	for _, command := range []string{"diff", "deploy"} {
 		err = p.refuseUnmoved(&StackInput{Command: command, Move: true}, stranded)
 		assert.ErrorContains(t, err, "can't move to SST 5's components yet", command)
-		assert.ErrorContains(t, err, "\n  - \"Nightly\" is SST 4's first `Cron`", command)
+		assert.ErrorContains(t, err, "\n  - \"Control\" is an `OpenControl`", command)
 		assert.ErrorContains(t, err, "\n  - \"OldNet\" is a `Vpc.v1`", command)
 	}
 	err = p.refuseUnmoved(&StackInput{Command: "deploy"}, stranded)
 	assert.ErrorContains(t, err, "hasn't moved to SST 5's")
 	assert.ErrorContains(t, err, "Before it can move, each of these has to be dealt with on SST 4")
-	assert.ErrorContains(t, err, "\"Nightly\"")
+	assert.ErrorContains(t, err, "\"Control\"")
 	assert.NotContains(t, p.refuseUnmoved(&StackInput{Command: "deploy"}, unmoved).Error(), "Before it can move")
 	// A diff of it that isn't the move's check still runs
 	assert.NoError(t, p.refuseUnmoved(&StackInput{Command: "diff"}, stranded))
@@ -159,12 +159,12 @@ func TestRefuseUnmoved(t *testing.T) {
 
 func TestStageStateStranded(t *testing.T) {
 	stack := "urn:pulumi:dev::app::pulumi:pulumi:Stack::app-dev"
-	cron := resourceAt("urn:pulumi:dev::app::sst:aws:Cron::Nightly", "sst:aws:Cron")
-	cron.Parent = resource.URN(stack)
+	control := resourceAt("urn:pulumi:dev::app::sst:aws:OpenControl::Control", "sst:aws:OpenControl")
+	control.Parent = resource.URN(stack)
 	// A stage SST 4 deployed
-	stranded := stageState(&CompleteEvent{Resources: []apitype.ResourceV3{cron}}).Stranded
-	assert.Equal(t, []string{"Nightly"}, []string{stranded[0].Name})
+	stranded := stageState(&CompleteEvent{Resources: []apitype.ResourceV3{control}}).Stranded
+	assert.Equal(t, []string{"Control"}, []string{stranded[0].Name})
 	// One that moved isn't read that way: its own components have the `.v1`
 	// forms' types and no version marker
-	assert.Nil(t, stageState(&CompleteEvent{Moved: true, Resources: []apitype.ResourceV3{cron}}).Stranded)
+	assert.Nil(t, stageState(&CompleteEvent{Moved: true, Resources: []apitype.ResourceV3{control}}).Stranded)
 }

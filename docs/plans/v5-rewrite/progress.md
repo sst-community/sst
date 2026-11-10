@@ -2,6 +2,26 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-10: SST 4's first `Cron` back, and both cron jobs under SST 4's names
+
+The maintainer asked to bring back SST 4's first `Cron`, with each cron job named as in SST 4, and to drop what told the two apart ([decision](plan.md#decisions)).
+
+- **`Cron`**, in `aws/cron.ts` with the type `sst:aws:Cron`, is the port at `de729d193`, on an EventBridge rule, with SST 4's rule, target, permission and the task's role as its parts. It's brought up to what `CronV2` took since: a function given in `existing`, the shared helpers for the rule's state, the invoke permission and the roles a task passes, and the same messages. It stays deprecated, as in SST 4, pointing at `CronV2`. Its map moves the function from `<name>Handler` to `<name>Function`, as `CronV2`'s does.
+- **`CronV2`**, in `aws/cron-v2.ts` with `CronV2Args`, is the component that was `Cron`, named back.
+- **What told them apart is gone:** the `CronV2` stub; the codemod's rename of `CronV2`, and its reading of a `Cron` with `job` as SST 4's first, which it now renames to `function` on either, `nodes.job` too; the first `Cron` in what `--check` and the deploy's refusal name as having no 5.0 form; and the recorded lab program's lookup of either name. `nodes.job` on either says to read `nodes.function`.
+- **Docs:** the guide's renamed components are three, its "Before you start" has no row for `Cron`, and its examples of a rename use `ApiGatewayV2`. The README, `CONTRIBUTING.md`, the docs generator's comments, the `Workflow`'s example and "Write a local component" name `CronV2` where they meant it. The home page's example stays `sst.aws.Cron`, as SST 4's has it.
+- **Checked:** the first `Cron`'s takeover suite against SST 4's frozen one (a handler, args with an event, args in an output, an ARN, a version's ARN, a function elsewhere in the app, a workflow, settings as outputs, a task, a task with an event, the deprecated `job`, transforms, and an object transform merged into a task's target), and what it creates, refuses and transforms. `CronV2`'s suite under its name, the codemod's and the stranded list's tests. 110 files and 4228 tests, the Go tests, the type check, the API reports (both are components, and the `CronV2` stub is gone), and a docs page for each.
+- **In the lab**, on a stage of its own, from a copy of the lab app: SST 4 (4.24.0) deployed a first `Cron` and a `CronV2`, each invoking a function every minute, and a first `Cron` written with `job`, disabled. Both ran. The codemod changed only `job` to `function`. `sst migrate --check` passed: 30 kept, 15 at a new address and 3 updated in place, the functions' code, uploaded again under new keys. The move ran, and `sst diff` then showed no changes. Compared by cloud id, 21 of the 24 cloud resources were kept, 12 at a new name in the state and none renamed in AWS, and only the three code objects were new. The rule and the schedule weren't touched, and both ran after the move. A first `Cron` that runs a task is checked under the mock only, as it needs a VPC.
+- **Cleaned up:** the stage removed with SST 5, then its 57 state versions and markers, its passphrase and 3 source maps.
+- **Two independent reviews**, one of the first `Cron` against SST 4's and one of what the change could have missed, found the `Cron` takes over SST 4's resource for resource. Fixed from them:
+  - The first `Cron` refuses `enabled` next to an existing rule, `event` next to an existing target, an existing role for a job that invokes a function, and an existing permission for a job that runs a task, as the components' rules say; `CronV2` refuses its schedule's settings next to an existing schedule, which it took and dropped. Each new test fails without its fix.
+  - The docs' sidebar lists the first `Cron` under "Deprecated", as SST 4's did. The "Switch from" of each says how to replace a target's nested object as SST 4 did: with a function.
+  - `Function`'s test of a `$transform` on what other components create uses `CronV2` again, as it did before the rename; two plan rows that still read as if `CronV2` were `Cron` say it came back; the `Cron` that warms a site no longer stands for what `--check` leaves unlisted; `CONTRIBUTING.md` points at `cron-v2.ts` as the one to copy.
+- **Left, older than this change:**
+  - The docs generator takes no file of SST 4's with `@deprecated` in it as a component's original, so 16 pages, both cron jobs' among them, get none of its notes for "Switch from", like the one on merged transforms, and the check that a page doesn't name SST 4's name.
+  - A job that runs a task has no function, but `nodes.function` is typed as one, in both cron jobs.
+  - A config that a CLI built from `v5` between 2026-11-03 and now rewrote, `CronV2` to `Cron`, would replace its schedule with a rule on its next deploy. No release had that codemod.
+
 ## 2026-11-10: why SST 4's refresh fails after going back
 
 SST 4's `sst refresh` failed after going back in both serverless runs, on the `Links` function's `LinkRef`: "cannot complete a resource ... whose registration isn't pending". The maintainer asked to look into it.

@@ -1,8 +1,14 @@
 import type { Task } from "./task";
 import { all, ComponentResourceOptions, output } from "@pulumi/pulumi";
-import { iam, scheduler } from "@pulumi/aws";
-import { type ComponentArgs, component, deferred } from "../parts-component";
-import { notAnOption, plain, usedAsItIs } from "../args";
+import { cloudwatch, iam, lambda } from "@pulumi/aws";
+import {
+  type ComponentArgs,
+  component,
+  deferred,
+  named,
+  optional,
+} from "../parts-component";
+import { notAnExistingPart, notAnOption, plain, usedAsItIs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { Function } from "./function";
@@ -12,6 +18,7 @@ import {
   plainFunction,
 } from "./helpers/function-part";
 import { enabledState } from "./helpers/eventbridge";
+import { invokePermissionArgs } from "./helpers/function-permission";
 import { rolesToPass } from "./helpers/fargate";
 
 const parts = () => ({
@@ -21,13 +28,23 @@ const parts = () => ({
    */
   function: deferred(Function),
   /**
-   * The IAM role EventBridge Scheduler assumes to invoke the function or run the task.
+   * The permission for EventBridge to invoke the function. There isn't one when the job
+   * runs a task.
    */
-  role: iam.Role,
+  permission: optional(lambda.Permission),
   /**
-   * The EventBridge Scheduler schedule.
+   * The EventBridge rule that runs on the schedule.
    */
-  schedule: scheduler.Schedule,
+  rule: cloudwatch.EventRule,
+  /**
+   * The IAM role EventBridge runs the task as. There isn't one when the job invokes a
+   * function.
+   */
+  role: named(optional(iam.Role), "TargetRole"),
+  /**
+   * The rule's target: the function or the task.
+   */
+  target: cloudwatch.EventTarget,
 });
 
 export interface CronArgs extends ComponentArgs<typeof parts> {
@@ -145,29 +162,8 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
    *   schedule: "cron(15 10 * * ? *)", // 10:15 AM (UTC) every day
    * }
    * ```
-   *
-   * Or an [at expression](https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html#one-time) for a one-time schedule.
-   *
-   * ```ts
-   * {
-   *   schedule: "at(2025-06-01T10:00:00)",
-   * }
-   * ```
    */
-  schedule: Input<`rate(${string})` | `cron(${string})` | `at(${string})`>;
-  /**
-   * The IANA timezone for the cron schedule. When set, the cron expression is
-   * evaluated in this timezone, with automatic DST handling.
-   *
-   * @default `"UTC"`
-   * @example
-   * ```ts
-   * {
-   *   timezone: "America/New_York"
-   * }
-   * ```
-   */
-  timezone?: Input<string>;
+  schedule: Input<`rate(${string})` | `cron(${string})`>;
   /**
    * Configures whether the cron job is enabled. When disabled, the cron job won't run.
    * @default true
@@ -179,38 +175,25 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
    * ```
    */
   enabled?: Input<boolean>;
-  /**
-   * The number of retry attempts for failed invocations. Between 0 and 185.
-   *
-   * @default `0`
-   * @example
-   * ```ts
-   * {
-   *   retries: 3
-   * }
-   * ```
-   */
-  retries?: Input<number>;
-  /**
-   * The ARN of an SQS queue to use as a dead-letter queue. When all retry
-   * attempts are exhausted, failed events are sent to this queue.
-   *
-   * @example
-   * ```ts
-   * {
-   *   dlq: myQueue.arn
-   * }
-   * ```
-   */
-  dlq?: Input<string>;
 }
 
 /**
+ * The `Cron` component has been deprecated. Use [`CronV2`](/docs/component/aws/cron-v2) instead.
+ *
+ * :::caution
+ * This component has been deprecated.
+ * :::
+ *
  * The `Cron` component lets you add cron jobs to your app
- * using [Amazon EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html). The cron job can invoke a function or a container `Task`.
+ * using [Amazon Event Bus](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-event-bus.html). The cron job can invoke a function or a container `Task`.
+ *
+ * `CronV2` uses EventBridge Scheduler, so switching a cron job to it replaces its rule
+ * with a schedule.
  *
  * It's built from parts, so every resource it creates can be transformed, is available in
  * `nodes`, and can be swapped for one you already have.
+ *
+ * @deprecated Use [`CronV2`](/docs/component/aws/cron-v2) instead.
  *
  * @example
  * #### Cron job function
@@ -239,35 +222,6 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  * });
  * ```
  *
- * #### Set a timezone
- *
- * ```ts title="sst.config.ts"
- * new sst.aws.Cron("MyCronJob", {
- *   function: "src/cron.handler",
- *   schedule: "cron(15 10 * * ? *)",
- *   timezone: "America/New_York"
- * });
- * ```
- *
- * #### Configure retries
- *
- * ```ts title="sst.config.ts"
- * new sst.aws.Cron("MyCronJob", {
- *   function: "src/cron.handler",
- *   schedule: "rate(1 minute)",
- *   retries: 3
- * });
- * ```
- *
- * #### One-time schedule
- *
- * ```ts title="sst.config.ts"
- * new sst.aws.Cron("MyCronJob", {
- *   function: "src/cron.handler",
- *   schedule: "at(2025-06-01T10:00:00)"
- * });
- * ```
- *
  * #### Customize the function
  *
  * ```js title="sst.config.ts"
@@ -280,32 +234,18 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  * });
  * ```
  *
- * #### Switch from SST 4's `sst.aws.CronV2`
+ * #### Switch from SST 4's `sst.aws.Cron`
  *
- * Change `sst.aws.CronV2` to `sst.aws.Cron`, without the version, and keep the name. The
- * schedule, its role and the function you've deployed are kept.
- *
- * ```ts title="sst.config.ts" del={1-4} ins={5-8}
- * new sst.aws.CronV2("MyCronJob", {
- *   function: "src/cron.handler",
- *   schedule: "rate(1 minute)"
- * });
- * new sst.aws.Cron("MyCronJob", {
- *   function: "src/cron.handler",
- *   schedule: "rate(1 minute)"
- * });
- * ```
+ * Keep the name, and `sst migrate` moves it. The rule, its target, the permission, the
+ * task's role and the function you've deployed are kept.
  *
  * A few things are written differently:
  *
- * - It's named `Cron`. SST 4's `CronV2` had the version in its name because it replaced
- *   SST 4's first `Cron`, which has no 5.0 form. It keeps its type, `sst:aws:CronV2`, which
- *   is what a deployed one has.
- * - The deprecated `job` is gone. Use `function`, as written below. So is
+ * - The deprecated `job` is gone. Use `function`. So is
  *   `nodes.job`: read `nodes.function`.
  * - The function is named after `function`: `MyCronJobFunction`, where it was
  *   `MyCronJobHandler`. The function you've deployed keeps its name in AWS.
- * - `nodes.function` is empty for a job that runs a task, where SST 4's `CronV2` failed
+ * - `nodes.function` is empty for a job that runs a task, where SST 4's `Cron` failed
  *   when it was read.
  * - `function`, as a handler or a function's args, has to be a plain value, not an output:
  *   it decides what's created. A function you already have, or its ARN, can still be an
@@ -316,10 +256,11 @@ export interface CronArgs extends ComponentArgs<typeof parts> {
  *   type-check. Inside them, what it's built from, like `handler`, `runtime` or `bundle`,
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
- * - If you set part of the schedule's `target` with an object in `transform`, the rest
- *   of the target is kept.
+ * - `nodes` has the permission and the task's role too, and `transform` takes them.
+ * - If you set part of the target's `ecsTarget` with an object in `transform`, the rest
+ *   of it is kept. To replace it, as SST 4 did, use a function.
  */
-export class Cron extends component("sst:aws:CronV2", parts) {
+export class Cron extends component("sst:aws:Cron", parts) {
   constructor(name: string, args: CronArgs, opts?: ComponentResourceOptions) {
     super(name, args, opts);
 
@@ -341,8 +282,32 @@ export class Cron extends component("sst:aws:CronV2", parts) {
       throw new VisibleError(
         `The "${name}" cron job needs a "function" or a "task" to run.`,
       );
+    // A rule or a target that's already there is used the way it is, and only
+    // what the job runs is given in `existing`
+    if (this.existingPart("rule")) usedAsItIs(args, ["enabled"], "rule", owner);
+    if (this.existingPart("target"))
+      usedAsItIs(args, ["event"], "target", owner);
+    if (task)
+      notAnExistingPart(
+        args.existing,
+        "permission",
+        owner,
+        `A cron job that runs a task gives no function permission to be invoked.`,
+      );
+    else
+      notAnExistingPart(
+        args.existing,
+        "role",
+        owner,
+        `A cron job that invokes a function needs no role: the function's permission lets EventBridge invoke it.`,
+      );
 
     const event = output(args.event || {});
+    const rule = this.part("rule", {
+      scheduleExpression: args.schedule,
+      state: enabledState(args.enabled),
+    });
+
     const fn =
       args.function || existingFunction
         ? functionPart(
@@ -353,63 +318,59 @@ export class Cron extends component("sst:aws:CronV2", parts) {
             {},
           )
         : undefined;
+    if (fn)
+      this.part(
+        "permission",
+        invokePermissionArgs(fn, "events.amazonaws.com", rule.arn),
+      );
 
-    // What the schedule runs, and what it takes to run it
-    const runs = fn
-      ? [{ actions: ["lambda:InvokeFunction"], resources: [fn.targetArn] }]
-      : [
-          {
-            actions: ["ecs:RunTask"],
-            resources: [task!.nodes.taskDefinition.arn],
-          },
-          {
-            actions: ["iam:PassRole"],
-            resources: rolesToPass(task!.nodes.taskDefinition),
-          },
-        ];
-    const role = this.part("role", {
-      assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
-        Service: "scheduler.amazonaws.com",
-      }),
-      inlinePolicies: [
-        {
-          name: "inline",
-          policy: output(args.dlq).apply(
-            (dlq) =>
-              iam.getPolicyDocumentOutput({
+    const role = task
+      ? this.part("role", {
+          assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
+            Service: "events.amazonaws.com",
+          }),
+          inlinePolicies: [
+            {
+              name: "inline",
+              policy: iam.getPolicyDocumentOutput({
                 statements: [
-                  ...runs,
-                  // Failed events are sent to the dead-letter queue
-                  ...(dlq
-                    ? [{ actions: ["sqs:SendMessage"], resources: [dlq] }]
-                    : []),
+                  {
+                    actions: ["ecs:RunTask"],
+                    resources: [task.nodes.taskDefinition.arn],
+                  },
+                  {
+                    actions: ["iam:PassRole"],
+                    resources: rolesToPass(task.nodes.taskDefinition),
+                  },
                 ],
               }).json,
-          ),
-        },
-      ],
-    });
+            },
+          ],
+        })
+      : undefined;
 
-    const retries = {
-      retryPolicy: { maximumRetryAttempts: output(args.retries ?? 0) },
-      deadLetterConfig: args.dlq ? { arn: args.dlq } : undefined,
-    };
-    this.part("schedule", {
-      scheduleExpression: args.schedule,
-      scheduleExpressionTimezone: args.timezone,
-      flexibleTimeWindow: { mode: "OFF" },
-      state: enabledState(args.enabled),
-      target: fn
+    this.part(
+      "target",
+      fn
         ? {
             arn: fn.targetArn,
-            roleArn: role.arn,
+            rule: rule.name,
             // A function is given the event as it is
             input: event.apply((event) => JSON.stringify(event)),
-            ...retries,
           }
         : {
             arn: task!.cluster,
-            roleArn: role.arn,
+            rule: rule.name,
+            ecsTarget: {
+              launchType: "FARGATE",
+              taskDefinitionArn: task!.nodes.taskDefinition.arn,
+              networkConfiguration: {
+                subnets: task!.subnets,
+                securityGroups: task!.securityGroups,
+                assignPublicIp: task!.assignPublicIp,
+              },
+            },
+            roleArn: role!.arn,
             // A task's containers are given the event in `SST_EVENT`
             input: all([event, task!.containers]).apply(([event, containers]) =>
               JSON.stringify({
@@ -421,17 +382,7 @@ export class Cron extends component("sst:aws:CronV2", parts) {
                 })),
               }),
             ),
-            ecsParameters: {
-              taskDefinitionArn: task!.nodes.taskDefinition.arn,
-              launchType: "FARGATE",
-              networkConfiguration: {
-                subnets: task!.subnets,
-                securityGroups: task!.securityGroups,
-                assignPublicIp: task!.assignPublicIp,
-              },
-            },
-            ...retries,
           },
-    });
+    );
   }
 }

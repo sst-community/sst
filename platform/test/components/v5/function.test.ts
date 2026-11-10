@@ -896,10 +896,10 @@ describe("Function", () => {
       });
 
       const { Queue } = await import("../../../src/components/aws/queue");
-      const { Cron } = await import("../../../src/components/aws/cron");
+      const { CronV2 } = await import("../../../src/components/aws/cron-v2");
       const { Bus } = await import("../../../src/components/aws/bus");
       new Queue("SpreadQueue").subscribe(handler);
-      new Cron("SpreadCron", { function: handler, schedule: "rate(1 hour)" });
+      new CronV2("SpreadCron", { function: handler, schedule: "rate(1 hour)" });
       new Bus("SpreadBus").subscribe("Logger", {
         handler,
         environment: { MINE: "yes" },

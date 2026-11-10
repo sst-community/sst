@@ -31,7 +31,6 @@ func (s Stranded) String() string {
 
 // What each type with no 5.0 form is, and what to do about it
 var leftOut = map[string]string{
-	"sst:aws:Cron":              "SST 4's first `Cron`, which has no 5.0 form: move it to `sst.aws.CronV2` with SST 4, which is `Cron` in 5.0.",
 	"sst:aws:OpenControl":       "an `OpenControl`, which has no 5.0 form: remove it with SST 4, and run OpenControl outside of SST.",
 	"sst:aws:Vector":            "a `Vector`, which has no 5.0 form: move its vectors to a vector database of their own, and remove it, with SST 4.",
 	"sst:cloudflare:Auth":       "Cloudflare's `Auth`, which has no 5.0 form: remove it with SST 4, or keep the stage on SST 4.",
@@ -62,8 +61,8 @@ const versionMarker = "sst:sst:Version"
 // FindStranded lists the components of SST 4's in a state that have no 5.0
 // form, by name. Only a state SST 4 deployed is read this way: SST 5's own
 // components have the `.v1` forms' types and no version marker. One inside
-// another of SST's components, like the `Cron` that warms a site, moves with
-// that one, and isn't listed.
+// another of SST's components, like the `Postgres.v1` a `Vector` keeps its
+// vectors in, moves with that one, and isn't listed.
 func FindStranded(resources []apitype.ResourceV3) []Stranded {
 	children := map[string][]string{}
 	for _, res := range resources {

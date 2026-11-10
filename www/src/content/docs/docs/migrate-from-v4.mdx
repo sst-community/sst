@@ -27,7 +27,7 @@ Then the next stage: a dev stage first, and production last.
 
 ## What changes
 
-- **The components are new.** They take the place of SST 4's, as `sst.aws.*`, `sst.cloudflare.*` and `sst.x.*`, and four of them have clearer names.
+- **The components are new.** They take the place of SST 4's, as `sst.aws.*`, `sst.cloudflare.*` and `sst.x.*`, and three of them have clearer names.
 - **Each has the same type as the one it replaces**, `sst:aws:Queue` for both queues. So what links to it sees no change, `Resource.MyQueue.type` stays the same, and a `$transform` for either applies to both.
 - **A few have new names**, with the same type:
 
@@ -35,7 +35,6 @@ Then the next stage: a dev stage first, and production last.
   | --- | --- |
   | `sst.aws.ApiGatewayV1` | `sst.aws.ApiGatewayRest` |
   | `sst.aws.ApiGatewayV2` | `sst.aws.ApiGatewayHttp` |
-  | `sst.aws.CronV2` | `sst.aws.Cron` |
   | `sst.cloudflare.StaticSiteV2` | `sst.cloudflare.StaticSite` |
 
 - **A stage moves once, and whole.** SST 5 doesn't deploy SST 4's components. On a stage deployed with SST 4, `sst deploy`, `sst dev` and `sst remove` are refused until it has moved; `sst diff` and `sst refresh` still run. To remove a stage you won't move, like an old preview stage, use SST 4, as the branch it was deployed from does. A new stage is refused SST 4's components too.
@@ -45,11 +44,10 @@ Then the next stage: a dev stage first, and production last.
 
 ## Before you start
 
-1. **Every component you use has to have a 5.0 form.** These don't. Deal with each one with SST 4 and deploy, before you move a stage that has it. `sst migrate --check` reads the stage's state and names each one it has, so you don't have to look for them. The codemod can't always tell from your config: the first `Cron` and Cloudflare's first `StaticSite` are written the way their 5.0 forms are.
+1. **Every component you use has to have a 5.0 form.** These don't. Deal with each one with SST 4 and deploy, before you move a stage that has it. `sst migrate --check` reads the stage's state and names each one it has, so you don't have to look for them. The codemod can't always tell from your config: Cloudflare's first `StaticSite` is written the way its 5.0 form is.
 
    | Component | What to do |
    | --- | --- |
-   | `sst.aws.Cron`, the first one | Move to `sst.aws.CronV2`, which is `Cron` in 5.0. Its schedule replaces the rule. |
    | `sst.aws.Vector` | Move its vectors to a vector database of their own, then remove it. |
    | `sst.aws.OpenControl` | Remove it, and run OpenControl outside of SST. |
    | `sst.aws.Auth.v1` | Move to `sst.aws.Auth`, OpenAuth's. |
@@ -121,7 +119,7 @@ sst migrate --codemod
 
 It makes the changes that are mechanical:
 
-- **The names**: the four renamed components get their new names, wherever they're written, in a `new`, a `get`, a type or a `$transform`. A name the v5 alphas wrote, like `sst.aws.v5.Queue`, loses its `v5`.
+- **The names**: the three renamed components get their new names, wherever they're written, in a `new`, a `get`, a type or a `$transform`. A name the v5 alphas wrote, like `sst.aws.v5.Queue`, loses its `v5`.
 - **The args written differently**, like a function's `role`, which is `existing.role`, a service's `public`, which is `loadBalancer`, or a site's `route`, which is `router`. Args that SST 4 ignored, and SST 5 refuses, are removed, and it says where they go if you meant them.
 - **What a method gave.** A route, a subscriber or a data source isn't a component of its own any more. So a read like `subscriber.nodes.function` becomes the component's, `bus.nodes.subscriber["MySubscriber"]`, and a subscriber's own `transform` moves into the component's `transform`, for that subscriber only.
 - **The static methods that took an ARN**, which are methods of what `get` gives: `sst.aws.Bus.subscribe(name, arn, ...)` becomes `sst.aws.Bus.get("MyBus", arn).subscribe(name, ...)`.
@@ -129,7 +127,7 @@ It makes the changes that are mechanical:
 It lists each change, and each thing it couldn't do, marked `!`, with what to write:
 
 ```txt frame="none"
-✓  sst.config.ts:9   `sst.aws.CronV2` is `sst.aws.Cron`
+✓  sst.config.ts:9   `sst.aws.ApiGatewayV2` is `sst.aws.ApiGatewayHttp`
 ✓  sst.config.ts:11  `Bus`'s `subscribe`'s `transform.rule` is the bus's `transform.rule`, for its id
 ✓  sst.config.ts:18  `Service`'s `public` is `loadBalancer`, with the same settings
 !  sst.config.ts:25  `Router`'s `routes` are gone. With SST 4, add each with `route()` or `routeBucket()` in place of `routes` and deploy; then move the stage.
@@ -149,7 +147,7 @@ Where the codemod wasn't run, or couldn't read the code, SST 4's names fail with
 Some reads fail without saying so, so look for them where the codemod wasn't run:
 - a record by id passed on whole where SST 4 gave one resource, like `subscriber.nodes.rule` given to another resource's args, which isn't read as one of them;
 - a field read on a record with nothing in it yet, like `bus.nodes.rule.arn` before the bus has a subscriber, which is `undefined`;
-- a check written to tell SST 4 from SST 5 by whether a name exists, like `sst.aws.CronV2 ?? sst.aws.Cron`, which finds SST 4's name in SST 5 too.
+- a check written to tell SST 4 from SST 5 by whether a name exists, like `sst.aws.ApiGatewayV2 ?? sst.aws.ApiGatewayHttp`, which finds SST 4's name in SST 5 too.
 
 ### What the codemod can't see
 
@@ -171,7 +169,7 @@ A few changes depend on what your values are, not on how they're written. Look f
 
 Each component's page has a "Switch from" section with everything that's written or works differently:
 
-- **AWS:** [`Alb`](/docs/component/aws/alb/), [`Analog`](/docs/component/aws/analog/), [`ApiGatewayHttp`](/docs/component/aws/apigateway-http/), [`ApiGatewayRest`](/docs/component/aws/apigateway-rest/), [`ApiGatewayRestApiKey`](/docs/component/aws/apigateway-rest-api-key/), [`ApiGatewayRestUsagePlan`](/docs/component/aws/apigateway-rest-usage-plan/), [`ApiGatewayWebSocket`](/docs/component/aws/apigateway-websocket/), [`AppSync`](/docs/component/aws/app-sync/), [`Astro`](/docs/component/aws/astro/), [`Aurora`](/docs/component/aws/aurora/), [`Auth`](/docs/component/aws/auth/), [`Bucket`](/docs/component/aws/bucket/), [`Bus`](/docs/component/aws/bus/), [`Cdn`](/docs/component/aws/cdn/), [`Cluster`](/docs/component/aws/cluster/), [`CognitoIdentityPool`](/docs/component/aws/cognito-identity-pool/), [`CognitoUserPool`](/docs/component/aws/cognito-user-pool/), [`CognitoUserPoolClient`](/docs/component/aws/cognito-user-pool-client/), [`Cron`](/docs/component/aws/cron/), [`DnsValidatedCertificate`](/docs/component/aws/dns-validated-certificate/), [`Dsql`](/docs/component/aws/dsql/), [`Dynamo`](/docs/component/aws/dynamo/), [`Efs`](/docs/component/aws/efs/), [`Email`](/docs/component/aws/email/), [`Function`](/docs/component/aws/function/), [`KinesisStream`](/docs/component/aws/kinesis-stream/), [`MicroVm`](/docs/component/aws/microvm/), [`Mysql`](/docs/component/aws/mysql/), [`Nextjs`](/docs/component/aws/nextjs/), [`Nuxt`](/docs/component/aws/nuxt/), [`OpenSearch`](/docs/component/aws/open-search/), [`Postgres`](/docs/component/aws/postgres/), [`Queue`](/docs/component/aws/queue/), [`React`](/docs/component/aws/react/), [`Realtime`](/docs/component/aws/realtime/), [`Redis`](/docs/component/aws/redis/), [`Remix`](/docs/component/aws/remix/), [`Router`](/docs/component/aws/router/), [`Service`](/docs/component/aws/service/), [`SnsTopic`](/docs/component/aws/sns-topic/), [`SolidStart`](/docs/component/aws/solid-start/), [`StaticSite`](/docs/component/aws/static-site/), [`StepFunctions`](/docs/component/aws/step-functions/), [`SvelteKit`](/docs/component/aws/svelte-kit/), [`TanStackStart`](/docs/component/aws/tan-stack-start/), [`Task`](/docs/component/aws/task/), [`Vpc`](/docs/component/aws/vpc/), [`Workflow`](/docs/component/aws/workflow/).
+- **AWS:** [`Alb`](/docs/component/aws/alb/), [`Analog`](/docs/component/aws/analog/), [`ApiGatewayHttp`](/docs/component/aws/apigateway-http/), [`ApiGatewayRest`](/docs/component/aws/apigateway-rest/), [`ApiGatewayRestApiKey`](/docs/component/aws/apigateway-rest-api-key/), [`ApiGatewayRestUsagePlan`](/docs/component/aws/apigateway-rest-usage-plan/), [`ApiGatewayWebSocket`](/docs/component/aws/apigateway-websocket/), [`AppSync`](/docs/component/aws/app-sync/), [`Astro`](/docs/component/aws/astro/), [`Aurora`](/docs/component/aws/aurora/), [`Auth`](/docs/component/aws/auth/), [`Bucket`](/docs/component/aws/bucket/), [`Bus`](/docs/component/aws/bus/), [`Cdn`](/docs/component/aws/cdn/), [`Cluster`](/docs/component/aws/cluster/), [`CognitoIdentityPool`](/docs/component/aws/cognito-identity-pool/), [`CognitoUserPool`](/docs/component/aws/cognito-user-pool/), [`CognitoUserPoolClient`](/docs/component/aws/cognito-user-pool-client/), [`Cron`](/docs/component/aws/cron/), [`CronV2`](/docs/component/aws/cron-v2/), [`DnsValidatedCertificate`](/docs/component/aws/dns-validated-certificate/), [`Dsql`](/docs/component/aws/dsql/), [`Dynamo`](/docs/component/aws/dynamo/), [`Efs`](/docs/component/aws/efs/), [`Email`](/docs/component/aws/email/), [`Function`](/docs/component/aws/function/), [`KinesisStream`](/docs/component/aws/kinesis-stream/), [`MicroVm`](/docs/component/aws/microvm/), [`Mysql`](/docs/component/aws/mysql/), [`Nextjs`](/docs/component/aws/nextjs/), [`Nuxt`](/docs/component/aws/nuxt/), [`OpenSearch`](/docs/component/aws/open-search/), [`Postgres`](/docs/component/aws/postgres/), [`Queue`](/docs/component/aws/queue/), [`React`](/docs/component/aws/react/), [`Realtime`](/docs/component/aws/realtime/), [`Redis`](/docs/component/aws/redis/), [`Remix`](/docs/component/aws/remix/), [`Router`](/docs/component/aws/router/), [`Service`](/docs/component/aws/service/), [`SnsTopic`](/docs/component/aws/sns-topic/), [`SolidStart`](/docs/component/aws/solid-start/), [`StaticSite`](/docs/component/aws/static-site/), [`StepFunctions`](/docs/component/aws/step-functions/), [`SvelteKit`](/docs/component/aws/svelte-kit/), [`TanStackStart`](/docs/component/aws/tan-stack-start/), [`Task`](/docs/component/aws/task/), [`Vpc`](/docs/component/aws/vpc/), [`Workflow`](/docs/component/aws/workflow/).
 - **Cloudflare:** [`Ai`](/docs/component/cloudflare/ai/), [`Astro`](/docs/component/cloudflare/astro/), [`Bucket`](/docs/component/cloudflare/bucket/), [`Cron`](/docs/component/cloudflare/cron/), [`D1`](/docs/component/cloudflare/d1/), [`DurableObject`](/docs/component/cloudflare/durable-object/), [`Hyperdrive`](/docs/component/cloudflare/hyperdrive/), [`Kv`](/docs/component/cloudflare/kv/), [`Queue`](/docs/component/cloudflare/queue/), [`RateLimit`](/docs/component/cloudflare/rate-limit/), [`ReactRouter`](/docs/component/cloudflare/react-router/), [`StaticSite`](/docs/component/cloudflare/static-site/), [`TanStackStart`](/docs/component/cloudflare/tan-stack-start/), [`Worker`](/docs/component/cloudflare/worker/), [`Workflow`](/docs/component/cloudflare/workflow/).
 - **Experimental:** [`DevCommand`](/docs/component/experimental/dev-command/).
 
@@ -192,7 +190,7 @@ It shows what the move keeps, what it carries over to a new name, and what it up
 
 Expect updates in place, like a function's description or the tags SST sets. A few things are expected to change more:
 
-- **A function whose part has a new name uploads its code again.** The function is updated in place. `CronV2`'s function is one: it was `MyCronJobHandler` and is `MyCronJobFunction`.
+- **A function whose part has a new name uploads its code again.** The function is updated in place. A `Cron`'s or a `CronV2`'s function is one: it was `MyCronJobHandler` and is `MyCronJobFunction`.
 - **A file uploaded under a key made from what's in it**, like a function's code or a site's build, is replaced when what's in it changes, as on any deploy.
 - **Nothing is replaced for a change of provider alone.** SST 4 created some resources with your app's provider, whatever the component was given, like the queue subscribers of a `Bus`. A 5.0 component gives each one its own `provider`, and the move keeps them, updated in place.
 
@@ -248,9 +246,7 @@ A [package component](/docs/write-a-package-component/) built on the v5 alphas, 
 
 - **SST's components aren't in `v5` any more:** `v5.Queue` from `sst/components/aws` is `Queue`, and `sst.aws.v5.Queue` in an example is `sst.aws.Queue`.
 
-- **Two of SST's components have new names**, with the same type, so what an app deployed with them is kept:
-  - `v5.ApiGatewayV2` is `ApiGatewayHttp`, and its types are `ApiGatewayHttpArgs`, `ApiGatewayHttpAuthorizerArgs` and `ApiGatewayHttpRouteArgs`.
-  - `v5.CronV2` is `Cron`, and its args are `CronArgs`.
+- **One of SST's components has a new name**, with the same type, so what an app deployed with it is kept: `v5.ApiGatewayV2` is `ApiGatewayHttp`, and its types are `ApiGatewayHttpArgs`, `ApiGatewayHttpAuthorizerArgs` and `ApiGatewayHttpRouteArgs`.
 - **Two args are gone:** `Redis`'s `nodes`, which is `cluster.nodes`, and `Cluster`'s `forceUpgrade`.
 - **`linkable` is gone** from `sst/components`. Use `Linkable.wrap`. `V5Args`, which wrapped a v4 component's args, is gone too.
 - **Drop `skipLibCheck` and the `google-protobuf` pin.** SST's types check without `skipLibCheck`, under `moduleResolution: "bundler"` or `"NodeNext"`, and `mock()` works with the `google-protobuf` that `@pulumi/pulumi` installs.

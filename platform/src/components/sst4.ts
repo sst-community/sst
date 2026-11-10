@@ -139,6 +139,7 @@ const route = { function: added("route", "handler", `, by the route`) };
 export const renamedNodes: Record<string, Record<string, string>> = {
   "sst:aws:Alb": { listeners: `"nodes.listener", by the same keys` },
   "sst:aws:Auth": { authorizer: `"nodes.issuer"` },
+  "sst:aws:Cron": { job: `"nodes.function"` },
   "sst:aws:CronV2": { job: `"nodes.function"` },
   "sst:aws:Bus": {
     ...subscriber(),

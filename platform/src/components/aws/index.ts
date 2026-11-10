@@ -17,6 +17,7 @@ export * from "./cognito-identity-pool";
 export * from "./cognito-user-pool";
 export * from "./cognito-user-pool-client";
 export * from "./cron";
+export * from "./cron-v2";
 export * from "./dns-validated-certificate";
 export * from "./dsql";
 export * from "./dynamo";
@@ -57,7 +58,6 @@ export { iamEdit } from "./iam-edit";
 export {
   ApiGatewayV1,
   ApiGatewayV2,
-  CronV2,
   Vector,
   OpenControl,
 } from "./sst4";

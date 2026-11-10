@@ -22,12 +22,14 @@ func component(chain, name, parent string) apitype.ResourceV3 {
 
 func TestFindStranded(t *testing.T) {
 	stack := "urn:pulumi:dev::app::pulumi:pulumi:Stack::app-dev"
+	control := component("sst:aws:OpenControl", "Control", stack)
+	// Both of SST 4's cron jobs have a 5.0 form
 	cron := component("sst:aws:Cron", "Nightly", stack)
 	cronV2 := component("sst:aws:CronV2", "Hourly", stack)
 	vector := component("sst:aws:Vector", "Embeddings", stack)
 	// The `Postgres.v1` a `Vector` keeps its vectors in moves with it
 	vectorDb := component("sst:aws:Vector$sst:aws:Postgres", "EmbeddingsDatabase", string(vector.URN))
-	// The `Cron` that warms a site moves with the site
+	// The `Cron` that warms a site has a 5.0 form, and moves with the site
 	site := component("sst:aws:Nextjs", "Web", stack)
 	warmer := component("sst:aws:Nextjs$sst:aws:Cron", "WebWarmer", string(site.URN))
 	// The current `Vpc` records its version inside it; a `Vpc.v1` doesn't
@@ -40,25 +42,25 @@ func TestFindStranded(t *testing.T) {
 	siteV2 := component("sst:cloudflare:StaticSite", "Blog", stack)
 	// One inside an app's own component is the app's
 	wrapper := component("acme:index:Jobs", "Jobs", stack)
-	wrapped := component("acme:index:Jobs$sst:aws:Cron", "JobsCleanup", string(wrapper.URN))
+	wrapped := component("acme:index:Jobs$sst:aws:OpenControl", "JobsControl", string(wrapper.URN))
 	// A resource of a type with no 5.0 form isn't a component
-	custom := component("sst:aws:Cron$aws:cloudwatch/eventRule:EventRule", "NightlyRule", string(cron.URN))
+	custom := component("sst:aws:OpenControl$aws:lambda/function:Function", "ControlServer", string(control.URN))
 	custom.Custom = true
 
 	found := FindStranded([]apitype.ResourceV3{
-		cron, cronV2, vector, vectorDb, site, warmer, vpc, vpcVersion, vpcV1,
+		control, cron, cronV2, vector, vectorDb, site, warmer, vpc, vpcVersion, vpcV1,
 		firstSite, firstSiteKv, siteV2, wrapper, wrapped, custom,
 	})
 	names := []string{}
 	for _, s := range found {
 		names = append(names, s.Name)
 	}
-	assert.Equal(t, []string{"Docs", "Embeddings", "JobsCleanup", "Nightly", "OldNet"}, names)
-	assert.Equal(t, `"Nightly" is SST 4's first `+"`Cron`"+`, which has no 5.0 form: move it to `+"`sst.aws.CronV2`"+` with SST 4, which is `+"`Cron`"+` in 5.0.`, found[3].String())
+	assert.Equal(t, []string{"Control", "Docs", "Embeddings", "JobsControl", "OldNet"}, names)
+	assert.Equal(t, `"Control" is an `+"`OpenControl`"+`, which has no 5.0 form: remove it with SST 4, and run OpenControl outside of SST.`, found[0].String())
 	assert.Contains(t, found[4].String(), "`Vpc.v1`")
-	assert.Contains(t, found[0].String(), "Cloudflare's first `StaticSite`")
+	assert.Contains(t, found[1].String(), "Cloudflare's first `StaticSite`")
 
-	assert.Nil(t, FindStranded([]apitype.ResourceV3{cronV2, site, warmer, vpc, vpcVersion, siteV2}))
+	assert.Nil(t, FindStranded([]apitype.ResourceV3{cron, cronV2, site, warmer, vpc, vpcVersion, siteV2}))
 	assert.Nil(t, FindStranded(nil))
 }
 
@@ -73,8 +75,8 @@ func TestFindStrandedVectorGetAndSameNames(t *testing.T) {
 	own := component("sst:aws:Postgres", "Reports", stack)
 	api := component("acme:index:Api", "Api", stack)
 	worker := component("acme:index:Worker", "Worker", stack)
-	inApi := component("acme:index:Api$sst:aws:Cron", "Cleanup", string(api.URN))
-	inWorker := component("acme:index:Worker$sst:aws:Cron", "Cleanup", string(worker.URN))
+	inApi := component("acme:index:Api$sst:aws:OpenControl", "Control", string(api.URN))
+	inWorker := component("acme:index:Worker$sst:aws:OpenControl", "Control", string(worker.URN))
 
 	found := FindStranded([]apitype.ResourceV3{vector, lookedUp, own, api, worker, inApi, inWorker})
 	lines := []string{}
@@ -82,8 +84,8 @@ func TestFindStrandedVectorGetAndSameNames(t *testing.T) {
 		lines = append(lines, s.String())
 	}
 	assert.Len(t, lines, 4)
-	assert.True(t, strings.HasPrefix(lines[0], `"Cleanup", in "Api", is SST 4's first`), lines[0])
-	assert.True(t, strings.HasPrefix(lines[1], `"Cleanup", in "Worker", is SST 4's first`), lines[1])
+	assert.True(t, strings.HasPrefix(lines[0], `"Control", in "Api", is an `+"`OpenControl`"), lines[0])
+	assert.True(t, strings.HasPrefix(lines[1], `"Control", in "Worker", is an `+"`OpenControl`"), lines[1])
 	assert.True(t, strings.HasPrefix(lines[2], `"Reports" is a `+"`Postgres.v1`"), lines[2])
 	assert.True(t, strings.HasPrefix(lines[3], `"Search" is a `+"`Vector`"), lines[3])
 }
@@ -91,7 +93,7 @@ func TestFindStrandedVectorGetAndSameNames(t *testing.T) {
 // Every type the codemod leaves out has a line here, as the two lists say the
 // same of a config and a state
 func TestStrandedTypes(t *testing.T) {
-	for _, typ := range []string{"sst:aws:Cron", "sst:aws:OpenControl", "sst:aws:Vector", "sst:cloudflare:Auth", "sst:cloudflare:SolidStart"} {
+	for _, typ := range []string{"sst:aws:OpenControl", "sst:aws:Vector", "sst:cloudflare:Auth", "sst:cloudflare:SolidStart"} {
 		assert.Contains(t, leftOut[typ], "no 5.0 form", typ)
 	}
 	for _, typ := range []string{"sst:aws:Auth", "sst:aws:Vpc", "sst:aws:Cluster", "sst:aws:Postgres", "sst:aws:Redis"} {

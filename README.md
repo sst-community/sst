@@ -100,7 +100,7 @@ Every change to 5.0 is held to these. [goals.md](docs/plans/v5-rewrite/goals.md)
 
 ## Status
 
-- **Every component of SST 4 has a 5.0 form,** under the same name, but for four that are renamed (`ApiGatewayV1` and `ApiGatewayV2` are `ApiGatewayRest` and `ApiGatewayHttp`, `CronV2` is `Cron`, and Cloudflare's `StaticSiteV2` is `StaticSite`) and a few that are left out, like SST 4's first `Cron`, `Vector`, `OpenControl` and the `.v1`s. The guide says what to do with each before a move.
+- **Every component of SST 4 has a 5.0 form,** under the same name, but for three that are renamed (`ApiGatewayV1` and `ApiGatewayV2` are `ApiGatewayRest` and `ApiGatewayHttp`, and Cloudflare's `StaticSiteV2` is `StaticSite`) and a few that are left out, like `Vector`, `OpenControl` and the `.v1`s. The guide says what to do with each before a move.
 - **How it's been checked:** each component's move is tested against the SST 4 component it replaces, under a mock of the deploy engine, and against states recorded from real deploys. Each was also moved from SST 4 in a real AWS or Cloudflare account as it was ported, but Cloudflare's `Bucket` and `Hyperdrive`, which need R2, checked under the mock only.
 - **Left before 5.0.0:** moving whole apps in a real account, with every resource compared by its cloud id, and releasing 5.0 next to 4.x.
 

@@ -17,14 +17,6 @@ export type CloudflareComponents = typeof cf;
 export type Vpc = InstanceType<typeof aws.Vpc>;
 
 /**
- * SST 4's `CronV2`, which is `Cron` in 5.0: the same type, without the
- * version. 4.x's own `Cron` is the one `CronV2` replaced.
- */
-function cron(aws: Components): Components["Cron"] {
-  return sst4<Components["Cron"]>(aws, "CronV2") ?? aws.Cron;
-}
-
-/**
  * SST 4's `ApiGatewayV2`, which is `ApiGatewayHttp` in 5.0, with the same type.
  */
 function httpApi(aws: Components): Components["ApiGatewayHttp"] {
@@ -199,7 +191,7 @@ export function serverless(aws: Components) {
   });
   graph.addResolver("Query hello", { dataSource: lambdaDS.name });
 
-  new (cron(aws))("Tick", {
+  new aws.CronV2("Tick", {
     function: "functions/log.handler",
     schedule: "rate(1 hour)",
   });
@@ -274,7 +266,7 @@ export function containers(aws: Components, vpc: Vpc) {
     image: "public.ecr.aws/docker/library/busybox:stable",
     command: ["echo", "ran"],
   });
-  new (cron(aws))("Nightly", { task: job, schedule: "rate(1 day)" });
+  new aws.CronV2("Nightly", { task: job, schedule: "rate(1 day)" });
 
   // A function in the VPC that mounts the file system and can run the task
   const mounted = new aws.Function("Mounted", {

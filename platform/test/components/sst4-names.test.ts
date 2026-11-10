@@ -82,7 +82,6 @@ describe.each(GROUPS)("sst.%s", (group) => {
         ? {
             ApiGatewayV1: "ApiGatewayRest",
             ApiGatewayV2: "ApiGatewayHttp",
-            CronV2: "Cron",
           }
         : { StaticSiteV2: "StaticSite" };
     for (const [old, now] of Object.entries(renamed)) {
@@ -231,7 +230,11 @@ describe("SST 4's nodes names", () => {
         fields: { id: "string" },
         primaryIndex: { hashKey: "id" },
       }),
-      "sst:aws:CronV2": new aws.Cron("Cron", {
+      "sst:aws:Cron": new aws.Cron("Cron", {
+        schedule: "rate(1 day)",
+        function: handler,
+      }),
+      "sst:aws:CronV2": new aws.CronV2("CronV2", {
         schedule: "rate(1 day)",
         function: handler,
       }),

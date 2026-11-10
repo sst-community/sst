@@ -45,3 +45,12 @@ export const internal = {
   ],
   cloudflare: [],
 };
+
+/**
+ * The components a provider has that are deprecated, which the sidebar lists
+ * under "Deprecated", as SST 4's did.
+ */
+export const deprecated = {
+  aws: ["cron"],
+  cloudflare: [],
+};

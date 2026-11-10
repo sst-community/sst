@@ -225,7 +225,7 @@ export const rules: Rule[] = [
       if (
         !ref.written5 &&
         isLeftOut(ref.group, ref.name) &&
-        oldForm(node, ref)
+        oldForm(ref)
       ) {
         ctx.note(node, "left-out", leftOut[ref.group][ref.name]);
         return;
@@ -339,23 +339,22 @@ export const rules: Rule[] = [
     },
   },
 
-  // Cron, SST 4's CronV2
+  // Cron and CronV2
   {
     name: "cron-job",
-    visit: onNew(["Cron"], (ctx, args, ref) => {
-      if (ref.name !== "CronV2") return;
-      renameKey("cron-job", "`CronV2`", ["job"], "function")(ctx, args);
-    }),
+    visit: onNew(["Cron", "CronV2"], (ctx, args, ref) =>
+      renameKey("cron-job", `\`${ref.five}\``, ["job"], "function")(ctx, args),
+    ),
   },
   {
     name: "cron-nodes-job",
-    visit: onNodes(["Cron"], (ctx, node, ref) => {
-      if (ref.name !== "CronV2" || node.name.text !== "job") return;
+    visit: onNodes(["Cron", "CronV2"], (ctx, node, ref) => {
+      if (node.name.text !== "job") return;
       ctx.replace(node.name, "function");
       ctx.change(
         node,
         "cron-nodes-job",
-        "`CronV2`'s `nodes.job` is `nodes.function`",
+        `\`${ref.five}\`'s \`nodes.job\` is \`nodes.function\``,
       );
     }),
   },
@@ -1490,19 +1489,11 @@ function valueOf(ctx: FileContext, p: ts.ObjectLiteralElementLike) {
   return undefined;
 }
 
-// Whether a component that shares its name with a 5.0 one is SST 4's first:
-// `Cron` with `job`. Cloudflare's `StaticSite`, and `Cron` without its args,
-// are read as 5.0's, which they are in a config the codemod already ran on.
-function oldForm(node: ts.Node, ref: Ref) {
-  const call = node.parent;
-  const args =
-    ts.isNewExpression(call) && call.expression === node
-      ? argsOf(call, 1)
-      : undefined;
-  if (ref.group === "aws" && ref.name === "Cron")
-    return !!args && !!prop(args, "job");
-  if (ref.group === "cloudflare" && ref.name === "StaticSite") return false;
-  return true;
+// Whether a component that shares its name with a 5.0 one is SST 4's first.
+// Cloudflare's `StaticSite` is read as 5.0's, which it is in a config the
+// codemod already ran on.
+function oldForm(ref: Ref) {
+  return !(ref.group === "cloudflare" && ref.name === "StaticSite");
 }
 
 // What SST 4's `Function` took that 5.0's takes another way: in a `Function`'s

@@ -15,9 +15,6 @@ export const ApiGatewayV2 = renamedComponent(
   "sst.aws.ApiGatewayHttp",
 );
 
-/** @deprecated SST 4's name: it's `sst.aws.Cron` in SST 5. */
-export const CronV2 = renamedComponent("sst.aws.CronV2", "sst.aws.Cron");
-
 /** @deprecated SST 4's, which SST 5 doesn't have. */
 export const Vector = leftOutComponent(
   "sst.aws.Vector",
