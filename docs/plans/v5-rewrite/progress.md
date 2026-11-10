@@ -2,6 +2,17 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-10: why SST 4's refresh fails after going back
+
+SST 4's `sst refresh` failed after going back in both serverless runs, on the `Links` function's `LinkRef`: "cannot complete a resource ... whose registration isn't pending". The maintainer asked to look into it.
+
+- **The cause is Pulumi's refresh with `--run-program`, which SST 4 uses.** A resource the program registers that the state doesn't have, or whose object in the cloud is gone, is skipped. A component with a state of its own that depends directly on a skipped resource gets no step, so when it registers its outputs, there's nothing pending to complete. SST 4 makes a `LinkRef` for each linkable component at the top, and the one for a `Function` depends on whatever its links' outputs come from: for `Links`, linked to the user pool, the pool's trigger and the trigger's code object.
+- **The move deletes that object.** It renames the trigger, and uploads its code again under SST 5's key, deleting SST 4's. After going back, SST 4's state still names it, and SST 4's deploy doesn't upload it again, as its key hasn't changed. The other groups refreshed: none of them links to a component whose part's code the move deleted, and the sites' builds upload their code again on every deploy.
+- **Reproduced without a move**, on a small SST 4 stage: a function linked to a user pool with a trigger. Its refresh passed; with the trigger's code deleted from the asset bucket by hand, it failed the same way. `sst state remove` of the code object, then `sst deploy`, uploaded it again, and the refresh passed.
+- **SST 4's refresh fails the same way on any stage `sst dev` deployed** with that shape, moved or not: its state has no code objects, since the functions are stubs, but the refresh runs the program as a deploy, which makes them. So the `sst dev` run's refresh failure was SST 4's own. Noted only; 4.x isn't changed ([decision](plan.md#decisions), 2026-11-09).
+- **The guide** says what makes the refresh fail after going back, and how to put the code back ([decision](plan.md#decisions)).
+- **Cleaned up:** both small stages removed with SST 4, then their 155 state versions and markers, their passphrases and 2 source maps.
+
 ## 2026-11-10: step 5's exit, Cloudflare
 
 The lab app's two Cloudflare groups through [the user's path](plan.md#5-moving-an-app), on a stage of its own, as recorded: a `Worker` with a URL, smart placement, a migration and bindings to a `Kv`, a `D1`, a `Queue` with a subscriber, an `Ai`, a `RateLimit`, a `DurableObject` and a `Workflow`; a `Cron`; a `StaticSiteV2`; and the three sites with a server, `Astro`, `ReactRouter` and `TanStackStart`, each counting its visits in a `Kv` of its own. It ran in one folder, as the `sst dev` run did.

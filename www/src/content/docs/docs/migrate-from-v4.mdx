@@ -296,6 +296,13 @@ This was tried with SST 4.24.0: on the app above with an API, deployed once with
 - **On a stage you use with `sst dev`,** the function keeps the name SST 5's `sst dev` knows it by, so SST 4's `sst dev` doesn't reach it, and calls to it fail. Run SST 4's `sst deploy`, then `sst dev`.
 - **A function whose code is a `bundle`,** like a Next.js site's, reads its links from a file named after it, so it looks for the file under its new name. Run SST 4's `sst refresh`, then `sst deploy`.
 
-The refresh passed for the databases, the sites, the containers and Cloudflare's; for the app with the API it failed, for a reason that isn't known yet. So go back only to get a stage onto SST 4 again quickly, and move it again when you can.
+SST 4's `sst refresh` can fail after going back, with "cannot complete a resource … whose registration isn't pending". The move deleted the code SST 4 had uploaded for each function it gave a new name, the ones `sst migrate --check` said upload their code again. SST 4's state still names that code, as `<function>Code` under SST 4's name for the function, and SST 4's deploy doesn't upload it again. Its refresh then fails on a component linked to one of them, like a user pool with a trigger. Take each of those out of SST 4's state, then deploy, and SST 4 uploads them again:
+
+```bash frame="none"
+sst state remove UsersTriggerpreSignUpCode --stage dev
+sst deploy --stage dev
+```
+
+In the tests, the refresh failed this way for the app with the API, and passed for the others. So go back only to get a stage onto SST 4 again quickly, and move it again when you can.
 
 Once the stage has been deployed again with SST 5, the copy no longer matches what's deployed. Fix forward instead.
