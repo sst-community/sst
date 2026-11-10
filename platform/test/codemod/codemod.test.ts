@@ -32,6 +32,41 @@ describe("names", () => {
     ).toBe(`new sst.aws.Function("Api", { handler: "a.handler" });`);
   });
 
+  // The v5 alphas let a config pick a group's components by it
+  it("writes a group's `v5` as the group, where SST 5's components are", () => {
+    const out = config(
+      `const aws = v5 ? sst.aws.v5 : sst.aws;\nconst cf = sst.cloudflare.v5;\ntype C = typeof sst.aws.v5;\nnew sst.aws.v5.Queue("Q");\nsst.aws.v5["Bucket"];`,
+    );
+    expect(out.text).toBe(
+      `const aws = v5 ? sst.aws : sst.aws;\nconst cf = sst.cloudflare;\ntype C = typeof sst.aws;\nnew sst.aws.Queue("Q");\nsst.aws["Bucket"];`,
+    );
+    expect(out.changes).toContain("`sst.aws.v5` is `sst.aws`, where SST 5's components are");
+    // Not anything else's `v5`
+    const other = `const a = x.aws.v5;\nconst b = sst.x.v5;\nconst c = sst.aws.Vpc.v5;`;
+    expect(config(other).text).toBe(other);
+    // Once written, a second run changes nothing
+    expect(config(out.text).changes).toEqual([]);
+  });
+
+  // A group passed in as an argument, which the codemod can't follow
+  it("leaves a note for a renamed component it can't trace to SST's", () => {
+    const out = config(
+      `export function api(aws: any) {\n  new aws.ApiGatewayV2("Api");\n  new aws.CronV2("Tick", {});\n  new aws.Queue("Q");\n  new acme.StaticSiteV2("Web");\n}`,
+    );
+    expect(out.text).toBe(
+      `export function api(aws: any) {\n  new aws.ApiGatewayV2("Api");\n  new aws.CronV2("Tick", {});\n  new aws.Queue("Q");\n  new acme.StaticSiteV2("Web");\n}`,
+    );
+    expect(out.notes).toEqual([
+      "If this is SST's `ApiGatewayV2`, it's `sst.aws.ApiGatewayHttp` in SST 5: the codemod can't tell what `aws` holds, so rename it by hand",
+      "If this is SST's `CronV2`, it's `sst.aws.Cron` in SST 5: the codemod can't tell what `aws` holds, so rename it by hand",
+      "If this is SST's `StaticSiteV2`, it's `sst.cloudflare.StaticSite` in SST 5: the codemod can't tell what `acme` holds, so rename it by hand",
+    ]);
+    // SST's own, traced, is renamed and gets no note
+    const traced = config(`new sst.aws.ApiGatewayV2("Api");`);
+    expect(traced.text).toBe(`new sst.aws.ApiGatewayHttp("Api");`);
+    expect(traced.notes).toEqual([]);
+  });
+
   it("gives a renamed component its 5.0 name, and its types", () => {
     const out = config(
       `const api = new sst.aws.ApiGatewayV2("Api");\nconst a: sst.aws.ApiGatewayV2Args = {};\nnew sst.aws.CronV2("C", { function: "a.h", schedule: "rate(1 day)" });`,

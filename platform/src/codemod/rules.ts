@@ -14,7 +14,7 @@ import {
   type FileContext,
   type Ref,
 } from "./engine";
-import { leftOut, v1 } from "./names";
+import { leftOut, renamed, v1 } from "./names";
 import { nameless, overloaded, partRules } from "./parts";
 
 // The sites built on SST 4's SsrSite
@@ -236,6 +236,62 @@ export const rules: Rule[] = [
       if (from === to) return;
       ctx.replace(node, to);
       ctx.change(node, "name", `\`${from}\` is \`${to}\``);
+    },
+  },
+  {
+    // `sst.aws.v5` itself, as the v5 alphas let a config pick a group's
+    // components by it, like `const aws = v5 ? sst.aws.v5 : sst.aws`. SST 5's
+    // are `sst.aws`, and `sst.aws.v5` is `undefined`. `sst.aws.v5.Queue` is
+    // the name rule's.
+    name: "v5-group",
+    visit(ctx, node) {
+      if (!ts.isPropertyAccessExpression(node) && !ts.isQualifiedName(node))
+        return;
+      const [left, right] = ts.isPropertyAccessExpression(node)
+        ? [node.expression, node.name]
+        : [node.left, node.right];
+      if (right.text !== "v5") return;
+      if (!ts.isPropertyAccessExpression(left) && !ts.isQualifiedName(left))
+        return;
+      const [root, group] = ts.isPropertyAccessExpression(left)
+        ? [left.expression, left.name.text]
+        : [left.left, left.right.text];
+      if (!ts.isIdentifier(root) || root.text !== "sst") return;
+      if (group !== "aws" && group !== "cloudflare") return;
+      const parent = node.parent;
+      if (
+        (ts.isPropertyAccessExpression(parent) && parent.expression === node) ||
+        (ts.isQualifiedName(parent) && parent.left === node)
+      )
+        return;
+      if (ctx.isSkipped(node)) return;
+      ctx.replace(node, `sst.${group}`);
+      ctx.change(
+        node,
+        "v5-group",
+        `\`sst.${group}.v5\` is \`sst.${group}\`, where SST 5's components are`,
+      );
+    },
+  },
+  {
+    // A renamed component the codemod can't trace to `sst.aws`, like one
+    // made from a group passed in as an argument: `new aws.ApiGatewayV2(...)`.
+    // SST 5 refuses SST 4's name with what to write; this says so first.
+    name: "renamed-untraced",
+    visit(ctx, node) {
+      if (!ts.isNewExpression(node)) return;
+      const callee = node.expression;
+      if (!ts.isPropertyAccessExpression(callee) || chain(callee)) return;
+      const name = callee.name.text;
+      const group = (["aws", "cloudflare"] as const).find(
+        (g) => name in renamed[g] && !name.includes("."),
+      );
+      if (!group || ctx.isSkipped(node)) return;
+      ctx.note(
+        callee,
+        "name",
+        `If this is SST's \`${name}\`, it's \`sst.${group}.${renamed[group][name]}\` in SST 5: the codemod can't tell what \`${ctx.text(callee.expression)}\` holds, so rename it by hand`,
+      );
     },
   },
   {
