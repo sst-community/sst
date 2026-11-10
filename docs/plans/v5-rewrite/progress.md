@@ -2,6 +2,18 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: the docs' examples in SST 5's forms
+
+The 2026-11-07 review found the hand-written docs used forms SST 5 refuses. The codemod was run on each code block in the docs that uses SST's components, 712 of them, and every one it would change or notes was rewritten:
+
+- **A `Service`'s `loadBalancer.ports` is `rules`,** in the home page's two examples and 12 of the AWS start guides: Astro, Bun, Deno, Express, Hono, NestJS, Nuxt, Next.js, Prisma, Remix, SvelteKit and SolidStart.
+- **The home page's `Cron`** takes `function`, not SST 4's first `Cron`'s `job`.
+- **"Attach to a resource"** subscribes to a queue that isn't in the app with `sst.aws.Queue.get(...).subscribe(...)`, where it used the static `subscribe`, which SST 5 refuses.
+- **"Components"** routes to a function's URL with `router.route(...)`, where it gave the `Router` SST 4's `routes`.
+- **"Write a local component"** and `delegateOpts()`'s doc call a DNS adapter's `alias`, SST 5's name for `createAlias`.
+
+What the codemod still lists is in the components' "Switch from" sections, which show SST 4's form and then SST 5's on purpose. Text outside code was searched for SST 4's names, and has them only in the migration guide and in "Switch from".
+
 ## 2026-11-09: what the review left open
 
 The known differences and the points raised in [the review of the day's fixes](#2026-11-09-a-review-of-the-days-fixes-and-its-findings-fixed), each fixed:

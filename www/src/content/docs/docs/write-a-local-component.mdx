@@ -217,7 +217,7 @@ Do this only when an arg can't decide it.
 Sometimes another function creates resources under your component, like a DNS adapter creating records. Give it `this.delegateOpts()` as its options.
 
 ```ts
-dns.createAlias(name, record, this.delegateOpts());
+dns.alias(name, record, this.delegateOpts());
 ```
 
 These aren't parts. They're configured through whatever creates them, so they have no `transform` and aren't in `nodes`.

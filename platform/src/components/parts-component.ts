@@ -701,7 +701,7 @@ export class PartsComponent<P extends Parts> extends Component {
    *
    * @example
    * ```ts
-   * dns.createAlias(name, record, this.delegateOpts());
+   * dns.alias(name, record, this.delegateOpts());
    * ```
    */
   protected delegateOpts(): ComponentResourceOptions {

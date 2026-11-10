@@ -150,12 +150,14 @@ These are listed under the `vpc` prop of the `Cluster` component.
 Referencing existing resources also comes in handy when you are attaching to an existing resource. For example, to add a subscriber to an externally created queue:
 
 ```ts title="sst.config.ts" {3}
-sst.aws.Queue.subscribe("arn:aws:sqs:us-east-1:123456789012:MyQueue", "src/subscriber.handler");
+sst.aws.Queue
+  .get("MyQueue", "arn:aws:sqs:us-east-1:123456789012:MyQueue")
+  .subscribe("src/subscriber.handler");
 ```
 
-Here we are using the `static subscribe` method of the `Queue` component. And it takes the queue ARN that you are trying to attach to.
+Here `get` references the queue by the ARN of the queue you are trying to attach to, and `subscribe` adds the subscriber to it, as it would to a queue in your app.
 
-There are a few other built-in SST components that have `static` methods like this.
+A few other built-in SST components can be subscribed to like this.
 
 - `Bus`
 - `Dynamo`

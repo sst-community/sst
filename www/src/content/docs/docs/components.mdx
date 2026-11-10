@@ -285,15 +285,12 @@ const myFunction = new sst.aws.Function("MyFunction", {
 
 Here, `myFunction.url` is of type `Output<string>`. We want to use this function url as a route in our router.
 
-```ts {3} title="sst.config.ts"
-new sst.aws.Router("MyRouter", {
-  routes: {
-    "/api": myFunction.url
-  }
-});
+```ts {2} title="sst.config.ts"
+const router = new sst.aws.Router("MyRouter");
+router.route("/api", myFunction.url);
 ```
 
-The route arg takes `Input<string>`, which means it can take a string or an output. This creates a dependency internally. So the router will be deployed after the function has been. However, other components that are not dependent on this function can be deployed concurrently.
+The `route` method takes the URL as an `Input<string>`, which means it can take a string or an output. This creates a dependency internally. So the router will be deployed after the function has been. However, other components that are not dependent on this function can be deployed concurrently.
 
 You can read more about [Input and Output types on the Pulumi docs](https://www.pulumi.com/docs/concepts/inputs-outputs/).
 
