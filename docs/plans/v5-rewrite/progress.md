@@ -2,6 +2,15 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-10: an app's resource inside one of SST's components
+
+The 2026-11-07 review found that a resource of the app's given one of SST's components as its `parent`, which SST 4 allowed, fails with a message that says to add it to the component's parts, and that the guide was silent on it. The maintainer kept the refusal and asked for the right error and a line in the guide ([decision](plan.md#decisions)).
+
+- **The error**, for one of SST's components, says that only its parts can be inside it, to leave out `parent`, and, for one SST 4 deployed there, to write `aliases: [{ parent: ... }]` with the same component in its place. For a component of an app or a package, it still says to add it to the parts, and that a resource of the app's leaves out its `parent`.
+- **The guide**, under "What the codemod can't see", says the same, with an example, and to keep the alias until every stage has moved. A row in the plan's [breaking changes](plan.md#breaking-changes-so-far).
+- **Tests:** the refusal and its message, for a `Bucket` and for a component of the app's; and a queue of the app's and an SST 4 `Queue` inside a `Bucket`, taken over with the alias in place of the parent. The mock lists the app queue's name as dropped, as it compares what each is given, where the provider keeps the name it has. The refusal tests fail without the change.
+- **In the lab**, on a stage of its own: SST 4 (4.24.0) deployed a `Bucket` with an `aws.sqs.Queue`, which SST 4 named, an `aws.s3.BucketObjectv2` and an `sst.aws.Queue` inside it. A CLI built from `v5` refused `sst migrate --check` with the old message. With `aliases: [{ parent: bucket }]` in place of `parent`, `--check` passed: 12 kept, 4 at a new address, nothing updated or replaced. `sst migrate` moved it, `sst diff` then showed no changes, the queue kept its name and its creation time, and the object its content. Removed with SST 5 and cleaned up: 48 state versions and markers, and the passphrase.
+
 ## 2026-11-10: "Why SST 5" and "Custom Runtimes" in the docs
 
 The maintainer asked for a page on why 5.0 was done and what users get from it, and then for one on runtimes made of commands, which the first page names.

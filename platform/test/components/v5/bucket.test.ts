@@ -488,6 +488,45 @@ describe("Bucket", () => {
 
   });
 
+  // SST 4 let an app's own resource be inside one of SST's components
+  describe("an app's resource given the bucket as its parent", () => {
+    it("is refused, with what keeps one SST 4 deployed", async () => {
+      const aws = await import("@pulumi/aws");
+      const bucket = new Bucket("MyBucket");
+      expect(
+        () => new aws.sqs.Queue("MyBucketQueue", {}, { parent: bucket }),
+      ).toThrow(
+        /"MyBucketQueue" \(aws:sqs\/queue:Queue\) is not one of the component's parts\. Only those can be inside one of SST's components: leave out the `parent` you gave it\. If SST 4 deployed it inside the component, write `aliases: \[\{ parent: \.\.\. \}\]`/,
+      );
+      await pulumi.settle();
+    });
+
+    it("is kept, when SST 4 deployed it there, with an alias in place of the parent", async () => {
+      const aws = await import("@pulumi/aws");
+      const { unclaimed, changed } = await pulumi.takesOver(
+        () => {
+          const bucket = new OriginalBucket("MyBucket");
+          new aws.sqs.Queue("MyBucketQueue", {}, { parent: bucket });
+          new SidedQueue("MyBucketJobs", {}, { parent: bucket });
+        },
+        () => {
+          const bucket = new Bucket("MyBucket");
+          const aliases = [{ parent: bucket }];
+          new aws.sqs.Queue("MyBucketQueue", {}, { aliases });
+          new SidedQueue("MyBucketJobs", {}, { aliases });
+        },
+      );
+      expect(unclaimed).toEqual([]);
+      // SST 4 named the queue, as it named what was inside its components.
+      // Outside one, the provider names it, and keeps the name it has: a move
+      // in AWS kept it and updated nothing. The mock compares what each is
+      // given, so it lists the name SST 4 gave.
+      expect(changed.map((c) => [c.name, c.fields])).toEqual([
+        ["MyBucketQueue", ["name", "options.ignoreChanges"]],
+      ]);
+    });
+  });
+
   describe("policy", () => {
     const statements = () =>
       JSON.parse(resource("MyBucketPolicy").inputs.policy).statements;

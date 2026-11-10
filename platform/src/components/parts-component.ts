@@ -766,10 +766,18 @@ export class PartsComponent<P extends Parts> extends Component {
     if (this.partDelegated.has(child.resource)) return;
 
     const part = this.findPart(child);
-    if (!part)
+    if (!part) {
+      const notAPart = `In the "${this.componentName}" component, "${child.name}" (${child.type}) is not one of the component's parts.`;
+      // One of SST's own creates only its parts, so this is an app's resource
+      // given the component as its parent, which SST 4 allowed
+      if (this.componentType.startsWith("sst:"))
+        throw new VisibleError(
+          `${notAPart} Only those can be inside one of SST's components: leave out the \`parent\` you gave it. If SST 4 deployed it inside the component, write \`aliases: [{ parent: ... }]\`, with the same component, where \`parent\` was. That keeps the one deployed.`,
+        );
       throw new VisibleError(
-        `In the "${this.componentName}" component, "${child.name}" (${child.type}) is not one of the component's parts. Add it to the parts of ${this.componentType.replaceAll(":", ".")}: ${Object.keys(this.partClasses).join(", ")}.`,
+        `${notAPart} Add it to the parts of ${this.componentType.replaceAll(":", ".")}: ${Object.keys(this.partClasses).join(", ")}. If it's a resource of the app's, given the component as its parent, leave out its \`parent\`.`,
       );
+    }
     put(this.partNodes, part.key, part.id, child.resource);
     if (moving()) this.reportMoved(part, child.resource);
   }

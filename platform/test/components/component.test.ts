@@ -156,7 +156,7 @@ describe("Component parts", () => {
       }
     }
     expect(() => new Leaky("Docs")).toThrow(
-      /"DocsExtra" \(aws:sqs\/queue:Queue\) is not one of the component's parts/,
+      /"DocsExtra" \(aws:sqs\/queue:Queue\) is not one of the component's parts\. Add it to the parts of acme\.index\.Leaky: bucket\. If it's a resource of the app's, given the component as its parent, leave out its `parent`\./,
     );
     await pulumi.settle();
   });

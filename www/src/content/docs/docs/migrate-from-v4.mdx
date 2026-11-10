@@ -166,6 +166,13 @@ A few changes depend on what your values are, not on how they're written. Look f
   ```
 
 - **A `transform` function can be given outputs** where SST 4 gave plain values: for what's only known once the deploy runs, like a `Vpc` subnet's `availabilityZone` when `az` is a number, or a `Task`'s container definitions, and for what follows from an arg you set as an output, which SST 4 resolved first. Otherwise it's given what SST 4 gave it, an output where SST 4 gave one, like a function's `timeout`, and a plain value where SST 4 gave one, like a table's `hashKey`. Each component's docs list what's different. For a part a component has several of, like a route or a subscriber, it's called for each one, with its id last. What it changes in the args is a copy, as it was in SST 4: it doesn't reach your config.
+- **A resource of your own can't be inside one of SST's components.** SST 4 let you give it one as its `parent`. SST 5 refuses that, with what to write, as only what a component creates itself is inside it. Leave out `parent`. For one that SST 4 deployed inside a component, write `aliases` with the same component where `parent` was. That keeps the one deployed, with the name SST 4 gave it, and `sst migrate --check` shows it kept. Keep the alias until every stage has moved.
+
+  ```ts title="sst.config.ts"
+  const bucket = new sst.aws.Bucket("MyBucket");
+  // In SST 4: { parent: bucket }
+  new aws.sqs.Queue("MyBucketQueue", {}, { aliases: [{ parent: bucket }] });
+  ```
 
 Each component's page has a "Switch from" section with everything that's written or works differently:
 
