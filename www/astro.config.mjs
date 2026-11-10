@@ -12,6 +12,7 @@ import rehypeAutolinkHeadings from "rehype-autolink-headings";
 const sidebar = [
   { label: "Intro", slug: "docs" },
   { label: "Basics", slug: "docs/basics" },
+  { label: "Why SST 5", slug: "docs/why-sst-5" },
   ...(hasExamples ? [{ label: "Examples", slug: "docs/examples" }] : []),
   { label: "Changelog", slug: "docs/changelog" },
   {
@@ -71,6 +72,7 @@ const sidebar = [
       { label: "IAM Credentials", slug: "docs/iam-credentials" },
       { label: "Migrate From v4", slug: "docs/migrate-from-v4" },
       { label: "Custom Domains", slug: "docs/custom-domains" },
+      { label: "Custom Runtimes", slug: "docs/custom-runtimes" },
       { label: "Import Resources", slug: "docs/import-resources" },
       { label: "Set up a Monorepo", slug: "docs/set-up-a-monorepo" },
       { label: "Write a Local Component", slug: "docs/write-a-local-component" },

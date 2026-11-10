@@ -1,0 +1,162 @@
+---
+title: Why SST 5
+description: What SST 5 changes for your app, and what moving to it costs.
+---
+
+SST 5 rebuilds SST's components on one foundation. Your handler code, the `Resource` SDK, linking, `sst dev`, `sst shell` and the tunnel work as they did. What changes is how the components are built, which makes them behave the same way everywhere, and makes what a deploy will do something you can see before it runs.
+
+:::caution
+SST 5 is in pre-release. Its components can still change in any way before 5.0.0.
+:::
+
+---
+
+## Every component works the same way
+
+In SST 4, each component decided for itself which of its resources you could change. Some could be transformed and some couldn't. Some were in `nodes` and some weren't. Using a resource you already had was a different option on every component, where there was one.
+
+In SST 5, a component declares every resource it creates, and each of them works the same way:
+
+```ts title="sst.config.ts"
+const api = new sst.aws.Function("Api", {
+  handler: "src/api.handler",
+  // Change how any resource it creates is made
+  transform: { logGroup: { retentionInDays: 30 } },
+  // Use a resource you already have in place of one it would create
+  existing: { role: "arn:aws:iam::123456789012:role/api" },
+});
+
+// Read any resource it created
+api.nodes.function.arn;
+```
+
+Each resource in `nodes` is the resource itself, not an output of it, but for one a component creates for each route, subscriber or region, which is still an output. Each component's page lists them.
+
+---
+
+## A component can change without breaking your stage
+
+In SST 4, when a release changed how a component was built, your next deploy stopped until you renamed it, like `Vpc` to `Vpc.v1`, or created it again.
+
+In SST 5, each component has a version, and a map of where its resources go from one version to the next. When a 5.x release gives a component a new version, `sst migrate --check` shows what moving to it does, and `sst migrate` moves your stage, with the same checks as the move from SST 4.
+
+---
+
+## `sst diff` shows what the deploy will do
+
+Pulumi's preview skips an `.apply()` on a value it doesn't know yet, and SST 4's components created many of their resources inside one. So `sst diff` could show less than the deploy then did: a function built inside one could show as deleted, and the preview of a new stage left out what was created inside one, like the DNS records of a CDN with aliases and a redirect.
+
+In SST 5, the args that decide what SST's components create are plain values, so the preview has everything they'll create. An output in one of those args is refused by `sst diff` and the deploy, with the arg's name and why. What's inside the arg can still be an output, and so can most args. For a value from a lookup, `await` it in `run()`:
+
+```ts title="sst.config.ts"
+const zone = await aws.route53.getZone({ zoneId: "Z123" });
+```
+
+What your own config creates inside an `.apply()` still isn't in the preview. Create it directly, with the output as one of its inputs.
+
+---
+
+## A transform adds to SST's settings
+
+In SST 4, an object in `transform` replaced each nested object it named. A function's `environment` replaced every variable SST sets, so `Resource` couldn't read the function's links, and a `loggingConfig` replaced the one with SST's log group, so the function logged somewhere else.
+
+In SST 5, an object is merged into SST's settings, nested objects too:
+
+```ts title="sst.config.ts"
+transform: {
+  // Adds A, and keeps the variables SST sets
+  function: { environment: { variables: { A: "1" } } },
+}
+```
+
+To replace a setting whole, use a function in `transform`. When you move a stage, `sst migrate --check` lists each place where a merge changes what's deployed.
+
+---
+
+## What SST 4 deployed wrong, SST 5 deploys right
+
+A few of what moving fixes:
+
+- **Provider settings that are `true`, `false` or a number,** like `maxRetries`, reach the provider. SST 4 left them out.
+- **A domain's hosted zone** is the longest one the domain ends with, a public one over a private one of the same name, and two alike are refused. SST 4 took the first one listed.
+- **A site's changed image**, or any other file that isn't text, is uploaded again. SST 4 hashed files as text, which could miss a change. `assets.textEncoding` is applied, where SST 4 wrote `UTF-8`.
+- **`sst refresh` doesn't build your sites.** SST 4 built each one on every refresh.
+- **A `StepFunctions` with `logging: false` deploys,** and Cloudflare's `Queue` sends `dlq.retryDelay` in seconds, where SST 4 sent milliseconds, so a retry set to wait 30 seconds waited 30,000.
+- **An arg SST 4 ignored without a word is refused,** with what to write, like a task's `permissions` next to a task role you give it, which SST 4 dropped. You find out in `sst diff`, not after a deploy.
+
+Each component's "Switch from" section lists the rest.
+
+---
+
+## Your own components, on the same foundation
+
+`sst.component()` is what SST's own components are made with, and it's yours to use. In SST 4, the class SST's components extend wasn't available to an app, and a component could create only the resource types on a list written into SST.
+
+This one verifies an email domain. The identity is in AWS and the DNS record is in Cloudflare.
+
+```ts title="sst.config.ts"
+const parts = {
+  identity: aws.ses.DomainIdentity,
+  verification: cloudflare.DnsRecord,
+};
+
+interface EmailDomainArgs extends sst.ComponentArgs<typeof parts> {
+  domain: string;
+  zoneId: string;
+}
+
+class EmailDomain extends sst.component("acme:index:EmailDomain", parts) {
+  constructor(name: string, args: EmailDomainArgs, opts?: $util.ComponentResourceOptions) {
+    super(name, args, opts);
+
+    const identity = this.part("identity", { domain: args.domain });
+    this.part("verification", {
+      zoneId: args.zoneId,
+      name: `_amazonses.${args.domain}`,
+      type: "TXT",
+      content: identity.verificationToken,
+      ttl: 60,
+    });
+  }
+}
+```
+
+Whoever uses it gets what SST's components give, with nothing more to write: `transform` and `existing` for both parts, and `nodes.identity` and `nodes.verification`. Add a `link()` method and it can be linked like any other.
+
+Resources are named after the app and stage, as in SST's components. That list of resource types is still there, but it no longer limits you: a type that isn't on it is named by its provider, or you say which field holds its name with `sst.Component.naming()`.
+
+Share it in your app, or as a package.
+
+- [Write a Local Component](/docs/write-a-local-component/)
+- [Write a Package Component](/docs/write-a-package-component/)
+
+---
+
+## Places to plug in
+
+- **Targets.** A stage can be bound to a target, an emulator of AWS on your machine that a package provides, in [`targets`](/docs/reference/config/#targets). Its commands can't reach the real cloud by a flag left out, and nothing on it gets your credentials for AWS, Cloudflare or Vercel, not even from a profile file.
+- **Runtimes.** A function in a language SST doesn't build, or one you'd build your own way, can run with [`sst.runtime`](/docs/custom-runtimes/), which builds and runs it with commands you give, in `sst dev` too.
+- **Checks.** A check, made with `sst.check()`, looks at each component, resource and provider call in your config. With one on, a deploy previews first, and stops on what the check finds before anything changes.
+- **A stable base for packages.** What a package builds on doesn't break within 5.x: SST's public API is checked on every change.
+
+---
+
+## Safer by default
+
+- **`sst dev`'s local server** takes connections only from your machine, and only with a token made for that run.
+- **On AWS, a stage's lock is taken in one step**, so two deploys started at once can't both get it.
+- **A deploy stops when a stage's state is missing but its history says it's deployed**, as when the state is read from the wrong place. Otherwise it would create everything again beside what's running, and write over the real state. A first deploy, or one after `sst remove`, goes ahead as usual.
+- **Errors name the component** and say what to write, SST 4's names included.
+
+---
+
+## What it costs
+
+- **Some of your config changes.** Three components have new names, and some args are written differently or refused where SST 4 ignored them. The codemod makes the changes that are mechanical, and lists the rest.
+- **Each stage moves once.** `sst migrate` checks the move first and stops before it would delete or replace anything that holds data. SST 5 doesn't deploy or remove a stage that hasn't moved: to remove one you won't move, like an old preview stage, use SST 4. After a stage moves, SST 4 refuses to deploy it, and going back uses the copy the move saves.
+- **A component's new version is a move too.** When a 5.x release gives one a new version, a plain deploy, in CI too, is refused until `sst migrate` moves the stage to it.
+- **Sites are built in `sst diff` too,** with values that aren't known until the deploy left out, so a build that checks its environment has to allow for that. `sst migrate`, and a deploy on a stage with checks, build each site twice.
+- **A few of SST 4's components have no 5.0 form,** like `Vector`, `OpenControl` and the `.v1`s. A stage with one deals with it on SST 4 first.
+- **The SST Console doesn't connect to `sst dev`**, so it doesn't show your local function calls.
+
+[Migrate From v4](/docs/migrate-from-v4/) has the steps, and every change.

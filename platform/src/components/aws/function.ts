@@ -733,7 +733,7 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    *
    * A runtime made of commands builds the function with its `build` command, runs it
    * with its `dev` command in `sst dev`, and is deployed with the Lambda runtime it
-   * names.
+   * names. [Custom Runtimes](/docs/custom-runtimes/) has the rest.
    *
    * ```js
    * {

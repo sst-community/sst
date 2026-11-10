@@ -3,7 +3,7 @@ title: Migrate From v4
 description: Rewrite your config for SST 5's components with the codemod, then move each stage with sst migrate, keeping what you've deployed.
 ---
 
-SST 5 rebuilds SST's components on one foundation. You move an app in two steps: the codemod rewrites your config for the new components, then `sst migrate` moves each stage to them in one deploy. What you've deployed is kept. The move is checked first, and it stops before it would delete or replace anything that holds data.
+SST 5 rebuilds SST's components on one foundation. [Why SST 5](/docs/why-sst-5/) says what that changes for your app, and what it costs. You move an app in two steps: the codemod rewrites your config for the new components, then `sst migrate` moves each stage to them in one deploy. What you've deployed is kept. The move is checked first, and it stops before it would delete or replace anything that holds data.
 
 :::caution
 SST 5 is in pre-release. Its components can still change in any way before 5.0.0, so move a stage of its own first.

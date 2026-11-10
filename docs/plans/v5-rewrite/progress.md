@@ -2,6 +2,14 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-10: "Why SST 5" and "Custom Runtimes" in the docs
+
+The maintainer asked for a page on why 5.0 was done and what users get from it, and then for one on runtimes made of commands, which the first page names.
+
+- **"Why SST 5"** (`docs/why-sst-5`, in the sidebar after "Basics"): every component works the same way; `sst diff` shows what the deploy will do; a transform adds to SST's settings; your own components on the same foundation, with the example the README had; places to plug in; what's safer by default, without 4.x's details; and what moving costs, linking to the migration guide, whose first paragraph links to it. The README's "What 5.0 is for" is a paragraph that links to it.
+- **"Custom Runtimes"** (`docs/custom-runtimes`, under "How to"): `sst.runtime` for a language SST doesn't build, or a build of one's own. A Go function built by a script of the app's, on `provided.al2023`, reading its link with SST's Go SDK; what the build and the dev command are given; `watch`; reading links without an SDK (the encrypted file and its format); and every setting. Until now only the `Function`'s `runtime` arg had one example, and `runtime.ts`'s docs were on no page. The `Function`'s `runtime` and "Why SST 5" link to it.
+- **The example checked in the lab**, on a stage of its own, with a CLI built from `v5`: deployed, its URL answered from Lambda (`linux`, `amd64`) with the bucket's name; in `sst dev` the same URL answered from this machine (`darwin`, `arm64`); a change to the Go file built and started it again, and the next call had the change. The page's code compiles as it's written, and its script builds for `arm64` too. Removed, and cleaned up: 59 state versions and markers, and the passphrase.
+
 ## 2026-11-10: the docs generator finds SST 4's deprecated components
 
 The review of the cron jobs found that the docs generator, looking for the component of SST 4's that a 5.0 one replaces, skipped every file of SST 4's with `@deprecated` in it, an arg's included. So 16 pages had no original: AWS's `ApiGatewayRest`, `ApiGatewayWebSocket`, `Bucket`, `Cron`, `CronV2`, `Dynamo`, `Function`, `KinesisStream`, `Router`, `SnsTopic`, `StaticSite` and `Task`, and Cloudflare's `Cron`, `D1`, `Kv` and `StaticSite`.

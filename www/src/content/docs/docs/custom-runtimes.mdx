@@ -1,0 +1,126 @@
+---
+title: Custom Runtimes
+description: Build and run a function with commands of your own, for a language SST doesn't build, or to build one your own way.
+---
+
+SST builds Node.js, Python, Go and Rust functions itself. For any other language, or to build one of those your own way, give a function a runtime made of commands with `sst.runtime`: one that builds it, and one that runs it in `sst dev`.
+
+- **On a deploy,** SST runs the build command, zips what it built, and deploys it with the Lambda runtime you name.
+- **In `sst dev`,** SST runs the build command, then the dev command, which takes the function's invocations from the Lambda runtime API that `sst dev` serves on your machine. When a file you watch changes, it builds and starts it again.
+
+---
+
+## An example
+
+A Go function, built with a script of your own and deployed on Lambda's OS-only runtime, `provided.al2023`.
+
+```ts title="sst.config.ts"
+const go = sst.runtime({
+  lambda: "provided.al2023",
+  build: { command: "sh build.sh", output: "dist" },
+  dev: { command: "./bootstrap" },
+  watch: ["**/*.go", "go.mod", "go.sum"],
+});
+
+const bucket = new sst.aws.Bucket("MyBucket");
+
+new sst.aws.Function("MyApi", {
+  runtime: go,
+  handler: "functions/api/bootstrap",
+  url: true,
+  link: [bucket],
+});
+```
+
+The handler's folder, `functions/api`, is where the build runs, and the rest, `bootstrap`, is the handler as Lambda takes it. On `provided.al2023`, that's the program Lambda runs.
+
+The build command isn't run in a shell, so a build that sets variables goes in a script. This one builds for Lambda on a deploy, and for your machine in `sst dev`:
+
+```sh title="functions/api/build.sh"
+#!/bin/sh
+set -e
+if [ "$SST_BUILD" = "deploy" ]; then
+  export GOOS=linux CGO_ENABLED=0
+  if [ "$SST_ARCHITECTURE" = "arm64" ]; then export GOARCH=arm64; else export GOARCH=amd64; fi
+fi
+go build -tags lambda.norpc -o dist/bootstrap .
+```
+
+The function reads its links with [SST's Go SDK](/docs/reference/sdk/#golang), as any Go function does:
+
+```go title="functions/api/main.go"
+package main
+
+import (
+	"context"
+
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/sst/sst/v3/sdk/golang/resource"
+)
+
+func handler(ctx context.Context, req events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
+	bucket, err := resource.Get("MyBucket", "name")
+	if err != nil {
+		return events.LambdaFunctionURLResponse{}, err
+	}
+	return events.LambdaFunctionURLResponse{StatusCode: 200, Body: bucket.(string)}, nil
+}
+
+func main() {
+	lambda.Start(handler)
+}
+```
+
+`lambda.Start` talks to the runtime API it finds in `AWS_LAMBDA_RUNTIME_API`, in Lambda and in `sst dev` alike, so the dev command runs the program as it is.
+
+---
+
+## Build it
+
+The build command runs in the function's folder, `dir`, with `SST_BUILD` set to `dev` or `deploy`, and `SST_ARCHITECTURE` to `x86_64` or `arm64`, from the function's `architecture`. It isn't run in a shell: to set variables or run more than one command, run a script or a tool like `make`.
+
+What's deployed is its `output`, a folder from `dir`: everything in it but `.sst` and `.git` folders. Without a build command, nothing is run, and the folder is deployed as it is.
+
+Functions that share a folder and a build command, and are built at the same time, are built once.
+
+---
+
+## Run it in `sst dev`
+
+The dev command runs in a folder of the function's own, which holds what the build made, the function's `copyFiles` and its links. It's given:
+
+- the function's environment;
+- `AWS_LAMBDA_RUNTIME_API`, the runtime API that `sst dev` serves, and `_HANDLER`, as Lambda sets them, and `LAMBDA_TASK_ROOT`, the folder it runs in;
+- `SST_KEY_FILE`, the file with its links;
+- your `PATH` and `HOME`.
+
+It isn't run in a shell either. `$NAME` or `${NAME}`, for a variable it's given, is replaced with its value, and `$$` is a `$`.
+
+The command has to take invocations from the runtime API, as a function does in Lambda. A program built for `provided.al2023` usually does. For a language Lambda runs itself, like Ruby or Java, run its runtime interface client: for Ruby, `bundle exec aws_lambda_ric $_HANDLER`.
+
+**`watch`** lists the files that build and start it again when they change, as globs from `dir`, where `**` is any number of folders. A glob that starts with `../` can match files outside it. The build's `output` is left out when it's a folder of its own; a glob shouldn't match anything else the build writes, or each build starts another. Without `watch`, a change doesn't rebuild it: start `sst dev` again.
+
+---
+
+## Read its links
+
+SST's SDKs read a function's links in [JavaScript, Python, Go and Rust](/docs/reference/sdk/). In another language, read them yourself:
+
+- **`SST_KEY_FILE`** is a file with the links as a JSON object, by name, encrypted with AES-256-GCM. The key is `SST_KEY`, in base64; the nonce is 12 zero bytes, and the last 16 bytes of the file are the tag.
+- **`SST_RESOURCE_<Name>`** variables, like `SST_RESOURCE_App`, hold more of them, each as JSON.
+
+---
+
+## Settings
+
+| Setting | What it is | Default |
+| --- | --- | --- |
+| `lambda` | The Lambda runtime it's deployed with, like `provided.al2023` or `ruby3.4`. | Required |
+| `dir` | The folder of the function's code, from the app's folder. The build runs in it, and the handler is as Lambda takes it, from the build's output. | The handler's folder, with the handler the rest of it: `functions/api/bootstrap` is `bootstrap` in `functions/api`. |
+| `build.command` | The command that builds it. | Nothing is run. |
+| `build.output` | The folder, from `dir`, that holds the function's code once it's built. | `"."` |
+| `dev.command` | The command that runs it in `sst dev`. | Required |
+| `watch` | The files that rebuild it in `sst dev`, as globs from `dir`. | Nothing is watched. |
+
+A function's `runtime` decides what's built, so it has to be a plain value: create the runtime in your config, not inside an `.apply()`.

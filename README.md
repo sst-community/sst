@@ -17,61 +17,7 @@
 
 ## What 5.0 is for
 
-In version 4, each component decides for itself which of its resources you can change. Some can be transformed and some can't. Some are in `nodes` and some aren't. Using a resource you already have is a different option on every component, where there is one.
-
-5.0 rebuilds the components on one foundation. A component declares every resource it creates as a **part**, and from that one list every component gives you the same three things:
-
-```ts
-const redis = new sst.aws.Redis("MyRedis", {
-  vpc,
-  // Change how any resource is created
-  transform: { cluster: { snapshotRetentionLimit: 7 } },
-  // Use a resource you already have in place of one it would create
-  existing: { subnetGroup: "my-subnet-group" },
-});
-
-// Read any resource it created
-redis.nodes.parameterGroup.name;
-```
-
-## Your own components, from any provider
-
-The same foundation is yours to build on. `sst.component()` is what SST's own components are made with, and a part can be a resource from any provider in your app: AWS, Cloudflare, or any other Pulumi provider you've added.
-
-In version 4 this was very hard to do. The class SST's components extend wasn't available to an app. It also only accepted the resource types on a list written into SST itself, so a component that created any other type failed on deploy. And each component wrote its own `transform` and `nodes` by hand. What you could write was a bare Pulumi component, with none of it.
-
-This one verifies an email domain. The identity is in AWS and the DNS record is in Cloudflare.
-
-```ts
-const parts = {
-  identity: aws.ses.DomainIdentity,
-  verification: cloudflare.DnsRecord,
-};
-
-interface EmailDomainArgs extends sst.ComponentArgs<typeof parts> {
-  domain: string;
-  zoneId: string;
-}
-
-class EmailDomain extends sst.component("acme:index:EmailDomain", parts) {
-  constructor(name: string, args: EmailDomainArgs, opts?: $util.ComponentResourceOptions) {
-    super(name, args, opts);
-
-    const identity = this.part("identity", { domain: args.domain });
-    this.part("verification", {
-      zoneId: args.zoneId,
-      name: `_amazonses.${args.domain}`,
-      type: "TXT",
-      content: identity.verificationToken,
-      ttl: 60,
-    });
-  }
-}
-```
-
-Whoever uses it gets what SST's components give, with nothing more to write: `transform` and `existing` for both parts, and `nodes.identity` and `nodes.verification`. Add a `link()` method and it can be linked like any other.
-
-Resources are named after the app and stage, as in SST's components. That list of resource types is still there, but it no longer limits you: a type that isn't on it is named by its provider, or you say which field holds its name with `sst.Component.naming()`.
+5.0 rebuilds the components on one foundation. Every component lets you transform, replace and read each resource it creates, the same way; `sst diff` shows what a deploy will do; and your own components are built the way SST's are, from any provider. [Why SST 5](www/src/content/docs/docs/why-sst-5.mdx) says what that changes for your app, and what it costs.
 
 ## Moving an app
 
@@ -102,7 +48,7 @@ Every change to 5.0 is held to these. [goals.md](docs/plans/v5-rewrite/goals.md)
 
 - **Every component of SST 4 has a 5.0 form,** under the same name, but for three that are renamed (`ApiGatewayV1` and `ApiGatewayV2` are `ApiGatewayRest` and `ApiGatewayHttp`, and Cloudflare's `StaticSiteV2` is `StaticSite`) and a few that are left out, like `Vector`, `OpenControl` and the `.v1`s. The guide says what to do with each before a move.
 - **How it's been checked:** each component's move is tested against the SST 4 component it replaces, under a mock of the deploy engine, and against states recorded from real deploys. Each was also moved from SST 4 in a real AWS or Cloudflare account as it was ported, but Cloudflare's `Bucket` and `Hyperdrive`, which need R2, checked under the mock only.
-- **Left before 5.0.0:** moving whole apps in a real account, with every resource compared by its cloud id, and releasing 5.0 next to 4.x.
+- **Left before 5.0.0:** moving an app in daily use in a real account (every recorded app has been moved, with every resource compared by its cloud id), and releasing 5.0 next to 4.x.
 
 ## Try it
 
