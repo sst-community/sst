@@ -212,6 +212,12 @@ When the check passes, move the stage:
 sst migrate --stage dev
 ```
 
+Move a stage you deploy with `sst dev` the way you checked it, with `--dev`, so it keeps a stub in place of each function. Without it, the move would put each function's code in place of its stub, and the check refuses that:
+
+```bash frame="none"
+sst migrate --dev --stage dev
+```
+
 It takes the stage's lock, checks the move again, and stops there if the check fails. Then it saves a copy of the stage's state in your app's home, takes out of the state what the components let go of, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so nothing else deploys the stage in between. The deploy runs your config again, so don't change it while the move runs, or what it deploys isn't what it checked.
 
 Then confirm. `sst diff` should show nothing to create or destroy:
@@ -285,6 +291,11 @@ You can put a stage that has moved back on SST 4, as long as nothing else has be
 Copy the state back before you run SST 4's `sst unlock`. Without it, SST 4 reads SST 5's state, where much of what moved has a new address. SST 4 doesn't know those addresses, so it tries to create each of those resources again, and to delete the one at the new address, with what's in it. In a test of an app with an API, functions, queues, a table, a bucket and a user pool, that was 86 of its 117 resources, 13 log groups among them, with their logs; the table, the bucket, the queues and the user pool kept their addresses. In a test of SST's databases, Postgres, MySQL, Aurora, Redis and DSQL kept theirs, and their secrets in Secrets Manager moved.
 :::
 
-This was tried in AWS with SST 4.24.0, on three apps: the one above with an API, SST's databases, and a router with SST's sites behind it. Each time, SST 4 deployed the stage, changing nothing but what a build changes, and later removed it. But the copy is the state from before the move, and the move changed some things in place. It uploaded each function's code again, which stays in your asset bucket unused, and updated some functions. SST 4 compares your config with the copy, not with what's deployed, so those functions keep what SST 5 gave them until SST 4 changes them. One of those can matter: a function whose code is a `bundle`, like a Next.js site's, reads its links from a file named after it, so if the move gave it a new name, like a subscriber's, it looks for the file under that name. SST 4's `sst refresh`, then `sst deploy`, puts back what the move changed. The refresh passed for the databases and the sites; for the app with the API it failed, for a reason that isn't known yet. So go back only to get a stage onto SST 4 again quickly, and move it again when you can.
+This was tried in AWS with SST 4.24.0: on the app above with an API, deployed once with `sst deploy` and once with `sst dev`, on SST's databases, on a router with SST's sites behind it, and on SST's containers. Each time, SST 4 deployed the stage, changing nothing but what a build changes, and later removed it. But the copy is the state from before the move, and the move changed some things in place. It uploaded each function's code again, which stays in your asset bucket unused, and updated some functions. SST 4 compares your config with the copy, not with what's deployed, so those functions keep what SST 5 gave them until SST 4 changes them. Two of those can matter, both for a function the move gave a new name, like a subscriber or an API's route:
+
+- **On a stage you use with `sst dev`,** the function keeps the name SST 5's `sst dev` knows it by, so SST 4's `sst dev` doesn't reach it, and calls to it fail. Run SST 4's `sst deploy`, then `sst dev`.
+- **A function whose code is a `bundle`,** like a Next.js site's, reads its links from a file named after it, so it looks for the file under its new name. Run SST 4's `sst refresh`, then `sst deploy`.
+
+The refresh passed for the databases, the sites and the containers; for the app with the API it failed, for a reason that isn't known yet. So go back only to get a stage onto SST 4 again quickly, and move it again when you can.
 
 Once the stage has been deployed again with SST 5, the copy no longer matches what's deployed. Fix forward instead.
