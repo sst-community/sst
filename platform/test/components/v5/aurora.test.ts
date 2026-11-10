@@ -839,6 +839,30 @@ describe("Aurora", () => {
     expect(parents).toEqual([database, database]);
   });
 
+  // 4.x applied it to the instance's args, then made each replica from them
+  // and applied it again
+  it("applies the instance's transform function once to each replica", async () => {
+    new Aurora("MyDatabase", {
+      engine: "postgres",
+      vpc,
+      replicas: 2,
+      transform: {
+        instance: (args) => {
+          const tags = (args.tags ?? {}) as Record<string, string>;
+          args.tags = { ...tags, applied: String(Number(tags.applied ?? 0) + 1) };
+        },
+      },
+    });
+    await pulumi.settle();
+
+    for (const name of [
+      "MyDatabaseInstance",
+      "MyDatabaseReplica0",
+      "MyDatabaseReplica1",
+    ])
+      expect(resource(name).inputs.tags, name).toEqual({ applied: "1" });
+  });
+
   it("makes replicas the last to be promoted", async () => {
     new Aurora("MyDatabase", { engine: "postgres", vpc, replicas: 1 });
     await pulumi.settle();

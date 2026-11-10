@@ -101,4 +101,25 @@ describe("A transform function is given what SST 4's gave, where that's no outpu
     expect(seen.callbackUrls).toEqual(["https://example.com"]);
     expect(seen.supportedIdentityProviders).toEqual(["COGNITO"]);
   });
+
+  // SST 4 made the image inside an `apply`
+  it("an image's cache lists are lists, and nothing with the cache off", async () => {
+    const { Function } = await import("../../../src/components/aws/function");
+    const seen: Record<string, any> = {};
+    for (const [name, container] of [
+      ["Cached", true],
+      ["Uncached", { cache: false }],
+    ] as const)
+      new Function(name, {
+        handler: "functions/src/functions/api.handler",
+        runtime: "python3.12",
+        python: { container },
+        transform: { image: (args) => void (seen[name] = args) },
+      });
+    await pulumi.settle();
+    for (const key of ["cacheFrom", "cacheTo"]) {
+      expect(Array.isArray(seen.Cached[key]), key).toBe(true);
+      expect(seen.Uncached[key], key).toBeUndefined();
+    }
+  });
 });

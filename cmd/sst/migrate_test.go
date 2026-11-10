@@ -9,7 +9,7 @@ import (
 
 func TestMergedLine(t *testing.T) {
 	assert.Equal(t,
-		"Your transform sets \"loggingConfig\" as an object, which SST 4 put in place of the component's settings. SST 5 merges it into them, keeping logFormat, logGroup. To replace them as SST 4 did, set it in a function.",
+		"Your transform sets \"loggingConfig\" as an object, which SST 5 merges into the component's settings, keeping logFormat, logGroup. SST 4 put an object in place of them. To replace them, set it in a function.",
 		mergedLine(move.MergedField{Field: "loggingConfig", Kept: []string{"logFormat", "logGroup"}}),
 	)
 	assert.Contains(t,

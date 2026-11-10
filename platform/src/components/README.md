@@ -91,6 +91,7 @@ const uploads = new Uploads("Docs", {
 uploads.nodes.bucket; // the aws.s3.Bucket
 uploads.nodes.audit; // undefined when it wasn't created
 uploads.nodes.reader.legal; // by id
+uploads.nodes.reader.arn; // fails, saying to read nodes.reader["design"].arn
 
 new sst.aws.Function("Api", { handler: "src/api.handler", link: [uploads] });
 ```
@@ -143,7 +144,8 @@ the component reads its args.
     that resolve to what was created, or fail with the build. A `many(deferred(...))`
     part is listed by id as it's created; when the ids are known before, like a site's
     regions, name them with `this.willCreate(key, ids)` so `nodes` has them from the
-    start.
+    start. One `create` may not make, like the server of a static Astro site, is
+    `many(deferred(optional(...)))`, and its entry resolves to `undefined` then.
   - A failure the user should read is a `VisibleError`, from `sst/components`. Its
     message is shown once and as it's written, however many resources wait on what
     failed. It names the component the way the rest do, `the "${name}" queue`, with the

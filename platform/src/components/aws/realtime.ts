@@ -38,7 +38,7 @@ const parts = () => ({
   /**
    * The permission for IoT to invoke the authorizer function.
    */
-  permission: lambda.Permission,
+  authorizerPermission: named(lambda.Permission, "Permission"),
   /**
    * Each subscriber's function, by the subscriber's name.
    */
@@ -235,7 +235,9 @@ export interface RealtimeSubscriberArgs {
  *   and what decides what's created, like `url` or `logging`, are plain values, as
  *   [`sst.aws.Function`](/docs/component/aws/function) takes them.
  * - `nodes.authHandler` is an output, as it was, and `nodes` has the authorizer's
- *   permission too.
+ *   permission too, as `nodes.authorizerPermission`. A subscriber's is
+ *   `nodes.subscriberPermission`, by its name: `nodes.permission`, which SST 4's
+ *   subscriber had, says so.
  * - A subscriber is created with the provider the server has. SST 4's `Realtime` gave it
  *   only a `provider` passed to the server itself, so if your server takes its provider
  *   from a parent component or from `providers`, the switch gives its subscribers that
@@ -257,7 +259,7 @@ export class Realtime extends component("sst:aws:Realtime", parts) {
       signingDisabled: true,
       authorizerFunctionArn: authHandler.arn,
     });
-    this.part("permission", {
+    this.part("authorizerPermission", {
       action: "lambda:InvokeFunction",
       function: authHandler.arn,
       principal: "iot.amazonaws.com",

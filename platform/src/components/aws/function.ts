@@ -34,7 +34,7 @@ import {
   many,
   optional,
 } from "../parts-component";
-import { ifSet, mapArg, plain, plainDeep, usedAsItIs, withDefault, withoutDependencies, getArgs } from "../args";
+import { mapArg, plain, plainDeep, usedAsItIs, withDefault, withoutDependencies, getArgs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { Link } from "../link";
@@ -2382,10 +2382,11 @@ export class Function extends component("sst:aws:Function", parts) {
       const authToken = ecr.getAuthorizationTokenOutput({
         registryId: bootstrapData.assetEcrRegistryId,
       });
-      // Set unless the cache is switched off
-      const cached = output(
-        typeof container === "object" ? container.cache : undefined,
-      ).apply((cache) => (cache === false ? undefined : true));
+      // Set unless the cache is switched off. SST 4 made the image inside an
+      // `apply`, so a plain `cache` gives plain lists, as it did
+      const cache = typeof container === "object" ? container.cache : undefined;
+      const unlessOff = <T>(lists: T) =>
+        mapArg(cache, (cache) => (cache === false ? undefined : lists));
       const cacheRef = interpolate`${bootstrapData.assetEcrUrl}:${name}-cache`;
 
       return self.part("image", {
@@ -2396,8 +2397,8 @@ export class Function extends component("sst:aws:Function", parts) {
             path.join(context().paths.work, "artifacts", `${name}-src`),
           ),
         },
-        cacheFrom: ifSet(cached, () => [{ registry: { ref: cacheRef } }]),
-        cacheTo: ifSet(cached, () => [
+        cacheFrom: unlessOff([{ registry: { ref: cacheRef } }]),
+        cacheTo: unlessOff([
           {
             registry: {
               ref: cacheRef,

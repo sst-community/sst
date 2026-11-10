@@ -695,9 +695,9 @@ export class Astro extends Astro_base {
 
 // @public (undocumented)
 const Astro_base: ComponentClass<    {
+server: ManyPart<DeferredPart<OptionalPart<Function_2>>>;
 assets: Bucket;
 assetFiles: BucketFiles;
-server: ManyPart<DeferredPart<Function_2>>;
 warmer: ManyPart<DeferredPart<Function_2>>;
 warmerRule: NamedPart<ManyPart<DeferredPart<EventRule>>>;
 warmerTarget: NamedPart<ManyPart<DeferredPart<EventTarget_2>>>;
@@ -2382,7 +2382,7 @@ type ManyKeys<P extends Parts> = {
 }[keyof P] & string;
 
 // @public
-interface ManyPart<T extends PartClass | DeferredPart = PartClass | DeferredPart> {
+interface ManyPart<T extends PartClass | DeferredPart<PartClass | OptionalPart> = PartClass | DeferredPart<PartClass | OptionalPart>> {
     // (undocumented)
     many: T;
 }
@@ -3106,9 +3106,9 @@ const parts_2: {
 
 // @public (undocumented)
 const parts_20: () => {
+    server: ManyPart<DeferredPart<OptionalPart<Function_2>>>;
     assets: Bucket;
     assetFiles: BucketFiles;
-    server: ManyPart<DeferredPart<Function_2>>;
     warmer: ManyPart<DeferredPart<Function_2>>;
     warmerRule: NamedPart<ManyPart<DeferredPart<EventRule>>>;
     warmerTarget: NamedPart<ManyPart<DeferredPart<EventTarget_2>>>;
@@ -3354,9 +3354,9 @@ const parts_37: {
 
 // @public (undocumented)
 const parts_38: () => {
+    server: ManyPart<DeferredPart<OptionalPart<Function_2>>>;
     assets: Bucket;
     assetFiles: BucketFiles;
-    server: ManyPart<DeferredPart<Function_2>>;
     warmer: ManyPart<DeferredPart<Function_2>>;
     warmerRule: NamedPart<ManyPart<DeferredPart<EventRule>>>;
     warmerTarget: NamedPart<ManyPart<DeferredPart<EventTarget_2>>>;
@@ -3382,7 +3382,7 @@ const parts_38: () => {
 const parts_39: () => {
     authHandler: NamedPart<DeferredPart<typeof Function_2>>;
     authorizer: Authorizer_3;
-    permission: Permission_2;
+    authorizerPermission: NamedPart<Permission_2>;
     subscriber: ManyPart<DeferredPart<typeof Function_2>>;
     subscriberPermission: ManyPart<Permission_2>;
     topicRule: ManyPart<TopicRule>;
@@ -3969,9 +3969,9 @@ export class React extends React_base {
 
 // @public (undocumented)
 const React_base: ComponentClass<    {
+server: ManyPart<DeferredPart<OptionalPart<Function_2>>>;
 assets: Bucket;
 assetFiles: BucketFiles;
-server: ManyPart<DeferredPart<Function_2>>;
 warmer: ManyPart<DeferredPart<Function_2>>;
 warmerRule: NamedPart<ManyPart<DeferredPart<EventRule>>>;
 warmerTarget: NamedPart<ManyPart<DeferredPart<EventTarget_2>>>;
@@ -4043,7 +4043,7 @@ export class Realtime extends Realtime_base {
 const Realtime_base: ComponentClass<    {
 authHandler: NamedPart<DeferredPart<typeof Function_2>>;
 authorizer: Authorizer_3;
-permission: Permission_2;
+authorizerPermission: NamedPart<Permission_2>;
 subscriber: ManyPart<DeferredPart<typeof Function_2>>;
 subscriberPermission: ManyPart<Permission_2>;
 topicRule: ManyPart<TopicRule>;

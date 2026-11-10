@@ -407,7 +407,7 @@ The `.sst/platform` directory is created by `sst install`, so run that first in 
 #### What you get
 
 - `app.resources` has each resource that was created, with its `type`, `name`, `parent`, the `inputs` it was given and its `options`.
-- `app.settle()` waits until everything has been created.
+- `app.settle()` waits until everything has been created. It waits half a second for a component's outputs while nothing else is going on; for a component that waits on a longer timer, pass `mock({ patience: 3000 })`, in milliseconds.
 - `app.resolve(value)` reads an `Output`.
 - `app.reset()` empties the list, so each test sees its own resources.
 

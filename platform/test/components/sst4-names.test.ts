@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { mockPulumi } from "../helpers/graph";
 import { VisibleError } from "../../src/components/error";
-import { renamedNodes } from "../../src/components/sst4";
+import { keptById, renamedNodes } from "../../src/components/sst4";
 
 const pulumi = mockPulumi({
   // The `Auth`'s issuer has a URL
@@ -147,8 +147,75 @@ describe("SST 4's nodes names", () => {
       for (const value of Object.values(v5))
         if (isComponent(value)) types.add(value.__pulumiType);
     }
-    for (const type of Object.keys(renamedNodes))
+    for (const type of [...Object.keys(renamedNodes), ...Object.keys(keptById)])
       expect(types, type).toContain(type);
+  });
+
+  // SST 4's subscribe, route and the like gave a component of their own, and
+  // SST 5's give the component itself, which has these as records by id
+  it("SST 5 kept as records say to read one by id", async () => {
+    const fs = await import("fs");
+    const os = await import("os");
+    const path = await import("path");
+    const aws = await import("../../src/components/aws/index");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sst4-kept-"));
+    const schema = path.join(dir, "schema.graphql");
+    fs.writeFileSync(schema, "type Query {\n  user: String\n}\n");
+    const handler = "src/a.handler";
+    try {
+      const table = new aws.Dynamo("Table", {
+        fields: { id: "string" },
+        primaryIndex: { hashKey: "id" },
+        stream: "new-image",
+      });
+      const graph = new aws.AppSync("Graph", { schema });
+      graph.addDataSource({
+        name: "users",
+        dynamodb: "arn:aws:dynamodb:us-east-1:123456789012:table/users",
+      });
+      const made: Record<string, any> = {
+        "sst:aws:Bus": new aws.Bus("Bus").subscribe("Sub", handler),
+        "sst:aws:SnsTopic": new aws.SnsTopic("Topic").subscribe("Sub", handler),
+        "sst:aws:Dynamo": table.subscribe("Sub", handler),
+        "sst:aws:KinesisStream": new aws.KinesisStream("Stream").subscribe(
+          "Sub",
+          handler,
+        ),
+        "sst:aws:ApiGatewayV2": new aws.ApiGatewayHttp("Http").route(
+          "GET /",
+          handler,
+        ),
+        "sst:aws:ApiGatewayV1": new aws.ApiGatewayRest("Rest").route(
+          "GET /",
+          handler,
+        ),
+        "sst:aws:ApiGatewayWebSocket": new aws.ApiGatewayWebSocket(
+          "Socket",
+        ).route("$connect", handler),
+        "sst:aws:AppSync": graph.addResolver("Query user", {
+          dataSource: "users",
+          code: "export function request() {}",
+        }),
+      };
+      await pulumi.settle();
+      // The sites need a build, which the mock doesn't make
+      const sites = Object.keys(keptById).filter((type) => !(type in made));
+      for (const site of sites) expect(keptById[site], site).toHaveProperty("server");
+      for (const [type, component] of Object.entries(made))
+        for (const key of Object.keys(keptById[type])) {
+          const record = component.nodes[key];
+          expect(Object.keys(record).length, `${type} ${key}`).toBe(1);
+          const message = refusal(() => record.urn);
+          expect(message, `${type} ${key}`).toContain(
+            `has a resource for each, by its id, not one: read \`nodes.${key}[`,
+          );
+          expect(message, `${type} ${key}`).toContain(
+            `gave a component of its own for each, whose \`nodes.${key}\` was one: SST 5's`,
+          );
+        }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuse with a key SST 5's nodes has, and aren't listed", async () => {
@@ -194,6 +261,120 @@ describe("SST 4's nodes names", () => {
         const part = now.match(/^"nodes\.(\w+)"/)?.[1];
         expect(Object.keys(nodes), `${type} ${key} -> ${part}`).toContain(part);
       }
+    }
+  });
+});
+
+// SST 4's gave a component of its own, with `nodes`; SST 5's gives the
+// resource itself
+describe("What an add method gives", () => {
+  it("says what to read for SST 4's nodes, and reads as the resource", async () => {
+    const fs = await import("fs");
+    const os = await import("os");
+    const path = await import("path");
+    const aws = await import("../../src/components/aws/index");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sst4-names-"));
+    const schema = path.join(dir, "schema.graphql");
+    fs.writeFileSync(schema, "type Query {\n  user: String\n}\n");
+    const table = "arn:aws:dynamodb:us-east-1:123456789012:table/users";
+    try {
+      const appSync = new aws.AppSync("Graph", { schema });
+      const http = new aws.ApiGatewayHttp("Http");
+      const rest = new aws.ApiGatewayRest("Rest");
+      const given: [string, object, string, string?][] = [
+        [
+          "addAuthorizer",
+          http.addAuthorizer({
+            name: "jwt",
+            jwt: { issuer: "https://issuer.com/", audiences: ["api"] },
+          }),
+          "authorizer",
+        ],
+        [
+          "addAuthorizer",
+          http.addAuthorizer({
+            name: "lambda",
+            lambda: { function: "src/auth.handler" },
+          }),
+          "authorizer",
+        ],
+        [
+          "addAuthorizer",
+          rest.addAuthorizer({
+            name: "token",
+            tokenFunction: "src/token.handler",
+          }),
+          "authorizer",
+        ],
+        [
+          "addAuthorizer",
+          rest.addAuthorizer({
+            name: "request",
+            requestFunction: "src/request.handler",
+          }),
+          "function",
+          `the API's "nodes.authorizerFunction"`,
+        ],
+        [
+          "addAuthorizer",
+          new aws.ApiGatewayWebSocket("Socket").addAuthorizer({
+            name: "auth",
+            lambda: { function: "src/auth.handler" },
+          }),
+          "authorizer",
+        ],
+        [
+          "addDataSource",
+          appSync.addDataSource({ name: "users", dynamodb: table }),
+          "dataSource",
+        ],
+        [
+          "addDataSource",
+          appSync.addDataSource({ name: "others", dynamodb: table }),
+          "function",
+          `the API's "nodes.dataSourceFunction"`,
+        ],
+        [
+          "addDataSource",
+          appSync.addDataSource({ name: "more", dynamodb: table }),
+          "serviceRole",
+          `the API's "nodes.serviceRole"`,
+        ],
+        [
+          "addFunction",
+          appSync.addFunction({
+            name: "getUser",
+            dataSource: "users",
+            code: "export function request() {}",
+          }),
+          "function",
+        ],
+        [
+          "addIdentityProvider",
+          new aws.CognitoUserPool("Pool").addIdentityProvider("Google", {
+            type: "google",
+            details: { client_id: "id", client_secret: "secret" },
+          }),
+          "identityProvider",
+        ],
+      ];
+      await pulumi.settle();
+      for (const [method, resource, key, now] of given) {
+        const message = refusal(() => (resource as any).nodes[key]);
+        expect(message, `${method} ${key}`).toContain(
+          `"nodes.${key}" of what "${method}" gives is SST 4's: SST 5's "${method}" gives `,
+        );
+        expect(message, `${method} ${key}`).toContain(
+          now ?? `Read what "nodes.${key}" had on it, like its "id".`,
+        );
+        expect(Object.keys(resource), method).not.toContain("nodes");
+        expect(
+          await pulumi.resolve((resource as any).urn),
+          method,
+        ).toMatch(/^urn:/);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

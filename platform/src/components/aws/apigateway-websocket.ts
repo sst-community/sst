@@ -16,6 +16,7 @@ import type { Prettify } from "../component";
 import { notAnOption, plain } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { sst4NodesOn } from "../sst4";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
 import {
@@ -738,7 +739,9 @@ export class ApiGatewayWebSocket extends component(
       name,
       authorizerPermissionArgs(fn, api.executionArn, authorizer.id),
     );
-    return authorizer;
+    return sst4NodesOn(authorizer, "addAuthorizer", "the authorizer", {
+      authorizer: undefined,
+    });
   }
 
   /**

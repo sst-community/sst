@@ -68,6 +68,44 @@ export function refuseSst4Name(cls: unknown) {
   if (message !== undefined) throw new VisibleError(message);
 }
 
+/**
+ * Gives a resource a method returns in SST 5, where SST 4's returned a
+ * component of its own for it, the `nodes` names that component had: each
+ * says what to read instead. Without them, `authorizer.nodes.authorizer.id`
+ * fails reading `authorizer` of `undefined`. They aren't enumerable, so
+ * nothing that lists the resource's fields sees them.
+ *
+ * @param what What the method gives, in messages: `the authorizer`.
+ * @param nodes What to read for each, where it isn't the resource itself.
+ */
+export function sst4NodesOn<T extends object>(
+  resource: T,
+  method: string,
+  what: string,
+  nodes: Record<string, string | undefined>,
+): T {
+  // One the app gave in `existing` may be its own, with `nodes` of its own
+  if ("nodes" in resource) return resource;
+  const refusing = Object.create(null);
+  for (const [key, now] of Object.entries(nodes))
+    Object.defineProperty(refusing, key, {
+      enumerable: false,
+      get() {
+        throw new VisibleError(
+          `"nodes.${key}" of what "${method}" gives is SST 4's: SST 5's "${method}" gives ${what} itself, which has no "nodes". ${
+            now ?? `Read what "nodes.${key}" had on it, like its "id".`
+          }`,
+        );
+      },
+    });
+  Object.defineProperty(resource, "nodes", {
+    configurable: true,
+    enumerable: false,
+    value: refusing,
+  });
+  return resource;
+}
+
 /** @deprecated SST 4's: use `sst.Linkable.wrap`, which takes the same. */
 export function linkable(..._args: unknown[]): never {
   throw new VisibleError(
@@ -121,9 +159,13 @@ export const renamedNodes: Record<string, Record<string, string>> = {
   "sst:aws:Dynamo": subscriber(),
   "sst:aws:KinesisStream": subscriber(),
   "sst:aws:Queue": subscriber(""),
-  // Not its `permission`: SST 5's has one, the authorizer's
   "sst:aws:Realtime": {
     ...subscriber(`, by the subscriber's name`),
+    permission: `${added(
+      "subscribe",
+      "subscriberPermission",
+      `, by the subscriber's name`,
+    )}. The authorizer's is "nodes.authorizerPermission"`,
     rule: added("subscribe", "topicRule", `, by the subscriber's name`),
   },
   "sst:aws:Bucket": {
@@ -149,6 +191,79 @@ export const renamedNodes: Record<string, Record<string, string>> = {
     ]),
   ),
 };
+
+// SST 4's `nodes` names on what a method gave, where SST 5's method gives
+// the component itself and has a part of that name, by the component's type:
+// read on the component, each is a record by id, not the one resource SST 4's
+// was. And a site's server, which SST 4 had one of.
+const gaveOwn =
+  (...methods: string[]) =>
+  (key: string) =>
+    `SST 4's ${methods
+      .map((m) => `"${m}"`)
+      .join(
+        methods.length > 2 ? ", " : " and ",
+      )} gave a component of its own for each, whose \`nodes.${key}\` was one: SST 5's ${
+      methods.length > 1 ? "give" : "gives"
+    } the component itself.`;
+const firstServer = () =>
+  `SST 4's was the server of the first region: \`Object.values(nodes.server)[0]\`.`;
+export const keptById: Record<
+  string,
+  Record<string, (key: string) => string>
+> = {
+  "sst:aws:Bus": {
+    permission: gaveOwn("subscribe"),
+    rule: gaveOwn("subscribe", "subscribeQueue"),
+    target: gaveOwn("subscribe", "subscribeQueue"),
+  },
+  "sst:aws:SnsTopic": {
+    permission: gaveOwn("subscribe"),
+    subscription: gaveOwn("subscribe", "subscribeQueue"),
+  },
+  "sst:aws:Dynamo": { eventSourceMapping: gaveOwn("subscribe") },
+  "sst:aws:KinesisStream": { eventSourceMapping: gaveOwn("subscribe") },
+  "sst:aws:ApiGatewayV2": {
+    integration: gaveOwn("route", "routeUrl", "routePrivate"),
+    permission: gaveOwn("route"),
+    route: gaveOwn("route", "routeUrl", "routePrivate"),
+  },
+  "sst:aws:ApiGatewayV1": {
+    integration: gaveOwn("route", "routeIntegration"),
+    method: gaveOwn("route", "routeIntegration"),
+    permission: gaveOwn("route"),
+  },
+  "sst:aws:ApiGatewayWebSocket": {
+    integration: gaveOwn("route"),
+    permission: gaveOwn("route"),
+    route: gaveOwn("route"),
+  },
+  "sst:aws:AppSync": { resolver: gaveOwn("addResolver") },
+  ...Object.fromEntries(
+    [
+      "Nextjs",
+      "Astro",
+      "SvelteKit",
+      // SST 4's type, which SST 5 keeps
+      "TanstackStart",
+      "Nuxt",
+      "SolidStart",
+      "Analog",
+      "Remix",
+      "React",
+    ].map((site) => [`sst:aws:${site}`, { server: firstServer }]),
+  ),
+};
+
+/**
+ * What SST 4 had where SST 5's component has a record by id under `key`, for
+ * a read of one resource's field on the record: an empty string where SST 4
+ * had nothing of the name.
+ */
+export function keptByIdOf(type: string, key: string): string {
+  const said = keptById[type]?.[key];
+  return said ? ` ${said(key)}` : "";
+}
 
 /**
  * The `nodes` names SST 4 had for a component of this type that SST 5

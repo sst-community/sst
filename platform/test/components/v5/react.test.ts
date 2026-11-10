@@ -113,7 +113,9 @@ ssrSiteSuite(
           warm: 1,
         });
         await pulumi.settle();
-        expect(Object.keys(web.nodes.server)).toEqual([]);
+        // Its region, as `undefined`, as SST 4's `nodes.server` was
+        expect(Object.keys(web.nodes.server)).toEqual(["us-east-1"]);
+        expect(await pulumi.resolve(web.nodes.server["us-east-1"])).toBeUndefined();
         expect(names()).not.toContain("WebServerUseast1");
         const { entries } = pulumi.resources.find(
           (r) => r.name === "WebKvKeys",

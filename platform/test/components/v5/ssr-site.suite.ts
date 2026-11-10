@@ -503,12 +503,10 @@ export function ssrSiteSuite(
           warm: 1,
         });
         // What's made from the server waits for it, and fails with the build
-        if (c.alwaysServes) {
-          const server = (web.nodes.server["us-east-1"] as any).promise();
-          await expect(server).rejects.toThrow(
-            new RegExp(`Failed to build the "${S}" site`),
-          );
-        }
+        const server = (web.nodes.server["us-east-1"] as any).promise();
+        await expect(server).rejects.toThrow(
+          new RegExp(`Failed to build the "${S}" site`),
+        );
         await pulumi.settle();
       });
       // Pulumi reports an error once, by identity
@@ -520,27 +518,22 @@ export function ssrSiteSuite(
       expect(names()).not.toContain(`${S}ServerUseast1`);
     });
 
-    if (c.alwaysServes)
-      it("has its server in nodes from the start, without regions", async () => {
-        const web = new Site(S, { path: site, buildCommand: "true", warm: 1 });
-        expect(Object.keys(web.nodes.server)).toEqual(["us-east-1"]);
-        expect(Object.keys(web.nodes.warmer)).toEqual(["us-east-1"]);
-        expect(Object.keys(web.nodes.prewarm)).toEqual(["us-east-1"]);
-        expect(Object.keys(web.nodes.urlAccess)).toEqual(["us-east-1"]);
-        expect(Object.keys(web.nodes.cloudFrontUrlAccess)).toEqual([]);
-        const server = await pulumi.resolve(web.nodes.server["us-east-1"]);
-        expect(server.constructor.name).toBe("Function");
-        await pulumi.settle();
-      });
-    else
-      it("has its server in nodes once the build says it has one", async () => {
-        const web = new Site(S, { path: site, buildCommand: "true", warm: 1 });
-        expect(Object.keys(web.nodes.server)).toEqual([]);
-        await pulumi.settle();
-        expect(Object.keys(web.nodes.server)).toEqual(["us-east-1"]);
-        expect(Object.keys(web.nodes.warmer)).toEqual(["us-east-1"]);
-        expect(Object.keys(web.nodes.urlAccess)).toEqual(["us-east-1"]);
-      });
+    it("has its server in nodes from the start, without regions", async () => {
+      const web = new Site(S, { path: site, buildCommand: "true", warm: 1 });
+      expect(Object.keys(web.nodes.server)).toEqual(["us-east-1"]);
+      // What's made with a server is too, where every build has one, and
+      // otherwise once the build says there is one
+      const withServer = c.alwaysServes ? ["us-east-1"] : [];
+      expect(Object.keys(web.nodes.warmer)).toEqual(withServer);
+      expect(Object.keys(web.nodes.prewarm)).toEqual(withServer);
+      expect(Object.keys(web.nodes.urlAccess)).toEqual(withServer);
+      expect(Object.keys(web.nodes.cloudFrontUrlAccess)).toEqual([]);
+      const server = await pulumi.resolve(web.nodes.server["us-east-1"]);
+      expect(server.constructor.name).toBe("Function");
+      await pulumi.settle();
+      expect(Object.keys(web.nodes.warmer)).toEqual(["us-east-1"]);
+      expect(Object.keys(web.nodes.urlAccess)).toEqual(["us-east-1"]);
+    });
 
     it("has its server in nodes once it's created, given a provider of its own", async () => {
       const { Provider } = await import("@pulumi/aws");
@@ -562,11 +555,7 @@ export function ssrSiteSuite(
         buildCommand: "true",
         regions: ["us-east-1", "eu-west-1"],
       });
-      if (c.alwaysServes)
-        expect(Object.keys(web.nodes.server)).toEqual([
-          "us-east-1",
-          "eu-west-1",
-        ]);
+      expect(Object.keys(web.nodes.server)).toEqual(["us-east-1", "eu-west-1"]);
       await pulumi.settle();
       expect(Object.keys(web.nodes.server)).toEqual(["us-east-1", "eu-west-1"]);
       const server = await pulumi.resolve(web.nodes.server["eu-west-1"]);

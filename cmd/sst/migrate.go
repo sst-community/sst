@@ -393,8 +393,10 @@ func count(n int, one, many string) string {
 }
 
 // mergedLine says why a field a transform sets changes: SST 5 merges the
-// transform's object into the component's settings, where SST 4 put it in
-// their place
+// transform's object into the component's settings, where SST 4 put an
+// object in their place. The transform may be one SST 4 didn't have, like a
+// part that's new in SST 5, so it says what SST 4 did with objects, not with
+// this one.
 func mergedLine(field move.MergedField) string {
 	kept := field.Kept
 	more := ""
@@ -403,7 +405,7 @@ func mergedLine(field move.MergedField) string {
 		kept = kept[:4]
 	}
 	return fmt.Sprintf(
-		"Your transform sets %q as an object, which SST 4 put in place of the component's settings. SST 5 merges it into them, keeping %s%s. To replace them as SST 4 did, set it in a function.",
+		"Your transform sets %q as an object, which SST 5 merges into the component's settings, keeping %s%s. SST 4 put an object in place of them. To replace them, set it in a function.",
 		field.Field, strings.Join(kept, ", "), more,
 	)
 }

@@ -80,6 +80,7 @@ export interface MockInput {
     call?: (args: pulumi.runtime.MockCallArgs) => Record<string, any> | undefined;
     cli?: (method: string, args: any) => any;
     move?: boolean;
+    patience?: number;
     preview?: boolean;
     recorded?: StateExport;
     root?: string;

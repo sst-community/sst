@@ -446,18 +446,17 @@ describe("services, sites and nodes", () => {
     );
   });
 
-  it("leaves a note where nodes.server is empty while the config runs", () => {
-    const astro = config(
-      `const web = new sst.aws.Astro("Web");\nf(web.nodes.server);`,
-    );
-    expect(astro.text).toBe(
-      `const web = new sst.aws.Astro("Web");\nf(web.nodes.server);`,
-    );
-    expect(astro.notes).toEqual([
-      expect.stringMatching(
-        /^`Astro`'s `nodes.server` is a record by region, filled once the site is built/,
-      ),
-    ]);
+  it("reads a site's nodes.server as SST 4's, or leaves a note where it's empty while the config runs", () => {
+    // A site whose build may have no server has each region from the start,
+    // as `undefined` when there's none, as SST 4's was
+    for (const site of ["Astro", "React"])
+      expect(
+        config(`const web = new sst.aws.${site}("Web");\nf(web.nodes.server);`)
+          .text,
+        site,
+      ).toBe(
+        `const web = new sst.aws.${site}("Web");\nf(Object.values(web.nodes.server)[0]);`,
+      );
     const west = `const web = new sst.aws.Nextjs("Web", {}, { provider: west });\nf(web.nodes.server);`;
     expect(config(west).text).toBe(west);
     expect(config(west).notes).toEqual([

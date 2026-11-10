@@ -21,6 +21,7 @@ import { knownValue, notAnOption, plain } from "../args";
 import { context } from "../contract";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { sst4NodesOn } from "../sst4";
 import { hashStringToPrettyString, logicalName } from "../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
@@ -1167,7 +1168,10 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
         id,
         authorizerPermissionArgs(fn, api.executionArn, authorizer.id),
       );
-    return authorizer;
+    return sst4NodesOn(authorizer, "addAuthorizer", "the authorizer", {
+      authorizer: undefined,
+      function: `Its function is the API's "nodes.authorizerFunction", by the authorizer's name.`,
+    });
   }
 
   /**

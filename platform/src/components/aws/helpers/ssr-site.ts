@@ -858,6 +858,27 @@ export interface SsrSiteArgs {
 
 export type SsrSiteParts = ReturnType<typeof ssrSiteParts>;
 
+/**
+ * The parts of a site whose build may have no server, like a static Astro
+ * site: the same, with each region's server `undefined` when there's none.
+ */
+export const sometimesServingSiteParts = () => ({
+  ...ssrSiteParts(),
+  /**
+   * The AWS Lambda function that renders the site, one in each of the `regions`,
+   * by region: `nodes.server["us-east-1"]`. Each is an output, as it's created
+   * once the site is built, and is `undefined` when the build has no server.
+   *
+   * Without `regions`, the server is in the app's region. When the site is given
+   * an AWS provider of its own, its region isn't known until the deploy reads it,
+   * so the server is listed once it's created. Set `regions` to have it from the
+   * start.
+   */
+  server: many(deferred(optional(Function))),
+});
+
+type SometimesServingSiteParts = ReturnType<typeof sometimesServingSiteParts>;
+
 // The parts a site creates for a distribution of its own, which it doesn't
 // have behind a router
 const DISTRIBUTION_PARTS = [
@@ -958,8 +979,10 @@ export interface SsrFramework<B extends SiteBuild = SiteBuild> {
    */
   load(builtPath: string, owner: string): B;
   /**
-   * Whether every build has a server, so `nodes.server` lists one in each
-   * region from the start.
+   * Whether every build has a server. A site whose build may have none, like
+   * a static Astro site, is made from `sometimesServingSiteParts()`, so each
+   * region's server is `undefined` when there's none, and what's made with
+   * a server, like its warmer, is listed once it's created.
    */
   alwaysServes: boolean;
   /**
@@ -1002,7 +1025,10 @@ interface Built {
  * this.siteUrl = createSsrSite(this.builder(), name, args, framework).url;
  * ```
  */
-export function createSsrSite<P extends SsrSiteParts, B extends SiteBuild>(
+export function createSsrSite<
+  P extends SsrSiteParts | SometimesServingSiteParts,
+  B extends SiteBuild,
+>(
   siteBuilder: PartsBuilder<P>,
   name: string,
   args: SsrSiteArgs & SiteOwnArgs & { existing?: object },
@@ -1102,7 +1128,7 @@ export function createSsrSite<P extends SsrSiteParts, B extends SiteBuild>(
   });
   const built = builder.after(build, createFromBuild);
   const builtOutput = output(built);
-  if (framework.alwaysServes) promiseRegionalParts();
+  promiseRegionalParts();
 
   const assetFiles = builder.part("assetFiles", {
     bucketName: bucket.name,
@@ -1199,10 +1225,12 @@ export function createSsrSite<P extends SsrSiteParts, B extends SiteBuild>(
   }
 
   // The parts made for each region are in `nodes` before they're created,
-  // when the regions are known
+  // when the regions are known: the server, which is `undefined` for a build
+  // without one, and, when every build has one, what's made with it
   function promiseRegionalParts() {
     if (!serverRegions) return;
     builder.willCreate("server", serverRegions);
+    if (!framework.alwaysServes) return;
     if (warm)
       for (const key of [
         "warmer",

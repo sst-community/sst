@@ -17,6 +17,7 @@ import type { Prettify } from "../component";
 import { ifSet, notAnExistingPart, plain, usedAsItIs, withDefault, getArgs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { sst4NodesOn } from "../sst4";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
 import { type DomainArgs, domainOf } from "./helpers/domain";
@@ -898,7 +899,7 @@ export class CognitoUserPool extends component(
   ) {
     this.assertNew("identity provider", "identityProvider", name, args);
 
-    return this.part("identityProvider", name, {
+    const provider = this.part("identityProvider", name, {
       userPoolId: this.id,
       providerName: name,
       providerType: output(args.type).apply((type) => {
@@ -910,6 +911,9 @@ export class CognitoUserPool extends component(
       }),
       providerDetails: args.details,
       attributeMapping: args.attributes,
+    });
+    return sst4NodesOn(provider, "addIdentityProvider", "the identity provider", {
+      identityProvider: undefined,
     });
   }
 

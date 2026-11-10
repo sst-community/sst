@@ -396,7 +396,7 @@ export interface LinkDefinition {
 type LinkInclude = Permission | ReturnType<typeof binding> | ReturnType<typeof env>;
 
 // @public
-export function many<T extends PartClass | DeferredPart>(part: T): ManyPart<T>;
+export function many<T extends PartClass | DeferredPart<PartClass | OptionalPart>>(part: T): ManyPart<T>;
 
 // @public (undocumented)
 type ManyKeys<P extends Parts> = {
@@ -404,7 +404,7 @@ type ManyKeys<P extends Parts> = {
 }[keyof P] & string;
 
 // @public
-export interface ManyPart<T extends PartClass | DeferredPart = PartClass | DeferredPart> {
+export interface ManyPart<T extends PartClass | DeferredPart<PartClass | OptionalPart> = PartClass | DeferredPart<PartClass | OptionalPart>> {
     // (undocumented)
     many: T;
 }

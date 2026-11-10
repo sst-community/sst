@@ -26,7 +26,11 @@ tests. It's written for AWS; for Cloudflare, read `cloudflare/` for `aws/` and
   write.** A component's name, like `CronV2`, is a stub in the group's `sst4.ts`; a
   `nodes` name, like the `Alb`'s `listeners`, is in `renamedNodes` in
   `components/sst4.ts`, by the component's type. Otherwise the config fails with
-  "is not a constructor", or reads `undefined`. `test/components/sst4-names.test.ts`
+  "is not a constructor", or reads `undefined`. A method that gives a resource where
+  SST 4's gave a component of its own, like `addAuthorizer`, returns it through
+  `sst4NodesOn()`, with SST 4's `nodes` names. A `nodes` name SST 4's sub-item had and
+  SST 5's component has as a record by id, like a bus subscriber's `rule`, goes in
+  `keptById`, which the record's error adds to. `test/components/sst4-names.test.ts`
   checks that every component SST 4 exported has its name in SST 5.
 - **SST 4's components are frozen** in `platform/test/fixtures/v4/components/`, laid
   out as they were. The takeover suites and the recorded states load them, and nothing

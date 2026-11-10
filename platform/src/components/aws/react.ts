@@ -13,12 +13,12 @@ import {
   type SsrFramework,
   type SsrSiteArgs,
   createSsrSite,
-  ssrSiteParts,
+  sometimesServingSiteParts,
 } from "./helpers/ssr-site";
 import type { CdnDomainArgs } from "./cdn";
 import type { FunctionArgs } from "./function";
 
-const parts = ssrSiteParts;
+const parts = sometimesServingSiteParts;
 
 export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
@@ -424,7 +424,7 @@ export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. In SPA mode
- *   there's none, so a server is listed once the build says there is one.
+ *   there's none, so it's `undefined` there, as SST 4's `nodes.server` was.
  * - With `warm`, the server is warmed again when its code changes. SST 4's `React` warmed
  *   it on every deploy. The switch warms it once.
  * - The base path is read from `vite.config` and `react-router.config` in any of their

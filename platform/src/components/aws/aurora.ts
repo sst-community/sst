@@ -616,7 +616,11 @@ const acus = (acu: string) => parseFloat(acu.split(" ")[0]);
  *   reading one of them fails and says why it's missing, where SST 4's `Aurora` gave
  *   `undefined`.
  * - `transform.instance` still applies to the primary instance and to each replica. To
- *   change only the replicas, use `transform.replica`, which is applied after it.
+ *   change only the replicas, use `transform.replica`, which is applied after it. A
+ *   function there is applied once to each replica. SST 4's applied it to the instance's
+ *   args, then made each replica from those and applied it again, so a function that adds
+ *   to what it's given, like a tag counted up or an item pushed onto a list, gave a
+ *   replica it twice.
  * - If you set `tags` on the cluster with an object in `transform`, it keeps the tags SST
  *   sets next to yours. They're added back when you switch.
  *
@@ -820,7 +824,10 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       { ignoreChanges: pinned("engineVersion") },
     );
 
-    const instanceArgs = {
+    // Made again for each instance: a transform function changes the args
+    // it's given, so a replica made from the instance's would have the
+    // instance's transform applied to it twice, as SST 4's did
+    const instanceArgs = () => ({
       clusterIdentifier: cluster.id,
       instanceClass: "db.serverless",
       engine: cluster.engine.apply((v) => v as rds.EngineType),
@@ -828,13 +835,13 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
       dbSubnetGroupName: cluster.dbSubnetGroupName,
       dbParameterGroupName: instanceParameterGroup.name,
       autoMinorVersionUpgrade: false,
-    };
-    const instance = this.part("instance", instanceArgs);
+    });
+    const instance = this.part("instance", instanceArgs());
 
     for (let i = 0; i < replicas; i++) {
       // The instance's transform applies to each replica too, as it does in
       // `Aurora`. The replica's own transform is applied after it.
-      const replicaDefaults = { ...instanceArgs, promotionTier: 15 };
+      const replicaDefaults = { ...instanceArgs(), promotionTier: 15 };
       const [, replicaArgs, replicaOpts] = transformPart(
         args.transform?.instance,
         `${name}Replica${i}`,

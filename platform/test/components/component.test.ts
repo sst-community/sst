@@ -327,6 +327,10 @@ describe("Component parts", () => {
     }
     const regional = new Regional("Docs");
     expect(Object.keys(regional.nodes.bucket)).toEqual(["east"]);
+    // Before it's created, only what every resource has, and its class
+    expect(() => (regional.nodes.bucket as any).urn).toThrow(
+      'read `nodes.bucket["east"].urn`',
+    );
     const east = await pulumi.resolve(regional.nodes.bucket.east);
     await pulumi.settle();
     expect(east).toBeInstanceOf(aws.s3.Bucket);
@@ -502,6 +506,30 @@ describe("Component parts", () => {
         "us-east-1b",
       ]);
       expect(network.nodes.subnet["us-east-1a"]).toBeInstanceOf(aws.ec2.Subnet);
+    });
+
+    // Which would read `undefined`: the record isn't one of its resources
+    it("refuses a read of what its resources have, and reads as a record otherwise", async () => {
+      const Network = defineNetwork();
+      const network = new Network("Net", { zones: ["us-east-1a", "us-east-1b"] });
+      await pulumi.settle();
+
+      const subnets = network.nodes.subnet as Record<string, any>;
+      for (const field of ["id", "urn", "arn", "vpcId", "getProvider"])
+        expect(() => subnets[field], field).toThrow(
+          `\`nodes.subnet\` of "Net" has a resource for each, by its id, not one: read \`nodes.subnet["us-east-1a"].${field}\`.`,
+        );
+      // What isn't a resource's field, or is an id, reads as before
+      expect(subnets.then).toBeUndefined();
+      expect(subnets.toJSON).toBeUndefined();
+      expect(subnets.__pulumiOutput).toBeUndefined();
+      expect(subnets["us-east-1c"]).toBeUndefined();
+      expect("arn" in subnets).toBe(false);
+      expect(Object.keys({ ...subnets })).toEqual(["us-east-1a", "us-east-1b"]);
+      const ids = await pulumi.resolve(
+        output(subnets).apply((all) => Object.values(all).map((s: any) => s.id)),
+      );
+      expect(ids).toHaveLength(2);
     });
 
     it("applies an object transform to every one", async () => {

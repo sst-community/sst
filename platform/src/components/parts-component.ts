@@ -43,7 +43,7 @@ import {
 import { adoptable, mapsFrom, moving, reportMerged, reportPart } from "./move";
 import { type Report, reportItems, withRecord } from "./contract";
 import { VisibleError } from "./error";
-import { renamedNodesOf } from "./sst4";
+import { keptByIdOf, renamedNodesOf } from "./sst4";
 import { isFromGet, notAnOption } from "./args";
 
 export {
@@ -546,7 +546,9 @@ export class PartsComponent<P extends Parts> extends Component {
    * start, each an output that resolves to the resource once it's created.
    * Without this, an id is listed once its resource is created.
    *
-   * List only the ids `create` always creates.
+   * List only the ids `create` always creates, unless the part is declared
+   * with `many(deferred(optional(...)))`: then an id it doesn't create
+   * resolves to `undefined`, as for a site's server when its build has none.
    *
    * @example
    * ```ts
@@ -855,7 +857,7 @@ export class PartsComponent<P extends Parts> extends Component {
     }
     // Held by id on an object with no prototype, so `id in nodes.route` is
     // only true for a route that exists, whatever the id is.
-    if (!isDeferred(part)) return Object.assign(byId(), created);
+    if (!isDeferred(part)) return this.byIdOnly(key, Object.assign(byId(), created));
 
     // Each is read when asked for: one given as an ARN has no resource
     const many = byId();
@@ -874,7 +876,49 @@ export class PartsComponent<P extends Parts> extends Component {
               : output(created?.[id]),
       });
     }
-    return many;
+    return this.byIdOnly(key, many);
+  }
+
+  // A `many` part's record refuses a read of what its resources have, like
+  // `bus.nodes.rule.arn`, which would read `undefined`, as the record isn't
+  // one of them. SST 4's `subscribe`, `route` and the like gave a component
+  // of its own for each, whose `nodes.rule` was one, so a config written for
+  // SST 4 reads that. Everything else reads the record as it is.
+  private byIdOnly(key: string, record: Record<string, unknown>) {
+    let fields: Set<string> | undefined;
+    return new Proxy(record, {
+      get: (target, prop, receiver) => {
+        if (
+          typeof prop === "string" &&
+          !(prop in target) &&
+          (fields ??= this.fieldsOf(key)).has(prop)
+        ) {
+          const id = Object.keys(target)[0] ?? "<id>";
+          throw new VisibleError(
+            `\`nodes.${key}\` of "${this.componentName}" has a resource for each, by its id, not one: read \`nodes.${key}[${JSON.stringify(id)}].${prop}\`.${keptByIdOf(this.componentType, key)}`,
+          );
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  }
+
+  // What a part's resources have: what its class gives each, and what one
+  // that's created has of its own. Not the engine's own fields, which start
+  // with `__` and are read to tell a resource or an output from the rest.
+  private fieldsOf(key: string) {
+    const fields = new Set(["urn", "id"]);
+    for (
+      let proto = partClass(this.partClasses[key]).prototype;
+      proto && proto !== Object.prototype;
+      proto = Object.getPrototypeOf(proto)
+    )
+      for (const name of Object.getOwnPropertyNames(proto)) fields.add(name);
+    for (const resource of Object.values(this.partNodes[key] ?? {}))
+      if (resource && typeof resource === "object")
+        for (const name of Object.keys(resource)) fields.add(name);
+    fields.delete("constructor");
+    return new Set([...fields].filter((name) => !name.startsWith("__")));
   }
 
   // A deferred part's resource, once `after()` has created what it creates

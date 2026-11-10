@@ -83,7 +83,9 @@ export function optional<C extends PartClass>(cls: C): OptionalPart<C> {
 
 /** A part declared with `many()`. */
 export interface ManyPart<
-  T extends PartClass | DeferredPart = PartClass | DeferredPart,
+  T extends PartClass | DeferredPart<PartClass | OptionalPart> =
+    | PartClass
+    | DeferredPart<PartClass | OptionalPart>,
 > {
   many: T;
 }
@@ -106,9 +108,14 @@ export interface ManyPart<
  * the id. Its entry in `nodes` holds them by id.
  *
  * Wrap a deferred part to have several of those, like one function per
- * subscriber: `many(deferred(Function))`.
+ * subscriber: `many(deferred(Function))`. Each one `after()` may not create,
+ * like a site's server when its build has none, is
+ * `many(deferred(optional(Function)))`: its entry is then an `Output` that may
+ * be `undefined`.
  */
-export function many<T extends PartClass | DeferredPart>(part: T): ManyPart<T> {
+export function many<T extends PartClass | DeferredPart<PartClass | OptionalPart>>(
+  part: T,
+): ManyPart<T> {
   return { many: part };
 }
 

@@ -1167,9 +1167,9 @@ export const rules: Rule[] = [
 
   // A site's `nodes.server` is a record by region. SST 4's was the first
   // region's, which is the first in the record, when the record has it while
-  // the config runs: not for a site that may have no server, or one that may
-  // have a provider of its own and no `regions`, which list it once it's
-  // created.
+  // the config runs: not for one that may have a provider of its own and no
+  // `regions`, which lists it once it's created. A site whose build may have
+  // no server has it as `undefined` then, as SST 4's was.
   {
     name: "site-nodes-server",
     visit: (ctx, node) => {
@@ -1237,14 +1237,6 @@ export const rules: Rule[] = [
           /^Object\.(values|keys|entries)$/.test(ctx.text(after.expression)))
       )
         return;
-      if (ref.five === "Astro" || ref.five === "React") {
-        ctx.note(
-          node,
-          "site-nodes-server",
-          `\`${ref.five}\`'s \`nodes.server\` is a record by region, filled once the site is built, as a static site has no server: it's empty while your config runs. Rewrite this read by hand; the site's \`transform.server\` changes the server's args`,
-        );
-        return;
-      }
       // A provider of its own, from the options or a parent, is read in the
       // deploy, unless the site has its `regions`
       const args = ref.created?.arguments?.[1];

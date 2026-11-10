@@ -546,7 +546,7 @@ type ManyKeys<P extends Parts> = {
 }[keyof P] & string;
 
 // @public
-interface ManyPart<T extends PartClass | DeferredPart = PartClass | DeferredPart> {
+interface ManyPart<T extends PartClass | DeferredPart<PartClass | OptionalPart> = PartClass | DeferredPart<PartClass | OptionalPart>> {
     // (undocumented)
     many: T;
 }

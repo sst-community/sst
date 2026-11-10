@@ -90,6 +90,14 @@ export interface MockInput {
    */
   preview?: boolean;
   /**
+   * How long `settle()` waits, in milliseconds, for a component's outputs
+   * while nothing else is going on: nothing registered, nothing on disk, no
+   * command running and no call owed. Raise it for a component that waits on
+   * a timer longer than that before its outputs are in.
+   * @default 500
+   */
+  patience?: number;
+  /**
    * In a preview, whether a resource's id isn't known yet, as for one a
    * deploy creates: what's given its id gets an output that isn't known.
    * Otherwise a resource's id is made from its name.
@@ -606,7 +614,8 @@ export function mockPulumi(input?: MockInput) {
      * Lets pending `.apply()` chains and registrations finish: waits until
      * nothing new has been registered for a few rounds, resources or a
      * component's outputs, nothing is being read or written on disk, and no
-     * command is running.
+     * command is running. A component's outputs are waited on for `patience`
+     * with nothing else going on.
      */
     async settle() {
       // A function's code is zipped on disk, and a site is built by a command,
@@ -623,7 +632,7 @@ export function mockPulumi(input?: MockInput) {
       // only this long with nothing else going on. Time spent on a build, on
       // disk or on a call owed isn't counted: what's waited on may be
       // waiting on it.
-      const patience = 500;
+      const patience = input?.patience ?? 500;
       let changed = Date.now();
       for (let quiet = 0, seen = -1; quiet < 3; ) {
         for (let i = 0; i < 50; i++)

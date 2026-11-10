@@ -12,6 +12,7 @@ import type { Prettify } from "../component";
 import { notAnExistingPart, plain, withDefault } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { sst4NodesOn } from "../sst4";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
 import { parseDynamoArn } from "./helpers/arn";
@@ -728,12 +729,17 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
         ],
       });
 
-    return this.part("dataSource", name, {
+    const dataSource = this.part("dataSource", name, {
       apiId: this.nodes.api.id,
       type: source.type,
       name,
       serviceRoleArn: serviceRole?.arn,
       ...source.config,
+    });
+    return sst4NodesOn(dataSource, "addDataSource", "the data source", {
+      dataSource: undefined,
+      function: `Its function is the API's "nodes.dataSourceFunction", by the data source's name.`,
+      serviceRole: `Its role is the API's "nodes.serviceRole", by the data source's name.`,
     });
   }
 
@@ -775,7 +781,7 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
     const { name } = args;
     this.assertNew("function", "function", name, args);
 
-    return this.part("function", name, {
+    const fn = this.part("function", name, {
       apiId: this.nodes.api.id,
       name,
       dataSource: this.dataSourceName(args.dataSource),
@@ -783,6 +789,9 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
       responseMappingTemplate: args.responseMappingTemplate,
       code: args.code,
       runtime: args.code ? APPSYNC_JS : undefined,
+    });
+    return sst4NodesOn(fn, "addFunction", "the AppSync function", {
+      function: undefined,
     });
   }
 

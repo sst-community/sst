@@ -18,6 +18,7 @@ import type { Prettify } from "../component";
 import { ifSet, plain, usedAsItIs } from "../args";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
+import { sst4NodesOn } from "../sst4";
 import { type Duration, type DurationHours, toSeconds } from "../duration";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function, type FunctionArgs } from "./function";
@@ -1109,7 +1110,7 @@ export class ApiGatewayHttp extends component("sst:aws:ApiGatewayV2", parts) {
 
     if (args.jwt) {
       const jwt = output(args.jwt);
-      return this.part("authorizer", name, {
+      const authorizer = this.part("authorizer", name, {
         apiId: api.id,
         authorizerType: "JWT",
         identitySources: [
@@ -1119,6 +1120,9 @@ export class ApiGatewayHttp extends component("sst:aws:ApiGatewayV2", parts) {
           audiences: jwt.audiences,
           issuer: jwt.issuer,
         })),
+      });
+      return sst4NodesOn(authorizer, "addAuthorizer", "the authorizer", {
+        authorizer: undefined,
       });
     }
 
@@ -1155,7 +1159,9 @@ export class ApiGatewayHttp extends component("sst:aws:ApiGatewayV2", parts) {
       authorizerPermissionArgs(fn, api.executionArn, authorizer.id),
     );
 
-    return authorizer;
+    return sst4NodesOn(authorizer, "addAuthorizer", "the authorizer", {
+      authorizer: undefined,
+    });
   }
 
   /**

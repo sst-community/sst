@@ -135,8 +135,11 @@ ssrSiteSuite(
           buildCommand: "true",
           warm: 2,
         });
+        // Its region, as `undefined`, as SST 4's `nodes.server` was
+        expect(Object.keys(web.nodes.server)).toEqual(["us-east-1"]);
+        expect(await pulumi.resolve(web.nodes.server["us-east-1"])).toBeUndefined();
         await pulumi.settle();
-        expect(Object.keys(web.nodes.server)).toEqual([]);
+        expect(Object.keys(web.nodes.server)).toEqual(["us-east-1"]);
         expect(Object.keys(web.nodes.warmer)).toEqual([]);
         expect(names()).not.toContain("WebServerUseast1");
         expect(names()).toEqual(

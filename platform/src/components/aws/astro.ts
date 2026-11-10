@@ -13,13 +13,13 @@ import {
   type SsrFramework,
   type SsrSiteArgs,
   createSsrSite,
-  ssrSiteParts,
+  sometimesServingSiteParts,
 } from "./helpers/ssr-site";
 import type { SitePlan } from "./site-code";
 import type { CdnDomainArgs } from "./cdn";
 import type { FunctionArgs } from "./function";
 
-const parts = ssrSiteParts;
+const parts = sometimesServingSiteParts;
 
 export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
   /**
@@ -421,7 +421,7 @@ export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts> {
  *
  * - `nodes.server` holds the server of each region, by region, each an output:
  *   `nodes.server["us-east-1"]`. Without `regions`, that's the app's region. A static site
- *   has none, so a server is listed once the build says there is one.
+ *   has none, so it's `undefined` there, as SST 4's `nodes.server` was.
  * - With `warm`, the server is warmed again when its code changes. SST 4's `Astro` warmed
  *   it on every deploy. The switch warms it once.
  */

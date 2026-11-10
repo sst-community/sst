@@ -2,6 +2,22 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-09: what the review left open
+
+The known differences and the points raised in [the review of the day's fixes](#2026-11-09-a-review-of-the-days-fixes-and-its-findings-fixed), each fixed:
+
+- **An `Astro` or `React` site's server can be read while the config runs.** Each region's is in `nodes.server` from the start, as for the other sites, and resolves to `undefined` for a build without one, a static Astro site or a React site in SPA mode, as SST 4's `nodes.server` did. Its type says so: `Output<Function | undefined>`. What's made with a server, like its warmer, is listed once it's created. The parts take `many(deferred(optional(...)))` for this, and `willCreate()` an id that may resolve to `undefined` for such a part. The codemod rewrites these sites' `nodes.server` as it does the others'.
+- **A `nodes` record by id refuses a read of what its resources have,** like `bus.nodes.rule.arn`, which read `undefined`: it says to read one by its id, like `nodes.rule["MySubscriber"].arn`. Where SST 4's `subscribe`, `route` or `addResolver` gave a component whose `nodes` had that name, it says so, and for a site's `nodes.server` that SST 4's was the first region's. An id, `in`, `Object.keys`, a spread and an output of the record read as before; what Pulumi and JavaScript read to tell a resource, an output or a promise from the rest isn't a resource's field. Before a deferred part's first resource is created, the fields known are what every resource has and what its class has, which for SST's `Function` is all of them.
+- **`Realtime`'s authorizer permission is `nodes.authorizerPermission`,** with the name it had, so `nodes.permission`, which SST 4's subscriber had, says to read `nodes.subscriberPermission` by the subscriber's name.
+- **What `addAuthorizer`, `addDataSource`, `addFunction` and `addIdentityProvider` give** has SST 4's `nodes` names, which say what to read: the resource's own fields, or for a data source's function and role, the API's records. They aren't enumerable, and a resource the app gave in `existing` with `nodes` of its own is left as it is.
+- **An image's cache settings** are plain lists for a plain `cache`, as SST 4 made the image inside an `apply`. A function URL's `authorizationType` was an output in SST 4 too, so it stays one; the review's note was wrong. SST 4 gave neither the image nor the URL a transform.
+- **`Aurora` applies a function in `transform.instance` once to each replica,** where SST 4 applied it to the instance's args and then again to each replica made from them. A function that adds to what it's given, like a tag counted up, gave a replica it twice.
+- **The mock's wait for a component's outputs** can be longer: `mock({ patience })`, in milliseconds, for a component waiting on a timer longer than half a second.
+- **What `--check` says of a merge** doesn't say SST 4 put this transform's object in place, as the transform may be one SST 4 didn't have, like `Cron`'s `transform.function`: SST 5 merges it, keeping these settings, and SST 4 put an object in place of them.
+- **Tests:** a record by id refuses each field and reads as a record otherwise, a deferred one too; each kept name refuses on a component built under the mock, with what SST 4 gave; each `add` method's SST 4 names, both of the HTTP API's authorizers and the REST API's function; a static Astro site's and an SPA's server is listed and `undefined`; every site lists its region from the start; a replica's tag counted once; an image's lists; `patience`. Each new test fails without its fix.
+- **Still left:** a record by id passed on whole, like `subscriber.nodes.rule` given to another resource's args, isn't read as one of its resources, so it isn't refused; nor is a field read on a record with nothing in it yet, like `bus.nodes.rule.arn` before any subscriber, as a Pulumi resource's fields are known only from one that's created.
+- **An independent review** of the change found one gap, fixed: the REST API's authorizer had SST 4's `nodes.function` too, which now says to read `nodes.authorizerFunction`.
+
 ## 2026-11-09: a review of the day's fixes, and its findings fixed
 
 Three reviews, each without the others' conclusions: of the six fixes pushed earlier in the day, in two halves, and of the SST 4 names below. What they found, each checked, and fixed:
