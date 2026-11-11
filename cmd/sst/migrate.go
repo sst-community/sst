@@ -234,9 +234,13 @@ var CmdMigrate = &cli.Command{
 
 		// The move the check passed. Under the same lock, the state is saved
 		// and what the maps release is marked retained, so it leaves the state
-		// without its delete, and the components apply their maps.
+		// without its delete, and the components apply their maps. So is what
+		// the move replaces but keeps in the cloud.
 		released := []project.Released{}
 		for _, r := range result.Released {
+			released = append(released, project.Released{URN: r.URN, Type: r.Type})
+		}
+		for _, r := range result.Retained {
 			released = append(released, project.Released{URN: r.URN, Type: r.Type})
 		}
 		return finish(p.Run(c.Context, &project.StackInput{

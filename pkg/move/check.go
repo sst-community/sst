@@ -20,13 +20,16 @@
 //     replaces it.
 //   - A Lambda invocation keyed on the time of the deploy, or one of SST's
 //     components keys on what it runs, is replaced when that changed, as any
-//     deploy calls it again.
+//     deploy calls it again. So is one replaced because a newer provider than
+//     the one that deployed it reads it, as on a move from an older SST 4,
+//     when it's keyed on the time.
 //
 // Nothing that holds data is deleted, replaced or emptied, whatever the map
 // says.
 package move
 
 import (
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -162,6 +165,11 @@ type Result struct {
 	Released []Change
 	Created  []Change
 	Replaced []Change
+	// Retained are replaced resources the move keeps in the cloud: the one in
+	// their place is kept when it's deleted, and the one SST 4 deployed isn't,
+	// like the dev stub code every stage in an account and region shares. The
+	// move marks the old one retained, so its replace doesn't delete it.
+	Retained []Change
 	Problems []Problem
 	// The parent of each resource in the preview, by URN
 	parents map[string]string
@@ -313,6 +321,7 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 				problem(urn, step, "replace", why)
 				result.Problems[len(result.Problems)-1].Fields = fields
 			}
+			replacedBefore := len(result.Replaced)
 			switch {
 			case data:
 				replaceProblem(fields, "It holds data."+changedBecause(fields))
@@ -330,6 +339,15 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 				result.Replaced = append(result.Replaced, Change{URN: urn, Type: step.Type, Why: calledAgain(steps)})
 			default:
 				replaceProblem(fields, "No component's state map says it's replaced."+changedBecause(fields))
+			}
+			// A replace the move may make, of one SST 5 keeps when it's
+			// deleted, keeps the one SST 4 deployed too
+			if len(result.Replaced) > replacedBefore {
+				if old, ok := retainedOnReplace(steps); ok {
+					result.Retained = append(result.Retained, Change{URN: old.URN, Type: old.Type, Why: "SST 5 keeps it when it's deleted, so the move keeps the one SST 4 deployed."})
+					last := &result.Replaced[len(result.Replaced)-1]
+					last.Why += " The one SST 4 deployed is kept in the cloud, as SST 5 keeps this one when it's deleted."
+				}
 			}
 
 		case step.Op == apitype.OpRead && step.Old != nil && !step.Old.External:
@@ -537,12 +555,18 @@ func isLocalCommand(step apitype.StepEventMetadata) bool {
 	return !ok || command == ""
 }
 
-// A time in milliseconds, as JavaScript's `Date.now()` gives it
-var millis = regexp.MustCompile(`^[0-9]{13}$`)
+// A time in milliseconds, as JavaScript's `Date.now()` gives it, anywhere in
+// a value: the whole of it, or in JSON, as in `{"ts":1762100000000}`
+var millis = regexp.MustCompile(`\b[0-9]{13}\b`)
+
+// Where a provider records the schema a resource was written with. A newer
+// provider than the one that deployed it changes it, as on a move from an
+// SST 4 with an older provider, and a Lambda invocation is replaced for it.
+const providerMeta = "__meta"
 
 // Why any deploy calls a replaced Lambda invocation again, so its replace
 // isn't the move's doing, or "" when it may be. It's replaced for nothing
-// but what it's keyed on, and either:
+// but what it's keyed on, or the provider's record of its schema, and either:
 //
 //   - that's the time of the deploy, its `triggers` or its `input`, as SST 4
 //     seeds a Next.js site's ISR data and warms a site's server, and an app
@@ -550,12 +574,32 @@ var millis = regexp.MustCompile(`^[0-9]{13}$`)
 //   - it's right under one of SST's components, keyed on one `version`, as
 //     the 5.0 sites key the same calls on what they run, which most builds
 //     change.
+//
+// One replaced for the provider's record alone is called again by the move
+// whatever it's keyed on, so only what it's keyed on decides whether any
+// deploy would call it too.
 func calledAgain(steps []apitype.StepEventMetadata) string {
-	keys := replaceKeys(steps)
-	if len(keys) != 1 || (keys[0] != "triggers" && keys[0] != "input") {
+	keys := []string{}
+	meta := false
+	for _, key := range replaceKeys(steps) {
+		if key == providerMeta {
+			meta = true
+			continue
+		}
+		keys = append(keys, key)
+	}
+	var field string
+	switch {
+	case len(keys) == 1 && (keys[0] == "triggers" || keys[0] == "input"):
+		field = keys[0]
+	case len(keys) == 0 && meta:
+		field = changedKey(steps)
+		if field == "" {
+			return ""
+		}
+	default:
 		return ""
 	}
-	field := keys[0]
 	// What it's keyed on, as one value: the time or the version
 	keyedOn := func(state *apitype.StepEventStateMetadata) (string, bool) {
 		if field == "input" {
@@ -589,7 +633,7 @@ func calledAgain(steps []apitype.StepEventMetadata) string {
 		if !ok {
 			return ""
 		}
-		timed = timed && millis.MatchString(before) && millis.MatchString(after)
+		timed = timed && onlyTimesDiffer(before, after)
 		found = true
 	}
 	switch {
@@ -601,6 +645,56 @@ func calledAgain(steps []apitype.StepEventMetadata) string {
 		return "One of SST's components calls it again whenever what it's keyed on changes, as any deploy does."
 	}
 	return ""
+}
+
+// The resource a replace deletes, when the one that takes its place is kept
+// when it's deleted and it isn't, like the dev stub code an SST 4 without
+// that rule uploaded, which every stage in an account and region shares
+func retainedOnReplace(steps []apitype.StepEventMetadata) (*apitype.StepEventStateMetadata, bool) {
+	retains := false
+	for _, step := range steps {
+		if step.New != nil && step.New.RetainOnDelete {
+			retains = true
+		}
+	}
+	if !retains {
+		return nil, false
+	}
+	for _, step := range steps {
+		if step.Op == apitype.OpDeleteReplaced && step.Old != nil && !step.Old.RetainOnDelete {
+			return step.Old, true
+		}
+	}
+	return nil, false
+}
+
+// Whether two values have a time in them and differ in nothing else
+func onlyTimesDiffer(before, after string) bool {
+	if !millis.MatchString(before) || !millis.MatchString(after) {
+		return false
+	}
+	return millis.ReplaceAllString(before, "#") == millis.ReplaceAllString(after, "#")
+}
+
+// Which of what an invocation is keyed on, its `input` or its `triggers`,
+// changed, or "" when neither or both did
+func changedKey(steps []apitype.StepEventMetadata) string {
+	changed := ""
+	for _, step := range steps {
+		if step.Old == nil || step.New == nil {
+			continue
+		}
+		for _, field := range []string{"input", "triggers"} {
+			if reflect.DeepEqual(step.Old.Inputs[field], step.New.Inputs[field]) {
+				continue
+			}
+			if changed != "" && changed != field {
+				return ""
+			}
+			changed = field
+		}
+	}
+	return changed
 }
 
 // Whether a resource is right under one of SST's components
@@ -691,7 +785,11 @@ func changedBecause(fields []string) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	return " Changed: " + strings.Join(fields, ", ") + "."
+	why := " Changed: " + strings.Join(fields, ", ") + "."
+	if contains(fields, providerMeta) {
+		why += " `" + providerMeta + "` is where the provider records the schema it wrote the resource with: SST 5's provider is newer than the one that deployed it."
+	}
+	return why
 }
 
 // The top-level fields an update changes

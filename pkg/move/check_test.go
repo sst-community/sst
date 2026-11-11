@@ -331,6 +331,56 @@ func TestNewUpload(t *testing.T) {
 	assert.Len(t, failed(upload(layer, "deps-"+before, "deps-"+after)), 1)
 }
 
+// The dev stub code every stage in an account and region shares: SST 5 keeps
+// it when it's deleted, and the move keeps the one an SST 4 without that rule
+// uploaded, which other stages' functions are created from.
+func TestKeptWhenReplaced(t *testing.T) {
+	const before = "31949f392f6e9c7db434e78a711e595c401e8bdd4feb6d95f62e1ae9876574d3"
+	const after = "16202918c4b0e2f1a9d7c3b5e8f0a2c4d6e8f0a1b3c5d7e9f1a3b5c7d9e1f3a5"
+	bridge := urn("aws:s3/bucketObjectv2:BucketObjectv2", "DevBridgeCodeUswest2Bridge")
+	// Its replace, with whether the one SST 4 deployed and the one in its
+	// place are kept when they're deleted
+	stub := func(oldKept, newKept bool) []apitype.StepEventMetadata {
+		withKeys := inputs(
+			map[string]any{"key": "assets/dev-bridge-code-" + before + ".zip"},
+			map[string]any{"key": "assets/dev-bridge-code-" + after + ".zip"},
+		)
+		kept := func(s *apitype.StepEventMetadata) {
+			s.Old.RetainOnDelete = oldKept
+			s.New.RetainOnDelete = newKept
+		}
+		deleted := step(apitype.OpDeleteReplaced, bridge, func(s *apitype.StepEventMetadata) { s.Old.RetainOnDelete = oldKept })
+		deleted.New = nil
+		return []apitype.StepEventMetadata{
+			step(apitype.OpCreateReplacement, bridge, keys("key"), withKeys, kept),
+			step(apitype.OpReplace, bridge, keys("key"), withKeys, kept),
+			deleted,
+		}
+	}
+
+	// An upstream SST 4's, not kept on delete: the move keeps it
+	r := Check(stub(false, true), nil)
+	assert.Empty(t, problems(r))
+	assert.Equal(t, []Change{{URN: bridge, Type: "aws:s3/bucketObjectv2:BucketObjectv2", Why: "SST 5 keeps it when it's deleted, so the move keeps the one SST 4 deployed."}}, r.Retained)
+	if assert.Len(t, r.Replaced, 1) {
+		assert.Equal(t, "Its file changed, and its key follows from the file: any deploy uploads it again under the new key. The one SST 4 deployed is kept in the cloud, as SST 5 keeps this one when it's deleted.", r.Replaced[0].Why)
+	}
+	// One already kept on delete, as sst-community's SST 4 uploads it
+	assert.Empty(t, Check(stub(true, true), nil).Retained)
+	// What SST 5 doesn't keep either, like a function's own code
+	assert.Empty(t, Check(stub(false, false), nil).Retained)
+	// A replace the move may not make keeps nothing
+	refused := stub(false, true)
+	for i := range refused {
+		if refused[i].Op != apitype.OpDeleteReplaced {
+			refused[i].Keys = []string{"bucket", "key"}
+		}
+	}
+	r = Check(refused, nil)
+	assert.Len(t, problems(r), 1)
+	assert.Empty(t, r.Retained)
+}
+
 // What any deploy calls again: an invocation keyed on the time of the deploy,
 // as a 4.x Nextjs seeds its ISR data, a 4.x site with `warm` warms its server
 // and an app runs its migrations; and one a 5.0 site keys on what it runs.
@@ -384,6 +434,13 @@ func TestCalledAgain(t *testing.T) {
 	// An app's own, keyed on the time: its triggers, or its input
 	allowed(invocation(migrate, migrate, "triggers", version("1762100000000"), version("1762107000000")), timed)
 	allowed(invocation(migrate, migrate, "input", "1762100000000", "1762107000000"), timed)
+	// Or the time in its input's JSON
+	allowed(invocation(migrate, migrate, "input", `{"ts":1762100000000}`, `{"ts":1762107000000}`), timed)
+	// Replaced because SST 5's provider is newer than the one that deployed
+	// it, as on a move from an older SST 4: what it's keyed on decides
+	allowed(invocation(migrate, migrate, "input", `{"ts":1762100000000}`, `{"ts":1762107000000}`, "__meta"), timed)
+	allowed(invocation(migrate, migrate, "triggers", version("1762100000000"), version("1762107000000"), "__meta", "triggers"), timed)
+	allowed(invocation(seed, seed, "triggers", version(hashA), version(hashB), "__meta"), bySst)
 
 	// What the map says comes first
 	r := Check(invocation(seed, seed, "triggers", version("1762100000000"), map[string]any{"seed": "abc"}), []Part{{URN: seed, Key: "revalidationSeed", Replaced: "Seeded once."}})
@@ -392,6 +449,17 @@ func TestCalledAgain(t *testing.T) {
 	// An app's own keyed on anything but the time
 	failed(invocation(migrate, migrate, "triggers", version(hashA), version(hashB)))
 	failed(invocation(migrate, migrate, "input", `{"step":1}`, `{"step":2}`))
+	failed(invocation(migrate, migrate, "input", `{"ts":1762100000000,"step":1}`, `{"ts":1762107000000,"step":2}`))
+	// Replaced for a newer provider alone, keyed on what doesn't change, or
+	// on anything but the time: the move calls it again where a deploy
+	// wouldn't
+	failed(invocation(migrate, migrate, "input", `{"step":1}`, `{"step":1}`, "__meta"))
+	failed(invocation(migrate, migrate, "input", `{"step":1}`, `{"step":2}`, "__meta"))
+	// The provider's record and more
+	failed(invocation(seed, seed, "triggers", version(hashA), version(hashB), "__meta", "functionName"))
+	// What the provider's record is, where it's what a replace is for
+	r = Check(invocation(migrate, migrate, "input", `{"step":1}`, `{"step":1}`, "__meta"), nil)
+	assert.Contains(t, r.Problems[0].Why, "Changed: __meta. `__meta` is where the provider records the schema it wrote the resource with")
 	// SST's, keyed on more than one version, or on its input
 	failed(invocation(seed, seed, "triggers",
 		map[string]any{"version": hashA, "code": "a"},

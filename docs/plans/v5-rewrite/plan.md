@@ -660,6 +660,7 @@ Each comes when it's needed, with its own exit test.
 2. ~~**What happens to each Kept and Community component?**~~ Settled 2026-11-02: every one is ported ([decision](#decisions)).
 3. ~~**Which `Cron` is `sst.aws.v5.Cron`?**~~ Settled 2026-11-03: the old `Cron` is left out of 5.0, and `CronV2` is `sst.aws.v5.Cron`, with its type, `sst:aws:CronV2` ([decisions](#decisions)), as SST's list for its next major has it: "`CronV2` becomes `Cron`, and the old `Cron` goes". Settled again 2026-11-10: SST 4's first `Cron` came back, so each keeps SST 4's name, `Cron` and `CronV2` ([decisions](#decisions)).
 4. ~~**Does `sst.aws.Auth.v1` get a 5.0 form?**~~ Settled 2026-11-03: no, it's left out as the deprecated components are ([decisions](#decisions)). A stage with one moves it to `Auth` with SST 4 first.
+5. **Does `sst migrate --dev` serve the stage's functions while it deploys, as `sst dev` does?** A config that invokes one of its own functions on every deploy, like a migrations run, stops the move there: the function is a stub, and nothing answers it ([progress](progress.md)). Today the guide says to run `sst dev`, which finishes the move. Serving them would make `--dev` a move like any other, but brings the dev server into `sst migrate`.
 
 ## Status
 
