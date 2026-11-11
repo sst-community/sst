@@ -182,7 +182,13 @@ func (c *CloudflareHome) putData(kind, app, stage string, data io.Reader) error 
 		}
 		data = encoded
 	}
-	_, err := makeRequestContext(c.provider.api, context.Background(), http.MethodPut, "/accounts/"+c.provider.identifier.Identifier+"/r2/buckets/"+c.bootstrap.State+"/objects/"+path, data)
+	// Bytes, not a reader: the client sends the body again when Cloudflare
+	// rate limits or fails a write, and a reader would be empty by then
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return err
+	}
+	_, err = makeRequestContext(c.provider.api, context.Background(), http.MethodPut, "/accounts/"+c.provider.identifier.Identifier+"/r2/buckets/"+c.bootstrap.State+"/objects/"+path, body)
 	if err != nil {
 		return err
 	}
