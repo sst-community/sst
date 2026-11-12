@@ -1,6 +1,7 @@
 ---
 import type { Props } from '@astrojs/starlight/props'
 import Default from '@astrojs/starlight/components/Head.astro'
+import { current } from '../versions.mjs'
 
 // The sst-community site has no analytics and doesn't use SST's social card
 // service, so only the home page title override remains.
@@ -17,6 +18,11 @@ const {
 
 { slug === "" && (
   <title>{title}</title>
+)}
+
+{/* A pre-release's docs stay out of search results */}
+{ current.prerelease && (
+  <meta name="robots" content="noindex" />
 )}
 
 <Default {...Astro.props}><slot /></Default>
