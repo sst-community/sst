@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>pulumi-dev</title>
+    <script src="config.js"></script>
+  </head>
+  <body>
+    <h1>pulumi-dev</h1>
+    <p>API: <code id="api"></code></p>
+    <p>Version: <code id="version">…</code></p>
+    <script>
+      document.getElementById("api").textContent = window.API_URL;
+      fetch(new URL("version", window.API_URL))
+        .then((response) => response.json())
+        .then((body) => (document.getElementById("version").textContent = body.version));
+    </script>
+  </body>
+</html>

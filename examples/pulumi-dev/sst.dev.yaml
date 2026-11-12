@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=./node_modules/sst/schema/sst.dev.json
+# What `sst dev` runs of this program: the functions to run on this machine,
+# by their name in the program, and the dev commands, each in a pane of its
+# own. ${name} is the stack's output of that name.
+functions:
+  Api: functions/api.handler
+  # or every function by a naming convention, from functions/<name>.ts:
+  # "*": functions/{name}.handler
+
+commands:
+  Postgres:
+    command: docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:17
+  Web:
+    command: node dev.mjs
+    directory: web
+    environment:
+      API_URL: ${apiUrl}
+  Report:
+    command: node scripts/report.mjs
+    # a role of the program, by name: sst dev lets your account take it
+    role: Reporter
+    environment:
+      REPORTS_BUCKET: ${reportsBucket}
+      ARCHIVE_BUCKET: ${archiveBucket}
