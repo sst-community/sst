@@ -128,6 +128,12 @@ jobs:
         with:
           version: "latest"
 
+      # The runtimes' tests bundle functions that import the SDK, like
+      # `sst/resource/cloudflare`, which resolves to its build, as check.yml
+      # builds it first
+      - name: Build the SDK
+        run: cd sdk/js && bun run build
+
       - name: Run Go tests
         run: go test -vet=all ./...
 
