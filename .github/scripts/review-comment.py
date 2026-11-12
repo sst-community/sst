@@ -195,11 +195,17 @@ if version == "major" and not TAKES_BREAKING:
         "",
     ]
 # On a branch that takes breaking changes, a major points at its release
-# note, when the review wrote one
-elif breaking or (version == "major" and has_note):
+# note, or says it has none
+elif breaking or (version == "major" and note):
     out += [
         "> [!WARNING]",
         "> **This changes what users need**, so the release notes will list it under Breaking changes. Check that the drafted release note below says what they have to do.",
+        "",
+    ]
+elif version == "major":
+    out += [
+        "> [!WARNING]",
+        "> **This looks like a breaking change**, and the review drafted no release note for it. Say in the description what breaks and what users have to do, for the release notes.",
         "",
     ]
 out += ["| | |", "|---|---|", f"| **Result** | {result} |", f"| **Risk** | {risk_icon} {risk} · {cell(risk_why)} |"]
