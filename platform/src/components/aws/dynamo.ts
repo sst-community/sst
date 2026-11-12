@@ -771,12 +771,12 @@ export class Dynamo extends component("sst:aws:Dynamo", parts) {
   }
 
   /**
-   * Linking a table gives the linked resource the table's name and permission
-   * to use it.
+   * Linking a table gives the linked resource the table's name and ARN, and
+   * permission to use it.
    */
   public link() {
     return {
-      properties: { name: this.name },
+      properties: { name: this.name, arn: this.arn },
       include: [
         permission({
           actions: ["dynamodb:*"],

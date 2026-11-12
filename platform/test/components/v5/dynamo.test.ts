@@ -588,14 +588,17 @@ describe("Dynamo", () => {
     );
   });
 
-  it("links with its name and permission to use the table", async () => {
+  it("links with its name, its ARN and permission to use the table", async () => {
     const { Link } = await import("../../../src/components/link");
     const table = new Dynamo("MyTable", keys);
     await pulumi.settle();
 
     expect(Link.isLinkable(table)).toBe(true);
     const definition = (table as any).getSSTLink();
-    expect(Object.keys(definition.properties)).toEqual(["name"]);
+    expect(Object.keys(definition.properties)).toEqual(["name", "arn"]);
+    expect(await pulumi.resolve(definition.properties.arn)).toBe(
+      "arn:aws:mock:us-east-1:123456789012:MyTableTable",
+    );
     expect(definition.include).toMatchObject([
       { type: "aws.permission", actions: ["dynamodb:*"] },
     ]);

@@ -1771,6 +1771,7 @@ export class Dynamo extends Dynamo_base {
     link(): {
         properties: {
             name: Output<string>;
+            arn: Output<string>;
         };
         include: {
             effect?: "allow" | "deny" | undefined;

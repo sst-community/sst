@@ -2024,7 +2024,7 @@ export class Function extends component("sst:aws:Function", parts) {
         ...(image
           ? {
               packageType: "Image",
-              imageUri: image.ref.apply((ref) => ref?.replace(":latest", "")),
+              imageUri: image.ref.apply((ref) => ref?.replace(`:${name}`, "")),
               imageConfig: {
                 commands: [
                   handler.apply((handler) =>
@@ -2390,7 +2390,9 @@ export class Function extends component("sst:aws:Function", parts) {
       const cacheRef = interpolate`${bootstrapData.assetEcrUrl}:${name}-cache`;
 
       return self.part("image", {
-        tags: [interpolate`${bootstrapData.assetEcrUrl}:latest`],
+        // A tag of its own, so two functions' images don't take it from
+        // each other, as SST 4 does since 4.25.0
+        tags: [interpolate`${bootstrapData.assetEcrUrl}:${name}`],
         context: {
           // Read once the code is built, so the image is built after it
           location: built.apply(() =>
