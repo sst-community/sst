@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/pulumi/pulumi/pkg/v3/secrets"
 	"github.com/pulumi/pulumi/pkg/v3/secrets/passphrase"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
@@ -80,8 +81,11 @@ func (p *Project) Undo(ctx context.Context) (*Undone, error) {
 	if err != nil {
 		return refuse(err)
 	}
+	if current == nil || current.Latest == nil {
+		return refuse(util.NewReadableError(nil, "The stage has no state, so there's nothing to put back on SST 4."))
+	}
 	undone := &Undone{Restored: &move.Restored{}, Moved: plan.Moved.TimeStarted}
-	if plan.Stopped && (current == nil || current.Latest == nil || markerOf(current.Latest.Resources) == nil) {
+	if plan.Stopped && markerOf(current.Latest.Resources) == nil {
 		// A going back that stopped after it put SST 4's state back
 		undone.Finished = true
 		return p.record(update, undone, provider.RemoveTombstone(p.home, app, stage))
@@ -203,31 +207,41 @@ type undoPlan struct {
 	Stopped bool
 }
 
-// planUndo picks the move to undo: the first since the stage last went back.
-// A move run again on a stage that moved saves the state it found, which is
-// SST 5's, or a move's that stopped partway, so the first copy is SST 4's.
+// planUndo picks the move to undo: the first since the stage was last on SST
+// 4, by going back or by SST 4 running on it, as after a move that stopped
+// before the stage moved. A move run again on a stage that moved partway
+// saves the state it found, a move's that stopped, so the first copy since
+// then is SST 4's.
 // The stage right after the move is the move's snapshot, or, for a move that
 // stopped partway, like one with `--dev` that a deploy-time invocation
 // stopped, the snapshot of the deploy that finished it. updates and copies
 // are newest first, as their IDs sort; self is this run's.
 func planUndo(copies []string, updates []provider.Update, self string) (*undoPlan, error) {
-	var lastUndo *provider.Update
+	// The last time the stage was on SST 4: newest first, so the first found
+	var onSST4 *provider.Update
 	for i := range updates {
-		if updates[i].ID != self && updates[i].Command == "undo" && done(updates[i]) {
-			lastUndo = &updates[i]
+		update := updates[i]
+		if update.ID == self {
+			continue
+		}
+		if (update.Command == "undo" && done(update)) || sst4Version(update.Version) {
+			onSST4 = &updates[i]
 			break
 		}
 	}
 	first := ""
 	for _, id := range copies {
-		if lastUndo != nil && id > lastUndo.ID {
+		if onSST4 != nil && id > onSST4.ID {
 			break
 		}
 		first = id
 	}
 	if first == "" {
-		if lastUndo != nil {
-			return nil, util.NewReadableError(nil, fmt.Sprintf("The stage went back to SST 4 already, on %v. Move it again with `sst migrate` before going back.", lastUndo.TimeStarted))
+		switch {
+		case onSST4 != nil && onSST4.Command == "undo":
+			return nil, util.NewReadableError(nil, fmt.Sprintf("The stage went back to SST 4 already, on %v. Move it again with `sst migrate` before going back.", onSST4.TimeStarted))
+		case onSST4 != nil:
+			return nil, util.NewReadableError(nil, fmt.Sprintf("SST %v ran `sst %v` on the stage on %v, after the last move, so it's on SST 4 already.", onSST4.Version, onSST4.Command, onSST4.TimeStarted))
 		}
 		return nil, util.NewReadableError(nil, "No move saved a state for this stage, so there's nothing to go back to.")
 	}
@@ -256,6 +270,14 @@ func planUndo(copies []string, updates []provider.Update, self string) (*undoPla
 		}
 	}
 	return plan, nil
+}
+
+// sst4Version says whether an update was SST 4's (or SST 3's), by the version
+// of the CLI that ran it. A build without a release's version can't be told
+// apart, and isn't taken as one.
+func sst4Version(version string) bool {
+	major, _, ok := strings.Cut(version, ".")
+	return ok && (major == "3" || major == "4")
 }
 
 // done is an update that finished without errors
@@ -321,21 +343,52 @@ func newRecrypter(ctx context.Context, phrase string, from, to *apitype.SecretsP
 	}, nil
 }
 
-// codeGone says whether a code object SST 4 uploaded is gone from its bucket
+// codeGone says whether a code object SST 4 uploaded is gone from its
+// bucket. SST 4 uploads a function's code to the asset bucket of its region,
+// which may not be the app's, so a bucket elsewhere is asked in its own
+// region.
 func (p *Project) codeGone(ctx context.Context) func(apitype.ResourceV3) (bool, error) {
-	var client *s3.Client
+	var config *aws.Config
 	if unknown, ok := p.Provider("aws"); ok {
-		if aws, ok := unknown.(*provider.AwsProvider); ok {
-			client = s3.NewFromConfig(aws.Config())
+		if awsProvider, ok := unknown.(*provider.AwsProvider); ok {
+			cfg := awsProvider.Config()
+			config = &cfg
 		}
 	}
+	clients := map[string]*s3.Client{}
+	client := func(region string) *s3.Client {
+		if clients[region] == nil {
+			clients[region] = s3.NewFromConfig(*config, func(o *s3.Options) {
+				if region != "" {
+					o.Region = region
+				}
+			})
+		}
+		return clients[region]
+	}
+	regions := map[string]string{}
 	return func(r apitype.ResourceV3) (bool, error) {
 		bucket, _ := r.Outputs["bucket"].(string)
 		key, _ := r.Outputs["key"].(string)
-		if client == nil || bucket == "" || key == "" {
+		if config == nil || bucket == "" || key == "" {
 			return false, nil
 		}
-		_, err := client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+		head := func() error {
+			_, err := client(regions[bucket]).HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+			return err
+		}
+		err := head()
+		var response *smithyhttp.ResponseError
+		if err != nil && errors.As(err, &response) && response.HTTPStatusCode() == 301 && regions[bucket] == "" {
+			location, locErr := client("").GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: aws.String(bucket)})
+			if locErr == nil {
+				regions[bucket] = string(location.LocationConstraint)
+				if regions[bucket] == "" {
+					regions[bucket] = "us-east-1"
+				}
+				err = head()
+			}
+		}
 		if err == nil {
 			return false, nil
 		}

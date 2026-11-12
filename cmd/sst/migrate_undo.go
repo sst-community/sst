@@ -67,7 +67,7 @@ func runUndo(c *cli.Cli) error {
 	}
 	fmt.Println()
 	if len(undone.Replaced) > 0 || len(undone.Stale) > 0 {
-		deploy += " Then run SST 4's `sst refresh`, and deploy again, for what couldn't be brought up to date."
+		deploy += " Then run SST 4's `sst refresh`, and deploy again, for what couldn't be brought up to date. A function among them keeps the code SST 5 deployed until its code changes."
 	}
 	ui.Success("The stage is on SST 4 again. " + deploy)
 	return nil

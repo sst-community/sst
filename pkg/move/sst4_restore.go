@@ -31,8 +31,7 @@ type Restored struct {
 	Dropped []resource.URN
 	// Unknown are the resources in the cloud SST 5's state has that the copy
 	// has under no type, like the code the move uploaded under new keys. They
-	// stay in the cloud. What SST 5 keeps when it's deleted, like the code
-	// every `sst dev` stub shares, isn't one.
+	// stay in the cloud. The code every `sst dev` stub shares isn't one.
 	Unknown []resource.URN
 }
 
@@ -152,7 +151,7 @@ func Restore(saved, current *apitype.CheckpointV3, gone func(apitype.ResourceV3)
 		result.Refreshed++
 	}
 	for _, r := range now {
-		if inCloud(r) && !r.External && !r.RetainOnDelete && !ids[r.ID] {
+		if inCloud(r) && !r.External && !isStubCode(r) && !ids[r.ID] {
 			result.Unknown = append(result.Unknown, r.URN)
 		}
 	}
@@ -165,6 +164,15 @@ func Restore(saved, current *apitype.CheckpointV3, gone func(apitype.ResourceV3)
 			if drop[r.DeletedWith] {
 				r.DeletedWith = ""
 			}
+			if len(r.ReplaceWith) > 0 {
+				kept := []resource.URN{}
+				for _, urn := range r.ReplaceWith {
+					if !drop[urn] {
+						kept = append(kept, urn)
+					}
+				}
+				r.ReplaceWith = kept
+			}
 			resources = append(resources, r)
 		}
 		saved.Latest.Resources = resources
@@ -174,7 +182,10 @@ func Restore(saved, current *apitype.CheckpointV3, gone func(apitype.ResourceV3)
 }
 
 // Changed lists what's in the cloud in one state and not the other, by type
-// and id: what was created, and what was deleted or replaced, between them
+// and id: what was created, and what was deleted or replaced, between them.
+// Code objects are left out: a function's code is uploaded again when it
+// changes, and swapped for the code its stub shares between `sst dev` and a
+// deploy, and Restore takes out what's gone of it, which SST 4 uploads again.
 func Changed(before, after *apitype.CheckpointV3) (created, gone []resource.URN) {
 	index := func(c *apitype.CheckpointV3) map[string]resource.URN {
 		out := map[string]resource.URN{}
@@ -182,7 +193,7 @@ func Changed(before, after *apitype.CheckpointV3) (created, gone []resource.URN)
 			return out
 		}
 		for _, r := range c.Latest.Resources {
-			if inCloud(r) {
+			if inCloud(r) && !codeObjects[string(r.Type)] {
 				out[identity(r)] = r.URN
 			}
 		}
@@ -206,13 +217,22 @@ func Changed(before, after *apitype.CheckpointV3) (created, gone []resource.URN)
 
 // inCloud says whether a resource of a state is one in the cloud, of a
 // provider's package: not a component, a provider's entry, one of SST's own
-// or a dynamic one, or one being deleted
+// or a dynamic one, a command run on this machine, like a site's build, which
+// runs again on every deploy, or one being deleted
 func inCloud(r apitype.ResourceV3) bool {
-	if !r.Custom || r.ID == "" || r.Delete {
+	if !r.Custom || r.ID == "" || r.Delete || strings.HasPrefix(string(r.Type), "command:local:") {
 		return false
 	}
 	pkg, _, _ := strings.Cut(string(r.Type), ":")
 	return pkg != "pulumi" && pkg != "pulumi-nodejs" && pkg != "sst"
+}
+
+// isStubCode says whether a resource is the code every `sst dev` stub of an
+// SST version in an account and region shares, which SST keeps when it's
+// deleted, so that one stage's remove doesn't take it from the others
+func isStubCode(r apitype.ResourceV3) bool {
+	urn := string(r.URN)
+	return codeObjects[string(r.Type)] && strings.HasPrefix(urn[strings.LastIndex(urn, "::")+2:], "DevBridgeCode")
 }
 
 func dependsOn(r apitype.ResourceV3, urns map[resource.URN]bool) bool {

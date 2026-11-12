@@ -289,7 +289,7 @@ You can put a stage that has moved back on SST 4, as long as SST 5 hasn't deploy
 
    It puts the state the move saved in place of the stage's, and takes out the lock SST 5 keeps for SST 4. Where the move changed something in place, like a function's code or environment, or a CloudFront function's version, it gives that state SST 5's view of it, as a refresh would, so SST 4's deploy sees what to put back. It takes out the code the move deleted, which SST 4's deploy uploads again. It changes nothing in the cloud, and lists what SST 5 created that SST 4's state doesn't have, like the code the move uploaded under new keys, which stays in your account.
 
-   It's refused once SST 5 has created, deleted or replaced anything on the stage since the move: the state the move saved no longer matches what's deployed, so fix it forward instead. A deploy that only updated something in place, like each start of `sst dev`, doesn't stop it.
+   It's refused once SST 5 has created, deleted or replaced anything on the stage since the move: the state the move saved no longer matches what's deployed, so fix it forward instead. A deploy that only updated something in place, uploaded a function's code again or built a site again, like each start of `sst dev`, doesn't stop it.
 
 2. **Check out the commit from before the codemod**, and install. It has SST 4 in your `package.json` and lockfile. With a global CLI, install SST 4 again.
 
@@ -301,6 +301,6 @@ You can put a stage that has moved back on SST 4, as long as SST 5 hasn't deploy
 
    It puts back what the move changed, and changes nothing else.
 
-If `--undo` lists something the move replaced, like a REST API's deployment, or something it couldn't bring up to date, as when the stage moved from an SST 4 whose AWS provider isn't SST 5's, run SST 4's `sst refresh` after its deploy, and deploy again.
+If `--undo` lists something the move replaced, like a REST API's deployment, or something it couldn't bring up to date, as when the stage moved from an SST 4 whose AWS provider isn't SST 5's, run SST 4's `sst refresh` after its deploy, and deploy again. A function among them keeps the code SST 5 deployed until its code changes, as a refresh doesn't read which code a function was given.
 
 This was tried with this fork's SST 4.25.0, on an app with an API with an authorizer, functions, queues, a bus, a table, a bucket with a notification, a user pool with a trigger and a cron job, deployed with `sst deploy`. `--undo` took a few seconds. SST 4's deploy then uploaded the 10 code objects the move had deleted and put back each function's code and description, and created, deleted or replaced nothing else. Each function ran SST 4's code again, the data written before the move was there, SST 4's `sst refresh` passed and changed nothing, and its `sst diff` had no changes.

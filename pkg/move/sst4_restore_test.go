@@ -290,17 +290,19 @@ func TestRestoreUnknownLeavesOutWhatSST4StillUses(t *testing.T) {
 func TestRestoreDropsWhatPointsAtDroppedCode(t *testing.T) {
 	file := custom("urn:pulumi:dev::app::aws:s3/bucketObjectv2:BucketObjectv2::Note", object, "bucket/note.txt", sst4Aws, nil)
 	file.DeletedWith = sst4Code
+	file.ReplaceWith = []resource.URN{sst4Code, sst4Aws}
 	saved := checkpoint(
 		providerAt(sst4Aws, "aws", "7.54.0"),
 		custom(sst4Code, object, "bucket/old.zip", sst4Aws, nil),
 		file,
 	)
-	current := checkpoint(providerAt(sst5Aws, "aws", "7.54.0"), custom(file.URN.Name(), object, "bucket/note.txt", sst5Aws, nil))
+	current := checkpoint(providerAt(sst5Aws, "aws", "7.54.0"), custom(string(file.URN), object, "bucket/note.txt", sst5Aws, nil))
 	restored, err := Restore(saved, current, func(r apitype.ResourceV3) (bool, error) { return r.ID == "bucket/old.zip", nil }, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []resource.URN{sst4Code}, restored.Dropped)
 	require.Len(t, restored.State.Latest.Resources, 2)
 	assert.Equal(t, resource.URN(""), restored.State.Latest.Resources[1].DeletedWith)
+	assert.Equal(t, []resource.URN{sst4Aws}, restored.State.Latest.Resources[1].ReplaceWith)
 }
 
 func TestChanged(t *testing.T) {
@@ -320,11 +322,50 @@ func TestChanged(t *testing.T) {
 	assert.Empty(t, gone)
 
 	replaced := checkpoint(
-		custom(sst5Fn, function, "fn", sst5Aws, nil),
+		custom(sst5Fn, function, "fn-replaced", sst5Aws, nil),
 		custom(sst5Code, object, "bucket/b.zip", sst5Aws, nil),
 		custom(sst5Fn+"New", function, "new", sst5Aws, nil),
 	)
 	created, gone = Changed(before, replaced)
-	assert.Equal(t, []resource.URN{sst5Fn + "New", sst5Code}, created)
-	assert.Equal(t, []resource.URN{sst5Code}, gone)
+	assert.Equal(t, []resource.URN{sst5Fn, sst5Fn + "New"}, created)
+	assert.Equal(t, []resource.URN{sst5Fn}, gone)
+}
+
+// What runs again on every deploy, like a site's build, and code swapped for
+// the stub's between a deploy and `sst dev`, aren't changes that keep a stage
+// from going back
+func TestChangedLeavesOutCodeAndBuilds(t *testing.T) {
+	builder := func(id string) apitype.ResourceV3 {
+		return custom("urn:pulumi:dev::app::sst:aws:Nextjs$command:local:Command::WebBuilder", "command:local:Command", id, "", nil)
+	}
+	stub := custom("urn:pulumi:dev::app::sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2::DevBridgeCodeUswest2", object, "bucket/bridge.zip", sst5Aws, nil)
+	stub.RetainOnDelete = true
+	deployed := checkpoint(builder("WebBuilder1a2b"), custom(sst5Code, object, "bucket/code.zip", sst5Aws, nil))
+	inDev := checkpoint(builder("WebBuilder3c4d"), stub)
+	created, gone := Changed(deployed, inDev)
+	assert.Empty(t, created)
+	assert.Empty(t, gone)
+}
+
+// SST 4's site build in the copy isn't one the move replaced: nothing in the
+// cloud is behind it
+func TestRestoreLeavesOutBuilds(t *testing.T) {
+	restored, err := Restore(
+		checkpoint(custom("urn:pulumi:dev::app::sst:aws:Nextjs$command:local:Command::WebBuilder", "command:local:Command", "WebBuilder1a2b", "", nil)),
+		checkpoint(custom("urn:pulumi:dev::app::sst:aws:Nextjs$command:local:Command::WebBuilder", "command:local:Command", "WebBuilder3c4d", "", nil)),
+		nothingGone, nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, restored.Replaced)
+	assert.Empty(t, restored.Unknown)
+}
+
+// On a stage SST keeps everything of when it's removed, what SST 5 uploaded
+// is still listed: only the code the stubs share is left out
+func TestRestoreUnknownOnAStageThatsKept(t *testing.T) {
+	code := custom(sst5Code, object, "bucket/new.zip", sst5Aws, nil)
+	code.RetainOnDelete = true
+	restored, err := Restore(checkpoint(providerAt(sst4Aws, "aws", "7.54.0")), checkpoint(providerAt(sst5Aws, "aws", "7.54.0"), code), nothingGone, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []resource.URN{sst5Code}, restored.Unknown)
 }

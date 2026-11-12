@@ -49,7 +49,7 @@ var CmdMigrate = &cli.Command{
 			"",
 			"A stage deployed with SST 4 can't be deployed with `sst deploy` or `sst dev`, or removed with `sst remove`, until it has moved. Its `sst diff` and `sst refresh` still run. To remove a stage you won't move, use SST 4.",
 			"",
-			"With `--undo`, it puts a stage that moved back on SST 4. It puts the state the move saved in place of the stage's, brought up to date where the move changed something in place, and lets SST 4 deploy the stage again. It changes nothing in the cloud: SST 4's next `sst deploy` puts back what the move changed. It's refused once SST 5 has created, deleted or replaced anything on the stage since the move. A deploy that only updated something in place, like each start of `sst dev`, doesn't stop it.",
+			"With `--undo`, it puts a stage that moved back on SST 4. It puts the state the move saved in place of the stage's, brought up to date where the move changed something in place, and lets SST 4 deploy the stage again. It changes nothing in the cloud: SST 4's next `sst deploy` puts back what the move changed. It's refused once SST 5 has created, deleted or replaced anything on the stage since the move. A deploy that only updated something in place, uploaded a function's code again or built a site again, like each start of `sst dev`, doesn't stop it.",
 			"",
 			"```bash frame=\"none\"",
 			"sst migrate --undo --stage dev",

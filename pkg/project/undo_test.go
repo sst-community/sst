@@ -14,6 +14,7 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/config"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/sig"
 	"github.com/sst/sst/v3/pkg/move"
 	"github.com/sst/sst/v3/pkg/project/provider"
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,11 @@ func TestPlanUndo(t *testing.T) {
 	failed := func(id, command string) provider.Update {
 		update := done(id, command)
 		update.Errors = []provider.SummaryError{{Message: "stopped"}}
+		return update
+	}
+	sst4 := func(id, command string) provider.Update {
+		update := done(id, command)
+		update.Version = "4.25.0"
 		return update
 	}
 	// IDs sort newest first: "b" is newer than "m"; "a" is this run
@@ -69,6 +75,14 @@ func TestPlanUndo(t *testing.T) {
 		"gone back already": {
 			copies: []string{"m"}, updates: []provider.Update{done("c", "undo"), done("m", "deploy")},
 			refused: "went back to SST 4 already, on then c",
+		},
+		"a move that stopped, SST 4 deploying after it, and a move again": {
+			copies: []string{"b", "m"}, updates: []provider.Update{done("b", "deploy"), sst4("c", "deploy"), failed("m", "deploy")},
+			copy: "b", baseline: "b",
+		},
+		"SST 4 deploying after the move": {
+			copies: []string{"m"}, updates: []provider.Update{sst4("c", "deploy"), failed("m", "deploy")},
+			refused: "SST 4.25.0 ran `sst deploy` on the stage on then c, after the last move",
 		},
 		"no move": {
 			refused: "nothing to go back to",
@@ -418,4 +432,55 @@ func salt(t *testing.T, sp *apitype.SecretsProvidersV1) string {
 	}
 	require.NoError(t, json.Unmarshal(sp.State, &state))
 	return state.Salt
+}
+
+// With no state, there's nothing to put back for SST 4, and the tombstone
+// stays
+func TestUndoRefusedWithoutAState(t *testing.T) {
+	home := provider.NewLocalHomeAt(t.TempDir())
+	sst4 := versioned(t, stateWith(undoProvider(), undoFunction(sst4Function, "app-dev-Api", "SST 4's")))
+	moved(t, home, sst4, versioned(t, stateWith(undoProvider(), undoFunction(sst5Function, "app-dev-Api", "SST 5's"), sst5Marker)))
+	require.NoError(t, home.Remove(context.Background(), provider.Key{Kind: "app", App: undoApp, Stage: undoStage}))
+	_, err := undoProject(home).Undo(context.Background())
+	assert.ErrorContains(t, err, "has no state")
+	assert.Contains(t, string(lockIn(t, home, "lock")), "tombstone")
+}
+
+// Going back carries a secret of SST 5's state over to the copy's salt, with
+// the stage's passphrase, and it reads back as SST 5 had it
+func TestUndoEncryptsSecretsAgain(t *testing.T) {
+	ctx := context.Background()
+	home := provider.NewLocalHomeAt(t.TempDir())
+	phrase, err := provider.GetOrCreatePassphrase(home, undoApp, undoStage)
+	require.NoError(t, err)
+	manager := func() secrets.Manager {
+		_, m, err := passphrase.NewPassphraseSecretsManager(phrase)
+		require.NoError(t, err)
+		return m
+	}
+	sst4Secrets, sst5Secrets := manager(), manager()
+	state := func(m secrets.Manager, urn, plaintext string, marker bool) []byte {
+		ciphertext, err := m.Encrypter().EncryptValue(ctx, plaintext)
+		require.NoError(t, err)
+		fn := undoFunction(urn, "app-dev-Api", "")
+		fn.Outputs = map[string]interface{}{"environment": map[string]interface{}{sig.Key: sig.Secret, "ciphertext": ciphertext}}
+		resources := []apitype.ResourceV3{undoProvider(), fn}
+		if marker {
+			resources = append(resources, sst5Marker)
+		}
+		checkpoint := stateWith(resources...)
+		checkpoint.Latest.SecretsProviders = &apitype.SecretsProvidersV1{Type: "passphrase", State: m.State()}
+		return versioned(t, checkpoint)
+	}
+	moved(t, home, state(sst4Secrets, sst4Function, `"SST 4's key"`, false), state(sst5Secrets, sst5Function, `"SST 5's key"`, true))
+
+	undone, err := undoProject(home).Undo(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, undone.Refreshed)
+	restored := stateIn(t, home)
+	assert.JSONEq(t, string(sst4Secrets.State()), string(restored.Latest.SecretsProviders.State))
+	secret := restored.Latest.Resources[1].Outputs["environment"].(map[string]interface{})
+	plaintext, err := sst4Secrets.Decrypter().DecryptValue(ctx, secret["ciphertext"].(string))
+	require.NoError(t, err)
+	assert.Equal(t, `"SST 5's key"`, plaintext)
 }
