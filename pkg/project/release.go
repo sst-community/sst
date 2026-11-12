@@ -15,11 +15,12 @@ type Released struct {
 	Type string
 }
 
-// beginMove saves the state a move starts from in the home, then marks what
-// the move releases as retained in the state the deploy runs from. Pulumi
-// then takes each one out of the state without calling its delete, which
-// would remove what it wrote, like a site's files. It's the one edit a move
-// makes to the state; aliases carry everything that moves.
+// beginMove saves the state a move starts from in the home, unless the stage
+// has moved already, then marks what the move releases as retained in the
+// state the deploy runs from. Pulumi then takes each one out of the state
+// without calling its delete, which would remove what it wrote, like a
+// site's files. It's the one edit a move makes to the state; aliases carry
+// everything that moves.
 func (p *Project) beginMove(workdir *PulumiWorkdir, updateID string, released []Released) error {
 	data, err := os.ReadFile(workdir.state())
 	if err != nil {
@@ -32,8 +33,12 @@ func (p *Project) beginMove(workdir *PulumiWorkdir, updateID string, released []
 	if err := retain(checkpoint, released); err != nil {
 		return err
 	}
-	if err := provider.PushMoveCopy(p.home, updateID, p.app.Name, p.app.Stage, data); err != nil {
-		return fmt.Errorf("saving a copy of the state: %w", err)
+	// A move run again on a stage that has moved finds SST 5's state, which
+	// isn't one to go back to (`sst migrate --undo`)
+	if checkpoint.Latest == nil || markerOf(checkpoint.Latest.Resources) == nil {
+		if err := provider.PushMoveCopy(p.home, updateID, p.app.Name, p.app.Stage, data); err != nil {
+			return fmt.Errorf("saving a copy of the state: %w", err)
+		}
 	}
 	if len(released) == 0 {
 		return nil

@@ -26,6 +26,9 @@
 //
 // Nothing that holds data is deleted, replaced or emptied, whatever the map
 // says.
+//
+// What only a move from SST 4 needs is in sst4.go and the files beside it
+// named sst4_*.go, and marked "SST 4's" where the check uses it.
 package move
 
 import (
@@ -72,63 +75,6 @@ type Kept struct {
 	// Merged are the fields that change because the object form of a
 	// transform is merged into SST's settings, where SST 4 replaced them
 	Merged []MergedField `json:",omitempty"`
-}
-
-// Merged is what the object form of a part's transform merged into its
-// defaults where SST 4's replaced the arg whole. The program reports it as the
-// stage moves (platform/src/components/move.ts, reportMerged).
-type Merged struct {
-	URN    string        `json:"urn"`
-	Fields []MergedField `json:"fields"`
-}
-
-// MergedField is an arg the transform sets as an object, and the paths of
-// SST's settings in it that 5.0 keeps beside what the transform sets. SST 4
-// put the transform's object in their place.
-type MergedField struct {
-	Field string   `json:"field"`
-	Kept  []string `json:"kept"`
-}
-
-// Explain says which changes come from a transform's object merged into the
-// component's settings, where SST 4 replaced them: of a kept resource, the
-// fields it updates in place, and of one that would be replaced where it may
-// not be, the fields the replace is keyed on. A merge reported for a
-// component, like a function part's, explains a field of the same name that
-// a resource inside it changes. A replace the move allows isn't explained: a
-// map or the cloud is why.
-func (r *Result) Explain(merged []Merged) {
-	byURN := map[string][]MergedField{}
-	for _, m := range merged {
-		byURN[m.URN] = append(byURN[m.URN], m.Fields...)
-	}
-	explain := func(urn string, fields []string) []MergedField {
-		found := []MergedField{}
-		seen := map[string]bool{}
-		for at := urn; at != "" && !seen[at]; at = r.parents[at] {
-			seen[at] = true
-			for _, field := range byURN[at] {
-				if contains(fields, field.Field) {
-					found = append(found, field)
-				}
-			}
-		}
-		if len(found) == 0 {
-			return nil
-		}
-		return found
-	}
-	for i, kept := range r.Kept {
-		if len(kept.Fields) > 0 {
-			r.Kept[i].Merged = explain(kept.URN, kept.Fields)
-		}
-	}
-	// An update that may not happen is the kept resource's, which says it
-	for i, problem := range r.Problems {
-		if problem.Does == "replace" && len(problem.Fields) > 0 {
-			r.Problems[i].Merged = explain(problem.URN, problem.Fields)
-		}
-	}
 }
 
 // Change is a resource the move creates, takes out of the state or replaces,
@@ -212,18 +158,8 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 			imported[step.URN] = step.New.ID
 		}
 	}
-	// The names more than one of SST 4's resources a move adopts have: the
-	// core gives the program their ids by name, so it gives neither
-	adoptNames := map[string]int{}
-	for _, step := range steps {
-		if step.Op == apitype.OpDelete && step.Type == dynamicType && adoptKinds[kindOf(step.URN)] {
-			adoptNames[nameOf(step.URN)]++
-		}
-	}
-	sharedNames := map[string]bool{}
-	for name, count := range adoptNames {
-		sharedNames[name] = count > 1
-	}
+	// SST 4's resources a move adopts that share a name
+	sharedNames := sharedAdoptNames(steps)
 
 	// The parts in the place of what's released, when the preview really
 	// takes that out of the state
@@ -340,14 +276,10 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 			default:
 				replaceProblem(fields, "No component's state map says it's replaced."+changedBecause(fields))
 			}
-			// A replace the move may make, of one SST 5 keeps when it's
-			// deleted, keeps the one SST 4 deployed too
+			// SST 4's: a replace the move may make, of one SST 5 keeps when
+			// it's deleted, keeps the one SST 4 deployed too
 			if len(result.Replaced) > replacedBefore {
-				if old, ok := retainedOnReplace(steps); ok {
-					result.Retained = append(result.Retained, Change{URN: old.URN, Type: old.Type, Why: "SST 5 keeps it when it's deleted, so the move keeps the one SST 4 deployed."})
-					last := &result.Replaced[len(result.Replaced)-1]
-					last.Why += " The one SST 4 deployed is kept in the cloud, as SST 5 keeps this one when it's deleted."
-				}
+				keepReplaced(result, steps)
 			}
 
 		case step.Op == apitype.OpRead && step.Old != nil && !step.Old.External:
@@ -389,16 +321,14 @@ func Check(steps []apitype.StepEventMetadata, parts []Part) *Result {
 			// same resource in the cloud, imported by its id
 			case isReleased && data && !adopted(step, imported[part.URN]):
 				problem(urn, step, "delete", "It holds data, and "+nameOf(part.URN)+", in its place, doesn't adopt it by its id.")
-			case isReleased && step.Type == dynamicType && adoptKinds[kindOf(urn)] && !adopted(step, imported[part.URN]):
-				why := nameOf(part.URN) + ", in its place, doesn't adopt it by its id, so a second one would be made in the cloud and this one left there."
-				if sharedNames[nameOf(urn)] {
-					why += " The stage has more than one named " + nameOf(urn) + ", in different components, so the core can't tell which is whose."
-				}
-				problem(urn, step, "delete", why)
+			// SST 4's provider resources a move adopts
+			case isReleased && unadopted(step, imported[part.URN]):
+				problem(urn, step, "delete", unadoptedWhy(urn, part, sharedNames))
 			case isReleased:
 				result.Released = append(result.Released, Change{URN: urn, Type: step.Type, Why: "Taken out of the state without being deleted, with " + nameOf(part.URN) + " in its place."})
-			case step.Type == dynamicType && lookupKinds[kindOf(urn)]:
-				result.Released = append(result.Released, Change{URN: urn, Type: step.Type, Why: "One of SST 4's lookups, which SST 5 makes with a function: nothing in the cloud is behind it."})
+			// SST 4's lookups
+			case isLookup(step):
+				result.Released = append(result.Released, Change{URN: urn, Type: step.Type, Why: lookupWhy})
 			case !custom:
 				result.Left = append(result.Left, Change{URN: urn, Type: step.Type, Why: "Nothing in the cloud is behind it."})
 			default:
@@ -501,6 +431,7 @@ func isCustom(step apitype.StepEventMetadata) bool {
 	if strings.HasPrefix(step.Type, "pulumi:providers:") || step.Type == "pulumi:pulumi:Stack" {
 		return false
 	}
+	// SST 4's site builds
 	if isSiteBuild(step) || isLocalCommand(step) {
 		return false
 	}
@@ -511,34 +442,6 @@ func isCustom(step apitype.StepEventMetadata) bool {
 	}
 	// Without either, it's taken as one, which only makes the check stricter
 	return true
-}
-
-// The build of a 4.x site: the one command an SST component runs on this
-// machine, `<Site>Builder`, right under the site, with no delete command. A
-// 4.x site builds again on every deploy, which replaces it, so its replace
-// isn't the move's doing, and it writes only the site's files on this machine.
-func isSiteBuild(step apitype.StepEventMetadata) bool {
-	if step.Type != "command:local:Command" {
-		return false
-	}
-	for _, state := range []*apitype.StepEventStateMetadata{step.Old, step.New} {
-		if state == nil {
-			continue
-		}
-		if command, ok := state.Inputs["delete"].(string); ok && command != "" {
-			return false
-		}
-	}
-	parts := strings.Split(step.URN, "::")
-	if len(parts) < 4 {
-		return false
-	}
-	chain := strings.Split(parts[2], "$")
-	if len(chain) < 2 {
-		return false
-	}
-	parent := chain[len(chain)-2]
-	return strings.HasPrefix(parent, "sst:") && strings.HasSuffix(parts[len(parts)-1], "Builder")
 }
 
 // The delete of a command run on this machine that has no delete command, so
@@ -645,27 +548,6 @@ func calledAgain(steps []apitype.StepEventMetadata) string {
 		return "One of SST's components calls it again whenever what it's keyed on changes, as any deploy does."
 	}
 	return ""
-}
-
-// The resource a replace deletes, when the one that takes its place is kept
-// when it's deleted and it isn't, like the dev stub code an SST 4 without
-// that rule uploaded, which every stage in an account and region shares
-func retainedOnReplace(steps []apitype.StepEventMetadata) (*apitype.StepEventStateMetadata, bool) {
-	retains := false
-	for _, step := range steps {
-		if step.New != nil && step.New.RetainOnDelete {
-			retains = true
-		}
-	}
-	if !retains {
-		return nil, false
-	}
-	for _, step := range steps {
-		if step.Op == apitype.OpDeleteReplaced && step.Old != nil && !step.Old.RetainOnDelete {
-			return step.Old, true
-		}
-	}
-	return nil, false
 }
 
 // Whether two values have a time in them and differ in nothing else

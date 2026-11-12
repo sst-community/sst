@@ -153,7 +153,7 @@ Share it in your app, or as a package.
 ## What it costs
 
 - **Some of your config changes.** Three components have new names, and some args are written differently or refused where SST 4 ignored them. The codemod makes the changes that are mechanical, and lists the rest.
-- **Each stage moves once.** `sst migrate` checks the move first and stops before it would delete or replace anything that holds data. SST 5 doesn't deploy or remove a stage that hasn't moved: to remove one you won't move, like an old preview stage, use SST 4. After a stage moves, SST 4 refuses to deploy it, and going back uses the copy the move saves.
+- **Each stage moves once.** `sst migrate` checks the move first and stops before it would delete or replace anything that holds data. SST 5 doesn't deploy or remove a stage that hasn't moved: to remove one you won't move, like an old preview stage, use SST 4. After a stage moves, SST 4 refuses to deploy it, and `sst migrate --undo` puts back the copy the move saves.
 - **A component's new version is a move too.** When a 5.x release gives one a new version, a plain deploy, in CI too, is refused until `sst migrate` moves the stage to it.
 - **Sites are built in `sst diff` too,** with values that aren't known until the deploy left out, so a build that checks its environment has to allow for that. `sst migrate`, and a deploy on a stage with checks, build each site twice.
 - **A few of SST 4's components have no 5.0 form,** like `Vector`, `OpenControl` and the `.v1`s. A stage with one deals with it on SST 4 first.

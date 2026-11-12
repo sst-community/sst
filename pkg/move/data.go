@@ -2,7 +2,6 @@ package move
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 )
@@ -43,58 +42,6 @@ var dataTypes = map[string]bool{
 	"cloudflare:index/d1Database:D1Database":                 true,
 	"cloudflare:index/workersKvNamespace:WorkersKvNamespace": true,
 	"cloudflare:index/queue:Queue":                           true,
-}
-
-// SST's own provider resources that hold data, by the kind they add to their
-// name ("MyVectorTable.sst.aws.VectorTable"), and the inputs that empty one
-// when they change. In 4.x a `Vector`'s table is dropped and created again
-// when its dimension changes (VectorTable.Update).
-var dataKinds = map[string][]string{
-	"sst.aws.VectorTable": {"dimension"},
-}
-
-// SST 4's provider resources that a move adopts, by the kind each adds to its
-// name: what takes the place of one imports it by its id, as its create would
-// make a second one in the cloud and leave the first behind
-// (docs/plans/v5-rewrite/reference.md, SST's provider resources).
-var adoptKinds = map[string]bool{
-	"sst.aws.OriginAccessControl": true,
-}
-
-// Adoptable is the id of each of SST 4's provider resources in a state that a
-// move adopts, by its name, which the program is told while the stage moves:
-// the part in its place imports it. A name two of them share is left out, so
-// neither is adopted, and the check refuses the move.
-func Adoptable(resources []apitype.ResourceV3) map[string]string {
-	ids := map[string]string{}
-	shared := map[string]bool{}
-	for _, res := range resources {
-		if !res.Custom || res.Delete || res.Type != dynamicType || res.ID == "" || !adoptKinds[kindOf(string(res.URN))] {
-			continue
-		}
-		name := res.URN.Name()
-		if _, ok := ids[name]; ok {
-			shared[name] = true
-		}
-		ids[name] = string(res.ID)
-	}
-	for name := range shared {
-		delete(ids, name)
-	}
-	return ids
-}
-
-// The type of SST 4's provider resources: Pulumi's dynamic resources
-const dynamicType = "pulumi-nodejs:dynamic:Resource"
-
-// SST 4's lookups, made with resources, by the kind each adds to its name.
-// SST 5 makes them with functions. Nothing in the cloud is behind one, so a
-// move releases it: it leaves the state without its delete being called, so
-// the move doesn't need what ran SST 4's lookups, which goes with SST 4's
-// components (docs/plans/v5-rewrite/reference.md, SST's provider resources).
-var lookupKinds = map[string]bool{
-	"sst.aws.HostedZoneLookup":  true,
-	"sst.cloudflare.ZoneLookup": true,
 }
 
 // What sets when what a bucket stores expires. A move doesn't create one or
@@ -208,26 +155,6 @@ func keptFor(inputs map[string]any, r retention) (float64, bool) {
 }
 
 func holdsData(typ, urn string) bool {
-	if dataTypes[typ] {
-		return true
-	}
-	_, ok := dataKinds[kindOf(urn)]
-	return ok
-}
-
-// The inputs of a resource that empty it when they change
-func emptiedBy(urn string) []string {
-	return dataKinds[kindOf(urn)]
-}
-
-// The kind one of SST's provider resources adds to the end of its name, as
-// "sst.aws.VectorTable". The name before it may have ".sst." in it too: SST
-// 4's Cloudflare lookups put a domain in it, like "docs.sst.dev".
-func kindOf(urn string) string {
-	name := urn[strings.LastIndex(urn, "::")+2:]
-	at := strings.LastIndex(name, ".sst.")
-	if at == -1 {
-		return ""
-	}
-	return name[at+1:]
+	// SST 4's provider resources that hold data
+	return dataTypes[typ] || sst4HoldsData(urn)
 }

@@ -49,6 +49,12 @@ var CmdMigrate = &cli.Command{
 			"",
 			"A stage deployed with SST 4 can't be deployed with `sst deploy` or `sst dev`, or removed with `sst remove`, until it has moved. Its `sst diff` and `sst refresh` still run. To remove a stage you won't move, use SST 4.",
 			"",
+			"With `--undo`, it puts a stage that moved back on SST 4. It puts the state the move saved in place of the stage's, brought up to date where the move changed something in place, and lets SST 4 deploy the stage again. It changes nothing in the cloud: SST 4's next `sst deploy` puts back what the move changed. It's refused once SST 5 has created, deleted or replaced anything on the stage since the move. A deploy that only updated something in place, like each start of `sst dev`, doesn't stop it.",
+			"",
+			"```bash frame=\"none\"",
+			"sst migrate --undo --stage dev",
+			"```",
+			"",
 			"With `--codemod`, it rewrites your `sst.config.ts`, and the files it imports, for the new components first: their names, and the changes to their args that are mechanical. It lists each change, and each thing it couldn't do with what to write. It leaves a file with changes git hasn't committed as it is, unless you pass `--force`, so its changes show as a diff. With `--dry-run`, it prints the diff and writes nothing.",
 			"",
 			"```bash frame=\"none\"",
@@ -71,6 +77,14 @@ var CmdMigrate = &cli.Command{
 			Description: cli.Description{
 				Short: "Move the stage as sst dev deploys it",
 				Long:  "Check or move the stage as `sst dev` deploys it, with a stub in place of each function.",
+			},
+		},
+		{
+			Name: "undo",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Put a stage that moved back on SST 4",
+				Long:  "Put the state the move saved back in place of the stage's, brought up to date where the move changed something in place, so that SST 4 can deploy the stage again.",
 			},
 		},
 		{
@@ -125,8 +139,23 @@ var CmdMigrate = &cli.Command{
 				Short: "Move production",
 			},
 		},
+		{
+			Content: "sst migrate --undo --stage production",
+			Description: cli.Description{
+				Short: "Put production back on SST 4",
+			},
+		},
 	},
 	Run: func(c *cli.Cli) error {
+		// SST 4's: going back to it (migrate_undo.go)
+		if c.Bool("undo") {
+			for _, other := range []string{"check", "dev", "codemod", "dry-run", "force", "json"} {
+				if c.Bool(other) {
+					return util.NewReadableError(nil, fmt.Sprintf("`--undo` goes on its own, not with `--%v`.", other))
+				}
+			}
+			return runUndo(c)
+		}
 		if c.Bool("codemod") {
 			return runCodemod(c)
 		}
@@ -240,10 +269,11 @@ var CmdMigrate = &cli.Command{
 		for _, r := range result.Released {
 			released = append(released, project.Released{URN: r.URN, Type: r.Type})
 		}
+		// SST 4's stub code a replace keeps (move.keepReplaced)
 		for _, r := range result.Retained {
 			released = append(released, project.Released{URN: r.URN, Type: r.Type})
 		}
-		return finish(p.Run(c.Context, &project.StackInput{
+		err = p.Run(c.Context, &project.StackInput{
 			Command: "deploy",
 			Move:    true,
 			Release: released,
@@ -251,7 +281,14 @@ var CmdMigrate = &cli.Command{
 			Dev:     c.Bool("dev"),
 			Server:  s.URL(),
 			Verbose: c.Bool("verbose"),
-		}))
+		})
+		// Nothing serves the stage's functions during a move with `--dev`, so
+		// one the config invokes as it deploys stops it, and `sst dev`, which
+		// serves them, finishes it (plan.md, decisions, 2026-11-11)
+		if c.Bool("dev") && errors.Is(err, project.ErrStackRunFailed) {
+			err = util.NewReadableError(err, "The move stopped partway. If it stopped at a function your config invokes as it deploys, run `sst dev`: its deploy finishes the move, with the function run on your machine.")
+		}
+		return finish(err)
 	},
 }
 
@@ -262,6 +299,8 @@ var CmdMigrate = &cli.Command{
 func checkMove(c *cli.Cli, p *project.Project, server string) (*move.Result, error) {
 	steps := []apitype.StepEventMetadata{}
 	parts := []move.Part{}
+	// SST 4's: where a transform's object is merged, which it replaced
+	// (move.Explain)
 	merged := []move.Merged{}
 	var summary *apitype.SummaryEvent
 	collected := bus.Subscribe(&apitype.ResOutputsEvent{}, &move.Part{}, &move.Merged{}, &apitype.SummaryEvent{})

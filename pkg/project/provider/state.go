@@ -305,6 +305,76 @@ func PushMoveCopy(backend Home, updateID, app, stage string, data []byte) error 
 	return backend.Put(context.TODO(), historyKey("migrate", app, stage, updateID), data, PutOptions{})
 }
 
+// ListMoveCopies returns the updates of the moves that saved a copy of the
+// stage's state, newest first.
+func ListMoveCopies(backend Home, app, stage string) ([]string, error) {
+	keys, err := backend.List(context.TODO(), Key{Kind: "migrate", App: app, Stage: stage})
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, key := range keys {
+		if updateID, ok := updateIDFromKey(key.Stage); ok {
+			ids = append(ids, updateID)
+		}
+	}
+	// Update IDs sort newest first
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// GetMoveCopy returns the state the move of the update saved
+func GetMoveCopy(backend Home, app, stage, updateID string) ([]byte, error) {
+	data, err := backend.Get(context.TODO(), historyKey("migrate", app, stage, updateID))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("the state the move %s saved is empty", updateID)
+	}
+	return data, nil
+}
+
+// GetSnapshot returns the state an update left, or nil when it left none, as
+// a run that stopped before Pulumi ran doesn't
+func GetSnapshot(backend Home, app, stage, updateID string) ([]byte, error) {
+	return backend.Get(context.TODO(), historyKey("snapshot", app, stage, updateID))
+}
+
+// ListUpdates returns the stage's history, newest first. One that can't be
+// read is left out, as HasDeployHistory does.
+func ListUpdates(backend Home, app, stage string) ([]Update, error) {
+	keys, err := backend.List(context.TODO(), Key{Kind: "update", App: app, Stage: stage})
+	if err != nil {
+		return nil, err
+	}
+	updates := []Update{}
+	for _, key := range keys {
+		var update Update
+		if err := getJSON(backend, key, false, &update); err != nil || update.ID == "" {
+			slog.Warn("skipping an update that can't be read", "key", key.String(), "err", err)
+			continue
+		}
+		updates = append(updates, update)
+	}
+	sort.Slice(updates, func(i, j int) bool { return updates[i].ID < updates[j].ID })
+	return updates, nil
+}
+
+// RemoveTombstone takes out the tombstone a stage on SST 5's components keeps
+// at the lock SST 4 reads, so that SST 4 can deploy the stage again. A lock
+// SST 4 holds stays.
+func RemoveTombstone(backend Home, app, stage string) error {
+	var sst4 lockData
+	if err := getJSON(backend, sst4LockKey(app, stage), false, &sst4); err != nil {
+		return err
+	}
+	if !sst4.Tombstone {
+		return nil
+	}
+	return backend.Remove(context.TODO(), sst4LockKey(app, stage))
+}
+
 func PushEventLog(backend Home, updateID, app, stage string, reader io.Reader) error {
 	slog.Info("pushing eventlog", "updateID", updateID)
 	data, err := io.ReadAll(reader)
@@ -388,7 +458,7 @@ func lockKey(app, stage string) Key     { return Key{Kind: "lock5", App: app, St
 func sst4LockKey(app, stage string) Key { return Key{Kind: "lock", App: app, Stage: stage} }
 
 // tombstoneMessage is for whoever finds the tombstone in a home
-const tombstoneMessage = "This stage is on SST 5's components. This lock keeps SST 4's CLI from deploying, removing or refreshing it, which would delete what SST 5 created. Don't remove it with SST 4's `sst unlock`. SST 5 takes its own lock, in the lock5 folder beside this one."
+const tombstoneMessage = "This stage is on SST 5's components. This lock keeps SST 4's CLI from deploying, removing or refreshing it, which would delete what SST 5 created. Don't remove it with SST 4's `sst unlock`: to put the stage back on SST 4, run SST 5's `sst migrate --undo`. SST 5 takes its own lock, in the lock5 folder beside this one."
 
 // Lock takes the stage's lock, and records the update it starts. The lock is
 // written only if there's none, in one step where the home can, so two CLIs

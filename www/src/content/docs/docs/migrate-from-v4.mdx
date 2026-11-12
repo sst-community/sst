@@ -55,7 +55,11 @@ Then the next stage: a dev stage first, and production last.
    | `sst.cloudflare.StaticSite`, the first one | Move to `sst.cloudflare.StaticSiteV2`, which is `StaticSite` in 5.0. |
    | `sst.cloudflare.Auth` and `sst.cloudflare.x.SolidStart` | Remove them, or keep the stage on SST 4. |
 
-2. **Update to the latest SST 4 and deploy**, from where you'll move the stage, with nothing changed in between. Then what SST 4 changed since your version is deployed on its own, and not with the move. SST 4 keeps the full path of the folder a container's image is built from, so from another folder, like your CI's, or with the image's files changed, the image is built again and its task definition is replaced, and `sst migrate --check` refuses a move that replaces it. On SST's own SST 4, the `sst` package, you can stay on the version you have: moves from 4.14.1 and 4.17.2 were tried, and each went back to the version it came from.
+2. **Update to the newest SST 4 of this fork and deploy**, from where you'll move the stage, with nothing changed in between. It deploys with the providers SST 5 uses, so the move changes nothing that a newer provider would, and [going back](#going-back) can bring the state the move saved up to date. What SST 4 changed since your version is deployed on its own, and not with the move.
+
+   On SST's own SST 4, the `sst` package, switch to this fork's first. It runs your config as it is. It needs Node.js 22, below, and an `aws` provider of 7.54 or later if you pin one. On a stage you use with `sst dev`, the switch deletes the code SST's `sst dev` stubs are created from, which every stage on your SST version in that account and region shares, so switch the other stages there that use `sst dev` too.
+
+   SST 4 keeps the full path of the folder a container's image is built from, so from another folder, like your CI's, or with the image's files changed, the image is built again and its task definition is replaced, and `sst migrate --check` refuses a move that replaces it.
 
 3. **Use Node.js 22 or later.**
 
@@ -239,7 +243,7 @@ From then on, the stage deploys with `sst deploy` and `sst dev` as before. Move 
 :::danger
 Don't deploy a stage that has moved with SST 4, like from an old branch or in CI. It would try to put back SST 4's resources in place of what moved.
 
-SST 5 keeps a lock on a stage that has moved, where SST 4 looks for one, so SST 4's `sst deploy`, `sst dev`, `sst refresh` and `sst remove` stop with "A concurrent update was detected". **Don't run SST 4's `sst unlock` on it**, except to [go back](#going-back) with the state copied back first: it takes the lock out, and SST 4 would then deploy. SST 5's `sst unlock` leaves it. SST 4's `sst state` commands don't take the lock, so don't run them on a stage that has moved either.
+SST 5 keeps a lock on a stage that has moved, where SST 4 looks for one, so SST 4's `sst deploy`, `sst dev`, `sst refresh` and `sst remove` stop with "A concurrent update was detected". **Don't run SST 4's `sst unlock` on it**: it takes the lock out, and SST 4 would then deploy over what moved. To put the stage back on SST 4, [go back](#going-back) with `sst migrate --undo`. SST 5's `sst unlock` leaves the lock. SST 4's `sst state` commands don't take the lock, so don't run them on a stage that has moved either.
 :::
 
 Set a `version` rule, so that anyone on SST 4 is told their version doesn't match, before the config runs:
@@ -275,42 +279,28 @@ From 5.0 on, what a package builds on changes only in a major version.
 
 ## Going back
 
-You can put a stage that has moved back on SST 4, as long as nothing else has been deployed to it with SST 5. Going back takes three things from before the move: your config, SST 4, and the stage's state. Git has the first two, if you committed before the codemod, as [Before you start](#before-you-start) says. The move saved the third.
+You can put a stage that has moved back on SST 4, as long as SST 5 hasn't deployed it since. The move saved the stage's state from before it, and `sst migrate --undo` puts it back.
 
-1. **Check out the commit from before the codemod**, and install. It has SST 4 in your `package.json` and lockfile. With a global CLI, install SST 4 again.
-
-2. **Copy the saved state over the stage's state.** In your app's home, the copy is at `migrate/<app>/<stage>/<id>.json`, the newest one if you moved the stage more than once, and the stage's state is at `app/<app>/<stage>.json`. On AWS, the home is your account's SST state bucket, named in the SSM parameter `/sst/bootstrap`:
+1. **Put the stage back on SST 4**, with SST 5:
 
    ```bash frame="none"
-   aws s3 cp s3://<bucket>/migrate/<app>/<stage>/<id>.json s3://<bucket>/app/<app>/<stage>.json
+   sst migrate --undo --stage dev
    ```
 
-3. **Take out the lock** SST 5 keeps for SST 4, with SST 4's `sst unlock`.
+   It puts the state the move saved in place of the stage's, and takes out the lock SST 5 keeps for SST 4. Where the move changed something in place, like a function's code or environment, or a CloudFront function's version, it gives that state SST 5's view of it, as a refresh would, so SST 4's deploy sees what to put back. It takes out the code the move deleted, which SST 4's deploy uploads again. It changes nothing in the cloud, and lists what SST 5 created that SST 4's state doesn't have, like the code the move uploaded under new keys, which stays in your account.
 
-4. **Deploy with SST 4**:
+   It's refused once SST 5 has created, deleted or replaced anything on the stage since the move: the state the move saved no longer matches what's deployed, so fix it forward instead. A deploy that only updated something in place, like each start of `sst dev`, doesn't stop it.
+
+2. **Check out the commit from before the codemod**, and install. It has SST 4 in your `package.json` and lockfile. With a global CLI, install SST 4 again.
+
+3. **Deploy with SST 4**, with `sst deploy`, or with `sst dev` on a stage you use with it:
 
    ```bash frame="none"
    sst deploy --stage dev
    ```
 
-:::danger
-Copy the state back before you run SST 4's `sst unlock`. Without it, SST 4 reads SST 5's state, where much of what moved has a new address. SST 4 doesn't know those addresses, so it tries to create each of those resources again, and to delete the one at the new address, with what's in it. In a test of an app with an API, functions, queues, a table, a bucket and a user pool, that was 86 of its 117 resources, 13 log groups among them, with their logs; the table, the bucket, the queues and the user pool kept their addresses. In a test of SST's databases, Postgres, MySQL, Aurora, Redis and DSQL kept theirs, and their secrets in Secrets Manager moved.
-:::
+   It puts back what the move changed, and changes nothing else.
 
-This was tried with SST 4.24.0: on the app above with an API, deployed once with `sst deploy` and once with `sst dev`, on SST's databases, on a router with SST's sites behind it, on SST's containers, and on Cloudflare's components with their sites. And with SST's own 4.14.1 and 4.17.2, from the `sst` package, on an app shaped like one in daily use: functions in a VPC, an Aurora database, queues, a bus, a user pool, durable workflows, a cron job, an HTTP API with a JWT authorizer, and static sites behind a router, deployed once with `sst deploy` and once with `sst dev`. Each time, SST 4 deployed the stage, changing nothing but what a build changes, and later removed it. But the copy is the state from before the move, and the move changed some things in place. It uploaded each function's code again, which stays in your asset bucket unused, and updated some functions. SST 4 compares your config with the copy, not with what's deployed, so those functions keep what SST 5 gave them until SST 4 changes them. Two of those can matter, both for a function the move gave a new name, like a subscriber or an API's route:
+If `--undo` lists something the move replaced, like a REST API's deployment, or something it couldn't bring up to date, as when the stage moved from an SST 4 whose AWS provider isn't SST 5's, run SST 4's `sst refresh` after its deploy, and deploy again.
 
-- **On a stage you use with `sst dev`,** the function keeps the name SST 5's `sst dev` knows it by, so SST 4's `sst dev` doesn't reach it, and calls to it fail. Run SST 4's `sst deploy`, then `sst dev`. SST 4's `sst refresh` doesn't fix it. The deploy creates what your config leaves out in `sst dev`, like a database with `dev` set, and `sst dev` removes it again. On SST's own SST 4, the `sst` package, the deploy also deletes the code every `sst dev` stub in your account and region is created from, until `sst dev` uploads it again, so another stage there can't create or update a stub in between.
-- **A function whose code is a `bundle`,** like a Next.js site's, reads its links from a file named after it, so it looks for the file under its new name. Run SST 4's `sst refresh`, then `sst deploy`.
-
-A CloudFront function the move updated, like a router's, matters too: SST 4's state has its version from before, and CloudFront refuses to change or delete a function with "PreconditionFailed" until SST 4's `sst refresh` reads the version it has. Run SST 4's `sst refresh` once you've gone back, before you remove the stage, or SST 4's `sst remove` stops there.
-
-SST 4's `sst refresh` can fail after going back, with "cannot complete a resource … whose registration isn't pending". The move deleted the code SST 4 had uploaded for each function it gave a new name, the ones `sst migrate --check` said upload their code again. SST 4's state still names that code, as `<function>Code` under SST 4's name for the function, and SST 4's deploy doesn't upload it again. Its refresh then fails on a component linked to one of them, like a user pool with a trigger. Take each of those out of SST 4's state, then deploy, and SST 4 uploads them again:
-
-```bash frame="none"
-sst state remove UsersTriggerpreSignUpCode --stage dev
-sst deploy --stage dev
-```
-
-In the tests, the refresh failed this way for the app with the API, and passed for the others. So go back only to get a stage onto SST 4 again quickly, and move it again when you can.
-
-Once the stage has been deployed again with SST 5, the copy no longer matches what's deployed. Fix forward instead.
+This was tried with this fork's SST 4.25.0, on an app with an API with an authorizer, functions, queues, a bus, a table, a bucket with a notification, a user pool with a trigger and a cron job, deployed with `sst deploy`. `--undo` took a few seconds. SST 4's deploy then uploaded the 10 code objects the move had deleted and put back each function's code and description, and created, deleted or replaced nothing else. Each function ran SST 4's code again, the data written before the move was there, SST 4's `sst refresh` passed and changed nothing, and its `sst diff` had no changes.
