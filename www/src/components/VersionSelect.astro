@@ -1,0 +1,82 @@
+---
+// The version switcher in the header. Each version opens the same page in
+// that version's docs, or its docs home when it has no such page (a
+// component one version leaves out, or one renamed).
+import Select from "@astrojs/starlight/components/Select.astro";
+import { current, versions } from "../versions.mjs";
+
+// The page's path within these docs, the same in every version
+const path = Astro.url.pathname.slice(current.base.length) || "/";
+---
+
+<sst-version-select data-path={path}>
+  <Select
+    icon="open-book"
+    label="Version"
+    value={current.base + path}
+    width="10.5em"
+    options={versions.map((version) => ({
+      value: version.base + path,
+      selected: version.id === current.id,
+      label: version.prerelease
+        ? `${version.label} (pre-release)`
+        : version.label,
+    }))}
+  />
+  <noscript>
+    <a href={versions.find((version) => version.id !== current.id)!.base + "/docs/"}>
+      Other version
+    </a>
+  </noscript>
+</sst-version-select>
+
+<script>
+  import { versions } from "../versions.mjs";
+
+  class VersionSelect extends HTMLElement {
+    constructor() {
+      super();
+      const select = this.querySelector("select");
+      if (!select) return;
+      const path = this.dataset.path ?? "/";
+      select.addEventListener("change", async () => {
+        const target = select.value;
+        const version = versions.find((v) => target === v.base + path);
+        const go = (url: string) =>
+          window.location.assign(url + window.location.hash);
+        try {
+          const response = await fetch(target, { method: "HEAD" });
+          if (response.ok) return go(target);
+        } catch {}
+        // No such page in that version
+        window.location.assign(`${version?.base ?? ""}/docs/`);
+      });
+      // A page from the back/forward cache keeps the option picked before
+      window.addEventListener("pageshow", (event) => {
+        if (!event.persisted) return;
+        const index =
+          select.querySelector<HTMLOptionElement>("option[selected]")?.index;
+        if (index !== undefined) select.selectedIndex = index;
+      });
+    }
+  }
+  customElements.define("sst-version-select", VersionSelect);
+</script>
+
+<style>
+  sst-version-select {
+    display: flex;
+    align-items: center;
+    font-family: var(--sl-font-mono);
+    color: var(--color-text-secondary);
+  }
+  sst-version-select :global(select) {
+    font-size: var(--sl-text-xs);
+  }
+  /* The whole label where there's room for it, cut short on a phone */
+  @media (min-width: 50rem) {
+    sst-version-select :global(select) {
+      --sl-select-width: 15.5em;
+    }
+  }
+</style>

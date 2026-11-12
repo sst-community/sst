@@ -3,6 +3,7 @@ import starlight from "@astrojs/starlight";
 import sitemap from "@astrojs/sitemap";
 import config from "./config";
 import forkLinks from "./src/fork-links.mjs";
+import { current, versions } from "./src/versions.mjs";
 import { rehypeHeadingIds } from "@astrojs/markdown-remark";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 
@@ -298,9 +299,10 @@ if (import.meta.env.DEV) {
   });
 }
 
-// The sst-community docs are a static site on GitHub Pages, under this path.
+// The sst-community docs are a static site on GitHub Pages. Each version of
+// them is under its own path (src/versions.mjs).
 const site = "https://sst-community.github.io";
-const base = "/sst";
+const base = current.base;
 
 // https://astro.build/config
 export default defineConfig({
@@ -355,9 +357,10 @@ export default defineConfig({
         { icon: "discord", label: "Discord", href: config.forkDiscord },
       ],
       editLink: {
-        baseUrl: "https://github.com/sst-community/sst/edit/main/www",
+        baseUrl: `${config.fork}/edit/${current.branch}/www`,
       },
       components: {
+        Banner: "./src/components/Banner.astro",
         Hero: "./src/components/Hero.astro",
         Head: "./src/components/Head.astro",
         Header: "./src/components/Header.astro",
@@ -403,7 +406,15 @@ export default defineConfig({
           behavior: "wrap",
         },
       ],
-      [forkLinks, { base }],
+      [
+        forkLinks,
+        {
+          base,
+          bases: versions.map((version) => version.base),
+          fork: config.fork,
+          branch: current.branch,
+        },
+      ],
     ],
   },
 });

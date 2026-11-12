@@ -1,0 +1,69 @@
+---
+// A page's own banner, and on a pre-release's docs a banner that says so on
+// every page. That one stays in sight under the header as the page scrolls.
+import Default from "@astrojs/starlight/components/Banner.astro";
+import { current, latest } from "../versions.mjs";
+
+const link = `${latest.base}/docs/`;
+---
+
+{
+  current.prerelease && (
+    <div class="sst-prerelease">
+      <span class="long">
+        {current.label} is a pre-release, and these docs can still change. For
+        the current release, see the <a href={link}>{latest.label} docs</a>.
+      </span>
+      <span class="short">
+        {current.label} is a pre-release. See the{" "}
+        <a href={link}>{latest.label} docs</a>.
+      </span>
+    </div>
+  )
+}
+<Default />
+
+<style>
+  .sst-prerelease {
+    --__text: var(--sl-color-banner-text, var(--sl-color-text-invert));
+    position: sticky;
+    /* Under the header, and on a phone under "On this page" */
+    top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height));
+    z-index: 3;
+    min-height: var(--sst-banner-height);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem var(--sl-nav-pad-x);
+    background-color: var(--sl-color-banner-bg, var(--sl-color-bg-accent));
+    color: var(--__text);
+    font-size: var(--sl-text-sm);
+    line-height: var(--sl-line-height-headings);
+    text-align: center;
+    text-wrap: balance;
+    box-shadow: var(--sl-shadow-sm);
+  }
+  .sst-prerelease a {
+    color: var(--__text);
+  }
+  .short {
+    display: none;
+  }
+  @media (max-width: 50rem) {
+    .long {
+      display: none;
+    }
+    .short {
+      display: inline;
+    }
+  }
+
+  /* A link to a heading leaves room for the banner too */
+  :global(:root:has(.sst-prerelease)) {
+    --sst-banner-height: 2.25rem;
+    scroll-padding-top: calc(
+      1.5rem + var(--sl-nav-height) + var(--sl-mobile-toc-height) +
+        var(--sst-banner-height)
+    );
+  }
+</style>
