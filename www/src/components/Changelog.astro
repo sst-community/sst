@@ -10,7 +10,49 @@ type Entry = {
   upstream: boolean;
 };
 
-const entries = data as Entry[];
+interface Props {
+  // The first version to list. Older ones are left out, like the alphas
+  // that were SST 5's proof of concept.
+  since?: string;
+}
+
+const { since } = Astro.props;
+
+// Orders two versions as semver does: a pre-release before its release, and
+// a pre-release's identifiers one by one, numbers by value
+function compareVersions(a: string, b: string): number {
+  const parse = (version: string) => {
+    const v = version.replace(/^v/, "");
+    const dash = v.indexOf("-");
+    return {
+      core: (dash < 0 ? v : v.slice(0, dash)).split(".").map(Number),
+      pre: dash < 0 ? [] : v.slice(dash + 1).split("."),
+    };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < 3; i++) {
+    if (x.core[i] !== y.core[i]) return (x.core[i] ?? 0) - (y.core[i] ?? 0);
+  }
+  if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length;
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i];
+    const q = y.pre[i];
+    if (p === q) continue;
+    if (p === undefined) return -1;
+    if (q === undefined) return 1;
+    const pNumber = /^\d+$/.test(p);
+    const qNumber = /^\d+$/.test(q);
+    if (pNumber && qNumber) return Number(p) - Number(q);
+    if (pNumber !== qNumber) return pNumber ? -1 : 1;
+    return p < q ? -1 : 1;
+  }
+  return 0;
+}
+
+const entries = (data as Entry[]).filter(
+  (entry) => !since || compareVersions(entry.tag, since) >= 0,
+);
 
 const processor = await createMarkdownProcessor();
 
@@ -47,6 +89,7 @@ const releases = rendered.map((entry, index) => ({
 }));
 ---
 
+{releases.length === 0 && <p class="none"><em>No releases yet.</em></p>}
 <ul class="changelog">
   {releases.map((entry) => (
     <>
