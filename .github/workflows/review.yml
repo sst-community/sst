@@ -1,25 +1,27 @@
 name: review
 
-# A first-pass review of each pull request to main, before a committer looks:
-# checks that don't need a model (review-prepare.sh), then a review by opencode
-# with one of its free models, or a paid one when no free model writes it,
-# posted as one comment, a risk label and a `review` status (review-post.sh).
+# A first-pass review of each pull request to main or v5, before a committer
+# looks: checks that don't need a model (review-prepare.sh), then a review by
+# opencode with one of its free models, or a paid one when no free model
+# writes it, posted as one comment, a risk label and a `review` status
+# (review-post.sh).
 #
 # pull_request_target runs this file from main with a token that can comment,
 # for pull requests from forks too. That's safe only because nothing from the
-# pull request runs: main is checked out, the diff is fetched as text, and
-# opencode can read files and write text but has no edits, no web access and
-# no usable shell (.github/review/opencode.json), and no GitHub token. The only
-# secret is OPENCODE_API_KEY, which review-run.sh passes to opencode alone and
-# keeps out of the comment. The shell tool
-# stays listed, with every command denied but `true`, because opencode's free
-# models refuse requests that come without it. Keep it that way: never
-# check out the pull request's ref here.
+# pull request runs: the branch it targets is checked out (main or v5, by the
+# filter below, which only committers can push to), the diff is fetched as
+# text, and opencode can read files and write text but has no edits, no web
+# access and no usable shell (.github/review/opencode.json), and no GitHub
+# token. The only secret is OPENCODE_API_KEY, which review-run.sh passes to
+# opencode alone and keeps out of the comment. The shell tool stays listed,
+# with every command denied but `true`, because opencode's free models refuse
+# requests that come without it. Keep it that way: never check out the pull
+# request's ref here.
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, edited]
-    branches: [main]
+    branches: [main, v5]
 
 concurrency:
   group: review-${{ github.event.pull_request.number }}
@@ -43,9 +45,12 @@ jobs:
       MODEL: opencode/glm-5.3-flash-free
       OPENCODE: opencode-ai@1.19.3
     steps:
-      - name: Checkout main
+      # The branch the pull request targets, so the review reads the files the
+      # change is made to. pull_request_target checks out main otherwise.
+      - name: Checkout ${{ github.event.pull_request.base.ref }}
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
 
       - name: Collect the pull request and run the checks

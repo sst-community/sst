@@ -5,7 +5,8 @@
 # SST's issues with a closing keyword.
 #
 # Needs GH_TOKEN, GH_REPO, PR and OUT. Writes, in $OUT:
-#   pr.md        title, description, files and check results, for the model
+#   pr.md        title, branch, description, files and check results, for the model
+#   base         the branch the pull request targets
 #   pr.diff      the change, cut at 100 KB
 #   checks.md    the check results, for the comment
 #   risk         low, medium or high
@@ -19,6 +20,8 @@ pr=$(gh api "repos/$GH_REPO/pulls/$PR")
 title=$(jq -r .title <<<"$pr")
 body=$(jq -r '.body // ""' <<<"$pr")
 author=$(jq -r .user.login <<<"$pr")
+base=$(jq -r .base.ref <<<"$pr")
+echo "$base" >"$OUT/base"
 files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files")
 
 # The diff, from each file's patch. GitHub leaves out the patch of a binary or
@@ -162,6 +165,8 @@ echo "$failed" >"$OUT/failed"
   echo "# $title"
   echo
   echo "Author: $author"
+  echo
+  echo "Branch: \`$base\`"
   echo
   echo "## Description"
   echo

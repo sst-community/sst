@@ -1,11 +1,20 @@
 name: docs
 
-# Builds www/ and publishes it to GitHub Pages at sst-community.github.io/sst.
+# Builds www/ for each version of the docs and publishes them together to
+# GitHub Pages at sst-community.github.io/sst. www/src/versions.mjs on main
+# lists the versions, each built from its own branch and published under its
+# own path: SST 4 from main at /sst/, SST 5 from v5 at /sst/v5/.
+#
+# Pages deploys only from main, and each deploy replaces the whole site. So a
+# push to another version's branch starts this workflow on main, which builds
+# every version again. A run started with the workflow's token doesn't start
+# other workflows, but a workflow_dispatch can.
 
 on:
   push:
     branches:
       - main
+      - v5
     paths:
       - "www/**"
       - "platform/src/**"
@@ -16,22 +25,76 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: ${{ github.ref == 'refs/heads/main' && 'pages' || format('docs-{0}', github.ref) }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  dispatch:
+    if: github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
-      # The whole history, for each page's "Last updated" date.
+      - name: Build the site again from main
+        run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  versions:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.list.outputs.versions }}
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          sparse-checkout: www/src/versions.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: List the versions
+        id: list
+        run: |
+          versions=$(node --input-type=module -e '
+            const { versions } = await import("./www/src/versions.mjs");
+            console.log(JSON.stringify(versions.map(({ id, base, branch }) => ({ id, base, branch }))));
+          ')
+          echo "$versions"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version: ${{ fromJSON(needs.versions.outputs.versions) }}
+    name: build (SST ${{ matrix.version.id }})
+    env:
+      ID: ${{ matrix.version.id }}
+      BRANCH: ${{ matrix.version.branch }}
+    steps:
+      # The whole history, for each page's "Last updated" date.
+      - name: Checkout ${{ matrix.version.branch }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.version.branch }}
           fetch-depth: 0
+
+      # Each branch says which version it is in one line of versions.mjs. A
+      # merge between the branches that took the other's line would build the
+      # wrong version under this path.
+      - name: Check the branch is this version
+        run: |
+          current=$(node --input-type=module -e '
+            const { current } = await import("./www/src/versions.mjs");
+            console.log(current.id);
+          ')
+          if [ "$current" != "$ID" ]; then
+            echo "::error::www/src/versions.mjs on $BRANCH says it's version $current, not $ID."
+            exit 1
+          fi
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
@@ -71,14 +134,56 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCS_LAST_UPDATED: "true"
 
+      - name: Upload this version
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-${{ matrix.version.id }}
+          path: www/dist
+          retention-days: 1
+
+  # Each version under its own path: /sst/ is the site's root, and /sst/v5/
+  # its v5/ folder. The root's version goes in first, so a folder of its own
+  # that another version's path would take is found.
+  site:
+    needs: [versions, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the versions
+        uses: actions/download-artifact@v4
+        with:
+          pattern: docs-*
+          path: versions
+
+      - name: Put each under its path
+        run: |
+          echo "$VERSIONS" | jq -r 'sort_by(.base | length) | .[] | "\(.id) \(.base)"' | while read -r id base; do
+            case "$base" in
+              /sst) dir=site ;;
+              /sst/*) dir="site${base#/sst}" ;;
+              *) echo "::error::SST $id's path $base isn't under /sst."; exit 1 ;;
+            esac
+            if [ -e "$dir" ]; then
+              echo "::error::SST $id's folder ${dir#site/} is in another version's site already."
+              exit 1
+            fi
+            mkdir -p "$dir"
+            cp -R "versions/docs-$id/." "$dir/"
+            echo "SST $id: $(find "versions/docs-$id" -name '*.html' | wc -l) pages at $base/"
+          done
+        env:
+          VERSIONS: ${{ needs.versions.outputs.versions }}
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: www/dist
+          path: site
 
   deploy:
-    needs: build
+    needs: site
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
