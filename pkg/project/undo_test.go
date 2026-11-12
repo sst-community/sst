@@ -147,7 +147,14 @@ func moved(t *testing.T, home provider.Home, sst4, sst5 []byte) *provider.Update
 	move.TimeCompleted = time.Now().UTC().Format(time.RFC3339)
 	require.NoError(t, provider.PutUpdate(home, undoApp, undoStage, move))
 	require.NoError(t, provider.Unlock(home, undoApp, undoStage, move, provider.StageAfter{Moved: true}))
+	apart()
 	return move
+}
+
+// apart keeps the next run's ID apart from the last one's: IDs are made from
+// the millisecond, so two runs in the same one sort either way
+func apart() {
+	time.Sleep(5 * time.Millisecond)
 }
 
 // deployedSince runs a deploy of SST 5's on the stage that leaves the state given
@@ -159,6 +166,7 @@ func deployedSince(t *testing.T, home provider.Home, state []byte) {
 	deploy.TimeCompleted = "later"
 	require.NoError(t, provider.PutUpdate(home, undoApp, undoStage, deploy))
 	require.NoError(t, provider.Unlock(home, undoApp, undoStage, deploy, provider.StageAfter{Moved: true}))
+	apart()
 }
 
 func undoProject(home provider.Home) *Project {
