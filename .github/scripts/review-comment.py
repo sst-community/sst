@@ -194,7 +194,9 @@ if version == "major" and not TAKES_BREAKING:
         f"> **This looks like a breaking change**, and `{BASE}` doesn't take breaking changes for now. The blocking findings say what breaks. If it isn't one, reply saying why, and a committer decides.",
         "",
     ]
-elif breaking or version == "major":
+# On a branch that takes breaking changes, a major points at its release
+# note, when the review wrote one
+elif breaking or (version == "major" and has_note):
     out += [
         "> [!WARNING]",
         "> **This changes what users need**, so the release notes will list it under Breaking changes. Check that the drafted release note below says what they have to do.",

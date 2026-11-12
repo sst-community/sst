@@ -6,6 +6,8 @@ body:
     attributes:
       value: |
         Search the open issues first. If the bug is already reported, add a 👍 to that issue instead of opening another. Maintainers look at the most-wanted ones first.
+
+        If `sst version` prints 5.x, use "Report a bug in SST 5" instead.
   - type: textarea
     id: what
     attributes:
