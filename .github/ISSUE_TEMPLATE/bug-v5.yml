@@ -1,0 +1,55 @@
+name: Report a bug in SST 5
+description: Something in SST 5's pre-release doesn't work as it should.
+labels: ["bug", "v5"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SST 5 is a pre-release of the next major version, on the `v5` branch. Search the open issues with the `v5` label first. If the bug is already reported, add a 👍 to that issue instead of opening another.
+
+        If `sst version` prints 4.x, use "Report a bug" instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest `sst.config.ts` or set of steps that shows it.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `sst version` prints.
+      placeholder: sst 5.0.0-beta.1 (sst-community)
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it happened
+      options:
+        - A new stage, deployed with SST 5
+        - A stage moved from SST 4 with `sst migrate`
+        - "`sst migrate` itself: `--codemod`, `--check`, the move, or `--undo`"
+        - "`sst dev`"
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: migrate
+    attributes:
+      label: What `sst migrate --check` printed
+      description: For a stage moved from SST 4, or one that won't move. Take out anything private, like account ids.
+      render: text
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Logs, your operating system, a workaround you found.

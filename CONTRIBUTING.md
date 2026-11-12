@@ -42,7 +42,7 @@ If the change affects what gets deployed or how `sst dev` behaves, try it on an 
 
 ## Pull requests
 
-- Fork the repo and branch from `main`, which is the 4.x line. A rewrite of the components is in progress on the `v5` branch; ask on Discord before working on it.
+- Fork the repo and branch from `main`, which is the 4.x line. SST 5, a rewrite of the components, is in pre-release on the `v5` branch: for a change to SST 5, branch from `v5` and open the pull request against it, and ask on Discord first for anything large.
 - Keep one change to a pull request.
 - Title it the way commits here are titled: the area, a colon, then what the change does. For example, `Function: retain the shared dev bridge code object on delete`.
 - The `check` workflow has to pass. On your first pull request, a maintainer approves the run before it starts.

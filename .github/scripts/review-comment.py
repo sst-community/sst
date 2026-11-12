@@ -2,8 +2,8 @@
 """Builds the automatic review's comment, and works out its status, from the
 files review-prepare.sh wrote and opencode's output. review-post.sh posts it.
 
-Reads, in $OUT: risk, risk.md, failed, checks.md, files, upstream.md, and
-review.raw, opencode's output, used only when OPENCODE_OUTCOME is "success".
+Reads, in $OUT: risk, risk.md, failed, checks.md, files, upstream.md, base,
+and review.raw, opencode's output, used only when OPENCODE_OUTCOME is "success".
 Writes, in $OUT: comment.md, state, description, version (patch, minor,
 major, or empty when the review gave none), and breaking (yes, no, or empty
 when the review gave no release note).
@@ -32,6 +32,12 @@ def read(name, default=""):
 
 def lines(name):
     return [line for line in read(name).splitlines() if line.strip()]
+
+
+# The branch the pull request targets. `main` doesn't take breaking changes
+# for now. `v5` does: SST 5 can change in any way until 5.0.0.
+BASE = read("base").strip() or "main"
+TAKES_BREAKING = BASE == "v5"
 
 
 def cell(text):
@@ -78,8 +84,8 @@ finished = any(key.startswith("findings") for key in sections)
 summary = section("summary")
 
 # The version: patch, minor or major, then why. It becomes the `semver:`
-# label that next-version.sh counts. `main` doesn't take breaking changes for
-# now, so a major fails the status.
+# label that next-version.sh counts. A major fails the status on a branch
+# that doesn't take breaking changes (BASE).
 version, version_why = "", ""
 found = re.search(r"\b(patch|minor|major)\b", section("version"), re.I)
 if found:
@@ -144,8 +150,8 @@ suggestions = [text for kind, text in findings if kind == "suggestion"]
 
 if failed:
     state, description = "failure", f"{failed} check(s) failed. See the review comment."
-elif version == "major":
-    state, description = "failure", "The review marks this as a breaking change, which main doesn't take for now."
+elif version == "major" and not TAKES_BREAKING:
+    state, description = "failure", f"The review marks this as a breaking change, which {BASE} doesn't take for now."
 elif blocking:
     state, description = "failure", f"The review has {len(blocking)} blocking finding(s). See the review comment."
 elif finished:
@@ -182,13 +188,13 @@ if state == "failure":
         "> **Before a committer reviews this, please fix what's marked ❌ below**, or reply if you disagree. Pushing a fix runs this again.",
         "",
     ]
-if version == "major":
+if version == "major" and not TAKES_BREAKING:
     out += [
         "> [!WARNING]",
-        "> **This looks like a breaking change**, and `main` doesn't take breaking changes for now. The blocking findings say what breaks. If it isn't one, reply saying why, and a committer decides.",
+        f"> **This looks like a breaking change**, and `{BASE}` doesn't take breaking changes for now. The blocking findings say what breaks. If it isn't one, reply saying why, and a committer decides.",
         "",
     ]
-if breaking and version != "major":
+elif breaking or version == "major":
     out += [
         "> [!WARNING]",
         "> **This changes what users need**, so the release notes will list it under Breaking changes. Check that the drafted release note below says what they have to do.",

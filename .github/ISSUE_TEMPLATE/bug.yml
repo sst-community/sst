@@ -1,5 +1,5 @@
 name: Report a bug
-description: Something in sst-community doesn't work as it should.
+description: Something in sst-community's SST 4 doesn't work as it should.
 labels: ["bug"]
 body:
   - type: markdown
@@ -25,7 +25,7 @@ body:
     attributes:
       label: Version
       description: What `sst version` prints.
-      placeholder: sst 4.17.2 (sst-community)
+      placeholder: sst 4.25.0 (sst-community)
     validations:
       required: true
   - type: dropdown
