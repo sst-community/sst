@@ -5,7 +5,7 @@ This is for maintainers and the agents working with them: how SST's releases are
 ## Branches
 
 - **`main`** is the 4.x line: an SST release plus the fork's commits. It is shared history. Merge SST into it. Never rebase it or force-push it.
-- **`v5`** is the fork's own major version, a rewrite of the components. It releases as 5.x and doesn't follow SST's numbering. Its plans and progress are in `docs/plans/` on that branch. For now it's released only as pre-releases, such as `v5.0.0-alpha.1`; see [Pre-releases of v5](#pre-releases-of-v5).
+- **`v5`** is the fork's own major version, a rewrite of the components. It releases as 5.x and doesn't follow SST's numbering. Its plans and progress are in `docs/plans/` on that branch. For now it's released only as pre-releases, such as `v5.0.0-beta.1`; see [Pre-releases of v5](#pre-releases-of-v5).
 
 `git log upstream/v<the SST release main is on>..main --first-parent` lists every commit the fork adds.
 
@@ -112,9 +112,9 @@ Things to know:
 
 v5 goes out as pre-releases from the `v5` branch, to npm and GitHub, without changing what 4.x users get. Only `v5`'s `release.yml` runs for a tag with a suffix; `main`'s doesn't.
 
-1. Write `.github/release-notes/v5.0.0-alpha.N.md`. Without it, the GitHub release lists every commit since the newest tag in `v5`'s history.
-2. Check it against [the v5 goals](docs/plans/v5-goals.md). Update where each one stands, and name any goal the release doesn't meet under Known issues in the notes.
-3. Push the tag on a commit that's on `v5`: `v5.0.0-alpha.1`, then `v5.0.0-alpha.2`, and so on. Count up, and never reuse a number.
+1. Write `.github/release-notes/v5.0.0-beta.N.md`. Without it, the GitHub release lists every commit since the newest tag in `v5`'s history.
+2. Check it against [the 5.0 goals](docs/plans/v5-rewrite/goals.md), and name any goal the release doesn't meet under Known issues in the notes.
+3. Push the tag on a commit that's on `v5`: `v5.0.0-beta.1`, then `v5.0.0-beta.2`, and so on. Count up, and never reuse a number. The alphas, `v5.0.0-alpha.1` and `v5.0.0-alpha.2`, were the proof of concept; the 5.0 rewrite's pre-releases are betas.
 
 For a tag with a suffix, `release.yml`:
 
@@ -126,7 +126,7 @@ For a tag with a suffix, `release.yml`:
 Things to know:
 
 - **A 5.x tag without a suffix stops.** Before it builds anything, `release.yml` on `v5` fails a version whose major is newer than npm's `latest`, such as `v5.0.0` while 4.x is out. To release 5.0.0, remove the "Check the version" step in the commit you tag.
-- **Users install a pre-release** with `npm install sst@npm:@sst-community/sst@next-experimental`, or install the CLI alone with `curl -fsSL https://raw.githubusercontent.com/sst-community/sst/main/install | VERSION=5.0.0-alpha.1 bash`, which replaces their global CLI. A pre-release's `sst upgrade` moves to the newest 5.x version, pre-releases included, and its `sst init` writes that version.
+- **Users install a pre-release** with `npm install sst@npm:@sst-community/sst@next-experimental`, or install the CLI alone with `curl -fsSL https://raw.githubusercontent.com/sst-community/sst/main/install | VERSION=5.0.0-beta.1 bash`, which replaces their global CLI. A pre-release's `sst upgrade` moves to the newest 5.x version, pre-releases included, and its `sst init` writes that version.
 - **A pre-release meets an app's `version` rule when its release would**, from `5.0.0-alpha.2` on: `">= 4"` and `"5.x"` allow it, and `"4.x"` doesn't. `5.0.0-alpha.1` only meets a rule that names a pre-release, such as `">= 5.0.0-0"`.
 - **`release.yml`, `.goreleaser.yml` and `sdk/js/scripts/release.ts` differ between `main` and `v5`.** When merging `main` into `v5` conflicts in one of them, keep `v5`'s pre-release changes.
 

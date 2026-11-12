@@ -2,6 +2,22 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-11: getting ready for SST 5's first pre-release, `5.0.0-beta.1`
+
+The maintainer asked "what do we need to do for the 5.0 pre-release and release setup", and chose to start on the pre-release. Its name is `5.0.0-beta.1`, and step 2's diff-only pre-release is dropped ([decision](plan.md#decisions)).
+
+- **`main`'s v4.25.0 merged into `v5`.** It wasn't: the last merge was v4.24.0's. Where `main`'s change was in `v5` already, `v5`'s side is kept: its homes are stores of bytes, so the state-write fixes of #257 were there, and #257's S3 test passes on `v5` and is added; the HTTPS proxy check of #250 is moot, as `v5` has no TLS proxy. `SST_STAGE` is set for every command (#252).
+- **4.25.0's changes to SST 4's components, made in SST 5's**, so a move from 4.25.0 changes neither: linking a `Dynamo` table gives its ARN too (#251), and an image function's image is pushed under its name, not `latest` (#256). SST 4's frozen components get both, as they did the `Bucket` fix on 2026-11-07, so the takeover suites and the recorded states start from 4.25.0. The API report gains the link's `arn`.
+- **The docs, on `main`** (a pull request): `v5`'s switcher, banner, base path and changelog for each major, set to SST 4, and a `docs.yml` that builds every version `www/src/versions.mjs` lists from its branch, checks the branch says it's that version, puts each under its path, and deploys them together. A push to `v5` starts that run on `main`, as Pages deploys only from `main`.
+- **Issues and reviews for `v5`, on `main`** (a pull request): a bug form for SST 5 (labels `bug` and `v5`), and the automatic review on pull requests to `v5`, against `v5`'s files, where a `major` doesn't fail the status. `pull_request_target` takes the workflow from `main` whatever the base branch.
+- **The release notes**, `.github/release-notes/v5.0.0-beta.1.md`, and `MAINTAINING.md`'s steps for the betas.
+
+**Checked:** on the merged branch, the typecheck, all 110 test files (4,233 tests), the API report and the Go tests pass. Without SST 4's frozen components updated, 26 tests failed, the takeovers of an `Auth` (its functions link a table), of a python container `Function` and of the recorded serverless group among them: what a move from a stage SST 4 deployed before 4.25.0 changes in place. The docs: SST 4's site built from the pull request's branch (342 pages) and SST 5's from `v5` (185), put together by the workflow's own step, and served under `/sst/`: the switcher in both directions, a page one version doesn't have (404, so the switcher opens that version's home), the banner and `noindex` on SST 5's pages only, SST 4's changelog with 4.x releases only and SST 5's with its pre-releases, and the edit links on each version's branch. The step refuses a version whose folder another version's site has. The review's comment script, given a `major` review, fails it on `main` and not on `v5`, and acts as on `main` when the branch isn't known.
+
+**Found:** GitHub blocks `pull_request_target` by default in public repositories from 2026-12-02, unless an Actions policy allows it, with brownouts before then. The automatic review runs on it, so it needs a repository policy that allows `pull_request_target` for `review.yml`; this repository has none. `v5`'s ruleset only stops its deletion, where the 2026-11-05 decision gives it `main`'s.
+
+**Left before the tag:** merging the two pull requests to `main`, then `main` into `v5`; the label `v5`; the Actions policy; `v5`'s ruleset; and a lab run of the published package.
+
 ## 2026-11-11: going back with `sst migrate --undo`, one starting point, and `--dev` (branch `v5-simplify-move`)
 
 The maintainer asked "is there something we should do to simplify things?": most of what step 5's runs found came from going back. Three changes, on a branch of their own, to weigh before merging ([decisions](plan.md#decisions)).
