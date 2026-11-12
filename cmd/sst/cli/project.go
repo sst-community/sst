@@ -91,6 +91,8 @@ func (c *Cli) initProject(loadHome bool) (*project.Project, error) {
 	}
 	// Looks for a newer sst once a day, for the UI to say on a later run
 	go global.CheckForUpdate(c.version)
+	// Builds and the processes the command starts, like the one running the config's run(), read the stage from the environment
+	os.Setenv("SST_STAGE", p.App().Stage)
 	if version := p.NodeVersion(); project.NodeTooOld(version) {
 		fmt.Fprintln(os.Stderr, ui.TEXT_WARNING_BOLD.Render("Warning: ")+fmt.Sprintf("SST needs Node.js %d or later, and this is Node.js %s. Some features may fail until you upgrade.", project.MinNodeMajor, version))
 	}

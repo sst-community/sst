@@ -173,7 +173,6 @@ func CmdMosaic(c *cli.Cli) error {
 			return util.NewReadableError(nil, err.Error())
 		}
 	}
-	os.Setenv("SST_STAGE", p.App().Stage)
 	slog.Info("mosaic", "project", p.PathRoot())
 
 	wg.Go(func() error {
