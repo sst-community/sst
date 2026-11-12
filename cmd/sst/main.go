@@ -145,7 +145,8 @@ func run() error {
 		return err
 	}
 
-	if !flag.SST_SKIP_DEPENDENCY_CHECK {
+	// a plain Pulumi program runs the pulumi on the PATH, and uses neither
+	if !flag.SST_SKIP_DEPENDENCY_CHECK && !c.IsPulumiProgram() {
 		spin := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 		spin.Color("cyan")
 		spin.Suffix = "  Download dependencies..."

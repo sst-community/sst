@@ -17,7 +17,7 @@ var ErrAppsyncNotReady = fmt.Errorf("appsync not ready")
 
 func Start(
 	ctx context.Context,
-	p *project.Project,
+	p project.Program,
 	s *server.Server,
 	args map[string]interface{},
 ) error {
@@ -26,7 +26,7 @@ func Start(
 	config := prov.Config()
 	go warnLowConcurrency(ctx, config.Region, accountSettings(config))
 	slog.Info("getting endpoint")
-	prefix := fmt.Sprintf("/sst/%s/%s", p.App().Name, p.App().Stage)
+	prefix := fmt.Sprintf("/sst/%s/%s", p.Name(), p.Stage())
 
 	transport, ok := p.Transport()
 	if !ok {

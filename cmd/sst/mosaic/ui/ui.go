@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -473,7 +474,8 @@ func (u *UI) Event(unknown interface{}) {
 			}
 			u.println()
 			if len(evt.Hints) > 0 {
-				for k, v := range evt.Hints {
+				for _, k := range slices.Sorted(maps.Keys(evt.Hints)) {
+					v := evt.Hints[k]
 					splits := strings.Split(k, "::")
 					u.println(
 						TEXT_GRAY_BOLD.Render("   "),

@@ -18,7 +18,7 @@ type DeployFailedEvent struct {
 	Error string
 }
 
-func Start(ctx context.Context, p *project.Project, server *server.Server, policyPath string) error {
+func Start(ctx context.Context, p project.Program, server *server.Server, policyPath string) error {
 	log := slog.Default().With("service", "deployer")
 	log.Info("starting")
 	defer log.Info("done")

@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
+	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/server"
@@ -25,7 +29,7 @@ type Message struct {
 	Event json.RawMessage `json:"event"`
 }
 
-func Start(ctx context.Context, p *project.Project, server *server.Server) error {
+func Start(ctx context.Context, p project.Program, server *server.Server) error {
 	var complete *project.CompleteEvent
 	var wg errgroup.Group
 
@@ -88,9 +92,12 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		directory := r.URL.Query().Get("directory")
 		name := r.URL.Query().Get("name")
 		resolved := complete
-		latest, err := p.GetCompleted(ctx)
-		if err == nil && (resolved == nil || resolved.Old) {
-			resolved = latest
+		// The state is read only when the last deploy's isn't known, as a
+		// read can take a while
+		if resolved == nil || resolved.Old {
+			if latest, err := p.GetCompleted(ctx); err == nil {
+				resolved = latest
+			}
 		}
 		if resolved == nil {
 			http.Error(w, "dev state not ready", http.StatusServiceUnavailable)
@@ -109,6 +116,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 				body, err := json.Marshal(map[string]interface{}{
 					"env":     env,
 					"command": d.Command,
+					"awsOnly": d.Aws != nil && d.Aws.Only,
 				})
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -186,6 +194,21 @@ func Stream(ctx context.Context, url string, types ...interface{}) (chan any, er
 type EnvResponse struct {
 	Env     map[string]string `json:"env"`
 	Command string            `json:"command"`
+	// AwsOnly is whether the command runs with its role's credentials alone
+	// (project.DevAws)
+	AwsOnly bool `json:"awsOnly"`
+}
+
+// Inherit is what a dev command keeps of the CLI's environment: all of it,
+// but the AWS profile when it runs with its role's credentials alone, as the
+// AWS SDKs would take the profile over them
+func (r *EnvResponse) Inherit(environ []string) []string {
+	if !r.AwsOnly {
+		return environ
+	}
+	return slices.DeleteFunc(slices.Clone(environ), func(entry string) bool {
+		return strings.HasPrefix(entry, "AWS_PROFILE=") || strings.HasPrefix(entry, "AWS_DEFAULT_PROFILE=")
+	})
 }
 
 func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
@@ -194,6 +217,11 @@ func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// what sst dev said went wrong, like a role it couldn't take
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, util.NewReadableError(nil, strings.TrimSpace(string(body)))
+	}
 	var result EnvResponse
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {

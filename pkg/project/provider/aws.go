@@ -145,7 +145,16 @@ func awsRoles(args map[string]interface{}) []AwsRole {
 }
 
 func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}) error {
-	ctx := context.Background()
+	if err := a.Load(app, stage, args); err != nil {
+		return err
+	}
+	_, err := a.Bootstrap(a.config.Region)
+	return err
+}
+
+// Load sets the provider up from an SST app's args and finds its credentials,
+// as Init does, without SST's bootstrap.
+func (a *AwsProvider) Load(app string, stage string, args map[string]interface{}) error {
 	if os.Getenv("SST_AWS_NO_PROFILE") != "" {
 		delete(args, "profile")
 	}
@@ -161,25 +170,34 @@ func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}
 	}
 
 	region, _ := args["region"].(string)
-	a.roles = awsRoles(args)
-	cfg, err := LoadAwsConfig(ctx, a.profile, region, a.roles)
-	if err != nil {
+	if err := a.LoadFrom(a.profile, region, awsRoles(args)); err != nil {
 		return err
 	}
-	_, err = cfg.Credentials.Retrieve(ctx)
-	if err != nil {
-		return err
-	}
-	slog.Info("aws credentials found", "region", cfg.Region, "profile", a.profile)
-	a.config = cfg
 	tags(app, stage, args)
 	if args["region"] == nil {
-		args["region"] = cfg.Region
+		args["region"] = a.config.Region
 	}
-	_, err = a.Bootstrap(cfg.Region)
+	return nil
+}
+
+// LoadFrom sets the provider up with the profile, region and roles given, as
+// they are, and finds its credentials, without SST's bootstrap: `sst dev` in a
+// Pulumi project sets it up as the stack's config sets up the program's
+// provider, and creates nothing of SST's in the account but the Event API its
+// stubs talk through.
+func (a *AwsProvider) LoadFrom(profile, region string, roles []AwsRole) error {
+	ctx := context.Background()
+	cfg, err := LoadAwsConfig(ctx, profile, region, roles)
 	if err != nil {
 		return err
 	}
+	if _, err := cfg.Credentials.Retrieve(ctx); err != nil {
+		return err
+	}
+	slog.Info("aws credentials found", "region", cfg.Region, "profile", profile)
+	a.profile = profile
+	a.roles = roles
+	a.config = cfg
 	return nil
 }
 

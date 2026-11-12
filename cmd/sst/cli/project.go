@@ -12,10 +12,12 @@ import (
 	"github.com/briandowns/spinner"
 	"github.com/joho/godotenv"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
+	"github.com/sst/sst/v3/internal/fs"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/pulumidev"
 )
 
 // the temp log what's logged goes to until InitProject makes sst.log
@@ -48,14 +50,56 @@ func (c *Cli) Discover() (string, error) {
 		if _, err := os.Stat(abs); os.IsNotExist(err) {
 			return "", util.NewReadableError(err, "Could not find "+abs)
 		}
+		if pulumidev.IsProgram(abs) {
+			return c.pulumiProgram(abs)
+		}
 		return abs, nil
 	}
 
 	match, err := project.Discover()
 	if err != nil {
+		// sst dev runs a plain Pulumi program too, in a folder with a
+		// Pulumi.yaml and no SST app up from it (pulumi.go): only when there's
+		// no sst.config.ts, not one that couldn't be used
+		if !hasSSTConfig() {
+			if found, findErr := pulumidev.Discover(); findErr == nil {
+				return c.pulumiProgram(found)
+			}
+		}
 		return "", util.NewReadableError(err, "Could not find sst.config.ts")
 	}
 	return match, nil
+}
+
+// hasSSTConfig is whether there's an sst.config.ts up from the working
+// folder
+func hasSSTConfig() bool {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return true
+	}
+	_, err = fs.FindUp(cwd, "sst.config.ts")
+	return err == nil
+}
+
+// InitDev loads what sst dev runs: the SST app, or a plain Pulumi program
+// (pulumi.go).
+func (c *Cli) InitDev() (project.Program, error) {
+	cfgPath, err := c.Discover()
+	if err != nil {
+		return nil, err
+	}
+	if pulumidev.IsProgram(cfgPath) {
+		return c.initPulumi(cfgPath)
+	}
+	p, err := c.InitProject()
+	if err != nil {
+		return nil, err
+	}
+	if p.App().Protect {
+		return nil, project.ErrProtectedDevStage
+	}
+	return p, nil
 }
 
 func (c *Cli) InitProject() (*project.Project, error) {
@@ -89,57 +133,11 @@ func (c *Cli) initProject(loadHome bool) (*project.Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Looks for a newer sst once a day, for the UI to say on a later run
-	go global.CheckForUpdate(c.version)
-	// Builds and the processes the command starts, like the one running the config's run(), read the stage from the environment
-	os.Setenv("SST_STAGE", p.App().Stage)
-	if version := p.NodeVersion(); project.NodeTooOld(version) {
-		fmt.Fprintln(os.Stderr, ui.TEXT_WARNING_BOLD.Render("Warning: ")+fmt.Sprintf("SST needs Node.js %d or later, and this is Node.js %s. Some features may fail until you upgrade.", project.MinNodeMajor, version))
-	}
+	c.loaded(p.App().Stage, p.NodeVersion())
 	godotenv.Load(filepath.Join(p.PathRoot(), ".env"))
-
-	if flag.SST_LOG == "" {
-		// what's logged meanwhile waits for the new file
-		logMu.Lock()
-		_, err = logFile.Seek(0, 0)
-		if err != nil {
-			logMu.Unlock()
-			return nil, err
-		}
-		sstLog := p.PathLog("sst")
-		logPath := p.PathLog("")
-		os.MkdirAll(logPath, 0755)
-		nextLogFile, err := os.Create(sstLog)
-		if err != nil {
-			logMu.Unlock()
-			return nil, util.NewReadableError(err, "Could not create log file")
-		}
-		// what an earlier run's log moved there past its cap
-		os.Remove(sstLog + ".1")
-		_, err = io.Copy(nextLogFile, logFile)
-		if err != nil {
-			logMu.Unlock()
-			return nil, util.NewReadableError(err, "Could not copy log file")
-		}
-		logFile.Close()
-		// its name is taken now, as logFile can change once it's unlocked
-		tmpLog := logFile.Name()
-		defer func() {
-			// only the temp log, not an sst.log a second call would have here
-			if tmpLog != tempLogPath {
-				return
-			}
-			err = os.Remove(tmpLog)
-			if err != nil {
-				slog.Error("failed to remove temp log file", "err", err)
-			}
-			// were it ever past the cap before sst.log
-			os.Remove(tmpLog + ".1")
-		}()
-		logFile = nextLogFile
-		logMu.Unlock()
+	if err := c.logTo(p.PathLog("")); err != nil {
+		return nil, err
 	}
-	c.configureLog()
 
 	spin := spinner.New(spinner.CharSets[14], 100*time.Millisecond, spinner.WithWriterFile(os.Stderr))
 	spin.Color("cyan")
@@ -176,6 +174,65 @@ func (c *Cli) initProject(loadHome bool) (*project.Project, error) {
 
 	c.configureLog()
 	return p, nil
+}
+
+// loaded does what's done for every project once it's read: what the
+// processes the command starts read of it, and the checks of what it runs on
+func (c *Cli) loaded(stage, nodeVersion string) {
+	// Looks for a newer sst once a day, for the UI to say on a later run
+	go global.CheckForUpdate(c.version)
+	// Builds and the processes the command starts, like the one running the config's run(), read the stage from the environment
+	os.Setenv("SST_STAGE", stage)
+	if project.NodeTooOld(nodeVersion) {
+		fmt.Fprintln(os.Stderr, ui.TEXT_WARNING_BOLD.Render("Warning: ")+fmt.Sprintf("SST needs Node.js %d or later, and this is Node.js %s. Some features may fail until you upgrade.", project.MinNodeMajor, nodeVersion))
+	}
+}
+
+// logTo moves what's been logged so far to the project's sst.log, in logDir,
+// and logs the rest there
+func (c *Cli) logTo(logDir string) error {
+	if flag.SST_LOG == "" {
+		// what's logged meanwhile waits for the new file
+		logMu.Lock()
+		if _, err := logFile.Seek(0, 0); err != nil {
+			logMu.Unlock()
+			return err
+		}
+		sstLog := filepath.Join(logDir, "sst.log")
+		os.MkdirAll(logDir, 0755)
+		nextLogFile, err := os.Create(sstLog)
+		if err != nil {
+			logMu.Unlock()
+			return util.NewReadableError(err, "Could not create log file")
+		}
+		// what an earlier run's log moved there past its cap
+		os.Remove(sstLog + ".1")
+		_, err = io.Copy(nextLogFile, logFile)
+		if err != nil {
+			logMu.Unlock()
+			return util.NewReadableError(err, "Could not copy log file")
+		}
+		logFile.Close()
+		// its name is taken now, as logFile can change once it's unlocked
+		tmpLog := logFile.Name()
+		defer func() {
+			// only the temp log, not an sst.log a second call would have here
+			if tmpLog != tempLogPath {
+				return
+			}
+			if err := os.Remove(tmpLog); err != nil {
+				slog.Error("failed to remove temp log file", "err", err)
+			}
+			// were it ever past the cap before sst.log
+			os.Remove(tmpLog + ".1")
+		}()
+		logFile = nextLogFile
+		logMu.Unlock()
+	}
+	// before the temp log is removed: the crash output holds it open until
+	// it's moved to the new file, and Windows can't remove an open file
+	c.configureLog()
+	return nil
 }
 
 func (c *Cli) configureLog() {

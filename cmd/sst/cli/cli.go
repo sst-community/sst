@@ -16,6 +16,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/pulumidev"
 )
 
 type Cli struct {
@@ -303,6 +304,9 @@ func (c CommandPath) PrintHelp() error {
 }
 
 func (c *Cli) Stage(cfgPath string) (string, error) {
+	if pulumidev.IsProgram(cfgPath) {
+		return c.pulumiStage(cfgPath)
+	}
 	stage := c.String("stage")
 	if stage == "" {
 		stage = os.Getenv("SST_STAGE")

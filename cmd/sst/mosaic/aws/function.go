@@ -73,7 +73,7 @@ type FunctionWorkerForgottenEvent struct {
 
 type input struct {
 	config  aws.Config
-	project *project.Project
+	project project.Program
 	server  *server.Server
 	client  *bridge.Client
 	msg     chan bridge.Message
@@ -573,7 +573,7 @@ func function(ctx context.Context, input input) {
 			delete(builds, functionID)
 		}
 		target, _ := targets[functionID]
-		build, err := input.project.Runtime.Build(ctx, target)
+		build, err := input.project.Runtimes().Build(ctx, target)
 		return record(functionID, build, err)
 	}
 
@@ -582,7 +582,7 @@ func function(ctx context.Context, input input) {
 	buildEach := func(toBuild []*runtime.BuildInput) map[string]bool {
 		failed := map[string]bool{}
 		results := buildAll(toBuild, func(target *runtime.BuildInput) (*runtime.BuildOutput, error) {
-			return input.project.Runtime.Build(ctx, target)
+			return input.project.Runtimes().Build(ctx, target)
 		})
 		for _, result := range results {
 			if record(result.FunctionID, result.Output, result.Err) == nil {
@@ -631,7 +631,7 @@ func function(ctx context.Context, input input) {
 		// recorded, and put back if it doesn't start
 		stopped, wasStopped := stoppedAt[workerID]
 		delete(stoppedAt, workerID)
-		worker, err := input.project.Runtime.Run(ctx, &runtime.RunInput{
+		worker, err := input.project.Runtimes().Run(ctx, &runtime.RunInput{
 			CfgPath:    input.project.PathConfig(),
 			Runtime:    target.Runtime,
 			Server:     input.server.WorkerRunAddress(workerID, info.Run),
@@ -918,7 +918,7 @@ func function(ctx context.Context, input input) {
 				continue
 			}
 			for path := range paths {
-				if !input.project.Runtime.ShouldRebuild(target.Runtime, target.FunctionID, path) {
+				if !input.project.Runtimes().ShouldRebuild(target.Runtime, target.FunctionID, path) {
 					continue
 				}
 				for _, worker := range workers {

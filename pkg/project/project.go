@@ -272,8 +272,6 @@ func New(input *ProjectConfig) (*Project, error) {
 	rootPath := filepath.Dir(input.Config)
 	tmp := filepath.Join(rootPath, ".sst")
 
-	pythonRuntime := python.New()
-
 	proj := &Project{
 		version: input.Version,
 		root:    rootPath,
@@ -282,14 +280,7 @@ func New(input *ProjectConfig) (*Project, error) {
 		target:  target.Cloud{},
 	}
 
-	proj.Runtime = runtime.NewCollection(
-		input.Config,
-		node.New(input.Version),
-		worker.New(),
-		pythonRuntime,
-		golang.New(),
-		rust.New(),
-	)
+	proj.Runtime = NewRuntimes(input.Config, input.Version)
 
 	_, err := os.Stat(tmp)
 	if err != nil {
@@ -476,6 +467,19 @@ console.log("~j" + JSON.stringify(await mod.app({
 	}
 
 	return proj, nil
+}
+
+// NewRuntimes are the runtimes that build a program's functions and run them
+// in sst dev
+func NewRuntimes(cfgPath, version string) *runtime.Collection {
+	return runtime.NewCollection(
+		cfgPath,
+		node.New(version),
+		worker.New(),
+		python.New(),
+		golang.New(),
+		rust.New(),
+	)
 }
 
 func (proj *Project) LoadHome() error {

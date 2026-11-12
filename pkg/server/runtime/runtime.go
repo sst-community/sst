@@ -10,12 +10,12 @@ import (
 )
 
 type Runtime struct {
-	project *project.Project
+	program project.Program
 }
 
 func (r *Runtime) Build(input *runtime.BuildInput, output *runtime.BuildOutput) error {
-	input.CfgPath = r.project.PathConfig()
-	result, err := r.project.Runtime.Build(context.Background(), input)
+	input.CfgPath = r.program.PathConfig()
+	result, err := r.program.Runtimes().Build(context.Background(), input)
 	if err != nil {
 		return err
 	}
@@ -29,9 +29,9 @@ func (r *Runtime) AddTarget(input *runtime.BuildInput, output *bool) error {
 	return nil
 }
 
-func Register(ctx context.Context, p *project.Project, r *rpc.Server) error {
+func Register(ctx context.Context, p project.Program, r *rpc.Server) error {
 	r.RegisterName("Runtime", &Runtime{
-		project: p,
+		program: p,
 	})
 	return nil
 }

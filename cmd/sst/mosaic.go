@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,9 +96,9 @@ func CmdMosaic(c *cli.Cli) error {
 				if !ok {
 					return nil
 				}
-				query := "directory=" + cwd
+				query := "directory=" + neturl.QueryEscape(cwd)
 				if child != "" {
-					query = "name=" + child
+					query = "name=" + neturl.QueryEscape(child)
 				}
 				nextEnv, err := dev.Env(c.Context, query, url)
 				if err != nil {
@@ -127,7 +128,7 @@ func CmdMosaic(c *cli.Cli) error {
 						fields[0],
 						fields[1:]...,
 					)
-					cmd.Env = os.Environ()
+					cmd.Env = nextEnv.Inherit(os.Environ())
 					cmd.Env = append(cmd.Env, "FORCE_COLOR=1")
 					for k, v := range nextEnv.Env {
 						cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
@@ -160,12 +161,9 @@ func CmdMosaic(c *cli.Cli) error {
 		return util.NewReadableError(nil, "The dev command for this process does not look right. Check your dev script in package.json to make sure it is simply starting your process and not running `sst dev`. More info here: https://sst-community.github.io/sst/docs/reference/cli/#dev")
 	}
 
-	p, err := c.InitProject()
+	p, err := c.InitDev()
 	if err != nil {
 		return err
-	}
-	if p.App().Protect {
-		return project.ErrProtectedDevStage
 	}
 	policyPath := c.String("policy")
 	if policyPath != "" {
@@ -178,8 +176,8 @@ func CmdMosaic(c *cli.Cli) error {
 	wg.Go(func() error {
 		defer c.Cancel()
 		return watcher.Start(c.Context, watcher.WatchConfig{
-			Root:  p.PathRoot(),
-			Watch: p.App().Watch,
+			Root:  p.PathWatch(),
+			Watch: p.Watch(),
 		})
 	})
 
@@ -187,7 +185,7 @@ func CmdMosaic(c *cli.Cli) error {
 	if err != nil {
 		return err
 	}
-	removeServerFile, err := server.WriteDiscoveryFile(p.PathConfig(), p.App().Stage)
+	removeServerFile, err := server.WriteDiscoveryFile(p.PathConfig(), p.Stage())
 	if err != nil {
 		return err
 	}
@@ -207,14 +205,14 @@ func CmdMosaic(c *cli.Cli) error {
 			case evt := <-evts:
 				switch evt := evt.(type) {
 				case *runtime.BuildInput:
-					p.Runtime.AddTarget(evt)
+					p.Runtimes().AddTarget(evt)
 				}
 			}
 		}
 	})
 
 	os.Setenv("SST_SERVER", server.URL())
-	for name, a := range p.App().Providers {
+	for name, a := range p.Providers() {
 		args := a
 		switch name {
 		case "aws":
@@ -264,11 +262,11 @@ func CmdMosaic(c *cli.Cli) error {
 		multiEnv := append(
 			c.Env(),
 			"SST_SERVER="+server.URL(),
-			"SST_STAGE="+p.App().Stage,
+			"SST_STAGE="+p.Stage(),
 		)
 		serverURL := server.URL()
-		_, hasAWS := p.App().Providers["aws"]
-		showWorkers := p.App().Home == "cloudflare" && !hasAWS
+		_, hasAWS := p.Providers()["aws"]
+		showWorkers := p.Home() == "cloudflare" && !hasAWS
 		fnTitle := "Functions"
 		fnFilter := "function"
 		if showWorkers {
@@ -354,7 +352,7 @@ func CmdMosaic(c *cli.Cli) error {
 						for name := range evt.Tunnels {
 							multi.AddProcess(multiplexer.PaneConfig{
 								Key:       "tunnel",
-								Args:      []string{currentExecutable, "tunnel", "--stage", p.App().Stage},
+								Args:      []string{currentExecutable, "tunnel", "--stage", p.Stage()},
 								Icon:      "⇌",
 								Title:     "Tunnel",
 								Killable:  true,
@@ -419,10 +417,10 @@ func CmdMosaic(c *cli.Cli) error {
 
 	if mode == "mono" {
 		mono := monoplexer.New()
-		_, hasAWS := p.App().Providers["aws"]
+		_, hasAWS := p.Providers()["aws"]
 		fnTitle := "Function"
 		fnFilter := "function"
-		if p.App().Home == "cloudflare" && !hasAWS {
+		if p.Home() == "cloudflare" && !hasAWS {
 			fnTitle = "Worker"
 			fnFilter = "worker"
 		}
@@ -463,7 +461,7 @@ func CmdMosaic(c *cli.Cli) error {
 							)
 						}
 						for range evt.Tunnels {
-							mono.AddProcess("tunnel", []string{currentExecutable, "tunnel", "--stage", p.App().Stage}, "", "Tunnel", true)
+							mono.AddProcess("tunnel", []string{currentExecutable, "tunnel", "--stage", p.Stage()}, "", "Tunnel", true)
 						}
 						break
 					}

@@ -22,7 +22,6 @@ import (
 
 	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/project"
-	"github.com/sst/sst/v3/pkg/server/aws"
 	"github.com/sst/sst/v3/pkg/server/runtime"
 )
 
@@ -166,15 +165,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.routes.ServeHTTP(w, r)
 }
 
-func (s *Server) Start(ctx context.Context, p *project.Project) error {
+// Start serves the program contract to the program the command runs: the
+// calls every program can make (Runtime and Dev), and the program's own.
+func (s *Server) Start(ctx context.Context, p project.Program) error {
 	log := slog.Default().With("service", "server")
 	log.Info("starting")
 	defer log.Info("server done")
 
-	aws.Register(ctx, p, s.Rpc)
 	runtime.Register(ctx, p, s.Rpc)
-	s.Rpc.RegisterName("Dev", &devContract{project: p})
-	s.Rpc.RegisterName("Move", &moveContract{})
+	s.Rpc.RegisterName("Dev", &devContract{program: p})
+	p.RegisterRPC(s.Rpc)
 	return s.Serve(ctx)
 }
 
