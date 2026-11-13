@@ -20,6 +20,7 @@ type Runtime interface {
 	Build(ctx context.Context, input *BuildInput) (*BuildOutput, error)
 	Run(ctx context.Context, input *RunInput) (Worker, error)
 	ShouldRebuild(functionID string, path string) bool
+	ValidateHandler(input *BuildInput) error
 	// ShouldRunEagerly controls whether workers are started immediately after a rebuild
 	// or lazily on first invocation.
 	//
@@ -121,6 +122,13 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		out = input.Bundle
 		if !filepath.IsAbs(out) {
 			out = filepath.Join(path.ResolveRootDir(input.CfgPath), out)
+		}
+		runtime, ok := c.Runtime(input.Runtime)
+		if !ok {
+			return nil, fmt.Errorf("runtime not found: %v", input.Runtime)
+		}
+		if err := runtime.ValidateHandler(input); err != nil {
+			return nil, err
 		}
 		result = &BuildOutput{
 			Handler: input.Handler,

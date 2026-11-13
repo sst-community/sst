@@ -180,6 +180,18 @@ func (r *PythonRuntime) Run(ctx context.Context, input *runtime.RunInput) (runti
 
 }
 
+func (r *PythonRuntime) ValidateHandler(input *runtime.BuildInput) error {
+	rootDir := path.ResolveRootDir(input.CfgPath)
+	if input.Bundle != "" {
+		rootDir = input.Bundle
+	}
+	_, err := resolveHandler(rootDir, input.Handler)
+	if err != nil {
+		return fmt.Errorf("handler not found: %v", input.Handler)
+	}
+	return nil
+}
+
 func (r *PythonRuntime) ShouldRebuild(functionID string, file string) bool {
 	// Skip paths inside build artifacts, caches, or virtual envs to avoid feedback loops
 	normalized := filepath.ToSlash(file)
