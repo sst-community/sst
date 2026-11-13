@@ -1,4 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 export interface MicrovmImagePruneArgs {
   /** The ARN of the MicroVM image. */
@@ -24,6 +25,6 @@ export class MicrovmImagePrune extends CustomResource {
     args: MicrovmImagePruneArgs,
     opts?: CustomResourceOptions,
   ) {
-    super("sst:aws:MicrovmImagePrune", name, { ...args }, opts);
+    super("sst:aws:MicrovmImagePrune", name, { ...args }, withPlugin(opts));
   }
 }

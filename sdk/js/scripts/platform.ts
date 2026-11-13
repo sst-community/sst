@@ -34,6 +34,7 @@ export async function copyPlatform() {
   await fs.cp("../../platform/dist/types", "platform/types", {
     recursive: true,
   });
+  await copyDeployFiles();
   // Which of the platform's files a bundler keeps when nothing imports from
   // them. Without it, the package's own `sideEffects: false` would apply. The
   // compiled JavaScript has the takeovers inside its chunks, so all of it.
@@ -87,6 +88,47 @@ export async function copyPlatform() {
 
   await compilePlatform();
   return dependencies;
+}
+
+// What the components read from the platform's folder as they deploy
+// (`context().paths.platform`), which a program Pulumi runs on its own finds in
+// the package, as SST's CLI finds them in the app's `.sst/platform`. The
+// stubs `sst dev` deploys stay with the CLI: nothing runs such a program in
+// `sst dev`, and they're 13 MB each.
+const deployFiles = [
+  "dist/oac-edge-signer",
+  "dist/ssr-warmer",
+  "functions/cf-static-site-router-worker-experimental",
+  "functions/empty-function",
+  "functions/react-server",
+  "functions/remix-server",
+];
+const devFiles = ["dist/bridge", "dist/nodejs-bridge"];
+
+async function copyDeployFiles() {
+  // Every folder a component names under the platform's folder is one of
+  // the two, so a new one can't be left out of the package unnoticed
+  const named = new Set<string>();
+  for await (const file of new Bun.Glob("**/*.ts").scan(
+    "../../platform/src/components",
+  )) {
+    const code = await Bun.file(`../../platform/src/components/${file}`).text();
+    for (const match of code.matchAll(
+      /paths\.platform,\s*"(dist|functions)",\s*"([^"]+)"/g,
+    ))
+      named.add(`${match[1]}/${match[2]}`);
+  }
+  const unknown = [...named].filter(
+    (dir) => !deployFiles.includes(dir) && !devFiles.includes(dir),
+  );
+  if (unknown.length > 0)
+    throw new Error(
+      `The components read ${unknown.join(", ")} from the platform's folder: add each to deployFiles or devFiles in scripts/platform.ts`,
+    );
+  for (const dir of deployFiles)
+    await fs.cp(`../../platform/${dir}`, `platform/${dir}`, {
+      recursive: true,
+    });
 }
 
 // The exports compiled to JavaScript that plain Node loads: it won't strip

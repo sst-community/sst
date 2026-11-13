@@ -1,4 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 export interface KvRoutesUpdateArgs {
   /** The ARN of the CloudFront key-value store. */
@@ -23,6 +24,6 @@ export class KvRoutesUpdate extends CustomResource {
     args: KvRoutesUpdateArgs,
     opts?: CustomResourceOptions,
   ) {
-    super("sst:aws:KvRoutesUpdate", name, { ...args }, opts);
+    super("sst:aws:KvRoutesUpdate", name, { ...args }, withPlugin(opts));
   }
 }

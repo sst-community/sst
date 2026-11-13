@@ -38,6 +38,9 @@ const tmp = `tmp`;
 const binaryPackages = [] as { dir: string; name: string }[];
 for (const artifact of artifacts) {
   if (artifact.type !== "Binary") continue;
+  // The provider plugin, the same binary, goes out in the GitHub release only
+  // (.goreleaser.yml)
+  if (path.basename(artifact.path).startsWith("pulumi-resource-")) continue;
   const os = artifact.goos === "windows" ? "win32" : artifact.goos;
   const cpu = cpus[artifact.goarch as keyof typeof cpus];
   if (!os || !cpu)

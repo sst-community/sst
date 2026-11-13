@@ -1,4 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 export interface RdsRoleLookupArgs {
   /** The name of the IAM role. */
@@ -18,6 +19,6 @@ export class RdsRoleLookup extends CustomResource {
     args: RdsRoleLookupArgs,
     opts?: CustomResourceOptions,
   ) {
-    super("sst:aws:RdsRoleLookup", name, { ...args }, opts);
+    super("sst:aws:RdsRoleLookup", name, { ...args }, withPlugin(opts));
   }
 }

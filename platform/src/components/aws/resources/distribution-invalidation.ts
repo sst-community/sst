@@ -1,4 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 export interface DistributionInvalidationArgs {
   distributionId: Input<string>;
@@ -21,6 +22,11 @@ export class DistributionInvalidation extends CustomResource {
     args: DistributionInvalidationArgs,
     opts?: CustomResourceOptions,
   ) {
-    super("sst:aws:DistributionInvalidation", name, { ...args }, opts);
+    super(
+      "sst:aws:DistributionInvalidation",
+      name,
+      { ...args },
+      withPlugin(opts),
+    );
   }
 }

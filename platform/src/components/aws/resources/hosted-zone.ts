@@ -5,6 +5,7 @@ import {
   output,
   runtime,
 } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 /**
  * The id of the Route 53 hosted zone a domain is in: the one whose name is the
@@ -19,7 +20,7 @@ export function hostedZoneId(
     .invokeOutput<{ zoneId: string }>(
       "sst:aws:getHostedZone",
       { domain: output(domain).apply((name) => name.replace(/\.$/, "")) },
-      opts,
+      withPlugin(opts),
     )
     .apply((found) => found.zoneId);
 }

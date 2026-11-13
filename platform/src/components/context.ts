@@ -2,6 +2,7 @@ import os from "os";
 import path from "path";
 import * as pulumi from "@pulumi/pulumi";
 import type { Target } from "./target";
+import { sstPackage } from "./sst-package";
 
 // The context, in a module of its own that imports none of the components,
 // so the base classes and helpers that read it can import it without a cycle.
@@ -87,11 +88,14 @@ function fromCore(): Context {
 // No core speaks a version of the contract to a program Pulumi runs, and
 // nothing runs it in `sst dev` or moves it. Pulumi runs the program for a
 // preview and a deploy; `pulumi refresh` and `pulumi destroy` don't run it.
-// The paths are the ones SST's CLI reads for a Pulumi project
-// (pkg/pulumidev): `.sst` next to Pulumi.yaml.
+// The work folder is the one SST's CLI uses for a Pulumi project
+// (pkg/pulumidev): `.sst` next to Pulumi.yaml. The platform's files a deploy
+// reads are in the `sst` package (sdk/js/scripts/platform.ts); `sst dev`'s
+// stubs aren't, as nothing runs the program in `sst dev`.
 function fromPulumi(): Context {
   const root = pulumi.getRootDirectory?.() || process.cwd();
   const work = path.join(root, ".sst");
+  const pkg = sstPackage();
   return {
     contract: 0,
     app: {
@@ -108,7 +112,9 @@ function fromPulumi(): Context {
     paths: {
       root,
       work,
-      platform: path.join(work, "platform"),
+      platform: pkg
+        ? path.join(pkg.dir, "platform")
+        : path.join(work, "platform"),
       home: path.join(configDir(), "sst"),
     },
   };

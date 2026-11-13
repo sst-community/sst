@@ -3,10 +3,10 @@ import http from "http";
 import path from "path";
 import { spawn } from "child_process";
 import { createRequire } from "module";
-import { fileURLToPath } from "url";
 import { rpc } from "./rpc";
 import { context, underCore } from "../context";
 import { VisibleError } from "../error";
+import { sstPackage } from "../sst-package";
 import { lazy } from "../../util/lazy";
 
 /**
@@ -77,33 +77,24 @@ const buildServer = lazy(
 );
 
 // The binary is in a package named after the `sst` package, which may be
-// scoped, as bin/sst.mjs finds it. This file is inside the `sst` package.
+// scoped, as bin/sst.mjs finds it
 function binary(): string {
   if (process.env.SST_BIN_PATH) return process.env.SST_BIN_PATH;
-  for (
-    let dir = path.dirname(fileURLToPath(import.meta.url));
-    ;
-    dir = path.dirname(dir)
-  ) {
-    const file = path.join(dir, "package.json");
-    const pkg = fs.existsSync(file)
-      ? JSON.parse(fs.readFileSync(file, "utf8"))
-      : undefined;
-    if (pkg?.bin?.sst) {
-      const name = `${pkg.name}-${process.platform}-${process.arch}`;
-      const exe = process.platform === "win32" ? "sst.exe" : "sst";
-      try {
-        return createRequire(file).resolve(`${name}/bin/${exe}`);
-      } catch {
-        throw new VisibleError(
-          `SST's components build functions with SST's binary, and the "${name}" package that has it isn't installed. Install it, or set SST_BIN_PATH to an sst binary.`,
-        );
-      }
-    }
-    if (path.dirname(dir) === dir)
-      throw new VisibleError(
-        `SST's components build functions with SST's binary, and they aren't in the "sst" package that has it. Set SST_BIN_PATH to an sst binary.`,
-      );
+  const pkg = sstPackage();
+  if (!pkg)
+    throw new VisibleError(
+      `SST's components build functions with SST's binary, and they aren't in the "sst" package that has it. Set SST_BIN_PATH to an sst binary.`,
+    );
+  const name = `${pkg.name}-${process.platform}-${process.arch}`;
+  const exe = process.platform === "win32" ? "sst.exe" : "sst";
+  try {
+    return createRequire(path.join(pkg.dir, "package.json")).resolve(
+      `${name}/bin/${exe}`,
+    );
+  } catch {
+    throw new VisibleError(
+      `SST's components build functions with SST's binary, and the "${name}" package that has it isn't installed. Install it, or set SST_BIN_PATH to an sst binary.`,
+    );
   }
 }
 

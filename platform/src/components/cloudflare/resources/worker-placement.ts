@@ -5,6 +5,7 @@ import {
   Output,
 } from "@pulumi/pulumi";
 import { DEFAULT_ACCOUNT_ID } from "../account-id";
+import { withPlugin } from "../../plugin";
 
 /**
  * Where a Worker runs: one of Smart Placement (`mode`), or near a region, a
@@ -44,7 +45,7 @@ export class WorkerPlacement extends CustomResource {
       "sst:cloudflare:WorkerPlacement",
       name,
       { ...args, accountId: args.accountId ?? DEFAULT_ACCOUNT_ID },
-      opts,
+      withPlugin(opts),
     );
   }
 }

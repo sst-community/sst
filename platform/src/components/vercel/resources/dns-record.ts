@@ -4,6 +4,7 @@ import {
   Input,
   Output,
 } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 export interface DnsRecordArgs {
   domain: Input<string>;
@@ -30,7 +31,7 @@ export class DnsRecord extends CustomResource {
       "sst:vercel:DnsRecord",
       name,
       { ...args, teamId: process.env.VERCEL_TEAM_ID, recordId: undefined },
-      opts,
+      withPlugin(opts),
     );
   }
 }

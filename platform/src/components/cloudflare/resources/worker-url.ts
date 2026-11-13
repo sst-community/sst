@@ -4,6 +4,7 @@ import {
   Input,
   Output,
 } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 export interface WorkerUrlArgs {
   accountId: Input<string>;
@@ -27,6 +28,11 @@ export interface WorkerUrl {
  */
 export class WorkerUrl extends CustomResource {
   constructor(name: string, args: WorkerUrlArgs, opts?: CustomResourceOptions) {
-    super("sst:cloudflare:WorkerUrl", name, { ...args, url: undefined }, opts);
+    super(
+      "sst:cloudflare:WorkerUrl",
+      name,
+      { ...args, url: undefined },
+      withPlugin(opts),
+    );
   }
 }

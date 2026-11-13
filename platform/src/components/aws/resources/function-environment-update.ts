@@ -1,4 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
+import { withPlugin } from "../../plugin";
 
 export interface FunctionEnvironmentUpdateArgs {
   /** The name of the function. */
@@ -31,6 +32,11 @@ export class FunctionEnvironmentUpdate extends CustomResource {
     args: FunctionEnvironmentUpdateArgs,
     opts?: CustomResourceOptions,
   ) {
-    super("sst:aws:FunctionEnvironmentUpdate", name, { ...args }, opts);
+    super(
+      "sst:aws:FunctionEnvironmentUpdate",
+      name,
+      { ...args },
+      withPlugin(opts),
+    );
   }
 }

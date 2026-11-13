@@ -1,7 +1,8 @@
 version: 2
 project_name: sst
 builds:
-  - env:
+  - id: sst
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -9,14 +10,31 @@ builds:
       - windows
     main: ./cmd/sst
     # Setting ldflags replaces goreleaser's defaults, so main.version is repeated.
-    ldflags:
+    ldflags: &ldflags
       - -s -w -X main.version={{.Version}}
       - -X github.com/sst/sst/v3/cmd/sst/mosaic/ui.Distribution=sst-community
       # The SST release this build is on, which release.yml works out.
       - -X github.com/sst/sst/v3/cmd/sst/mosaic/ui.Upstream={{ envOrDefault "SST_UPSTREAM" "" }}
+  # The same binary as the provider SST's own resources run on, which it is
+  # when it's named pulumi-resource-sst (cmd/sst/main.go). A Pulumi program
+  # that uses SST's components without SST's CLI has Pulumi download it from
+  # the release (platform/src/components/plugin.ts).
+  - id: plugin
+    binary: pulumi-resource-sst
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    main: ./cmd/sst
+    ldflags: *ldflags
 
 archives:
-  - formats:
+  - id: sst
+    ids:
+      - sst
+    formats:
       - tar.gz
     name_template: >-
       sst-
@@ -31,6 +49,16 @@ archives:
       - goos: windows
         formats:
           - zip
+  # Named as Pulumi looks for a plugin in a GitHub release, Windows too:
+  # pulumi-resource-sst-v<version>-<os>-<arch>.tar.gz, with only the binary
+  - id: plugin
+    ids:
+      - plugin
+    formats:
+      - tar.gz
+    name_template: "pulumi-resource-sst-v{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - none*
 checksum:
   name_template: "checksums.txt"
 # A tag with a suffix, such as v5.0.0-alpha.1, is published as a pre-release,
@@ -40,7 +68,9 @@ release:
 snapshot:
   version_template: "0.0.0-{{ .Timestamp }}"
 nfpms:
-  - maintainer: sst-community
+  - ids:
+      - sst
+    maintainer: sst-community
     description: the sst cli
     formats:
       - deb

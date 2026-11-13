@@ -86,7 +86,7 @@ The fork numbers its own releases, with semver, because it moves faster than SST
 `release.yml` then:
 
 - stops if an adapter in `packages/` has never been published to npm, before anything is released
-- builds the CLI with goreleaser and creates the GitHub release, using your notes in place of a generated changelog
+- builds the CLI with goreleaser and creates the GitHub release, using your notes in place of a generated changelog. On `v5` the release also has `pulumi-resource-sst-v<version>-<os>-<arch>.tar.gz` for each platform: the same binary as the provider SST's own resources run on, which Pulumi downloads for a program that uses SST's components without SST's CLI
 - pushes the `bridge-task` image, which `sst.aws.Task` runs in `sst dev`, to `ghcr.io/sst-community/sst/bridge-task`
 - publishes `@sst-community/sst` and a `@sst-community/sst-<os>-<cpu>` package for each platform to npm
 - publishes each adapter in `packages/`, `@sst-community/svelte-kit-sst` and `@sst-community/astro-sst`, when the version in its `package.json` isn't on npm yet
@@ -106,6 +106,7 @@ Things to know:
 - **The container image has to be public.** GitHub may create the `sst/bridge-task` package as private on its first push. Until it's public, `sst dev` can't start a Task.
 - **The environment doesn't cover the image.** A workflow on any branch can push `bridge-task:latest` with its own `GITHUB_TOKEN`, and `sst dev` runs whatever that tag points at. Every committer is a releaser today, so this gives nobody more than a release tag already does. Before adding a committer who isn't a releaser, have the release build the CLI with the digest of the image it pushed, so that a later push to the tag can't change what a released CLI runs.
 - **The Discord webhook** is the `DISCORD_WEBHOOK_URL` secret of the `release` environment. Without it the step is skipped. `.github/scripts/announce-release.sh` is the script.
+- **The provider's archives are named as Pulumi looks for them** (v5). A stack deployed by plain Pulumi keeps the version and this repo's releases in its state, and `pulumi destroy` downloads the plugin from there, so don't rename them or leave them out of a release. `release.ts` leaves the plugin's binaries out of the npm packages.
 - **Fork builds are labelled.** `.goreleaser.yml` sets `ui.Distribution=sst-community`, which `sst version` and the `sst dev` banner show, and `ui.Upstream` to the SST release the build is on, which `sst version` shows. Keep both out of `main.version`.
 
 ### Pre-releases of v5
@@ -157,6 +158,18 @@ npm install -D <folder>/sst-0.0.0.tgz
 - After a change to the platform, build it, pack again and install the tarball again. Install a tarball, not a link to `sdk/js`: through a link, SST's components would load Pulumi and the providers from this repo's `node_modules` instead of the package repo's.
 - The pack stops if one of the package's exports doesn't load in plain Node.
 - An app doesn't use these: its deploy bundles the copy of the platform in `.sst/platform`.
+
+### A plain Pulumi program on a dev build (v5)
+
+SST's components also run in a Pulumi program that Pulumi runs on its own, with no SST command (`docs/plans/thin-layer/`). On a dev build, pack and install the package as above, then give Pulumi the binary twice: to build functions, and as the provider SST's own resources run on, which a release would download.
+
+```bash
+export SST_BIN_PATH=<this repo>/dist/sst5
+pulumi plugin install resource sst 0.0.0 --file "$SST_BIN_PATH"
+```
+
+- `0.0.0` is the packed package's version, which SST's resources ask for. Install the binary again after rebuilding it.
+- Pulumi warns that the plugin "is expected to have version >=0.0.0, but has" none: a dev build's version isn't semver, so it reports none. A release's reports its own.
 
 ## The public API (v5)
 

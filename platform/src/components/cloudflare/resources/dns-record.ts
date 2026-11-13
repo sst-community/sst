@@ -5,6 +5,7 @@ import {
   Output,
 } from "@pulumi/pulumi";
 import { DEFAULT_ACCOUNT_ID } from "../account-id";
+import { withPlugin } from "../../plugin";
 
 export interface DnsRecordArgs {
   zoneId: Input<string>;
@@ -42,7 +43,7 @@ export class DnsRecord extends CustomResource {
         accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
         recordId: undefined,
       },
-      opts,
+      withPlugin(opts),
     );
   }
 }
