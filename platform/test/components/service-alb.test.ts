@@ -324,6 +324,54 @@ describe("Service with external ALB", function () {
       expect(devCommands[0].name).toBe("DevMultiContainerServiceDev");
     });
 
+    it("keeps container dev commands when the top-level dev also has a command", async () => {
+      createdResources.length = 0;
+      // @ts-ignore — Service checks $dev to decide dev mode
+      global.$dev = true;
+
+      try {
+        new Service("DevBothService", {
+          cluster,
+          dev: { command: "npm run dev" },
+          containers: [
+            {
+              name: "api",
+              image: { context: "./api" },
+              dev: { command: "npm run api" },
+            },
+            {
+              name: "sidecar",
+              image: { context: "./worker" },
+            },
+          ],
+        });
+        // With one container, its dev command is also named "DevSingleServiceDev",
+        // so a second one for the top-level command would clash.
+        new Service("DevSingleService", {
+          cluster,
+          dev: { command: "npm run dev" },
+          containers: [
+            {
+              name: "api",
+              image: { context: "./api" },
+              dev: { command: "npm run api" },
+            },
+          ],
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      } finally {
+        // @ts-ignore — Restore the default used by the other tests
+        global.$dev = false;
+      }
+
+      const devCommands = createdResources
+        .filter((resource) => resource.type === "sst:sst:DevCommand")
+        .map((resource) => resource.name)
+        .sort();
+      expect(devCommands).toEqual(["DevBothServiceapiDev", "DevSingleServiceDev"]);
+    });
+
     it("creates service with container field in rules", async () => {
       const service = new Service("MultiContainerService", {
         cluster,

@@ -365,6 +365,9 @@ export interface ServiceArgs extends FargateBaseArgs {
         /**
          * The command that `sst dev` runs to start this in dev mode. This is the command you run
          * when you want to run your service locally.
+         *
+         * If you use `containers`, this is used only when none of the containers has its own
+         * `dev.command`. It runs from the project root unless you set `directory`.
          */
         command?: Input<string>;
         /**
@@ -2829,22 +2832,33 @@ export class Service extends Component implements Link.Linkable {
     }
 
     function registerReceiver() {
-      if (
-        args.containers &&
-        args.dev &&
-        typeof args.dev === "object" &&
-        args.dev.command
-      ) {
-        new DevCommand(`${name}Dev`, {
-          link: args.link,
-          dev: args.dev,
-          aws: {
-            role: taskRole.arn,
-          },
-        });
-      }
-
       all([containers]).apply(([val]) => {
+        // With `containers`, a top-level `dev.command` runs the service as a whole.
+        // Only use it when no container has its own `dev.command`, so existing
+        // per-container setups stay the same.
+        if (
+          args.containers &&
+          args.dev &&
+          args.dev.command &&
+          !val.some((container) => container.dev && container.dev.command)
+        ) {
+          new DevCommand(`${name}Dev`, {
+            link: args.link,
+            dev: {
+              title: name,
+              autostart: args.dev.autostart,
+              directory: args.dev.directory,
+              command: args.dev.command,
+            },
+            environment: {
+              AWS_REGION: region,
+            },
+            aws: {
+              role: taskRole.arn,
+            },
+          });
+        }
+
         for (const container of val) {
           if (
             !container.dev ||
