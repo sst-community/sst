@@ -2,6 +2,18 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: the docs page
+
+"Components in Pulumi" (`www/src/content/docs/docs/components-in-pulumi.mdx`, in the sidebar after "Use with Pulumi", which links to it), [as decided](plan.md#decisions), in place of rewriting the components' docs:
+
+- **Set up:** the install, with the four providers `sst/components/aws` loads beside AWS's; `nodenext`; what a deploy needs (the binary, SST's plugin, SST's bootstrap, AWS credentials as the program's provider has them); SST's tags by the stack's config.
+- **From SST's docs:** a table from each of SST's globals and `sst.aws.X` to its import or Pulumi's own (`$app.stage` is `pulumi.getStack()`, `$dev` is `context().dev`), with a secret as stack config linked by a `Linkable` in place of `sst.Secret`, and `protect` in place of `removal`.
+- **`sst dev`** on SST's components, and `sst-env.d.ts`.
+- **`sst eject`:** what it writes and takes out, switching the program, the module, several stacks, `ejected()`'s argument, the functions' code and `nodeBuild()`, going back, what it leaves and what it refuses.
+- **Limits**, among them two gaps found while writing it: an account SST's CLI hasn't deployed to has no bootstrap, so an SST app has to have deployed to the region once; and `$transform` has no import for a Pulumi program.
+
+**Checked:** the page's examples typecheck against the branch's package (`tsc --strict`, `nodenext`); the docs site builds.
+
 ## 2026-11-13: step 7, SST's components inside the program's own component
 
 The eject no longer refuses one of SST's components that's in a component of the program's: the module makes it with that component as its parent, which `ejected()` is given. Committed as `aece8b61c`.

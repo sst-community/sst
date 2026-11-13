@@ -182,5 +182,6 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 4. Goals 2 and 3 for what's built | Done 2026-11-12, lab-checked, committed (`d0a4281d7`) |
 | The maintainer's sample program at step 4 | Done 2026-11-12: a `Bucket`, a linked `Function` and a `DevCommand`, nothing deployed |
 | 5. The eject | Done 2026-11-12 for a linked `Function`, a `Bucket` and a `StaticSite`, lab-checked, committed (`5f0a66a9d`) |
-| 7. The eject's other cases | Several stacks: done 2026-11-13, lab-checked, committed (`447d04e92`). Components inside the program's: done 2026-11-13, lab-checked, committed (`aece8b61c`). Next: the docs page |
+| 7. The eject's other cases | Several stacks: done 2026-11-13, lab-checked, committed (`447d04e92`). Components inside the program's: done 2026-11-13, lab-checked, committed (`aece8b61c`) |
+| The docs page | Written 2026-11-13: "Components in Pulumi" (`www/src/content/docs/docs/components-in-pulumi.mdx`) |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |
