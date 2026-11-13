@@ -1510,6 +1510,9 @@ function renderType(
     if (type.name === "CustomResourceOptions") {
       return `[<code class="type">${type.name}</code>](https://www.pulumi.com/docs/iac/concepts/resources/dynamic-providers/)`;
     }
+    if (type.name === "InvokeOutputOptions") {
+      return `[<code class="type">${type.name}</code>](https://www.pulumi.com/docs/iac/concepts/functions/provider-functions/)`;
+    }
     if (type.name === "FileAsset") {
       return `[<code class="type">${type.name}</code>](https://www.pulumi.com/docs/iac/concepts/assets-archives/#assets)`;
     }
