@@ -1142,6 +1142,10 @@ describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => 
       // deployed site too, as in the StaticSite suite. The V5 one says so
       // only where it runs it. Nothing in Cloudflare changes.
       ["CfSite", ["outputs"]],
+      // The API's placement is set again after every upload of its script,
+      // which SST 4's only did when the code changed: it's placed once more,
+      // as it is
+      ["CfApiPlacement.sst.cloudflare.WorkerPlacement", ["modifiedOn"]],
     ]);
     expect(result.unordered.filter((order) => !needless(order))).toEqual([]);
   });

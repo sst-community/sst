@@ -20,13 +20,14 @@ type WorkerPlacement struct {
 type WorkerPlacementInputs struct {
 	AccountId  string `json:"accountId"`
 	ScriptName string `json:"scriptName"`
-	// The script's etag, so it's set again each time the script is uploaded:
-	// a Worker with assets can have its settings written over
-	Etag     string `json:"etag,omitempty"`
-	Mode     string `json:"mode,omitempty"`
-	Region   string `json:"region,omitempty"`
-	Host     string `json:"host,omitempty"`
-	Hostname string `json:"hostname,omitempty"`
+	// The script's etag, the hash of its code, and when it was last uploaded,
+	// so it's set again after every upload, which resets it, the code's or not
+	Etag       string `json:"etag,omitempty"`
+	ModifiedOn string `json:"modifiedOn,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	Region     string `json:"region,omitempty"`
+	Host       string `json:"host,omitempty"`
+	Hostname   string `json:"hostname,omitempty"`
 }
 
 type WorkerPlacementOutputs struct {

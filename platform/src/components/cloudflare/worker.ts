@@ -665,9 +665,10 @@ export class Worker extends component("sst:cloudflare:Worker", parts) {
       this.part("placement", {
         accountId,
         scriptName: script.scriptName,
-        // Applied again after each update of the script. A Worker with
-        // assets can have its settings rewritten, placement included.
+        // Applied again after each upload of the script, which resets it,
+        // whether the code changed (its etag) or not (when it was uploaded)
         etag: script.etag,
+        modifiedOn: script.modifiedOn,
         mode: placement.apply((placement) => placement.mode),
         region: placement.apply((placement) => placement.region),
         host: placement.apply((placement) => placement.host),

@@ -8,7 +8,13 @@ const DOMAIN = "cloudflare:index/workersCustomDomain:WorkersCustomDomain";
 // The mock builds a worker into a file of this extension
 const handler = "src/worker.mjs";
 
-const pulumi = mockPulumi();
+// A script has when it was last uploaded, as Cloudflare gives it
+const pulumi = mockPulumi({
+  state: (args) =>
+    args.type === "cloudflare:index/workersScript:WorkersScript"
+      ? { modifiedOn: "2026-11-13T19:36:35Z" }
+      : {},
+});
 
 type WorkerClass =
   | typeof import("../../../fixtures/v4/components/cloudflare/worker").Worker
@@ -98,16 +104,27 @@ describe("Worker", () => {
             opts,
           );
         },
-        "a worker with environment variables and placement": (Worker, opts) => {
-          new Worker(
-            "MyWorker",
-            {
-              handler,
-              environment: { MODE: "prod" },
-              placement: { mode: "smart" },
-            },
-            opts,
-          );
+        "a worker with environment variables and placement": {
+          create: (Worker, opts) => {
+            new Worker(
+              "MyWorker",
+              {
+                handler,
+                environment: { MODE: "prod" },
+                placement: { mode: "smart" },
+              },
+              opts,
+            );
+          },
+          // Placed again after every upload of the script, which SST 4's
+          // only did when the code changed: on the move, it's placed once
+          // more, as it is
+          changed: [
+            [
+              "MyWorkerPlacement.sst.cloudflare.WorkerPlacement",
+              ["modifiedOn"],
+            ],
+          ],
         },
         "a worker with Durable Object migrations": (Worker, opts) => {
           new Worker(
@@ -319,6 +336,18 @@ describe("Worker", () => {
       scriptName: resource("MyWorkerScript").inputs.scriptName,
     });
     expect(resource("MyWorkerPlacement").inputs).not.toHaveProperty("mode");
+  });
+
+  // Cloudflare resets a script's placement each time it's uploaded without
+  // one, as Pulumi's provider uploads it, code or not: an upload for a
+  // binding, a setting or a migration doesn't change the etag
+  it("places it again after every upload of its script", async () => {
+    new Worker("MyWorker", { handler, placement: { mode: "smart" } });
+    await pulumi.settle();
+    expect(resource("MyWorkerPlacement").inputs).toMatchObject({
+      mode: "smart",
+      modifiedOn: "2026-11-13T19:36:35Z",
+    });
   });
 
   it("tells sst dev to build it, and reports its handler", async () => {
