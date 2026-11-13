@@ -97,6 +97,33 @@ describe("The program contract", () => {
     expect(prefixName(64, "Api")).toBe("shop-dev-Api");
   });
 
+  it("reads `sst dev` from the environment it gives `pulumi up`", () => {
+    const saved = {
+      SST_DEV: process.env.SST_DEV,
+      SST_SERVER: process.env.SST_SERVER,
+    };
+    const read = (env: Partial<typeof saved>) => {
+      Object.assign(process.env, { SST_DEV: "", SST_SERVER: "", ...env });
+      try {
+        return withoutCore(() => context());
+      } finally {
+        for (const [key, value] of Object.entries(saved))
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+      }
+    };
+    const dev = read({ SST_DEV: "true", SST_SERVER: "http://127.0.0.1:13557" });
+    expect(dev.dev).toBe(true);
+    expect(dev.command).toBe("deploy");
+    // The stubs are in the copy of the platform `sst dev` makes
+    expect(dev.paths.platform).toBe(
+      path.join(getRootDirectory(), ".sst", "platform"),
+    );
+    // Both are set by `sst dev`, and a shell's SST_DEV alone isn't it
+    expect(read({ SST_DEV: "true" }).dev).toBe(false);
+    expect(read({ SST_SERVER: "http://127.0.0.1:13557" }).dev).toBe(false);
+  });
+
   it("gives the program its stage's target", () => {
     const app = (globalThis as any).$app;
     const emulator = { name: "emulator", endpoint: "http://127.0.0.1:4566" };

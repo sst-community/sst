@@ -320,7 +320,8 @@ func New(cfgPath, stack, version string) (*Program, error) {
 		return nil, util.NewReadableError(err, err.Error())
 	}
 
-	dev, err := readDevFile(root)
+	entry := programEntry(root, parsed.Main)
+	dev, err := readDevFileFor(root, scanProgram(root, entry).components)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +335,7 @@ func New(cfgPath, stack, version string) (*Program, error) {
 		runtimes:   project.NewRuntimes(cfgPath, version),
 		cli:        cli,
 		stack:      stack,
-		entry:      programEntry(root, parsed.Main),
+		entry:      entry,
 		aws:        aws,
 		dev:        dev,
 		live:       map[string]project.FunctionReport{},

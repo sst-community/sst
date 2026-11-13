@@ -72,41 +72,8 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 		if !ok {
 			continue
 		}
-		report, err := readReport(outputs)
-		if err != nil {
+		if err := AddRecords(complete, res.URN, string(res.Type), outputs); err != nil {
 			return nil, err
-		}
-		if report != nil {
-			complete.add(res.URN, report)
-		}
-
-		if res.Type == "sst:sst:LinkRef" {
-			target, targetOk := outputs["target"].(string)
-			properties, propertiesOk := outputs["properties"].(map[string]interface{})
-			if !targetOk || !propertiesOk {
-				continue
-			}
-			link := common.Link{
-				Properties: properties,
-				Include:    []common.LinkInclude{},
-			}
-			if includeSlice, ok := outputs["include"].([]interface{}); ok {
-				for _, inc := range includeSlice {
-					incMap, ok := inc.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					incType, ok := incMap["type"].(string)
-					if !ok {
-						continue
-					}
-					link.Include = append(link.Include, common.LinkInclude{
-						Type:  incType,
-						Other: incMap,
-					})
-				}
-			}
-			complete.Links[target] = link
 		}
 	}
 
@@ -120,6 +87,54 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 	}
 
 	return complete, nil
+}
+
+// LinkRefType is the record of a resource that can be linked: its
+// properties, which a dev command or `sst shell` it's linked to is given
+const LinkRefType = "sst:sst:LinkRef"
+
+// AddRecords adds to what the deploy left what one of the state's resources
+// records for the core, from its outputs, decrypted: a component's report
+// (its _sst output), and a link's properties. An SST app's state and a Pulumi
+// program's are read the same way.
+func AddRecords(complete *CompleteEvent, urn resource.URN, typ string, outputs map[string]interface{}) error {
+	report, err := readReport(outputs)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		complete.add(urn, report)
+	}
+	if typ != LinkRefType {
+		return nil
+	}
+	target, targetOk := outputs["target"].(string)
+	properties, propertiesOk := outputs["properties"].(map[string]interface{})
+	if !targetOk || !propertiesOk {
+		return nil
+	}
+	link := common.Link{
+		Properties: properties,
+		Include:    []common.LinkInclude{},
+	}
+	if includeSlice, ok := outputs["include"].([]interface{}); ok {
+		for _, inc := range includeSlice {
+			incMap, ok := inc.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			incType, ok := incMap["type"].(string)
+			if !ok {
+				continue
+			}
+			link.Include = append(link.Include, common.LinkInclude{
+				Type:  incType,
+				Other: incMap,
+			})
+		}
+	}
+	complete.Links[target] = link
+	return nil
 }
 
 // add adds what a component reported to what the deploy left

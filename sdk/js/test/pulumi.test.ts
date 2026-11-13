@@ -189,6 +189,34 @@ describe("in sst dev", () => {
     expect(calls.at(-1)!.body.params[0].name).toBe("Cron");
   });
 
+  it("tells sst dev a function is made in one of SST's components", async () => {
+    // SST's Function, and a part of it made in a component of its own
+    const component = new pulumi.ComponentResource("sst:aws:Function", "Web");
+    const inner = new pulumi.ComponentResource(
+      "acme:index:Inner",
+      "WebInner",
+      {},
+      {
+        parent: component,
+      },
+    );
+    for (const parent of [component, inner]) {
+      expect(
+        await sst.transform({ ...fn, name: "WebFunction", opts: { parent } }),
+      ).toBeUndefined();
+      expect(calls.at(-1)!.body.params[0]).toEqual({
+        name: "WebFunction",
+        runtime: "nodejs22.x",
+        image: false,
+        component: { type: "sst:aws:Function", name: "Web" },
+      });
+    }
+    // a component of the program's own isn't SST's
+    const own = new pulumi.ComponentResource("acme:index:Api", "Own");
+    await sst.transform({ ...fn, name: "OwnFunction", opts: { parent: own } });
+    expect(calls.at(-1)!.body.params[0].component).toBeUndefined();
+  });
+
   it("tells sst dev a function is a container image, or its runtime isn't known yet", async () => {
     await sst.transform({
       ...fn,

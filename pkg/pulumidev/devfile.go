@@ -220,6 +220,17 @@ commands:
     environment:
       API_URL: ${apiUrl}`
 
+// readDevFileFor reads the project's DevFile, for a program that imports
+// SST's components or doesn't. SST's components say what runs in sst dev
+// themselves, so such a program needs no DevFile, and without one has none.
+func readDevFileFor(root string, components bool) (*devFile, error) {
+	dev, err := readDevFile(root)
+	if components && errors.Is(err, ErrNoDevFile) {
+		return &devFile{dir: root}, nil
+	}
+	return dev, err
+}
+
 // readDevFile reads the project's DevFile
 func readDevFile(root string) (*devFile, error) {
 	path := filepath.Join(root, DevFile)

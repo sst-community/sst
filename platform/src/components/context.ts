@@ -86,16 +86,19 @@ function fromCore(): Context {
 }
 
 // No core speaks a version of the contract to a program Pulumi runs, and
-// nothing runs it in `sst dev` or moves it. Pulumi runs the program for a
-// preview and a deploy; `pulumi refresh` and `pulumi destroy` don't run it.
-// The work folder is the one SST's CLI uses for a Pulumi project
-// (pkg/pulumidev): `.sst` next to Pulumi.yaml. The platform's files a deploy
-// reads are in the `sst` package (sdk/js/scripts/platform.ts); `sst dev`'s
-// stubs aren't, as nothing runs the program in `sst dev`.
+// nothing moves it. Pulumi runs the program for a preview and a deploy;
+// `pulumi refresh` and `pulumi destroy` don't run it. `sst dev` runs it with
+// `pulumi up` (pkg/pulumidev), and says so in the environment it gives it, as
+// `sst/pulumi` reads it: then it's a deploy in dev, as `sst dev` is for an SST
+// app. The work folder is the one SST's CLI uses for a Pulumi project: `.sst`
+// next to Pulumi.yaml. The platform's files a deploy reads are in the `sst`
+// package (sdk/js/scripts/platform.ts), and `sst dev`'s stubs aren't: in
+// `sst dev` they're in the copy of the platform the CLI puts in `.sst`.
 function fromPulumi(): Context {
   const root = pulumi.getRootDirectory?.() || process.cwd();
   const work = path.join(root, ".sst");
   const pkg = sstPackage();
+  const dev = process.env.SST_DEV === "true" && !!process.env.SST_SERVER;
   return {
     contract: 0,
     app: {
@@ -106,15 +109,17 @@ function fromPulumi(): Context {
       home: "pulumi",
       providers: {},
     },
-    dev: false,
+    dev,
+    // `sst dev` runs `pulumi up --skip-preview`, so a dev run is a deploy
     command: pulumi.runtime.isDryRun() ? "diff" : "deploy",
     move: false,
     paths: {
       root,
       work,
-      platform: pkg
-        ? path.join(pkg.dir, "platform")
-        : path.join(work, "platform"),
+      platform:
+        pkg && !dev
+          ? path.join(pkg.dir, "platform")
+          : path.join(work, "platform"),
       home: path.join(configDir(), "sst"),
     },
   };

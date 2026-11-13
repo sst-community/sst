@@ -34,6 +34,15 @@ type FunctionInput struct {
 	Runtime string `json:"runtime"`
 	// Image is whether its code is a container image
 	Image bool `json:"image"`
+	// Component is the nearest of SST's components it's made in, which
+	// runs it in sst dev, or doesn't, itself
+	Component *ComponentInput `json:"component,omitempty"`
+}
+
+// ComponentInput is one of SST's components, by its type and name
+type ComponentInput struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
 // FunctionAnswer says whether sst dev runs the function on this machine, and
@@ -66,6 +75,15 @@ func (d *devContract) Function(input *FunctionInput, output *FunctionAnswer) err
 	p.asked[input.Name] = true
 	p.mu.Unlock()
 	function, pattern, ok := file.Functions.find(input.Name)
+	// SST's component decides: a pattern doesn't take its function, and a
+	// name the file gives it exactly is a mistake
+	if component := input.Component; component != nil {
+		if ok && pattern == "" {
+			return fmt.Errorf("%s names the %q function, which SST's %s %q makes. SST's components run their functions in sst dev themselves: take it out of %s", DevFile, input.Name, component.Type, component.Name, DevFile)
+		}
+		*output = FunctionAnswer{}
+		return nil
+	}
 	if !ok {
 		*output = FunctionAnswer{}
 		return nil

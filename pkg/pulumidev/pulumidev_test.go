@@ -384,7 +384,7 @@ commands:
 		}
 		return nil, errors.New("pulumi stack output: no")
 	}
-	complete, err := completedFromExport([]byte(exported), dev, reveal)
+	complete, err := completedFromExport([]byte(exported), dev, reveal, noSecretsShown(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ commands:
 }
 
 func TestCompletedFromExportEmpty(t *testing.T) {
-	complete, err := completedFromExport([]byte(`{"version": 3, "deployment": {"manifest": {"time": "2026-11-12T00:00:00Z", "magic": "", "version": ""}}}`), &devFile{}, nil)
+	complete, err := completedFromExport([]byte(`{"version": 3, "deployment": {"manifest": {"time": "2026-11-12T00:00:00Z", "magic": "", "version": ""}}}`), &devFile{}, nil, noSecretsShown(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +455,7 @@ func TestCompletedFromExportEmpty(t *testing.T) {
 }
 
 func TestCompletedFromExportNewer(t *testing.T) {
-	if _, err := completedFromExport([]byte(`{"version": 99, "deployment": {}}`), &devFile{}, nil); err == nil {
+	if _, err := completedFromExport([]byte(`{"version": 99, "deployment": {}}`), &devFile{}, nil, noSecretsShown(t)); err == nil {
 		t.Fatal("a newer format can't be read")
 	}
 }

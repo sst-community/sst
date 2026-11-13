@@ -16,10 +16,10 @@ import (
 // without SST's state, and reaching for it is a decision made here.
 var allowed = map[string][]string{
 	"project": {
-		"AddDevEnv", "AssumeDevRole", "BuildFailedEvent", "BuildSuccessEvent",
+		"AddDevEnv", "AddRecords", "AssumeDevRole", "BuildFailedEvent", "BuildSuccessEvent",
 		"CancelledEvent", "CompleteEvent", "Dev", "DevAws", "Devs", "Error",
 		"ErrStackRunFailed", "FunctionReport", "ImportDiff", "InvalidAppRegex",
-		"InvalidStageRegex", "NewRuntimes", "Program", "PublishEngineEvent",
+		"InvalidStageRegex", "LinkRefType", "NewRuntimes", "Program", "PublishEngineEvent",
 		"ResolvePolicyPack", "StackCommandEvent", "StackInput", "Task", "Tunnel",
 		"Watch",
 	},

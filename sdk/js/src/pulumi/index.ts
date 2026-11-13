@@ -115,6 +115,30 @@ if (dev) {
 }
 
 /**
+ * The nearest of SST's components a resource is made in, by its type and name.
+ * SST's components run their functions in `sst dev` themselves, deploying
+ * the stub where it's needed, so `sst dev` is only told of such a function.
+ */
+function sstComponent(
+  parent: pulumi.Resource | undefined,
+): { type: string; name: string } | undefined {
+  // Pulumi keeps each resource's type, name and parent on it
+  type Made = {
+    __pulumiType?: string;
+    __name?: string;
+    __parentResource?: Made;
+  };
+  for (
+    let made = parent as Made | undefined;
+    made;
+    made = made.__parentResource
+  )
+    if (made.__pulumiType?.startsWith("sst:"))
+      return { type: made.__pulumiType, name: made.__name ?? "" };
+  return undefined;
+}
+
+/**
  * A function `sst.dev.yaml` names, deployed as a stub that passes its
  * invocations to this machine, where `sst dev` runs it from its source with
  * its own environment and the credentials of its own role. Its role is let
@@ -127,6 +151,7 @@ async function live({
 }: pulumi.ResourceTransformArgs): Promise<
   pulumi.ResourceTransformResult | undefined
 > {
+  const component = sstComponent(opts.parent);
   const answer = await call<{ live: boolean; stub?: Stub }>(
     "PulumiDev.Function",
     {
@@ -135,6 +160,7 @@ async function live({
       // its stub is a zip, and a function can't change from an image to a
       // zip without being replaced
       image: props.packageType === "Image" || Boolean(props.imageUri),
+      ...(component ? { component } : {}),
     },
   );
   if (!answer.live || !answer.stub) return undefined;

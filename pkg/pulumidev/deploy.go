@@ -16,6 +16,7 @@ import (
 	esbuild "github.com/evanw/esbuild/pkg/api"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/events"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/sig"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/bus"
@@ -42,9 +43,10 @@ func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 	})
 	// What the program is made of, and DevFile, deploy it again when they
 	// change
-	files := append(p.programFiles(), p.linked(filepath.Join(p.root, DevFile))...)
+	scan := scanProgram(p.root, p.entry)
+	files := append(p.filesOf(scan), p.linked(filepath.Join(p.root, DevFile))...)
 	bus.Publish(&project.BuildSuccessEvent{Files: files})
-	dev, err := readDevFile(p.root)
+	dev, err := readDevFileFor(p.root, scan.components)
 	if err != nil {
 		bus.Publish(&project.BuildFailedEvent{Error: err.Error()})
 		return project.ErrStackRunFailed
@@ -98,6 +100,12 @@ func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 		// what makes --event-log a flag pulumi takes
 		"PULUMI_DEBUG_COMMANDS=true",
 	)
+	// SST's components give their stubs the region of sst dev's own AWS
+	// provider, as an SST app's CLI gives it, for the transport the stubs
+	// reach sst dev through
+	if p.awsProvider != nil {
+		cmd.Env = append(cmd.Env, "SST_AWS_REGION="+p.awsProvider.Config().Region)
+	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	log.Info("starting pulumi", "args", cmd.Args)
@@ -146,10 +154,21 @@ func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 	complete.UpdateID = id.Descending()
 	complete.Finished = finished
 	p.mu.Lock()
+	// What runs here: the functions DevFile names, and those of SST's
+	// components, which run here unless they say they don't
+	here := map[string]string{}
+	for name, handler := range p.here {
+		here[name] = handler
+	}
+	for name, report := range complete.Functions {
+		if report.Dev && !report.Internal {
+			here[name] = report.Handler
+		}
+	}
 	for functionID, report := range p.live {
 		complete.Functions[functionID] = report
 	}
-	if hint := listFunctions(p.here); hint != "" {
+	if hint := listFunctions(here); hint != "" {
 		complete.Hints[hereHint] = hint
 	}
 	if hint := listFunctions(p.cloud); hint != "" {
@@ -321,7 +340,15 @@ func (p *Program) GetCompleted(ctx context.Context) (*project.CompleteEvent, err
 	p.mu.Lock()
 	dev := p.dev
 	p.mu.Unlock()
-	return completedFromExport(out, dev, p.revealOutput)
+	return completedFromExport(out, dev, p.revealOutput, p.exportShowingSecrets)
+}
+
+// exportShowingSecrets is the stack's state with its secrets in the clear,
+// which pulumi decrypts with the stack's own secrets provider. It's read
+// only for the records of SST's components that hold a secret, and nothing
+// else of it is kept.
+func (p *Program) exportShowingSecrets() ([]byte, error) {
+	return runPulumiCLI(p.cli, p.root, "stack", "export", "--show-secrets", "--stack", p.stack)
 }
 
 // revealOutput is a secret output of the stack in the clear, which pulumi
@@ -339,22 +366,15 @@ func (p *Program) revealOutput(name string) (interface{}, error) {
 }
 
 // completedFromExport reads what `pulumi stack export` printed: the stack's
-// outputs, with its secrets hidden as pulumi shows them, and the dev commands
-// DevFile names, with what they take of the state. reveal reads a secret
-// output in the clear, for a dev command's environment.
-func completedFromExport(data []byte, dev *devFile, reveal func(name string) (interface{}, error)) (*project.CompleteEvent, error) {
-	var untyped apitype.UntypedDeployment
-	if err := json.Unmarshal(data, &untyped); err != nil {
-		return nil, fmt.Errorf("reading the stack's state: %w", err)
-	}
-	if untyped.Version > apitype.DeploymentSchemaVersionCurrent {
-		return nil, fmt.Errorf("the stack's state is in version %d of Pulumi's format, newer than this CLI reads: upgrade SST", untyped.Version)
-	}
-	var deployment apitype.DeploymentV3
-	if len(untyped.Deployment) > 0 {
-		if err := json.Unmarshal(untyped.Deployment, &deployment); err != nil {
-			return nil, fmt.Errorf("reading the stack's state: %w", err)
-		}
+// outputs, with its secrets hidden as pulumi shows them, what SST's
+// components recorded for sst dev, as an SST app's state is read, and the dev
+// commands DevFile names, with what they take of the state. reveal reads a
+// secret output in the clear, for a dev command's environment, and
+// showingSecrets the state in the clear, for a record that holds a secret.
+func completedFromExport(data []byte, dev *devFile, reveal func(name string) (interface{}, error), showingSecrets func() ([]byte, error)) (*project.CompleteEvent, error) {
+	deployment, err := readExport(data)
+	if err != nil {
+		return nil, err
 	}
 	complete := &project.CompleteEvent{
 		Links:       common.Links{},
@@ -387,10 +407,141 @@ func completedFromExport(data []byte, dev *devFile, reveal func(name string) (in
 			}
 		}
 	}
+	if err := addRecords(complete, deployment, showingSecrets); err != nil {
+		return nil, err
+	}
 	if dev != nil {
-		complete.Devs, complete.Errors = dev.devs(outputs, roles, reveal)
+		devs, found := dev.devs(outputs, roles, reveal)
+		for name, command := range devs {
+			if _, ok := complete.Devs[name]; ok {
+				found = append(found, project.Error{Message: fmt.Sprintf("%s names the dev command %q, and so does a DevCommand of the program's: rename one.", DevFile, name)})
+				continue
+			}
+			complete.Devs[name] = command
+		}
+		complete.Errors = found
 	}
 	return complete, nil
+}
+
+// readExport is the deployment `pulumi stack export` printed
+func readExport(data []byte) (apitype.DeploymentV3, error) {
+	var deployment apitype.DeploymentV3
+	var untyped apitype.UntypedDeployment
+	if err := json.Unmarshal(data, &untyped); err != nil {
+		return deployment, fmt.Errorf("reading the stack's state: %w", err)
+	}
+	if untyped.Version > apitype.DeploymentSchemaVersionCurrent {
+		return deployment, fmt.Errorf("the stack's state is in version %d of Pulumi's format, newer than this CLI reads: upgrade SST", untyped.Version)
+	}
+	if len(untyped.Deployment) > 0 {
+		if err := json.Unmarshal(untyped.Deployment, &deployment); err != nil {
+			return deployment, fmt.Errorf("reading the stack's state: %w", err)
+		}
+	}
+	return deployment, nil
+}
+
+// addRecords adds what SST's components recorded in the state for sst dev:
+// their reports (a function to run here, a dev command, a hint) and the
+// properties of what can be linked, as an SST app's are read. A record that
+// holds a secret is read from the state in the clear, and only that record.
+func addRecords(complete *project.CompleteEvent, deployment apitype.DeploymentV3, showingSecrets func() ([]byte, error)) error {
+	secret := map[resource.URN]bool{}
+	for _, res := range deployment.Resources {
+		if record := recordOf(res); record != nil && hasSecret(record) {
+			secret[res.URN] = true
+		}
+	}
+	clear := map[resource.URN]map[string]interface{}{}
+	if len(secret) > 0 {
+		data, err := showingSecrets()
+		if err != nil {
+			return util.NewReadableError(err, fmt.Sprintf("Could not read the records of SST's components that hold a secret: %v", err))
+		}
+		shown, err := readExport(data)
+		if err != nil {
+			return err
+		}
+		for _, res := range shown.Resources {
+			if !secret[res.URN] {
+				continue
+			}
+			record, err := inTheClear(recordOf(res))
+			if err != nil {
+				return fmt.Errorf("reading the record of %s: %w", res.URN.Name(), err)
+			}
+			if record, ok := record.(map[string]interface{}); ok {
+				clear[res.URN] = record
+			}
+		}
+	}
+	for _, res := range deployment.Resources {
+		record := recordOf(res)
+		if record == nil {
+			continue
+		}
+		if secret[res.URN] {
+			if record = clear[res.URN]; record == nil {
+				continue
+			}
+		}
+		if err := project.AddRecords(complete, res.URN, string(res.Type), record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recordOf is what a resource of the state records for sst dev: a link's
+// outputs, a component's report (its _sst output), or nil
+func recordOf(res apitype.ResourceV3) map[string]interface{} {
+	if string(res.Type) == project.LinkRefType {
+		return res.Outputs
+	}
+	if report, ok := res.Outputs["_sst"]; ok {
+		return map[string]interface{}{"_sst": report}
+	}
+	return nil
+}
+
+// inTheClear is a value `pulumi stack export --show-secrets` printed, with
+// each secret's value in its place
+func inTheClear(value interface{}) (interface{}, error) {
+	switch cast := value.(type) {
+	case map[string]interface{}:
+		if isSecret(cast) {
+			plaintext, ok := cast["plaintext"].(string)
+			if !ok {
+				return nil, fmt.Errorf("a secret isn't in the clear")
+			}
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(plaintext), &parsed); err != nil {
+				return nil, fmt.Errorf("reading a secret: %w", err)
+			}
+			return inTheClear(parsed)
+		}
+		result := map[string]interface{}{}
+		for key, item := range cast {
+			clear, err := inTheClear(item)
+			if err != nil {
+				return nil, err
+			}
+			result[key] = clear
+		}
+		return result, nil
+	case []interface{}:
+		result := make([]interface{}, len(cast))
+		for i, item := range cast {
+			clear, err := inTheClear(item)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = clear
+		}
+		return result, nil
+	}
+	return value, nil
 }
 
 // hiddenSecret is what a secret is shown as, as pulumi shows it
@@ -452,14 +603,39 @@ func hideSecrets(value interface{}) interface{} {
 // again: its entry and what it imports, but for the packages in node_modules.
 // A workspace package is followed, as it resolves outside node_modules.
 func (p *Program) programFiles() []string {
-	if p.entry == "" {
-		return nil
+	return p.filesOf(scanProgram(p.root, p.entry))
+}
+
+// filesOf are the files a scan found, each by its path through each link too
+func (p *Program) filesOf(scan programScan) []string {
+	files := []string{}
+	for _, path := range scan.files {
+		files = append(files, p.linked(path)...)
+	}
+	return files
+}
+
+// programScan is what the program is made of, as its entry and what it
+// imports are read
+type programScan struct {
+	// files are its own, by their real paths, but for the packages in
+	// node_modules
+	files []string
+	// components is whether it imports SST's components
+	components bool
+}
+
+// scanProgram reads the program from its entry and what it imports. A scan
+// that fails finds nothing.
+func scanProgram(root, entry string) programScan {
+	if entry == "" {
+		return programScan{}
 	}
 	const resolving = "sst:resolving"
 	result := esbuild.Build(esbuild.BuildOptions{
-		EntryPoints:   []string{p.entry},
-		AbsWorkingDir: p.root,
-		Outdir:        filepath.Join(p.pathWorkingDir(), "pulumi-program"),
+		EntryPoints:   []string{entry},
+		AbsWorkingDir: root,
+		Outdir:        filepath.Join(root, ".sst", "pulumi-program"),
 		Bundle:        true,
 		Write:         false,
 		Metafile:      true,
@@ -490,27 +666,37 @@ func (p *Program) programFiles() []string {
 	})
 	if len(result.Errors) > 0 {
 		slog.Warn("could not read the program's files, so a change to them won't deploy it again", "error", result.Errors[0].Text)
-		return nil
+		return programScan{}
 	}
 	var meta struct {
-		Inputs map[string]interface{} `json:"inputs"`
+		Inputs map[string]struct {
+			Imports []struct {
+				Path     string `json:"path"`
+				External bool   `json:"external"`
+			} `json:"imports"`
+		} `json:"inputs"`
 	}
 	if err := json.Unmarshal([]byte(result.Metafile), &meta); err != nil {
-		return nil
+		return programScan{}
 	}
-	files := []string{}
-	for input := range meta.Inputs {
+	scan := programScan{files: []string{}}
+	for input, read := range meta.Inputs {
+		for _, imported := range read.Imports {
+			if imported.External && (imported.Path == "sst/components" || strings.HasPrefix(imported.Path, "sst/components/")) {
+				scan.components = true
+			}
+		}
 		if strings.Contains(input, ":") && !filepath.IsAbs(input) {
 			// a namespace of esbuild's, not a file
 			continue
 		}
 		path := input
 		if !filepath.IsAbs(path) {
-			path = filepath.Join(p.root, input)
+			path = filepath.Join(root, input)
 		}
-		files = append(files, p.linked(path)...)
+		scan.files = append(scan.files, path)
 	}
-	return files
+	return scan
 }
 
 // linked is a file's path, and its path through each link to the project's
