@@ -46,3 +46,21 @@ func TestParseCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDevCommand(t *testing.T) {
+	got, err := parseDevCommand("WebDev", "bun run dev")
+	if err != nil {
+		t.Fatalf("parseDevCommand returned an error: %v", err)
+	}
+	if want := []string{"bun", "run", "dev"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("parseDevCommand = %q, want %q", got, want)
+	}
+
+	_, err = parseDevCommand("WebDev", "")
+	if err == nil {
+		t.Fatal("parseDevCommand accepted an empty command")
+	}
+	if want := `invalid dev command for "WebDev": command is empty`; err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}

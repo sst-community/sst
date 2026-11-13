@@ -372,6 +372,44 @@ describe("Service with external ALB", function () {
       expect(devCommands).toEqual(["DevBothServiceapiDev", "DevSingleServiceDev"]);
     });
 
+    it("skips dev commands that resolve to an empty string", async () => {
+      createdResources.length = 0;
+      // @ts-ignore — Service checks $dev to decide dev mode
+      global.$dev = true;
+
+      try {
+        new Service("DevEmptyOutputService", {
+          cluster,
+          dev: { command: pulumi.output("") },
+          containers: [
+            { name: "api", image: { context: "./api" } },
+            { name: "sidecar", image: { context: "./worker" } },
+          ],
+        });
+        new Service("DevEmptyContainerOutputService", {
+          cluster,
+          containers: [
+            {
+              name: "api",
+              image: { context: "./api" },
+              dev: { command: pulumi.output("") },
+            },
+            { name: "sidecar", image: { context: "./worker" } },
+          ],
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      } finally {
+        // @ts-ignore — Restore the default used by the other tests
+        global.$dev = false;
+      }
+
+      const devCommands = createdResources.filter(
+        (resource) => resource.type === "sst:sst:DevCommand",
+      );
+      expect(devCommands).toHaveLength(0);
+    });
+
     it("creates service with container field in rules", async () => {
       const service = new Service("MultiContainerService", {
         cluster,

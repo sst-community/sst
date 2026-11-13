@@ -378,7 +378,7 @@ export interface ServiceArgs extends FargateBaseArgs {
         autostart?: Input<boolean>;
         /**
          * Change the directory from where the `command` is run.
-         * @default Uses the `image.dockerfile` path
+         * @default Uses the `image.dockerfile` path. With `containers`, the project root.
          */
         directory?: Input<string>;
       };
@@ -2832,23 +2832,25 @@ export class Service extends Component implements Link.Linkable {
     }
 
     function registerReceiver() {
-      all([containers]).apply(([val]) => {
+      // Resolve `args.dev` with the containers, so a command that resolves to
+      // an empty string is skipped like a missing one.
+      all([containers, args.dev]).apply(([val, topDev]) => {
         // With `containers`, a top-level `dev.command` runs the service as a whole.
         // Only use it when no container has its own `dev.command`, so existing
         // per-container setups stay the same.
         if (
           args.containers &&
-          args.dev &&
-          args.dev.command &&
+          topDev &&
+          topDev.command &&
           !val.some((container) => container.dev && container.dev.command)
         ) {
           new DevCommand(`${name}Dev`, {
             link: args.link,
             dev: {
               title: name,
-              autostart: args.dev.autostart,
-              directory: args.dev.directory,
-              command: args.dev.command,
+              autostart: topDev.autostart,
+              directory: topDev.directory,
+              command: topDev.command,
             },
             environment: {
               AWS_REGION: region,

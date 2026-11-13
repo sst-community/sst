@@ -120,7 +120,13 @@ func CmdMosaic(c *cli.Cli) error {
 					}
 					fields := args
 					if len(fields) == 0 {
-						fields, err = parseCommand(nextEnv.Command)
+						// A child started by name knows its dev command; one started from a
+						// directory is matched by that directory.
+						name := child
+						if name == "" {
+							name = cwd
+						}
+						fields, err = parseDevCommand(name, nextEnv.Command)
 						if err != nil {
 							return err
 						}
@@ -342,8 +348,8 @@ func CmdMosaic(c *cli.Cli) error {
 							if strings.TrimSpace(d.Command) == "" {
 								continue
 							}
-							if _, err := parseCommand(d.Command); err != nil {
-								return fmt.Errorf("invalid dev command for %q: %w", d.Name, err)
+							if _, err := parseDevCommand(d.Name, d.Command); err != nil {
+								return err
 							}
 							dir := filepath.Join(cwd, d.Directory)
 							title := d.Title
@@ -463,9 +469,9 @@ func CmdMosaic(c *cli.Cli) error {
 							if strings.TrimSpace(d.Command) == "" {
 								continue
 							}
-							words, err := parseCommand(d.Command)
+							words, err := parseDevCommand(d.Name, d.Command)
 							if err != nil {
-								return fmt.Errorf("invalid dev command for %q: %w", d.Name, err)
+								return err
 							}
 							dir := filepath.Join(cwd, d.Directory)
 							title := d.Title
@@ -494,6 +500,16 @@ func CmdMosaic(c *cli.Cli) error {
 	err = wg.Wait()
 	slog.Info("done mosaic", "err", err)
 	return err
+}
+
+// parseDevCommand parses the command of the dev named name, and names it in the
+// error.
+func parseDevCommand(name string, command string) ([]string, error) {
+	fields, err := parseCommand(command)
+	if err != nil {
+		return nil, fmt.Errorf("invalid dev command for %q: %w", name, err)
+	}
+	return fields, nil
 }
 
 func parseCommand(command string) ([]string, error) {
