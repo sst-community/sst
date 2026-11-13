@@ -268,6 +268,20 @@
         "retainOnDelete": false
       },
       {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function$sst:aws:FunctionEnvironmentUpdate::ApiEnvironmentUpdate",
+        "custom": true,
+        "id": "env",
+        "type": "sst:aws:FunctionEnvironmentUpdate",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:sst::sst::0aaa",
+        "dependencies": ["urn:pulumi:dev::shop::sst:aws:Function$aws:lambda/function:Function::ApiFunction"],
+        "inputs": {
+          "environment": { "LATE": "https://example.com" },
+          "functionName": "shop-dev-ApiFunction-abcdefgh",
+          "region": "us-west-2"
+        }
+      },
+      {
         "urn": "urn:pulumi:dev::shop::sst:aws:Function$aws:lambda/permission:Permission::ApiUrlInvoke",
         "custom": true,
         "id": "perm",

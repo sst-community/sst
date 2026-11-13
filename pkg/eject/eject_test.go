@@ -118,7 +118,8 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 		secrets[secret.Key] = secret.Value
 	}
 	wantSecrets := map[string]string{
-		"sst-ejected:ApiFunction.environment.variables": `{"SST_KEY":"c2VjcmV0LWtleQ==","SST_KEY_FILE":"resource.enc","SST_RESOURCE_App":"{\"name\":\"shop\",\"stage\":\"dev\"}"}`,
+		// with what addEnvironment added
+		"sst-ejected:ApiFunction.environment.variables": `{"LATE":"https://example.com","SST_KEY":"c2VjcmV0LWtleQ==","SST_KEY_FILE":"resource.enc","SST_RESOURCE_App":"{\"name\":\"shop\",\"stage\":\"dev\"}"}`,
 		"sst-ejected:ApiFunction.s3Key":                 "assets/Api-code-1234.zip",
 	}
 	if len(secrets) != len(wantSecrets) {
@@ -134,7 +135,7 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 	for _, urn := range plan.Remove {
 		removed = append(removed, urn.Name())
 	}
-	if got, want := strings.Join(removed, " "), "sst LambdaEncryptionKey FilesLinkRef FilesUpload ApiCode Worker default_4_21_2"; got != want {
+	if got, want := strings.Join(removed, " "), "sst LambdaEncryptionKey FilesLinkRef FilesUpload ApiCode ApiEnvironmentUpdate Worker default_4_21_2"; got != want {
 		t.Errorf("removes %s, not %s", got, want)
 	}
 	if len(plan.Components) != 2 || plan.Components[1].MadeAt != "index.ts:6" {
@@ -142,6 +143,9 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 	}
 	if got := strings.Join(plan.Uses, "; "); got != "Readme uses FilesBucket" {
 		t.Errorf("uses %q", got)
+	}
+	if got := strings.Join(plan.Updates, "; "); got != "ApiFunction's environment gets LATE, which addEnvironment added after it was made" {
+		t.Errorf("updates %q", got)
 	}
 
 	// The same state writes the same module
@@ -177,12 +181,12 @@ func TestBuildRefuses(t *testing.T) {
 			edit: func(resources []map[string]any) []map[string]any {
 				for _, r := range resources {
 					if r["type"] == "sst:aws:BucketFiles" {
-						r["type"] = "sst:aws:KvRoutesUpdate"
+						r["type"] = "sst:aws:RdsRoleLookup"
 					}
 				}
 				return resources
 			},
-			error: "FilesUpload (sst:aws:KvRoutesUpdate) is one of SST's own resources",
+			error: "FilesUpload (sst:aws:RdsRoleLookup) is one of SST's own resources",
 		},
 		{
 			name: "a file it doesn't write",
@@ -243,7 +247,7 @@ func TestWithoutResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(parsed.Deployment.Resources), 20-len(plan.Remove); got != want {
+	if got, want := len(parsed.Deployment.Resources), 21-len(plan.Remove); got != want {
 		t.Errorf("%d resources left, not %d", got, want)
 	}
 	for _, r := range parsed.Deployment.Resources {

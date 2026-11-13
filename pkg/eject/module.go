@@ -49,6 +49,9 @@ type Plan struct {
 	// The program's own resources that use a component, for what the eject
 	// says
 	Uses []string
+	// What the module has that the state doesn't, which the first `pulumi up`
+	// updates in place to what it already is in the cloud
+	Updates []string
 }
 
 // Secret is a secret input, as it's set in the stack's config: a string as
@@ -81,13 +84,17 @@ const (
 	rolePart
 	// What leaves the state
 	roleRemove
+	// An AWS provider SST makes for a region (`useProvider`), which the
+	// module makes the same way
+	roleRegionProvider
 )
 
 // SST's own resources the eject takes out of the state, with what's left of
 // what they made
 var ownResources = map[string]string{
 	"sst:aws:BucketFiles":                  "the site's files, which stay as last deployed",
-	"sst:aws:KvKeys":                       "the site's entries in its key-value store, which stay as last deployed",
+	"sst:aws:KvKeys":                       "entries in a site's or a router's key-value store, which stay as last deployed",
+	"sst:aws:KvRoutesUpdate":               "a route's entry in the router's key-value store, which stays as last deployed",
 	"sst:aws:DistributionInvalidation":     "an invalidation of the CDN's cache, with nothing to keep",
 	"sst:aws:DistributionDeploymentWaiter": "a wait for the CDN to deploy, with nothing in the cloud",
 }
@@ -109,6 +116,12 @@ type generator struct {
 	plan      *Plan
 	// Whether a function has the comment on the build to switch to
 	nodeBuild bool
+	// What addEnvironment added to a function's environment after it was
+	// made, by the function's name, then by the function
+	envUpdates map[string]map[string]any
+	addedEnv   map[resource.URN]map[string]any
+	// Whether a part was made with a provider SST makes for a region
+	usesRegionProvider bool
 }
 
 // Build works out the eject from the stack's state, read with its secrets
@@ -123,14 +136,16 @@ func Build(shown []byte, opts Options) (*Plan, error) {
 		return nil, fmt.Errorf("The stack has operations Pulumi didn't finish, like a deploy that was stopped. Run `pulumi refresh` first, and eject once it's clean.")
 	}
 	g := &generator{
-		opts:      opts,
-		resources: parsed.Deployment.Resources,
-		byURN:     map[resource.URN]*stateResource{},
-		role:      map[resource.URN]role{},
-		vars:      map[resource.URN]string{},
-		used:      map[string]bool{"pulumi": true, "secrets": true, "providers": true, "ejected": true},
-		imports:   map[string]string{},
-		plan:      &Plan{},
+		opts:       opts,
+		resources:  parsed.Deployment.Resources,
+		byURN:      map[resource.URN]*stateResource{},
+		role:       map[resource.URN]role{},
+		vars:       map[resource.URN]string{},
+		used:       map[string]bool{"pulumi": true, "secrets": true, "providers": true, "ejected": true},
+		imports:    map[string]string{},
+		plan:       &Plan{},
+		envUpdates: map[string]map[string]any{},
+		addedEnv:   map[resource.URN]map[string]any{},
 	}
 	if err := g.classify(); err != nil {
 		return nil, err
@@ -179,6 +194,8 @@ func (g *generator) classify() error {
 			g.role[r.URN] = roleProgram
 		case r.Type == "pulumi:providers:sst":
 			g.remove(r, "SST's provider, which SST's own resources were made with")
+		case r.Type == "pulumi:providers:aws" && r.Parent == stack && strings.HasPrefix(name, "AwsProvider.sst."):
+			g.role[r.URN] = roleRegionProvider
 		case strings.HasPrefix(r.Type, "pulumi:providers:"):
 			if inComponent {
 				return fmt.Errorf("%s, one of SST's components, made a provider of its own, %s, which sst eject doesn't write yet.", r.Parent.Name(), name)
@@ -197,6 +214,21 @@ func (g *generator) classify() error {
 			if !inComponent {
 				g.plan.Components = append(g.plan.Components, Component{Name: name, Type: r.Type, MadeAt: r.madeAt()})
 			}
+		case r.Custom && r.providerURN().Type() == "pulumi:providers:sst" && r.Type == "sst:aws:FunctionEnvironmentUpdate":
+			// addEnvironment's: what it added goes in the function's
+			// environment in the module
+			fn, _ := r.Inputs["functionName"].(string)
+			added, _ := revealed(r.Inputs["environment"]).(map[string]any)
+			if fn == "" {
+				return fmt.Errorf("%s (%s) names no function.", name, r.Type)
+			}
+			if g.envUpdates[fn] == nil {
+				g.envUpdates[fn] = map[string]any{}
+			}
+			for key, value := range added {
+				g.envUpdates[fn][key] = value
+			}
+			g.remove(r, "what addEnvironment added to "+fn+"'s environment, which the module puts in its environment")
 		case r.Custom && r.providerURN().Type() == "pulumi:providers:sst":
 			why, ok := ownResources[r.Type]
 			if !ok {
@@ -222,6 +254,22 @@ func (g *generator) classify() error {
 			g.role[r.URN] = roleProgram
 		}
 	}
+	// What addEnvironment added, by the function it's added to
+	for fn, added := range g.envUpdates {
+		var found *stateResource
+		for _, r := range g.resources {
+			if g.role[r.URN] == rolePart && r.Type == "aws:lambda/function:Function" && (r.ID == fn || r.Outputs["name"] == fn) {
+				found = r
+			}
+		}
+		if found == nil {
+			return fmt.Errorf("addEnvironment added to the environment of %s, which isn't one of the functions SST's components made here.", fn)
+		}
+		g.addedEnv[found.URN] = added
+		keys := sortedKeys(added)
+		g.plan.Updates = append(g.plan.Updates, fmt.Sprintf("%s's environment gets %s, which addEnvironment added after it was made", found.name(), strings.Join(keys, ", ")))
+	}
+	sort.Strings(g.plan.Updates)
 	// A part made with a provider of the program's is given it by name, and
 	// one SST made isn't written yet
 	for _, r := range g.resources {
@@ -235,8 +283,9 @@ func (g *generator) classify() error {
 		if isDefaultProvider(provider) {
 			continue
 		}
-		if strings.HasPrefix(provider.name(), "AwsProvider.sst.") {
-			return fmt.Errorf("%s was made with %s, a provider SST makes for a region, which sst eject doesn't write yet.", r.name(), provider.name())
+		if g.role[provider.URN] == roleRegionProvider {
+			g.usesRegionProvider = true
+			continue
 		}
 		if g.role[provider.URN] != roleProgram {
 			return fmt.Errorf("%s was made with %s, which sst eject doesn't write yet.", r.name(), provider.name())
@@ -371,6 +420,16 @@ func (g *generator) name() error {
 			g.vars[r.URN] = g.unique(varName(r.name()))
 		}
 	}
+	if g.usesRegionProvider {
+		g.imports["aws"] = "aws"
+		g.used["aws"] = true
+		g.used["regionProvider"] = true
+		for _, r := range g.resources {
+			if g.role[r.URN] == roleRegionProvider {
+				g.vars[r.URN] = g.unique(varName("aws " + strings.TrimPrefix(r.name(), "AwsProvider.sst.")))
+			}
+		}
+	}
 	return nil
 }
 
@@ -450,7 +509,19 @@ func (g *generator) module() (string, error) {
 	}
 	var body strings.Builder
 	written := map[resource.URN]bool{}
-	for left := len(g.vars) - len(g.providers); left > 0; {
+	left := len(g.vars) - len(g.providers)
+	// SST's providers for a region come first: they need nothing
+	for _, r := range g.resources {
+		if _, ok := g.vars[r.URN]; ok && g.role[r.URN] == roleRegionProvider {
+			if left == len(g.vars)-len(g.providers) {
+				body.WriteString("\n" + comment("The AWS providers SST made for a region, which its components took.", "  "))
+			}
+			fmt.Fprintf(&body, "  const %s = regionProvider(%s);\n", g.vars[r.URN], quote(strings.TrimPrefix(r.name(), "AwsProvider.sst.")))
+			written[r.URN] = true
+			left--
+		}
+	}
+	for left > 0 {
 		progress := false
 		for _, group := range groups {
 			for _, d := range declarations[group] {
@@ -513,6 +584,9 @@ func (g *generator) module() (string, error) {
 	if len(g.plan.Secrets) > 0 {
 		fmt.Fprintf(&b, "\nconst secrets = new pulumi.Config(%s);\n", quote(ConfigNamespace))
 	}
+	if g.usesRegionProvider {
+		b.WriteString(regionProviderHelper)
+	}
 	b.WriteString("\n/**\n")
 	b.WriteString(" * Makes what SST's components made, and returns each one's parts by\n")
 	b.WriteString(" * component, for the program to use in place of their outputs.\n")
@@ -532,6 +606,32 @@ func (g *generator) module() (string, error) {
 	b.WriteString("\n  return " + result.ts("  ") + ";\n}\n")
 	return b.String(), nil
 }
+
+// regionProviderHelper makes an AWS provider for a region as SST's
+// components made it (useProvider in aws/helpers/provider.ts): from the
+// stack's AWS config, with the region, so its inputs are the same
+const regionProviderHelper = `
+/**
+ * An AWS provider for a region, as SST made it: the stack's AWS config, in
+ * that region.
+ */
+function regionProvider(region: string) {
+  const config: Record<string, any> = {};
+  for (const [key, value] of Object.entries(pulumi.runtime.allConfig())) {
+    const [namespace, name] = key.split(":");
+    if (namespace !== "aws") continue;
+    try {
+      config[name] = JSON.parse(value);
+    } catch {
+      config[name] = value;
+    }
+  }
+  return new aws.Provider(` + "`AwsProvider.sst.${region}`" + `, {
+    ...config,
+    region: region as aws.Region,
+  });
+}
+`
 
 // component is the code that makes one of SST's components, as a Pulumi
 // component of the same type and name
@@ -675,6 +775,9 @@ func (at valueAt) where() string {
 func (g *generator) inputs(r *stateResource, used map[resource.URN]bool) (*object, error) {
 	values := withoutDefaults(r.Inputs)
 	delete(values, "tagsAll")
+	if added := g.addedEnv[r.URN]; added != nil {
+		values["environment"] = withEnvironment(values["environment"], added)
+	}
 	if region, ok := values["region"].(string); ok {
 		if provider := g.byURN[r.providerURN()]; provider != nil && provider.Inputs["region"] == region {
 			delete(values, "region")
@@ -694,6 +797,43 @@ func (g *generator) inputs(r *stateResource, used map[resource.URN]bool) (*objec
 		result.set(key, value)
 	}
 	return result, nil
+}
+
+// withEnvironment is a function's environment input with what's added to
+// its variables. If either has a secret, the variables are a secret.
+func withEnvironment(environment any, added map[string]any) any {
+	result := map[string]any{}
+	if given, ok := environment.(map[string]any); ok {
+		for key, value := range given {
+			result[key] = value
+		}
+	}
+	variables := map[string]any{}
+	secret := false
+	given := result["variables"]
+	if wrapped, ok := given.(map[string]any); ok && wrapped[sig.Key] == sig.Secret {
+		secret = true
+		given = revealed(wrapped)
+	}
+	if given, ok := given.(map[string]any); ok {
+		for key, value := range given {
+			variables[key] = value
+		}
+	}
+	for key, value := range added {
+		if wrapped, ok := value.(map[string]any); ok && wrapped[sig.Key] == sig.Secret {
+			secret = true
+			value = revealed(wrapped)
+		}
+		variables[key] = value
+	}
+	if !secret {
+		result["variables"] = variables
+		return result
+	}
+	text, _ := marshal(variables)
+	result["variables"] = map[string]any{sig.Key: sig.Secret, "plaintext": string(text)}
+	return result
 }
 
 // declared are those of the URNs the module has a name for
@@ -1016,6 +1156,9 @@ func (g *generator) options(r *stateResource, used map[resource.URN]bool) (*obje
 	needs := []resource.URN{r.Parent}
 	if provider := r.providerURN(); containsURN(g.providers, provider) {
 		opts.set("provider", raw(g.vars[provider]))
+	} else if g.role[provider] == roleRegionProvider {
+		opts.set("provider", raw(g.vars[provider]))
+		needs = append(needs, provider)
 	}
 	var dependsOn array
 	seen := map[resource.URN]bool{}

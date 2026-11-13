@@ -255,6 +255,12 @@ func report(out io.Writer, plan *Plan, project, stage, root, backup string) {
 		rows = append(rows, []string{r.Name, r.Type, r.Why})
 	}
 	table(rows)
+	if len(plan.Updates) > 0 {
+		fmt.Fprintln(out, "Wrote what the state doesn't have, so the first `pulumi up` updates it in place, to what it already is in AWS:")
+		for _, update := range plan.Updates {
+			fmt.Fprintln(out, "  "+update)
+		}
+	}
 	fmt.Fprintf(out, "Saved the state from before in %s.\n\n", rel(backup))
 
 	fmt.Fprintln(out, "Next:")
@@ -264,8 +270,12 @@ func report(out io.Writer, plan *Plan, project, stage, root, backup string) {
 		fmt.Fprintln(out, "     "+use+".")
 	}
 	fmt.Fprintln(out, "  2. Take sst out of package.json, and run npm install.")
-	fmt.Fprintln(out, "  3. Run pulumi preview: it changes nothing in the cloud, and the components'")
-	fmt.Fprintln(out, "     records leave their outputs.")
+	if len(plan.Updates) > 0 {
+		fmt.Fprintln(out, "  3. Run pulumi preview: it updates what's listed above, and changes nothing")
+		fmt.Fprintln(out, "     else in the cloud.")
+	} else {
+		fmt.Fprintln(out, "  3. Run pulumi preview: it changes nothing in the cloud.")
+	}
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "To go back before you deploy, run `pulumi stack import --file %s`,\n", rel(backup))
 	fmt.Fprintf(out, "delete what sst eject wrote, and remove the stack's %s config.\n", ConfigNamespace)
@@ -287,6 +297,9 @@ func preview(out io.Writer, plan *Plan, stage string) {
 		fmt.Fprintf(w, "  %s\t%s\t%s\n", r.Name, r.Type, r.Why)
 	}
 	w.Flush()
+	for _, update := range plan.Updates {
+		fmt.Fprintf(out, "Would update in place, to what it already is in AWS: %s.\n", update)
+	}
 	for _, use := range plan.Uses {
 		fmt.Fprintln(out, use+".")
 	}
