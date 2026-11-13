@@ -365,6 +365,9 @@ export interface ServiceArgs extends FargateBaseArgs {
         /**
          * The command that `sst dev` runs to start this in dev mode. This is the command you run
          * when you want to run your service locally.
+         *
+         * If you use `containers`, this is used only when none of the containers has its own
+         * `dev.command`. It runs from the project root unless you set `directory`.
          */
         command?: Input<string>;
         /**
@@ -375,7 +378,7 @@ export interface ServiceArgs extends FargateBaseArgs {
         autostart?: Input<boolean>;
         /**
          * Change the directory from where the `command` is run.
-         * @default Uses the `image.dockerfile` path
+         * @default Uses the `image.context` path. With `containers`, the project root.
          */
         directory?: Input<string>;
       };
@@ -2829,8 +2832,42 @@ export class Service extends Component implements Link.Linkable {
     }
 
     function registerReceiver() {
-      all([containers]).apply(([val]) => {
+      // Resolve `args.dev` with the containers, so a command that resolves to
+      // an empty string is skipped like a missing one.
+      all([containers, args.dev]).apply(([val, topDev]) => {
+        // With `containers`, a top-level `dev.command` runs the service as a whole.
+        // Only use it when no container has its own `dev.command`, so existing
+        // per-container setups stay the same.
+        if (
+          args.containers &&
+          topDev &&
+          topDev.command &&
+          !val.some((container) => container.dev && container.dev.command)
+        ) {
+          new DevCommand(`${name}Dev`, {
+            link: args.link,
+            dev: {
+              title: name,
+              autostart: topDev.autostart,
+              directory: topDev.directory,
+              command: topDev.command,
+            },
+            environment: {
+              AWS_REGION: region,
+            },
+            aws: {
+              role: taskRole.arn,
+            },
+          });
+        }
+
         for (const container of val) {
+          if (
+            !container.dev ||
+            typeof container.dev !== "object" ||
+            !container.dev.command
+          )
+            continue;
           const title = val.length == 1 ? name : `${name}${container.name}`;
           new DevCommand(`${title}Dev`, {
             link: args.link,

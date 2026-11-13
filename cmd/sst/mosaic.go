@@ -118,9 +118,14 @@ func CmdMosaic(c *cli.Cli) error {
 						<-processExited
 						fmt.Println("\n[restarting]")
 					}
-					fields, _ := shellquote.Split(nextEnv.Command)
-					if len(args) > 0 {
-						fields = args
+					fields := args
+					if len(fields) == 0 {
+						// Without arguments this process was started as SST_CHILD, so child
+						// is the dev command's name.
+						fields, err = parseDevCommand(child, nextEnv.Command)
+						if err != nil {
+							return err
+						}
 					}
 					cmd = process.Command(
 						fields[0],
@@ -336,7 +341,9 @@ func CmdMosaic(c *cli.Cli) error {
 					switch evt := unknown.(type) {
 					case *project.CompleteEvent:
 						for _, d := range evt.Devs {
-							if d.Command == "" {
+							// A command that doesn't parse still gets its pane. The pane's
+							// process reports the error, and the rest of sst dev keeps running.
+							if strings.TrimSpace(d.Command) == "" {
 								continue
 							}
 							dir := filepath.Join(cwd, d.Directory)
@@ -454,18 +461,23 @@ func CmdMosaic(c *cli.Cli) error {
 					switch evt := unknown.(type) {
 					case *project.CompleteEvent:
 						for _, d := range evt.Devs {
-							if d.Command == "" {
+							if strings.TrimSpace(d.Command) == "" {
 								continue
 							}
+							// A command that doesn't parse is started without arguments, so
+							// its process reports the error and the rest of sst dev keeps running.
+							args := []string{currentExecutable, "dev"}
+							if words, err := parseDevCommand(d.Name, d.Command); err == nil {
+								args = append(append(args, "--"), words...)
+							}
 							dir := filepath.Join(cwd, d.Directory)
-							words, _ := shellquote.Split(d.Command)
 							title := d.Title
 							if title == "" {
 								title = d.Name
 							}
 							mono.AddProcess(
 								d.Name,
-								append([]string{currentExecutable, "dev", "--"}, words...),
+								args,
 								dir,
 								title,
 								d.Autostart,
@@ -485,6 +497,31 @@ func CmdMosaic(c *cli.Cli) error {
 	err = wg.Wait()
 	slog.Info("done mosaic", "err", err)
 	return err
+}
+
+// parseDevCommand parses the command of the dev named name, and names it in the
+// error. The error is readable, so the CLI prints it instead of a generic one.
+func parseDevCommand(name string, command string) ([]string, error) {
+	fields, err := parseCommand(command)
+	if err != nil {
+		return nil, util.NewReadableError(err, fmt.Sprintf("invalid dev command for %q: %v", name, err))
+	}
+	return fields, nil
+}
+
+func parseCommand(command string) ([]string, error) {
+	if strings.TrimSpace(command) == "" {
+		return nil, fmt.Errorf("command is empty")
+	}
+
+	fields, err := shellquote.Split(command)
+	if err != nil {
+		return nil, err
+	}
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("command is empty")
+	}
+	return fields, nil
 }
 
 func diff(a map[string]string, b map[string]string) bool {
