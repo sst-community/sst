@@ -24,6 +24,10 @@ As tests:
 | 2026-11-12 | **Step 3 is `sst dev` on SST's components**, over the eject and the smaller gaps (the default tags, `VisibleError`'s stack trace, a linked function's `Resource` checked at runtime): the maintainer chose it, as recommended. Asked whether a Pulumi program should use only Pulumi's own resources instead, the maintainer, told the components are what SST adds on top of the dev loop and the eject is the way out to plain resources, said to continue. |
 | 2026-11-12 | **After step 3: step 4 closes goals 2 and 3 for what's built, then a sample program the maintainer tries it with, then the eject.** Offered those three and pushing the two branches, the maintainer chose the first three. |
 | 2026-11-12 | **SST's tags under plain Pulumi are the stack's config, not code.** SST's CLI tags an app's AWS resources through the default provider's `defaultTags`, which under plain Pulumi comes from the stack's config, out of the program's reach. Of documenting the config or having the components tag what they create (which still updates every resource on a move, as the tags change place), the maintainer chose the config, as recommended. |
+| 2026-11-12 | **The eject writes the program from the stack's state.** Of three ways (from the state; Pulumi's own `pulumi import --generate-code`, whose inputs come from a read of the cloud, so a first `pulumi up` can differ, and whose old entries are left to clear by hand; or an eject written for each component, about 40 to keep in step), the maintainer chose the state, as recommended: it needs no code for each component, and the first `pulumi up` changes nothing. |
+| 2026-11-12 | **After the eject a function keeps its last build, with a build to switch to.** Each function points at the code already in the asset bucket, so nothing changes, and for Node.js the eject writes an esbuild build a function is switched to when its code next changes. The maintainer chose it, as recommended, over building in the program from the start (the first `pulumi up` updates the code) and keeping the last build only. |
+| 2026-11-12 | **SST's own resources leave the state, and what they made stays.** Each one's delete removes what it made (a site's files, the router's keys and routes, the origin access control), so the eject takes them out of the state rather than out of the program, and SST's plugin isn't needed after it. The origin access control is adopted by Pulumi's own resource. A site's files and the router's routes stay as last deployed. The maintainer chose it, as recommended, over keeping them on SST's plugin. |
+| 2026-11-12 | **The eject keeps SST's components as Pulumi components of the same type and name**, so every URN stays and no alias is needed, in place of the aliases to a new parent this plan began with. Proposed with the design, with aliases left for the maintainer to ask for; the maintainer said to continue. |
 
 ## Where it starts
 
@@ -61,7 +65,7 @@ Each tie, and what plain Pulumi would use instead. Where there's more than one w
 
    The first step doesn't need it: a `Function` without a router or `addEnvironment` uses none of them.
 5. **Linking, secrets and `sst dev`.** A link is IAM statements and environment, which the component writes already. `sst-env.d.ts` stays SST's, written from the stack's outputs. `sst.Secret` is still to read. For `sst dev`, the components already report their functions (`_sst`), which `sst dev` on a Pulumi program could read in place of `sst.dev.yaml`. Later.
-6. **Removing SST.** An eject that writes the program with Pulumi's own resources, each aliased to where SST's component had it (`aliases: [{ parent }]`), so nothing is replaced. Later: what it has to do depends on 4.
+6. **Removing SST.** An eject that writes the program with Pulumi's own resources, at the URNs SST's components gave them, so nothing is replaced ([step 5](#5-the-eject)).
 7. **SST's CLI on a Pulumi stack.** `sst dev` runs a Pulumi program already. To choose: whether `sst deploy`, `sst diff` and the rest do too, or Pulumi keeps those.
 8. **Apps SST deployed.** Their state is in SST's home, under 5.0's one hard rule. With the names above, their URNs would match a Pulumi stack named after the stage in a project named after the app, so `pulumi stack import` might carry one across, but how the secrets are encrypted is still to check. Not in the first steps.
 
@@ -113,9 +117,33 @@ Exit tests, in the lab: `sst dev` on a program with a `Function` linked to a buc
 
 Exit tests: in the lab, after `sst dev`, `sst-env.d.ts` types the bucket's link and the handler typechecks against it; a deploy with the config has SST's two tags on what it creates; a `VisibleError` under `pulumi up` shows its message without a stack trace.
 
+### 5. The eject
+
+`sst eject`, in a Pulumi project, writes the program's SST components as Pulumi's own resources, [as decided](#decisions), and takes SST's own resources out of the stack's state. After it, the program needs neither SST's package nor its binary nor its plugin, and its first `pulumi up` changes nothing in the cloud.
+
+- **What it writes:** a TypeScript module, `sst-ejected.ts`, from `pulumi stack export`:
+  - **Each of SST's components is a plain `pulumi.ComponentResource` of the same type and name** (`new pulumi.ComponentResource("sst:aws:Function", "Api")`), and each of its parts the same resource as before, with the component as its parent. So every URN stays as it was, and no alias is needed. The type is only a name: nothing of SST's is loaded. Renaming them later, with aliases, is the program's choice. (The step that began this plan had aliases to a new parent; keeping the parent is simpler and leaves nothing to clean up once every stack has moved.)
+  - **Each part's inputs are the ones its state has**, which the last deploy gave it, so a `pulumi up` sees no difference. A value that is another ejected resource's output becomes a reference to it (`role.arn`), in the state's order, which is the order they depend on each other. The options the state keeps go with it: `protect`, `retainOnDelete`, `ignoreChanges`, `deletedWith`, custom timeouts, its explicit dependencies. (The state doesn't keep `deleteBeforeReplace`.)
+  - **A secret input** is read from `pulumi stack export --show-secrets`, written into the stack's config as a secret, and read with `config.requireSecret`. None is written into the code.
+  - **A provider**: the stack's default provider needs nothing. A provider of the program's own is taken by the module's function as an argument, by name.
+  - **What the module returns**: each component's parts, by the names SST gave them, for the program to use where it used the component's outputs (`api.url` becomes the URL part's `functionUrl`). The program's own code is the developer's to change: the eject says which components to replace.
+- **The code**, [as decided](#decisions): a function keeps the code object it has in the asset bucket (`s3Bucket`, `s3Key`), and the object, with its source maps, leaves the state, so nothing deletes it. For Node.js, `sst-ejected-build.ts` has a build with esbuild a function is switched to, which bundles its handler and gives it the archive. It's a file of its own, so the program needs esbuild only once a function is switched.
+- **SST's own resources**, [as decided](#decisions): the file sync, the invalidation, the CDN's waiter, the router's keys and routes, `addEnvironment`'s update, the image prune and the role lookup leave the state, and so does SST's provider, with one `pulumi stack import` of the state without them, so the change lands whole or not at all. The origin access control is written as `aws.cloudfront.OriginAccessControl`, adopted by its id (`import`). The link records (`sst:sst:LinkRef`) and the links' key (`LambdaEncryptionKey`, in the code's environment already) are left out of the program and leave the state with the rest: they have nothing in the cloud.
+- **In this order**, so no deploy can delete what SST's own resources made: the stack's state is saved to a file beside the program, then the module is written and the config set, then SST's own resources leave the state. `sst eject` changes nothing in the cloud.
+- **First:** a `Function` with a link and a URL, and a `StaticSite`, the components the steps before checked.
+
+Exit tests, in the lab: a program with a linked `Function` and a `StaticSite`, deployed by `pulumi up`; `sst eject`; the program switched to the module, and SST's package taken out of `node_modules` with no `SST_BIN_PATH`; `pulumi preview` shows nothing to create, update or replace in the cloud (the components' records leaving the state aside); `pulumi up`; the function and the site answer as before; the function switched to the esbuild build and deployed, answering; `pulumi destroy`, and nothing left.
+
+Built for those, and passed ([progress](progress.md)). The `StaticSite` has no origin access control: its CloudFront function sets the bucket as its origin, with access control settings of its own. Left for later, each refused with a message until then:
+
+- **The `Router`'s origin access control and routes** (`OriginAccessControl`, `KvRoutesUpdate`). SST's state doesn't keep the access control's name, which has a random ending, so adopting it needs a read of the cloud with the provider's credentials.
+- **`addEnvironment`** (`FunctionEnvironmentUpdate`): what it adds is in the function's environment in AWS and not in its state, so the module's function would need it merged in.
+- **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's), the providers SST makes for a region, and a component of SST's in a component of the program's.
+- **A project with more than one stack.** The module is the stack's it's from, and throws on another.
+
 ### Later
 
-SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js.
+SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js. Step 5 left the eject of the components [listed there](#5-the-eject).
 
 ## Open questions
 
@@ -134,4 +162,4 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 3. `sst dev` on SST's components | Done 2026-11-12, lab-checked, committed (`b74b7e1df`) |
 | 4. Goals 2 and 3 for what's built | Done 2026-11-12, lab-checked, committed (`d0a4281d7`) |
 | The maintainer's sample program at step 4 | Done 2026-11-12: a `Bucket`, a linked `Function` and a `DevCommand`, nothing deployed |
-| The eject | Next: its design |
+| 5. The eject | Done 2026-11-12 for a linked `Function`, a `Bucket` and a `StaticSite`, lab-checked, committed (`5f0a66a9d`) |

@@ -2,6 +2,41 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: step 5, the eject
+
+`sst eject`, in a Pulumi program that uses SST's components, writes them as Pulumi's own resources from the stack's state, and takes SST's own resources out of the state. In the lab, a program with a linked `Function` with a URL, a `Bucket` and a `StaticSite`, ejected, with SST's package, binary and plugin then gone, previewed and deployed with nothing changed, answered as before, was switched to its own build of the function, and destroyed clean. Committed as `5f0a66a9d`.
+
+**What changed:**
+
+- **`pkg/eject`**, and the command in `cmd/sst/eject.go`. It reads the stack's export twice: as it is, for the copy it saves and the state it imports, and with its secrets shown, for the module. The secrets aren't written anywhere but the stack's config.
+- **The module, `sst-ejected.ts`**, [as designed](plan.md#5-the-eject):
+  - each of SST's components is a `pulumi.ComponentResource` of the same type and name, and nested ones keep their parent;
+  - each part is Pulumi's own class for its type, with the state's inputs, but for what the provider filled in itself: what it lists under `__defaults`, `tagsAll`, and a `region` that's its provider's;
+  - a value that's an output of a resource the input depends on is a reference (`role: apiRole.arn`, `logGroup: apiLogGroup.name`), also as the start of a value (`` pulumi.interpolate`${filesBucket.arn}/*` ``), and in a string that's JSON, which is written as the value it's made from when `JSON.stringify` gives the same string back (`pulumi.jsonStringify({...}, undefined, 2)`);
+  - the options the state keeps go with each part: `parent`, `dependsOn` (what it depends on that no reference already says), `deletedWith`, `protect`, `retainOnDelete`, `ignoreChanges`, `replaceOnChanges`, `additionalSecretOutputs`, custom timeouts. A provider of the program's own is an argument of `ejected()`;
+  - the declarations are grouped by component, each after what it refers to;
+  - `ejected()` returns each component's parts by the names SST gave them, a nested component as one of its parent's (`parts.Web.cdn.distribution`);
+  - it throws on a stack other than the one it's from.
+- **The build is a file of its own, `sst-ejected-build.ts`**, not part of the module as the plan had it, so the program needs esbuild only once a function is switched to it. Each Node.js function in the module has a comment that says how.
+- **The state changes with one `pulumi stack import`**, in place of the plan's `pulumi state delete`s, so the change lands whole or not at all. It takes out SST's own resources (`BucketFiles`, `KvKeys`, `DistributionInvalidation`, `DistributionDeploymentWaiter` for now) and SST's provider, a function's code object and source maps, the link records and the links' key, and a default provider nothing else uses, with every reference to them. The records and the key were to leave at the next `pulumi up`; taken out with the rest, the first preview shows nothing at all. The state is read once more before the import, and a change since stops it.
+- **What it refuses**, before it writes anything: a stack `sst dev` deployed last, a stack with operations Pulumi didn't finish or a resource waiting to be deleted or replaced, one of SST's own resources not in the list above, a part with a file as an input, a provider an SST component made (`AwsProvider.sst.<region>` included), a component in a component of the program's, and the options it doesn't write yet (`replaceWith`, replacement triggers, hooks, views). If it stops after writing the module, it takes out what it wrote.
+- **`--dry-run`** prints the module and what would leave the state, and changes nothing.
+- **A component with nothing in it leaves the state too**, like a `DevCommand`, which only tells `sst dev` what to run. Found on the maintainer's sample program after the lab run, which had none; in the tests.
+- **No origin access control to adopt yet.** The `StaticSite` has none: its CloudFront function sets the bucket as the origin, with access control settings of its own. SST's `OriginAccessControl` is the `Router`'s; its name has a random ending SST's state doesn't keep, so adopting it needs a read of the cloud. It's refused for now.
+
+**Checked:**
+
+- Go: `pkg/eject`'s tests (a fixture state with a linked function, a bucket, a program's provider and SST's own resources: the module, the secrets, what leaves, the refusals, the state edit, the JSON round trip), and the full suite. The module the lab's state gave typechecked with `tsc --strict`.
+- In the lab, project `thineject`, stack `ej`, on Pulumi's local backend, with SST's tags in `aws:defaultTags`:
+  - `pulumi up` with SST's components: 34 created.
+  - `sst eject --dry-run`, then `sst eject`: 2 secrets put in the config (the function's environment and code key), 12 resources out of the state.
+  - The program switched to `ejected()`, `sst` uninstalled, `SST_BIN_PATH` unset: `pulumi preview --diff` showed 23 unchanged and nothing else, not even the components' outputs. `pulumi up`, 23 unchanged. The function and the site answered as before.
+  - SST's plugin moved out of Pulumi's plugins for the rest of the run.
+  - The function switched to `nodeBuild` and given its bucket in its environment, the handler reading `process.env` in place of `Resource`: 1 updated, and it answered `v2` with the bucket. Another preview and a refresh preview: 23 unchanged.
+  - `pulumi destroy`: 23 deleted. The function, role, buckets, distribution, CloudFront function, key-value store and log group checked one by one: gone; the tagging API lists nothing of the app. Left, by design: the function's last code object and its source map in the asset bucket, which were deleted by their keys. The shared stub objects are as they were.
+
+**Not checked:** a program with more of SST's components than these, a provider of the program's in a real run (the fixture has one), and going back with the saved state.
+
 ## 2026-11-12: step 4, goals 2 and 3 for what's built
 
 The typed links in `sst dev`, SST's tags by the stack's config, and `VisibleError` without a stack trace under Pulumi. Committed as `d0a4281d7`.
