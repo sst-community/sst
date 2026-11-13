@@ -72,6 +72,9 @@ const pulumi = mockPulumi({
         "functionUrl",
         "domainName",
         "id",
+        // the key links are encrypted with, which the build of a function
+        // that isn't a bundle is given
+        "base64",
       ]
         .filter((key) => !(key in args.inputs))
         .map((key) => [key, UNKNOWN]),
@@ -138,5 +141,15 @@ describe("a Nextjs site in a new stage's preview", () => {
       "NextServerCachePolicy",
       "NextServerUseast1",
     ]);
+
+    // Its functions are bundles OpenNext built, so their handlers are known,
+    // as the provider needs to plan a Zip function, though the key they're
+    // deployed with isn't
+    const handlers = pulumi.resources
+      .filter((r) => r.type === "aws:lambda/function:Function")
+      .map((r) => [r.name, r.inputs.handler]);
+    expect(handlers.length).toBeGreaterThan(0);
+    for (const [name, handler] of handlers)
+      expect(handler, name).toMatch(/\.handler$/);
   });
 });

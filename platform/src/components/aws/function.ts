@@ -1950,27 +1950,33 @@ export class Function extends component("sst:aws:Function", parts) {
     // its handler, which the provider needs to plan a Zip function, and its
     // source maps, so that what the deploy uploads is in the preview.
     const knowsBuild = output((built as any).isKnown as Promise<boolean>).apply(
-      (known) =>
-        // With `bundle`, the build writes into the app's own folder, which a
-        // build with no key would leave wrong
-        known || dev || !!args.bundle || !pulumiRuntime.isDryRun(),
+      (known) => known || dev || !pulumiRuntime.isDryRun(),
     );
     let builtWithoutLinks: Output<FunctionBundle> | undefined;
     const buildWithoutLinks = () =>
-      (builtWithoutLinks ??= withoutDependencies(
-        buildParts.apply((parts) =>
-          buildBundle(
-            {
-              ...parts,
-              // a key of the right length, as none is known yet
-              encryptionKey: Buffer.alloc(32).toString("base64"),
-              links: {},
-              isContainer,
-            },
-            args.hook && ((dir) => args.hook!.postbuild(dir)),
-          ),
-        ),
-      ));
+      (builtWithoutLinks ??= args.bundle
+        ? // A bundle is built already: the CLI's build of one gives the
+          // handler it's given and the bundle's folder (pkg/runtime), and
+          // only writes the links' file into it, in the app's own folder,
+          // which a build with no key would leave wrong. So it isn't built.
+          output(args.handler).apply((handler) => ({
+            handler,
+            bundle: path.resolve(context().paths.root, args.bundle!),
+          }))
+        : withoutDependencies(
+            buildParts.apply((parts) =>
+              buildBundle(
+                {
+                  ...parts,
+                  // a key of the right length, as none is known yet
+                  encryptionKey: Buffer.alloc(32).toString("base64"),
+                  links: {},
+                  isContainer,
+                },
+                args.hook && ((dir) => args.hook!.postbuild(dir)),
+              ),
+            ),
+          ));
     // What's built, as far as what the function is made of goes. Every
     // preview knows it.
     const shape: Output<FunctionBundle> = knowsBuild.apply((knows) =>
