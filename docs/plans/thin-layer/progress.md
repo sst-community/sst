@@ -2,6 +2,21 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: step 6, the sweep in the mock
+
+Every SST 5 component's tests, run as Pulumi runs a program, with none of SST's globals. Committed as `d85d01786`, with the path fix on `v5` as `57d26dd4f`, merged here.
+
+**What changed:**
+
+- **`sst/testing`'s `mockPulumi` takes `plain: true`** (`platform/src/testing/mock.ts`): no `$app`, `$cli`, `$dev`, `$util`, `$interpolate`, `$jsonParse` or `$jsonStringify`; the app and the stage are the mock's project and stack; SST's bootstrap is read from its parameter, `/sst/bootstrap`, as the components read it under plain Pulumi, with the answer the CLI's call would get; what only SST's binary does, a function's build, goes to the mock as it goes to `sst dev`'s server; a test that sets `$dev` sets `SST_DEV`, as `sst dev` tells a Pulumi program; and the root is Pulumi's, with a `.sst` that has the platform's files, as the `sst` package has them. It's in the API report: an addition.
+- **`SST_TEST_PLAIN=1`** runs the platform's tests that way (`test/helpers/graph.ts`), and skips the takeover cases, which are SST 4's.
+- **`StepFunctions` used SST's `$jsonStringify` global** for a state machine's definition, which a plain Pulumi program doesn't have. It uses Pulumi's `jsonStringify` now.
+- **An image's `context` and a function's `copyFiles` were joined onto the app's root** (`path.join`), which turns an absolute path into one under the root. They're resolved from it now (`path.resolve`), as `$asset` and the Cloudflare `Worker`'s assets are: a relative path is the same. This is a bug on `v5` too, under SST's CLI, for an absolute path, so it's fixed there (`57d26dd4f`, with a test of a `Task` whose context is outside the app's folder) and merged here.
+
+**Checked:** `SST_TEST_PLAIN=1` over `test/components/v5` (78 files): 1267 passed, 2355 skipped (the takeover cases), 161 failed, each read. Of those, all but five are tests written for SST's CLI: SST 4's components in a takeover, a move, `sst refresh`, or a test that reads or sets `$cli`, `$util` or `$app` itself. Of the five, four pass on their own (a `Cluster` test and three of Cloudflare's, after an SST 4 test in the same file failed halfway), and one is a `MicroVm` test that reads `$dev` as the docs' example does. The normal suite: `tsc`, 112 files, 4248 tests; the API reports.
+
+**Found, not fixed:** the components' docs write their examples with SST's globals (`$dev`, `$app.stage`), which a plain Pulumi program doesn't have.
+
 ## 2026-11-12: step 5, the eject
 
 `sst eject`, in a Pulumi program that uses SST's components, writes them as Pulumi's own resources from the stack's state, and takes SST's own resources out of the state. In the lab, a program with a linked `Function` with a URL, a `Bucket` and a `StaticSite`, ejected, with SST's package, binary and plugin then gone, previewed and deployed with nothing changed, answered as before, was switched to its own build of the function, and destroyed clean. Committed as `5f0a66a9d`.

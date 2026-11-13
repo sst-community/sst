@@ -27,6 +27,7 @@ As tests:
 | 2026-11-12 | **The eject writes the program from the stack's state.** Of three ways (from the state; Pulumi's own `pulumi import --generate-code`, whose inputs come from a read of the cloud, so a first `pulumi up` can differ, and whose old entries are left to clear by hand; or an eject written for each component, about 40 to keep in step), the maintainer chose the state, as recommended: it needs no code for each component, and the first `pulumi up` changes nothing. |
 | 2026-11-12 | **After the eject a function keeps its last build, with a build to switch to.** Each function points at the code already in the asset bucket, so nothing changes, and for Node.js the eject writes an esbuild build a function is switched to when its code next changes. The maintainer chose it, as recommended, over building in the program from the start (the first `pulumi up` updates the code) and keeping the last build only. |
 | 2026-11-12 | **SST's own resources leave the state, and what they made stays.** Each one's delete removes what it made (a site's files, the router's keys and routes, the origin access control), so the eject takes them out of the state rather than out of the program, and SST's plugin isn't needed after it. The origin access control is adopted by Pulumi's own resource. A site's files and the router's routes stay as last deployed. The maintainer chose it, as recommended, over keeping them on SST's plugin. |
+| 2026-11-12 | **After step 5: a sweep of SST's components under plain Pulumi**, over moving an SST app to a Pulumi stack, SST's CLI on Pulumi stacks and pushing for review: the maintainer chose it, as recommended, as four components were proven and a real app uses many. |
 | 2026-11-12 | **The eject keeps SST's components as Pulumi components of the same type and name**, so every URN stays and no alias is needed, in place of the aliases to a new parent this plan began with. Proposed with the design, with aliases left for the maintainer to ask for; the maintainer said to continue. |
 
 ## Where it starts
@@ -141,6 +142,15 @@ Built for those, and passed ([progress](progress.md)). The `StaticSite` has no o
 - **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's), the providers SST makes for a region, and a component of SST's in a component of the program's.
 - **A project with more than one stack.** The module is the stack's it's from, and throws on another.
 
+### 6. The sweep
+
+Every one of SST 5's components under plain Pulumi, [as decided](#decisions), in two parts:
+
+- **In the mock.** `sst/testing`'s `mockPulumi` takes `plain: true`, which runs a program as Pulumi does: none of SST's globals, the app and the stage as Pulumi's project and stack, SST's bootstrap read from its parameter, and the program's root as Pulumi gives it. With `SST_TEST_PLAIN=1`, the platform's component tests run that way, but for the takeover cases, which are SST 4's and only ran under SST's CLI. What fails is a component's tie to SST's CLI, or a test that's written for the CLI (a move, `sst refresh`, or a test that sets `$cli` itself).
+- **In the lab**, the components an app uses most that steps 1 to 5 didn't deploy: a `Router` with routes to a function and a bucket, a `Queue` with a subscriber, a `Dynamo` table with a stream subscriber, a `Cron`, and `Nextjs`, deployed by `pulumi up` and called, then ejected where the eject handles them.
+
+Then the eject is extended to what the lab finds it refuses: first the `Router`'s origin access control and routes, and `addEnvironment`.
+
 ### Later
 
 SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js. Step 5 left the eject of the components [listed there](#5-the-eject).
@@ -163,3 +173,4 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 4. Goals 2 and 3 for what's built | Done 2026-11-12, lab-checked, committed (`d0a4281d7`) |
 | The maintainer's sample program at step 4 | Done 2026-11-12: a `Bucket`, a linked `Function` and a `DevCommand`, nothing deployed |
 | 5. The eject | Done 2026-11-12 for a linked `Function`, a `Bucket` and a `StaticSite`, lab-checked, committed (`5f0a66a9d`) |
+| 6. The sweep | In the mock: done 2026-11-12, committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: next |
