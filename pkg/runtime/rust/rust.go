@@ -159,6 +159,12 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 }
 
 func (r *Runtime) ValidateHandler(input *runtime.BuildInput) error {
+	// A custom bundle is a prebuilt artifact directory. The rust handler is a
+	// crate path that Build resolves directly (never relative to the bundle),
+	// so there is nothing bundle-relative to validate here.
+	if input.Bundle != "" {
+		return nil
+	}
 	parts := strings.Split(input.Handler, ".")
 	handler := strings.Join(parts[:len(parts)-1], ".")
 

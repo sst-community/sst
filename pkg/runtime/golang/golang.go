@@ -97,6 +97,12 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 }
 
 func (r *Runtime) ValidateHandler(input *runtime.BuildInput) error {
+	// A custom bundle is a prebuilt artifact directory. The go handler is a
+	// module path that Build resolves directly (never relative to the bundle),
+	// so there is nothing bundle-relative to validate here.
+	if input.Bundle != "" {
+		return nil
+	}
 	if input.Handler != "" {
 		if info, err := os.Stat(input.Handler); err != nil || !info.IsDir() {
 			return fmt.Errorf("handler not found: %v", input.Handler)
