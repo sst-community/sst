@@ -85,7 +85,7 @@ Exit tests, in the lab:
 
 ### Later
 
-`sst dev` reading the components' reports, the eject, SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): AWS lookups in SST 5's components that don't follow the component's provider; SST's default tags, which plain Pulumi doesn't set; `VisibleError`'s stack trace under Pulumi; every provider of a group to install; and runtimes other than Node.js.
+`sst dev` reading the components' reports, the eject, SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): SST's default tags, which plain Pulumi doesn't set; `VisibleError`'s stack trace under Pulumi; every provider of a group to install; and runtimes other than Node.js.
 
 ## Open questions
 
@@ -99,4 +99,5 @@ Exit tests, in the lab:
 | Plan | Started 2026-11-12 |
 | 1. A `Function` on plain Pulumi | Done 2026-11-12, lab-checked, committed (`fd905e16a`) |
 | 2. A `StaticSite` on plain Pulumi | Done 2026-11-12, lab-checked, committed (`28c2ed12e`) |
-| SST's provider takes the program's AWS setup | Done 2026-11-12, lab-checked, not committed ([progress](progress.md)) |
+| SST's provider takes the program's AWS setup | Done 2026-11-12, lab-checked, committed (`18f36ce79`) |
+| The components' lookups follow their provider | Fixed on `v5` (`754dbde82`), merged here (`0aa256062`), lab-checked |

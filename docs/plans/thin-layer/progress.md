@@ -2,6 +2,12 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: the components' lookups follow their provider, on `v5`
+
+The lookups found below were fixed on `v5`, as framework fixes are, the maintainer's choice ("Fix on v5 now"): `754dbde82`, not pushed, then `v5` merged into `v5-pulumi-dev` (`bbe23c72f`) and this branch (`0aa256062`). Each of the components' lookups has its component as `parent`, `iamEdit` takes options, and `test/components/lookups.test.ts` fails on a lookup given none. The merge's one conflict, `Function`'s region and bootstrap, keeps both: `{ parent: this }` and `bootstrap.forRegion(region, self)`.
+
+**Checked on the merged branch:** `tsc`, the platform suite (4236 tests), the API reports and the Go suite. In the lab, the case that failed before: a `Function` given `providers: { aws: Lab }`, with `addEnvironment`, in a stack with no AWS config and no AWS credentials, profile or region in the environment. It deployed; the state has no default AWS provider at all, only `Lab` and the SST provider `sst-Lab` with its profile and region; the function answered with the variable SST's resource added. Destroyed, and nothing left (the source map SST keeps was deleted).
+
 ## 2026-11-12: SST's provider takes the AWS setup of the program's
 
 Under plain Pulumi, SST's provider reaches the account the program's AWS provider does, set up the same way. Not committed.
