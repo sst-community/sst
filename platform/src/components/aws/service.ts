@@ -378,7 +378,7 @@ export interface ServiceArgs extends FargateBaseArgs {
         autostart?: Input<boolean>;
         /**
          * Change the directory from where the `command` is run.
-         * @default Uses the `image.dockerfile` path. With `containers`, the project root.
+         * @default Uses the `image.context` path. With `containers`, the project root.
          */
         directory?: Input<string>;
       };
