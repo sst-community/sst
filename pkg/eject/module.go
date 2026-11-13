@@ -52,6 +52,9 @@ type Plan struct {
 	// The program's own resources that use a component, for what the eject
 	// says
 	Uses []string
+	// What the module's function is given of the program's own, like
+	// `parents.shop: the program's "Shop" component`
+	Takes []string
 }
 
 // StackPlan is what an eject changes in one stack
@@ -127,9 +130,11 @@ type generator struct {
 	// The names the module refers to each component, part and provider by
 	// (with a ! for one only some stacks have)
 	vars map[resource.URN]string
-	// The program's own providers parts were made with, which the module's
-	// function is given
+	// The program's own providers parts were made with, and its own
+	// resources SST's components are in, which the module's function is
+	// given
 	providers []resource.URN
+	parents   []resource.URN
 	plan      *StackPlan
 	// SST's components made at the program's top level
 	components []Component
@@ -175,8 +180,9 @@ func (g *generator) classify() error {
 		case !r.Custom && r.Type == "sst:sst:LinkRef":
 			g.remove(r, "a record of what links to "+strings.TrimSuffix(name, "LinkRef")+", with nothing in the cloud")
 		case !r.Custom && (strings.HasPrefix(r.Type, "sst:") || inComponent):
-			if r.Parent != stack && !inComponent {
-				return fmt.Errorf("%s, one of SST's components, is in %s, a component of the program's, which sst eject doesn't write yet.", name, r.Parent.Name())
+			// In one of the program's own components: the module is given it
+			if r.Parent != stack && !inComponent && !containsURN(g.parents, r.Parent) {
+				g.parents = append(g.parents, r.Parent)
 			}
 			if dev, _ := recordedFunction(r)["dev"].(bool); dev {
 				return fmt.Errorf("The %q stack was last deployed by sst dev, so its functions run the stub that sends their calls to your machine. Run `pulumi up` first, which deploys their code, then eject.", g.plan.Name)
@@ -434,6 +440,8 @@ func (g *generator) decl(r *stateResource) (*decl, error) {
 	if g.role[r.Parent] == roleComponent {
 		d.parent = keyOf(r.Parent)
 		d.needs = append(d.needs, d.parent)
+	} else if containsURN(g.parents, r.Parent) {
+		d.programParent = g.vars[r.Parent]
 	}
 	if d.kind != rolePart {
 		return d, nil
@@ -609,7 +617,7 @@ func withEnvironment(environment any, added map[string]any) any {
 func (g *generator) declared(urns []resource.URN) []resource.URN {
 	var result []resource.URN
 	for _, urn := range urns {
-		if _, ok := g.vars[urn]; ok && !strings.HasPrefix(g.vars[urn], "providers.") {
+		if _, ok := g.vars[urn]; ok && !strings.HasPrefix(g.vars[urn], "program.") {
 			result = append(result, urn)
 		}
 	}

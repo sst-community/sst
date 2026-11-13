@@ -317,6 +317,12 @@ func report(out io.Writer, plan *Plan, project, root string, backups map[string]
 	fmt.Fprintln(out, "Next:")
 	fmt.Fprintf(out, "  1. In the program, call ejected() from ./%s in place of SST's components,\n", strings.TrimSuffix(ModuleFile, ".ts"))
 	fmt.Fprintln(out, "     and use the parts it returns where you used their outputs.")
+	if len(plan.Takes) > 0 {
+		fmt.Fprintln(out, "     Give it the program's own resources it takes, made before it's called:")
+		for _, take := range plan.Takes {
+			fmt.Fprintln(out, "       "+take)
+		}
+	}
 	for _, use := range plan.Uses {
 		fmt.Fprintln(out, "     "+use+".")
 	}
@@ -414,6 +420,9 @@ func preview(out io.Writer, plan *Plan) {
 	stackChanges(out, plan, "Would put", "Would take", "and nothing out of the cloud")
 	for _, name := range plan.Skipped {
 		fmt.Fprintf(out, "Would leave out the %q stack, which has none of SST's components.\n", name)
+	}
+	for _, take := range plan.Takes {
+		fmt.Fprintln(out, "ejected() would take "+take+".")
 	}
 	for _, use := range plan.Uses {
 		fmt.Fprintln(out, use+".")

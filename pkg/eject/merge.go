@@ -32,10 +32,15 @@ type ejector struct {
 	order []string
 	names map[string]string
 	in    map[string][]int
-	// The program's own providers, which the module's function is given, by
-	// the same key: the name of the argument
+	// The program's own providers and the program's own resources SST's
+	// components are in, which the module's function is given, by the same
+	// key: the name it's given by
 	providerOrder []string
 	providerArgs  map[string]string
+	parentOrder   []string
+	parentArgs    map[string]string
+	// What it is, for what the eject says
+	takes map[string]string
 }
 
 // decl is how one stack has something the module makes
@@ -44,6 +49,8 @@ type decl struct {
 	r      *stateResource
 	kind   role
 	parent string
+	// How the module refers to the program's own resource it's in
+	programParent string
 	// For a part
 	class    string
 	comment  string
@@ -78,12 +85,14 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 		opts:    opts,
 		imports: map[string]string{},
 		used: map[string]bool{
-			"pulumi": true, "config": true, "providers": true, "ejected": true,
+			"pulumi": true, "config": true, "program": true, "ejected": true,
 			"stacks": true, "onStack": true, "byStack": true, "regionProvider": true,
 		},
 		names:        map[string]string{},
 		in:           map[string][]int{},
 		providerArgs: map[string]string{},
+		parentArgs:   map[string]string{},
+		takes:        map[string]string{},
 	}
 	plan := &Plan{}
 	for _, state := range states {
@@ -130,6 +139,14 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 		return nil, err
 	}
 	plan.Module = module
+	for _, key := range e.providerOrder {
+		name := "providers." + e.providerArgs[key]
+		plan.Takes = append(plan.Takes, name+": "+e.takes[name])
+	}
+	for _, key := range e.parentOrder {
+		name := "parents." + e.parentArgs[key]
+		plan.Takes = append(plan.Takes, name+": "+e.takes[name])
+	}
 	if e.nodeBuild {
 		plan.Build = buildModule
 	}
@@ -197,6 +214,15 @@ func (e *ejector) name() {
 			if _, ok := e.providerArgs[key]; !ok {
 				e.providerArgs[key] = e.unique(varName(urn.Name()))
 				e.providerOrder = append(e.providerOrder, key)
+				e.takes["providers."+e.providerArgs[key]] = fmt.Sprintf("the program's %q provider (%s)", urn.Name(), urn.Type())
+			}
+		}
+		for _, urn := range g.parents {
+			key := keyOf(urn)
+			if _, ok := e.parentArgs[key]; !ok {
+				e.parentArgs[key] = e.unique(varName(urn.Name()))
+				e.parentOrder = append(e.parentOrder, key)
+				e.takes["parents."+e.parentArgs[key]] = fmt.Sprintf("the program's %q (%s), which SST's components are in", urn.Name(), urn.Type())
 			}
 		}
 		for _, r := range g.resources {
@@ -217,7 +243,10 @@ func (e *ejector) name() {
 	}
 	for _, g := range e.stacks {
 		for _, urn := range g.providers {
-			g.vars[urn] = "providers." + e.providerArgs[keyOf(urn)]
+			g.vars[urn] = "program.providers." + e.providerArgs[keyOf(urn)]
+		}
+		for _, urn := range g.parents {
+			g.vars[urn] = "program.parents." + e.parentArgs[keyOf(urn)]
 		}
 		for _, r := range g.resources {
 			if g.declares(r) {
@@ -420,12 +449,25 @@ func (e *ejector) module() (string, error) {
 	b.WriteString(" * Makes what SST's components made, and returns each one's parts by\n")
 	b.WriteString(" * component, for the program to use in place of their outputs.\n")
 	b.WriteString(" */\n")
-	if len(e.providerOrder) == 0 {
+	if len(e.providerOrder) == 0 && len(e.parentOrder) == 0 {
 		b.WriteString("export function ejected() {\n")
 	} else {
-		b.WriteString("export function ejected(providers: {\n")
-		for _, key := range e.providerOrder {
-			fmt.Fprintf(&b, "  %s: pulumi.ProviderResource;\n", e.providerArgs[key])
+		b.WriteString("export function ejected(program: {\n")
+		if len(e.providerOrder) > 0 {
+			b.WriteString("  /** The program's own providers SST's components were given. */\n")
+			b.WriteString("  providers: {\n")
+			for _, key := range e.providerOrder {
+				fmt.Fprintf(&b, "    %s: pulumi.ProviderResource;\n", e.providerArgs[key])
+			}
+			b.WriteString("  };\n")
+		}
+		if len(e.parentOrder) > 0 {
+			b.WriteString("  /** The program's own components SST's components are in. */\n")
+			b.WriteString("  parents: {\n")
+			for _, key := range e.parentOrder {
+				fmt.Fprintf(&b, "    %s: pulumi.Resource;\n", e.parentArgs[key])
+			}
+			b.WriteString("  };\n")
 		}
 		b.WriteString("}) {\n")
 	}
@@ -495,6 +537,9 @@ func (e *ejector) declaration(m *merger, key string, in []int, present []*decl) 
 		build = func(string) string { return "regionProvider(" + region + ")" }
 	case roleComponent:
 		build = func(string) string {
+			if first.programParent != "" {
+				return fmt.Sprintf("new pulumi.ComponentResource(%s, %s, {}, { parent: %s })", quote(first.r.Type), quote(first.r.name()), first.programParent)
+			}
 			if first.parent == "" {
 				return fmt.Sprintf("new pulumi.ComponentResource(%s, %s)", quote(first.r.Type), quote(first.r.name()))
 			}

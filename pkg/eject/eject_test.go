@@ -76,8 +76,8 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 		"protect: true",
 		`customTimeouts: { create: "600s", delete: "90.5s" }`,
 		// A provider of the program's, given by name
-		"export function ejected(providers: {\n  east: pulumi.ProviderResource;\n})",
-		"provider: providers.east",
+		"export function ejected(program: {\n  /** The program's own providers SST's components were given. */\n  providers: {\n    east: pulumi.ProviderResource;\n  };\n})",
+		"provider: program.providers.east",
 		// Secrets, read from the config
 		`variables: config.requireSecretObject<any>("ApiFunction.environment.variables")`,
 		`s3Key: config.requireSecret("ApiFunction.s3Key")`,
@@ -475,5 +475,46 @@ func TestBuildLeavesOutAStackWithoutComponents(t *testing.T) {
 	}
 	if !strings.Contains(plan.Module, `if (pulumi.getStack() !== "dev")`) {
 		t.Error("the module isn't the dev stack's alone")
+	}
+}
+
+func TestBuildTakesTheProgramsComponentSSTsIsIn(t *testing.T) {
+	data := editFixture(t, func(resources []map[string]any) []map[string]any {
+		stack := "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev"
+		shop := "urn:pulumi:dev::shop::acme:index:Shop::Shop"
+		inner := "urn:pulumi:dev::shop::acme:index:Shop$sst:aws:Queue::Jobs"
+		return append(resources,
+			map[string]any{"urn": shop, "custom": false, "type": "acme:index:Shop", "parent": stack},
+			map[string]any{"urn": inner, "custom": false, "type": "sst:aws:Queue", "parent": shop},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::acme:index:Shop$sst:aws:Queue$aws:sqs/queue:Queue::JobsQueue", "custom": true, "id": "https://sqs/jobs",
+				"type": "aws:sqs/queue:Queue", "parent": inner,
+				"provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+				"inputs":   map[string]any{"name": "shop-dev-JobsQueue-abcdefgh"},
+			},
+		)
+	})
+	plan, err := build(t, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"  /** The program's own components SST's components are in. */\n  parents: {\n    shop: pulumi.Resource;\n  };\n",
+		`const jobs = new pulumi.ComponentResource("sst:aws:Queue", "Jobs", {}, { parent: program.parents.shop });`,
+		"{ parent: jobs }",
+		"Jobs: { queue: jobsQueue },",
+	} {
+		if !strings.Contains(plan.Module, want) {
+			t.Errorf("the module has no\n%s\nin\n%s", want, plan.Module)
+		}
+	}
+	if got := strings.Join(plan.Takes, "; "); !strings.Contains(got, `parents.shop: the program's "Shop" (acme:index:Shop), which SST's components are in`) {
+		t.Errorf("takes %q", got)
+	}
+	// The program's own component stays the program's
+	for _, urn := range plan.Stacks[0].Remove {
+		if urn.Name() == "Shop" {
+			t.Error("the program's component leaves the state")
+		}
 	}
 }
