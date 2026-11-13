@@ -120,13 +120,9 @@ func CmdMosaic(c *cli.Cli) error {
 					}
 					fields := args
 					if len(fields) == 0 {
-						// A child started by name knows its dev command; one started from a
-						// directory is matched by that directory.
-						name := child
-						if name == "" {
-							name = cwd
-						}
-						fields, err = parseDevCommand(name, nextEnv.Command)
+						// Without arguments this process was started as SST_CHILD, so child
+						// is the dev command's name.
+						fields, err = parseDevCommand(child, nextEnv.Command)
 						if err != nil {
 							return err
 						}
