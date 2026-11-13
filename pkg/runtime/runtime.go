@@ -123,12 +123,14 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		if !filepath.IsAbs(out) {
 			out = filepath.Join(path.ResolveRootDir(input.CfgPath), out)
 		}
-		runtime, ok := c.Runtime(input.Runtime)
-		if !ok {
-			return nil, fmt.Errorf("runtime not found: %v", input.Runtime)
-		}
-		if err := runtime.ValidateHandler(input); err != nil {
-			return nil, err
+		// Only runtimes we build know how to resolve a handler. Custom-bundle
+		// functions on a runtime with no implementation (e.g. provided.al2,
+		// provided.al2023 for Swift or Dart) have nothing to validate against,
+		// so skip the check rather than failing the deploy.
+		if runtime, ok := c.Runtime(input.Runtime); ok {
+			if err := runtime.ValidateHandler(input); err != nil {
+				return nil, err
+			}
 		}
 		result = &BuildOutput{
 			Handler: input.Handler,
