@@ -2,6 +2,26 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: SST's provider takes the AWS setup of the program's
+
+Under plain Pulumi, SST's provider reaches the account the program's AWS provider does, set up the same way. Not committed.
+
+**What changed:**
+
+- **SST's own AWS resources get an SST provider for their AWS provider.** `withAwsPlugin(opts)` (`platform/src/components/plugin.ts`), on the AWS resources and `getHostedZone`, gives each the SST provider made for the AWS provider its component uses (`parent.getProvider("aws::")`), once for each. For the stack's default AWS provider, it's named `sst` and its config is the stack's `aws:profile`, `aws:region` and the roles in `aws:assumeRoles` or `aws:assumeRole`, as `sst dev` reads them for a Pulumi program. A secret one, or a role with an external ID, is refused, as there. For an explicit `aws.Provider`, it's named `sst-<name>`, with that provider's `profile` and `region`; its roles aren't among its outputs. Cloudflare's and Vercel's resources keep the default provider (`withPlugin`). Under SST's CLI, nothing changes.
+- **The provider reads its AWS setup from its config.** `Configure` reads `awsProfile`, `awsRegion` and `awsAssumeRoles` from an explicit provider's inputs or a default provider's `sst:` config (`pkg/provider`), and the first resource that needs AWS makes its setup from them with `LoadAwsConfig`, as the CLI makes its own: a profile that's named wins over keys in the environment. With none, it's the environment's, as under SST's CLI. It names no credentials, so the state keeps none. This is the 5.0 decision of 2026-11-01 ("from the environment the core gives Pulumi, never from its config") for SST's CLI; a program with no CLI has no environment from a core to give.
+
+**Checked:**
+
+- Go: `TestConfigureAws` (an explicit provider's inputs, a default provider's stack config with `sst:dev` beside it, none, roles it can't read) and `TestEnvAwsFromSettings` (the config's profile wins over `AWS_PROFILE` and the shell's keys, and gives its region, the config's region over the profile's, none falls back to the environment). The full suite passed.
+- Platform: `tsc`, the full suite (110 files, 4234 tests), the API reports unchanged.
+- In the lab, with no AWS credentials, profile or region in the environment, and a scratch AWS config with a profile `thinlab` whose `credential_process` asks `aws-sso` for the lab's credentials:
+  - **The stack's config:** the `StaticSite` program with `aws:profile thinlab` and `aws:region us-west-2` deployed (16 resources, the SST provider `sst` among them, with `awsProfile: thinlab`, `awsRegion: us-west-2`), answered 200, previewed with no changes, and destroyed.
+  - **An explicit provider:** a `Function` in a component of the program's with `providers: { aws: Lab }` (`profile: thinlab`, `region: us-west-2`), and `addEnvironment`, while the stack's default provider was `us-east-1`. The SST provider `sst-Lab` took `us-west-2`, `FunctionEnvironmentUpdate` ran on it, and the function answered with the variable it added. Destroyed.
+  - Nothing left: the audit by id found no distribution, bucket, function, role, log group, CloudFront function or key-value store, and the one source map SST keeps on delete was deleted.
+
+**Found, in SST 5's components, not this branch's:** lookups that don't follow the component's AWS provider. `Function` looks up its region, partition and account with the component's `opts` (`getRegionOutput({}, opts)`), as do `Bucket`'s distribution ARN, the Step Functions `Map` and the API Gateway account helper, where the other components pass `{ parent: this }`; a lookup reads `provider` or `parent`, not a component's `providers`. So a `Function` given `providers: { aws }` for another region looks up the default provider's region, and SST's bootstrap there, under SST's CLI too. And about 23 `iam.getPolicyDocument` calls pass neither. Under SST's CLI the default provider is always set up and the documents are made locally, so they work; under plain Pulumi, a program whose only AWS provider is an explicit one fails on the first. The lab's explicit-provider check gave the default provider credentials for this reason.
+
 ## 2026-11-12: step 2, a `StaticSite` on plain Pulumi
 
 A plain Pulumi program with `new StaticSite("Web", { path: "web" })` from `sst/components/aws` deploys with `pulumi up` alone. SST's own resources (`BucketFiles`, `KvKeys`, `DistributionInvalidation`, `DistributionDeploymentWaiter`) run on SST's provider as a plugin Pulumi downloads, [as decided](plan.md#decisions). Not committed.
