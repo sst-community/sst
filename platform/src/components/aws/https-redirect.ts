@@ -8,7 +8,6 @@ import { Input } from "../input.js";
 import { Dns } from "../dns.js";
 import { cloudfront, s3 } from "@pulumi/aws";
 import { CF_BLOCK_CLOUDFRONT_URL_INJECTION } from "./router.js";
-import { OriginAccessControl } from "./providers/origin-access-control.js";
 
 /**
  * Properties to configure an HTTPS Redirect
@@ -58,7 +57,6 @@ export class HttpsRedirect extends Component {
     // Retain the website configuration so existing edge locations can still use
     // the old origin while the distribution update is deploying.
     createBucketWebsite();
-    const originAccessControl = createOriginAccessControl();
     const distribution = createDistribution();
     createDnsRecords();
 
@@ -100,14 +98,6 @@ export class HttpsRedirect extends Component {
           },
         },
         { parent },
-      );
-    }
-
-    function createOriginAccessControl() {
-      return new OriginAccessControl(
-        `${name}S3AccessControl`,
-        { name: physicalName(64, name) },
-        { parent, ignoreChanges: ["name"] },
       );
     }
 
@@ -182,12 +172,16 @@ async function handler(event) {
           origins: [
             {
               originId: "s3Origin",
-              // CloudFront requires an origin even though the function responds
-              // before contacting it. Keep this fallback private and HTTPS-only.
-              domainName: bucket.nodes.bucket.bucketRegionalDomainName,
-              originAccessControlId: originAccessControl.id,
-              s3OriginConfig: {
-                originAccessIdentity: "",
+              // CloudFront requires an origin even though the function answers
+              // every request before contacting it. Use the same HTTPS-only
+              // placeholder as the sites, so there is no HTTP-only origin and
+              // no origin access control (and no new permission) is needed.
+              domainName: "placeholder.sst.dev",
+              customOriginConfig: {
+                httpPort: 80,
+                httpsPort: 443,
+                originProtocolPolicy: "https-only",
+                originSslProtocols: ["TLSv1.2"],
               },
             },
           ],

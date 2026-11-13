@@ -17,7 +17,6 @@ pulumi.runtime.setMocks(
         state: {
           ...args.inputs,
           arn: `arn:aws:mock:us-east-1:123456789012:${args.name}`,
-          bucketRegionalDomainName: `${args.inputs.bucket}.s3.us-east-1.amazonaws.com`,
         },
       };
     },
@@ -121,7 +120,7 @@ describe("HttpsRedirect", () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it("uses a private S3 REST fallback with always-signed OAC", () => {
+  it("uses an HTTPS-only placeholder origin and no origin access control", () => {
     const distribution = resources.get("RedirectDistribution");
     expect(distribution?.inputs.aliases).toEqual([
       "example.com",
@@ -134,14 +133,20 @@ describe("HttpsRedirect", () => {
     expect(distribution?.inputs.origins).toEqual([
       {
         originId: "s3Origin",
-        domainName:
-          resources.get("RedirectBucketBucket")?.inputs.bucket +
-          ".s3.us-east-1.amazonaws.com",
-        originAccessControlId:
-          "RedirectS3AccessControl.sst.aws.OriginAccessControl_id",
-        s3OriginConfig: { originAccessIdentity: "" },
+        domainName: "placeholder.sst.dev",
+        customOriginConfig: {
+          httpPort: 80,
+          httpsPort: 443,
+          originProtocolPolicy: "https-only",
+          originSslProtocols: ["TLSv1.2"],
+        },
       },
     ]);
+    expect(
+      [...resources.values()].filter((r) =>
+        r.type.includes("OriginAccessControl"),
+      ),
+    ).toEqual([]);
     expect(
       resources.get("RedirectBucketPublicAccessBlock")?.inputs,
     ).toMatchObject({
