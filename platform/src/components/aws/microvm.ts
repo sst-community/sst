@@ -679,44 +679,50 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
 
     function executionRoleArgs(): iam.RoleArgs {
       return {
-        assumeRolePolicy: iam.getPolicyDocumentOutput({
-          statements: [
-            {
-              actions: ["sts:AssumeRole", "sts:TagSession"],
-              principals: [
-                { type: "Service", identifiers: ["lambda.amazonaws.com"] },
-              ],
-            },
-            // In `sst dev`, the CLI assumes this role to run `dev.command`.
-            ...(dev
-              ? [
-                  {
-                    actions: ["sts:AssumeRole"],
-                    principals: [
-                      {
-                        type: "AWS",
-                        identifiers: [
-                          getCallerIdentityOutput({}, { parent: self })
-                            .accountId,
-                        ],
-                      },
-                    ],
-                  },
-                ]
-              : []),
-          ],
-        }).json,
-        inlinePolicies: inlinePolicies([
-          args.permissions,
-          Link.getInclude<Permission>("aws.permission", args.link),
+        assumeRolePolicy: iam.getPolicyDocumentOutput(
+          {
+            statements: [
+              {
+                actions: ["sts:AssumeRole", "sts:TagSession"],
+                principals: [
+                  { type: "Service", identifiers: ["lambda.amazonaws.com"] },
+                ],
+              },
+              // In `sst dev`, the CLI assumes this role to run `dev.command`.
+              ...(dev
+                ? [
+                    {
+                      actions: ["sts:AssumeRole"],
+                      principals: [
+                        {
+                          type: "AWS",
+                          identifiers: [
+                            getCallerIdentityOutput({}, { parent: self })
+                              .accountId,
+                          ],
+                        },
+                      ],
+                    },
+                  ]
+                : []),
+            ],
+          },
+          { parent: self },
+        ).json,
+        inlinePolicies: inlinePolicies(
           [
-            {
-              effect: "allow",
-              actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
-              resources: [interpolate`${logGroup.arn}:*`],
-            },
+            args.permissions,
+            Link.getInclude<Permission>("aws.permission", args.link),
+            [
+              {
+                effect: "allow",
+                actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources: [interpolate`${logGroup.arn}:*`],
+              },
+            ],
           ],
-        ]),
+          self,
+        ),
       };
     }
 
@@ -798,33 +804,39 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
 
     function buildRoleArgs(): iam.RoleArgs {
       return {
-        assumeRolePolicy: iam.getPolicyDocumentOutput({
-          statements: [
-            {
-              actions: ["sts:AssumeRole", "sts:TagSession"],
-              principals: [
-                { type: "Service", identifiers: ["lambda.amazonaws.com"] },
-              ],
-            },
-          ],
-        }).json,
+        assumeRolePolicy: iam.getPolicyDocumentOutput(
+          {
+            statements: [
+              {
+                actions: ["sts:AssumeRole", "sts:TagSession"],
+                principals: [
+                  { type: "Service", identifiers: ["lambda.amazonaws.com"] },
+                ],
+              },
+            ],
+          },
+          { parent: self },
+        ).json,
         inlinePolicies: [
           {
             name: "inline",
-            policy: iam.getPolicyDocumentOutput({
-              statements: [
-                {
-                  actions: ["s3:GetObject"],
-                  resources: [
-                    interpolate`arn:${partition}:s3:::${code.object.bucket}/${code.object.key}`,
-                  ],
-                },
-                {
-                  actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
-                  resources: [interpolate`${logGroup.arn}:*`],
-                },
-              ],
-            }).json,
+            policy: iam.getPolicyDocumentOutput(
+              {
+                statements: [
+                  {
+                    actions: ["s3:GetObject"],
+                    resources: [
+                      interpolate`arn:${partition}:s3:::${code.object.bucket}/${code.object.key}`,
+                    ],
+                  },
+                  {
+                    actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+                    resources: [interpolate`${logGroup.arn}:*`],
+                  },
+                ],
+              },
+              { parent: self },
+            ).json,
           },
         ],
       };
@@ -848,31 +860,34 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
         inlinePolicies: [
           {
             name: "inline",
-            policy: iam.getPolicyDocumentOutput({
-              statements: [
-                {
-                  actions: ["ec2:CreateNetworkInterface"],
-                  resources: [
-                    interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
-                    interpolate`arn:${partition}:ec2:*:*:subnet/*`,
-                    interpolate`arn:${partition}:ec2:*:*:security-group/*`,
-                  ],
-                },
-                {
-                  actions: ["ec2:CreateTags"],
-                  resources: [
-                    interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
-                  ],
-                  conditions: [
-                    {
-                      test: "StringEquals",
-                      variable: "ec2:ManagedResourceOperator",
-                      values: ["network-connectors.lambda.amazonaws.com"],
-                    },
-                  ],
-                },
-              ],
-            }).json,
+            policy: iam.getPolicyDocumentOutput(
+              {
+                statements: [
+                  {
+                    actions: ["ec2:CreateNetworkInterface"],
+                    resources: [
+                      interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
+                      interpolate`arn:${partition}:ec2:*:*:subnet/*`,
+                      interpolate`arn:${partition}:ec2:*:*:security-group/*`,
+                    ],
+                  },
+                  {
+                    actions: ["ec2:CreateTags"],
+                    resources: [
+                      interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
+                    ],
+                    conditions: [
+                      {
+                        test: "StringEquals",
+                        variable: "ec2:ManagedResourceOperator",
+                        values: ["network-connectors.lambda.amazonaws.com"],
+                      },
+                    ],
+                  },
+                ],
+              },
+              { parent: self },
+            ).json,
           },
         ],
       });

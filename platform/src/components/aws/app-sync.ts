@@ -709,22 +709,28 @@ export class AppSync extends component("sst:aws:AppSync", parts) {
     const serviceRole =
       source.access &&
       this.part("serviceRole", name, {
-        assumeRolePolicy: iam.getPolicyDocumentOutput({
-          statements: [
-            {
-              actions: ["sts:AssumeRole"],
-              principals: [
-                { type: "Service", identifiers: ["appsync.amazonaws.com"] },
-              ],
-            },
-          ],
-        }).json,
+        assumeRolePolicy: iam.getPolicyDocumentOutput(
+          {
+            statements: [
+              {
+                actions: ["sts:AssumeRole"],
+                principals: [
+                  { type: "Service", identifiers: ["appsync.amazonaws.com"] },
+                ],
+              },
+            ],
+          },
+          { parent: this },
+        ).json,
         inlinePolicies: [
           {
             name: "inline",
-            policy: iam.getPolicyDocumentOutput({
-              statements: [source.access],
-            }).json,
+            policy: iam.getPolicyDocumentOutput(
+              {
+                statements: [source.access],
+              },
+              { parent: this },
+            ).json,
           },
         ],
       });

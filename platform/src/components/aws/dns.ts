@@ -185,7 +185,10 @@ export function dns(args: DnsArgs = {}) {
       function lookupZone() {
         if (args.zone) {
           return output(args.zone).apply(async (zoneId) => {
-            const zone = await route53.getZone({ zoneId });
+            const zone = await route53.getZone(
+              { zoneId },
+              { parent: opts.parent },
+            );
             if (!partial.name.replace(/\.$/, "").endsWith(zone.name)) {
               throw new VisibleError(
                 `The DNS record "${partial.name}" cannot be created because the domain name does not match the hosted zone "${zone.name}" (${zoneId}).`,

@@ -386,7 +386,7 @@ export class SnsTopic extends component("sst:aws:SnsTopic", parts) {
     this.assertNew("subscriber", "subscription", name, args);
 
     const queueArn = queueArnOf(queue);
-    this.part("queuePolicy", name, ...sendPolicy(queueArn));
+    this.part("queuePolicy", name, ...sendPolicy(queueArn, this));
     this.part("subscription", name, {
       topic: this.arn,
       protocol: "sqs",

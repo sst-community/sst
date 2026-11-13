@@ -1,4 +1,4 @@
-import { Input, output } from "@pulumi/pulumi";
+import { Input, output, type Resource } from "@pulumi/pulumi";
 import { iam } from "@pulumi/aws";
 import { parseQueueArn } from "./arn";
 
@@ -7,28 +7,31 @@ import { parseQueueArn } from "./arn";
  * queue: SNS for topic subscriptions, S3 for bucket notifications, and
  * EventBridge for bus subscriptions.
  */
-export function sendPolicyArgs(queueArn: Input<string>) {
+export function sendPolicyArgs(queueArn: Input<string>, parent: Resource) {
   const arn = output(queueArn);
   return {
     queueUrl: arn.apply((arn) => parseQueueArn(arn).queueUrl),
-    policy: iam.getPolicyDocumentOutput({
-      statements: [
-        {
-          actions: ["sqs:SendMessage"],
-          resources: [arn],
-          principals: [
-            {
-              type: "Service",
-              identifiers: [
-                "sns.amazonaws.com",
-                "s3.amazonaws.com",
-                "events.amazonaws.com",
-              ],
-            },
-          ],
-        },
-      ],
-    }).json,
+    policy: iam.getPolicyDocumentOutput(
+      {
+        statements: [
+          {
+            actions: ["sqs:SendMessage"],
+            resources: [arn],
+            principals: [
+              {
+                type: "Service",
+                identifiers: [
+                  "sns.amazonaws.com",
+                  "s3.amazonaws.com",
+                  "events.amazonaws.com",
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { parent },
+    ).json,
   };
 }
 
@@ -39,9 +42,9 @@ export function sendPolicyArgs(queueArn: Input<string>) {
  * kept when it's deleted.
  *
  * ```ts
- * this.part("queuePolicy", name, ...sendPolicy(queueArn));
+ * this.part("queuePolicy", name, ...sendPolicy(queueArn, this));
  * ```
  */
-export function sendPolicy(queueArn: Input<string>) {
-  return [sendPolicyArgs(queueArn), { retainOnDelete: true }] as const;
+export function sendPolicy(queueArn: Input<string>, parent: Resource) {
+  return [sendPolicyArgs(queueArn, parent), { retainOnDelete: true }] as const;
 }

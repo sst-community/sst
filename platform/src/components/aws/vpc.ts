@@ -913,16 +913,19 @@ export class Vpc extends component("sst:aws:Vpc", parts) {
     function ec2RoleArgs(): iam.RoleArgs {
       const partition = getPartitionOutput({}, { parent: self }).partition;
       return {
-        assumeRolePolicy: iam.getPolicyDocumentOutput({
-          statements: [
-            {
-              actions: ["sts:AssumeRole"],
-              principals: [
-                { type: "Service", identifiers: ["ec2.amazonaws.com"] },
-              ],
-            },
-          ],
-        }).json,
+        assumeRolePolicy: iam.getPolicyDocumentOutput(
+          {
+            statements: [
+              {
+                actions: ["sts:AssumeRole"],
+                principals: [
+                  { type: "Service", identifiers: ["ec2.amazonaws.com"] },
+                ],
+              },
+            ],
+          },
+          { parent: self },
+        ).json,
         managedPolicyArns: [
           interpolate`arn:${partition}:iam::aws:policy/AmazonSSMManagedInstanceCore`,
         ],
