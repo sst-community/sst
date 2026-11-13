@@ -32,6 +32,12 @@ import (
 // Live dev (`sst dev`) is only available for executable assemblies since those
 // can be started directly and speak the Lambda Runtime API on their own.
 type Runtime struct {
+	// publish serializes `dotnet publish`. Functions often share a project or a
+	// project reference, and concurrent builds of the same project race on its
+	// obj/ directory.
+	publish sync.Mutex
+	// mut guards directories. It is separate from publish so the file watcher
+	// isn't held up behind a build.
 	mut         sync.Mutex
 	directories map[string]string
 }
@@ -74,8 +80,14 @@ func New() *Runtime {
 	}
 }
 
+// runtimes are the managed .NET runtimes Lambda can still create functions on.
+var runtimes = map[string]bool{
+	"dotnet8":  true,
+	"dotnet10": true,
+}
+
 func (r *Runtime) Match(runtime string) bool {
-	return strings.HasPrefix(runtime, "dotnet")
+	return runtimes[runtime]
 }
 
 type Properties struct {
@@ -136,6 +148,9 @@ func ResolveProject(path string) (string, error) {
 	}
 	switch len(matches) {
 	case 0:
+		if sources, _ := filepath.Glob(filepath.Join(path, "*.cs")); len(sources) > 0 {
+			return "", fmt.Errorf("no .csproj found in %q, for a file-based app point the handler at the .cs file instead", path)
+		}
 		return "", fmt.Errorf("no .csproj found in %q", path)
 	case 1:
 		return matches[0], nil
@@ -222,7 +237,9 @@ func readFileBasedApp(data []byte) *Project {
 }
 
 // AssemblyName returns the explicit AssemblyName or falls back to the project
-// or source file name, mirroring MSBuild's default.
+// or source file name, mirroring MSBuild's default. This is a best guess: the
+// name can also be set conditionally or from an imported file, so the build
+// confirms it against the publish output with publishedAssembly.
 func (p *Project) AssemblyName(path string) string {
 	if p.assemblyName != "" {
 		return p.assemblyName
@@ -273,8 +290,8 @@ func PublishArgs(project string, out string, dev bool, architecture string) []st
 }
 
 func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtime.BuildOutput, error) {
-	r.mut.Lock()
-	defer r.mut.Unlock()
+	r.publish.Lock()
+	defer r.publish.Unlock()
 	var properties Properties
 	json.Unmarshal(input.Properties, &properties)
 
@@ -352,7 +369,16 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 			Errors: []string{message},
 		}, nil
 	}
-	r.directories[input.FunctionID], _ = filepath.Abs(root)
+	assembly, err = publishedAssembly(input.Out(), assembly)
+	if err != nil {
+		return &runtime.BuildOutput{
+			Errors: []string{fmt.Sprintf("%s: %s", filepath.Base(projectPath), err)},
+		}, nil
+	}
+	directory, _ := filepath.Abs(root)
+	r.mut.Lock()
+	r.directories[input.FunctionID] = directory
+	r.mut.Unlock()
 
 	lambdaHandler := assembly
 	if !handler.IsExecutable() {
@@ -364,6 +390,25 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 		Errors:     []string{},
 		Out:        root,
 	}, nil
+}
+
+// publishedAssembly confirms the assembly name against what `dotnet publish`
+// wrote. The name read from the project can be off when <AssemblyName> is set
+// conditionally or in an imported file like Directory.Build.props. In that case
+// the published runtimeconfig.json names the entry assembly.
+func publishedAssembly(out string, assembly string) (string, error) {
+	if _, err := os.Stat(filepath.Join(out, assembly+".dll")); err == nil {
+		return assembly, nil
+	}
+	const suffix = ".runtimeconfig.json"
+	matches, _ := filepath.Glob(filepath.Join(out, "*"+suffix))
+	if len(matches) == 1 {
+		name := strings.TrimSuffix(filepath.Base(matches[0]), suffix)
+		if _, err := os.Stat(filepath.Join(out, name+".dll")); err == nil {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("could not find %s.dll in the publish output. Set <AssemblyName> unconditionally in the project file so SST can find the assembly", assembly)
 }
 
 // sdkVersion reports the SDK that `dotnet --version` resolves to from the given
@@ -425,7 +470,9 @@ func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 	if !rebuildExtensions[strings.ToLower(filepath.Ext(file))] {
 		return false
 	}
+	r.mut.Lock()
 	match, ok := r.directories[functionID]
+	r.mut.Unlock()
 	if !ok {
 		return false
 	}

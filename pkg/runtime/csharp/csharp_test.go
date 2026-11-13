@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestMatch(t *testing.T) {
 			t.Errorf("expected %q to match", name)
 		}
 	}
-	for _, name := range []string{"nodejs24.x", "go", "rust", "python3.13", "provided.al2023"} {
+	for _, name := range []string{"nodejs24.x", "go", "rust", "python3.13", "provided.al2023", "dotnet6", "dotnet", "dotnetcore3.1"} {
 		if r.Match(name) {
 			t.Errorf("expected %q not to match", name)
 		}
@@ -108,6 +109,61 @@ func TestResolveProject(t *testing.T) {
 	if _, err := ResolveProject(other); err == nil {
 		t.Error("expected non-project file to fail")
 	}
+}
+
+func TestResolveProjectHintsAtFileBasedApps(t *testing.T) {
+	root := t.TempDir()
+	writeProject(t, root, "Api.cs", `Console.WriteLine("hi");`)
+	if _, err := ResolveProject(root); err == nil || !strings.Contains(err.Error(), "point the handler at the .cs file") {
+		t.Errorf("expected a file-based app hint, got %v", err)
+	}
+	if _, err := ResolveProject(t.TempDir()); err == nil || strings.Contains(err.Error(), ".cs file") {
+		t.Errorf("expected a plain missing project error, got %v", err)
+	}
+}
+
+func TestPublishedAssembly(t *testing.T) {
+	out := t.TempDir()
+	writeProject(t, out, "Api.dll", "")
+	writeProject(t, out, "Api.runtimeconfig.json", "{}")
+	if got, err := publishedAssembly(out, "Api"); err != nil || got != "Api" {
+		t.Errorf("publishedAssembly = %q, %v; want Api", got, err)
+	}
+	// The project file named an assembly this configuration didn't build.
+	if got, err := publishedAssembly(out, "Custom.Assembly"); err != nil || got != "Api" {
+		t.Errorf("publishedAssembly = %q, %v; want Api", got, err)
+	}
+
+	writeProject(t, out, "Other.dll", "")
+	writeProject(t, out, "Other.runtimeconfig.json", "{}")
+	if _, err := publishedAssembly(out, "Custom.Assembly"); err == nil || !strings.Contains(err.Error(), "Custom.Assembly.dll") {
+		t.Errorf("expected an ambiguous output to fail, got %v", err)
+	}
+	if _, err := publishedAssembly(t.TempDir(), "Api"); err == nil {
+		t.Error("expected an empty output to fail")
+	}
+}
+
+// TestConcurrentBuildBookkeeping runs under -race to catch unguarded access to
+// the directories map shared by Build and the file watcher.
+func TestConcurrentBuildBookkeeping(t *testing.T) {
+	r := New()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		id := fmt.Sprintf("fn%d", i)
+		go func() {
+			defer wg.Done()
+			r.mut.Lock()
+			r.directories[id] = "/app/src"
+			r.mut.Unlock()
+		}()
+		go func() {
+			defer wg.Done()
+			r.ShouldRebuild(id, "/app/src/Function.cs")
+		}()
+	}
+	wg.Wait()
 }
 
 func TestReadProject(t *testing.T) {
@@ -652,5 +708,59 @@ func TestDotnet10Examples(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBuildConfirmsAssemblyName builds a project whose <AssemblyName> only
+// applies to Release. A dev build is a Debug build, so the handler has to name
+// the assembly that was actually published. Needs a .NET SDK.
+func TestBuildConfirmsAssemblyName(t *testing.T) {
+	requireDotnet(t, 8)
+	version, err := exec.Command("dotnet", "--version").Output()
+	if err != nil {
+		t.Skipf("dotnet --version failed: %v", err)
+	}
+	major, _, err := parseMajor(strings.TrimSpace(string(version)))
+	if err != nil {
+		t.Skip(err)
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "src")
+	writeProject(t, dir, "Api.csproj", fmt.Sprintf(`<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net%d.0</TargetFramework>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <AssemblyName>Custom.Assembly</AssemblyName>
+  </PropertyGroup>
+</Project>`, major))
+	writeProject(t, dir, "Program.cs", `System.Console.WriteLine("hello");`)
+	cfg := filepath.Join(root, "sst.config.ts")
+	r := New()
+
+	dev := devBuild(t, r, cfg, "dev", dir, "dotnet10")
+	if dev.Handler != "Api" {
+		t.Errorf("dev Handler = %q, want Api", dev.Handler)
+	}
+	if _, err := os.Stat(filepath.Join(dev.Out, "Api.dll")); err != nil {
+		t.Errorf("dev build is missing the handler assembly: %v", err)
+	}
+
+	deploy, err := r.Build(context.Background(), &runtime.BuildInput{
+		FunctionID: "deploy",
+		Handler:    dir,
+		Runtime:    "dotnet10",
+		Properties: json.RawMessage(`{"architecture":"x86_64"}`),
+		CfgPath:    cfg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deploy.Errors) > 0 {
+		t.Fatalf("deploy build errors: %s", strings.Join(deploy.Errors, "\n"))
+	}
+	if deploy.Handler != "Custom.Assembly" {
+		t.Errorf("deploy Handler = %q, want Custom.Assembly", deploy.Handler)
 	}
 }

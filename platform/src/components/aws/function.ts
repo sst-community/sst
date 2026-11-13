@@ -1643,8 +1643,8 @@ export interface FunctionArgs {
  *
  * #### Supported runtimes
  *
- * Currently supports **Node.js** and **Golang** functions. **Python** and **Rust**
- * are community supported. Other runtimes are on the roadmap.
+ * Currently supports **Node.js** and **Golang** functions. **Python**, **Rust** and
+ * **.NET** are community supported. Other runtimes are on the roadmap.
  *
  * @example
  *
