@@ -18,7 +18,13 @@ func readFixture(t *testing.T) []byte {
 	return data
 }
 
-var fixtureOptions = Options{Project: "shop", Stack: "dev", Date: "2026-11-12"}
+var fixtureOptions = Options{Project: "shop", Date: "2026-11-12"}
+
+// build ejects the fixture as the "dev" stack, and the other states given
+func build(t *testing.T, shown []byte, more ...StackState) (*Plan, error) {
+	t.Helper()
+	return Build(append([]StackState{{Stack: "dev", Shown: shown}}, more...), fixtureOptions)
+}
 
 // editFixture changes the fixture's resources before it's read
 func editFixture(t *testing.T, edit func(resources []map[string]any) []map[string]any) []byte {
@@ -41,7 +47,7 @@ func editFixture(t *testing.T, edit func(resources []map[string]any) []map[strin
 }
 
 func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
-	plan, err := Build(readFixture(t), fixtureOptions)
+	plan, err := build(t, readFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,9 +79,9 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 		"export function ejected(providers: {\n  east: pulumi.ProviderResource;\n})",
 		"provider: providers.east",
 		// Secrets, read from the config
-		`variables: secrets.requireSecretObject<any>("ApiFunction.environment.variables")`,
-		`s3Key: secrets.requireSecret("ApiFunction.s3Key")`,
-		`const secrets = new pulumi.Config("sst-ejected");`,
+		`variables: config.requireSecretObject<any>("ApiFunction.environment.variables")`,
+		`s3Key: config.requireSecret("ApiFunction.s3Key")`,
+		`const config = new pulumi.Config("sst-ejected");`,
 		// The build to switch to
 		`...nodeBuild("functions/api.handler") from ./sst-ejected-build`,
 		// The stack it's from
@@ -113,9 +119,16 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 	if plan.Build == "" {
 		t.Error("no build for the Node.js function")
 	}
+	if len(plan.Stacks) != 1 {
+		t.Fatalf("stacks %v", plan.Stacks)
+	}
+	stack := plan.Stacks[0]
 	secrets := map[string]string{}
-	for _, secret := range plan.Secrets {
-		secrets[secret.Key] = secret.Value
+	for _, setting := range stack.Config {
+		if !setting.Secret {
+			t.Errorf("%s isn't a secret", setting.Key)
+		}
+		secrets[setting.Key] = setting.Value
 	}
 	wantSecrets := map[string]string{
 		// with what addEnvironment added
@@ -132,7 +145,7 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 	}
 
 	var removed []string
-	for _, urn := range plan.Remove {
+	for _, urn := range stack.Remove {
 		removed = append(removed, urn.Name())
 	}
 	if got, want := strings.Join(removed, " "), "sst LambdaEncryptionKey FilesLinkRef FilesUpload ApiCode ApiEnvironmentUpdate Worker default_4_21_2"; got != want {
@@ -144,12 +157,12 @@ func TestBuildWritesTheComponentsAsPulumisResources(t *testing.T) {
 	if got := strings.Join(plan.Uses, "; "); got != "Readme uses FilesBucket" {
 		t.Errorf("uses %q", got)
 	}
-	if got := strings.Join(plan.Updates, "; "); got != "ApiFunction's environment gets LATE, which addEnvironment added after it was made" {
+	if got := strings.Join(stack.Updates, "; "); got != "ApiFunction's environment gets LATE, which addEnvironment added after it was made" {
 		t.Errorf("updates %q", got)
 	}
 
 	// The same state writes the same module
-	again, err := Build(readFixture(t), fixtureOptions)
+	again, err := build(t, readFixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +234,7 @@ func TestBuildRefuses(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Build(editFixture(t, tc.edit), fixtureOptions)
+			_, err := build(t, editFixture(t, tc.edit))
 			if err == nil || !strings.Contains(err.Error(), tc.error) {
 				t.Fatalf("got %v, want %q", err, tc.error)
 			}
@@ -231,12 +244,12 @@ func TestBuildRefuses(t *testing.T) {
 
 func TestWithoutResources(t *testing.T) {
 	data := readFixture(t)
-	plan, err := Build(data, fixtureOptions)
+	plan, err := build(t, data)
 	if err != nil {
 		t.Fatal(err)
 	}
 	remove := map[resource.URN]bool{}
-	for _, urn := range plan.Remove {
+	for _, urn := range plan.Stacks[0].Remove {
 		remove[urn] = true
 	}
 	edited, err := withoutResources(data, remove)
@@ -247,7 +260,7 @@ func TestWithoutResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := len(parsed.Deployment.Resources), 21-len(plan.Remove); got != want {
+	if got, want := len(parsed.Deployment.Resources), 21-len(plan.Stacks[0].Remove); got != want {
 		t.Errorf("%d resources left, not %d", got, want)
 	}
 	for _, r := range parsed.Deployment.Resources {
@@ -346,5 +359,121 @@ func TestStrings(t *testing.T) {
 	}
 	if got := partKey("Api", "ApiFunction"); got != "function" {
 		t.Error(got)
+	}
+}
+
+// prodFixture is the fixture as another stack has it: its own names, a
+// function given a role that isn't the component's, and a queue only it has
+func prodFixture(t *testing.T) []byte {
+	t.Helper()
+	text := strings.NewReplacer("dev::shop", "prod::shop", "Stack::shop-dev", "Stack::shop-prod", "shop-dev-", "shop-prod-", `\"stage\\\":\\\"dev`, `\"stage\\\":\\\"prod`).Replace(string(readFixture(t)))
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	deployment := parsed["deployment"].(map[string]any)
+	resources := deployment["resources"].([]any)
+	for _, r := range resources {
+		r := r.(map[string]any)
+		if strings.HasSuffix(r["urn"].(string), "::ApiFunction") {
+			r["inputs"].(map[string]any)["role"] = "arn:aws:iam::123456789012:role/external"
+		}
+	}
+	stack := "urn:pulumi:prod::shop::pulumi:pulumi:Stack::shop-prod"
+	resources = append(resources,
+		map[string]any{"urn": "urn:pulumi:prod::shop::sst:aws:Queue::Extra", "custom": false, "type": "sst:aws:Queue", "parent": stack},
+		map[string]any{
+			"urn": "urn:pulumi:prod::shop::sst:aws:Queue$aws:sqs/queue:Queue::ExtraQueue", "custom": true, "id": "https://sqs/extra",
+			"type": "aws:sqs/queue:Queue", "parent": "urn:pulumi:prod::shop::sst:aws:Queue::Extra",
+			"provider": "urn:pulumi:prod::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+			"inputs":   map[string]any{"name": "shop-prod-ExtraQueue-abcdefgh", "visibilityTimeoutSeconds": 30},
+			"outputs":  map[string]any{"arn": "arn:aws:sqs:us-west-2:123456789012:shop-prod-ExtraQueue-abcdefgh", "url": "https://sqs/extra"},
+		},
+	)
+	deployment["resources"] = resources
+	data, err := json.Marshal(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestBuildWritesOneModuleForEveryStack(t *testing.T) {
+	plan, err := build(t, readFixture(t), StackState{Stack: "acme/shop/prod", Shown: prodFixture(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := plan.Module
+	for _, want := range []string{
+		"from the state of the \"dev\" and \"prod\" stacks of shop.",
+		`if (!["dev", "prod"].includes(pulumi.getStack()))`,
+		// What's the same in both, as it is
+		"bucket: filesBucket.bucket",
+		"forceDestroy: true",
+		"pulumi.interpolate`${filesBucket.arn}/*`",
+		// A plain value each stack has its own of, from its config
+		`bucket: config.require("FilesBucket.bucket")`,
+		`name: config.require("ApiRole.name")`,
+		// A secret, from each stack's config
+		`variables: config.requireSecretObject<any>("ApiFunction.environment.variables")`,
+		// A value that's a reference in one stack and not in the other
+		"role: byStack({\n        dev: () => apiRole.arn,\n        prod: () => \"arn:aws:iam::123456789012:role/external\",\n      }),",
+		"function byStack<T>(values: Record<string, () => T>): T {",
+		// What only one stack has
+		"function onStack(...stacks: string[]) {",
+		"// Extra, SST's sst:aws:Queue, in the \"prod\" stack",
+		"const extra = onStack(\"prod\")\n    ? new pulumi.ComponentResource(\"sst:aws:Queue\", \"Extra\")\n    : undefined;",
+		"const extraQueue = onStack(\"prod\")\n    ? new aws.sqs.Queue(\n",
+		"{ parent: extra! }",
+		`name: "shop-prod-ExtraQueue-abcdefgh"`,
+		"Extra: { queue: extraQueue },",
+	} {
+		if !strings.Contains(module, want) {
+			t.Errorf("the module has no\n%s\nin\n%s", want, module)
+		}
+	}
+
+	if len(plan.Stacks) != 2 || plan.Stacks[1].Stack != "acme/shop/prod" || plan.Stacks[1].Name != "prod" {
+		t.Fatalf("stacks %+v", plan.Stacks)
+	}
+	settings := func(stack *StackPlan) map[string]Setting {
+		result := map[string]Setting{}
+		for _, setting := range stack.Config {
+			result[setting.Key] = setting
+		}
+		return result
+	}
+	dev, prod := settings(plan.Stacks[0]), settings(plan.Stacks[1])
+	if got := dev["sst-ejected:FilesBucket.bucket"]; got.Value != "shop-dev-filesbucket-abcdefgh" || got.Secret {
+		t.Errorf("dev's bucket: %+v", got)
+	}
+	if got := prod["sst-ejected:FilesBucket.bucket"]; got.Value != "shop-prod-filesbucket-abcdefgh" || got.Secret {
+		t.Errorf("prod's bucket: %+v", got)
+	}
+	if got := prod["sst-ejected:ApiFunction.environment.variables"]; !got.Secret || !strings.Contains(got.Value, `\"stage\":\"prod\"`) {
+		t.Errorf("prod's environment: %+v", got)
+	}
+	if len(dev) != len(prod) {
+		t.Errorf("dev has %d settings and prod %d", len(dev), len(prod))
+	}
+	if got := len(plan.Stacks[1].Remove); got != len(plan.Stacks[0].Remove) {
+		t.Errorf("prod has %d to take out", got)
+	}
+	if strings.Contains(module, "shop-dev-") {
+		t.Error("the module has dev's names in it")
+	}
+}
+
+func TestBuildLeavesOutAStackWithoutComponents(t *testing.T) {
+	empty := []byte(`{"version":3,"deployment":{"resources":[{"urn":"urn:pulumi:old::shop::pulumi:pulumi:Stack::shop-old","custom":false,"type":"pulumi:pulumi:Stack"}]}}`)
+	plan, err := build(t, readFixture(t), StackState{Stack: "old", Shown: empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Stacks) != 1 || strings.Join(plan.Skipped, " ") != "old" {
+		t.Errorf("stacks %v, skipped %v", plan.Stacks, plan.Skipped)
+	}
+	if !strings.Contains(plan.Module, `if (pulumi.getStack() !== "dev")`) {
+		t.Error("the module isn't the dev stack's alone")
 	}
 }

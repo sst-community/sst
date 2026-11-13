@@ -1,7 +1,6 @@
 package eject
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -25,40 +24,59 @@ const (
 type Options struct {
 	// The Pulumi project's name
 	Project string
-	// The stack's name, without its organization and project
-	Stack string
 	// The day it's written, for the module's first line
 	Date string
 }
 
-// Plan is what an eject writes and what it takes out of the state, worked
-// out from the state before anything is changed
+// StackState is a stack's state, as `pulumi stack export --show-secrets`
+// prints it
+type StackState struct {
+	// The stack, as Pulumi names it
+	Stack string
+	Shown []byte
+}
+
+// Plan is what an eject writes and what it takes out of each stack's state,
+// worked out from the states before anything is changed
 type Plan struct {
 	// sst-ejected.ts
 	Module string
 	// sst-ejected-build.ts, or "" when no function runs on Node.js
 	Build string
-	// What's set in the stack's config, under ConfigNamespace
-	Secrets []Secret
-	// What leaves the state, in the state's order
-	Remove []resource.URN
+	// The stacks the module is for, and what changes in each
+	Stacks []*StackPlan
+	// The stacks with none of SST's components, which it has nothing for
+	Skipped []string
 	// SST's components, now in the module, for what the eject says
 	Components []Component
-	// What leaves the state, and why, for what the eject says
-	Removed []Removed
 	// The program's own resources that use a component, for what the eject
 	// says
 	Uses []string
-	// What the module has that the state doesn't, which the first `pulumi up`
-	// updates in place to what it already is in the cloud
+}
+
+// StackPlan is what an eject changes in one stack
+type StackPlan struct {
+	// The stack, as Pulumi names it
+	Stack string
+	// Its name, without its organization and project
+	Name string
+	// What's set in its config, under ConfigNamespace
+	Config []Setting
+	// What leaves its state, in the state's order
+	Remove []resource.URN
+	// What leaves its state, and why, for what the eject says
+	Removed []Removed
+	// What the module has that its state doesn't, which the first `pulumi
+	// up` updates in place to what it already is in the cloud
 	Updates []string
 }
 
-// Secret is a secret input, as it's set in the stack's config: a string as
-// it is, and anything else as JSON
-type Secret struct {
-	Key   string
-	Value string
+// Setting is a value set in a stack's config: a string as it is, and
+// anything else as JSON
+type Setting struct {
+	Key    string
+	Value  string
+	Secret bool
 }
 
 type Component struct {
@@ -99,73 +117,26 @@ var ownResources = map[string]string{
 	"sst:aws:DistributionDeploymentWaiter": "a wait for the CDN to deploy, with nothing in the cloud",
 }
 
+// generator reads one stack's state: what the eject does with each
+// resource, and each one the module makes, as that stack has it
 type generator struct {
-	opts      Options
+	shared    *ejector
 	resources []*stateResource
 	byURN     map[resource.URN]*stateResource
 	role      map[resource.URN]role
-	// The names of components, parts and the program's providers in the
-	// module
+	// The names the module refers to each component, part and provider by
+	// (with a ! for one only some stacks have)
 	vars map[resource.URN]string
-	used map[string]bool
-	// Pulumi's packages the parts are from, by the name they're imported as
-	imports map[string]string
 	// The program's own providers parts were made with, which the module's
 	// function is given
 	providers []resource.URN
-	plan      *Plan
-	// Whether a function has the comment on the build to switch to
-	nodeBuild bool
+	plan      *StackPlan
+	// SST's components made at the program's top level
+	components []Component
 	// What addEnvironment added to a function's environment after it was
 	// made, by the function's name, then by the function
 	envUpdates map[string]map[string]any
 	addedEnv   map[resource.URN]map[string]any
-	// Whether a part was made with a provider SST makes for a region
-	usesRegionProvider bool
-}
-
-// Build works out the eject from the stack's state, read with its secrets
-// shown, and writes the module. It refuses a state it can't eject without a
-// change in the cloud, saying why.
-func Build(shown []byte, opts Options) (*Plan, error) {
-	parsed, err := readExport(shown)
-	if err != nil {
-		return nil, err
-	}
-	if len(parsed.Deployment.PendingOperations) > 0 {
-		return nil, fmt.Errorf("The stack has operations Pulumi didn't finish, like a deploy that was stopped. Run `pulumi refresh` first, and eject once it's clean.")
-	}
-	g := &generator{
-		opts:       opts,
-		resources:  parsed.Deployment.Resources,
-		byURN:      map[resource.URN]*stateResource{},
-		role:       map[resource.URN]role{},
-		vars:       map[resource.URN]string{},
-		used:       map[string]bool{"pulumi": true, "secrets": true, "providers": true, "ejected": true},
-		imports:    map[string]string{},
-		plan:       &Plan{},
-		envUpdates: map[string]map[string]any{},
-		addedEnv:   map[resource.URN]map[string]any{},
-	}
-	if err := g.classify(); err != nil {
-		return nil, err
-	}
-	if len(g.plan.Components) == 0 {
-		return nil, fmt.Errorf("The %q stack has none of SST's components, so there's nothing to eject.", opts.Stack)
-	}
-	if err := g.name(); err != nil {
-		return nil, err
-	}
-	module, err := g.module()
-	if err != nil {
-		return nil, err
-	}
-	g.plan.Module = module
-	if g.nodeBuild {
-		g.plan.Build = buildModule
-	}
-	g.plan.Uses = g.uses()
-	return g.plan, nil
 }
 
 func (g *generator) remove(r *stateResource, why string) {
@@ -208,11 +179,11 @@ func (g *generator) classify() error {
 				return fmt.Errorf("%s, one of SST's components, is in %s, a component of the program's, which sst eject doesn't write yet.", name, r.Parent.Name())
 			}
 			if dev, _ := recordedFunction(r)["dev"].(bool); dev {
-				return fmt.Errorf("The %q stack was last deployed by sst dev, so its functions run the stub that sends their calls to your machine. Run `pulumi up` first, which deploys their code, then eject.", g.opts.Stack)
+				return fmt.Errorf("The %q stack was last deployed by sst dev, so its functions run the stub that sends their calls to your machine. Run `pulumi up` first, which deploys their code, then eject.", g.plan.Name)
 			}
 			g.role[r.URN] = roleComponent
 			if !inComponent {
-				g.plan.Components = append(g.plan.Components, Component{Name: name, Type: r.Type, MadeAt: r.madeAt()})
+				g.components = append(g.components, Component{Name: name, Type: r.Type, MadeAt: r.madeAt()})
 			}
 		case r.Custom && r.providerURN().Type() == "pulumi:providers:sst" && r.Type == "sst:aws:FunctionEnvironmentUpdate":
 			// addEnvironment's: what it added goes in the function's
@@ -238,7 +209,7 @@ func (g *generator) classify() error {
 		case r.Custom && r.Parent == stack && r.Type == "random:index/randomBytes:RandomBytes" && name == "LambdaEncryptionKey":
 			g.remove(r, "the key SST encrypts links with, with nothing in the cloud: each function has it in its environment")
 		case r.Custom && r.Parent == stack && strings.HasPrefix(name, "DevBridgeCode"):
-			return fmt.Errorf("The %q stack has been deployed by sst dev, and its state still has the stub's code. Run `pulumi up` first, then eject.", g.opts.Stack)
+			return fmt.Errorf("The %q stack has been deployed by sst dev, and its state still has the stub's code. Run `pulumi up` first, then eject.", g.plan.Name)
 		case r.Custom && inComponent:
 			if built(r) {
 				// SST keeps a function's source maps on delete, and not its code
@@ -284,7 +255,7 @@ func (g *generator) classify() error {
 			continue
 		}
 		if g.role[provider.URN] == roleRegionProvider {
-			g.usesRegionProvider = true
+			g.shared.usesRegionProvider = true
 			continue
 		}
 		if g.role[provider.URN] != roleProgram {
@@ -307,9 +278,9 @@ func (g *generator) classify() error {
 			why = "a dev command for sst dev, with nothing in the cloud"
 		}
 		g.remove(r, why)
-		for j, c := range g.plan.Components {
+		for j, c := range g.components {
 			if c.Name == r.name() && c.Type == r.Type {
-				g.plan.Components = append(g.plan.Components[:j], g.plan.Components[j+1:]...)
+				g.components = append(g.components[:j], g.components[j+1:]...)
 				break
 			}
 		}
@@ -398,50 +369,6 @@ func revealed(value any) any {
 	return inner
 }
 
-// name gives each component, part and provider of the program's a name in
-// the module
-func (g *generator) name() error {
-	for _, r := range g.resources {
-		if g.role[r.URN] != rolePart {
-			continue
-		}
-		pkg, _, _ := strings.Cut(r.Type, ":")
-		if _, ok := g.imports[pkg]; !ok {
-			alias := varName(pkg)
-			g.imports[pkg] = alias
-			g.used[alias] = true
-		}
-	}
-	for _, urn := range g.providers {
-		g.vars[urn] = "providers." + g.unique(varName(urn.Name()))
-	}
-	for _, r := range g.resources {
-		if role := g.role[r.URN]; role == roleComponent || role == rolePart {
-			g.vars[r.URN] = g.unique(varName(r.name()))
-		}
-	}
-	if g.usesRegionProvider {
-		g.imports["aws"] = "aws"
-		g.used["aws"] = true
-		g.used["regionProvider"] = true
-		for _, r := range g.resources {
-			if g.role[r.URN] == roleRegionProvider {
-				g.vars[r.URN] = g.unique(varName("aws " + strings.TrimPrefix(r.name(), "AwsProvider.sst.")))
-			}
-		}
-	}
-	return nil
-}
-
-func (g *generator) unique(name string) string {
-	result := name
-	for n := 2; g.used[result]; n++ {
-		result = fmt.Sprintf("%s%d", name, n)
-	}
-	g.used[result] = true
-	return result
-}
-
 // uses is what of the program's own uses a component or a part, which the
 // program then takes from what the module returns
 func (g *generator) uses() []string {
@@ -461,150 +388,6 @@ func (g *generator) uses() []string {
 		}
 	}
 	return result
-}
-
-// module is sst-ejected.ts
-func (g *generator) module() (string, error) {
-	// Each declaration, with what it refers to, which has to come before
-	// it, grouped by the component of the program's it's in
-	type declaration struct {
-		urn   resource.URN
-		code  string
-		needs []resource.URN
-	}
-	top := func(r *stateResource) *stateResource {
-		for g.role[r.Parent] == roleComponent {
-			r = g.byURN[r.Parent]
-		}
-		return r
-	}
-	var groups []resource.URN
-	declarations := map[resource.URN][]declaration{}
-	children := map[resource.URN][]*stateResource{}
-	for _, r := range g.resources {
-		role := g.role[r.URN]
-		if role != roleComponent && role != rolePart {
-			continue
-		}
-		var d declaration
-		switch role {
-		case roleComponent:
-			d = declaration{urn: r.URN, code: g.component(r)}
-			if g.role[r.Parent] == roleComponent {
-				d.needs = []resource.URN{r.Parent}
-				children[r.Parent] = append(children[r.Parent], r)
-			} else {
-				groups = append(groups, r.URN)
-			}
-		case rolePart:
-			code, needs, err := g.part(r)
-			if err != nil {
-				return "", err
-			}
-			d = declaration{urn: r.URN, code: code, needs: needs}
-			children[r.Parent] = append(children[r.Parent], r)
-		}
-		group := top(r).URN
-		declarations[group] = append(declarations[group], d)
-	}
-	var body strings.Builder
-	written := map[resource.URN]bool{}
-	left := len(g.vars) - len(g.providers)
-	// SST's providers for a region come first: they need nothing
-	for _, r := range g.resources {
-		if _, ok := g.vars[r.URN]; ok && g.role[r.URN] == roleRegionProvider {
-			if left == len(g.vars)-len(g.providers) {
-				body.WriteString("\n" + comment("The AWS providers SST made for a region, which its components took.", "  "))
-			}
-			fmt.Fprintf(&body, "  const %s = regionProvider(%s);\n", g.vars[r.URN], quote(strings.TrimPrefix(r.name(), "AwsProvider.sst.")))
-			written[r.URN] = true
-			left--
-		}
-	}
-	for left > 0 {
-		progress := false
-		for _, group := range groups {
-			for _, d := range declarations[group] {
-				if written[d.urn] || !all(d.needs, written) {
-					continue
-				}
-				body.WriteString("\n" + d.code)
-				written[d.urn] = true
-				left--
-				progress = true
-			}
-		}
-		if !progress {
-			return "", fmt.Errorf("the state's resources depend on each other in a circle")
-		}
-	}
-
-	// What it returns: each component's parts, by the names its component
-	// gave them, with a component in it as one of its parts
-	var parts func(r *stateResource) *object
-	parts = func(r *stateResource) *object {
-		result := newObject()
-		for _, child := range children[r.URN] {
-			key := partKey(r.name(), child.name())
-			for n := 2; result.values[key] != nil; n++ {
-				key = fmt.Sprintf("%s%d", partKey(r.name(), child.name()), n)
-			}
-			if g.role[child.URN] == roleComponent {
-				result.set(key, parts(child))
-			} else {
-				result.set(key, raw(g.vars[child.URN]))
-			}
-		}
-		return result
-	}
-	result := newObject()
-	for _, urn := range groups {
-		result.set(urn.Name(), parts(g.byURN[urn]))
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "// Written by sst eject on %s, from the state of the %q stack of %s.\n", g.opts.Date, g.opts.Stack, g.opts.Project)
-	b.WriteString("// SST's components are Pulumi components here, of the same type and name,\n")
-	b.WriteString("// and their parts are Pulumi's own resources, with the inputs they were\n")
-	b.WriteString("// last deployed with, so nothing changes in the cloud when this takes their\n")
-	b.WriteString("// place. It's yours to change from here.\n")
-	if len(g.plan.Secrets) > 0 {
-		b.WriteString("//\n")
-		fmt.Fprintf(&b, "// Secret inputs are in the stack's config, under %s.\n", ConfigNamespace)
-	}
-	b.WriteString("import * as pulumi from \"@pulumi/pulumi\";\n")
-	pkgs := make([]string, 0, len(g.imports))
-	for pkg := range g.imports {
-		pkgs = append(pkgs, pkg)
-	}
-	sort.Strings(pkgs)
-	for _, pkg := range pkgs {
-		fmt.Fprintf(&b, "import * as %s from %s;\n", g.imports[pkg], quote("@pulumi/"+pkg))
-	}
-	if len(g.plan.Secrets) > 0 {
-		fmt.Fprintf(&b, "\nconst secrets = new pulumi.Config(%s);\n", quote(ConfigNamespace))
-	}
-	if g.usesRegionProvider {
-		b.WriteString(regionProviderHelper)
-	}
-	b.WriteString("\n/**\n")
-	b.WriteString(" * Makes what SST's components made, and returns each one's parts by\n")
-	b.WriteString(" * component, for the program to use in place of their outputs.\n")
-	b.WriteString(" */\n")
-	if len(g.providers) == 0 {
-		b.WriteString("export function ejected() {\n")
-	} else {
-		b.WriteString("export function ejected(providers: {\n")
-		for _, urn := range g.providers {
-			fmt.Fprintf(&b, "  %s: pulumi.ProviderResource;\n", strings.TrimPrefix(g.vars[urn], "providers."))
-		}
-		b.WriteString("}) {\n")
-	}
-	fmt.Fprintf(&b, "  if (pulumi.getStack() !== %s)\n", quote(g.opts.Stack))
-	fmt.Fprintf(&b, "    throw new Error(\n      `%s is the %s stack's, from its state, and this is the \"${pulumi.getStack()}\" stack.`,\n    );\n", ModuleFile, templateText(quote(g.opts.Stack)))
-	b.WriteString(body.String())
-	b.WriteString("\n  return " + result.ts("  ") + ";\n}\n")
-	return b.String(), nil
 }
 
 // regionProviderHelper makes an AWS provider for a region as SST's
@@ -633,28 +416,6 @@ function regionProvider(region: string) {
 }
 `
 
-// component is the code that makes one of SST's components, as a Pulumi
-// component of the same type and name
-func (g *generator) component(r *stateResource) string {
-	if g.role[r.Parent] == roleComponent {
-		return fmt.Sprintf("  const %s = new pulumi.ComponentResource(%s, %s, {}, { parent: %s });\n", g.vars[r.URN], quote(r.Type), quote(r.name()), g.vars[r.Parent])
-	}
-	text := fmt.Sprintf("%s, SST's %s", r.name(), r.Type)
-	if at := r.madeAt(); at != "" {
-		text += ", made at " + at
-	}
-	return comment(text, "  ") + fmt.Sprintf("  const %s = new pulumi.ComponentResource(%s, %s);\n", g.vars[r.URN], quote(r.Type), quote(r.name()))
-}
-
-func all(urns []resource.URN, in map[resource.URN]bool) bool {
-	for _, urn := range urns {
-		if !in[urn] {
-			return false
-		}
-	}
-	return true
-}
-
 // partKey is a part's name without its component's, like function for
 // ApiFunction in Api
 func partKey(component, part string) string {
@@ -666,46 +427,54 @@ func partKey(component, part string) string {
 	return strings.TrimSuffix(key, "_")
 }
 
-// part is the code that makes one part, and the components and parts it
-// refers to
-func (g *generator) part(r *stateResource) (string, []resource.URN, error) {
+// decl is how this stack has a component, a part or a provider SST makes
+// for a region, for the module to make
+func (g *generator) decl(r *stateResource) (*decl, error) {
+	d := &decl{key: keyOf(r.URN), r: r, kind: g.role[r.URN]}
+	if g.role[r.Parent] == roleComponent {
+		d.parent = keyOf(r.Parent)
+		d.needs = append(d.needs, d.parent)
+	}
+	if d.kind != rolePart {
+		return d, nil
+	}
 	class, err := g.class(r.Type)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	switch {
 	case len(r.ReplaceWith) > 0:
-		return "", nil, fmt.Errorf("%s is replaced with another resource (replaceWith), which sst eject doesn't write yet.", r.name())
+		return nil, fmt.Errorf("%s is replaced with another resource (replaceWith), which sst eject doesn't write yet.", r.name())
 	case r.ReplacementTrigger != nil:
-		return "", nil, fmt.Errorf("%s has a replacement trigger, which sst eject doesn't write yet.", r.name())
+		return nil, fmt.Errorf("%s has a replacement trigger, which sst eject doesn't write yet.", r.name())
 	case len(r.ResourceHooks) > 0:
-		return "", nil, fmt.Errorf("%s has resource hooks, which sst eject doesn't write yet.", r.name())
+		return nil, fmt.Errorf("%s has resource hooks, which sst eject doesn't write yet.", r.name())
 	case r.ViewOf != "":
-		return "", nil, fmt.Errorf("%s is a view of another resource, which sst eject doesn't write yet.", r.name())
+		return nil, fmt.Errorf("%s is a view of another resource, which sst eject doesn't write yet.", r.name())
 	}
-	var b strings.Builder
-	b.WriteString(g.buildComment(r))
+	d.class = class
+	d.comment = g.buildComment(r)
+	var needs []resource.URN
 	if r.External {
-		opts, needs := g.options(r, nil)
-		fmt.Fprintf(&b, "  const %s = %s.get(%s, %s, undefined, %s);\n", g.vars[r.URN], class, quote(r.name()), quote(r.ID), opts.ts("  "))
-		return b.String(), needs, nil
+		d.external = true
+		d.id = literal{r.ID}
+		d.opts, needs = g.options(r, nil)
+	} else {
+		used := map[resource.URN]bool{}
+		args, err := g.inputs(r, used)
+		if err != nil {
+			return nil, err
+		}
+		d.args = args
+		d.opts, needs = g.options(r, used)
+		for urn := range used {
+			needs = append(needs, urn)
+		}
 	}
-	used := map[resource.URN]bool{}
-	args, err := g.inputs(r, used)
-	if err != nil {
-		return "", nil, err
+	for _, urn := range needs {
+		d.needs = append(d.needs, keyOf(urn))
 	}
-	opts, needs := g.options(r, used)
-	for urn := range used {
-		needs = append(needs, urn)
-	}
-	line := fmt.Sprintf("  const %s = new %s(%s, %s, %s);", g.vars[r.URN], class, quote(r.name()), args.ts("  "), opts.ts("  "))
-	if !strings.Contains(line, "\n") && len(line) <= width {
-		b.WriteString(line + "\n")
-		return b.String(), needs, nil
-	}
-	fmt.Fprintf(&b, "  const %s = new %s(\n    %s,\n    %s,\n    %s,\n  );\n", g.vars[r.URN], class, quote(r.name()), args.ts("    "), opts.ts("    "))
-	return b.String(), needs, nil
+	return d, nil
 }
 
 // class is the class Pulumi's package for a type has, like aws.lambda.Function
@@ -715,7 +484,7 @@ func (g *generator) class(token string) (string, error) {
 	if len(parts) != 3 {
 		return "", fmt.Errorf("sst eject can't write a resource of type %s.", token)
 	}
-	alias := g.imports[parts[0]]
+	alias := g.shared.imports[parts[0]]
 	module, _, _ := strings.Cut(parts[1], "/")
 	if module == "index" || module == "" {
 		return alias + "." + parts[2], nil
@@ -737,7 +506,7 @@ func (g *generator) buildComment(r *stateResource) string {
 	if handler == "" {
 		return ""
 	}
-	g.nodeBuild = true
+	g.shared.nodeBuild = true
 	return comment(fmt.Sprintf("The last build SST made of %s, in the asset bucket. To build it here, take out handler, s3Bucket and s3Key, and add ...nodeBuild(%s) from ./%s. SST_KEY and SST_KEY_FILE in its environment are for the links in SST's build: give the handler what it links to in its environment instead.", handler, quote(handler), strings.TrimSuffix(BuildFile, ".ts")), "  ")
 }
 
@@ -992,31 +761,7 @@ func (g *generator) secret(value map[string]any, key string, at valueAt) (expr, 
 	if hasSignature(inner) {
 		return nil, fmt.Errorf("%s has a secret at %s that sst eject doesn't write yet.", at.r.name(), at.where())
 	}
-	// Pulumi lets resources of two types have one name
-	name := at.where()
-	for n, taken := 2, g.secretKeys(); taken[name]; n++ {
-		name = fmt.Sprintf("%s.%d", at.where(), n)
-	}
-	if text, ok := inner.(string); ok {
-		g.plan.Secrets = append(g.plan.Secrets, Secret{Key: ConfigNamespace + ":" + name, Value: text})
-		return raw("secrets.requireSecret(" + quote(name) + ")"), nil
-	}
-	var b bytes.Buffer
-	encoder := json.NewEncoder(&b)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(inner); err != nil {
-		return nil, err
-	}
-	g.plan.Secrets = append(g.plan.Secrets, Secret{Key: ConfigNamespace + ":" + name, Value: strings.TrimSuffix(b.String(), "\n")})
-	return raw("secrets.requireSecretObject<any>(" + quote(name) + ")"), nil
-}
-
-func (g *generator) secretKeys() map[string]bool {
-	taken := map[string]bool{}
-	for _, secret := range g.plan.Secrets {
-		taken[strings.TrimPrefix(secret.Key, ConfigNamespace+":")] = true
-	}
-	return taken
+	return stackSecret{path: at.where(), value: inner}, nil
 }
 
 func hasSignature(value any) bool {

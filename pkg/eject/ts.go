@@ -289,3 +289,43 @@ func varName(name string) string {
 	}
 	return result
 }
+
+// stackSecret is a secret input in one stack's state, which the merge of
+// the stacks puts in each one's config
+type stackSecret struct {
+	path  string
+	value any
+}
+
+func (s stackSecret) ts(string) string {
+	panic("eject: a secret that wasn't put in the config: " + s.path)
+}
+
+// configRead is a value read from the stack's config, under ConfigNamespace,
+// like config.require("ApiFunction.name")
+type configRead struct {
+	key    string
+	method string
+}
+
+func (c configRead) ts(string) string {
+	return "config." + c.method + "(" + quote(c.key) + ")"
+}
+
+// byStack is a value each stack has its own of, which aren't all plain
+// values, so they're written in the code: `byStack({ dev: () => ... })`
+type byStack struct {
+	stacks []string
+	values []expr
+}
+
+func (b byStack) ts(indent string) string {
+	inner := indent + "  "
+	var out strings.Builder
+	out.WriteString("byStack({\n")
+	for i, stack := range b.stacks {
+		out.WriteString(inner + tsKey(stack) + ": () => " + b.values[i].ts(inner) + ",\n")
+	}
+	out.WriteString(indent + "})")
+	return out.String()
+}
