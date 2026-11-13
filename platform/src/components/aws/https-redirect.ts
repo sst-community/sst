@@ -37,8 +37,9 @@ export interface HttpsRedirectArgs {
 }
 
 /**
- * Allows creating a domainA -> domainB redirect using CloudFront and S3.
- * You can specify multiple domains to be redirected.
+ * Allows creating a domainA -> domainB redirect at the CloudFront edge.
+ * You can specify multiple domains to be redirected. Paths and query strings
+ * are preserved.
  */
 export class HttpsRedirect extends Component {
   constructor(
@@ -53,7 +54,9 @@ export class HttpsRedirect extends Component {
     validateArgs();
     const certificateArn = createSsl();
     const bucket = createBucket();
-    const bucketWebsite = createBucketWebsite();
+    // Retain the website configuration so existing edge locations can still use
+    // the old origin while the distribution update is deploying.
+    createBucketWebsite();
     const distribution = createDistribution();
     createDnsRecords();
 
@@ -142,12 +145,24 @@ export class HttpsRedirect extends Component {
                   {
                     name: physicalName(64, `${name}CloudfrontFunctionRequest`),
                     runtime: "cloudfront-js-2.0",
-                    code: `
-import cf from "cloudfront";
+                    code: output(args.targetDomain).apply(
+                      (targetDomain) => `
 async function handler(event) {
   ${CF_BLOCK_CLOUDFRONT_URL_INJECTION}
-  return event.request;
+  var request = event.request;
+  var query = request.rawQueryString();
+  return {
+    statusCode: 301,
+    statusDescription: "Moved Permanently",
+    headers: {
+      location: {
+        value: ${JSON.stringify("https://" + targetDomain)} + request.uri
+          + (query === undefined ? "" : "?" + query)
+      }
+    }
+  };
 }`,
+                    ),
                   },
                   { ignoreChanges: ["name"] },
                 ).arn,
@@ -157,11 +172,15 @@ async function handler(event) {
           origins: [
             {
               originId: "s3Origin",
-              domainName: bucketWebsite.websiteEndpoint,
+              // CloudFront requires an origin even though the function answers
+              // every request before contacting it. Use the same HTTPS-only
+              // placeholder as the sites, so there is no HTTP-only origin and
+              // no origin access control (and no new permission) is needed.
+              domainName: "placeholder.sst.dev",
               customOriginConfig: {
                 httpPort: 80,
                 httpsPort: 443,
-                originProtocolPolicy: "http-only",
+                originProtocolPolicy: "https-only",
                 originSslProtocols: ["TLSv1.2"],
               },
             },
