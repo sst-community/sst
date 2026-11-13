@@ -3,6 +3,7 @@ package eject
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,13 +120,16 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 		for _, s := range set {
 			pulumi(cli, root, nil, "config", "rm", s.key, "--stack", s.stack)
 		}
-		restored := ""
+		failed := ""
 		for _, stack := range imported {
 			if _, err := pulumi(cli, root, nil, "stack", "import", "--file", backups[stack], "--stack", stack); err != nil {
-				restored += fmt.Sprintf("\nCould not put back the state of the %q stack: run `pulumi stack import --file %s --stack %s`.", stack, backups[stack], stack)
+				failed += fmt.Sprintf("\nCould not put back the state of the %q stack: run `pulumi stack import --file %s --stack %s`.", stack, backups[stack], stack)
 			}
 		}
-		return util.NewReadableError(cause, fmt.Sprintf("%v\n\nsst eject stopped, and took out what it wrote: no stack's state is changed.%s", cause, restored))
+		if failed != "" {
+			return util.NewReadableError(cause, fmt.Sprintf("%v\n\nsst eject stopped, and took out what it wrote, but not all of the states:%s", cause, failed))
+		}
+		return util.NewReadableError(cause, fmt.Sprintf("%v\n\nsst eject stopped, and took out what it wrote: no stack's state is changed.", cause))
 	}
 	files := map[string]string{ModuleFile: plan.Module}
 	if plan.Build != "" {
@@ -153,6 +157,10 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 			if err != nil {
 				return undo(err)
 			}
+			// The build the state has, not one made since it was read
+			if fmt.Sprintf("%x", sha256.Sum256(data)) != file.Sum {
+				return undo(fmt.Errorf("%s changed since sst eject read it, as when a deploy or sst dev builds again. Run it again once nothing builds.", file.From))
+			}
 			to := filepath.Join(root, filepath.FromSlash(file.Path))
 			if err := os.WriteFile(to, data, 0644); err != nil {
 				return undo(err)
@@ -162,9 +170,9 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 	}
 	for _, sp := range plan.Stacks {
 		for _, setting := range sp.Config {
-			args := []string{"config", "set", setting.Key, "--stack", sp.Stack}
+			args := []string{"config", "set", setting.Key, "--stack", sp.Stack, "--plaintext"}
 			if setting.Secret {
-				args = append(args, "--secret")
+				args[len(args)-1] = "--secret"
 			}
 			if _, err := pulumi(cli, root, strings.NewReader(setting.Value), args...); err != nil {
 				return undo(fmt.Errorf("Could not put %s in the %q stack's config: %w", setting.Key, sp.Name, err))
@@ -194,10 +202,13 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 		}
 		_, err = pulumi(cli, root, nil, "stack", "import", "--file", file.Name(), "--stack", sp.Stack)
 		os.Remove(file.Name())
+		// A failed import may have landed anyway, as when it timed out after
+		// the backend took it, and putting the state read just before back
+		// changes nothing if it didn't
+		imported = append(imported, sp.Stack)
 		if err != nil {
 			return undo(fmt.Errorf("Could not take SST's own resources out of the %q stack's state: %w", sp.Name, err))
 		}
-		imported = append(imported, sp.Stack)
 	}
 
 	report(out, plan, project, root, backups)

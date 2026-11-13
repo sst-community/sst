@@ -1375,6 +1375,9 @@ export function containerImage<P extends Parts>(
     region: Output<string>;
   },
 ): Output<string> {
+  // An image it's given as it is, which needs nowhere to keep it, so it
+  // doesn't stop the program's assets from being declared after it
+  if (typeof container.image === "string") return output(container.image);
   // Where a built image is pushed: the program's assets, or under SST's
   // CLI, SST's bootstrap. Found only for an image that's built.
   const store = assetStore(

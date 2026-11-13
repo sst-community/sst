@@ -145,6 +145,7 @@ export class Assets extends component("sst:aws:Assets", parts) {
       registryId: output(repository?.registryId),
       region: getRegionOutput({}, { parent: this }).region,
       provider: this.getProvider("aws::"),
+      owned: true,
     });
   }
 
@@ -193,14 +194,19 @@ export class Assets extends component("sst:aws:Assets", parts) {
         "Assets.use() takes a bucket, a repository, or both.",
       );
     const repositoryUrl = output(store.repository);
+    // Two in a region have providers of their own, which tell them apart
+    const provider = (opts.provider as { __name?: string } | undefined)?.__name;
     declareStore({
-      label: "Assets.use()",
+      label: provider
+        ? `Assets.use() with the "${provider}" provider`
+        : "Assets.use()",
       bucket: output(store.bucket),
       repositoryUrl,
       // The account the repository is in starts its URL
       registryId: repositoryUrl.apply((url) => url?.split(".")[0]),
       region: getRegionOutput({}, { provider: opts.provider }).region,
       provider: opts.provider,
+      owned: false,
     });
   }
 }

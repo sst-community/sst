@@ -69,6 +69,10 @@ import {
   zipCode,
 } from "./helpers/function-code";
 import { devStubCode, linkEncryptionKey } from "./helpers/function-shared";
+import { perRun } from "../../util/lazy";
+
+// The store each region's dev stub code is in, by the key of devStubCode
+const devStubStores = perRun(() => new Map<string, string>());
 import { FunctionEnvironmentUpdate } from "./resources/function-environment-update";
 import { KvKeys } from "./resources/kv-keys";
 import { KvRoutesUpdate } from "./resources/kv-routes-update";
@@ -2479,10 +2483,19 @@ export class Function extends component("sst:aws:Function", parts) {
     // Every live function in a region is created from the same stub, so its
     // code is uploaded once for the app, outside of any function.
     function devBridgeCode() {
-      return all([built, region, store.shared]).apply(([{ bundle }, region, shared]) => {
+      return all([built, region, store.shared, store.which]).apply(([{ bundle }, region, shared, which]) => {
         const cache = devStubCode();
         const cacheKey = `${region}:${bundle}`;
         const cached = cache.get(cacheKey);
+        // The stub's code is one object in a region, named for it, so it's
+        // in one store
+        const stores = devStubStores();
+        const other = stores.get(cacheKey);
+        if (other !== undefined && other !== which)
+          throw new VisibleError(
+            `sst dev uploads the code of its stub once in each region, and ${name} keeps its code in ${which}, where another function in ${region} keeps its in ${other}. Give the functions of a region one store.`,
+          );
+        stores.set(cacheKey, which);
         if (cached) return cached;
 
         const stub = logicalName(path.basename(bundle));

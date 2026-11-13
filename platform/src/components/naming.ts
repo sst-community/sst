@@ -5,7 +5,7 @@ import {
   type ResourceTransformationResult,
 } from "@pulumi/pulumi";
 import { VisibleError } from "./error.js";
-import { context } from "./context.js";
+import { context, underCore } from "./context.js";
 import {
   NAMING_RULES,
   UNPREFIXED_TYPES,
@@ -33,6 +33,25 @@ export function physicalName(max: number, name: string, suffix: string = "") {
   return `${main}-${random}${suffix}`;
 }
 
+// The app and the stage, which SST's components put in the names of what
+// they make. SST's CLI holds them to its rule (pkg/project). A program Pulumi
+// runs on its own has its project's and stack's, which Pulumi lets have
+// characters, like "_" and ".", that the cloud's names don't.
+function appAndStage() {
+  const { name: app, stage } = context().app;
+  if (!underCore()) {
+    if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(app))
+      throw new VisibleError(
+        `SST's components put the Pulumi project's name in the names of what they make, as SST's CLI puts an app's, and "${app}" isn't one SST's CLI takes: start it with a letter, and use only letters, numbers and hyphens.`,
+      );
+    if (!/^[a-zA-Z0-9-]+$/.test(stage))
+      throw new VisibleError(
+        `SST's components put the stack's name in the names of what they make, as SST's CLI puts a stage's, and "${stage}" isn't one SST's CLI takes: use only letters, numbers and hyphens.`,
+      );
+  }
+  return { app, stage };
+}
+
 export function prefixName(max: number, name: string) {
   // This function does the following:
   // - Removes all non-alphanumeric characters
@@ -42,7 +61,7 @@ export function prefixName(max: number, name: string) {
 
   name = name.replace(/[^a-zA-Z0-9]/g, "");
 
-  const { name: app, stage } = context().app;
+  const { app, stage } = appAndStage();
   const stageLen = stage.length;
   const nameLen = name.length;
   const strategy =

@@ -268,6 +268,9 @@ export function mockPulumi(input?: MockInput) {
       ),
       registryId: pulumi.output<string | undefined>("123456789012"),
       region: pulumi.output("us-east-1"),
+      // As a program's own Assets is, as it was before stores knew whose
+      // they were
+      owned: true,
       provider: undefined,
     });
   };

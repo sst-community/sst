@@ -892,8 +892,10 @@ export class Worker extends component("sst:cloudflare:Worker", parts) {
           if (!latest)
             return { migrationTag: undefined, migrations: undefined };
 
+          // Every script of the account: the lookup lists 1000 unless it's
+          // told how many, and an account can have more
           const published = await cf.getWorkersScripts(
-            { accountId },
+            { accountId, maxItems: 100_000 },
             { parent: self },
           );
           const currentTag =

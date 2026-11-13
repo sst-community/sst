@@ -28,6 +28,9 @@ vi.mock("../../../../src/components/sst-package", () => ({
   }),
 }));
 
+// What the Worker's migrations last asked the scripts' lookup
+let scriptsAsked: Record<string, any> | undefined;
+
 let accounts: (provider: string) => { id: string }[] = () => [
   { id: "first-account" },
   { id: "second-account" },
@@ -38,13 +41,15 @@ const pulumi = mockPulumi({
   call: (args) => {
     if (args.token === "cloudflare:index/getAccounts:getAccounts")
       return { results: accounts(String(args.provider ?? "")) };
-    if (args.token === "cloudflare:index/getWorkersScripts:getWorkersScripts")
+    if (args.token === "cloudflare:index/getWorkersScripts:getWorkersScripts") {
+      scriptsAsked = args.inputs;
       return {
         results: [
           { id: "app-test-oldworkerscript", migrationTag: "v1" },
           { id: "unrelated", migrationTag: "v9" },
         ],
       };
+    }
     return undefined;
   },
 });
@@ -270,6 +275,9 @@ describe("Cloudflare's setup, in a Pulumi program", () => {
     });
     await pulumi.settle();
 
+    // Every script of the account, which can be more than the lookup's
+    // 1000 it lists unless it's told
+    expect(scriptsAsked?.maxItems).toBe(100_000);
     const script = resource("OldWorkerScript");
     expect(script.inputs.migrations).toEqual({
       oldTag: "v1",

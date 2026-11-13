@@ -800,13 +800,13 @@ func TestBuildCopiesAWorkersBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Files) != 1 || plan.Files[0] != (CopiedFile{Path: "sst-ejected-workers/EdgeScript.js", From: built}) {
+	if len(plan.Files) != 1 || plan.Files[0] != (CopiedFile{Path: "sst-ejected-workers/EdgeScript.js", From: built, Sum: sum}) {
 		t.Errorf("the eject copies %+v", plan.Files)
 	}
 	for _, want := range []string{
 		`import * as path from "path";`,
-		`contentFile: path.resolve("sst-ejected-workers/EdgeScript.js"),`,
-		`assets: { directory: path.resolve("sites/web") },`,
+		`contentFile: path.join(pulumi.getRootDirectory(), "sst-ejected-workers/EdgeScript.js"),`,
+		`assets: { directory: path.join(pulumi.getRootDirectory(), "sites/web") },`,
 	} {
 		if !strings.Contains(plan.Module, want) {
 			t.Errorf("the module has no %q:\n%s", want, plan.Module)

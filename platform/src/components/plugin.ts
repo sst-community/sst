@@ -139,8 +139,14 @@ function sstProvider(cloud: Cloud, given: ProviderResource | undefined) {
   for (let n = 2; names.has(name); n++) name = `${base}-${n}`;
   names.add(name);
   const pkg = sstPackage()!;
+  const region = given && stackCopies.get(given);
   const setup = {
-    aws: () => (given ? explicitSetup(given) : stackSetup()),
+    aws: () =>
+      !given
+        ? stackSetup()
+        : region
+          ? { ...stackSetup(), awsRegion: region }
+          : explicitSetup(given),
     cloudflare: () => cloudflareSetup(given),
     vercel: () => vercelSetup(given),
   }[cloud]();
@@ -150,6 +156,21 @@ function sstProvider(cloud: Cloud, given: ProviderResource | undefined) {
   });
   ofCloud.set(given, provider);
   return provider;
+}
+
+// The AWS providers SST's components make from the stack's config for
+// another region (useProvider), by their region: SST's provider for one is
+// set up as the stack's is, roles and all, in that region
+const stackCopies = new WeakMap<ProviderResource, string>();
+
+/**
+ * Says an AWS provider is the stack's, as its config sets it up, for another
+ * region, so SST's provider for it is too.
+ *
+ * @internal
+ */
+export function madeFromStack(provider: ProviderResource, region: string) {
+  stackCopies.set(provider, region);
 }
 
 // An AWS provider of the program's: its profile and region. Its roles aren't

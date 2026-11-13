@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
+	"strings"
 )
 
 // VercelResource is what SST's Vercel resources share: the context their
@@ -86,10 +88,10 @@ func (r *VercelDnsRecord) Update(input *UpdateInput[VercelDnsRecordInputs, Verce
 }
 
 func (r *VercelDnsRecord) createOrUpdateRecord(input *VercelDnsRecordInputs) (string, error) {
-	// Construct the URL with teamId if available
+	// Construct the URL with the team if there is one
 	url := fmt.Sprintf("https://api.vercel.com/v4/domains/%s/records", input.Domain)
 	if input.TeamId != "" {
-		url = fmt.Sprintf("%s?teamId=%s", url, input.TeamId)
+		url = fmt.Sprintf("%s?%s", url, teamQuery(input.TeamId))
 	}
 	
 	// Use the input type, name, and value for the DNS record. MxPriority is only
@@ -175,4 +177,14 @@ func (r *VercelDnsRecord) createOrUpdateRecord(input *VercelDnsRecordInputs) (st
 	}
 	
 	return apiResponse.Uid, nil
+}
+
+// teamQuery is the query that names a team: by its ID, which starts with
+// "team_", or by its slug, which Pulumi's Vercel provider takes as its team
+// too
+func teamQuery(team string) string {
+	if strings.HasPrefix(team, "team_") {
+		return "teamId=" + neturl.QueryEscape(team)
+	}
+	return "slug=" + neturl.QueryEscape(team)
 }

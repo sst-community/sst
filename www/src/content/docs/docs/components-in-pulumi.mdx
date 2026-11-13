@@ -28,6 +28,8 @@ npm install -D sst@npm:@sst-community/sst@next-experimental \
 
 `sst/components/aws` loads all five providers, whether the components you use need them or not. For Cloudflare's components, `sst/components/cloudflare`, install `@pulumi/cloudflare` and `@pulumi/aws`; for Vercel's DNS, `sst/components/vercel`, `@pulumiverse/vercel`.
 
+The components put the project's and the stack's names in the names of what they make, as SST's CLI puts an app's and a stage's, so they take only names SST's CLI would: letters, numbers and hyphens, and a project's starts with a letter. AWS refuses an `_` in a bucket's name, for one.
+
 The components are ES modules. In TypeScript, set `module` and `moduleResolution` to `nodenext`. A CommonJS program loads them on Node.js 22.12 or later.
 
 ```json title="tsconfig.json"
@@ -102,7 +104,7 @@ Assets.use({
 });
 ```
 
-They have to be in the components' region, and writable by the credentials that deploy. A bucket that `pulumi destroy` deletes needs `forceDestroy`, as old builds are left in it. A store another stack has is that stack's: protect it there, as services in other stacks pull their images from it.
+They have to be in the components' region, and writable by the credentials that deploy. A bucket that `pulumi destroy` deletes needs `forceDestroy`, as old builds are left in it. A store another stack has is that stack's: protect it there, as services in other stacks pull their images from it. As other stacks can share it, the code of `sst dev`'s stub, which every stack in a bucket uses, is kept in it when a stack is destroyed, as it is in SST's bootstrap.
 
 An SST app needs none of this: SST's CLI keeps its code and images in SST's bootstrap of the account, which every app shares. It can use `Assets` or `Assets.use()` too, in place of it.
 
@@ -202,7 +204,7 @@ npx sst eject
 It changes nothing in the cloud. For each stack of the project with SST's components in it, it:
 
 1. **Saves the stack's state**, beside `Pulumi.yaml`, as `sst-eject-<stack>-<time>.json`.
-2. **Writes `sst-ejected.ts`**, one module for every stack, whose function `ejected()` makes what SST's components made. A path in the project, like a site's folder, is written from the project's folder (`path.resolve("sites/web")`), so it's the same wherever the program is checked out.
+2. **Writes `sst-ejected.ts`**, one module for every stack, whose function `ejected()` makes what SST's components made. A path in the project, like a site's folder, is written from the project's folder (`path.join(pulumi.getRootDirectory(), "sites/web")`), so it's the same wherever the program is checked out, and whatever folder the project's `main` is in.
 3. **Puts values in the stack's config**, under `sst-ejected`: each secret input, and each value that isn't the same in every stack, like a resource's name.
 4. **Takes SST's own resources out of the state**, and SST's provider with them: a site's files, a router's routes, the invalidations, what `addEnvironment` added, a database proxy's wait for its role, a MicroVM image's pruning, a Worker's URL and placement, and the DNS records a certificate needs in Cloudflare or Vercel. What they made stays in the cloud, as last deployed. Nothing deletes a MicroVM image's old versions after it, so an image keeps up to the 50 Lambda allows.
 
@@ -317,6 +319,7 @@ It stops before it writes anything when it can't eject a stack without a change 
 - **A stack with an operation Pulumi didn't finish**, or a resource waiting to be deleted or replaced.
 - **SST's origin access control**, which it can't adopt yet, as its name isn't in the state.
 - **A provider one of SST's components made**, other than the one for a region that a site's server uses.
+- **Two stacks of one name**, in two organizations, as each stack's values are kept by its name.
 - **A resource that takes a file or a folder**, as a Pulumi asset or archive.
 
 ---

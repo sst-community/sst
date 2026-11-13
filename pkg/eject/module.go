@@ -77,6 +77,8 @@ type CopiedFile struct {
 	Path string
 	// Where it is
 	From string
+	// The SHA-256 of what the state says it is, in hex
+	Sum string
 }
 
 // StackPlan is what an eject changes in one stack
@@ -233,6 +235,12 @@ func (g *generator) classify() error {
 			// environment in the module
 			fn, _ := r.Inputs["functionName"].(string)
 			added, _ := revealed(r.Inputs["environment"]).(map[string]any)
+			// What's added as one secret stays a secret, each value of it
+			if wrapped, ok := r.Inputs["environment"].(map[string]any); ok && wrapped[sig.Key] == sig.Secret {
+				for key, value := range added {
+					added[key] = asSecret(value)
+				}
+			}
 			if fn == "" {
 				return fmt.Errorf("%s (%s) names no function.", name, r.Type)
 			}
@@ -420,13 +428,13 @@ func (g *generator) copyWorkers() error {
 			if file.Path != rel {
 				continue
 			}
-			if file.sum != sum {
+			if file.Sum != sum {
 				return fmt.Errorf("%s's code isn't the same in every stack, and sst eject keeps one build of each Worker. Deploy each stack with the same code, then eject.", r.name())
 			}
 			copied = true
 		}
 		if !copied {
-			g.shared.files = append(g.shared.files, copiedFile{CopiedFile{Path: rel, From: file}, sum})
+			g.shared.files = append(g.shared.files, CopiedFile{Path: rel, From: file, Sum: sum})
 		}
 		g.workerFiles[r.URN] = rel
 		if g.plan.Inputs == nil {
@@ -437,10 +445,12 @@ func (g *generator) copyWorkers() error {
 	return nil
 }
 
-// projectPath is a path under the project's folder, written from it
+// projectPath is a path under the project's folder, written from it as
+// Pulumi gives it, not from where the program runs: Pulumi runs a program
+// from the folder of the project's main, like src/
 func (g *generator) projectPath(rel string) expr {
 	g.shared.usesPath = true
-	return raw(fmt.Sprintf("path.resolve(%s)", quote(filepath.ToSlash(rel))))
+	return raw(fmt.Sprintf("path.join(pulumi.getRootDirectory(), %s)", quote(filepath.ToSlash(rel))))
 }
 
 // scriptOf is the Worker's script one of SST's Worker resources is for: the
@@ -531,8 +541,8 @@ func built(r *stateResource) bool {
 	if r.Type != "aws:s3/bucketObjectv2:BucketObjectv2" && r.Type != "aws:s3/bucketObject:BucketObject" {
 		return false
 	}
-	source := revealed(r.Inputs["source"])
-	kind, _ := source.(map[string]any)[sig.Key].(string)
+	source, _ := revealed(r.Inputs["source"]).(map[string]any)
+	kind, _ := source[sig.Key].(string)
 	return kind == sig.AssetSig || kind == sig.ArchiveSig
 }
 
@@ -763,8 +773,14 @@ func (g *generator) inputs(r *stateResource, used map[resource.URN]bool) (*objec
 }
 
 // withEnvironment is a function's environment input with what's added to
-// its variables. If either has a secret, the variables are a secret.
+// its variables. If either has a secret, the variables are a secret, and an
+// environment that's a secret as a whole stays one.
 func withEnvironment(environment any, added map[string]any) any {
+	whole := false
+	if wrapped, ok := environment.(map[string]any); ok && wrapped[sig.Key] == sig.Secret {
+		whole = true
+		environment = revealed(wrapped)
+	}
 	result := map[string]any{}
 	if given, ok := environment.(map[string]any); ok {
 		for key, value := range given {
@@ -790,13 +806,22 @@ func withEnvironment(environment any, added map[string]any) any {
 		}
 		variables[key] = value
 	}
+	if whole {
+		result["variables"] = variables
+		return asSecret(result)
+	}
 	if !secret {
 		result["variables"] = variables
 		return result
 	}
-	text, _ := marshal(variables)
-	result["variables"] = map[string]any{sig.Key: sig.Secret, "plaintext": string(text)}
+	result["variables"] = asSecret(variables)
 	return result
+}
+
+// asSecret is a value as the state has a secret, with its value shown
+func asSecret(value any) map[string]any {
+	text, _ := marshal(value)
+	return map[string]any{sig.Key: sig.Secret, "plaintext": string(text)}
 }
 
 // declared are those of the URNs the module has a name for
@@ -972,8 +997,12 @@ func (g *generator) secret(value map[string]any, key string, at valueAt) (expr, 
 	}
 	inner := revealed(value)
 	if text, ok := inner.(string); ok {
+		// Only the whole of it: a reference with text after it would write
+		// that text, part of the secret, in the code
 		if ref := g.match(text, key, at); ref != nil {
-			return ref, nil
+			if _, partly := ref.(interpolated); !partly {
+				return ref, nil
+			}
 		}
 	}
 	if object, ok := inner.(map[string]any); ok {
@@ -1135,7 +1164,7 @@ func (g *generator) options(r *stateResource, used map[resource.URN]bool) (*obje
 	seen := map[resource.URN]bool{}
 	for _, urn := range r.Dependencies {
 		name, ok := g.vars[urn]
-		if !ok || strings.HasPrefix(name, "providers.") || used[urn] || seen[urn] || urn == r.Parent {
+		if !ok || strings.HasPrefix(name, "program.") || used[urn] || seen[urn] || urn == r.Parent {
 			continue
 		}
 		seen[urn] = true
@@ -1145,7 +1174,7 @@ func (g *generator) options(r *stateResource, used map[resource.URN]bool) (*obje
 	if len(dependsOn) > 0 {
 		opts.set("dependsOn", dependsOn)
 	}
-	if name, ok := g.vars[r.DeletedWith]; ok && r.DeletedWith != "" && !strings.HasPrefix(name, "providers.") {
+	if name, ok := g.vars[r.DeletedWith]; ok && r.DeletedWith != "" && !strings.HasPrefix(name, "program.") {
 		opts.set("deletedWith", raw(name))
 		needs = append(needs, r.DeletedWith)
 	}

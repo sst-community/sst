@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Provider } from "@pulumi/aws";
+import { ComponentResource, type Output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../../src/testing/mock";
 import { rejectionsOf } from "../../helpers/rejections";
 
@@ -25,6 +26,8 @@ const pulumi = mockPulumi({
       String(args.provider ?? "").includes("::West::")
     )
       return { name: "us-west-2", region: "us-west-2", id: "us-west-2" };
+    if (args.token === "aws:index/getAvailabilityZones:getAvailabilityZones")
+      return { names: ["us-east-1a", "us-east-1b"] };
     return undefined;
   },
 });
@@ -33,14 +36,38 @@ const handler = "src/index.handler";
 
 type Module = typeof import("../../../src/components/aws/assets");
 type FunctionModule = typeof import("../../../src/components/aws/function");
+type ServiceModule = typeof import("../../../src/components/aws/service");
+type ClusterModule = typeof import("../../../src/components/aws/cluster");
+type StoreModule =
+  typeof import("../../../src/components/aws/helpers/bootstrap");
+
+// A cluster in a VPC of the program's, for a service
+const vpc = {
+  id: "vpc-1",
+  securityGroups: ["sg-1"],
+  containerSubnets: ["subnet-1", "subnet-2"],
+  loadBalancerSubnets: ["subnet-3", "subnet-4"],
+};
+
+// What an output resolves to
+const valueOf = <T>(value: Output<T>) =>
+  new Promise<T>((resolve) => value.apply(resolve));
 
 describe("Assets, in a Pulumi program", () => {
   let Assets: Module["Assets"];
   let Function: FunctionModule["Function"];
+  let Service: ServiceModule["Service"];
+  let Cluster: ClusterModule["Cluster"];
+  let assetStore: StoreModule["assetStore"];
 
   beforeAll(async () => {
     ({ Assets } = await import("../../../src/components/aws/assets"));
     ({ Function } = await import("../../../src/components/aws/function"));
+    ({ Service } = await import("../../../src/components/aws/service"));
+    ({ Cluster } = await import("../../../src/components/aws/cluster"));
+    ({ assetStore } = await import(
+      "../../../src/components/aws/helpers/bootstrap"
+    ));
   });
 
   beforeEach(() => pulumi.reset());
@@ -182,5 +209,41 @@ describe("Assets, in a Pulumi program", () => {
     expect(() => Assets.use({})).toThrow(
       /takes a bucket, a repository, or both/,
     );
+  });
+
+  it("isn't needed by a service that runs an image it's given", async () => {
+    const failures = await rejectionsOf(async () => {
+      const cluster = new Cluster("MyCluster", { vpc });
+      new Service("MyService", { cluster, image: "nginx:latest" });
+      await pulumi.settle();
+    });
+    expect(failures).toEqual([]);
+  });
+
+  it("can be declared after a service that runs an image it's given", async () => {
+    const cluster = new Cluster("MyCluster", { vpc });
+    new Service("MyService", { cluster, image: "nginx:latest" });
+    expect(() => new Assets("Assets")).not.toThrow();
+    await pulumi.settle();
+  });
+
+  it("is shared when it's from Assets.use(), as another stack's can be", async () => {
+    // What a stage stops using is kept in a shared one, like the dev stub's
+    // code every stack in a bucket uses
+    Assets.use({ bucket: "shared-code" });
+    const thing = new ComponentResource("test:index:Thing", "Thing");
+    const store = assetStore(thing, "the thing").forRegion("us-east-1");
+    expect(await valueOf(store.shared)).toBe(true);
+    expect(await valueOf(store.which)).toBe("Assets.use()");
+    await pulumi.settle();
+  });
+
+  it("isn't shared when the program makes it", async () => {
+    new Assets("Assets");
+    const thing = new ComponentResource("test:index:Thing", "Thing");
+    const store = assetStore(thing, "the thing").forRegion("us-east-1");
+    expect(await valueOf(store.shared)).toBe(false);
+    expect(await valueOf(store.which)).toBe('Assets("Assets")');
+    await pulumi.settle();
   });
 });

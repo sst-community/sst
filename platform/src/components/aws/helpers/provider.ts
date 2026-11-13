@@ -1,6 +1,7 @@
 import { runtime } from "@pulumi/pulumi";
 import { Provider, Region } from "@pulumi/aws";
 import { perRun } from "../../../util/lazy";
+import { madeFromStack } from "../../plugin";
 
 // A provider for a region is made once in each run, and shared by every
 // component that creates something in that region
@@ -33,6 +34,7 @@ export const useProvider = (region: Region) => {
     ...config,
     region,
   });
+  madeFromStack(provider, region);
   cache.set(region, provider);
   return provider;
 };

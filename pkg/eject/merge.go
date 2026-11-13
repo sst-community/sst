@@ -30,7 +30,7 @@ type ejector struct {
 	// Whether a path is written from the project's folder
 	usesPath bool
 	// Each Worker's last build, copied beside the module
-	files []copiedFile
+	files []CopiedFile
 	// What the module makes, by its URN without its stack and project, in
 	// the order the stacks have them: its name, and the stacks it's in
 	order []string
@@ -100,6 +100,17 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 		takes:        map[string]string{},
 	}
 	plan := &Plan{}
+	// Each stack's values are kept by its name, in Pulumi.<name>.yaml and the
+	// backups, so two stacks of one name, in two organizations, can't be told
+	// apart
+	named := map[string]string{}
+	for _, state := range states {
+		name := stageOf(state.Stack)
+		if other, ok := named[name]; ok {
+			return nil, fmt.Errorf("Two stacks of the project are named %q: %s and %s. sst eject keeps each stack's values by its name, so it ejects only a project whose stacks have names of their own.", name, other, state.Stack)
+		}
+		named[name] = state.Stack
+	}
 	for _, state := range states {
 		name := stageOf(state.Stack)
 		parsed, err := readExport(state.Shown)
@@ -156,9 +167,7 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 	if e.nodeBuild {
 		plan.Build = buildModule
 	}
-	for _, file := range e.files {
-		plan.Files = append(plan.Files, file.CopiedFile)
-	}
+	plan.Files = e.files
 	seen := map[string]bool{}
 	for _, g := range e.stacks {
 		for _, c := range g.components {
@@ -799,22 +808,28 @@ func (m *merger) merge(in []int, values []expr, path string, options bool) (expr
 
 // setting is a value read from each stack's config, which is set there
 func (m *merger) setting(in []int, values []expr, path string, secret, optional bool) expr {
-	key := path
+	// A config key has one ":", after its namespace, and a path can have more,
+	// from an object's keys, like a policy's aws:SourceAccount
+	base := strings.ReplaceAll(path, ":", "_")
+	key := base
 	for n := 2; m.keys[key]; n++ {
-		key = fmt.Sprintf("%s.%d", path, n)
+		key = fmt.Sprintf("%s.%d", base, n)
 	}
 	m.keys[key] = true
 	m.usesConfig = true
 	kind := ""
-	for i, value := range values {
+	for _, value := range values {
 		if value == nil {
 			continue
 		}
-		plain := plainValue(value)
 		this := "object"
-		switch plain.(type) {
+		switch plain := plainValue(value).(type) {
 		case string:
-			this = "string"
+			// pulumi config set takes a newline off the end of what it reads,
+			// which JSON keeps
+			if !strings.HasSuffix(plain, "\n") {
+				this = "string"
+			}
 		case json.Number:
 			this = "number"
 		case bool:
@@ -825,9 +840,20 @@ func (m *merger) setting(in []int, values []expr, path string, secret, optional 
 		} else if kind != this {
 			kind = "object"
 		}
+	}
+	for i, value := range values {
+		if value == nil {
+			continue
+		}
+		plain := plainValue(value)
+		// Read as an object, a string is set as JSON too
+		text := configText(plain)
+		if _, ok := plain.(string); ok && kind == "object" {
+			text, _ = jsonString(plain, "", "")
+		}
 		m.stacks[in[i]].plan.Config = append(m.stacks[in[i]].plan.Config, Setting{
 			Key:    ConfigNamespace + ":" + key,
-			Value:  configText(plain),
+			Value:  text,
 			Secret: secret,
 		})
 	}
@@ -1004,10 +1030,4 @@ func jsonString(value any, indent, current string) (string, bool) {
 		return value.String(), true
 	}
 	return stringify(value, indent, current)
-}
-
-// copiedFile is a Worker's build the eject copies, with its content's hash
-type copiedFile struct {
-	CopiedFile
-	sum string
 }
