@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as aws from "@pulumi/aws";
-import { getRootDirectory, output } from "@pulumi/pulumi";
+import { RunError, getRootDirectory, output } from "@pulumi/pulumi";
 import { mockPulumi } from "../helpers/graph";
 
 const pulumi = mockPulumi({ app: "shop", stage: "dev" });
@@ -122,6 +122,20 @@ describe("The program contract", () => {
     // Both are set by `sst dev`, and a shell's SST_DEV alone isn't it
     expect(read({ SST_DEV: "true" }).dev).toBe(false);
     expect(read({ SST_SERVER: "http://127.0.0.1:13557" }).dev).toBe(false);
+  });
+
+  it("shows a VisibleError without its stack trace under Pulumi", async () => {
+    const { VisibleError } = await import("../../src/components/error");
+    // Pulumi prints the message alone for its own RunError, as SST's CLI
+    // prints a VisibleError
+    const plain = withoutCore(() => new VisibleError("Give it a handler."));
+    expect(RunError.isInstance(plain)).toBe(true);
+    expect(plain.message).toBe("Give it a handler.");
+    expect(plain).toBeInstanceOf(Error);
+    // SST's CLI parses its own, so it's left as it was
+    expect(RunError.isInstance(new VisibleError("Give it a handler."))).toBe(
+      false,
+    );
   });
 
   it("gives the program its stage's target", () => {

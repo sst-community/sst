@@ -24,6 +24,7 @@ import (
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/project/common"
+	"github.com/sst/sst/v3/pkg/types"
 )
 
 // Run deploys the program to its stack for sst dev, with pulumi up, tells the
@@ -150,6 +151,14 @@ func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 	complete, err := p.GetCompleted(ctx)
 	if err != nil {
 		return err
+	}
+	// The links' types, for Resource in the program's code, as an SST app's
+	// deploy writes them. A program without SST's components has no links,
+	// and is left without the file.
+	if scan.components {
+		if err := types.Generate(p.config, complete.Links, nil); err != nil {
+			log.Warn("could not write the links' types", "error", err)
+		}
 	}
 	complete.UpdateID = id.Descending()
 	complete.Finished = finished
