@@ -2,6 +2,27 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: step 4, goals 2 and 3 for what's built
+
+The typed links in `sst dev`, SST's tags by the stack's config, and `VisibleError` without a stack trace under Pulumi. Committed as `d0a4281d7`.
+
+**What changed:**
+
+- **`sst dev` writes `sst-env.d.ts` for a program that imports SST's components**, after each deploy, from the components' link records, with the generator an SST app's deploy uses (`pkg/types`). A program without SST's components gets no file. A plain `pulumi up` writes none: no CLI runs.
+- **SST's tags are the stack's config**, [as decided](plan.md#decisions): the two `pulumi config set --path 'aws:defaultTags.tags["sst:app"]' ...` lines are in the plan's step 4. No code.
+- **A `VisibleError` is marked as Pulumi's `RunError` when SST's CLI isn't running the program** (`platform/src/components/error.ts`), and Pulumi prints such an error's message alone. Under SST's CLI it's as it was, for the CLI's own parsing. None of the dynamic providers still in the platform reaches `VisibleError`, so the code they keep in the state is unchanged.
+
+**Checked:**
+
+- Platform: a `VisibleError` is a `RunError` without SST's globals, and isn't with them; `tsc`, the full suite (112 files, 4248 tests). Go: `pkg/pulumidev`'s tests.
+- In the lab, the step 3 program on a stack `devlab` with `sst:dev: true` and SST's tags in `aws:defaultTags`:
+  - `LAB_BAD=1 pulumi preview` (a `DevCommand` with no command) showed `error: The "Bad" DevCommand has no "dev.command". ...` and no stack trace.
+  - `sst dev --mode=basic` wrote `sst-env.d.ts` with `Api` and `Files`. The handler typechecked against it once the lab's `tsconfig.json`, which lists its files one by one, listed it too (one with no `files` list includes it); `Resource.Filez` failed with "Did you mean 'Files'?".
+  - The function and the bucket had `sst:app: thinlab` and `sst:stage: devlab` in AWS.
+  - Destroyed (18), nothing left: no function, role, bucket, log group or source map, and the shared stub objects as they were.
+
+**Not checked:** a move of a stack between SST's CLI and Pulumi with the tags in its config. Step 1 found the tags the only difference between the two, so with them set nothing should be updated, but no stack was moved.
+
 ## 2026-11-12: step 3, `sst dev` on SST's components
 
 Under `sst dev`, a Pulumi program's SST components do what they do in an SST app: a `Function` runs on this machine, and a `DevCommand` runs with its links, with no `sst.dev.yaml`. A plain `pulumi up` deploys the real code again. Committed as `b74b7e1df`.

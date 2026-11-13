@@ -22,6 +22,8 @@ As tests:
 | 2026-11-12 | **The components read the context, and the context reads Pulumi when there's no core.** Asked whether the components need redoing not to depend on the context: no. Each field has an equivalent under Pulumi but `paths.platform`, whose files are a matter of packaging, for step 2. |
 | 2026-11-12 | **SST's own resources stay as they are, in the provider the `sst` binary serves, and Pulumi downloads that plugin under plain Pulumi.** Of the three ways in [the pieces](#the-pieces) (4), the maintainer chose this one, as recommended: it's the only one where a stack has the same URNs whether SST or Pulumi runs it ([goal 3](#goal)), and SST 5's stages already have these resources. The cost: each release publishes the plugin's archives, and a stack needs the plugin, which Pulumi downloads, until the eject replaces those resources. [pulumi-dev](../pulumi-dev/plan.md#decisions) turned down a provider of its own because everything SST adds there is for `sst dev` alone; here the provider is already part of what SST 5 deploys. |
 | 2026-11-12 | **Step 3 is `sst dev` on SST's components**, over the eject and the smaller gaps (the default tags, `VisibleError`'s stack trace, a linked function's `Resource` checked at runtime): the maintainer chose it, as recommended. Asked whether a Pulumi program should use only Pulumi's own resources instead, the maintainer, told the components are what SST adds on top of the dev loop and the eject is the way out to plain resources, said to continue. |
+| 2026-11-12 | **After step 3: step 4 closes goals 2 and 3 for what's built, then a sample program the maintainer tries it with, then the eject.** Offered those three and pushing the two branches, the maintainer chose the first three. |
+| 2026-11-12 | **SST's tags under plain Pulumi are the stack's config, not code.** SST's CLI tags an app's AWS resources through the default provider's `defaultTags`, which under plain Pulumi comes from the stack's config, out of the program's reach. Of documenting the config or having the components tag what they create (which still updates every resource on a move, as the tags change place), the maintainer chose the config, as recommended. |
 
 ## Where it starts
 
@@ -98,9 +100,22 @@ Under `sst dev`, a Pulumi program's SST components do what they do in an SST app
 
 Exit tests, in the lab: `sst dev` on a program with a `Function` linked to a bucket and a `DevCommand` linked to the same bucket. The function answers from the local code, a change to it shows without a deploy, and `Resource.<bucket>` works in it. The dev command's environment has the bucket's link. A plain `pulumi up` afterwards puts the real code back. Destroyed, and nothing left.
 
+### 4. Goals 2 and 3 for what's built
+
+- **The typed links.** `sst dev` writes `sst-env.d.ts` for a Pulumi program after each deploy, from the components' link records, as it does for an SST app, so `Resource.<name>` has its type. A plain `pulumi up` doesn't: no CLI runs.
+- **SST's tags**, [as decided](#decisions): a stack that moves between SST's CLI and Pulumi sets `aws:defaultTags` to `sst:app` (the project) and `sst:stage` (the stack), as SST's CLI sets them:
+
+  ```bash
+  pulumi config set --path 'aws:defaultTags.tags["sst:app"]' <project>
+  pulumi config set --path 'aws:defaultTags.tags["sst:stage"]' <stack>
+  ```
+- **`VisibleError` without a stack trace under Pulumi**, which prints the message alone for an error it's told is its own (`RunError`), as SST's CLI does for a `VisibleError`. Under SST's CLI nothing changes.
+
+Exit tests: in the lab, after `sst dev`, `sst-env.d.ts` types the bucket's link and the handler typechecks against it; a deploy with the config has SST's two tags on what it creates; a `VisibleError` under `pulumi up` shows its message without a stack trace.
+
 ### Later
 
-The eject, SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): SST's default tags, which plain Pulumi doesn't set; `VisibleError`'s stack trace under Pulumi; every provider of a group to install; and runtimes other than Node.js.
+SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js.
 
 ## Open questions
 
@@ -117,3 +132,6 @@ The eject, SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found
 | SST's provider takes the program's AWS setup | Done 2026-11-12, lab-checked, committed (`18f36ce79`) |
 | The components' lookups follow their provider | Fixed on `v5` (`754dbde82`), merged here (`0aa256062`), lab-checked |
 | 3. `sst dev` on SST's components | Done 2026-11-12, lab-checked, committed (`b74b7e1df`) |
+| 4. Goals 2 and 3 for what's built | Done 2026-11-12, lab-checked, committed (`d0a4281d7`) |
+| The maintainer's sample program at step 4 | Done 2026-11-12: a `Bucket`, a linked `Function` and a `DevCommand`, nothing deployed |
+| The eject | Next: its design |
