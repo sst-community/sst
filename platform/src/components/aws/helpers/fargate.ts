@@ -1384,7 +1384,7 @@ export function containerImage<P extends Parts>(
     ([image, architecture]) => {
       if (typeof image === "string") return output(image);
 
-      const contextPath = path.join(
+      const contextPath = path.resolve(
         context().paths.root,
         image?.context ?? ".",
       );
