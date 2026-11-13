@@ -341,11 +341,10 @@ func CmdMosaic(c *cli.Cli) error {
 					switch evt := unknown.(type) {
 					case *project.CompleteEvent:
 						for _, d := range evt.Devs {
+							// A command that doesn't parse still gets its pane. The pane's
+							// process reports the error, and the rest of sst dev keeps running.
 							if strings.TrimSpace(d.Command) == "" {
 								continue
-							}
-							if _, err := parseDevCommand(d.Name, d.Command); err != nil {
-								return err
 							}
 							dir := filepath.Join(cwd, d.Directory)
 							title := d.Title
@@ -465,9 +464,11 @@ func CmdMosaic(c *cli.Cli) error {
 							if strings.TrimSpace(d.Command) == "" {
 								continue
 							}
-							words, err := parseDevCommand(d.Name, d.Command)
-							if err != nil {
-								return err
+							// A command that doesn't parse is started without arguments, so
+							// its process reports the error and the rest of sst dev keeps running.
+							args := []string{currentExecutable, "dev"}
+							if words, err := parseDevCommand(d.Name, d.Command); err == nil {
+								args = append(append(args, "--"), words...)
 							}
 							dir := filepath.Join(cwd, d.Directory)
 							title := d.Title
@@ -476,7 +477,7 @@ func CmdMosaic(c *cli.Cli) error {
 							}
 							mono.AddProcess(
 								d.Name,
-								append([]string{currentExecutable, "dev", "--"}, words...),
+								args,
 								dir,
 								title,
 								d.Autostart,
@@ -499,11 +500,11 @@ func CmdMosaic(c *cli.Cli) error {
 }
 
 // parseDevCommand parses the command of the dev named name, and names it in the
-// error.
+// error. The error is readable, so the CLI prints it instead of a generic one.
 func parseDevCommand(name string, command string) ([]string, error) {
 	fields, err := parseCommand(command)
 	if err != nil {
-		return nil, fmt.Errorf("invalid dev command for %q: %w", name, err)
+		return nil, util.NewReadableError(err, fmt.Sprintf("invalid dev command for %q: %v", name, err))
 	}
 	return fields, nil
 }

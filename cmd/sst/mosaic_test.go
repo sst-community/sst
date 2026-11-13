@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/sst/sst/v3/internal/util"
 )
 
 func TestParseCommand(t *testing.T) {
@@ -62,5 +64,10 @@ func TestParseDevCommand(t *testing.T) {
 	}
 	if want := `invalid dev command for "WebDev": command is empty`; err.Error() != want {
 		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+	// main prints a *util.ReadableError as it is, and anything else as
+	// "Unexpected error occurred".
+	if _, ok := err.(*util.ReadableError); !ok {
+		t.Errorf("error is a %T, want *util.ReadableError", err)
 	}
 }
