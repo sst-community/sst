@@ -21,8 +21,9 @@ type PartialUnwrappedPolicyDocument = {
  * the string into a JSON object and passes it to the callback. Allowing you to modify the
  * policy document in a type-safe way.
  *
- * @param opts Where the document is made: in a program Pulumi runs on its own whose
- * only AWS provider is one of its own, give a `parent` that has it, or the provider.
+ * @param opts The AWS provider the document is made with. In a component given an AWS
+ * provider of its own, pass the component as `parent`, or the provider as `provider`, so
+ * the document is made with that provider and not the app's default one.
  *
  * @example
  *
