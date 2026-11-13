@@ -370,15 +370,18 @@ export class CronV2 extends component("sst:aws:CronV2", parts) {
           name: "inline",
           policy: output(args.dlq).apply(
             (dlq) =>
-              iam.getPolicyDocumentOutput({
-                statements: [
-                  ...runs,
-                  // Failed events are sent to the dead-letter queue
-                  ...(dlq
-                    ? [{ actions: ["sqs:SendMessage"], resources: [dlq] }]
-                    : []),
-                ],
-              }).json,
+              iam.getPolicyDocumentOutput(
+                {
+                  statements: [
+                    ...runs,
+                    // Failed events are sent to the dead-letter queue
+                    ...(dlq
+                      ? [{ actions: ["sqs:SendMessage"], resources: [dlq] }]
+                      : []),
+                  ],
+                },
+                { parent: this },
+              ).json,
           ),
         },
       ],

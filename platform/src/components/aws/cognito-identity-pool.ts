@@ -193,32 +193,35 @@ export class CognitoIdentityPool extends component(
 
     // Who may take a role: the pool's users, signed in or not
     const assumedBy = (amr: string) =>
-      iam.getPolicyDocumentOutput({
-        statements: [
-          {
-            effect: "Allow",
-            principals: [
-              {
-                type: "Federated",
-                identifiers: ["cognito-identity.amazonaws.com"],
-              },
-            ],
-            actions: ["sts:AssumeRoleWithWebIdentity"],
-            conditions: [
-              {
-                test: "StringEquals",
-                variable: "cognito-identity.amazonaws.com:aud",
-                values: [identityPool.id],
-              },
-              {
-                test: "ForAnyValue:StringLike",
-                variable: "cognito-identity.amazonaws.com:amr",
-                values: [amr],
-              },
-            ],
-          },
-        ],
-      }).json;
+      iam.getPolicyDocumentOutput(
+        {
+          statements: [
+            {
+              effect: "Allow",
+              principals: [
+                {
+                  type: "Federated",
+                  identifiers: ["cognito-identity.amazonaws.com"],
+                },
+              ],
+              actions: ["sts:AssumeRoleWithWebIdentity"],
+              conditions: [
+                {
+                  test: "StringEquals",
+                  variable: "cognito-identity.amazonaws.com:aud",
+                  values: [identityPool.id],
+                },
+                {
+                  test: "ForAnyValue:StringLike",
+                  variable: "cognito-identity.amazonaws.com:amr",
+                  values: [amr],
+                },
+              ],
+            },
+          ],
+        },
+        { parent: this },
+      ).json;
 
     const authRole = this.part("authenticatedRole", {
       assumeRolePolicy: assumedBy("authenticated"),
@@ -227,20 +230,23 @@ export class CognitoIdentityPool extends component(
           name: "inline",
           policy: output(args.permissions).apply(
             (permissions) =>
-              iam.getPolicyDocumentOutput({
-                statements: [
-                  {
-                    effect: "Allow",
-                    actions: [
-                      "mobileanalytics:PutEvents",
-                      "cognito-sync:*",
-                      "cognito-identity:*",
-                    ],
-                    resources: ["*"],
-                  },
-                  ...(permissions?.authenticated || []),
-                ],
-              }).json,
+              iam.getPolicyDocumentOutput(
+                {
+                  statements: [
+                    {
+                      effect: "Allow",
+                      actions: [
+                        "mobileanalytics:PutEvents",
+                        "cognito-sync:*",
+                        "cognito-identity:*",
+                      ],
+                      resources: ["*"],
+                    },
+                    ...(permissions?.authenticated || []),
+                  ],
+                },
+                { parent: this },
+              ).json,
           ),
         },
       ],
@@ -253,16 +259,19 @@ export class CognitoIdentityPool extends component(
           name: "inline",
           policy: output(args.permissions).apply(
             (permissions) =>
-              iam.getPolicyDocumentOutput({
-                statements: [
-                  {
-                    effect: "Allow",
-                    actions: ["mobileanalytics:PutEvents", "cognito-sync:*"],
-                    resources: ["*"],
-                  },
-                  ...(permissions?.unauthenticated || []),
-                ],
-              }).json,
+              iam.getPolicyDocumentOutput(
+                {
+                  statements: [
+                    {
+                      effect: "Allow",
+                      actions: ["mobileanalytics:PutEvents", "cognito-sync:*"],
+                      resources: ["*"],
+                    },
+                    ...(permissions?.unauthenticated || []),
+                  ],
+                },
+                { parent: this },
+              ).json,
           ),
         },
       ],

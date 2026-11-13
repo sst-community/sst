@@ -2,6 +2,14 @@
 
 What's been done on [the plan](plan.md), newest first. Each entry says what was done, what was checked, and what it found. The plan's [status](plan.md#status) has the summary.
 
+## 2026-11-12: a component's lookups follow its provider
+
+Found while running SST's components under plain Pulumi (`docs/plans/thin-layer/`, on the branch `v5-thin-layer`). A provider's lookup, like `iam.getPolicyDocumentOutput` or `getRegionOutput`, takes its provider from its options' `provider` or `parent`, not from a component's `providers`, and without either it's the stack's default provider. 27 of the components' 77 lookups were given no options, mostly `getPolicyDocument`, and `Function`'s region, partition and account, and `Bucket`'s distribution ARN, were given the component's own options, which a lookup reads only `provider` and `parent` from. So a `Function` given an AWS provider for another region looked up the default provider's region, and SST's bootstrap there, under SST's CLI too; and a program whose only AWS provider is its own failed on the first lookup.
+
+- Each now has the component it's for as `parent` (`{ parent: this }`, `self`, or the builder's component). `inlinePolicies`, `sendPolicy` and the RDS proxy's role take it from their callers. `iamEdit` takes options (`opts`), as a transform has no component to give it; its API report has the new argument.
+- `test/components/lookups.test.ts` lists each call of a get function imported from `@pulumi/aws`, Cloudflare's or Vercel's in the components that's given no options, and fails on one; with the components as they were, it listed all 27.
+- An app without AWS providers of its own looks up the same as before, with the default provider, so nothing it deploys changes; a lookup isn't in the state. `tsc`, the full suite (4235 tests) and the API reports passed.
+
 ## 2026-11-11: getting ready for SST 5's first pre-release, `5.0.0-beta.1`
 
 The maintainer asked "what do we need to do for the 5.0 pre-release and release setup", and chose to start on the pre-release. Its name is `5.0.0-beta.1`, and step 2's diff-only pre-release is dropped ([decision](plan.md#decisions)).

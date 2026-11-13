@@ -116,9 +116,12 @@ export function dns(args: DnsArgs = {}) {
     opts: ComponentResourceOptions,
   ) {
     if (args.zone) {
-      const zone = cloudflare.getZoneOutput({
-        zoneId: args.zone,
-      });
+      const zone = cloudflare.getZoneOutput(
+        {
+          zoneId: args.zone,
+        },
+        { parent: opts.parent },
+      );
       return {
         id: output(args.zone),
         name: zone.name,

@@ -1100,7 +1100,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
 
     this.part(
       "policy",
-      { bucket: bucket.bucket, policy: policyDocument(bucket.arn, args, opts) },
+      { bucket: bucket.bucket, policy: policyDocument(bucket.arn, args, { parent: this }) },
       { dependsOn: publicAccessBlock },
     );
 
@@ -1358,7 +1358,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
       } else if (n.queue !== undefined) {
         const queueArn = queueArnOf(n.queue);
         dependsOn.push(
-          this.part("queuePolicy", n.name, ...sendPolicy(queueArn)),
+          this.part("queuePolicy", n.name, ...sendPolicy(queueArn, this)),
         );
         queues.push({ ...config, queueArn });
       } else {
@@ -1383,7 +1383,7 @@ export class Bucket extends component("sst:aws:Bucket", parts) {
                   ],
                 },
               ],
-            }).json,
+            }, { parent: this }).json,
           }),
         );
         topics.push({ ...config, topicArn });
@@ -1708,7 +1708,7 @@ function policyDocument(
         ),
       });
     }
-    return iam.getPolicyDocumentOutput({ statements }).json;
+    return iam.getPolicyDocumentOutput({ statements }, opts).json;
   });
 }
 

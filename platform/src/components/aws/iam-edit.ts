@@ -1,4 +1,10 @@
-import { Input, jsonStringify, output, UnwrappedObject } from "@pulumi/pulumi";
+import {
+  Input,
+  type InvokeOutputOptions,
+  jsonStringify,
+  output,
+  UnwrappedObject,
+} from "@pulumi/pulumi";
 import { iam } from "@pulumi/aws";
 import { Prettify } from "../component";
 
@@ -14,6 +20,9 @@ type PartialUnwrappedPolicyDocument = {
  * The IAM policy document is normally in the form of a JSON string. This helper decodes
  * the string into a JSON object and passes it to the callback. Allowing you to modify the
  * policy document in a type-safe way.
+ *
+ * @param opts Where the document is made: in a program Pulumi runs on its own whose
+ * only AWS provider is one of its own, give a `parent` that has it, or the provider.
  *
  * @example
  *
@@ -39,12 +48,16 @@ type PartialUnwrappedPolicyDocument = {
 export function iamEdit(
   policy: Input<iam.PolicyDocument | string>,
   cb: (doc: Prettify<PartialUnwrappedPolicyDocument>) => void,
+  opts?: InvokeOutputOptions,
 ) {
   return output(policy).apply((v) => {
     const json = typeof v === "string" ? JSON.parse(v) : v;
     cb(json);
-    return iam.getPolicyDocumentOutput({
-      sourcePolicyDocuments: [jsonStringify(json)],
-    }).json;
+    return iam.getPolicyDocumentOutput(
+      {
+        sourcePolicyDocuments: [jsonStringify(json)],
+      },
+      opts,
+    ).json;
   });
 }

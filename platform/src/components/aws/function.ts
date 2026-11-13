@@ -1795,8 +1795,8 @@ export class Function extends component("sst:aws:Function", parts) {
     );
     const retries = plain(args.retries, option("retries"));
 
-    const partition = getPartitionOutput({}, opts).partition;
-    const region = getRegionOutput({}, opts).region;
+    const partition = getPartitionOutput({}, { parent: this }).partition;
+    const region = getRegionOutput({}, { parent: this }).region;
     const bootstrapData = region.apply((region) => bootstrap.forRegion(region));
     const assetBucket = bootstrapData.apply((data) => data.asset);
     // The key links are encrypted with is created once for the app, and
@@ -2349,7 +2349,7 @@ export class Function extends component("sst:aws:Function", parts) {
                         type: "AWS",
                         identifiers: [
                           interpolate`arn:${partition}:iam::${
-                            getCallerIdentityOutput({}, opts).accountId
+                            getCallerIdentityOutput({}, { parent: self }).accountId
                           }:root`,
                         ],
                       },
@@ -2358,12 +2358,12 @@ export class Function extends component("sst:aws:Function", parts) {
               ],
             },
           ],
-        }).json,
+        }, { parent: self }).json,
         inlinePolicies: inlinePolicies([
           args.permissions,
           linkPermissions,
           devPermissions,
-        ]),
+        ], self),
         managedPolicyArns: output(args.policies ?? []).apply((policies) => [
           ...policies,
           ...(logging ? [managed("AWSLambdaBasicExecutionRole")] : []),
@@ -2381,7 +2381,7 @@ export class Function extends component("sst:aws:Function", parts) {
     function createImage() {
       const authToken = ecr.getAuthorizationTokenOutput({
         registryId: bootstrapData.assetEcrRegistryId,
-      });
+      }, { parent: self });
       // Set unless the cache is switched off. SST 4 made the image inside an
       // `apply`, so a plain `cache` gives plain lists, as it did
       const cache = typeof container === "object" ? container.cache : undefined;

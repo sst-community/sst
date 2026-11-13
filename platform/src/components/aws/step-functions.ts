@@ -473,36 +473,42 @@ export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
       inlinePolicies: [
         {
           name: "inline",
-          policy: iam.getPolicyDocumentOutput({
-            statements: [
-              {
-                actions: ["events:*"],
-                resources: ["*"],
-              },
-              {
-                actions: [
-                  "logs:CreateLogDelivery",
-                  "logs:CreateLogStream",
-                  "logs:GetLogDelivery",
-                  "logs:UpdateLogDelivery",
-                  "logs:DeleteLogDelivery",
-                  "logs:ListLogDeliveries",
-                  "logs:PutLogEvents",
-                  "logs:PutResourcePolicy",
-                  "logs:DescribeResourcePolicies",
-                  "logs:DescribeLogGroups",
-                ],
-                resources: ["*"],
-              },
-              {
-                actions: ["states:StartExecution", "states:DescribeExecution"],
-                resources: ["*"],
-              },
-              // A lookup a state makes for its permissions, like a map's
-              // bucket's partition, uses the component's provider
-              ...root.getPermissions({ parent: self }),
-            ],
-          }).json,
+          policy: iam.getPolicyDocumentOutput(
+            {
+              statements: [
+                {
+                  actions: ["events:*"],
+                  resources: ["*"],
+                },
+                {
+                  actions: [
+                    "logs:CreateLogDelivery",
+                    "logs:CreateLogStream",
+                    "logs:GetLogDelivery",
+                    "logs:UpdateLogDelivery",
+                    "logs:DeleteLogDelivery",
+                    "logs:ListLogDeliveries",
+                    "logs:PutLogEvents",
+                    "logs:PutResourcePolicy",
+                    "logs:DescribeResourcePolicies",
+                    "logs:DescribeLogGroups",
+                  ],
+                  resources: ["*"],
+                },
+                {
+                  actions: [
+                    "states:StartExecution",
+                    "states:DescribeExecution",
+                  ],
+                  resources: ["*"],
+                },
+                // A lookup a state makes for its permissions, like a map's
+                // bucket's partition, uses the component's provider
+                ...root.getPermissions({ parent: self }),
+              ],
+            },
+            { parent: this },
+          ).json,
         },
       ],
     });

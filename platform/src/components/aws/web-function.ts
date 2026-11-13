@@ -764,46 +764,53 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
           { ignoreChanges: ["name"] },
         );
     const role = this.part("role", {
-      assumeRolePolicy: iam.getPolicyDocumentOutput({
-        statements: [
-          {
-            actions: ["sts:AssumeRole", "sts:TagSession"],
-            principals: [
-              { type: "Service", identifiers: ["lambda.amazonaws.com"] },
-            ],
-          },
-          // Only while the server runs locally, so the CLI can run it as
-          // the role
-          ...(dev
-            ? [
-                {
-                  actions: ["sts:AssumeRole"],
-                  principals: [
-                    {
-                      type: "AWS",
-                      identifiers: [
-                        getCallerIdentityOutput({}, { parent: this }).accountId,
-                      ],
-                    },
-                  ],
-                },
-              ]
-            : []),
-        ],
-      }).json,
-      inlinePolicies: inlinePolicies([
-        args.permissions,
-        Link.getInclude<Permission>("aws.permission", args.link),
+      assumeRolePolicy: iam.getPolicyDocumentOutput(
+        {
+          statements: [
+            {
+              actions: ["sts:AssumeRole", "sts:TagSession"],
+              principals: [
+                { type: "Service", identifiers: ["lambda.amazonaws.com"] },
+              ],
+            },
+            // Only while the server runs locally, so the CLI can run it as
+            // the role
+            ...(dev
+              ? [
+                  {
+                    actions: ["sts:AssumeRole"],
+                    principals: [
+                      {
+                        type: "AWS",
+                        identifiers: [
+                          getCallerIdentityOutput({}, { parent: this })
+                            .accountId,
+                        ],
+                      },
+                    ],
+                  },
+                ]
+              : []),
+          ],
+        },
+        { parent: this },
+      ).json,
+      inlinePolicies: inlinePolicies(
         [
-          {
-            actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
-            resources: [
-              interpolate`${logGroup.arn}:*`,
-              ...(localLogGroup ? [interpolate`${localLogGroup.arn}:*`] : []),
-            ],
-          },
+          args.permissions,
+          Link.getInclude<Permission>("aws.permission", args.link),
+          [
+            {
+              actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
+              resources: [
+                interpolate`${logGroup.arn}:*`,
+                ...(localLogGroup ? [interpolate`${localLogGroup.arn}:*`] : []),
+              ],
+            },
+          ],
         ],
-      ]),
+        this,
+      ),
     });
 
     // In `sst dev`, the server runs on the user's machine, as the role, in
@@ -1205,31 +1212,34 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
         inlinePolicies: [
           {
             name: "inline",
-            policy: iam.getPolicyDocumentOutput({
-              statements: [
-                {
-                  actions: ["ec2:CreateNetworkInterface"],
-                  resources: [
-                    interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
-                    interpolate`arn:${partition}:ec2:*:*:subnet/*`,
-                    interpolate`arn:${partition}:ec2:*:*:security-group/*`,
-                  ],
-                },
-                {
-                  actions: ["ec2:CreateTags"],
-                  resources: [
-                    interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
-                  ],
-                  conditions: [
-                    {
-                      test: "StringEquals",
-                      variable: "ec2:ManagedResourceOperator",
-                      values: ["network-connectors.lambda.amazonaws.com"],
-                    },
-                  ],
-                },
-              ],
-            }).json,
+            policy: iam.getPolicyDocumentOutput(
+              {
+                statements: [
+                  {
+                    actions: ["ec2:CreateNetworkInterface"],
+                    resources: [
+                      interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
+                      interpolate`arn:${partition}:ec2:*:*:subnet/*`,
+                      interpolate`arn:${partition}:ec2:*:*:security-group/*`,
+                    ],
+                  },
+                  {
+                    actions: ["ec2:CreateTags"],
+                    resources: [
+                      interpolate`arn:${partition}:ec2:*:*:network-interface/*`,
+                    ],
+                    conditions: [
+                      {
+                        test: "StringEquals",
+                        variable: "ec2:ManagedResourceOperator",
+                        values: ["network-connectors.lambda.amazonaws.com"],
+                      },
+                    ],
+                  },
+                ],
+              },
+              { parent: self },
+            ).json,
           },
         ],
       });

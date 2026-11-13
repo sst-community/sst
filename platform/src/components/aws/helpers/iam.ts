@@ -1,4 +1,4 @@
-import { all } from "@pulumi/pulumi";
+import { all, type Resource } from "@pulumi/pulumi";
 import { iam } from "@pulumi/aws";
 import { VisibleError } from "../../error";
 import type { Input } from "../../input";
@@ -20,21 +20,25 @@ import type { FunctionPermissionArgs } from "../function";
  */
 export function inlinePolicies(
   permissions: Input<Input<FunctionPermissionArgs>[] | undefined>[],
+  parent: Resource,
 ) {
   const policy = all(permissions).apply((lists) =>
-    iam.getPolicyDocumentOutput({
-      statements: lists
-        .flatMap((list) => list ?? [])
-        .map((item) => ({
-          effect: (() => {
-            const effect = item.effect ?? "allow";
-            return effect.charAt(0).toUpperCase() + effect.slice(1);
-          })(),
-          actions: item.actions,
-          resources: item.resources,
-          conditions: "conditions" in item ? item.conditions : undefined,
-        })),
-    }),
+    iam.getPolicyDocumentOutput(
+      {
+        statements: lists
+          .flatMap((list) => list ?? [])
+          .map((item) => ({
+            effect: (() => {
+              const effect = item.effect ?? "allow";
+              return effect.charAt(0).toUpperCase() + effect.slice(1);
+            })(),
+            actions: item.actions,
+            resources: item.resources,
+            conditions: "conditions" in item ? item.conditions : undefined,
+          })),
+      },
+      { parent },
+    ),
   );
   return policy.apply(({ statements }) =>
     statements ? [{ name: "inline", policy: policy.json }] : [],

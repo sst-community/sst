@@ -4,6 +4,7 @@ import {
   jsonStringify,
   type Output,
   output,
+  type Resource,
 } from "@pulumi/pulumi";
 import { RandomPassword, type RandomPasswordArgs } from "@pulumi/random";
 import { iam, rds, secretsmanager } from "@pulumi/aws";
@@ -143,6 +144,8 @@ export interface RdsCredentialsBuilder {
  * `this.builder()` gives it.
  */
 export interface RdsProxyBuilder {
+  /** The component the parts are built for. */
+  component: Resource;
   part(
     key: "proxySecret",
     id: string,
@@ -227,7 +230,10 @@ export function createRdsProxy(
   // The proxy can connect as the master user and as each of those
   const logins = [master, ...secrets];
 
-  const role = builder.part("proxyRole", proxyRoleArgs(logins));
+  const role = builder.part(
+    "proxyRole",
+    proxyRoleArgs(logins, builder.component),
+  );
   const lookup = builder.part("proxyRoleLookup", {
     name: "AWSServiceRoleForRDS",
   });
@@ -329,7 +335,10 @@ function proxyCredentials(
 }
 
 // The args of the role that lets a proxy read the secrets it connects with
-function proxyRoleArgs(secrets: secretsmanager.Secret[]): iam.RoleArgs {
+function proxyRoleArgs(
+  secrets: secretsmanager.Secret[],
+  parent: Resource,
+): iam.RoleArgs {
   return {
     assumeRolePolicy: iam.assumeRolePolicyForPrincipal({
       Service: "rds.amazonaws.com",
@@ -337,14 +346,17 @@ function proxyRoleArgs(secrets: secretsmanager.Secret[]): iam.RoleArgs {
     inlinePolicies: [
       {
         name: "inline",
-        policy: iam.getPolicyDocumentOutput({
-          statements: [
-            {
-              actions: ["secretsmanager:GetSecretValue"],
-              resources: secrets.map((secret) => secret.arn),
-            },
-          ],
-        }).json,
+        policy: iam.getPolicyDocumentOutput(
+          {
+            statements: [
+              {
+                actions: ["secretsmanager:GetSecretValue"],
+                resources: secrets.map((secret) => secret.arn),
+              },
+            ],
+          },
+          { parent },
+        ).json,
       },
     ],
   };

@@ -87,6 +87,7 @@ import { Integration as Integration_2 } from '@pulumi/aws/apigateway/integration
 import { IntegrationResponse } from '@pulumi/aws/apigateway/integrationResponse.js';
 import { InternetGateway } from '@pulumi/aws/ec2/internetGateway.js';
 import { Invocation } from '@pulumi/aws/lambda/invocation.js';
+import { InvokeOutputOptions } from '@pulumi/pulumi';
 import { KeyPair } from '@pulumi/aws/ec2/keyPair.js';
 import { KeyValueStore } from '@pulumi/aws/cloudfront/keyValueStore.js';
 import { lb } from '@pulumi/aws';
@@ -2262,7 +2263,7 @@ interface HyperdriveBinding {
 }
 
 // @public
-export function iamEdit(policy: Input_2<iam.PolicyDocument | string>, cb: (doc: Prettify<PartialUnwrappedPolicyDocument>) => void): Output<string>;
+export function iamEdit(policy: Input_2<iam.PolicyDocument | string>, cb: (doc: Prettify<PartialUnwrappedPolicyDocument>) => void, opts?: InvokeOutputOptions): Output<string>;
 
 // @public
 export function iamStatements(links: Input<any[]>): Output<    {

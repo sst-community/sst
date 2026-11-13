@@ -1237,22 +1237,25 @@ export function taskRoleArgs(
         ? { AWS: getCallerIdentityOutput({}, { parent }).accountId }
         : {}),
     }),
-    inlinePolicies: inlinePolicies([
-      args.permissions,
-      Link.getInclude<Permission>("aws.permission", args.link),
-      additional,
+    inlinePolicies: inlinePolicies(
       [
-        {
-          actions: [
-            "ssmmessages:CreateControlChannel",
-            "ssmmessages:CreateDataChannel",
-            "ssmmessages:OpenControlChannel",
-            "ssmmessages:OpenDataChannel",
-          ],
-          resources: ["*"],
-        },
+        args.permissions,
+        Link.getInclude<Permission>("aws.permission", args.link),
+        additional,
+        [
+          {
+            actions: [
+              "ssmmessages:CreateControlChannel",
+              "ssmmessages:CreateDataChannel",
+              "ssmmessages:OpenControlChannel",
+              "ssmmessages:OpenDataChannel",
+            ],
+            resources: ["*"],
+          },
+        ],
       ],
-    ]),
+      parent,
+    ),
   };
 }
 
@@ -1282,34 +1285,37 @@ export function executionRoleArgs(
     inlinePolicies: [
       {
         name: "inline",
-        policy: iam.getPolicyDocumentOutput({
-          statements: [
-            {
-              sid: "ReadSsmAndSecrets",
-              actions: [
-                "ssm:GetParameters",
-                "ssm:GetParameter",
-                "ssm:GetParameterHistory",
-                "secretsmanager:GetSecretValue",
-              ],
-              resources: ["*"],
-            },
-            // Every container's, as each loads its own
-            ...(withFiles.length
-              ? [
-                  {
-                    sid: "ReadEnvironmentFiles",
-                    actions: ["s3:GetObject"],
-                    resources: all(
-                      withFiles.map((container) =>
-                        output(container.environmentFiles!),
-                      ),
-                    ).apply((files) => files.flat()),
-                  },
-                ]
-              : []),
-          ],
-        }).json,
+        policy: iam.getPolicyDocumentOutput(
+          {
+            statements: [
+              {
+                sid: "ReadSsmAndSecrets",
+                actions: [
+                  "ssm:GetParameters",
+                  "ssm:GetParameter",
+                  "ssm:GetParameterHistory",
+                  "secretsmanager:GetSecretValue",
+                ],
+                resources: ["*"],
+              },
+              // Every container's, as each loads its own
+              ...(withFiles.length
+                ? [
+                    {
+                      sid: "ReadEnvironmentFiles",
+                      actions: ["s3:GetObject"],
+                      resources: all(
+                        withFiles.map((container) =>
+                          output(container.environmentFiles!),
+                        ),
+                      ).apply((files) => files.flat()),
+                    },
+                  ]
+                : []),
+            ],
+          },
+          { parent },
+        ).json,
       },
     ],
   };

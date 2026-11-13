@@ -400,7 +400,7 @@ export class Bus extends component("sst:aws:Bus", parts) {
   ) {
     this.assertNew("subscriber", "rule", name, args, ["rule", "target"]);
     const queueArn = queueArnOf(queue);
-    this.part("queuePolicy", name, ...sendPolicy(queueArn));
+    this.part("queuePolicy", name, ...sendPolicy(queueArn, this));
     const rule = this.subscriberRule(name, args);
     this.part("target", name, {
       arn: queueArn,

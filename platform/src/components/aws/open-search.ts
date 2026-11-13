@@ -395,15 +395,18 @@ export class OpenSearch extends component("sst:aws:OpenSearch", parts) {
 
     this.part("policy", {
       domainName: domain.domainName,
-      accessPolicies: iam.getPolicyDocumentOutput({
-        statements: [
-          {
-            principals: [{ type: "*", identifiers: ["*"] }],
-            actions: ["*"],
-            resources: ["*"],
-          },
-        ],
-      }).json,
+      accessPolicies: iam.getPolicyDocumentOutput(
+        {
+          statements: [
+            {
+              principals: [{ type: "*", identifiers: ["*"] }],
+              actions: ["*"],
+              resources: ["*"],
+            },
+          ],
+        },
+        { parent: this },
+      ).json,
     });
 
     this.connection = {

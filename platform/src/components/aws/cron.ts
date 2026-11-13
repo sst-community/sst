@@ -332,18 +332,21 @@ export class Cron extends component("sst:aws:Cron", parts) {
           inlinePolicies: [
             {
               name: "inline",
-              policy: iam.getPolicyDocumentOutput({
-                statements: [
-                  {
-                    actions: ["ecs:RunTask"],
-                    resources: [task.nodes.taskDefinition.arn],
-                  },
-                  {
-                    actions: ["iam:PassRole"],
-                    resources: rolesToPass(task.nodes.taskDefinition),
-                  },
-                ],
-              }).json,
+              policy: iam.getPolicyDocumentOutput(
+                {
+                  statements: [
+                    {
+                      actions: ["ecs:RunTask"],
+                      resources: [task.nodes.taskDefinition.arn],
+                    },
+                    {
+                      actions: ["iam:PassRole"],
+                      resources: rolesToPass(task.nodes.taskDefinition),
+                    },
+                  ],
+                },
+                { parent: this },
+              ).json,
             },
           ],
         })
