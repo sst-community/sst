@@ -39,6 +39,8 @@ As tests:
 | 2026-11-13 | **The eject copies each Worker's last build beside the module, and points the module and the state at the copy.** A Worker's code is uploaded from a file, its last build in `.sst/`, which isn't committed, written as an absolute path. Of that, copying beside the module and updating each script once on the first `pulumi up`, and keeping `.sst/artifacts` with paths from the project's folder, the maintainer chose the first, as recommended: any checkout deploys, and nothing changes in the cloud. |
 | 2026-11-13 | **The eject leaves a Worker's placement as it is, and says so.** The lab found Pulumi's Cloudflare provider can't upload a script with a placement: Cloudflare refuses 6.15's upload, and 6.24, the newest, can't serialize the placement's `targets`, which is read-only in both. The maintainer asked to try a newer provider first, then chose leaving it, as recommended, over refusing such a Worker: it stays until the script's next upload. |
 | 2026-11-13 | **SST's Worker places it again after every upload of its script, on `v5`.** The lab found Cloudflare resets a script's placement on every upload without one, and SST's `WorkerPlacement` was set again only when the code changed (the etag), so a deploy that changed only a Worker's environment, bindings or settings dropped it, under SST's CLI too. The maintainer chose fixing it on `v5`, as recommended (`ff384d74e`, merged here). |
+| 2026-11-13 | **SST's CLI keeps to `sst dev` and `sst eject` in a Pulumi project**, as [pulumi-dev](../pulumi-dev/plan.md#decisions) has it, and `pulumi` does the rest. Offered all of SST's commands on a Pulumi stack (`sst deploy`, `diff`, `remove` and `refresh` running the developer's own `pulumi` with SST's UI, and the typed links written after a deploy; `sst shell`, `tunnel` and `secret` reading the stack), only what Pulumi has nothing like (`shell`, `tunnel` and `secret`), or keeping it, the maintainer chose keeping it. [Open question 2](#open-questions) is closed. |
+| 2026-11-13 | **In a Pulumi program, an `sst.Secret`'s value is the stack's secret config of the same name** (`pulumi config set --secret StripeKey ...`), then its placeholder. Under SST's CLI it's what `sst secret set` stored, as before. It only found `SST_SECRET_<name>` in the environment, which nothing sets for a Pulumi program, so the docs page had a `Linkable` over the stack's config in its place. The maintainer chose it, as recommended, over keeping that. |
 
 ## Where it starts
 
@@ -75,9 +77,9 @@ Each tie, and what plain Pulumi would use instead. Where there's more than one w
    - **Dynamic providers**, in the program's language. No plugin, but Pulumi keeps their code in the state, which needs the same packages installed to delete them, and there are none for Python or Go.
 
    The first step doesn't need it: a `Function` without a router or `addEnvironment` uses none of them.
-5. **Linking, secrets and `sst dev`.** A link is IAM statements and environment, which the component writes already. `sst-env.d.ts` stays SST's, written from the stack's outputs. `sst.Secret` is still to read. For `sst dev`, the components already report their functions (`_sst`), which `sst dev` on a Pulumi program could read in place of `sst.dev.yaml`. Later.
+5. **Linking, secrets and `sst dev`.** A link is IAM statements and environment, which the component writes already. `sst-env.d.ts` stays SST's, written from the stack's outputs. `sst.Secret` reads the stack's config ([step 11](#11-sstsecret-in-a-pulumi-program)). For `sst dev`, the components already report their functions (`_sst`), which `sst dev` on a Pulumi program could read in place of `sst.dev.yaml`. Later.
 6. **Removing SST.** An eject that writes the program with Pulumi's own resources, at the URNs SST's components gave them, so nothing is replaced ([step 5](#5-the-eject)).
-7. **SST's CLI on a Pulumi stack.** `sst dev` runs a Pulumi program already. To choose: whether `sst deploy`, `sst diff` and the rest do too, or Pulumi keeps those.
+7. **SST's CLI on a Pulumi stack.** `sst dev` runs a Pulumi program already. To choose: whether `sst deploy`, `sst diff` and the rest do too, or Pulumi keeps those. [Decided](#decisions) 2026-11-13: Pulumi keeps them.
 8. **Apps SST deployed.** Their state is in SST's home, under 5.0's one hard rule. With the names above, their URNs would match a Pulumi stack named after the stage in a project named after the app, so `pulumi stack import` might carry one across, but how the secrets are encrypted is still to check. Not in the first steps.
 
 ## Steps
@@ -200,14 +202,20 @@ Exit tests: in the lab, under plain Pulumi, a `MicroVm`, and a `Postgres` with a
 
 Exit tests: the plain-mode tests of the account and of SST's provider for a Cloudflare provider; the eject's tests of each resource. In the lab, in the maintainer's Cloudflare account (no R2), under plain Pulumi with the token in the stack's config and not in the environment: a `Worker` with a URL, placement, links to a `Kv`, a `D1`, a `Queue` and a Durable Object, a `Cron` and a `StaticSite`, deployed with `pulumi up` and called, ejected, previewed and deployed without SST with only what the eject said, the Worker's code changed and deployed again with its URL still answering, and destroyed with nothing left. A DNS record only if the account has a zone; Vercel's in the tests only.
 
+### 11. `sst.Secret` in a Pulumi program
+
+[As decided](#decisions): with no core, a `Secret` reads the stack's config, `new pulumi.Config().getSecret(name)`, under the project's name, and takes its placeholder when the config has none. The environment isn't read then, so the stack's config is the one place. With neither, the error says `pulumi config set --secret <name> <value>`; under SST's CLI it still says `sst secret set`. The docs page's Secrets section uses `Secret` in place of a `Linkable`. There's no fallback for every stack, as `sst secret set --fallback` gives an SST app.
+
+Exit tests: a Pulumi program's `Secret` from the stack's config, from its placeholder, the config over the placeholder, no read of the environment, its link, and its error; an SST app's from the environment and not the config, and its error. A real `pulumi up` of a program with two `Secret`s, on a local backend: the preview fails with the message while there's no value; once it's set with `pulumi config set --secret`, the value, the link and the placeholder are outputs, secret, and the state has no copy in plain text.
+
 ### Later
 
-SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js. Step 5 left the eject of the components [listed there](#5-the-eject).
+Other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js. Step 5 left the eject of the components [listed there](#5-the-eject).
 
 ## Open questions
 
 1. ~~What happens in an account with no bootstrap (3).~~ Decided 2026-11-13: a Pulumi program declares its store ([step 8](#8-asset-storage)).
-2. Whether SST's CLI deploys Pulumi stacks too (7).
+2. ~~Whether SST's CLI deploys Pulumi stacks too (7).~~ Decided 2026-11-13: no. Only `sst dev` and `sst eject` run in a Pulumi project.
 
 ## Status
 
@@ -228,4 +236,5 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 8. Asset storage | Done 2026-11-13, lab-checked in a region SST's CLI never deployed to |
 | 9. The eject's last AWS cases | Done 2026-11-13, lab-checked (`MicroVm`, `Postgres` with a proxy) |
 | 10. Cloudflare under plain Pulumi | Done 2026-11-13, lab-checked. The placement fix on `v5` (`ff384d74e`), merged here |
+| 11. `sst.Secret` in a Pulumi program | Done 2026-11-13, checked with a real `pulumi up` on a local backend (a `Secret` makes nothing in the cloud) |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |

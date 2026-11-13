@@ -2,6 +2,21 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: step 11, `sst.Secret` in a Pulumi program
+
+First, [open question 2](plan.md#open-questions): SST's CLI on Pulumi stacks. Offered all of SST's commands on a Pulumi stack, each running the developer's own `pulumi` on the stack's own backend and keeping nothing of SST's, only the ones Pulumi has nothing like (`shell`, `tunnel`, `secret`), or keeping only `sst dev` and `sst eject`, the maintainer chose keeping them ([decisions](plan.md#decisions)). Then an `sst.Secret` in a Pulumi program, which only found `SST_SECRET_<name>` in the environment, and nothing sets it there.
+
+**What changed:**
+
+- **`Secret`** (`components/secret.ts`): with no core, its value is `new pulumi.Config().getSecret(name)`, the stack's config under the project's name, then its placeholder. The environment isn't read then. Under SST's CLI, nothing changed. `SecretMissingError` says `pulumi config set --secret <name> <value>` with no core, and `sst secret set` under SST's CLI, as before. Its docs say where a Pulumi program's value is.
+- **The docs page**: the Secrets section and the table use `Secret`, from `sst/components`, and `pulumi config set --secret`, in place of a `Linkable` over the stack's config. There's no fallback for every stack.
+
+**Found:** a preview that fails on a `Secret` with no value shows two `PromiseRejectionHandledWarning`s from Node before the error. The code before this change shows the same: it's how an error in an output another output reads comes out under plain Pulumi. Left as it is.
+
+**Checked:** `tsc`; the platform suite (117 files, 4292 tests), with `secret.test.ts` (a Pulumi program: the config, the placeholder, the config over it, no read of the environment, the link, the error) and `secret-cli.test.ts` (an SST app: the environment, not the config, the error); the API reports, unchanged; the components' docs generated. A real `pulumi up` (Pulumi 3.270.0, a local backend, no cloud credentials) of a program with the package packed from this branch, `StripeKey` with no placeholder and `PlanName` with one: the preview failed with the message; after `pulumi config set --secret StripeKey ...` (kept as `thinsecret:StripeKey`, encrypted), the deploy gave the value, the link's value and the placeholder as outputs, all secret, with no copy of the value in the state's export; destroyed and removed.
+
+**Not checked:** a `Secret` under `sst dev` on a Pulumi program, which reads the stack's config the same way, as no core runs it; a function reading `Resource.StripeKey.value` in the cloud, whose link is a link like any other.
+
 ## 2026-11-13: step 10, Cloudflare under plain Pulumi
 
 SST's Cloudflare components deploy, refresh and destroy under plain Pulumi, with the token in the stack's config alone, and the eject takes Cloudflare's and Vercel's own resources out of the state, [as decided](plan.md#decisions). The eject now refuses only SST's origin access control.
