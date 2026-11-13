@@ -896,6 +896,27 @@ describe("Task", () => {
     });
   });
 
+  it("builds from a context given as an absolute path, outside the app", async () => {
+    // @ts-ignore
+    const paths = global.$cli.paths;
+    const root = paths.root;
+    paths.root = fs.mkdtempSync(path.join(os.tmpdir(), "sst-task-root-"));
+    try {
+      new Task("MyTask", { cluster: cluster(), image: { context: app } });
+      await pulumi.settle();
+      expect(resource("MyTaskImageMyTask").inputs).toMatchObject({
+        context: { location: app },
+        dockerfile: { location: path.join(app, "Dockerfile") },
+      });
+      expect(fs.readFileSync(path.join(app, ".dockerignore"), "utf8")).toMatch(
+        /^\.sst$/m,
+      );
+    } finally {
+      fs.rmSync(paths.root, { recursive: true, force: true });
+      paths.root = root;
+    }
+  });
+
   it("keeps a container's image and log group under its name", async () => {
     const task = new Task("MyTask", {
       cluster: cluster(),

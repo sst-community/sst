@@ -2201,7 +2201,7 @@ export class Function extends component("sst:aws:Function", parts) {
       return output(args.copyFiles ?? []).apply((copyFiles) =>
         Promise.all(
           copyFiles.map(async (entry) => {
-            const from = path.join(context().paths.root, entry.from);
+            const from = path.resolve(context().paths.root, entry.from);
             const to = entry.to || entry.from;
             if (path.isAbsolute(to))
               throw new VisibleError(
