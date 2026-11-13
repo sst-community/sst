@@ -2,6 +2,14 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: step 7, SST's components inside the program's own component
+
+The eject no longer refuses one of SST's components that's in a component of the program's: the module makes it with that component as its parent, which `ejected()` is given. Committed as `aece8b61c`.
+
+**What changed** (`pkg/eject`): a resource of the program's that one of SST's components is in is given to `ejected()` under `parents`, by its name, as a provider of the program's is under `providers`; both are now in one argument, `ejected({ providers: { east }, parents: { shop } })`, and the module refers to them as `program.providers.east` and `program.parents.shop`. The eject says what `ejected()` takes, and the dry run too. A test has a `Queue` in the program's `Shop`.
+
+**Checked:** Go, `pkg/eject`'s tests and the full suite. In the lab, project `thinnested`, stack `dev`: a component of the program's, `Shop` (`acme:index:Shop`), with a `Bucket` and a `Function` linked to it in it. `pulumi up`: 17 created, and the function answered. `sst eject`: `ejected()` takes `parents.shop`. The program then made its `Shop` with nothing in it and gave it to `ejected()`; with `sst` uninstalled, `SST_BIN_PATH` unset and SST's plugin moved out, `pulumi preview --diff`: 14 unchanged; `pulumi up`: 14 unchanged, and the function answered. `pulumi destroy`: 14 deleted; the function, role, bucket and log group checked directly, gone; the tagging API lists nothing; the 2 build files deleted; the stack removed.
+
 ## 2026-11-13: step 7, the eject for several stacks
 
 `sst eject` writes one module for every stack of the project, [as decided](plan.md#decisions). Committed as `447d04e92`.

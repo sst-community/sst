@@ -140,7 +140,7 @@ Exit tests, in the lab: a program with a linked `Function` and a `StaticSite`, d
 Built for those, and passed ([progress](progress.md)). The `StaticSite` has no origin access control: its CloudFront function sets the bucket as its origin, with access control settings of its own. Left for later, each refused with a message until then:
 
 - **SST's origin access control** (`OriginAccessControl`). SST's state doesn't keep its name, which has a random ending, so adopting it needs a read of the cloud with the provider's credentials. Neither the `StaticSite` nor the `Router` makes one ([step 6](#6-the-sweep)).
-- **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's), and a component of SST's in a component of the program's. (The `Router`'s routes, `addEnvironment` and the providers SST makes for a region came in [step 6](#6-the-sweep).)
+- **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's). (The `Router`'s routes, `addEnvironment` and the providers SST makes for a region came in [step 6](#6-the-sweep); several stacks and a component of SST's in a component of the program's in [step 7](#7-the-ejects-other-cases).)
 
 ### 6. The sweep
 
@@ -158,7 +158,7 @@ Done ([progress](progress.md)). The `Router` turned out to have no origin access
 [As decided](#decisions), what any program can hit first:
 
 - **Several stacks.** `sst eject` reads every stack of the project and writes one module. What it makes is lined up across the stacks by URN, which is the same in each but for the stack's name. A value the same in every stack is written as it is; a plain value that isn't, like a resource's name, is read from each stack's config (`config.require("ApiFunction.name")`), where the eject puts it; a value with a reference in it that isn't the same is picked by stack (`byStack({ dev: () => role.arn, prod: () => "arn:..." })`); and what only some stacks have is made only on those (`onStack("prod") ? new ... : undefined`). A stack with none of SST's components is left out, and the module throws on a stack it has no values for. Each stack's state is saved, edited and imported on its own; if one fails, those imported before are put back.
-- **SST's components inside a component of the program's**: next.
+- **SST's components inside a component of the program's.** Their URNs have the program's component in them, so the module makes them with it as their parent. It's in the program's code, so `ejected()` is given it, as it's given a provider of the program's: `ejected({ providers: { east }, parents: { shop } })`. The eject says what it takes.
 
 ### Later
 
@@ -182,5 +182,5 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 4. Goals 2 and 3 for what's built | Done 2026-11-12, lab-checked, committed (`d0a4281d7`) |
 | The maintainer's sample program at step 4 | Done 2026-11-12: a `Bucket`, a linked `Function` and a `DevCommand`, nothing deployed |
 | 5. The eject | Done 2026-11-12 for a linked `Function`, a `Bucket` and a `StaticSite`, lab-checked, committed (`5f0a66a9d`) |
-| 7. The eject's other cases | Several stacks: done 2026-11-13, lab-checked, committed (`447d04e92`). Components inside the program's: next |
+| 7. The eject's other cases | Several stacks: done 2026-11-13, lab-checked, committed (`447d04e92`). Components inside the program's: done 2026-11-13, lab-checked, committed (`aece8b61c`). Next: the docs page |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |
