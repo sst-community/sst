@@ -195,12 +195,12 @@ func TestBuildRefuses(t *testing.T) {
 			edit: func(resources []map[string]any) []map[string]any {
 				for _, r := range resources {
 					if r["type"] == "sst:aws:BucketFiles" {
-						r["type"] = "sst:aws:RdsRoleLookup"
+						r["type"] = "sst:aws:OriginAccessControl"
 					}
 				}
 				return resources
 			},
-			error: "FilesUpload (sst:aws:RdsRoleLookup) is one of SST's own resources",
+			error: "FilesUpload (sst:aws:OriginAccessControl) is one of SST's own resources",
 		},
 		{
 			name: "a file it doesn't write",
@@ -605,5 +605,68 @@ func TestBuildWritesTheProgramsAssets(t *testing.T) {
 		if urn.Name() == "AssetsBucket" || urn.Name() == "Assets" {
 			t.Errorf("%s leaves the state", urn.Name())
 		}
+	}
+}
+
+// A database's proxy waits for the role RDS gives it, and a MicroVM's image
+// has its old versions deleted after each build: SST's own resources with
+// nothing in the cloud, which leave the state
+func TestBuildTakesOutTheRoleLookupAndTheImagePrune(t *testing.T) {
+	stack := "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev"
+	aws := "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb"
+	sst := "urn:pulumi:dev::shop::pulumi:providers:sst::sst::0aaa"
+	db := "urn:pulumi:dev::shop::sst:aws:Postgres::Db"
+	lookup := "urn:pulumi:dev::shop::sst:aws:Postgres$sst:aws:RdsRoleLookup::DbProxyRoleLookup"
+	vm := "urn:pulumi:dev::shop::sst:aws:MicroVm::Sandbox"
+	data := editFixture(t, func(resources []map[string]any) []map[string]any {
+		return append(resources,
+			map[string]any{"urn": db, "custom": false, "type": "sst:aws:Postgres", "parent": stack},
+			map[string]any{
+				"urn": lookup, "custom": true, "id": "lookup", "type": "sst:aws:RdsRoleLookup", "parent": db, "provider": sst,
+				"inputs": map[string]any{"name": "AWSServiceRoleForRDS"},
+			},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::sst:aws:Postgres$aws:rds/proxy:Proxy::DbProxy", "custom": true, "id": "shop-dev-dbproxy",
+				"type": "aws:rds/proxy:Proxy", "parent": db, "provider": aws,
+				"inputs":       map[string]any{"name": "shop-dev-dbproxy", "engineFamily": "POSTGRESQL"},
+				"dependencies": []any{lookup},
+			},
+			map[string]any{"urn": vm, "custom": false, "type": "sst:aws:MicroVm", "parent": stack},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::sst:aws:MicroVm$sst:aws:MicrovmImagePrune::SandboxImagePrune", "custom": true,
+				"id": "arn:aws:lambda:us-east-1:123456789012:microvm-image:sandbox", "type": "sst:aws:MicrovmImagePrune", "parent": vm, "provider": sst,
+				"inputs": map[string]any{"imageArn": "arn:aws:lambda:us-east-1:123456789012:microvm-image:sandbox", "imageVersion": "3", "keep": 3},
+			},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::sst:aws:MicroVm$aws:s3/bucketObjectv2:BucketObjectv2::SandboxCode", "custom": true,
+				"id": "sst-asset-abc/assets/microvm/sandbox.zip", "type": "aws:s3/bucketObjectv2:BucketObjectv2", "parent": vm, "provider": aws,
+				"inputs": map[string]any{
+					"bucket": "sst-asset-abc",
+					"key":    "assets/microvm/sandbox.zip",
+					"source": map[string]any{sig.Key: sig.ArchiveSig, "path": ".sst/artifacts/sandbox.zip"},
+				},
+			},
+		)
+	})
+	plan, err := build(t, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[string]string{}
+	for _, removed := range plan.Stacks[0].Removed {
+		reasons[removed.Name] = removed.Why
+	}
+	for name, want := range map[string]string{
+		"DbProxyRoleLookup": "a wait for the role RDS gives a proxy",
+		"SandboxImagePrune": "nothing deletes them after the eject",
+		"SandboxCode":       "the code the image was built from, which stays at s3://sst-asset-abc/assets/microvm/sandbox.zip while the image points at it",
+	} {
+		if !strings.Contains(reasons[name], want) {
+			t.Errorf("%s leaves the state as %q", name, reasons[name])
+		}
+	}
+	// The proxy stays, without waiting on what left
+	if !strings.Contains(plan.Module, `new aws.rds.Proxy(`) || strings.Contains(plan.Module, "RoleLookup") {
+		t.Errorf("the module has the proxy without the lookup:\n%s", plan.Module)
 	}
 }

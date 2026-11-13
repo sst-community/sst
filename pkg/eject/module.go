@@ -118,6 +118,8 @@ var ownResources = map[string]string{
 	"sst:aws:KvRoutesUpdate":               "a route's entry in the router's key-value store, which stays as last deployed",
 	"sst:aws:DistributionInvalidation":     "an invalidation of the CDN's cache, with nothing to keep",
 	"sst:aws:DistributionDeploymentWaiter": "a wait for the CDN to deploy, with nothing in the cloud",
+	"sst:aws:RdsRoleLookup":                "a wait for the role RDS gives a proxy, which is there now: nothing in the cloud",
+	"sst:aws:MicrovmImagePrune":            "the deletion of a MicroVM image's old versions after each build, with nothing in the cloud: nothing deletes them after the eject, and an image keeps up to 50",
 }
 
 // generator reads one stack's state: what the eject does with each
@@ -229,10 +231,17 @@ func (g *generator) classify() error {
 					g.remove(r, "a source map of SST's build, which stays at "+where+" until the stack's bucket is deleted")
 				case strings.HasPrefix(key, "sourcemap/"):
 					g.remove(r, "a source map of SST's build, which stays at "+where)
-				case own:
-					g.remove(r, "the code SST built, which stays at "+where+" while the function points at it: delete it once the function has a build of its own, or it goes with the stack's bucket")
 				default:
-					g.remove(r, "the code SST built, which stays at "+where+" while the function points at it: delete it once the function has a build of its own")
+					// A function's code, or the code a MicroVM's image was
+					// built from
+					what := "the code SST built, which stays at " + where + " while the function points at it: delete it once the function has a build of its own"
+					if parent := g.byURN[r.Parent]; parent != nil && parent.Type == "sst:aws:MicroVm" {
+						what = "the code the image was built from, which stays at " + where + " while the image points at it"
+					}
+					if own {
+						what += ", or it goes with the stack's bucket"
+					}
+					g.remove(r, what)
 				}
 			} else {
 				g.role[r.URN] = rolePart

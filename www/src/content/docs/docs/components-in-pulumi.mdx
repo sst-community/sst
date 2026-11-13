@@ -206,7 +206,7 @@ It changes nothing in the cloud. For each stack of the project with SST's compon
 1. **Saves the stack's state**, beside `Pulumi.yaml`, as `sst-eject-<stack>-<time>.json`.
 2. **Writes `sst-ejected.ts`**, one module for every stack, whose function `ejected()` makes what SST's components made.
 3. **Puts values in the stack's config**, under `sst-ejected`: each secret input, and each value that isn't the same in every stack, like a resource's name.
-4. **Takes SST's own resources out of the state**, and SST's provider with them: a site's files, a router's routes, the invalidations, what `addEnvironment` added. What they made stays in the cloud, as last deployed.
+4. **Takes SST's own resources out of the state**, and SST's provider with them: a site's files, a router's routes, the invalidations, what `addEnvironment` added, a database proxy's wait for its role, a MicroVM image's pruning. What they made stays in the cloud, as last deployed. Nothing deletes a MicroVM image's old versions after it, so an image keeps up to the 50 Lambda allows.
 
 It doesn't change your program. Replace SST's components with what `ejected()` returns, each component's parts by the names SST gave them:
 
@@ -310,7 +310,7 @@ It stops before it writes anything when it can't eject a stack without a change 
 
 - **A stack `sst dev` deployed last**, whose functions run the stub. Deploy it with `pulumi up` first.
 - **A stack with an operation Pulumi didn't finish**, or a resource waiting to be deleted or replaced.
-- **SST's own resources it doesn't take out yet:** the role lookup of a database's proxy (`Postgres`, `Mysql` and `Aurora`), `MicroVm`'s image prune, and Cloudflare's and Vercel's.
+- **SST's own resources it doesn't take out yet:** Cloudflare's and Vercel's.
 - **A provider one of SST's components made**, other than the one for a region that a site's server uses.
 - **A resource that takes a file or a folder**, as a Pulumi asset or archive.
 
