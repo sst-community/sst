@@ -247,7 +247,11 @@ class Parent extends pulumi.ComponentResource {
  * vitest.
  */
 export function mockPulumi(input?: MockInput) {
-  const engine = mockEngine(input);
+  // SST_TEST_PLAIN=1 runs the tests as Pulumi runs a program on its own
+  const engine = mockEngine({
+    ...(process.env.SST_TEST_PLAIN === "1" ? { plain: true } : {}),
+    ...input,
+  });
   const { resources, deployed } = engine;
 
   // A stage deployed before 4.x renamed something has it at its old address,
@@ -442,10 +446,14 @@ export function mockPulumi(input?: MockInput) {
         },
       };
 
+      // A takeover is from SST 4's components, which only ran under SST's
+      // CLI, so there's none under plain Pulumi
+      const describeTakeover =
+        process.env.SST_TEST_PLAIN === "1" ? describe.skip : describe;
       for (const [name, given] of Object.entries(suite.cases)) {
         const test: TakeoverCase<A | B> =
           typeof given === "function" ? { create: given } : given;
-        describe(name, () => {
+        describeTakeover(name, () => {
           for (const way of Object.keys(ways) as TakeoverWay[]) {
             it(way, async () => {
               const { opts, given } = await ways[way]();

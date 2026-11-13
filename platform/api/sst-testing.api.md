@@ -81,6 +81,7 @@ export interface MockInput {
     cli?: (method: string, args: any) => any;
     move?: boolean;
     patience?: number;
+    plain?: boolean;
     preview?: boolean;
     recorded?: StateExport;
     root?: string;

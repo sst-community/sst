@@ -127,6 +127,13 @@ export interface MockInput {
    * code went to. Undefined leaves the stand-in's answer.
    */
   cli?: (method: string, args: any) => any;
+  /**
+   * Run as Pulumi runs a program on its own, with no SST CLI: none of SST's
+   * globals (`$app`, `$cli`, `$dev`, `$util` and the rest), and the app and
+   * the stage are Pulumi's project and stack. A component reads them the same
+   * way either way, through its context.
+   */
+  plain?: boolean;
 }
 
 // The outputs 4.x's components name for the core, and what each is in a
@@ -179,6 +186,10 @@ function asTheCoreReads(outputs: Record<string, any>) {
  * globals the components read, and not the ones a config has, like `sst`.
  */
 export function mockPulumi(input?: MockInput) {
+  const plain = input?.plain === true;
+  urnRoot = plain
+    ? `urn:pulumi:${input?.stage ?? "test"}::${input?.app ?? "app"}::`
+    : "urn:pulumi:stack::project::";
   const resources: RecordedResource[] = [];
   // Counts what's sent to the engine, to tell when a deploy has gone quiet
   let activity = 0;
@@ -282,42 +293,60 @@ export function mockPulumi(input?: MockInput) {
         },
         permissions: [{ actions: ["appsync:*"], resources: ["*"] }],
       };
-    if (method === "Provider.Aws.Bootstrap")
-      return {
-        asset: "sst-asset-bucket",
-        assetEcrRegistryId: "123456789012",
-        assetEcrUrl: "123456789012.dkr.ecr.us-east-1.amazonaws.com/sst-asset",
-        state: "sst-state-bucket",
-        appsyncHttp: "appsync.example.com",
-        appsyncRealtime: "appsync-realtime.example.com",
-      };
+    if (method === "Provider.Aws.Bootstrap") return bootstrapData;
     return new Promise(() => {});
   }) as typeof rpc.call;
 
-  // @ts-ignore
-  global.$app = {
-    name: input?.app ?? "app",
-    stage: input?.stage ?? "test",
-    home: "aws",
-  };
-  // @ts-ignore
-  global.$util = pulumi;
-  // @ts-ignore
-  global.$interpolate = pulumi.interpolate;
-  // @ts-ignore
-  global.$jsonParse = pulumi.jsonParse;
-  // @ts-ignore
-  global.$jsonStringify = pulumi.jsonStringify;
-  // @ts-ignore
-  global.$dev = false;
-  // @ts-ignore
-  global.$cli = {
-    contract: contractVersion,
-    command: input?.preview ? "diff" : "deploy",
-    move: input?.move === true,
-    state: {},
-    paths: { root: input?.root ?? "/", work, platform },
-  };
+  if (plain) {
+    // What only SST's binary does, like a build, goes to the CLI's server
+    // when there is one, as under `sst dev`, and the mock answers it
+    process.env.SST_SERVER ??= "http://127.0.0.1:0/mock";
+    for (const name of [
+      "$app",
+      "$util",
+      "$interpolate",
+      "$jsonParse",
+      "$jsonStringify",
+      "$dev",
+      "$cli",
+    ])
+      delete (globalThis as any)[name];
+    // A test that sets $dev, as SST's CLI does, runs as `sst dev` runs a
+    // Pulumi program, with SST_DEV. There's still no $dev to read.
+    process.env.SST_DEV = "";
+    Object.defineProperty(globalThis, "$dev", {
+      configurable: true,
+      get: () => undefined,
+      set: (value: boolean) => {
+        process.env.SST_DEV = value ? "true" : "";
+      },
+    });
+  } else {
+    // @ts-ignore
+    global.$app = {
+      name: input?.app ?? "app",
+      stage: input?.stage ?? "test",
+      home: "aws",
+    };
+    // @ts-ignore
+    global.$util = pulumi;
+    // @ts-ignore
+    global.$interpolate = pulumi.interpolate;
+    // @ts-ignore
+    global.$jsonParse = pulumi.jsonParse;
+    // @ts-ignore
+    global.$jsonStringify = pulumi.jsonStringify;
+    // @ts-ignore
+    global.$dev = false;
+    // @ts-ignore
+    global.$cli = {
+      contract: contractVersion,
+      command: input?.preview ? "diff" : "deploy",
+      move: input?.move === true,
+      state: {},
+      paths: { root: input?.root ?? "/", work, platform },
+    };
+  }
 
   // What a recorded state answers for a resource registered or read. The
   // engine's mock is told only its type and name, and asks for it as soon as
@@ -400,6 +429,18 @@ export function mockPulumi(input?: MockInput) {
         };
       },
       call(args: pulumi.runtime.MockCallArgs) {
+        // SST's bootstrap, which a program Pulumi runs on its own reads from
+        // the parameter SST's CLI keeps it in, as the CLI would give it
+        if (
+          args.token === "aws:ssm/getParameter:getParameter" &&
+          args.inputs.name === "/sst/bootstrap"
+        )
+          return {
+            ...args.inputs,
+            value: JSON.stringify(
+              input?.cli?.("Provider.Aws.Bootstrap", {}) ?? bootstrapData,
+            ),
+          };
         return (
           input?.call?.(args) ??
           (replay && replayed(args)) ??
@@ -408,10 +449,31 @@ export function mockPulumi(input?: MockInput) {
         );
       },
     },
-    "project",
-    "stack",
+    plain ? input?.app ?? "app" : "project",
+    plain ? input?.stage ?? "test" : "stack",
     input?.preview ?? false,
   );
+  // Where Pulumi.yaml is, as Pulumi gives it to a program it runs. Its
+  // `.sst`, the work folder SST uses for a Pulumi project, is the mock's own
+  // when no root is given, with the stubs in its platform folder.
+  const settings = (globalThis as any).globalStore?.settings?.options;
+  if (plain && settings) {
+    let root = input?.root;
+    if (!root) {
+      root = path.join(work, "project");
+      fs.mkdirSync(root);
+      fs.symlinkSync(work, path.join(root, ".sst"));
+    } else if (
+      // A test's own folder, as a program has the platform's files from
+      // the `sst` package, which isn't installed here
+      fs.realpathSync(root).startsWith(fs.realpathSync(os.tmpdir())) &&
+      !fs.existsSync(path.join(root, ".sst", "platform"))
+    ) {
+      fs.mkdirSync(path.join(root, ".sst"), { recursive: true });
+      fs.symlinkSync(platform, path.join(root, ".sst", "platform"));
+    }
+    settings.rootDirectory = root;
+  }
   // The app's region, which the CLI sets for the AWS provider: the one a
   // recorded stage was deployed in, or the one the lookups give
   pulumi.runtime.setConfig(
@@ -1210,6 +1272,17 @@ function given(args: pulumi.runtime.MockResourceArgs): Record<string, any> {
 // What the lookups nearly every component makes return. Without these a
 // region is `undefined`, and an IAM policy is empty whatever it's given, so
 // two policies would always compare as the same.
+// SST's bootstrap of the region, as the CLI gives it and as a program Pulumi
+// runs on its own reads it from the parameter SST's CLI keeps it in
+const bootstrapData = {
+  asset: "sst-asset-bucket",
+  assetEcrRegistryId: "123456789012",
+  assetEcrUrl: "123456789012.dkr.ecr.us-east-1.amazonaws.com/sst-asset",
+  state: "sst-state-bucket",
+  appsyncHttp: "appsync.example.com",
+  appsyncRealtime: "appsync-realtime.example.com",
+};
+
 const lookups: Record<string, (inputs: any) => Record<string, any>> = {
   "aws:index/getRegion:getRegion": () => ({
     name: "us-east-1",
@@ -1230,8 +1303,11 @@ const lookups: Record<string, (inputs: any) => Record<string, any>> = {
   "sst:aws:getHostedZone": (inputs) => ({ zoneId: zoneOf(inputs.domain).id }),
 };
 
+// Where the mock's URNs start: the stack's and the project's
+let urnRoot = "urn:pulumi:stack::project::";
+
 function urn(type: string, name: string, parent: string) {
-  if (!parent) return `urn:pulumi:stack::project::${type}::${name}`;
+  if (!parent) return `${urnRoot}${type}::${name}`;
   const [prefix, project, types] = parent.split("::");
   return `${prefix}::${project}::${types}$${type}::${name}`;
 }

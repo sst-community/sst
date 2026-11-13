@@ -2,6 +2,7 @@ import {
   all,
   ComponentResourceOptions,
   interpolate,
+  jsonStringify,
   Output,
   output,
 } from "@pulumi/pulumi";
@@ -515,7 +516,7 @@ export class StepFunctions extends component("sst:aws:StepFunctions", parts) {
 
     this.part("stateMachine", {
       type: output(args.type ?? "standard").apply((type) => type.toUpperCase()),
-      definition: $jsonStringify({
+      definition: jsonStringify({
         StartAt: root.name,
         States: root.serialize(),
       }),
