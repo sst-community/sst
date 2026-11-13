@@ -14,10 +14,16 @@ export interface WorkerPlacementArgs {
   accountId?: Input<string>;
   scriptName: Input<string>;
   /**
-   * The script's etag, so it's set again each time the script is uploaded: a
-   * Worker with assets can have its settings written over.
+   * The script's etag, the hash of its code, so it's set again when the code
+   * changes.
    */
   etag?: Input<string>;
+  /**
+   * When the script was last uploaded, so it's set again after every upload,
+   * the code's or not: Cloudflare resets a script's placement when it's
+   * uploaded without one, as Pulumi's provider uploads it.
+   */
+  modifiedOn?: Input<string>;
   mode?: Input<string | undefined>;
   region?: Input<string | undefined>;
   host?: Input<string | undefined>;

@@ -1197,6 +1197,7 @@ interface WorkerPlacementArgs {
     hostname?: Input_2<string | undefined>;
     // (undocumented)
     mode?: Input_2<string | undefined>;
+    modifiedOn?: Input_2<string>;
     // (undocumented)
     region?: Input_2<string | undefined>;
     // (undocumented)
