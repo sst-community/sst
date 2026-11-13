@@ -2,6 +2,24 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: the restructure the review proposed
+
+[As decided](plan.md#decisions), after the fixes: what the review of the layers found, moved and tied together, with no change to what's deployed, its URNs or its state.
+
+- **What the TypeScript and Go sides agree on is tested.** `pkg/provider/contract_test.go`: the types of SST's own resources the components make (`*/resources/*.ts`) are the ones the provider serves, the config keys `plugin.ts` writes are the ones it reads (a key spelled differently on one side made SST's provider fall back to the environment's credentials without a word), and the plugin is downloaded from the repo SST releases from. `pkg/eject/contract_test.go`: each of those types is one the eject takes out of a state, makes something in the place of, or refuses with a reason (`refusedResources`, which the error now gives).
+- **The plain-mode sweep reaches SST's provider.** It ran without an `sst` package, so SST's own resources never got SST's provider, and one registered without it passed every test. Under `SST_TEST_PLAIN=1` a vitest setup file (`test/setup.ts`, `vitest.config.ts`) stands in for the package, and settling (`test/helpers/graph.ts`) fails a test whose own resource has no SST provider. Checked by taking it off `KvKeys`: the router's tests failed with the message. The sweep's failures are the same 189 as without it.
+- **One Pulumi CLI package**, `internal/pulumicli`, for `sst dev`'s Pulumi programs (`pkg/pulumidev`) and the eject: finding `pulumi`, running it, its first line of error, and reading `Pulumi.yaml`. The three ways a secret is read from an export stay three, as they differ on purpose: the eject keeps numbers exact and reads one level at a time, `sst dev` reads a whole value and fails on a secret it can't show, and an SST app's state has Pulumi's own type. `pkg/eject/boundary_test.go` holds the eject to SST's `internal/` packages, as `pkg/pulumidev` is held off an SST app's state.
+- **The eject by concern.** `module.go` (1188 lines) is three files: `plan.go` (what it's given and works out, and `Build`), `classify.go` (all it knows of SST: its types, the names SST's TypeScript makes, what each becomes) and `generate.go` (the module's code from a state, which knows no SST type). Moved with a tool that moves declarations whole, and checked line for line.
+- **Every build is given the platform's folder.** `Builder` has `PathPlatformDir()`, which every program has, in place of an interface found by a type assertion, and the Python build reads its default Dockerfile from the build's platform folder. The package ships `dist/dockerfiles`, and its check of what the components read from the platform's folder reads the Go builds' too. A function run in `sst dev` reads `.sst/platform`, where the CLI copies it for both kinds of program.
+- **One JSON-RPC client.** `rpc.call` takes the server, and the build client (`rpc/binary.ts`) uses it in place of a copy.
+- **A plain run's setup is a module of its own**, `plain.ts`, which `sst/components` and each group import, in place of a line at the end of `link.ts`.
+- **Vercel's token** falls back to `VERCEL_API_TOKEN` in `pkg/provider` (`envVercel`), as Cloudflare's credentials do, not in the resource, and `vercelSettings` is in `vercel.go`.
+- **Two tests from the fixes** didn't typecheck (an `afterEach` that returned a value): fixed.
+
+**Left as they are, as the review said:** `plugin.ts`'s three clouds in one file, `move.ts` and `check.ts` reading `$cli` (SST's CLI's alone), the eject's TypeScript written from Go strings, where `ServeBuilds` lives, and `sst/testing`'s mock doing both modes.
+
+**Checked:** each contract test against a change to one side (a config key spelled differently fails the provider's); `tsc`; the Go suite; the platform suite (120 files; 30 of them failed while the machine's load stood at 20 to 28 from other work, and passed when run again, 1669 tests); the plain-mode sweep, as above; the API reports, unchanged. The package's check of the Go builds' platform folders runs when it's next packed.
+
 ## 2026-11-13: an independent review, and its fixes
 
 [As decided](plan.md#decisions), three reviewers read the branch's own changes (against `v5-pulumi-dev` with `v5` merged in) with the code and the plan alone: one the eject and the rest of the Go, one the components, one the layers. Each finding was checked against the code before it was fixed; none was wrong. The layers' findings are the restructure, to come.
