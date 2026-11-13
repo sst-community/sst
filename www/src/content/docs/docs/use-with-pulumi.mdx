@@ -9,6 +9,8 @@ A team that writes plain Pulumi can use `sst dev` without moving to SST. SST run
 - **Its functions run on your machine**, from their source, with the credentials of their own role. A change to the code answers the next call, with no deploy.
 - **Its dev commands run beside it**, like a database in a container or the frontend's dev server, with the stack's outputs in their environment.
 
+To use SST's components in the program too, like a `Function` linked to a `Bucket`, see [Components in Pulumi](/docs/components-in-pulumi).
+
 The program changes by one line. What `sst dev` runs is in a file of its own, `sst.dev.yaml`. Outside `sst dev` nothing of SST changes the program, so a stack deployed with plain `pulumi up` has nothing of SST in it, and `pulumi destroy` works without SST installed.
 
 :::note
@@ -407,4 +409,4 @@ Run `npx sst dev` in `infra`, or from the repository's root with `npx sst dev --
 - **The functions' sources** are watched across the program's repository, or the project's folder outside one.
 - **TypeScript's `moduleResolution`.** `sst/pulumi` is an ES module. A CommonJS program finds it with `node`, Pulumi's default, or `nodenext`, and runs it on Node.js 22.12 or later.
 - **A role whose `inlinePolicies` Pulumi manages** has the stub's role policy taken off on its next update. Give a function `sst dev` runs a role without them.
-- **Not yet:** links (`Resource`), tasks, tunnels, Cloudflare workers and Rust functions.
+- **Not yet:** links (`Resource`) for the program's own functions, tasks, tunnels, Cloudflare workers and Rust functions. SST's components link as they do in an SST app: see [Components in Pulumi](/docs/components-in-pulumi).

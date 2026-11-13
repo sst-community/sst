@@ -1,0 +1,291 @@
+---
+title: Components in Pulumi
+description: Use SST's components in a plain Pulumi program, deployed by Pulumi alone, and eject them to Pulumi's own resources when you want SST gone.
+---
+
+A Pulumi program can use SST's components as it uses any other Pulumi component. Pulumi deploys them, with `pulumi up`, `pulumi preview` and `pulumi destroy`, on any backend, and no `sst` command running.
+
+- **The components are the ones an SST app uses.** A `Function`, a `Bucket` or a `Nextjs` site makes the same resources, named the same way, and links the same way.
+- **`sst dev` runs them** as it does in an SST app: functions on your machine, and dev commands beside them.
+- **`sst eject` takes SST out.** It writes the components as Pulumi's own resources, from the stack's state, so nothing in the cloud is replaced and the program needs nothing of SST's.
+
+To run the program's own Lambda functions in `sst dev` too, see [Use with Pulumi](/docs/use-with-pulumi).
+
+:::note
+It runs Pulumi programs in TypeScript or JavaScript, with SST's AWS components.
+:::
+
+---
+
+## Set up
+
+Add SST to the Pulumi project, with the providers SST's AWS components use.
+
+```bash
+npm install -D sst@npm:@sst-community/sst@next-experimental \
+  @pulumi/aws @pulumi/command @pulumi/docker-build @pulumi/random @pulumi/tls
+```
+
+`sst/components/aws` loads all five providers, whether the components you use need them or not.
+
+The components are ES modules. In TypeScript, set `module` and `moduleResolution` to `nodenext`. A CommonJS program loads them on Node.js 22.12 or later.
+
+```json title="tsconfig.json"
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true
+  }
+}
+```
+
+Then use the components in the program.
+
+```ts title="index.ts"
+import { Bucket, Function } from "sst/components/aws";
+
+const files = new Bucket("Files");
+
+const api = new Function("Api", {
+  handler: "functions/api.handler",
+  url: true,
+  link: [files],
+});
+
+export const url = api.url;
+```
+
+```bash
+pulumi up
+```
+
+Paths, like a function's `handler`, are from the folder of `Pulumi.yaml`. SST keeps its builds and logs in `.sst/`, so add it to your `.gitignore`.
+
+### What a deploy needs
+
+- **The `sst` binary**, which installing `sst` installs for your platform. The program starts it to build the functions, and it stops when the program does. `SST_BIN_PATH` points at another one.
+- **SST's provider**, for what SST makes itself: a site's files and the CDN's invalidation, a router's routes, what `addEnvironment` adds to a function. Pulumi downloads it as a plugin, as it does any provider, from the GitHub release of the `sst` package's version. A stack needs it as long as it has those resources, for `pulumi destroy` too, or until `sst eject` takes them out.
+- **SST's bootstrap in the account and region.** The components upload code to SST's asset bucket, which SST's CLI makes the first time it deploys to a region. Without it, the deploy stops and says so.
+- **AWS credentials**, as the program's AWS provider has them. SST's provider reads the stack's `aws:profile`, `aws:region` and `aws:assumeRoles`, or a component's own provider's `profile` and `region`, and then your environment.
+
+### SST's tags
+
+SST's CLI tags each AWS resource of an app with `sst:app` and `sst:stage`, through the AWS provider's default tags. In a Pulumi program, that's the stack's config. For the same tags:
+
+```bash
+pulumi config set --path 'aws:defaultTags.tags["sst:app"]' <project>
+pulumi config set --path 'aws:defaultTags.tags["sst:stage"]' <stack>
+```
+
+---
+
+## From SST's docs
+
+The components' docs write their examples for an SST app, in `sst.config.ts`, with SST's globals. In a Pulumi program each is an import.
+
+| In SST's docs | In a Pulumi program |
+| --- | --- |
+| `new sst.aws.Function(...)` | `new Function(...)`, with `import { Function } from "sst/components/aws"` |
+| `new sst.Linkable(...)`, `new sst.x.DevCommand(...)` | `Linkable` and `x`, from `sst/components` |
+| `aws.s3.Bucket`, and Pulumi's other providers | `import * as aws from "@pulumi/aws"` |
+| `$app.name` | `pulumi.getProject()` |
+| `$app.stage` | `pulumi.getStack()` |
+| `$dev` | `context().dev`, with `import { context } from "sst/components"` |
+| `$interpolate`, `$concat`, `$output`, `$resolve` | `pulumi.interpolate`, `pulumi.concat`, `pulumi.output`, `pulumi.all` |
+| `$jsonParse`, `$jsonStringify` | `pulumi.jsonParse`, `pulumi.jsonStringify` |
+| `$util` | `import * as pulumi from "@pulumi/pulumi"` |
+| `$asset("files")` | `new pulumi.asset.FileArchive("files")`, or a `FileAsset` for a file |
+| `sst.Secret`, and `sst secret set` | A secret in the stack's config, linked with a `Linkable`, [below](#secrets) |
+| `app()`'s `providers` | The stack's config, or a provider given to a component |
+| `app()`'s `removal` and `protect` | Pulumi's `protect` option, [below](#removal) |
+| `$transform(sst.aws.Function, ...)` | Not yet: each component's `transform` |
+
+### Secrets
+
+An `sst.Secret` gets its value from SST's CLI, which doesn't run a Pulumi program. Keep the secret in the stack's config instead, and link it with a `Linkable`.
+
+```bash
+pulumi config set --secret stripeKey sk_test_123
+```
+
+```ts title="index.ts"
+import * as pulumi from "@pulumi/pulumi";
+import { Linkable } from "sst/components";
+import { Function } from "sst/components/aws";
+
+const stripe = new Linkable("Stripe", {
+  properties: { key: new pulumi.Config().requireSecret("stripeKey") },
+});
+
+new Function("Api", {
+  handler: "functions/api.handler",
+  link: [stripe],
+});
+```
+
+The function reads it as `Resource.Stripe.key`.
+
+### Removal
+
+An SST app's `removal` decides what `sst remove` keeps. Pulumi has no such setting: `pulumi destroy` deletes everything the program made that isn't protected, a bucket with its files. To keep a component, protect it, and its parts are protected too.
+
+```ts title="index.ts"
+new Bucket("Uploads", {}, { protect: true });
+```
+
+---
+
+## `sst dev`
+
+`sst dev` runs a Pulumi program's SST components as it runs an SST app's: each `Function` on your machine, from its source, and each `DevCommand` in a pane of its own, both with their links. They need no `sst.dev.yaml`. The program's own functions and dev commands still go there, as in [Use with Pulumi](/docs/use-with-pulumi).
+
+Let a stack for development opt in, and start it.
+
+```bash
+pulumi config set sst:dev true --stack dev
+npx sst dev --stage dev
+```
+
+After each deploy it writes `sst-env.d.ts`, which types `Resource` in the functions from the components' links. If your `tsconfig.json` lists its files, add it there. A plain `pulumi up` doesn't write it, as no `sst` command runs.
+
+A plain `pulumi up` on the dev stack afterwards deploys the real code again.
+
+---
+
+## Eject
+
+`sst eject` writes the program's SST components as Pulumi's own resources, from the state of its stacks. After it, the program needs nothing of SST's: not its package, its binary or its plugin. Every resource keeps its URN, so nothing is replaced.
+
+Deploy each stack with `pulumi up` first, then:
+
+```bash
+npx sst eject --dry-run   # prints what it would write, and changes nothing
+npx sst eject
+```
+
+It changes nothing in the cloud. For each stack of the project with SST's components in it, it:
+
+1. **Saves the stack's state**, beside `Pulumi.yaml`, as `sst-eject-<stack>-<time>.json`.
+2. **Writes `sst-ejected.ts`**, one module for every stack, whose function `ejected()` makes what SST's components made.
+3. **Puts values in the stack's config**, under `sst-ejected`: each secret input, and each value that isn't the same in every stack, like a resource's name.
+4. **Takes SST's own resources out of the state**, and SST's provider with them: a site's files, a router's routes, the invalidations, what `addEnvironment` added. What they made stays in the cloud, as last deployed.
+
+It doesn't change your program. Replace SST's components with what `ejected()` returns, each component's parts by the names SST gave them:
+
+```ts title="index.ts"
+import { ejected } from "./sst-ejected";
+
+const parts = ejected();
+
+export const url = parts.Api.url.functionUrl;
+export const bucket = parts.Files.bucket.bucket;
+```
+
+Where the program used a component's outputs, it uses its parts': `api.url` is the URL part's `functionUrl`. Then take SST out, and preview.
+
+```bash
+npm uninstall sst
+pulumi preview --diff
+```
+
+Everything is unchanged, but for a function that `addEnvironment` added to: what it added is now in the function's environment, so it's updated in place, to what it already has in AWS.
+
+### The module
+
+Each of SST's components is a Pulumi component of the same type and name, with its parts in it, each with the inputs it was last deployed with.
+
+```ts title="sst-ejected.ts"
+// Api, SST's sst:aws:Function, made at index.ts:6
+const api = new pulumi.ComponentResource("sst:aws:Function", "Api");
+
+const apiFunction = new aws.lambda.Function(
+  "ApiFunction",
+  {
+    environment: {
+      variables: config.requireSecretObject<any>("ApiFunction.environment.variables"),
+    },
+    handler: "bundle.handler",
+    loggingConfig: { logFormat: "Text", logGroup: apiLogGroup.name },
+    name: config.require("ApiFunction.name"),
+    role: apiRole.arn,
+    runtime: "nodejs24.x",
+    s3Bucket: "sst-asset-abc123",
+    s3Key: config.requireSecret("ApiFunction.s3Key"),
+  },
+  { parent: api, ignoreChanges: ["name"] },
+);
+```
+
+The type is only a name: nothing of SST's is loaded. A value that's another resource's output is a reference to it, like `apiRole.arn`, and the options the state keeps go with each resource: `protect`, `ignoreChanges`, `dependsOn` and the rest. It's yours to change from there.
+
+### Several stacks
+
+`sst eject` reads every stack of the project, and writes one module for all of them. What's the same in every stack is written as it is. What isn't:
+
+- **A plain value or a secret** is read from each stack's config: `config.require("ApiFunction.name")`.
+- **A value with a reference in it** is picked by stack: `byStack({ dev: () => apiRole.arn, prod: () => "arn:aws:iam::123456789012:role/external" })`.
+- **What only some stacks have** is made only on those: `onStack("prod") ? new aws.sqs.Queue(...) : undefined`.
+
+A stack with none of SST's components is left out, and the module throws on a stack it wasn't written from.
+
+### Your providers and components
+
+A provider the program gave SST's components, or a component of the program's they're in, stays in the program, and `ejected()` takes it by its name. `sst eject` says what it takes.
+
+```ts title="index.ts"
+const parts = ejected({ providers: { east }, parents: { shop } });
+```
+
+### The functions' code
+
+Each function keeps the code SST last built, in SST's asset bucket, so it doesn't change. For a Node.js function, `sst-ejected-build.ts` has `nodeBuild()`, a build with esbuild, and the comment above the function in the module says how to switch it.
+
+```bash
+npm install -D esbuild
+```
+
+The links were in SST's build, so a function that reads `Resource` reads environment variables instead, which you give it in the module.
+
+```ts title="sst-ejected.ts"
+environment: { variables: { FILES_BUCKET: filesBucket.bucket } },
+```
+
+The build is in `.sst-ejected/`, so add it to your `.gitignore`.
+
+### Going back
+
+Until the next `pulumi up`, for each stack: put back the state it saved, and delete the `sst-ejected:` keys from `Pulumi.<stack>.yaml`.
+
+```bash
+pulumi stack import --stack <stack> --file sst-eject-<stack>-<time>.json
+```
+
+Then delete `sst-ejected.ts` and `sst-ejected-build.ts`.
+
+### What it leaves
+
+When a stack is destroyed after the eject, each function's last build and its source map stay in SST's asset bucket, as nothing in the state has them. `sst eject` prints where, to delete them then.
+
+### What it refuses
+
+It stops before it writes anything when it can't eject a stack without a change in the cloud:
+
+- **A stack `sst dev` deployed last**, whose functions run the stub. Deploy it with `pulumi up` first.
+- **A stack with an operation Pulumi didn't finish**, or a resource waiting to be deleted or replaced.
+- **SST's own resources it doesn't take out yet:** the role lookup of a database's proxy (`Postgres`, `Mysql` and `Aurora`), `MicroVm`'s image prune, and Cloudflare's and Vercel's.
+- **A provider one of SST's components made**, other than the one for a region that a site's server uses.
+- **A resource that takes a file or a folder**, as a Pulumi asset or archive.
+
+---
+
+## Limits
+
+- **TypeScript or JavaScript, and SST's AWS components.** Cloudflare's and Vercel's haven't been deployed with Pulumi alone yet.
+- **An account SST hasn't deployed to.** SST's CLI makes the bootstrap the components need, so for now an SST app has to have deployed to the region once.
+- **Every provider of a group.** `sst/components/aws` loads `@pulumi/command`, `@pulumi/docker-build`, `@pulumi/random` and `@pulumi/tls`, used or not.
+- **Builds** of Node.js functions are what's been checked. Other runtimes and container images haven't been.
+- **`$transform`** has no import yet. Set a component's `transform`, or make it in a function of yours, with your defaults.
+- **`Resource`'s types** are written by `sst dev` only.
+- **In `sst dev`, not yet:** tasks and the tunnel.
+- **A stage SST's CLI deployed** can't move to a Pulumi stack yet.

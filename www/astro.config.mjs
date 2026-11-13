@@ -75,6 +75,7 @@ const sidebar = [
       { label: "Custom Runtimes", slug: "docs/custom-runtimes" },
       { label: "Import Resources", slug: "docs/import-resources" },
       { label: "Use with Pulumi", slug: "docs/use-with-pulumi" },
+      { label: "Components in Pulumi", slug: "docs/components-in-pulumi" },
       { label: "Set up a Monorepo", slug: "docs/set-up-a-monorepo" },
       { label: "Write a Local Component", slug: "docs/write-a-local-component" },
       { label: "Write a Package Component", slug: "docs/write-a-package-component" },
