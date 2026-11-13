@@ -29,6 +29,9 @@ func (m *mockRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 func (m *mockRuntime) ShouldRebuild(functionID string, path string) bool {
 	return false
 }
+func (m *mockRuntime) ValidateHandler(input *runtime.BuildInput) error {
+	return nil
+}
 func (m *mockRuntime) ShouldRunEagerly() bool {
 	return true
 }
@@ -91,9 +94,11 @@ func TestCollectionBuildCustomBundle(t *testing.T) {
 				CfgPath: filepath.Join(projectDir, "sst.config.ts"),
 				Bundle:  tt.bundle,
 				Handler: "lambda.handler",
+				Runtime: "nodejs",
 			}
 
-			result, err := runtime.NewCollection(input.CfgPath).Build(context.Background(), input)
+			mr := &mockRuntime{matchFn: func(r string) bool { return r == "nodejs" }}
+			result, err := runtime.NewCollection(input.CfgPath, mr).Build(context.Background(), input)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, result.Out)
 			assert.True(t, filepath.IsAbs(result.Out))

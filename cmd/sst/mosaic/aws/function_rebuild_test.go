@@ -209,6 +209,8 @@ func (f *rebuildRuntime) ShouldRebuild(functionID string, path string) bool {
 
 func (f *rebuildRuntime) ShouldRunEagerly() bool { return true }
 
+func (f *rebuildRuntime) ValidateHandler(input *runtime.BuildInput) error { return nil }
+
 type rebuildWorker struct {
 	logs   *io.PipeReader
 	writer *io.PipeWriter

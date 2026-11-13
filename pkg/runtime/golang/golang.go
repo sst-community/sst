@@ -3,6 +3,7 @@ package golang
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -93,6 +94,23 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 		return nil, err
 	}
 	return worker, nil
+}
+
+func (r *Runtime) ValidateHandler(input *runtime.BuildInput) error {
+	// A custom bundle is a prebuilt artifact directory. The go handler is a
+	// module path that Build resolves directly (never relative to the bundle),
+	// so there is nothing bundle-relative to validate here.
+	if input.Bundle != "" {
+		return nil
+	}
+	// Mirror Build's handler resolution exactly: it finds go.mod above the
+	// handler and does not require the handler itself to be a directory, so a
+	// module-name or single-file handler that Build accepts isn't rejected here.
+	_, err := fs.FindUp(input.Handler, "go.mod")
+	if err != nil {
+		return fmt.Errorf("handler not found: could not find go.mod for handler %v", input.Handler)
+	}
+	return nil
 }
 
 func (r *Runtime) ShouldRebuild(functionID string, file string) bool {

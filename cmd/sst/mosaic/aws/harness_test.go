@@ -244,6 +244,8 @@ func (r *fakeRuntime) ShouldRebuild(functionID string, path string) bool { retur
 
 func (r *fakeRuntime) ShouldRunEagerly() bool { return !r.lazy }
 
+func (r *fakeRuntime) ValidateHandler(input *runtime.BuildInput) error { return nil }
+
 type fakeWorker struct {
 	runtime  *fakeRuntime
 	api      string

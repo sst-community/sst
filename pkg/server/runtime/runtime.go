@@ -24,6 +24,15 @@ func (r *Runtime) Build(input *runtime.BuildInput, output *runtime.BuildOutput) 
 }
 
 func (r *Runtime) AddTarget(input *runtime.BuildInput, output *bool) error {
+	input.CfgPath = r.project.PathConfig()
+	// Validate only when a runtime we build matches. provided.al2/al2023
+	// functions (Swift, Dart) have no runtime implementation and nothing to
+	// validate against, so leave them to register as before.
+	if rt, ok := r.project.Runtime.Runtime(input.Runtime); ok {
+		if err := rt.ValidateHandler(input); err != nil {
+			return err
+		}
+	}
 	bus.Publish(input)
 	*output = true
 	return nil

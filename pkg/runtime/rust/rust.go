@@ -158,6 +158,29 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 	return worker, nil
 }
 
+func (r *Runtime) ValidateHandler(input *runtime.BuildInput) error {
+	// A custom bundle is a prebuilt artifact directory. The rust handler is a
+	// crate path that Build resolves directly (never relative to the bundle),
+	// so there is nothing bundle-relative to validate here.
+	if input.Bundle != "" {
+		return nil
+	}
+	parts := strings.Split(input.Handler, ".")
+	handler := strings.Join(parts[:len(parts)-1], ".")
+
+	// Mirror Build's resolution: it finds Cargo.toml above the handler's path
+	// portion and does not require that path to be a directory, so a handler
+	// that builds isn't rejected here.
+	_, err := fs.FindUp(handler, "cargo.toml")
+	if err != nil {
+		_, err = fs.FindUp(handler, "Cargo.toml")
+		if err != nil {
+			return fmt.Errorf("handler not found: could not find Cargo.toml for handler %v", input.Handler)
+		}
+	}
+	return nil
+}
+
 func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 	// copied from go
 	if !strings.HasSuffix(file, ".rs") {

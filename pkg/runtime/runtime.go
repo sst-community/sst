@@ -20,6 +20,10 @@ type Runtime interface {
 	Build(ctx context.Context, input *BuildInput) (*BuildOutput, error)
 	Run(ctx context.Context, input *RunInput) (Worker, error)
 	ShouldRebuild(functionID string, path string) bool
+	// ValidateHandler reports whether the handler path resolves, so sst dev can
+	// fail at deploy instead of at first invocation. It must be no stricter than
+	// Build: it should reject only a handler that Build would also reject.
+	ValidateHandler(input *BuildInput) error
 	// ShouldRunEagerly controls whether workers are started immediately after a rebuild
 	// or lazily on first invocation.
 	//
@@ -122,6 +126,15 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		if !filepath.IsAbs(out) {
 			out = filepath.Join(path.ResolveRootDir(input.CfgPath), out)
 		}
+		// Only runtimes we build know how to resolve a handler. Custom-bundle
+		// functions on a runtime with no implementation (e.g. provided.al2,
+		// provided.al2023 for Swift or Dart) have nothing to validate against,
+		// so skip the check rather than failing the deploy.
+		if runtime, ok := c.Runtime(input.Runtime); ok {
+			if err := runtime.ValidateHandler(input); err != nil {
+				return nil, err
+			}
+		}
 		result = &BuildOutput{
 			Handler: input.Handler,
 			Errors:  []string{},
@@ -142,7 +155,7 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		}
 		runtime, ok := c.Runtime(input.Runtime)
 		if !ok {
-			return nil, fmt.Errorf("Runtime not found: %v", input.Runtime)
+			return nil, fmt.Errorf("runtime not found: %v", input.Runtime)
 		}
 		result, err = runtime.Build(ctx, input)
 		if err != nil {
