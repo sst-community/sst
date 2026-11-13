@@ -8,17 +8,14 @@ import (
 	"github.com/sst/sst/v3/pkg/runtime"
 )
 
-// Builder is what a program's builds need: where its config is, and the
-// runtimes that build its functions. Every project.Program is one.
+// Builder is what a program's builds need: where its config is, where
+// SST's platform files are, and the runtimes that build its functions. Every
+// project.Program is one, with the platform in its work folder, and so is a
+// Pulumi program's build server, with it in the sst package.
 type Builder interface {
 	PathConfig() string
+	PathPlatformDir() string
 	Runtimes() *runtime.Collection
-}
-
-// platformDir is a Builder whose platform files aren't in the work folder,
-// as a Pulumi program's build server has them in the sst package
-type platformDir interface {
-	PlatformDir() string
 }
 
 type Runtime struct {
@@ -27,9 +24,7 @@ type Runtime struct {
 
 func (r *Runtime) Build(input *runtime.BuildInput, output *runtime.BuildOutput) error {
 	input.CfgPath = r.program.PathConfig()
-	if p, ok := r.program.(platformDir); ok {
-		input.PlatformDir = p.PlatformDir()
-	}
+	input.PlatformDir = r.program.PathPlatformDir()
 	result, err := r.program.Runtimes().Build(context.Background(), input)
 	if err != nil {
 		return err

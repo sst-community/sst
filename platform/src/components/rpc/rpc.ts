@@ -7,9 +7,17 @@ export namespace rpc {
       super(`Method "${method}" not found`);
     }
   }
-  export async function call<T = any>(method: string, args: any) {
+  /**
+   * Calls the CLI's server: the one SST's CLI runs the program with, or the
+   * build server a program Pulumi runs on its own starts (`callBinary`).
+   */
+  export async function call<T = any>(
+    method: string,
+    args: any,
+    server: string = process.env.SST_SERVER!,
+  ) {
     return new Promise<T>((resolve, reject) => {
-      const url = new URL(process.env.SST_SERVER! + "/rpc");
+      const url = new URL(server + "/rpc");
       const options = {
         hostname: url.hostname,
         port: url.port,
@@ -22,6 +30,8 @@ export namespace rpc {
 
       const req = http.request(options, (res) => {
         let data = "";
+        // A character can be split between chunks
+        res.setEncoding("utf8");
 
         res.on("data", (chunk) => {
           data += chunk;

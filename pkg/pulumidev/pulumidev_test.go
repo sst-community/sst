@@ -17,7 +17,6 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/project"
-	"gopkg.in/yaml.v3"
 )
 
 func TestIsProgram(t *testing.T) {
@@ -29,23 +28,6 @@ func TestIsProgram(t *testing.T) {
 	} {
 		if got := IsProgram(path); got != want {
 			t.Errorf("IsProgram(%q) = %v", path, got)
-		}
-	}
-}
-
-func TestProgramYamlRuntime(t *testing.T) {
-	for text, want := range map[string]string{
-		"name: shop\nruntime: nodejs\n":                                            "nodejs",
-		"name: shop\nruntime:\n  name: nodejs\n  options:\n    typescript: true\n": "nodejs",
-		"name: shop\nruntime: python\n":                                            "python",
-		"name: shop\n":                                                             "",
-	} {
-		var parsed programYaml
-		if err := yaml.Unmarshal([]byte(text), &parsed); err != nil {
-			t.Fatal(err)
-		}
-		if got := parsed.runtime(); got != want {
-			t.Errorf("runtime of %q = %q, want %q", text, got, want)
 		}
 	}
 }

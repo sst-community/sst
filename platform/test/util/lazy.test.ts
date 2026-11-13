@@ -3,7 +3,9 @@ import * as pulumi from "@pulumi/pulumi";
 import { newRun, perRun } from "../../src/util/lazy";
 
 describe("perRun", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("makes a value once in a run, and again in the next", () => {
     let made = 0;

@@ -1,3 +1,6 @@
+// A run's setup under plain Pulumi
+import "../plain";
+
 export * from "./worker";
 export * from "./kv";
 export * from "./d1";

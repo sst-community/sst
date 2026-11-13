@@ -12,7 +12,9 @@ vi.mock("../../src/components/context.js", () => ({
 const { physicalName } = await import("../../src/components/naming.js");
 
 describe("physicalName, in a Pulumi program", () => {
-  afterEach(() => Object.assign(app, { name: "shop", stage: "dev" }));
+  afterEach(() => {
+    Object.assign(app, { name: "shop", stage: "dev" });
+  });
 
   it("has the project and the stack in it", () => {
     expect(physicalName(64, "Files")).toMatch(/^shop-dev-Files-[a-z]{8}$/);

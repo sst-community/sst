@@ -1,3 +1,6 @@
+// A run's setup under plain Pulumi
+import "../plain";
+
 export * from "./alb";
 export * from "./analog";
 export * from "./apigateway-http";

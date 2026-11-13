@@ -3,6 +3,9 @@
 // loads only the providers of the groups it imports too, like
 // `sst/components/aws`. The `sst` global is this and every group (index.ts).
 
+// A run's setup under plain Pulumi
+import "./plain";
+
 export * from "./secret";
 export * from "./linkable";
 export { VisibleError } from "./error";

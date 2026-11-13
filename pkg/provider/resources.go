@@ -4,12 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"sort"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cf "github.com/cloudflare/cloudflare-go"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	sstresource "github.com/sst/sst/v3/pkg/server/resource"
 )
+
+// ResourceTypes are the types of the resources the provider serves, which
+// SST's components make (platform/src/components/*/resources) and the eject
+// takes out of a state (pkg/eject)
+func ResourceTypes() []string {
+	var types []string
+	for t := range resources(nil, nil, nil) {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+	return types
+}
 
 // resources are the resources the provider serves, by type, with the AWS
 // setup and the Cloudflare credentials load and cloudflare give, and the

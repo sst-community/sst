@@ -5,20 +5,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
+	"github.com/sst/sst/v3/internal/pulumicli"
 	"github.com/sst/sst/v3/internal/util"
-	"github.com/sst/sst/v3/pkg/process"
-	"gopkg.in/yaml.v3"
 )
 
 // Run ejects the stacks of the Pulumi project whose Pulumi.yaml is at
@@ -44,9 +41,9 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 	if stack != "" {
 		return util.NewReadableError(nil, "sst eject writes one program for every stack of the project, so it ejects them together. Run it without --stage.")
 	}
-	cli, err := exec.LookPath("pulumi")
+	cli, err := pulumicli.Find("sst eject runs the Pulumi CLI")
 	if err != nil {
-		return util.NewReadableError(err, "sst eject runs the Pulumi CLI, and there's no pulumi on the PATH. Install it: https://www.pulumi.com/docs/iac/download-install/")
+		return err
 	}
 	for _, file := range []string{ModuleFile, BuildFile} {
 		if _, err := os.Stat(filepath.Join(root, file)); err == nil && !dryRun {
@@ -237,29 +234,14 @@ func listStacks(cli, root string) ([]string, error) {
 // readProject is the project's name, from its Pulumi.yaml, for a program in
 // TypeScript or JavaScript
 func readProject(cfgPath string) (string, error) {
-	data, err := os.ReadFile(cfgPath)
+	project, err := pulumicli.ReadProject(cfgPath)
 	if err != nil {
-		return "", err
-	}
-	var parsed struct {
-		Name    string    `yaml:"name"`
-		Runtime yaml.Node `yaml:"runtime"`
-	}
-	if err := yaml.Unmarshal(data, &parsed); err != nil {
 		return "", util.NewReadableError(err, "Could not read "+cfgPath+": "+err.Error())
 	}
-	runtime := parsed.Runtime.Value
-	if parsed.Runtime.Kind == yaml.MappingNode {
-		var named struct {
-			Name string `yaml:"name"`
-		}
-		_ = parsed.Runtime.Decode(&named)
-		runtime = named.Name
+	if project.Runtime != "nodejs" {
+		return "", util.NewReadableError(nil, fmt.Sprintf("sst eject writes TypeScript, for a Pulumi program in TypeScript, and this one's runtime is %q.", project.Runtime))
 	}
-	if runtime != "nodejs" {
-		return "", util.NewReadableError(nil, fmt.Sprintf("sst eject writes TypeScript, for a Pulumi program in TypeScript, and this one's runtime is %q.", runtime))
-	}
-	return parsed.Name, nil
+	return project.Name, nil
 }
 
 // sameResources is whether two exports of a state have the same resources
@@ -285,25 +267,9 @@ func sameResources(a, b []byte) (bool, error) {
 }
 
 // pulumi runs the Pulumi CLI in the project's folder, with what to read on
-// its input, and returns what it printed, or an error with the first line
-// of what it said went wrong
+// its input
 func pulumi(cli, dir string, stdin io.Reader, args ...string) ([]byte, error) {
-	cmd := process.Command(cli, append(args, "--non-interactive")...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PULUMI_SKIP_UPDATE_CHECK=true")
-	cmd.Stdin = stdin
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
-	if err != nil {
-		message, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n")
-		message = strings.TrimPrefix(strings.TrimSpace(message), "error: ")
-		if message == "" {
-			message = err.Error()
-		}
-		return nil, errors.New("pulumi " + args[0] + " " + args[1] + ": " + message)
-	}
-	return output, nil
+	return pulumicli.Run(cli, dir, stdin, args...)
 }
 
 // report says what the eject did and what's left to do

@@ -342,6 +342,25 @@ export function mockPulumi(input?: MockInput) {
 
   return {
     ...engine,
+    /**
+     * Waits for the program, as the engine does. Run as a program Pulumi runs
+     * on its own (SST_TEST_PLAIN=1), each of SST's own resources has to go
+     * through SST's provider for its cloud, as it does with the `sst` package
+     * (test/setup.ts): one that didn't would be run by no provider at all.
+     */
+    async settle() {
+      await engine.settle();
+      if (process.env.SST_TEST_PLAIN !== "1") return;
+      for (const r of resources) {
+        if (!r.custom || !r.type.startsWith("sst:")) continue;
+        if (
+          !String(r.options.provider ?? "").includes("::pulumi:providers:sst::")
+        )
+          throw new Error(
+            `${r.name} (${r.type}) is one of SST's own resources, and isn't given SST's provider. Register it with withAwsPlugin(), withCloudflarePlugin() or withVercelPlugin().`,
+          );
+      }
+    },
     /** A test starts on SST 5's side, as one that creates nothing of SST 4's. */
     reset() {
       creating = "v5";

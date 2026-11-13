@@ -85,7 +85,7 @@ func Main(version string) error {
 
 	configured := &settings{}
 	load := envAws(configured.aws)
-	s := newServer(version, resources(load, envCloudflare(configured.cloudflare), configured.vercelToken))
+	s := newServer(version, resources(load, envCloudflare(configured.cloudflare), envVercel(configured.vercelToken)))
 	s.functions = functions(load)
 	s.configured = configured
 	handle, err := rpcutil.ServeWithOptions(rpcutil.ServeOptions{

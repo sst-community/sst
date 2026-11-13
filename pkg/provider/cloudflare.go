@@ -51,10 +51,3 @@ func readCloudflareSettings(config map[string]string) cloudflareSettings {
 		Email: config["cloudflareEmail"],
 	}
 }
-
-// vercelSettings is the token a program Pulumi runs on its own gives SST's
-// provider in its config: that of the Vercel provider its component uses.
-// Without one, Vercel's resources read VERCEL_API_TOKEN, as under SST's CLI.
-type vercelSettings struct {
-	Token string
-}

@@ -103,11 +103,13 @@ export async function copyPlatform() {
 }
 
 // What the components read from the platform's folder as they deploy
-// (`context().paths.platform`), which a program Pulumi runs on its own finds in
-// the package, as SST's CLI finds them in the app's `.sst/platform`. The
-// stubs `sst dev` deploys stay with the CLI: nothing runs such a program in
-// `sst dev`, and they're 13 MB each.
+// (`context().paths.platform`), and the builds as they build (a
+// `BuildInput`'s `Platform()`, in Go), which a program Pulumi runs on its own
+// finds in the package, as SST's CLI finds them in the app's `.sst/platform`.
+// The stubs `sst dev` deploys stay with the CLI: nothing runs such a program
+// in `sst dev`, and they're 13 MB each.
 const deployFiles = [
+  "dist/dockerfiles",
   "dist/oac-edge-signer",
   "dist/ssr-warmer",
   "functions/cf-static-site-router-worker-experimental",
@@ -118,17 +120,27 @@ const deployFiles = [
 const devFiles = ["dist/bridge", "dist/nodejs-bridge"];
 
 async function copyDeployFiles() {
-  // Every folder a component names under the platform's folder is one of
-  // the two, so a new one can't be left out of the package unnoticed
+  // Every folder a component or a build names under the platform's folder
+  // is one of the two, so a new one can't be left out of the package
+  // unnoticed
   const named = new Set<string>();
-  for await (const file of new Bun.Glob("**/*.ts").scan(
-    "../../platform/src/components",
-  )) {
-    const code = await Bun.file(`../../platform/src/components/${file}`).text();
-    for (const match of code.matchAll(
+  for (const [dir, files, pattern] of [
+    [
+      "../../platform/src/components",
+      "**/*.ts",
       /paths\.platform,\s*"(dist|functions)",\s*"([^"]+)"/g,
-    ))
-      named.add(`${match[1]}/${match[2]}`);
+    ],
+    [
+      "../../pkg/runtime",
+      "**/*.go",
+      /input\.Platform\(\),\s*"(dist|functions)",\s*"([^"]+)"/g,
+    ],
+  ] as const) {
+    for await (const file of new Bun.Glob(files).scan(dir)) {
+      const code = await Bun.file(`${dir}/${file}`).text();
+      for (const match of code.matchAll(pattern))
+        named.add(`${match[1]}/${match[2]}`);
+    }
   }
   const unknown = [...named].filter(
     (dir) => !deployFiles.includes(dir) && !devFiles.includes(dir),

@@ -18,6 +18,7 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/events"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/plugin"
+	"github.com/sst/sst/v3/internal/pulumicli"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/server"
@@ -129,7 +130,7 @@ func previewStack(ctx context.Context, cli, root, stack string) (*previewed, err
 		for i := range engineEvents {
 			problems.add(&engineEvents[i])
 		}
-		message := strings.TrimPrefix(firstLine(stderr.String()), "error: ")
+		message := strings.TrimPrefix(pulumicli.FirstLine(stderr.String()), "error: ")
 		if len(problems.errors) > 0 {
 			message = problems.errors[0].Message
 		}

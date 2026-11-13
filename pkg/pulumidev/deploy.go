@@ -18,6 +18,7 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/sig"
+	"github.com/sst/sst/v3/internal/pulumicli"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/id"
@@ -142,7 +143,7 @@ func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 	// reach: what it said is the error
 	if !finished && len(found.errors) == 0 {
 		if data, err := os.ReadFile(stderr.Name()); err == nil {
-			if message := strings.TrimPrefix(firstLine(string(data)), "error: "); message != "" {
+			if message := strings.TrimPrefix(pulumicli.FirstLine(string(data)), "error: "); message != "" {
 				found.errors = append(found.errors, project.Error{Message: message})
 			}
 		}
@@ -342,7 +343,7 @@ func functionsMade(asked map[string]bool) string {
 // roles they run as. The state is read with its secrets encrypted; only a
 // secret output a dev command's environment names is read in the clear.
 func (p *Program) GetCompleted(ctx context.Context) (*project.CompleteEvent, error) {
-	out, err := runPulumiCLI(p.cli, p.root, "stack", "export", "--stack", p.stack)
+	out, err := pulumicli.Run(p.cli, p.root, nil, "stack", "export", "--stack", p.stack)
 	if err != nil {
 		return nil, util.NewReadableError(err, fmt.Sprintf("Could not read the state of the %q stack: %v", p.stack, err))
 	}
@@ -357,13 +358,13 @@ func (p *Program) GetCompleted(ctx context.Context) (*project.CompleteEvent, err
 // only for the records of SST's components that hold a secret, and nothing
 // else of it is kept.
 func (p *Program) exportShowingSecrets() ([]byte, error) {
-	return runPulumiCLI(p.cli, p.root, "stack", "export", "--show-secrets", "--stack", p.stack)
+	return pulumicli.Run(p.cli, p.root, nil, "stack", "export", "--show-secrets", "--stack", p.stack)
 }
 
 // revealOutput is a secret output of the stack in the clear, which pulumi
 // decrypts with the stack's own secrets provider
 func (p *Program) revealOutput(name string) (interface{}, error) {
-	out, err := runPulumiCLI(p.cli, p.root, "stack", "output", name, "--json", "--show-secrets", "--stack", p.stack)
+	out, err := pulumicli.Run(p.cli, p.root, nil, "stack", "output", name, "--json", "--show-secrets", "--stack", p.stack)
 	if err != nil {
 		return nil, err
 	}

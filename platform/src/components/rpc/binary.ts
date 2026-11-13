@@ -1,5 +1,4 @@
 import fs from "fs";
-import http from "http";
 import path from "path";
 import { spawn } from "child_process";
 import { createRequire } from "module";
@@ -23,7 +22,7 @@ export async function callBinary<T = any>(
   args: unknown,
 ): Promise<T> {
   if (underCore() || process.env.SST_SERVER) return rpc.call<T>(method, args);
-  return post<T>(await buildServer(), method, args);
+  return rpc.call<T>(method, args, await buildServer());
 }
 
 // The binary's `build-server` prints its address, then serves until its
@@ -103,40 +102,4 @@ function binary(): string {
       `SST's components build functions with SST's binary, and the "${name}" package that has it isn't installed. Install it, or set SST_BIN_PATH to an sst binary.`,
     );
   }
-}
-
-// A call to the build server, as rpc.call makes one to SST_SERVER
-function post<T>(server: string, method: string, args: unknown) {
-  const url = new URL(server + "/rpc");
-  const body = JSON.stringify({ jsonrpc: "1.0", method, params: [args] });
-  return new Promise<T>((resolve, reject) => {
-    const req = http.request(
-      {
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      },
-      (res) => {
-        let data = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk: string) => (data += chunk));
-        res.on("end", () => {
-          if (res.statusCode !== 200)
-            return reject(new Error(`Failed to call ${method}: ${data}`));
-          try {
-            const json = JSON.parse(data);
-            if (json.error) return reject(new Error(json.error));
-            resolve(json.result);
-          } catch (error: any) {
-            reject(new Error(`Failed to parse JSON: ${error.message}`));
-          }
-        });
-      },
-    );
-    req.on("error", reject);
-    req.setTimeout(0);
-    req.end(body);
-  });
 }

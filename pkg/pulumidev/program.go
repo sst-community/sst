@@ -10,13 +10,11 @@
 package pulumidev
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +22,7 @@ import (
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
 	"github.com/sst/sst/v3/internal/fs"
+	"github.com/sst/sst/v3/internal/pulumicli"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project"
@@ -31,7 +30,6 @@ import (
 	"github.com/sst/sst/v3/pkg/runtime"
 	"github.com/sst/sst/v3/pkg/target"
 	"github.com/sst/sst/v3/pkg/transport"
-	"gopkg.in/yaml.v3"
 )
 
 // Program is a plain Pulumi program on one of its stacks, which sst dev runs.
@@ -111,60 +109,9 @@ func Discover() (string, error) {
 	return found, nil
 }
 
-// programYaml is what sst dev reads of a Pulumi project's Pulumi.yaml
-type programYaml struct {
-	Name    string    `yaml:"name"`
-	Runtime yaml.Node `yaml:"runtime"`
-	Main    string    `yaml:"main"`
-}
-
-// runtime is the language the program is in: the runtime's name, given alone
-// or with its options
-func (y programYaml) runtime() string {
-	switch y.Runtime.Kind {
-	case yaml.ScalarNode:
-		return y.Runtime.Value
-	case yaml.MappingNode:
-		var named struct {
-			Name string `yaml:"name"`
-		}
-		y.Runtime.Decode(&named)
-		return named.Name
-	}
-	return ""
-}
-
 // pulumiCLI is the developer's pulumi, which runs the program as they would
 func pulumiCLI() (string, error) {
-	path, err := exec.LookPath("pulumi")
-	if err != nil {
-		return "", util.NewReadableError(err, "sst dev deploys a Pulumi project with the Pulumi CLI, and there's no pulumi on the PATH. Install it: https://www.pulumi.com/docs/iac/download-install/")
-	}
-	return path, nil
-}
-
-// runPulumiCLI runs pulumi in the project's folder and returns what it
-// printed, or an error with the first line of what it said went wrong
-func runPulumiCLI(cli, dir string, args ...string) ([]byte, error) {
-	cmd := process.Command(cli, append(args, "--non-interactive")...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PULUMI_SKIP_UPDATE_CHECK=true")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		message := strings.TrimPrefix(firstLine(stderr.String()), "error: ")
-		if message == "" {
-			message = err.Error()
-		}
-		return nil, fmt.Errorf("pulumi %s: %s", args[0], message)
-	}
-	return out, nil
-}
-
-func firstLine(text string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
-	return strings.TrimSpace(line)
+	return pulumicli.Find("sst dev deploys a Pulumi project with the Pulumi CLI")
 }
 
 // SelectedStack is the stack sst dev runs in a Pulumi project when none is
@@ -174,7 +121,7 @@ func SelectedStack(cfgPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out, err := runPulumiCLI(cli, filepath.Dir(cfgPath), "stack", "--show-name", "--fully-qualify-stack-names")
+	out, err := pulumicli.Run(cli, filepath.Dir(cfgPath), nil, "stack", "--show-name", "--fully-qualify-stack-names")
 	stack := strings.TrimSpace(string(out))
 	// pulumi can't say for another reason, like a backend it can't reach
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "no stack") {
@@ -266,18 +213,14 @@ func readStackAws(config map[string]configValue) (stackAws, error) {
 // config, which has to opt in. The stack is the one named, or the one
 // selected when it's empty.
 func New(cfgPath, stack, version string) (*Program, error) {
-	data, err := os.ReadFile(cfgPath)
+	parsed, err := pulumicli.ReadProject(cfgPath)
 	if err != nil {
-		return nil, err
-	}
-	var parsed programYaml
-	if err := yaml.Unmarshal(data, &parsed); err != nil {
 		return nil, util.NewReadableError(err, "Could not read "+cfgPath+": "+err.Error())
 	}
 	if parsed.Name == "" {
 		return nil, util.NewReadableError(nil, cfgPath+" has no name.")
 	}
-	if runtime := parsed.runtime(); runtime != "nodejs" {
+	if runtime := parsed.Runtime; runtime != "nodejs" {
 		return nil, util.NewReadableError(nil, fmt.Sprintf("sst dev runs Pulumi programs in TypeScript or JavaScript, and this one's runtime is %q.", runtime))
 	}
 	// The app and the stage name the channels the stubs and sst dev talk on,
@@ -301,7 +244,7 @@ func New(cfgPath, stack, version string) (*Program, error) {
 		return nil, util.NewReadableError(nil, fmt.Sprintf("sst dev needs the stack's name to have only letters, numbers and hyphens, and it's %q.", stage))
 	}
 
-	out, err := runPulumiCLI(cli, root, "config", "--json", "--stack", stack)
+	out, err := pulumicli.Run(cli, root, nil, "config", "--json", "--stack", stack)
 	if err != nil {
 		return nil, util.NewReadableError(err, fmt.Sprintf("Could not read the config of the %q stack: %v", stack, err))
 	}

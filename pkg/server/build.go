@@ -59,6 +59,6 @@ type builds struct {
 
 func (b builds) PathConfig() string { return b.cfgPath }
 
-func (b builds) PlatformDir() string { return b.platform }
+func (b builds) PathPlatformDir() string { return b.platform }
 
 func (b builds) Runtimes() *runtime.Collection { return b.runtimes }

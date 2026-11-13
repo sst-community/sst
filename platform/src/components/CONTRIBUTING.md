@@ -292,6 +292,11 @@ takeover(Site, {
 SST's own resources, like a site's files (`BucketFiles`), a router's entries (`KvKeys`),
 an invalidation or a Worker's URL, are served by the `sst` binary as a Pulumi provider:
 use the classes in `aws/resources/`, `cloudflare/resources/` and `vercel/resources/`.
+A new one is registered with `withAwsPlugin()`, `withCloudflarePlugin()` or
+`withVercelPlugin()` (`plugin.ts`), which gives it SST's provider for its component's
+cloud in a program Pulumi runs on its own (`SST_TEST_PLAIN=1` fails a test whose
+resource has none), is served in `pkg/provider/resources.go`, and is one `sst eject`
+knows what to do with (`pkg/eject/classify.go`): Go's tests fail until all three agree.
 SST 4's were dynamic resources with their kind added to their name, so a part that
 takes the place of one releases it with `sstResource(kind, address)` (`takeover.ts`),
 the kind with its cloud: `"aws.BucketFiles"`. `sst migrate` marks what's released as

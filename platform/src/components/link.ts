@@ -8,7 +8,7 @@ import {
 } from "@pulumi/pulumi";
 import { VisibleError } from "./error.js";
 import { Linkable } from "./linkable.js";
-import { context, underCore } from "./context.js";
+import { context } from "./context.js";
 
 export namespace Link {
   function normalizeType(type: string) {
@@ -198,11 +198,3 @@ export namespace Link {
     };
   }
 }
-
-// A program Pulumi runs on its own has no SST entry to set up its run
-// (platform/src/auto/run.ts), so the link records, which `sst dev` reads for a
-// dev command's links, and the check of the components' names are set up as
-// the components load. Pulumi loads the program inside its stack, before the
-// program makes anything. Loaded where no stack runs, as a test does before
-// its mock, nothing is set up.
-if (!underCore() && runtime.getStackResource()) Link.reset();

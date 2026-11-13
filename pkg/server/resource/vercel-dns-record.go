@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	neturl "net/url"
-	"os"
 	"strings"
 )
 
@@ -22,7 +21,7 @@ type VercelResource struct {
 }
 
 // NewVercelResource is a VercelResource whose calls run in ctx, with the
-// token token gives, or VERCEL_API_TOKEN when it gives none. token may be nil.
+// token token gives, which the provider finds (pkg/provider)
 func NewVercelResource(ctx context.Context, token func() string) *VercelResource {
 	return &VercelResource{ctx, token}
 }
@@ -35,10 +34,7 @@ func (r *VercelResource) authorize(req *http.Request) error {
 		token = r.token()
 	}
 	if token == "" {
-		token = os.Getenv("VERCEL_API_TOKEN")
-	}
-	if token == "" {
-		return fmt.Errorf("VERCEL_API_TOKEN is not set: it's the access token for Vercel's API")
+		return fmt.Errorf("There's no access token for Vercel's API: set VERCEL_API_TOKEN, or the stack's vercel:apiToken")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	return nil
