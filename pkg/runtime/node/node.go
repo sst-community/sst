@@ -412,6 +412,9 @@ func (r *Runtime) ValidateHandler(input *runtime.BuildInput) error {
 	rootDir := path.ResolveRootDir(input.CfgPath)
 	if input.Bundle != "" {
 		rootDir = input.Bundle
+		if !filepath.IsAbs(rootDir) {
+			rootDir = filepath.Join(path.ResolveRootDir(input.CfgPath), rootDir)
+		}
 	}
 	_, ok := findHandlerFile(rootDir, input.Handler)
 	if !ok {

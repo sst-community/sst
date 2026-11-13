@@ -184,6 +184,9 @@ func (r *PythonRuntime) ValidateHandler(input *runtime.BuildInput) error {
 	rootDir := path.ResolveRootDir(input.CfgPath)
 	if input.Bundle != "" {
 		rootDir = input.Bundle
+		if !filepath.IsAbs(rootDir) {
+			rootDir = filepath.Join(path.ResolveRootDir(input.CfgPath), rootDir)
+		}
 	}
 	_, err := resolveHandler(rootDir, input.Handler)
 	if err != nil {

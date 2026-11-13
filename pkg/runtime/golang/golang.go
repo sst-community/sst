@@ -103,12 +103,9 @@ func (r *Runtime) ValidateHandler(input *runtime.BuildInput) error {
 	if input.Bundle != "" {
 		return nil
 	}
-	if input.Handler != "" {
-		if info, err := os.Stat(input.Handler); err != nil || !info.IsDir() {
-			return fmt.Errorf("handler not found: %v", input.Handler)
-		}
-	}
-
+	// Mirror Build's handler resolution exactly: it finds go.mod above the
+	// handler and does not require the handler itself to be a directory, so a
+	// module-name or single-file handler that Build accepts isn't rejected here.
 	_, err := fs.FindUp(input.Handler, "go.mod")
 	if err != nil {
 		return fmt.Errorf("handler not found: could not find go.mod for handler %v", input.Handler)
