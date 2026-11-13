@@ -81,11 +81,11 @@ Exit tests, in the lab:
 
 ### 2. A component with SST's own resources
 
-`StaticSite` (its files, the invalidation, the origin access control), with SST's provider as a plugin Pulumi downloads, and the deploy-time files `paths.platform` names shipped in the package.
+`StaticSite` (its files, the invalidation, the CDN's waiter), with SST's provider as a plugin Pulumi downloads, and the deploy-time files `paths.platform` names shipped in the package. A site with its own domain, the origin access control and the router's routes weren't in it.
 
 ### Later
 
-`sst dev` reading the components' reports, the eject, SST's CLI on Pulumi stacks, other languages. Step 1 also found ([progress](progress.md)): SST's default tags, which plain Pulumi doesn't set; `VisibleError`'s stack trace under Pulumi; every provider of a group to install; and runtimes other than Node.js.
+`sst dev` reading the components' reports, the eject, SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): SST's provider takes its AWS setup from the environment, not the stack's config; SST's default tags, which plain Pulumi doesn't set; `VisibleError`'s stack trace under Pulumi; every provider of a group to install; and runtimes other than Node.js.
 
 ## Open questions
 
@@ -97,4 +97,5 @@ Exit tests, in the lab:
 | Step | Status |
 | --- | --- |
 | Plan | Started 2026-11-12 |
-| 1. A `Function` on plain Pulumi | Done 2026-11-12, lab-checked, not committed ([progress](progress.md)) |
+| 1. A `Function` on plain Pulumi | Done 2026-11-12, lab-checked, committed (`fd905e16a`) |
+| 2. A `StaticSite` on plain Pulumi | Done 2026-11-12, lab-checked, not committed ([progress](progress.md)) |

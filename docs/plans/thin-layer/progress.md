@@ -2,6 +2,31 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: step 2, a `StaticSite` on plain Pulumi
+
+A plain Pulumi program with `new StaticSite("Web", { path: "web" })` from `sst/components/aws` deploys with `pulumi up` alone. SST's own resources (`BucketFiles`, `KvKeys`, `DistributionInvalidation`, `DistributionDeploymentWaiter`) run on SST's provider as a plugin Pulumi downloads, [as decided](plan.md#decisions). Not committed.
+
+**What changed:**
+
+- **SST's own resources name their plugin.** Each of the 13 resource classes, and the `sst:aws:getHostedZone` function, is registered with `withPlugin(opts)` (`platform/src/components/plugin.ts`). Under SST's CLI that's the options as given, so a stage's state is unchanged. Under plain Pulumi it adds the `sst` package's version and `pluginDownloadURL: github://api.github.com/sst-community/sst`, which Pulumi reads as `https://github.com/sst-community/sst/releases/download/v<version>/pulumi-resource-sst-v<version>-<os>-<arch>.tar.gz`. The stack's provider is then `pulumi:providers:sst::default_<version>_github_/api.github.com/sst-community/sst`, which keeps both. The provider's `DiffConfig` never asks for a replace, so a change of version, or of the provider between SST's CLI and Pulumi, replaces nothing.
+- **The release has the plugin.** `.goreleaser.yml` builds the CLI a second time as `pulumi-resource-sst` and archives it, binary only, under the name Pulumi looks for, Windows included. `release.ts` leaves those binaries out of the npm packages. `MAINTAINING.md` says so, and how to run a plain Pulumi program on a dev build.
+- **The package has what a deploy reads from the platform's folder.** `sdk/js/scripts/platform.ts` copies the warmer, the edge signer, the empty function, the React and Remix server wrappers and Cloudflare's static-site Worker into the package's `platform/` (about 730 KB), and stops the pack if a component reads a folder there that's on neither its list nor the `sst dev` stubs'. Under plain Pulumi, `context().paths.platform` is the package's `platform/`. `sstPackage()` (`components/sst-package.ts`) finds the package for both this and the binary.
+
+**Checked:**
+
+- Platform: `tsc`, the full suite (110 files, 4234 tests) and the API reports, unchanged. SDK: `bun test` (31 tests).
+- goreleaser 2's `check`, and a snapshot release of a copy of the config for macOS and Windows on x64 and arm64, written to a scratch folder: each `pulumi-resource-sst-v<version>-<os>-<arch>.tar.gz` holds only the binary (`.exe` on Windows), and `release.ts`'s filter keeps the same four npm platform packages.
+- In the lab, a program named `thinsite` on the stack `lab`, with the branch's CLI installed as plugin `sst` 0.0.0 (`pulumi plugin install --file`):
+  - `pulumi up` alone created 15 resources in 5 minutes, most of it the CDN's waiter. The site answered 200 with its page, and a second preview had 15 unchanged.
+  - **Removing SST:** with the plugin taken out of Pulumi's cache, the `sst` package out of `node_modules` and no `SST_BIN_PATH`, `pulumi destroy` downloaded the plugin from the URL in the state and deleted all 15. The URL was pointed at a local server with a release-named archive, by Pulumi's `PULUMI_PLUGIN_DOWNLOAD_URL_OVERRIDES`, as no release has the archives yet.
+  - The audit found nothing left: no distribution, bucket, CloudFront function or key-value store. A plain Pulumi stack has nothing in SST's home.
+
+**Learned, for the next steps:**
+
+- **SST's provider takes its AWS setup from the environment.** Under SST's CLI the core gives it the stage's credentials, profile, region and roles. Under plain Pulumi it has only the shell's: `AWS_PROFILE`, `AWS_REGION` or the default chain, not the stack's `aws:profile` or `aws:region`. A stack whose AWS provider is set up only in its config could have SST's provider in another account or none; the calls it makes name the stack's own buckets and distributions, so that fails rather than writing elsewhere, but it's to fix before this is used.
+- **A dev build's plugin has no version**, so Pulumi warns. A release's has.
+- **Releases before this one have no plugin**, so a plain Pulumi program needs an `sst` package from a release after it.
+
 ## 2026-11-12: step 1, a `Function` on plain Pulumi
 
 A plain Pulumi program in TypeScript, with `import { Function } from "sst/components/aws"` and nothing of SST's CLI running, previews, deploys and destroys SST's `Function`. Not committed.
