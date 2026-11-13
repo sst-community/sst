@@ -2,6 +2,29 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: step 8, asset storage
+
+SST's components keep code and images in the store the program declares, [as decided](plan.md#decisions). In the lab, in a region SST's CLI had never deployed to, a program with `Assets` deployed with Pulumi alone, was ejected, ran without SST, and was destroyed with nothing left.
+
+**What changed:**
+
+- **`Assets`** (`aws/assets.ts`, `sst:aws:Assets`): a bucket (`forceDestroy`) and an image repository (`forceDelete`, left out with `repository: false`), which it declares as the program's store for its region. It passes `retainOnDelete` to its parts, which Pulumi doesn't; `protect` reaches them as Pulumi passes it. **`Assets.use({ bucket, repository })`** declares a bucket and repository of the program's, for the region of the provider it's given. ECR repositories have a naming rule now. `Assets` is in the codemod's list of `sst.aws`'s exports, and in `v5-components.test.ts`'s list of components SST 4 didn't have.
+- **The lookup** (`aws/helpers/bootstrap.ts`, `assetStore()`): a component that keeps code or images asks for it when it's created, after which a store declared is an error ("comes after"), so which store it uses never depends on when a value resolves. The store is the one declared for the component's region, the one with its provider when two are; under SST's CLI, SST's bootstrap when none is; under plain Pulumi, an error that says what to add. The bucket and the repository are found when they're used, so a service with an image it's given needs no store, and each depends only on its own resource: a code object depends on the bucket, not the repository (the lab's first deploy had both). `Function`, the image helper behind `Service` and `Task`, and `MicroVm` use it. Under plain Pulumi, `bootstrap.forRegion` no longer reads `/sst/bootstrap`, and the mock no longer answers it.
+- **What's kept on delete:** the dev stub's code only in SST's bootstrap. A function's source maps stay in SST's bootstrap under SST's CLI whatever the store, where SST's Console reads them, kept on delete as before; under plain Pulumi they're in the store, deleted with the function.
+- **The eject** tells a source map from code by its key, not by whether it was kept; says when a build stays in the stack's own bucket, which goes with it; and refers to a value a resource it takes out of the state carried, so a function's `s3Bucket` is `assetsBucket.bucket`. An output named as the end of the input's name (`s3Bucket`, `bucket`) is preferred to the id.
+- **The tests:** the mock forgets the declared stores on each reset; the platform's plain-mode helper declares the mock's bootstrap as the store. `assets.test.ts` (plain: the parts, `repository: false`, the options, a function's code and source maps, `Assets.use`, no store, the order, the region, a store without a bucket) and `assets-cli.test.ts` (SST's bootstrap unchanged, `Assets.use` with the source maps in SST's bootstrap, an image in the app's repository, the bootstrap in a region with no store). `TestBuildWritesTheProgramsAssets` in `pkg/eject`.
+- **The docs page:** `Assets` in the setup and the table; the eject's leftovers; the bootstrap limit gone.
+
+**Checked:** `tsc`; the platform suite (114 files, 4270 tests, with the codemod's list); the Go suite; the API reports (an addition, with the parts' internal names renumbered); the components' docs generate, with a page for `Assets`, and the docs site builds (188 pages). After the last change to the lookup, the suite again: 4 `Nextjs` and `Nuxt` takeover tests timed out while the docs site built beside it, and passed on their own (149). With `SST_TEST_PLAIN=1`, over `test/components/v5`, against the commit before: one new failure, a takeover test that expects the dev stub's code to be kept on delete, which a program's own store doesn't; 19 more pass (the new tests). Two task tests whose provider is in another region now fail as a program would be told, with no store there; they failed before too, on `$cli`.
+
+**In the lab**, project `thinassets`, stack `as`, in `us-east-2`, which had no `/sst/bootstrap` (the account's policies allow it, unlike `us-west-1` and `ca-central-1`), with a `Bucket` and a `Function` linked to it with a URL:
+
+- Without `Assets`, `pulumi preview` stopped with the message that says to add `new Assets("Assets")`, and no stack trace.
+- With `new Assets("Assets")`, `pulumi up`: 21 created. The function answered with its bucket. The code and its source map were in the program's bucket, not kept on delete; `/sst/bootstrap` still wasn't in the region. Another preview: 21 unchanged; another `pulumi up`, with each field depending on its own resource: 21 unchanged.
+- `sst eject`: 2 secrets in the config, 6 resources out of the state (the code and the source map said to stay in the stack's bucket until it's deleted). The module made `Assets` as SST's other components, with the bucket and the repository, and the function's `s3Bucket` was `assetsBucket.bucket`.
+- The program switched to `ejected()`, `sst` uninstalled, `SST_BIN_PATH` unset, SST's plugin moved out: `pulumi preview --diff`, 16 unchanged; `pulumi up`, 16 unchanged; the function answered.
+- `pulumi destroy`: 16 deleted. Both buckets (404), the function, the repository, the log group and the role, checked directly: gone; the tagging API lists nothing of the app; `/sst/bootstrap` still not in the region. Nothing was left in any bucket, as the code was in the program's own. The stack removed, SST's plugin put back.
+
 ## 2026-11-13: `$transform` for a Pulumi program
 
 `sst/components` exports `$transform`, the maintainer's choice of the two gaps the docs page found, as recommended. Under SST's CLI it's a global; a Pulumi program had no way to reach it, and Pulumi's own transforms can't change a component's args, which SST's components read before they register anything.

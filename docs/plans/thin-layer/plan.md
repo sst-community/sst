@@ -10,7 +10,7 @@ As tests:
 
 1. **Plain Pulumi deploys SST's components.** A Pulumi program that imports `sst/components/aws` previews, deploys, refreshes and destroys with `pulumi` alone, on any Pulumi backend, with no `sst` command running.
 2. **SST's CLI adds, and isn't needed.** `sst dev`, the typed links, secrets, `sst diff` and the moves are SST's. The program runs without them.
-3. **The same program gives the same resources either way.** Run by SST or by Pulumi, a component registers the same URNs and the same physical names, so a stack can go from one to the other without a replace.
+3. **The same program gives the same resources either way.** Run by SST or by Pulumi, a component registers the same URNs and the same physical names, so a stack can go from one to the other without a replace. Where a function's code is kept is the one difference, for a program that leaves it to SST's CLI: an SST app keeps it in SST's bootstrap, and a Pulumi program in the `Assets` it declares ([step 8](#8-asset-storage)), so a move updates the functions in place. A program that declares its `Assets` gets the same either way.
 4. **Removing SST keeps what's deployed.** With SST's package and CLI gone, `pulumi up` and `pulumi destroy` still work, and there's a way to write the program without SST's components that leaves every resource in the cloud.
 
 ## Decisions
@@ -32,6 +32,7 @@ As tests:
 | 2026-11-12 | **For several stacks, the eject writes one module from all of them**: what's the same in every stack as it is, a plain value that isn't from each stack's config, a value with a reference in it picked by stack in the code, and what only some stacks have made only on those. The maintainer chose it, as recommended, over a module for each stack (simpler, but near-identical files to keep) and keeping one stack for now. |
 | 2026-11-12 | **The eject keeps SST's components as Pulumi components of the same type and name**, so every URN stays and no alias is needed, in place of the aliases to a new parent this plan began with. Proposed with the design, with aliases left for the maintainer to ask for; the maintainer said to continue. |
 | 2026-11-13 | **`sst/components` exports `$transform`**, of the two gaps the docs page found (the other: no bootstrap in an account SST's CLI hasn't deployed to). The maintainer chose it, as recommended. |
+| 2026-11-13 | **Under plain Pulumi, a program declares where SST's components keep code and images: an `Assets`, and nothing is made for it.** SST's bootstrap is account-level and outside any stack, like `cdk bootstrap`, which Pulumi has no counterpart of: a fresh account needed an `sst` command first (goals 1 and 2), and ejected code was left in a bucket no stack owns (goal 4). Weighed: an `sst bootstrap` command (the same coupling, made explicit), the components making a store in the stack on their own (works, but a resource no code of the program's makes), each component taking a bucket (too many components make functions inside them), uploading code to Lambda directly (50 MB, and the eject has nothing to point at). The maintainer asked whether the command still coupled SST to the project, then for the store to be declared rather than made in the background, with a way to bring one's own, and for SST apps to keep SST's bootstrap. So: `new Assets("Assets")` makes a bucket and an image repository in the stack; `Assets.use({ bucket, repository })` points the components at the program's own, under SST's CLI too; an SST app that declares neither keeps SST's bootstrap; a Pulumi program that declares neither gets an error in its preview with the line to add. Deleted with the stack by default, emptied first. |
 
 ## Where it starts
 
@@ -161,13 +162,27 @@ Done ([progress](progress.md)). The `Router` turned out to have no origin access
 - **Several stacks.** `sst eject` reads every stack of the project and writes one module. What it makes is lined up across the stacks by URN, which is the same in each but for the stack's name. A value the same in every stack is written as it is; a plain value that isn't, like a resource's name, is read from each stack's config (`config.require("ApiFunction.name")`), where the eject puts it; a value with a reference in it that isn't the same is picked by stack (`byStack({ dev: () => role.arn, prod: () => "arn:..." })`); and what only some stacks have is made only on those (`onStack("prod") ? new ... : undefined`). A stack with none of SST's components is left out, and the module throws on a stack it has no values for. Each stack's state is saved, edited and imported on its own; if one fails, those imported before are put back.
 - **SST's components inside a component of the program's.** Their URNs have the program's component in them, so the module makes them with it as their parent. It's in the program's code, so `ejected()` is given it, as it's given a provider of the program's: `ejected({ providers: { east }, parents: { shop } })`. The eject says what it takes.
 
+### 8. Asset storage
+
+[As decided](#decisions): SST's components keep a function's code, its source maps, a MicroVM's code and container images in the store the program declares, and SST's bootstrap stays an SST app's default.
+
+- **`Assets`** (`sst:aws:Assets`, in `sst/components/aws`): a bucket, emptied when it's deleted, and an image repository, deleted with its images. It's deleted with the stack: `protect` reaches its parts as Pulumi passes it, and `retainOnDelete`, which Pulumi doesn't pass from a component to its parts, is passed by the component itself.
+- **`Assets.use({ bucket, repository })`** points the components at a bucket and repository the program has, from its own stack or another. Either one alone, for a program with only functions or only images.
+- **Declared first.** A store is declared before the components that upload: one declared after one of them is an error that says so, so which store a component uses never depends on when a value resolves.
+- **One for each region.** A component uses the store in its region, so a function given a provider of its own for the default's region uses the default's. Two stores in a region: the one with the component's provider.
+- **Under SST's CLI**, a component uses a declared store for its region, and SST's bootstrap otherwise. **Under plain Pulumi**, a component with no store for its region is an error in the preview, which says what to add.
+- **Kept on delete only in SST's bootstrap.** A function's source maps and the dev stub's code are kept when they're deleted because other stages share SST's bucket. In a store of the program's they're deleted, so `pulumi destroy` can delete a bucket without `forceDestroy`.
+- **The eject** writes `Assets` as it writes SST's other components, and a function's code location as a reference to the bucket.
+
+Exit tests: the plain-mode tests with a store; tests of `Assets`, `Assets.use` under both, the order, the region, and what's kept on delete. In the lab, in a region SST's CLI has never deployed to: a Pulumi program with `Assets` and a linked `Function` deploys with `pulumi up`, answers, and is ejected and previewed without SST with nothing to change; destroyed, and nothing is left in the region.
+
 ### Later
 
 SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js. Step 5 left the eject of the components [listed there](#5-the-eject).
 
 ## Open questions
 
-1. What happens in an account with no bootstrap (3). Step 1 refuses it with a message, for now.
+1. ~~What happens in an account with no bootstrap (3).~~ Decided 2026-11-13: a Pulumi program declares its store ([step 8](#8-asset-storage)).
 2. Whether SST's CLI deploys Pulumi stacks too (7).
 
 ## Status
@@ -186,4 +201,5 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 7. The eject's other cases | Several stacks: done 2026-11-13, lab-checked, committed (`447d04e92`). Components inside the program's: done 2026-11-13, lab-checked, committed (`aece8b61c`) |
 | The docs page | Written 2026-11-13: "Components in Pulumi" (`www/src/content/docs/docs/components-in-pulumi.mdx`) |
 | `$transform` for a Pulumi program | Done 2026-11-13: exported from `sst/components` |
+| 8. Asset storage | Done 2026-11-13, lab-checked in a region SST's CLI never deployed to |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |
