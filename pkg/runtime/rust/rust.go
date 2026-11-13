@@ -168,12 +168,9 @@ func (r *Runtime) ValidateHandler(input *runtime.BuildInput) error {
 	parts := strings.Split(input.Handler, ".")
 	handler := strings.Join(parts[:len(parts)-1], ".")
 
-	if handler != "" {
-		if info, err := os.Stat(handler); err != nil || !info.IsDir() {
-			return fmt.Errorf("handler not found: %v", input.Handler)
-		}
-	}
-
+	// Mirror Build's resolution: it finds Cargo.toml above the handler's path
+	// portion and does not require that path to be a directory, so a handler
+	// that builds isn't rejected here.
 	_, err := fs.FindUp(handler, "cargo.toml")
 	if err != nil {
 		_, err = fs.FindUp(handler, "Cargo.toml")

@@ -20,6 +20,9 @@ type Runtime interface {
 	Build(ctx context.Context, input *BuildInput) (*BuildOutput, error)
 	Run(ctx context.Context, input *RunInput) (Worker, error)
 	ShouldRebuild(functionID string, path string) bool
+	// ValidateHandler reports whether the handler path resolves, so sst dev can
+	// fail at deploy instead of at first invocation. It must be no stricter than
+	// Build: it should reject only a handler that Build would also reject.
 	ValidateHandler(input *BuildInput) error
 	// ShouldRunEagerly controls whether workers are started immediately after a rebuild
 	// or lazily on first invocation.
