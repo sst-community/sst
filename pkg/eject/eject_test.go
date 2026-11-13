@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/sig"
 )
 
 func readFixture(t *testing.T) []byte {
@@ -515,6 +516,94 @@ func TestBuildTakesTheProgramsComponentSSTsIsIn(t *testing.T) {
 	for _, urn := range plan.Stacks[0].Remove {
 		if urn.Name() == "Shop" {
 			t.Error("the program's component leaves the state")
+		}
+	}
+}
+
+// assetsFixture is the fixture with the function's code in the program's
+// Assets, as SST's components keep it in a Pulumi program, and a source map
+// beside it
+func assetsFixture(t *testing.T) []byte {
+	t.Helper()
+	stack := "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev"
+	assets := "urn:pulumi:dev::shop::sst:aws:Assets::Assets"
+	bucket := "urn:pulumi:dev::shop::sst:aws:Assets$aws:s3/bucket:Bucket::AssetsBucket"
+	provider := "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb"
+	code := "urn:pulumi:dev::shop::sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2::ApiCode"
+	return editFixture(t, func(resources []map[string]any) []map[string]any {
+		var out []map[string]any
+		for _, r := range resources {
+			if r["urn"] == code {
+				r["id"] = "shop-dev-assetsbucket-abcdefgh/assets/Api-code-1234.zip"
+				r["inputs"].(map[string]any)["bucket"] = "shop-dev-assetsbucket-abcdefgh"
+				r["propertyDependencies"] = map[string]any{"bucket": []any{bucket}}
+				r["dependencies"] = []any{bucket}
+			}
+			if strings.HasSuffix(r["urn"].(string), "::ApiFunction") {
+				r["inputs"].(map[string]any)["s3Bucket"] = "shop-dev-assetsbucket-abcdefgh"
+			}
+			out = append(out, r)
+			if r["urn"] == stack {
+				out = append(out,
+					map[string]any{"urn": assets, "custom": false, "type": "sst:aws:Assets", "parent": stack},
+					map[string]any{
+						"urn": bucket, "custom": true, "id": "shop-dev-assetsbucket-abcdefgh",
+						"type": "aws:s3/bucket:Bucket", "parent": assets, "provider": provider,
+						"inputs":  map[string]any{"bucket": "shop-dev-assetsbucket-abcdefgh", "forceDestroy": true},
+						"outputs": map[string]any{"bucket": "shop-dev-assetsbucket-abcdefgh", "id": "shop-dev-assetsbucket-abcdefgh"},
+					},
+				)
+			}
+		}
+		return append(out, map[string]any{
+			"urn":    "urn:pulumi:dev::shop::sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2::ApiSourcemap0",
+			"custom": true, "id": "shop-dev-assetsbucket-abcdefgh/sourcemap/arn/1234.index.mjs.map",
+			"type": "aws:s3/bucketObjectv2:BucketObjectv2", "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api", "provider": provider,
+			"inputs": map[string]any{
+				"bucket": "shop-dev-assetsbucket-abcdefgh",
+				"key":    "sourcemap/arn/1234.index.mjs.map",
+				"source": map[string]any{sig.Key: sig.AssetSig, "path": "/tmp/index.mjs.map"},
+			},
+			"propertyDependencies": map[string]any{"bucket": []any{bucket}},
+			"dependencies":         []any{bucket},
+		})
+	})
+}
+
+func TestBuildWritesTheProgramsAssets(t *testing.T) {
+	plan, err := build(t, assetsFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`const assets = new pulumi.ComponentResource("sst:aws:Assets", "Assets");`,
+		`new aws.s3.Bucket(`,
+		"forceDestroy: true",
+		"Assets: { bucket: assetsBucket },",
+		// The code object leaves the state, and the function refers to the
+		// bucket it's in
+		"s3Bucket: assetsBucket.bucket,",
+	} {
+		if !strings.Contains(plan.Module, want) {
+			t.Errorf("the module has no\n%s\nin\n%s", want, plan.Module)
+		}
+	}
+	reasons := map[string]string{}
+	for _, removed := range plan.Stacks[0].Removed {
+		reasons[removed.Name] = removed.Why
+	}
+	for name, want := range map[string]string{
+		"ApiCode":       "the code SST built, which stays at s3://shop-dev-assetsbucket-abcdefgh/assets/Api-code-1234.zip while the function points at it: delete it once the function has a build of its own, or it goes with the stack's bucket",
+		"ApiSourcemap0": "a source map of SST's build, which stays at s3://shop-dev-assetsbucket-abcdefgh/sourcemap/arn/1234.index.mjs.map until the stack's bucket is deleted",
+	} {
+		if reasons[name] != want {
+			t.Errorf("%s leaves the state as\n%s\nnot\n%s", name, reasons[name], want)
+		}
+	}
+	// The bucket stays the program's
+	for _, urn := range plan.Stacks[0].Remove {
+		if urn.Name() == "AssetsBucket" || urn.Name() == "Assets" {
+			t.Errorf("%s leaves the state", urn.Name())
 		}
 	}
 }

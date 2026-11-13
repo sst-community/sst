@@ -40,10 +40,12 @@ The components are ES modules. In TypeScript, set `module` and `moduleResolution
 }
 ```
 
-Then use the components in the program.
+Then use the components in the program, after the `Assets` they keep their code in.
 
 ```ts title="index.ts"
-import { Bucket, Function } from "sst/components/aws";
+import { Assets, Bucket, Function } from "sst/components/aws";
+
+new Assets("Assets");
 
 const files = new Bucket("Files");
 
@@ -66,8 +68,42 @@ Paths, like a function's `handler`, are from the folder of `Pulumi.yaml`. SST ke
 
 - **The `sst` binary**, which installing `sst` installs for your platform. The program starts it to build the functions, and it stops when the program does. `SST_BIN_PATH` points at another one.
 - **SST's provider**, for what SST makes itself: a site's files and the CDN's invalidation, a router's routes, what `addEnvironment` adds to a function. Pulumi downloads it as a plugin, as it does any provider, from the GitHub release of the `sst` package's version. A stack needs it as long as it has those resources, for `pulumi destroy` too, or until `sst eject` takes them out.
-- **SST's bootstrap in the account and region.** The components upload code to SST's asset bucket, which SST's CLI makes the first time it deploys to a region. Without it, the deploy stops and says so.
+- **Somewhere to keep code and images**, [below](#assets).
 - **AWS credentials**, as the program's AWS provider has them. SST's provider reads the stack's `aws:profile`, `aws:region` and `aws:assumeRoles`, or a component's own provider's `profile` and `region`, and then your environment.
+
+### Assets
+
+A function's code, and an image built for a function, service or task, is kept in the program's `Assets`: a bucket and an image repository, declared before the components that use them.
+
+```ts title="index.ts"
+new Assets("Assets");
+```
+
+They're the program's like anything else it makes. `pulumi destroy` deletes them, emptied first, as what they keep is built again on the next deploy. Pass `protect` to guard them, or `retainOnDelete` to keep them. Without one, a preview stops and says what to add.
+
+A function's code is kept in its region, so a component given a provider for another region needs assets there too.
+
+```ts title="index.ts"
+const east = new aws.Provider("East", { region: "us-east-1" });
+
+new Assets("Assets");
+new Assets("EastAssets", {}, { provider: east });
+```
+
+To keep them in a bucket and repository of your own, with settings of your own or from another stack, point the components at them with `Assets.use()` in place of `Assets`.
+
+```ts title="index.ts"
+const infra = new pulumi.StackReference("acme/infra/prod");
+
+Assets.use({
+  bucket: infra.getOutput("assetBucket"),
+  repository: infra.getOutput("assetRepositoryUrl"),
+});
+```
+
+They have to be in the components' region, and writable by the credentials that deploy. A bucket that `pulumi destroy` deletes needs `forceDestroy`, as old builds are left in it. A store another stack has is that stack's: protect it there, as services in other stacks pull their images from it.
+
+An SST app needs none of this: SST's CLI keeps its code and images in SST's bootstrap of the account, which every app shares. It can use `Assets` or `Assets.use()` too, in place of it.
 
 ### SST's tags
 
@@ -96,6 +132,7 @@ The components' docs write their examples for an SST app, in `sst.config.ts`, wi
 | `$jsonParse`, `$jsonStringify` | `pulumi.jsonParse`, `pulumi.jsonStringify` |
 | `$util` | `import * as pulumi from "@pulumi/pulumi"` |
 | `$asset("files")` | `new pulumi.asset.FileArchive("files")`, or a `FileAsset` for a file |
+| SST's bootstrap of the account | `new Assets("Assets")`, [above](#assets) |
 | `sst.Secret`, and `sst secret set` | A secret in the stack's config, linked with a `Linkable`, [below](#secrets) |
 | `app()`'s `providers` | The stack's config, or a provider given to a component |
 | `app()`'s `removal` and `protect` | Pulumi's `protect` option, [below](#removal) |
@@ -210,14 +247,14 @@ const apiFunction = new aws.lambda.Function(
     name: config.require("ApiFunction.name"),
     role: apiRole.arn,
     runtime: "nodejs24.x",
-    s3Bucket: "sst-asset-abc123",
+    s3Bucket: assetsBucket.bucket,
     s3Key: config.requireSecret("ApiFunction.s3Key"),
   },
   { parent: api, ignoreChanges: ["name"] },
 );
 ```
 
-The type is only a name: nothing of SST's is loaded. A value that's another resource's output is a reference to it, like `apiRole.arn`, and the options the state keeps go with each resource: `protect`, `ignoreChanges`, `dependsOn` and the rest. It's yours to change from there.
+The type is only a name: nothing of SST's is loaded. A value that's another resource's output is a reference to it, like `apiRole.arn`, and the options the state keeps go with each resource: `protect`, `ignoreChanges`, `dependsOn` and the rest. The program's `Assets` are written the same way, and a function's `s3Bucket` refers to their bucket. It's yours to change from there.
 
 ### Several stacks
 
@@ -239,7 +276,7 @@ const parts = ejected({ providers: { east }, parents: { shop } });
 
 ### The functions' code
 
-Each function keeps the code SST last built, in SST's asset bucket, so it doesn't change. For a Node.js function, `sst-ejected-build.ts` has `nodeBuild()`, a build with esbuild, and the comment above the function in the module says how to switch it.
+Each function keeps the code SST last built, in the program's `Assets`, so it doesn't change. For a Node.js function, `sst-ejected-build.ts` has `nodeBuild()`, a build with esbuild, and the comment above the function in the module says how to switch it.
 
 ```bash
 npm install -D esbuild
@@ -265,7 +302,7 @@ Then delete `sst-ejected.ts` and `sst-ejected-build.ts`.
 
 ### What it leaves
 
-When a stack is destroyed after the eject, each function's last build and its source map stay in SST's asset bucket, as nothing in the state has them. `sst eject` prints where, to delete them then.
+Each function's last build and its source maps leave the state and stay where they are, in the program's `Assets`, which the module keeps, so `pulumi destroy` deletes them with it. In a bucket of your own that `pulumi destroy` doesn't empty, or in another stack's, they're left: `sst eject` prints where.
 
 ### What it refuses
 
@@ -282,7 +319,6 @@ It stops before it writes anything when it can't eject a stack without a change 
 ## Limits
 
 - **TypeScript or JavaScript, and SST's AWS components.** Cloudflare's and Vercel's haven't been deployed with Pulumi alone yet.
-- **An account SST hasn't deployed to.** SST's CLI makes the bootstrap the components need, so for now an SST app has to have deployed to the region once.
 - **Every provider of a group.** `sst/components/aws` loads `@pulumi/command`, `@pulumi/docker-build`, `@pulumi/random` and `@pulumi/tls`, used or not.
 - **Builds** of Node.js functions are what's been checked. Other runtimes and container images haven't been.
 - **`Resource`'s types** are written by `sst dev` only.

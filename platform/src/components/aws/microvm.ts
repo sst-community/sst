@@ -30,7 +30,7 @@ import { VisibleError } from "../error";
 import { physicalName } from "../naming";
 import { DurationHours, toSeconds } from "../duration";
 import { notAnExistingPart, plain, usedAsItIs } from "../args";
-import { bootstrap } from "./helpers/bootstrap";
+import { assetStore } from "./helpers/bootstrap";
 import { inlinePolicies, noPermissionsFor } from "./helpers/iam";
 import { privateNetworkOf } from "./helpers/vpc";
 import { RETENTION } from "./logging";
@@ -530,6 +530,9 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
       context().dev;
     const partition = getPartitionOutput({}, { parent: this }).partition;
     const region = getRegionOutput({}, { parent: this }).region;
+    // Where its code is kept: the program's assets, or under SST's CLI,
+    // SST's bootstrap
+    const store = assetStore(this, `the "${name}" MicroVM`).forRegion(region);
     const image = normalizeImage();
 
     const logGroup = this.part(
@@ -794,9 +797,7 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
       // can't find it.
       const object = self.part("code", {
         key: interpolate`assets/microvm/${imageName}.zip`,
-        bucket: region.apply((region) =>
-          bootstrap.forRegion(region, self).then((d) => d.asset),
-        ),
+        bucket: store.bucket,
         source: zip.path.apply((p) => new asset.FileArchive(p)),
       });
       return { object, hash: zip.hash };

@@ -9,6 +9,7 @@ import { contractVersion } from "../components/contract";
 import { checkResource } from "../components/check";
 import type { MovedPart } from "../components/move";
 import { newRun } from "../util/lazy";
+import { resetAssetStores } from "../components/aws/helpers/bootstrap";
 import {
   ARCHIVE,
   ASSET,
@@ -131,7 +132,8 @@ export interface MockInput {
    * Run as Pulumi runs a program on its own, with no SST CLI: none of SST's
    * globals (`$app`, `$cli`, `$dev`, `$util` and the rest), and the app and
    * the stage are Pulumi's project and stack. A component reads them the same
-   * way either way, through its context.
+   * way either way, through its context. As under Pulumi, a program
+   * declares where its code and images are kept, with `Assets`.
    */
   plain?: boolean;
 }
@@ -429,18 +431,6 @@ export function mockPulumi(input?: MockInput) {
         };
       },
       call(args: pulumi.runtime.MockCallArgs) {
-        // SST's bootstrap, which a program Pulumi runs on its own reads from
-        // the parameter SST's CLI keeps it in, as the CLI would give it
-        if (
-          args.token === "aws:ssm/getParameter:getParameter" &&
-          args.inputs.name === "/sst/bootstrap"
-        )
-          return {
-            ...args.inputs,
-            value: JSON.stringify(
-              input?.cli?.("Provider.Aws.Bootstrap", {}) ?? bootstrapData,
-            ),
-          };
         return (
           input?.call?.(args) ??
           (replay && replayed(args)) ??
@@ -650,6 +640,8 @@ export function mockPulumi(input?: MockInput) {
      */
     reset() {
       newRun();
+      // The stores a program declares, with `Assets`, are its own
+      resetAssetStores();
       resources.length = 0;
       findings.length = 0;
       moved.length = 0;
@@ -1272,8 +1264,7 @@ function given(args: pulumi.runtime.MockResourceArgs): Record<string, any> {
 // What the lookups nearly every component makes return. Without these a
 // region is `undefined`, and an IAM policy is empty whatever it's given, so
 // two policies would always compare as the same.
-// SST's bootstrap of the region, as the CLI gives it and as a program Pulumi
-// runs on its own reads it from the parameter SST's CLI keeps it in
+// SST's bootstrap of the region, as the CLI gives it
 const bootstrapData = {
   asset: "sst-asset-bucket",
   assetEcrRegistryId: "123456789012",

@@ -49,7 +49,7 @@ import { RETENTION } from "../logging";
 import type { Permission } from "../permission";
 import type { FunctionPermissionArgs } from "../function";
 import type { DurationMinutes } from "../../duration";
-import { bootstrap } from "./bootstrap";
+import { assetStore } from "./bootstrap";
 import { isCluster } from "./cluster";
 import type { Cluster } from "../cluster";
 import { imageBuilder } from "./container-builder";
@@ -1375,9 +1375,12 @@ export function containerImage<P extends Parts>(
     region: Output<string>;
   },
 ): Output<string> {
-  const bootstrapData = build.region.apply((region) =>
-    bootstrap.forRegion(region, component),
-  );
+  // Where a built image is pushed: the program's assets, or under SST's
+  // CLI, SST's bootstrap. Found only for an image that's built.
+  const store = assetStore(
+    component,
+    `the "${container.name}" container`,
+  ).forRegion(build.region);
   const linkEnvs = Link.propertiesToEnv(Link.getProperties(build.link));
 
   return all([container.image, build.architecture]).apply(
@@ -1410,12 +1413,12 @@ export function containerImage<P extends Parts>(
                 : Platform.Linux_amd64,
             ],
             tags: [container.name, ...(image?.tags ?? [])].map(
-              (tag) => interpolate`${bootstrapData.assetEcrUrl}:${tag}`,
+              (tag) => interpolate`${store.repository.url}:${tag}`,
             ),
             registries: [
               ecr
                 .getAuthorizationTokenOutput(
-                  { registryId: bootstrapData.assetEcrRegistryId },
+                  { registryId: store.repository.registryId },
                   { parent: component },
                 )
                 .apply((authToken) => ({
@@ -1429,14 +1432,14 @@ export function containerImage<P extends Parts>(
                   cacheFrom: [
                     {
                       registry: {
-                        ref: interpolate`${bootstrapData.assetEcrUrl}:${container.name}-cache`,
+                        ref: interpolate`${store.repository.url}:${container.name}-cache`,
                       },
                     },
                   ],
                   cacheTo: [
                     {
                       registry: {
-                        ref: interpolate`${bootstrapData.assetEcrUrl}:${container.name}-cache`,
+                        ref: interpolate`${store.repository.url}:${container.name}-cache`,
                         imageManifest: true,
                         ociMediaTypes: true,
                         mode: "max",
@@ -1451,7 +1454,7 @@ export function containerImage<P extends Parts>(
         ),
       );
 
-      return interpolate`${bootstrapData.assetEcrUrl}@${built.digest}`;
+      return interpolate`${store.repository.url}@${built.digest}`;
     },
   );
 }

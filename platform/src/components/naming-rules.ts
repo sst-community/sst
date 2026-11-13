@@ -168,6 +168,7 @@ export const NAMING_RULES: Record<string, BuiltInNamingRule> = {
   "aws:ec2/subnet:Subnet": ["tags", 255],
   "aws:ec2/vpc:Vpc": ["tags", 255],
   "aws:ec2/vpcEndpoint:VpcEndpoint": ["tags", 255],
+  "aws:ecr/repository:Repository": ["name", 256, { lower: true }],
   "aws:ecs/cluster:Cluster": ["name", 255],
   "aws:elasticache/parameterGroup:ParameterGroup": [
     "name",

@@ -110,6 +110,7 @@ import { Plan } from '@pulumi/aws/backup/plan.js';
 import { Policy } from '@pulumi/aws/appautoscaling/policy.js';
 import { PrivateDnsNamespace } from '@pulumi/aws/servicediscovery/privateDnsNamespace.js';
 import { PrivateKey } from '@pulumi/tls/privateKey.js';
+import { ProviderResource } from '@pulumi/pulumi';
 import { ProvisionedConcurrencyConfig } from '@pulumi/aws/lambda/provisionedConcurrencyConfig.js';
 import { Proxy as Proxy_2 } from '@pulumi/aws/rds/proxy.js';
 import { ProxyDefaultTargetGroup } from '@pulumi/aws/rds/proxyDefaultTargetGroup.js';
@@ -119,6 +120,7 @@ import { QueuePolicy } from '@pulumi/aws/sqs/queuePolicy.js';
 import { RandomPassword } from '@pulumi/random/randomPassword.js';
 import { Record as Record_2 } from '@pulumi/aws/route53/record.js';
 import { ReplicationGroup } from '@pulumi/aws/elasticache/replicationGroup.js';
+import { Repository } from '@pulumi/aws/ecr/repository.js';
 import { Resolver } from '@pulumi/aws/appsync/resolver.js';
 import { Resource } from '@pulumi/pulumi';
 import { Resource as Resource_2 } from '@pulumi/aws/apigateway/resource.js';
@@ -683,6 +685,33 @@ export interface AppSyncResolverArgs {
 }
 
 // @public
+export class Assets extends Assets_base {
+    constructor(name: string, args?: AssetsArgs, opts?: ComponentResourceOptions);
+    get bucketName(): Output<string>;
+    get repositoryUrl(): Output<string> | undefined;
+    static use(store: AssetsUseArgs, opts?: {
+        provider?: ProviderResource;
+    }): void;
+}
+
+// @public (undocumented)
+const Assets_base: ComponentClass<    {
+bucket: Bucket_2;
+repository: OptionalPart<Repository>;
+}>;
+
+// @public (undocumented)
+export interface AssetsArgs extends ComponentArgs<typeof parts_20> {
+    repository?: boolean;
+}
+
+// @public
+export interface AssetsUseArgs {
+    bucket?: Input_2<string>;
+    repository?: Input_2<string>;
+}
+
+// @public
 export class Astro extends Astro_base {
     constructor(name: string, args?: AstroArgs, opts?: ComponentResourceOptions);
     // (undocumented)
@@ -721,7 +750,7 @@ devServer: OptionalPart<Function_2>;
 }>;
 
 // @public (undocumented)
-export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts_20> {
+export interface AstroArgs extends SsrSiteArgs, ComponentArgs<typeof parts_21> {
     buildCommand?: string;
     dev?: false | {
         url?: Input_2<string>;
@@ -787,7 +816,7 @@ secret: Secret;
 }>;
 
 // @public (undocumented)
-export interface AuroraArgs extends ComponentArgs<typeof parts_21> {
+export interface AuroraArgs extends ComponentArgs<typeof parts_22> {
     dataApi?: Input<boolean>;
     database?: Input<string>;
     dev?: {
@@ -842,7 +871,7 @@ router: OptionalPart<typeof Router>;
 }>;
 
 // @public (undocumented)
-export interface AuthArgs extends ComponentArgs<typeof parts_22> {
+export interface AuthArgs extends ComponentArgs<typeof parts_23> {
     domain?: string | Prettify<CdnDomainArgs>;
     issuer: string | FunctionArgs;
 }
@@ -1072,7 +1101,7 @@ queuePolicy: ManyPart<QueuePolicy>;
 }>;
 
 // @public (undocumented)
-export interface BusArgs extends ComponentArgs<typeof parts_24> {
+export interface BusArgs extends ComponentArgs<typeof parts_25> {
     logging?: Input<{
         level: Input<"error" | "info" | "trace">;
         detail?: Input<boolean>;
@@ -1202,7 +1231,7 @@ capacityProviders: ClusterCapacityProviders;
 }>;
 
 // @public (undocumented)
-export interface ClusterArgs extends ComponentArgs<typeof parts_25> {
+export interface ClusterArgs extends ComponentArgs<typeof parts_26> {
     vpc: Vpc | Input<{
         id: Input<string>;
         securityGroups: Input<Input<string>[]>;
@@ -1253,7 +1282,7 @@ roleAttachment: IdentityPoolRoleAttachment;
 }>;
 
 // @public (undocumented)
-export interface CognitoIdentityPoolArgs extends ComponentArgs<typeof parts_26> {
+export interface CognitoIdentityPoolArgs extends ComponentArgs<typeof parts_27> {
     permissions?: Input<{
         authenticated?: FunctionArgs["permissions"];
         unauthenticated?: FunctionArgs["permissions"];
@@ -1306,7 +1335,7 @@ export interface CognitoUserPoolAddClientArgs extends Omit<CognitoUserPoolClient
 }
 
 // @public (undocumented)
-export interface CognitoUserPoolArgs extends ComponentArgs<typeof parts_27> {
+export interface CognitoUserPoolArgs extends ComponentArgs<typeof parts_28> {
     advancedSecurity?: Input<"audit" | "enforced">;
     aliases?: Input<Input<"email" | "phone" | "preferred_username">[]>;
     domain?: string | CognitoUserPoolPrefixDomainArgs | Prettify<CognitoUserPoolDomainArgs>;
@@ -1346,7 +1375,7 @@ client: UserPoolClient;
 }>;
 
 // @public (undocumented)
-export interface CognitoUserPoolClientArgs extends ComponentArgs<typeof parts_28> {
+export interface CognitoUserPoolClientArgs extends ComponentArgs<typeof parts_29> {
     callbackUrls?: Input<Input<string>[]>;
     providers?: Input<Input<string>[]>;
     userPool: Input<string>;
@@ -1461,7 +1490,7 @@ target: EventTarget_2;
 }>;
 
 // @public (undocumented)
-export interface CronArgs extends ComponentArgs<typeof parts_29> {
+export interface CronArgs extends ComponentArgs<typeof parts_30> {
     enabled?: Input<boolean>;
     event?: Input<any>;
     function?: FunctionInput;
@@ -1482,7 +1511,7 @@ schedule: Schedule;
 }>;
 
 // @public (undocumented)
-export interface CronV2Args extends ComponentArgs<typeof parts_31> {
+export interface CronV2Args extends ComponentArgs<typeof parts_32> {
     dlq?: Input<string>;
     enabled?: Input<boolean>;
     event?: Input<any>;
@@ -1710,7 +1739,7 @@ backupSelection: OptionalPart<Selection>;
 }>;
 
 // @public (undocumented)
-export interface DsqlArgs extends ComponentArgs<typeof parts_32> {
+export interface DsqlArgs extends ComponentArgs<typeof parts_33> {
     backup?: boolean | {
         schedule?: Input<string>;
         retention?: Input<DurationDays>;
@@ -1800,7 +1829,7 @@ eventSourceMapping: ManyPart<EventSourceMapping>;
 }>;
 
 // @public (undocumented)
-export interface DynamoArgs extends ComponentArgs<typeof parts_23> {
+export interface DynamoArgs extends ComponentArgs<typeof parts_24> {
     deletionProtection?: Input<boolean>;
     fields: Input<Record<string, "string" | "number" | "binary">>;
     globalIndexes?: Input<Record<string, Input<{
@@ -1899,7 +1928,7 @@ verification: OptionalPart<DomainIdentityVerification>;
 }>;
 
 // @public (undocumented)
-export interface EmailArgs extends ComponentArgs<typeof parts_33> {
+export interface EmailArgs extends ComponentArgs<typeof parts_34> {
     dkim?: boolean;
     dmarc?: Input<string>;
     dns?: false | DnsAdapter;
@@ -2322,7 +2351,7 @@ eventSourceMapping: ManyPart<EventSourceMapping>;
 }>;
 
 // @public (undocumented)
-export interface KinesisStreamArgs extends ComponentArgs<typeof parts_34> {
+export interface KinesisStreamArgs extends ComponentArgs<typeof parts_35> {
 }
 
 // @public (undocumented)
@@ -2577,7 +2606,7 @@ networkConnector: OptionalPart<CoreNetworkConnector>;
 }>;
 
 // @public (undocumented)
-export interface MicroVmArgs extends ComponentArgs<typeof parts_35> {
+export interface MicroVmArgs extends ComponentArgs<typeof parts_36> {
     dev?: false | {
         command?: Input<string>;
         directory?: Input<string>;
@@ -2745,7 +2774,7 @@ devServer: OptionalPart<typeof Function_2>;
 }>;
 
 // @public (undocumented)
-export interface NextjsArgs extends SsrSiteArgs, ComponentArgs<typeof parts_36> {
+export interface NextjsArgs extends SsrSiteArgs, ComponentArgs<typeof parts_37> {
     buildCommand?: string;
     dev?: false | {
         url?: Input_2<string>;
@@ -2811,7 +2840,7 @@ devServer: OptionalPart<Function_2>;
 }>;
 
 // @public (undocumented)
-export interface NuxtArgs extends SsrSiteArgs, ComponentArgs<typeof parts_37> {
+export interface NuxtArgs extends SsrSiteArgs, ComponentArgs<typeof parts_38> {
     buildCommand?: string;
     dev?: false | {
         url?: Input_2<string>;
@@ -2858,7 +2887,7 @@ policy: NamedPart<OptionalPart<DomainPolicy>>;
 }>;
 
 // @public (undocumented)
-export interface OpenSearchArgs extends ComponentArgs<typeof parts_38> {
+export interface OpenSearchArgs extends ComponentArgs<typeof parts_39> {
     dev?: {
         url?: Input<string>;
         username?: Input<string>;
@@ -3127,7 +3156,13 @@ const parts_2: {
 };
 
 // @public (undocumented)
-const parts_20: () => {
+const parts_20: {
+    bucket: Bucket_2;
+    repository: OptionalPart<Repository>;
+};
+
+// @public (undocumented)
+const parts_21: () => {
     server: ManyPart<DeferredPart<OptionalPart<Function_2>>>;
     assets: Bucket;
     assetFiles: BucketFiles;
@@ -3153,7 +3188,7 @@ const parts_20: () => {
 };
 
 // @public (undocumented)
-const parts_21: {
+const parts_22: {
     proxySecret: ManyPart<Secret>;
     proxySecretVersion: ManyPart<SecretVersion>;
     proxyRole: OptionalPart<Role>;
@@ -3173,21 +3208,21 @@ const parts_21: {
 };
 
 // @public (undocumented)
-const parts_22: () => {
+const parts_23: () => {
     table: NamedPart<typeof Dynamo>;
     issuer: DeferredPart<typeof Function_2>;
     router: OptionalPart<typeof Router>;
 };
 
 // @public (undocumented)
-const parts_23: () => {
+const parts_24: () => {
     table: Table;
     subscriber: ManyPart<DeferredPart<typeof Function_2>>;
     eventSourceMapping: ManyPart<EventSourceMapping>;
 };
 
 // @public (undocumented)
-const parts_24: () => {
+const parts_25: () => {
     bus: EventBus;
     subscriber: ManyPart<DeferredPart<typeof Function_2>>;
     permission: ManyPart<Permission_2>;
@@ -3197,13 +3232,13 @@ const parts_24: () => {
 };
 
 // @public (undocumented)
-const parts_25: {
+const parts_26: {
     cluster: Cluster_3;
     capacityProviders: ClusterCapacityProviders;
 };
 
 // @public (undocumented)
-const parts_26: () => {
+const parts_27: () => {
     identityPool: IdentityPool;
     authenticatedRole: NamedPart<Role>;
     unauthenticatedRole: NamedPart<Role>;
@@ -3211,7 +3246,7 @@ const parts_26: () => {
 };
 
 // @public (undocumented)
-const parts_27: () => {
+const parts_28: () => {
     userPool: UserPool;
     trigger: ManyPart<DeferredPart<typeof Function_2>>;
     permission: ManyPart<Permission_2>;
@@ -3221,17 +3256,8 @@ const parts_27: () => {
 };
 
 // @public (undocumented)
-const parts_28: {
+const parts_29: {
     client: UserPoolClient;
-};
-
-// @public (undocumented)
-const parts_29: () => {
-    function: DeferredPart<typeof Function_2>;
-    permission: OptionalPart<Permission_2>;
-    rule: EventRule;
-    role: NamedPart<OptionalPart<Role>>;
-    target: EventTarget_2;
 };
 
 // @public (undocumented)
@@ -3254,7 +3280,16 @@ const parts_3: () => {
 };
 
 // @public (undocumented)
-const parts_30: {
+const parts_30: () => {
+    function: DeferredPart<typeof Function_2>;
+    permission: OptionalPart<Permission_2>;
+    rule: EventRule;
+    role: NamedPart<OptionalPart<Role>>;
+    target: EventTarget_2;
+};
+
+// @public (undocumented)
+const parts_31: {
     taskDefinition: TaskDefinition;
     publicSecurityGroup: OptionalPart<SecurityGroup>;
     executionRole: OptionalPart<Role>;
@@ -3264,14 +3299,14 @@ const parts_30: {
 };
 
 // @public (undocumented)
-const parts_31: () => {
+const parts_32: () => {
     function: DeferredPart<typeof Function_2>;
     role: Role;
     schedule: Schedule;
 };
 
 // @public (undocumented)
-const parts_32: {
+const parts_33: {
     cluster: Cluster_4;
     peerCluster: OptionalPart<Cluster_4>;
     clusterPeering: OptionalPart<ClusterPeering>;
@@ -3287,7 +3322,7 @@ const parts_32: {
 };
 
 // @public (undocumented)
-const parts_33: () => {
+const parts_34: () => {
     identity: EmailIdentity;
     configurationSet: NamedPart<ConfigurationSet>;
     mailFromAttributes: NamedPart<OptionalPart<EmailIdentityMailFromAttributes>>;
@@ -3296,14 +3331,14 @@ const parts_33: () => {
 };
 
 // @public (undocumented)
-const parts_34: () => {
+const parts_35: () => {
     stream: Stream;
     subscriber: ManyPart<DeferredPart<typeof Function_2>>;
     eventSourceMapping: ManyPart<EventSourceMapping>;
 };
 
 // @public (undocumented)
-const parts_35: {
+const parts_36: {
     logGroup: LogGroup;
     executionRole: Role;
     code: BucketObjectv2;
@@ -3315,7 +3350,7 @@ const parts_35: {
 };
 
 // @public (undocumented)
-const parts_36: () => {
+const parts_37: () => {
     imageOptimizer: DeferredPart<typeof Function_2>;
     revalidationQueue: NamedPart<DeferredPart<OptionalPart<typeof Queue>>>;
     revalidationTable: DeferredPart<OptionalPart<Table>>;
@@ -3349,7 +3384,7 @@ const parts_36: () => {
 };
 
 // @public (undocumented)
-const parts_37: () => {
+const parts_38: () => {
     assets: Bucket;
     assetFiles: BucketFiles;
     server: ManyPart<DeferredPart<Function_2>>;
@@ -3375,7 +3410,7 @@ const parts_37: () => {
 };
 
 // @public (undocumented)
-const parts_38: {
+const parts_39: {
     password: OptionalPart<RandomPassword>;
     secret: OptionalPart<Secret>;
     secretVersion: OptionalPart<SecretVersion>;
@@ -3384,7 +3419,12 @@ const parts_38: {
 };
 
 // @public (undocumented)
-const parts_39: () => {
+const parts_4: () => {
+    function: NamedPart<typeof Function_2>;
+};
+
+// @public (undocumented)
+const parts_40: () => {
     server: ManyPart<DeferredPart<OptionalPart<Function_2>>>;
     assets: Bucket;
     assetFiles: BucketFiles;
@@ -3410,12 +3450,7 @@ const parts_39: () => {
 };
 
 // @public (undocumented)
-const parts_4: () => {
-    function: NamedPart<typeof Function_2>;
-};
-
-// @public (undocumented)
-const parts_40: () => {
+const parts_41: () => {
     authHandler: NamedPart<DeferredPart<typeof Function_2>>;
     authorizer: Authorizer_3;
     authorizerPermission: NamedPart<Permission_2>;
@@ -3425,7 +3460,7 @@ const parts_40: () => {
 };
 
 // @public (undocumented)
-const parts_41: {
+const parts_42: {
     authToken: OptionalPart<RandomPassword>;
     secret: OptionalPart<Secret>;
     secretVersion: OptionalPart<SecretVersion>;
@@ -3438,7 +3473,7 @@ const parts_41: {
 };
 
 // @public (undocumented)
-const parts_42: () => {
+const parts_43: () => {
     assets: Bucket;
     assetFiles: BucketFiles;
     server: ManyPart<DeferredPart<Function_2>>;
@@ -3464,7 +3499,7 @@ const parts_42: () => {
 };
 
 // @public (undocumented)
-const parts_43: () => {
+const parts_44: () => {
     taskDefinition: OptionalPart<TaskDefinition>;
     loadBalancerSecurityGroup: OptionalPart<SecurityGroup>;
     loadBalancer: OptionalPart<LoadBalancer>;
@@ -3486,7 +3521,7 @@ const parts_43: () => {
 };
 
 // @public (undocumented)
-const parts_44: () => {
+const parts_45: () => {
     assets: Bucket;
     assetFiles: BucketFiles;
     server: ManyPart<DeferredPart<Function_2>>;
@@ -3512,7 +3547,7 @@ const parts_44: () => {
 };
 
 // @public (undocumented)
-const parts_45: () => {
+const parts_46: () => {
     assets: OptionalPart<typeof Bucket>;
     assetFiles: typeof BucketFiles;
     kvKeys: OptionalPart<typeof KvKeys>;
@@ -3526,36 +3561,10 @@ const parts_45: () => {
 };
 
 // @public (undocumented)
-const parts_46: () => {
+const parts_47: () => {
     logGroup: OptionalPart<LogGroup>;
     role: Role;
     stateMachine: StateMachine;
-};
-
-// @public (undocumented)
-const parts_47: () => {
-    assets: Bucket;
-    assetFiles: BucketFiles;
-    server: ManyPart<DeferredPart<Function_2>>;
-    warmer: ManyPart<DeferredPart<Function_2>>;
-    warmerRule: NamedPart<ManyPart<DeferredPart<EventRule>>>;
-    warmerTarget: NamedPart<ManyPart<DeferredPart<EventTarget_2>>>;
-    warmerPermission: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
-    prewarm: ManyPart<DeferredPart<Invocation>>;
-    urlAccess: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
-    cloudFrontUrlAccess: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
-    cloudFrontInvoke: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
-    kvKeys: KvKeys;
-    routesUpdate: OptionalPart<KvRoutesUpdate>;
-    invalidation: OptionalPart<DistributionInvalidation>;
-    cdn: OptionalPart<Cdn>;
-    kvStore: OptionalPart<KeyValueStore>;
-    cachePolicy: NamedPart<OptionalPart<CachePolicy>>;
-    requestFunction: NamedPart<OptionalPart<Function_4>>;
-    responseFunction: NamedPart<OptionalPart<Function_4>>;
-    edgeRole: NamedPart<OptionalPart<Role>>;
-    edgeFunction: OptionalPart<Function_3>;
-    devServer: OptionalPart<Function_2>;
 };
 
 // @public (undocumented)
@@ -3585,7 +3594,40 @@ const parts_48: () => {
 };
 
 // @public (undocumented)
-const parts_49: {
+const parts_49: () => {
+    assets: Bucket;
+    assetFiles: BucketFiles;
+    server: ManyPart<DeferredPart<Function_2>>;
+    warmer: ManyPart<DeferredPart<Function_2>>;
+    warmerRule: NamedPart<ManyPart<DeferredPart<EventRule>>>;
+    warmerTarget: NamedPart<ManyPart<DeferredPart<EventTarget_2>>>;
+    warmerPermission: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
+    prewarm: ManyPart<DeferredPart<Invocation>>;
+    urlAccess: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
+    cloudFrontUrlAccess: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
+    cloudFrontInvoke: NamedPart<ManyPart<DeferredPart<Permission_2>>>;
+    kvKeys: KvKeys;
+    routesUpdate: OptionalPart<KvRoutesUpdate>;
+    invalidation: OptionalPart<DistributionInvalidation>;
+    cdn: OptionalPart<Cdn>;
+    kvStore: OptionalPart<KeyValueStore>;
+    cachePolicy: NamedPart<OptionalPart<CachePolicy>>;
+    requestFunction: NamedPart<OptionalPart<Function_4>>;
+    responseFunction: NamedPart<OptionalPart<Function_4>>;
+    edgeRole: NamedPart<OptionalPart<Role>>;
+    edgeFunction: OptionalPart<Function_3>;
+    devServer: OptionalPart<Function_2>;
+};
+
+// @public (undocumented)
+const parts_5: () => {
+    queue: Queue_2;
+    subscriber: DeferredPart<typeof Function_2>;
+    eventSourceMapping: OptionalPart<EventSourceMapping>;
+};
+
+// @public (undocumented)
+const parts_50: {
     logGroup: LogGroup;
     localLogGroup: LogGroup;
     role: Role;
@@ -3599,13 +3641,6 @@ const parts_49: {
     endpoint: FunctionEndpoint;
     operatorRole: OptionalPart<Role>;
     networkConnector: OptionalPart<CoreNetworkConnector>;
-};
-
-// @public (undocumented)
-const parts_5: () => {
-    queue: Queue_2;
-    subscriber: DeferredPart<typeof Function_2>;
-    eventSourceMapping: OptionalPart<EventSourceMapping>;
 };
 
 // @public (undocumented)
@@ -4025,7 +4060,7 @@ devServer: OptionalPart<Function_2>;
 }>;
 
 // @public (undocumented)
-export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts_39> {
+export interface ReactArgs extends SsrSiteArgs, ComponentArgs<typeof parts_40> {
     buildCommand?: string;
     dev?: false | {
         url?: Input_2<string>;
@@ -4081,7 +4116,7 @@ topicRule: ManyPart<TopicRule>;
 }>;
 
 // @public (undocumented)
-export interface RealtimeArgs extends ComponentArgs<typeof parts_40> {
+export interface RealtimeArgs extends ComponentArgs<typeof parts_41> {
     authorizer: string | FunctionArgs;
 }
 
@@ -4134,7 +4169,7 @@ userGroup: OptionalPart<UserGroup>;
 }>;
 
 // @public (undocumented)
-export interface RedisArgs extends ComponentArgs<typeof parts_41> {
+export interface RedisArgs extends ComponentArgs<typeof parts_42> {
     cluster?: Input<boolean | {
         nodes: Input<number>;
     }>;
@@ -4204,7 +4239,7 @@ devServer: OptionalPart<Function_2>;
 }>;
 
 // @public (undocumented)
-export interface RemixArgs extends SsrSiteArgs, ComponentArgs<typeof parts_42> {
+export interface RemixArgs extends SsrSiteArgs, ComponentArgs<typeof parts_43> {
     buildCommand?: string;
     buildDirectory?: string;
     dev?: false | {
@@ -4485,7 +4520,7 @@ export interface ServiceAlbRuleArgs {
 }
 
 // @public (undocumented)
-export interface ServiceArgs extends ComponentArgs<typeof parts_43>, FargateBaseArgs {
+export interface ServiceArgs extends ComponentArgs<typeof parts_44>, FargateBaseArgs {
     capacity?: Input<"spot" | {
         fargate?: Input<{
             base?: Input<number>;
@@ -4707,7 +4742,7 @@ devServer: OptionalPart<Function_2>;
 }>;
 
 // @public (undocumented)
-export interface SolidStartArgs extends SsrSiteArgs, ComponentArgs<typeof parts_44> {
+export interface SolidStartArgs extends SsrSiteArgs, ComponentArgs<typeof parts_45> {
     buildCommand?: string;
     dev?: false | {
         url?: Input_2<string>;
@@ -4864,7 +4899,7 @@ accessControl: NamedPart<OptionalPart<typeof OriginAccessControl>>;
 }>;
 
 // @public (undocumented)
-export interface StaticSiteArgs extends ComponentArgs<typeof parts_45> {
+export interface StaticSiteArgs extends ComponentArgs<typeof parts_46> {
     assets?: {
         textEncoding?: Input_2<"utf-8" | "iso-8859-1" | "windows-1252" | "ascii" | "none">;
         fileOptions?: Input_2<Prettify<BaseSiteFileOptions>[]>;
@@ -4954,7 +4989,7 @@ stateMachine: StateMachine;
 }>;
 
 // @public (undocumented)
-export interface StepFunctionsArgs extends ComponentArgs<typeof parts_46> {
+export interface StepFunctionsArgs extends ComponentArgs<typeof parts_47> {
     definition: State;
     logging?: false | {
         retention?: Input<keyof typeof RETENTION>;
@@ -5029,7 +5064,7 @@ devServer: OptionalPart<Function_2>;
 }>;
 
 // @public (undocumented)
-export interface SvelteKitArgs extends SsrSiteArgs, ComponentArgs<typeof parts_47> {
+export interface SvelteKitArgs extends SsrSiteArgs, ComponentArgs<typeof parts_48> {
     buildCommand?: string;
     dev?: false | {
         url?: Input_2<string>;
@@ -5085,7 +5120,7 @@ devServer: OptionalPart<Function_2>;
 }>;
 
 // @public (undocumented)
-export interface TanStackStartArgs extends SsrSiteArgs, ComponentArgs<typeof parts_48> {
+export interface TanStackStartArgs extends SsrSiteArgs, ComponentArgs<typeof parts_49> {
     buildCommand?: string;
     dev?: false | {
         url?: Input_2<string>;
@@ -5171,7 +5206,7 @@ logGroup: ManyPart<LogGroup>;
 }>;
 
 // @public (undocumented)
-export interface TaskArgs extends ComponentArgs<typeof parts_30>, FargateBaseArgs {
+export interface TaskArgs extends ComponentArgs<typeof parts_31>, FargateBaseArgs {
     containers?: ContainerArgs[];
     dev?: false | {
         command?: Input<string>;
@@ -5407,7 +5442,7 @@ networkConnector: OptionalPart<CoreNetworkConnector>;
 }>;
 
 // @public (undocumented)
-export interface WebFunctionArgs extends ComponentArgs<typeof parts_49> {
+export interface WebFunctionArgs extends ComponentArgs<typeof parts_50> {
     bundle?: string;
     copyFiles?: FunctionArgs["copyFiles"];
     dev?: false | {

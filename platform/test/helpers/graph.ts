@@ -6,6 +6,7 @@ import {
   mockPulumi as mockEngine,
 } from "../../src/testing/mock";
 import { adoptable, deployedIn, stateGraph } from "../../src/testing/state";
+import { declareStore } from "../../src/components/aws/helpers/bootstrap";
 
 export type { RecordedResource };
 
@@ -254,6 +255,24 @@ export function mockPulumi(input?: MockInput) {
   });
   const { resources, deployed } = engine;
 
+  // Under plain Pulumi a program declares where its code and images are
+  // kept. The components' tests don't, so each run declares the bucket and
+  // repository SST's bootstrap has in the mock, in the mock's region.
+  const declareTestStore = () => {
+    if (process.env.SST_TEST_PLAIN !== "1" && !input?.plain) return;
+    declareStore({
+      label: "the tests' assets",
+      bucket: pulumi.output<string | undefined>("sst-asset-bucket"),
+      repositoryUrl: pulumi.output<string | undefined>(
+        "123456789012.dkr.ecr.us-east-1.amazonaws.com/sst-asset",
+      ),
+      registryId: pulumi.output<string | undefined>("123456789012"),
+      region: pulumi.output("us-east-1"),
+      provider: undefined,
+    });
+  };
+  declareTestStore();
+
   // A stage deployed before 4.x renamed something has it at its old address,
   // and what takes over claims it there too. What each resource is given is
   // the same either way, and is checked against the graph as it is now.
@@ -289,6 +308,7 @@ export function mockPulumi(input?: MockInput) {
   // like the dev stub code its functions share. The engine's reset does both.
   const newRun = async () => {
     engine.reset();
+    declareTestStore();
   };
 
   // The V5 side runs as the stage moves, so each component tells the core
@@ -323,6 +343,7 @@ export function mockPulumi(input?: MockInput) {
     reset() {
       creating = "v5";
       engine.reset();
+      declareTestStore();
     },
     /**
      * Runs what replaces a deployed graph as the stage moves, as the

@@ -218,11 +218,21 @@ func (g *generator) classify() error {
 			return fmt.Errorf("The %q stack has been deployed by sst dev, and its state still has the stub's code. Run `pulumi up` first, then eject.", g.plan.Name)
 		case r.Custom && inComponent:
 			if built(r) {
-				// SST keeps a function's source maps on delete, and not its code
-				if r.RetainOnDelete {
-					g.remove(r, "a source map of SST's build, which stays at s3://"+r.ID)
-				} else {
-					g.remove(r, "the code SST built, which stays at s3://"+r.ID+" while the function points at it: delete it once the function has a build of its own")
+				// In SST's bootstrap, which no stack has, it stays; in a bucket
+				// of the stack's, like the program's Assets, it goes with the
+				// bucket, which is emptied when it's deleted
+				where := "s3://" + r.ID
+				own := len(r.PropertyDependencies["bucket"]) > 0
+				key, _ := revealed(r.Inputs["key"]).(string)
+				switch {
+				case strings.HasPrefix(key, "sourcemap/") && own:
+					g.remove(r, "a source map of SST's build, which stays at "+where+" until the stack's bucket is deleted")
+				case strings.HasPrefix(key, "sourcemap/"):
+					g.remove(r, "a source map of SST's build, which stays at "+where)
+				case own:
+					g.remove(r, "the code SST built, which stays at "+where+" while the function points at it: delete it once the function has a build of its own, or it goes with the stack's bucket")
+				default:
+					g.remove(r, "the code SST built, which stays at "+where+" while the function points at it: delete it once the function has a build of its own")
 				}
 			} else {
 				g.role[r.URN] = rolePart
@@ -616,10 +626,30 @@ func withEnvironment(environment any, added map[string]any) any {
 // declared are those of the URNs the module has a name for
 func (g *generator) declared(urns []resource.URN) []resource.URN {
 	var result []resource.URN
-	for _, urn := range urns {
-		if _, ok := g.vars[urn]; ok && !strings.HasPrefix(g.vars[urn], "program.") {
-			result = append(result, urn)
+	seen := map[resource.URN]bool{}
+	var visit func(urn resource.URN)
+	visit = func(urn resource.URN) {
+		if seen[urn] {
+			return
 		}
+		seen[urn] = true
+		if name, ok := g.vars[urn]; ok {
+			if !strings.HasPrefix(name, "program.") {
+				result = append(result, urn)
+			}
+			return
+		}
+		// What leaves the state can carry a value of what it was made from:
+		// a function's code object has the bucket of the program's Assets,
+		// which the function then refers to
+		if r := g.byURN[urn]; r != nil && g.role[urn] == roleRemove {
+			for _, dep := range r.Dependencies {
+				visit(dep)
+			}
+		}
+	}
+	for _, urn := range urns {
+		visit(urn)
 	}
 	return result
 }
@@ -880,6 +910,11 @@ func bestOf(candidates []candidate, key string) (candidate, bool) {
 			if strings.HasSuffix(lower, ending) && c.key == ending {
 				return 1
 			}
+		}
+		// What the input is named after: a function's s3Bucket is a bucket's
+		// bucket
+		if len(c.key) >= 4 && strings.HasSuffix(lower, strings.ToLower(c.key)) {
+			return 1
 		}
 		switch c.key {
 		case "arn":

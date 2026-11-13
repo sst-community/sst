@@ -58,7 +58,7 @@ import { isEfs } from "./helpers/efs";
 import { type RouteArgs, routeOf } from "./helpers/router";
 import { RETENTION } from "./logging";
 import { Permission, permission } from "./permission";
-import { bootstrap } from "./helpers/bootstrap";
+import { assetStore } from "./helpers/bootstrap";
 import { parseRoleArn, splitQualifiedFunctionArn } from "./helpers/arn";
 import {
   FunctionBundle,
@@ -1797,10 +1797,9 @@ export class Function extends component("sst:aws:Function", parts) {
 
     const partition = getPartitionOutput({}, { parent: this }).partition;
     const region = getRegionOutput({}, { parent: this }).region;
-    const bootstrapData = region.apply((region) =>
-      bootstrap.forRegion(region, self),
-    );
-    const assetBucket = bootstrapData.apply((data) => data.asset);
+    // Where its code and image are kept: the program's assets, or under
+    // SST's CLI, SST's bootstrap
+    const store = assetStore(self, `the "${name}" function`).forRegion(region);
     // The key links are encrypted with is created once for the app, and
     // shared with the 4.x `Function`, so an app with both has one
     const encryptionKey = linkEncryptionKey().base64;
@@ -2268,13 +2267,13 @@ export class Function extends component("sst:aws:Function", parts) {
     function normalizeEnvironment() {
       return all([
         args.environment,
-        bootstrapData,
+        dev ? store.bucket : undefined,
         encryptionKey,
         args.link,
         args.streaming,
         args.bundle,
         dev ? devStub() : undefined,
-      ]).apply(([environment, bootstrap, key, link, streaming, bundle, stub]) => {
+      ]).apply(([environment, assetBucket, key, link, streaming, bundle, stub]) => {
         const result = environment ?? {};
         result.SST_RESOURCE_App = JSON.stringify({
           name: context().app.name,
@@ -2299,7 +2298,7 @@ export class Function extends component("sst:aws:Function", parts) {
           result.SST_FUNCTION_ID = name;
           result.SST_APP = context().app.name;
           result.SST_STAGE = context().app.stage;
-          result.SST_ASSET_BUCKET = bootstrap.asset;
+          result.SST_ASSET_BUCKET = assetBucket!;
           if (process.env.SST_FUNCTION_TIMEOUT) {
             result.SST_FUNCTION_TIMEOUT = process.env.SST_FUNCTION_TIMEOUT;
           }
@@ -2328,8 +2327,8 @@ export class Function extends component("sst:aws:Function", parts) {
               effect: "allow" as const,
               actions: ["s3:*"],
               resources: [
-                interpolate`arn:${partition}:s3:::${assetBucket}`,
-                interpolate`arn:${partition}:s3:::${assetBucket}/*`,
+                interpolate`arn:${partition}:s3:::${store.bucket}`,
+                interpolate`arn:${partition}:s3:::${store.bucket}/*`,
               ],
             },
           ])
@@ -2387,20 +2386,21 @@ export class Function extends component("sst:aws:Function", parts) {
     // in the artifact directory. What's left is to build the image and push
     // it to the container registry.
     function createImage() {
+      const repository = store.repository;
       const authToken = ecr.getAuthorizationTokenOutput({
-        registryId: bootstrapData.assetEcrRegistryId,
+        registryId: repository.registryId,
       }, { parent: self });
       // Set unless the cache is switched off. SST 4 made the image inside an
       // `apply`, so a plain `cache` gives plain lists, as it did
       const cache = typeof container === "object" ? container.cache : undefined;
       const unlessOff = <T>(lists: T) =>
         mapArg(cache, (cache) => (cache === false ? undefined : lists));
-      const cacheRef = interpolate`${bootstrapData.assetEcrUrl}:${name}-cache`;
+      const cacheRef = interpolate`${repository.url}:${name}-cache`;
 
       return self.part("image", {
         // A tag of its own, so two functions' images don't take it from
         // each other, as SST 4 does since 4.25.0
-        tags: [interpolate`${bootstrapData.assetEcrUrl}:${name}`],
+        tags: [interpolate`${repository.url}:${name}`],
         context: {
           // Read once the code is built, so the image is built after it
           location: built.apply(() =>
@@ -2458,20 +2458,20 @@ export class Function extends component("sst:aws:Function", parts) {
                 key: interpolate`sourcemap/${ownLogGroup.arn}/${
                   zip.hash
                 }.${path.basename(file)}`,
-                bucket: assetBucket,
+                bucket: store.sourcemaps.bucket,
                 // In a deploy, the build is the one the files come from
                 source: built.apply(
                   (built) => new asset.FileAsset(built.sourcemaps![index]),
                 ),
               },
-              { retainOnDelete: true },
+              { retainOnDelete: store.sourcemaps.retained },
             ),
           ),
         );
 
       return self.part("code", {
         key: interpolate`assets/${name}-code-${zip.hash}.zip`,
-        bucket: assetBucket,
+        bucket: store.bucket,
         source: zip.apply((zip) => new asset.FileArchive(zip.path)),
       });
     }
@@ -2479,7 +2479,7 @@ export class Function extends component("sst:aws:Function", parts) {
     // Every live function in a region is created from the same stub, so its
     // code is uploaded once for the app, outside of any function.
     function devBridgeCode() {
-      return all([built, region]).apply(([{ bundle }, region]) => {
+      return all([built, region, store.shared]).apply(([{ bundle }, region, shared]) => {
         const cache = devStubCode();
         const cacheKey = `${region}:${bundle}`;
         const cached = cache.get(cacheKey);
@@ -2500,7 +2500,7 @@ export class Function extends component("sst:aws:Function", parts) {
               `DevBridgeCode${logicalName(region)}${stub}`,
               {
                 key: `assets/dev-bridge-code-${zip.hash}.zip`,
-                bucket: assetBucket,
+                bucket: store.bucket,
                 source: new asset.FileArchive(zip.path),
               },
               {
@@ -2509,8 +2509,9 @@ export class Function extends component("sst:aws:Function", parts) {
                 // The dev bridge key is shared by every app and stage in this
                 // account and region. Retain it so removing a stage, deploying it
                 // outside dev, or changing its bridge version doesn't delete the
-                // object other stages' Lambdas are still created from.
-                retainOnDelete: true,
+                // object other stages' Lambdas are still created from. In the
+                // program's own assets it's the program's alone.
+                retainOnDelete: shared,
               },
             ),
         );

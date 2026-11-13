@@ -6,6 +6,7 @@ export * from "./apigateway-rest-api-key";
 export * from "./apigateway-rest-usage-plan";
 export * from "./apigateway-websocket";
 export * from "./app-sync";
+export * from "./assets";
 export * from "./astro";
 export * from "./aurora";
 export * from "./auth";

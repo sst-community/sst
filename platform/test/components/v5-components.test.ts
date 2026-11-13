@@ -61,6 +61,12 @@ const TYPE_NAMES: Record<Group, Record<string, string>> = {
   },
 };
 
+// The components SST 4 didn't have, which take the place of none of its
+const NEW: Record<Group, string[]> = {
+  aws: ["Assets"],
+  cloudflare: [],
+};
+
 describe("SST 5's components", () => {
   let takeoverOf: typeof import("../../src/components/takeover").takeoverOf;
 
@@ -92,6 +98,10 @@ describe("SST 5's components", () => {
     // file, unless it's one of the names the maintainer chose to make clearer,
     // which keep their type: `ApiGatewayHttp` replaces `ApiGatewayV2` as `sst:aws:ApiGatewayV2`.
     it("has the name and type of the component it replaces", async () => {
+      if (NEW[group].includes(component.name)) {
+        expect(component.__pulumiType).toBe(`sst:${group}:${component.name}`);
+        return;
+      }
       const originalName = RENAMED[group][component.name] ?? component.name;
       const typeName = TYPE_NAMES[group][component.name] ?? originalName;
       expect(component.__pulumiType).toBe(`sst:${group}:${typeName}`);
@@ -138,6 +148,7 @@ describe("SST 5's components", () => {
     // without one, a new stage takes the 4.x form, and a plain deploy can
     // switch it, where only `sst migrate` releases what a switch releases.
     it("has a takeover map, even an empty one", () => {
+      if (NEW[group].includes(component.name)) return;
       expect(
         takeoverOf(component),
         `Add ${group}/takeover/${file}, with "takeover(${component.name}, {})" when nothing moved, and import it from ${group}/takeover/index.ts`,
