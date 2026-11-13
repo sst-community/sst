@@ -313,7 +313,7 @@ func TestRead(t *testing.T) {
 func (t typed[I, O]) opened(ctx context.Context) any { return t.open(ctx) }
 
 func TestResources(t *testing.T) {
-	served := resources(envAws((&settings{}).aws), envCloudflare())
+	served := resources(envAws((&settings{}).aws), envCloudflare((&settings{}).cloudflare), nil)
 	ctx := context.Background()
 	// Each type, with what does its work
 	want := map[string]any{
@@ -439,29 +439,57 @@ func TestCloudflareCredentials(t *testing.T) {
 	t.Run("the CLI's token", func(t *testing.T) {
 		t.Setenv("SST_CLOUDFLARE_API_TOKEN", "resolved")
 		t.Setenv("CLOUDFLARE_API_TOKEN", "own")
-		api, err := envCloudflare()()
+		api, err := envCloudflare(none)()
 		require.NoError(t, err)
 		assert.Equal(t, "resolved", api.APIToken)
 	})
 	t.Run("the CLI's key and email", func(t *testing.T) {
 		t.Setenv("SST_CLOUDFLARE_API_KEY", "key")
 		t.Setenv("SST_CLOUDFLARE_EMAIL", "me@example.com")
-		api, err := envCloudflare()()
+		api, err := envCloudflare(none)()
 		require.NoError(t, err)
 		assert.Equal(t, "key", api.APIKey)
 		assert.Equal(t, "me@example.com", api.APIEmail)
 	})
 	t.Run("the environment's own", func(t *testing.T) {
 		t.Setenv("CLOUDFLARE_API_TOKEN", "own")
-		api, err := envCloudflare()()
+		api, err := envCloudflare(none)()
 		require.NoError(t, err)
 		assert.Equal(t, "own", api.APIToken)
 	})
 	t.Run("none", func(t *testing.T) {
-		_, err := envCloudflare()()
+		_, err := envCloudflare(none)()
 		assert.Error(t, err)
 	})
+	// A program Pulumi runs on its own gives them in the provider's config,
+	// which comes first
+	t.Run("the config's token", func(t *testing.T) {
+		t.Setenv("SST_CLOUDFLARE_API_TOKEN", "resolved")
+		t.Setenv("CLOUDFLARE_API_TOKEN", "own")
+		api, err := envCloudflare(func() cloudflareSettings { return cloudflareSettings{Token: "configured"} })()
+		require.NoError(t, err)
+		assert.Equal(t, "configured", api.APIToken)
+	})
+	t.Run("the config's key and email", func(t *testing.T) {
+		t.Setenv("CLOUDFLARE_API_TOKEN", "own")
+		api, err := envCloudflare(func() cloudflareSettings {
+			return cloudflareSettings{Key: "key", Email: "me@example.com"}
+		})()
+		require.NoError(t, err)
+		assert.Equal(t, "key", api.APIKey)
+		assert.Equal(t, "me@example.com", api.APIEmail)
+	})
+	t.Run("a key without an email in the config", func(t *testing.T) {
+		t.Setenv("CLOUDFLARE_API_TOKEN", "own")
+		api, err := envCloudflare(func() cloudflareSettings { return cloudflareSettings{Key: "key"} })()
+		require.NoError(t, err)
+		assert.Equal(t, "own", api.APIToken)
+	})
 }
+
+// none is a provider with no Cloudflare credentials in its config, as under
+// SST's CLI
+func none() cloudflareSettings { return cloudflareSettings{} }
 
 func TestVersion(t *testing.T) {
 	for version, want := range map[string]string{
@@ -737,6 +765,32 @@ func TestConfigureAws(t *testing.T) {
 			assert.Error(t, err, roles)
 		}
 	})
+}
+
+// It names the Cloudflare and Vercel tokens of the program's providers, which
+// the engine gives as plain values: the provider accepts no secrets
+func TestConfigureTokens(t *testing.T) {
+	ctx := context.Background()
+	configured := &settings{}
+	s := newServer("5.0.0", nil)
+	s.configured = configured
+	args, err := structpb.NewStruct(map[string]any{
+		"cloudflareApiToken": "cloudflare-token",
+		"vercelApiToken":     "vercel-token",
+	})
+	require.NoError(t, err)
+	_, err = s.Configure(ctx, &pulumirpc.ConfigureRequest{Args: args})
+	require.NoError(t, err)
+	assert.Equal(t, cloudflareSettings{Token: "cloudflare-token"}, configured.cloudflare())
+	assert.Equal(t, "vercel-token", configured.vercelToken())
+
+	// Under SST's CLI, none: the environment's are read
+	configured = &settings{}
+	s.configured = configured
+	_, err = s.Configure(ctx, &pulumirpc.ConfigureRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, cloudflareSettings{}, configured.cloudflare())
+	assert.Equal(t, "", configured.vercelToken())
 }
 
 // The AWS setup the config names wins over the environment's; without one,

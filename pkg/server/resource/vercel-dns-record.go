@@ -11,21 +11,30 @@ import (
 )
 
 // VercelResource is what SST's Vercel resources share: the context their
-// calls run in. The token for Vercel's API is the environment's, for the RPC
-// and the provider the sst binary serves (pkg/provider) alike.
+// calls run in, and the token for Vercel's API: VERCEL_API_TOKEN under SST's
+// CLI, or the one a program Pulumi runs on its own gives the provider the sst
+// binary serves (pkg/provider).
 type VercelResource struct {
 	context context.Context
+	token   func() string
 }
 
-// NewVercelResource is a VercelResource whose calls run in ctx
-func NewVercelResource(ctx context.Context) *VercelResource {
-	return &VercelResource{ctx}
+// NewVercelResource is a VercelResource whose calls run in ctx, with the
+// token token gives, or VERCEL_API_TOKEN when it gives none. token may be nil.
+func NewVercelResource(ctx context.Context, token func() string) *VercelResource {
+	return &VercelResource{ctx, token}
 }
 
-// authorize sets the token the CLI has for Vercel's API, VERCEL_API_TOKEN, on
-// a request. It's not in the resource's inputs, which are saved to the state.
+// authorize sets the token for Vercel's API on a request. It's not in the
+// resource's inputs, which are saved to the state.
 func (r *VercelResource) authorize(req *http.Request) error {
-	token := os.Getenv("VERCEL_API_TOKEN")
+	token := ""
+	if r.token != nil {
+		token = r.token()
+	}
+	if token == "" {
+		token = os.Getenv("VERCEL_API_TOKEN")
+	}
 	if token == "" {
 		return fmt.Errorf("VERCEL_API_TOKEN is not set: it's the access token for Vercel's API")
 	}

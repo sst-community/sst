@@ -13,7 +13,7 @@ import {
 } from "../dns-adapter";
 import { transform } from "../component";
 import { plain } from "../args";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { defaultAccountId } from "./helpers/account";
 import { DnsRecord as OverridableDnsRecord } from "./resources/dns-record";
 import { zoneOf as findZone } from "./helpers/zone";
 import type { DnsArgs } from "./dns";
@@ -134,6 +134,10 @@ export function cloudflareDnsAdapter(args: DnsArgs): DnsAdapter {
       );
       return { id: output(args.zone), name: zone.name };
     }
-    return findZone(domain, args.accountId ?? DEFAULT_ACCOUNT_ID, opts.parent);
+    return findZone(
+      domain,
+      args.accountId ?? defaultAccountId(opts.parent),
+      opts.parent,
+    );
   }
 }

@@ -103,7 +103,8 @@ export function ssrSiteSuite(
         : undefined,
   });
 
-  // Cloudflare's API, which a Worker with Durable Object migrations reads
+  // Cloudflare's API, which SST 4's Worker with Durable Object migrations
+  // reads. SST 5's reads it with Cloudflare's provider, which the mock answers.
   const realFetch = globalThis.fetch;
   beforeAll(() => {
     globalThis.fetch = (async (url: string | URL, init?: RequestInit) =>

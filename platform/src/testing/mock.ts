@@ -1287,6 +1287,15 @@ const lookups: Record<string, (inputs: any) => Record<string, any>> = {
     ...inputs,
     json: JSON.stringify(inputs),
   }),
+  // The account Cloudflare's credentials list, for a component given none in
+  // a program Pulumi runs on its own
+  "cloudflare:index/getAccounts:getAccounts": () => ({
+    results: [{ id: "mock-account-id", name: "Mock" }],
+  }),
+  // A Worker's scripts, of which none are deployed, for its migration tag
+  "cloudflare:index/getWorkersScripts:getWorkersScripts": () => ({
+    results: [],
+  }),
   // A zone for each domain of two labels, like `example.com`
   "cloudflare:index/getZones:getZones": (inputs) => ({
     results: inputs.name?.split(".").length === 2 ? [zoneOf(inputs.name)] : [],

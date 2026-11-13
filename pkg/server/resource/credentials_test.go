@@ -13,7 +13,7 @@ func TestCredentials(t *testing.T) {
 	t.Run("Vercel's", func(t *testing.T) {
 		t.Setenv("VERCEL_API_TOKEN", "vercel-token")
 		req, _ := http.NewRequest("POST", "https://api.vercel.com/v4/domains/example.com/records", nil)
-		if err := NewVercelResource(context.Background()).authorize(req); err != nil {
+		if err := NewVercelResource(context.Background(), nil).authorize(req); err != nil {
 			t.Fatal(err)
 		}
 		if req.Header.Get("Authorization") != "Bearer vercel-token" {
@@ -21,10 +21,22 @@ func TestCredentials(t *testing.T) {
 		}
 	})
 
+	t.Run("Vercel's, from the provider's config", func(t *testing.T) {
+		t.Setenv("VERCEL_API_TOKEN", "vercel-token")
+		req, _ := http.NewRequest("POST", "https://api.vercel.com/v4/domains/example.com/records", nil)
+		token := func() string { return "configured" }
+		if err := NewVercelResource(context.Background(), token).authorize(req); err != nil {
+			t.Fatal(err)
+		}
+		if req.Header.Get("Authorization") != "Bearer configured" {
+			t.Fatalf("headers = %v", req.Header)
+		}
+	})
+
 	t.Run("Vercel's missing", func(t *testing.T) {
 		t.Setenv("VERCEL_API_TOKEN", "")
 		req, _ := http.NewRequest("POST", "https://api.vercel.com/v4/domains/example.com/records", nil)
-		if err := NewVercelResource(context.Background()).authorize(req); err == nil {
+		if err := NewVercelResource(context.Background(), nil).authorize(req); err == nil {
 			t.Fatal("no error without a token")
 		}
 	})

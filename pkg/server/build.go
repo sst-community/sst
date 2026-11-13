@@ -20,12 +20,16 @@ import (
 // exits. It touches no home, state or cloud: what the program builds is
 // written under the project's .sst folder, as SST's CLI writes a Pulumi
 // program's builds in sst dev.
-func ServeBuilds(ctx context.Context, cfgPath, version string, in io.Reader, out io.Writer) error {
+//
+// platform is where SST's platform files are, which a build reads, like a
+// Worker's unenv config: the sst package's platform folder, which the program
+// gives it. Empty, they're in the project's .sst/platform.
+func ServeBuilds(ctx context.Context, cfgPath, platform, version string, in io.Reader, out io.Writer) error {
 	s, err := New()
 	if err != nil {
 		return err
 	}
-	serverRuntime.Register(ctx, builds{cfgPath: cfgPath, runtimes: project.NewRuntimes(cfgPath, version)}, s.Rpc)
+	serverRuntime.Register(ctx, builds{cfgPath: cfgPath, platform: platform, runtimes: project.NewRuntimes(cfgPath, version)}, s.Rpc)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -49,9 +53,12 @@ func ServeBuilds(ctx context.Context, cfgPath, version string, in io.Reader, out
 // builds is what the Runtime calls need of the program
 type builds struct {
 	cfgPath  string
+	platform string
 	runtimes *runtime.Collection
 }
 
 func (b builds) PathConfig() string { return b.cfgPath }
+
+func (b builds) PlatformDir() string { return b.platform }
 
 func (b builds) Runtimes() *runtime.Collection { return b.runtimes }

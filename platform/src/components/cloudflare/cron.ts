@@ -3,7 +3,7 @@ import * as cf from "@pulumi/cloudflare";
 import { type ComponentArgs, component, named } from "../parts-component";
 import type { Input } from "../input";
 import { notAnExistingPart, notAnOption } from "../args";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { defaultAccountId } from "./helpers/account";
 import { workerArgsOf } from "./helpers/worker-part";
 import { Worker, type WorkerArgs } from "./worker";
 
@@ -168,7 +168,7 @@ export class Cron extends component("sst:cloudflare:Cron", parts) {
       ...worker,
     }).nodes.worker;
     this.part("trigger", {
-      accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: args.accountId ?? defaultAccountId(this),
       scriptName: script.scriptName,
       schedules: output(args.schedules).apply((schedules) =>
         schedules.map((cron) => ({ cron })),

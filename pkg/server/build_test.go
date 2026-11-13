@@ -25,7 +25,7 @@ func TestServeBuilds(t *testing.T) {
 	in, closeIn := io.Pipe()
 	outRead, out := io.Pipe()
 	served := make(chan error, 1)
-	go func() { served <- ServeBuilds(context.Background(), cfgPath, "dev", in, out) }()
+	go func() { served <- ServeBuilds(context.Background(), cfgPath, "", "dev", in, out) }()
 
 	line, err := bufio.NewReader(outRead).ReadString('\n')
 	if err != nil {

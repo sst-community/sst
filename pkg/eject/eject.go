@@ -75,9 +75,12 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 		states = append(states, StackState{Stack: name, Shown: shown})
 	}
 	now := time.Now()
-	plan, err := Build(states, Options{Project: project, Date: now.Format("2006-01-02")})
+	plan, err := Build(states, Options{Project: project, Date: now.Format("2006-01-02"), Root: root})
 	if err != nil {
 		return util.NewReadableError(err, err.Error())
+	}
+	if _, err := os.Stat(filepath.Join(root, WorkerFolder)); err == nil && len(plan.Files) > 0 && !dryRun {
+		return util.NewReadableError(nil, fmt.Sprintf("There's a %s folder beside Pulumi.yaml already. sst eject copies each Worker's last build there, so it doesn't eject again over it: move it away first.", WorkerFolder))
 	}
 	edited := map[string][]byte{}
 	for _, sp := range plan.Stacks {
@@ -85,7 +88,7 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 		for _, urn := range sp.Remove {
 			remove[urn] = true
 		}
-		if edited[sp.Stack], err = withoutResources(plains[sp.Stack], remove); err != nil {
+		if edited[sp.Stack], err = withoutResources(plains[sp.Stack], remove, sp.Inputs); err != nil {
 			return util.NewReadableError(err, fmt.Sprintf("Could not take SST's own resources out of the %q stack's state: %v", sp.Name, err))
 		}
 	}
@@ -109,8 +112,9 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 	var set []key
 	var imported []string
 	undo := func(cause error) error {
-		for _, file := range written {
-			os.Remove(file)
+		// A folder after what's in it
+		for i := len(written) - 1; i >= 0; i-- {
+			os.Remove(written[i])
 		}
 		for _, s := range set {
 			pulumi(cli, root, nil, "config", "rm", s.key, "--stack", s.stack)
@@ -137,6 +141,24 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 			return undo(err)
 		}
 		written = append(written, path)
+	}
+	if len(plan.Files) > 0 {
+		dir := filepath.Join(root, WorkerFolder)
+		if err := os.Mkdir(dir, 0755); err != nil {
+			return undo(err)
+		}
+		written = append(written, dir)
+		for _, file := range plan.Files {
+			data, err := os.ReadFile(file.From)
+			if err != nil {
+				return undo(err)
+			}
+			to := filepath.Join(root, filepath.FromSlash(file.Path))
+			if err := os.WriteFile(to, data, 0644); err != nil {
+				return undo(err)
+			}
+			written = append(written, to)
+		}
 	}
 	for _, sp := range plan.Stacks {
 		for _, setting := range sp.Config {
@@ -297,6 +319,9 @@ func report(out io.Writer, plan *Plan, project, root string, backups map[string]
 	if plan.Build != "" {
 		fmt.Fprintf(out, "Wrote %s, a build of a Node.js function with esbuild, to switch a function to.\n", rel(filepath.Join(root, BuildFile)))
 	}
+	if len(plan.Files) > 0 {
+		fmt.Fprintf(out, "Copied the last build of %s to %s, which the module and the state point at.\n", plural(len(plan.Files), "the Worker", fmt.Sprintf("each of the %d Workers", len(plan.Files))), rel(filepath.Join(root, WorkerFolder)))
+	}
 	stackChanges(out, plan, "Put", "Took", "and nothing out of the cloud")
 	var saved []string
 	for _, sp := range plan.Stacks {
@@ -326,15 +351,18 @@ func report(out io.Writer, plan *Plan, project, root string, backups map[string]
 	for _, use := range plan.Uses {
 		fmt.Fprintln(out, "     "+use+".")
 	}
+	if len(plan.Files) > 0 {
+		fmt.Fprintf(out, "     Commit %s with it: a Worker's code is uploaded from there.\n", WorkerFolder)
+	}
 	fmt.Fprintln(out, "  2. Take sst out of package.json, and run npm install.")
 	if updates {
-		fmt.Fprintln(out, "  3. Run pulumi preview on each stack: it updates what's listed above, and")
-		fmt.Fprintln(out, "     changes nothing else in the cloud.")
+		fmt.Fprintln(out, "  3. Run pulumi preview on each stack: it sets what's listed above to what")
+		fmt.Fprintln(out, "     it already is, and changes nothing else in the cloud.")
 	} else {
 		fmt.Fprintln(out, "  3. Run pulumi preview on each stack: it changes nothing in the cloud.")
 	}
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "To go back before you deploy, delete what sst eject wrote, and for each stack")
+	fmt.Fprintln(out, "To go back before you deploy, delete what sst eject wrote and copied, and for each stack")
 	fmt.Fprintf(out, "remove its %s config and put back its state:\n", ConfigNamespace)
 	for _, sp := range plan.Stacks {
 		fmt.Fprintf(out, "  pulumi stack import --file %s --stack %s\n", rel(backups[sp.Stack]), sp.Stack)
@@ -384,7 +412,7 @@ func stackChanges(out io.Writer, plan *Plan, put, took, after string) {
 		}
 		before = sp.Removed
 		if len(sp.Updates) > 0 {
-			fmt.Fprintf(out, "Wrote what the state%s doesn't have, so the first `pulumi up` updates it in place, to what it already is in AWS:\n", in)
+			fmt.Fprintf(out, "Wrote what the state%s doesn't have, so the first `pulumi up` sets it to what it already is in the cloud:\n", in)
 			for _, update := range sp.Updates {
 				fmt.Fprintln(out, "  "+update)
 			}
@@ -416,6 +444,9 @@ func preview(out io.Writer, plan *Plan) {
 			}
 			fmt.Fprintf(out, "Would put %s in the %q stack's config, as %s.\n", setting.Key, sp.Name, kind)
 		}
+	}
+	for _, file := range plan.Files {
+		fmt.Fprintf(out, "Would copy %s to %s.\n", file.From, file.Path)
 	}
 	stackChanges(out, plan, "Would put", "Would take", "and nothing out of the cloud")
 	for _, name := range plan.Skipped {

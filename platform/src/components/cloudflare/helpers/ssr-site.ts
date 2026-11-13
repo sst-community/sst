@@ -16,7 +16,7 @@ import {
   resolveWithUnknowns,
   withoutUnknowns,
 } from "../../aws/helpers/site-build";
-import { DEFAULT_ACCOUNT_ID } from "../account-id";
+import { defaultAccountId } from "./account";
 import { Worker, type WorkerArgs, checkDomain } from "../worker";
 import {
   DEFAULT_COMPATIBILITY_DATE,
@@ -211,7 +211,9 @@ export function ssrSite(
       await resolveWithUnknowns(normalizeCompatibility(server)),
     ) as { date?: string; flags?: string[] } | undefined;
     const accountId = withoutUnknowns(
-      await resolveWithUnknowns(args.accountId ?? DEFAULT_ACCOUNT_ID),
+      await resolveWithUnknowns(
+        args.accountId ?? defaultAccountId(builder.component),
+      ),
     ) as string | undefined;
     const config = createWranglerConfig({
       appName,

@@ -12,10 +12,11 @@ import (
 )
 
 // resources are the resources the provider serves, by type, with the AWS
-// setup and the Cloudflare credentials load and cloudflare give. Each is the
-// code the RPC serves SST 4's entries with, or, for what SST 4 wrote in
-// TypeScript, the same calls made in Go.
-func resources(load func() (aws.Config, error), cloudflare func() (*cf.API, error)) map[string]handler {
+// setup and the Cloudflare credentials load and cloudflare give, and the
+// Vercel token vercelToken gives, if any. Each is the code the RPC serves SST
+// 4's entries with, or, for what SST 4 wrote in TypeScript, the same calls
+// made in Go.
+func resources(load func() (aws.Config, error), cloudflare func() (*cf.API, error), vercelToken func() string) map[string]handler {
 	onAws := func(ctx context.Context) *sstresource.AwsResource { return sstresource.NewAwsResource(ctx, load) }
 	onCloudflare := func(ctx context.Context) *sstresource.CloudflareResource {
 		return sstresource.NewCloudflareResource(ctx, cloudflare)
@@ -83,7 +84,7 @@ func resources(load func() (aws.Config, error), cloudflare func() (*cf.API, erro
 		},
 		"sst:vercel:DnsRecord": typed[sstresource.VercelDnsRecordInputs, sstresource.VercelDnsRecordOutputs]{
 			open: func(ctx context.Context) implementation[sstresource.VercelDnsRecordInputs, sstresource.VercelDnsRecordOutputs] {
-				return &sstresource.VercelDnsRecord{VercelResource: sstresource.NewVercelResource(ctx)}
+				return &sstresource.VercelDnsRecord{VercelResource: sstresource.NewVercelResource(ctx, vercelToken)}
 			},
 		},
 	}

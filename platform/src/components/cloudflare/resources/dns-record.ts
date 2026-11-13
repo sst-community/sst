@@ -4,8 +4,8 @@ import {
   Input,
   Output,
 } from "@pulumi/pulumi";
-import { DEFAULT_ACCOUNT_ID } from "../account-id";
-import { withPlugin } from "../../plugin";
+import { defaultAccountId } from "../helpers/account";
+import { withCloudflarePlugin } from "../../plugin";
 
 export interface DnsRecordArgs {
   zoneId: Input<string>;
@@ -31,7 +31,9 @@ export interface DnsRecord {
  * record an AWS certificate needs: one that exists is taken as it is, and the
  * record is kept when it's deleted. One of SST's own resources, which the
  * `sst` binary serves as a Pulumi provider. It calls Cloudflare's API with the
- * CLI's credentials, which aren't in its inputs: those are saved to the state.
+ * CLI's credentials, or in a program Pulumi runs on its own, those of its
+ * component's Cloudflare provider (`withCloudflarePlugin`). They aren't in its
+ * inputs, which are saved to the state.
  */
 export class DnsRecord extends CustomResource {
   constructor(name: string, args: DnsRecordArgs, opts?: CustomResourceOptions) {
@@ -40,10 +42,10 @@ export class DnsRecord extends CustomResource {
       name,
       {
         ...args,
-        accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
+        accountId: args.accountId ?? defaultAccountId(opts?.parent),
         recordId: undefined,
       },
-      withPlugin(opts),
+      withCloudflarePlugin(opts),
     );
   }
 }

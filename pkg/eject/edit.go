@@ -10,9 +10,11 @@ import (
 
 // withoutResources is the state, as `pulumi stack export` printed it, with
 // the resources taken out, and every reference to them: as a dependency,
-// and as what a resource is deleted with. Everything else is kept as
-// written, its secrets encrypted as they were, for `pulumi stack import`.
-func withoutResources(data []byte, remove map[resource.URN]bool) ([]byte, error) {
+// and as what a resource is deleted with, and the inputs in set set to their
+// values, in a resource's outputs too where it has them. Everything else is
+// kept as written, its secrets encrypted as they were, for `pulumi stack
+// import`.
+func withoutResources(data []byte, remove map[resource.URN]bool, set map[resource.URN]map[string]string) ([]byte, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
 		return nil, fmt.Errorf("reading the stack's state: %w", err)
@@ -27,7 +29,7 @@ func withoutResources(data []byte, remove map[resource.URN]bool) ([]byte, error)
 	}
 
 	kept := make([]map[string]json.RawMessage, 0, len(resources))
-	found := 0
+	found, setFound := 0, 0
 	for _, r := range resources {
 		var urn resource.URN
 		if err := json.Unmarshal(r["urn"], &urn); err != nil {
@@ -36,6 +38,12 @@ func withoutResources(data []byte, remove map[resource.URN]bool) ([]byte, error)
 		if remove[urn] {
 			found++
 			continue
+		}
+		if values := set[urn]; values != nil {
+			if err := setValues(r, values); err != nil {
+				return nil, fmt.Errorf("reading the stack's state: %w", err)
+			}
+			setFound++
 		}
 		var parent resource.URN
 		if raw, ok := r["parent"]; ok {
@@ -93,7 +101,7 @@ func withoutResources(data []byte, remove map[resource.URN]bool) ([]byte, error)
 		}
 		kept = append(kept, r)
 	}
-	if found != len(remove) {
+	if found != len(remove) || setFound != len(set) {
 		return nil, fmt.Errorf("the stack's state changed while it was read")
 	}
 
@@ -105,6 +113,31 @@ func withoutResources(data []byte, remove map[resource.URN]bool) ([]byte, error)
 		return nil, err
 	}
 	return marshal(top)
+}
+
+// setValues sets a resource's inputs, and its outputs of the same keys
+func setValues(r map[string]json.RawMessage, values map[string]string) error {
+	for _, field := range []string{"inputs", "outputs"} {
+		raw, ok := r[field]
+		if !ok {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return err
+		}
+		for key, value := range values {
+			if _, ok := fields[key]; !ok && field == "outputs" {
+				continue
+			}
+			fields[key], _ = json.Marshal(value)
+		}
+		var err error
+		if r[field], err = marshal(fields); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func withoutURNs(urns []resource.URN, remove map[resource.URN]bool) []resource.URN {

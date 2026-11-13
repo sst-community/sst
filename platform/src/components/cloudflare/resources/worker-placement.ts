@@ -4,8 +4,8 @@ import {
   Input,
   Output,
 } from "@pulumi/pulumi";
-import { DEFAULT_ACCOUNT_ID } from "../account-id";
-import { withPlugin } from "../../plugin";
+import { defaultAccountId } from "../helpers/account";
+import { withCloudflarePlugin } from "../../plugin";
 
 /**
  * Where a Worker runs: one of Smart Placement (`mode`), or near a region, a
@@ -32,8 +32,10 @@ export interface WorkerPlacement {
 /**
  * Where a Worker runs, in its script's settings, and back to Cloudflare's
  * default when it's deleted. One of SST's own resources, which the `sst`
- * binary serves as a Pulumi provider. It calls Cloudflare's API with the
- * CLI's credentials, which aren't in its inputs: those are saved to the state.
+ * binary serves as a Pulumi provider. It calls Cloudflare's API with the CLI's
+ * credentials, or in a program Pulumi runs on its own, those of its
+ * component's Cloudflare provider (`withCloudflarePlugin`). They aren't in its
+ * inputs, which are saved to the state.
  */
 export class WorkerPlacement extends CustomResource {
   constructor(
@@ -44,8 +46,8 @@ export class WorkerPlacement extends CustomResource {
     super(
       "sst:cloudflare:WorkerPlacement",
       name,
-      { ...args, accountId: args.accountId ?? DEFAULT_ACCOUNT_ID },
-      withPlugin(opts),
+      { ...args, accountId: args.accountId ?? defaultAccountId(opts?.parent) },
+      withCloudflarePlugin(opts),
     );
   }
 }

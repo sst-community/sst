@@ -16,7 +16,7 @@ import {
   toSeconds,
 } from "../duration";
 import { binding } from "./binding";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { defaultAccountId } from "./helpers/account";
 import { ownId, useExisting } from "./helpers/lookup";
 import { workerArgsOf } from "./helpers/worker-part";
 import { Worker, type WorkerArgs } from "./worker";
@@ -234,7 +234,7 @@ export class Queue extends component("sst:cloudflare:Queue", parts) {
     };
     // A queue that's already deployed is used as it is. Cloudflare's provider
     // looks one up by its account and id.
-    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
+    const accountId = args.accountId ?? defaultAccountId(this);
     const existing = args.existing?.queue;
     if (existing !== undefined)
       useExisting(existing, accountId, (id) => this.lookupPart("queue", id));
@@ -324,7 +324,7 @@ export class Queue extends component("sst:cloudflare:Queue", parts) {
     const script = this.part("subscriber", { accountId, ...worker }).nodes
       .worker;
     this.part("consumer", {
-      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: accountId ?? defaultAccountId(this),
       deadLetterQueue: dlq?.queue,
       queueId: this.id,
       scriptName: script.scriptName,

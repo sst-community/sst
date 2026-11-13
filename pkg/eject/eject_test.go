@@ -1,8 +1,11 @@
 package eject
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -253,7 +256,7 @@ func TestWithoutResources(t *testing.T) {
 	for _, urn := range plan.Stacks[0].Remove {
 		remove[urn] = true
 	}
-	edited, err := withoutResources(data, remove)
+	edited, err := withoutResources(data, remove, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +305,7 @@ func TestWithoutResources(t *testing.T) {
 			urn = r.URN
 		}
 	}
-	if _, err := withoutResources(data, map[resource.URN]bool{urn: true}); err == nil || !strings.Contains(err.Error(), "FilesBucket is in Files") {
+	if _, err := withoutResources(data, map[resource.URN]bool{urn: true}, nil); err == nil || !strings.Contains(err.Error(), "FilesBucket is in Files") {
 		t.Errorf("got %v", err)
 	}
 }
@@ -668,5 +671,169 @@ func TestBuildTakesOutTheRoleLookupAndTheImagePrune(t *testing.T) {
 	// The proxy stays, without waiting on what left
 	if !strings.Contains(plan.Module, `new aws.rds.Proxy(`) || strings.Contains(plan.Module, "RoleLookup") {
 		t.Errorf("the module has the proxy without the lookup:\n%s", plan.Module)
+	}
+}
+
+// Cloudflare's and Vercel's own resources of SST's: a Worker's URL is made
+// with Pulumi's resource, and its placement and a DNS record are left as they
+// are, as Pulumi's provider can't set a placement
+func TestBuildWritesAWorkersURL(t *testing.T) {
+	stack := "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev"
+	cf := "urn:pulumi:dev::shop::pulumi:providers:cloudflare::default_6_15_0"
+	sst := "urn:pulumi:dev::shop::pulumi:providers:sst::sst-cloudflare"
+	worker := "urn:pulumi:dev::shop::sst:cloudflare:Worker::Edge"
+	script := "urn:pulumi:dev::shop::sst:cloudflare:Worker$cloudflare:index/workersScript:WorkersScript::EdgeScript"
+	router := "urn:pulumi:dev::shop::sst:aws:Router::Web"
+	data := editFixture(t, func(resources []map[string]any) []map[string]any {
+		return append(resources,
+			map[string]any{"urn": cf, "custom": true, "id": "0ccc", "type": "pulumi:providers:cloudflare", "inputs": map[string]any{"version": "6.15.0"}},
+			map[string]any{"urn": sst, "custom": true, "id": "0aaa", "type": "pulumi:providers:sst", "inputs": map[string]any{"cloudflareApiToken": map[string]any{sig.Key: sig.Secret, "ciphertext": "x"}}},
+			map[string]any{"urn": worker, "custom": false, "type": "sst:cloudflare:Worker", "parent": stack},
+			map[string]any{
+				"urn": script, "custom": true, "id": "shop-dev-edgescript", "type": "cloudflare:index/workersScript:WorkersScript", "parent": worker, "provider": cf + "::0ccc",
+				"inputs":  map[string]any{"accountId": "acct", "scriptName": "shop-dev-edgescript", "content": "export default {}"},
+				"outputs": map[string]any{"accountId": "acct", "scriptName": "shop-dev-edgescript", "etag": "e1"},
+			},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::sst:cloudflare:Worker$sst:cloudflare:WorkerUrl::EdgeUrl", "custom": true, "id": "shop-dev-edgescript",
+				"type": "sst:cloudflare:WorkerUrl", "parent": worker, "provider": sst + "::0aaa",
+				"inputs":               map[string]any{"accountId": "acct", "scriptName": "shop-dev-edgescript", "enabled": true, "etag": "e1"},
+				"dependencies":         []any{script},
+				"propertyDependencies": map[string]any{"scriptName": []any{script}, "etag": []any{script}},
+			},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::sst:cloudflare:Worker$sst:cloudflare:WorkerPlacement::EdgePlacement", "custom": true, "id": "shop-dev-edgescript",
+				"type": "sst:cloudflare:WorkerPlacement", "parent": worker, "provider": sst + "::0aaa",
+				"inputs":               map[string]any{"accountId": "acct", "scriptName": "shop-dev-edgescript", "mode": "smart", "etag": "e1"},
+				"dependencies":         []any{script},
+				"propertyDependencies": map[string]any{"scriptName": []any{script}},
+			},
+			map[string]any{"urn": router, "custom": false, "type": "sst:aws:Router", "parent": stack},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::sst:aws:Router$sst:cloudflare:DnsRecord::WebCaaRecord", "custom": true, "id": "rec1",
+				"type": "sst:cloudflare:DnsRecord", "parent": router, "provider": sst + "::0aaa",
+				"inputs": map[string]any{"zoneId": "zone", "type": "CAA", "name": "web.example.com"},
+			},
+			map[string]any{
+				"urn": "urn:pulumi:dev::shop::sst:aws:Router$sst:vercel:DnsRecord::WebCaaWildcardRecord", "custom": true, "id": "rec2",
+				"type": "sst:vercel:DnsRecord", "parent": router, "provider": sst + "::0aaa",
+				"inputs": map[string]any{"domain": "example.com", "type": "CAA", "name": "web"},
+			},
+		)
+	})
+	plan, err := build(t, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[string]string{}
+	for _, removed := range plan.Stacks[0].Removed {
+		reasons[removed.Name] = removed.Why
+	}
+	for name, want := range map[string]string{
+		"EdgeUrl":              "turns on or off with Pulumi's WorkersScriptSubdomain",
+		"EdgePlacement":        "which stays until its script is next uploaded, and is Cloudflare's default after that",
+		"WebCaaRecord":         "a DNS record, like the CAA record a certificate needs, which stays",
+		"WebCaaWildcardRecord": "a DNS record, like the CAA record a certificate needs, which stays",
+		"sst-cloudflare":       "SST's provider",
+	} {
+		if !strings.Contains(reasons[name], want) {
+			t.Errorf("%s leaves the state as %q", name, reasons[name])
+		}
+	}
+	for _, want := range []string{
+		"new cloudflare.WorkersScriptSubdomain(",
+		`"EdgeUrl",`,
+		"enabled: true,",
+		"scriptName: edgeScript.scriptName,",
+	} {
+		if !strings.Contains(plan.Module, want) {
+			t.Errorf("the module has no %q:\n%s", want, plan.Module)
+		}
+	}
+	if strings.Contains(plan.Module, "WorkerUrl") || strings.Contains(plan.Module, "placement") || strings.Contains(plan.Module, "DnsRecord") {
+		t.Errorf("the module has SST's own resources:\n%s", plan.Module)
+	}
+	updates := strings.Join(plan.Stacks[0].Updates, "\n")
+	if want := "EdgeUrl is made with Pulumi's WorkersScriptSubdomain, which turns the Worker's workers.dev URL on, as it already is"; !strings.Contains(updates, want) || strings.Contains(updates, "placement") {
+		t.Errorf("the updates are %q", updates)
+	}
+}
+
+// A Worker's code is its last build, in the project's .sst, which a checkout
+// of the program doesn't have: it's copied beside the module, and the module
+// and the state point at the copy. A path in the project is written from it.
+func TestBuildCopiesAWorkersBuild(t *testing.T) {
+	root := t.TempDir()
+	built := filepath.Join(root, ".sst", "artifacts", "Edge-src", "worker.ts")
+	if err := os.MkdirAll(filepath.Dir(built), 0755); err != nil {
+		t.Fatal(err)
+	}
+	code := "export default { fetch: () => new Response('hi') };\n"
+	if err := os.WriteFile(built, []byte(code), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(code)))
+	stack := "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev"
+	cf := "urn:pulumi:dev::shop::pulumi:providers:cloudflare::default_6_15_0"
+	worker := "urn:pulumi:dev::shop::sst:cloudflare:Worker::Edge"
+	script := "urn:pulumi:dev::shop::sst:cloudflare:Worker$cloudflare:index/workersScript:WorkersScript::EdgeScript"
+	state := func(sum string) []byte {
+		return editFixture(t, func(resources []map[string]any) []map[string]any {
+			return append(resources,
+				map[string]any{"urn": cf, "custom": true, "id": "0ccc", "type": "pulumi:providers:cloudflare", "inputs": map[string]any{"version": "6.15.0"}},
+				map[string]any{"urn": worker, "custom": false, "type": "sst:cloudflare:Worker", "parent": stack},
+				map[string]any{
+					"urn": script, "custom": true, "id": "shop-dev-edgescript", "type": "cloudflare:index/workersScript:WorkersScript", "parent": worker, "provider": cf + "::0ccc",
+					"inputs": map[string]any{
+						"accountId": "acct", "scriptName": "shop-dev-edgescript", "mainModule": "placeholder",
+						"contentFile": built, "contentSha256": sum,
+						"assets": map[string]any{"directory": filepath.Join(root, "sites", "web")},
+					},
+					"outputs": map[string]any{"scriptName": "shop-dev-edgescript", "contentFile": built},
+				},
+			)
+		})
+	}
+	options := fixtureOptions
+	options.Root = root
+	plan, err := Build([]StackState{{Stack: "dev", Shown: state(sum)}}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Files) != 1 || plan.Files[0] != (CopiedFile{Path: "sst-ejected-workers/EdgeScript.js", From: built}) {
+		t.Errorf("the eject copies %+v", plan.Files)
+	}
+	for _, want := range []string{
+		`import * as path from "path";`,
+		`contentFile: path.resolve("sst-ejected-workers/EdgeScript.js"),`,
+		`assets: { directory: path.resolve("sites/web") },`,
+	} {
+		if !strings.Contains(plan.Module, want) {
+			t.Errorf("the module has no %q:\n%s", want, plan.Module)
+		}
+	}
+	copied := filepath.Join(root, "sst-ejected-workers", "EdgeScript.js")
+	if got := plan.Stacks[0].Inputs[resource.URN(script)]; got["contentFile"] != copied {
+		t.Errorf("the state's contentFile is set to %v", got)
+	}
+
+	// The state, with the copy in its inputs and outputs, and no other change
+	edited, err := withoutResources(state(sum), nil, plan.Stacks[0].Inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed export
+	if err := json.Unmarshal(edited, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range parsed.Deployment.Resources {
+		if string(r.URN) == script && (r.Inputs["contentFile"] != copied || r.Outputs["contentFile"] != copied || r.Inputs["contentSha256"] != sum) {
+			t.Errorf("the edited state has %v and %v", r.Inputs, r.Outputs)
+		}
+	}
+
+	// Another build than the state's isn't copied
+	if _, err := Build([]StackState{{Stack: "dev", Shown: state("0000")}}, options); err == nil || !strings.Contains(err.Error(), "EdgeScript's code is its last build") {
+		t.Errorf("another build is copied: %v", err)
 	}
 }

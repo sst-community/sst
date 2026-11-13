@@ -4,6 +4,7 @@ import {
   type Output,
   ProviderResource,
   type Resource,
+  secret,
 } from "@pulumi/pulumi";
 import { underCore } from "./context";
 import { sstPackage } from "./sst-package";
@@ -50,18 +51,54 @@ export function withPlugin<
  * region and roles (pkg/provider/aws.go). Both then reach the same account,
  * with the same credentials. One is made for each AWS provider.
  */
-export function withAwsPlugin<
-  T extends {
-    parent?: Resource;
-    provider?: ProviderResource;
-    version?: string;
-    pluginDownloadURL?: string;
-  },
->(opts?: T): T | undefined {
+export function withAwsPlugin<T extends PluginOptions>(
+  opts?: T,
+): T | undefined {
+  return withSetup("aws", opts);
+}
+
+/**
+ * The options SST's own Cloudflare resources are registered with, as
+ * `withAwsPlugin` for AWS: under SST's CLI as given, as the CLI gives the
+ * provider its credentials in its environment, and in a program Pulumi runs
+ * on its own, an SST provider whose config has the credentials of the
+ * Cloudflare provider their component uses (pkg/provider/cloudflare.go), kept
+ * in the state as a secret, as Pulumi keeps that provider's own.
+ */
+export function withCloudflarePlugin<T extends PluginOptions>(
+  opts?: T,
+): T | undefined {
+  return withSetup("cloudflare", opts);
+}
+
+/**
+ * The options SST's own Vercel resources are registered with, as
+ * `withCloudflarePlugin` for Cloudflare.
+ */
+export function withVercelPlugin<T extends PluginOptions>(
+  opts?: T,
+): T | undefined {
+  return withSetup("vercel", opts);
+}
+
+type PluginOptions = {
+  parent?: Resource;
+  provider?: ProviderResource;
+  version?: string;
+  pluginDownloadURL?: string;
+};
+
+// The clouds SST's provider takes a setup for
+type Cloud = "aws" | "cloudflare" | "vercel";
+
+function withSetup<T extends PluginOptions>(
+  cloud: Cloud,
+  opts?: T,
+): T | undefined {
   if (underCore() || !sstPackage() || opts?.provider) return withPlugin(opts);
   return {
     ...opts,
-    provider: sstProvider(opts?.parent?.getProvider("aws::")),
+    provider: sstProvider(cloud, opts?.parent?.getProvider(`${cloud}::`)),
   } as T;
 }
 
@@ -77,29 +114,41 @@ class SstProvider extends ProviderResource {
   }
 }
 
-// The SST provider made for each AWS provider in this run, the stack's
-// default one under undefined
+// The SST provider made for each provider of a cloud in this run, the
+// stack's default one under undefined
 const providers = perRun(() => ({
-  made: new Map<ProviderResource | undefined, ProviderResource>(),
+  made: new Map<string, Map<ProviderResource | undefined, ProviderResource>>(),
   names: new Set<string>(),
 }));
 
-function sstProvider(aws: ProviderResource | undefined) {
+function sstProvider(cloud: Cloud, given: ProviderResource | undefined) {
   const { made, names } = providers();
-  const found = made.get(aws);
+  const ofCloud = made.get(cloud) ?? new Map();
+  made.set(cloud, ofCloud);
+  const found = ofCloud.get(given);
   if (found) return found;
-  // Named after the AWS provider, as a stack's provider names are its own
-  const base = aws ? `sst-${(aws as { __name?: string }).__name}` : "sst";
+  // Named after the provider, as a stack's provider names are its own. The
+  // stack's default AWS one is `sst`, as it was before SST's provider took
+  // other clouds' setups.
+  const base = given
+    ? `sst-${(given as { __name?: string }).__name}`
+    : cloud === "aws"
+      ? "sst"
+      : `sst-${cloud}`;
   let name = base;
   for (let n = 2; names.has(name); n++) name = `${base}-${n}`;
   names.add(name);
   const pkg = sstPackage()!;
-  const provider = new SstProvider(
-    name,
-    aws ? explicitSetup(aws) : stackSetup(),
-    { version: pkg.version, pluginDownloadURL },
-  );
-  made.set(aws, provider);
+  const setup = {
+    aws: () => (given ? explicitSetup(given) : stackSetup()),
+    cloudflare: () => cloudflareSetup(given),
+    vercel: () => vercelSetup(given),
+  }[cloud]();
+  const provider = new SstProvider(name, setup, {
+    version: pkg.version,
+    pluginDownloadURL,
+  });
+  ofCloud.set(given, provider);
   return provider;
 }
 
@@ -162,4 +211,44 @@ function isSecret(key: string): boolean {
     pulumi.runtime as { isConfigSecret?: (key: string) => boolean }
   ).isConfigSecret;
   return check?.(key) ?? false;
+}
+
+// The credentials of a Cloudflare provider of the program's, or of the stack's
+// default one as its config sets it up, as secrets. With none, SST's provider
+// reads the environment's, as Pulumi's does.
+function cloudflareSetup(
+  given: ProviderResource | undefined,
+): Record<string, Input<string | undefined>> {
+  if (given) {
+    const { apiToken, apiKey, email } = given as {
+      apiToken?: Output<string | undefined>;
+      apiKey?: Output<string | undefined>;
+      email?: Output<string | undefined>;
+    };
+    return {
+      ...(apiToken ? { cloudflareApiToken: secret(apiToken) } : {}),
+      ...(apiKey ? { cloudflareApiKey: secret(apiKey) } : {}),
+      ...(email ? { cloudflareEmail: email } : {}),
+    };
+  }
+  const config = new pulumi.Config("cloudflare");
+  const apiToken = config.getSecret("apiToken");
+  const apiKey = config.getSecret("apiKey");
+  const email = config.get("email");
+  return {
+    ...(apiToken ? { cloudflareApiToken: apiToken } : {}),
+    ...(apiKey ? { cloudflareApiKey: apiKey } : {}),
+    ...(email ? { cloudflareEmail: email } : {}),
+  };
+}
+
+// The token of a Vercel provider of the program's, or of the stack's default
+// one, as a secret. With none, SST's provider reads VERCEL_API_TOKEN.
+function vercelSetup(
+  given: ProviderResource | undefined,
+): Record<string, Input<string | undefined>> {
+  const apiToken = given
+    ? (given as { apiToken?: Output<string | undefined> }).apiToken
+    : new pulumi.Config("vercel").getSecret("apiToken");
+  return apiToken ? { vercelApiToken: secret(apiToken) } : {};
 }

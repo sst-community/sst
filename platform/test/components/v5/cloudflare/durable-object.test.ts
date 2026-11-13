@@ -32,8 +32,9 @@ describe("DurableObject", () => {
     await import("../../../../src/components/cloudflare/takeover/index");
   });
 
-  // Cloudflare's API, which a Worker with Durable Object migrations reads
-  // its current migration tag from: none of its scripts are deployed
+  // Cloudflare's API, which SST 4's Worker with Durable Object migrations
+  // reads its current migration tag from: none of its scripts are deployed.
+  // SST 5's reads it with Cloudflare's provider, which the mock answers.
   const realFetch = globalThis.fetch;
   beforeAll(() => {
     globalThis.fetch = (async (url: string | URL, init?: RequestInit) =>

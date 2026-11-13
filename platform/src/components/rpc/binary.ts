@@ -31,13 +31,20 @@ export async function callBinary<T = any>(
 const buildServer = lazy(
   () =>
     new Promise<string>((resolve, reject) => {
-      const { root, work } = context().paths;
+      const { root, work, platform } = context().paths;
       // Its log, where SST's CLI keeps a Pulumi project's
       const log = path.join(work, "log", "build-server.log");
       fs.mkdirSync(path.dirname(log), { recursive: true });
       const child = spawn(binary(), ["build-server"], {
         cwd: root,
-        env: { ...process.env, SST_SKIP_LOCAL: "true", SST_LOG: log },
+        // The platform's files a build reads, like a Worker's unenv config,
+        // which are in the package
+        env: {
+          ...process.env,
+          SST_SKIP_LOCAL: "true",
+          SST_LOG: log,
+          SST_PLATFORM_DIR: platform,
+        },
         stdio: ["pipe", "pipe", "pipe"],
       });
       let out = "";

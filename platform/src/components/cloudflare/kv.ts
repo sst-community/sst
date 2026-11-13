@@ -5,7 +5,7 @@ import { getArgs } from "../args";
 import { VisibleError } from "../error";
 import type { Input } from "../input";
 import { binding } from "./binding";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { defaultAccountId } from "./helpers/account";
 import { ownId, useExisting } from "./helpers/lookup";
 
 const parts = {
@@ -93,7 +93,7 @@ export class Kv extends component("sst:cloudflare:Kv", parts) {
   ) {
     super(name, args, opts);
 
-    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
+    const accountId = args.accountId ?? defaultAccountId(this);
 
     // A namespace that's already deployed is used as it is. Its ID is looked
     // up in the account, as Cloudflare's provider takes it.

@@ -982,8 +982,10 @@ describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => 
   let run: Run;
   const realFetch = globalThis.fetch;
   // The scripts Cloudflare's API lists, with their Durable Object migration
-  // tags, which a Worker with migrations reads
+  // tags, which a Worker with migrations reads: SST 4's from the API, and
+  // 5.0's with Cloudflare's provider
   let scripts: { id: string; migration_tag: string }[] = [];
+  const listScripts = "cloudflare:index/getWorkersScripts:getWorkersScripts";
   beforeAll(async () => {
     const pulumi = replay("cloudflare.json", "reccf", mainStates);
     // Where the lab's CLI put the platform: SST's own Workers are built from
@@ -998,6 +1000,12 @@ describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => 
       resources.find((r: any) => r.urn.endsWith("::CfAstroWorkerScript")).inputs
         .assets.config.headers,
     );
+    lookups[listScripts] = () => ({
+      results: scripts.map(({ id, migration_tag }) => ({
+        id,
+        migrationTag: migration_tag,
+      })),
+    });
     // Nothing else of Cloudflare's API is called
     globalThis.fetch = (async (url: string | URL) => {
       if (
@@ -1033,6 +1041,7 @@ describe("the lab's Cloudflare groups, as SST 4 deployed them from main", () => 
   }, REPLAY);
   afterAll(() => {
     globalThis.fetch = realFetch;
+    delete lookups[listScripts];
     delete process.env.CLOUDFLARE_DEFAULT_ACCOUNT_ID;
     fs.rmSync(path.join(app, "sites"), { recursive: true, force: true });
     fs.rmSync(path.join(app, ".sst"), { recursive: true, force: true });

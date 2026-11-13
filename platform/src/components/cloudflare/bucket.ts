@@ -3,7 +3,7 @@ import * as cf from "@pulumi/cloudflare";
 import { type ComponentArgs, component } from "../parts-component";
 import type { Input } from "../input";
 import { binding } from "./binding";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { defaultAccountId } from "./helpers/account";
 import { useExisting } from "./helpers/lookup";
 
 const parts = {
@@ -95,7 +95,7 @@ export class Bucket extends component("sst:cloudflare:Bucket", parts) {
   ) {
     super(name, args, opts);
 
-    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
+    const accountId = args.accountId ?? defaultAccountId(this);
 
     // A bucket that's already deployed is used as it is. Cloudflare's
     // provider looks it up by its account, name and jurisdiction, which is

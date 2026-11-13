@@ -1,23 +1,30 @@
 package eject
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/sig"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/tokens"
 )
 
 // ConfigNamespace is where the module reads the secret inputs it was given,
 // in the stack's config
 const ConfigNamespace = "sst-ejected"
 
-// ModuleFile and BuildFile are the files sst eject writes beside Pulumi.yaml
+// ModuleFile and BuildFile are the files sst eject writes beside Pulumi.yaml,
+// and WorkerFolder the folder it copies each Cloudflare Worker's last build
+// to
 const (
-	ModuleFile = "sst-ejected.ts"
-	BuildFile  = "sst-ejected-build.ts"
+	ModuleFile   = "sst-ejected.ts"
+	BuildFile    = "sst-ejected-build.ts"
+	WorkerFolder = "sst-ejected-workers"
 )
 
 // Options says what the module is written from
@@ -26,6 +33,10 @@ type Options struct {
 	Project string
 	// The day it's written, for the module's first line
 	Date string
+	// The folder of the project's Pulumi.yaml. A path under it is written
+	// from it, and a Worker's last build, in its .sst, is copied beside the
+	// module. Without it, paths are written as the state has them.
+	Root string
 }
 
 // StackState is a stack's state, as `pulumi stack export --show-secrets`
@@ -55,6 +66,17 @@ type Plan struct {
 	// What the module's function is given of the program's own, like
 	// `parents.shop: the program's "Shop" component`
 	Takes []string
+	// Each Worker's last build, copied beside the module, which a checkout
+	// of the program doesn't have in .sst
+	Files []CopiedFile
+}
+
+// CopiedFile is a file the eject copies into the project
+type CopiedFile struct {
+	// Where it goes, from the project's folder, with slashes
+	Path string
+	// Where it is
+	From string
 }
 
 // StackPlan is what an eject changes in one stack
@@ -72,6 +94,9 @@ type StackPlan struct {
 	// What the module has that its state doesn't, which the first `pulumi
 	// up` updates in place to what it already is in the cloud
 	Updates []string
+	// Inputs it sets in the state, by resource, to what the module has: a
+	// Worker's code, copied, with the same content
+	Inputs map[resource.URN]map[string]string
 }
 
 // Setting is a value set in a stack's config: a string as it is, and
@@ -120,7 +145,14 @@ var ownResources = map[string]string{
 	"sst:aws:DistributionDeploymentWaiter": "a wait for the CDN to deploy, with nothing in the cloud",
 	"sst:aws:RdsRoleLookup":                "a wait for the role RDS gives a proxy, which is there now: nothing in the cloud",
 	"sst:aws:MicrovmImagePrune":            "the deletion of a MicroVM image's old versions after each build, with nothing in the cloud: nothing deletes them after the eject, and an image keeps up to 50",
+	"sst:cloudflare:DnsRecord":             "a DNS record, like the CAA record a certificate needs, which stays: SST's never deletes one",
+	"sst:cloudflare:WorkerPlacement":       "where the Worker runs, which stays until its script is next uploaded, and is Cloudflare's default after that: Pulumi's Cloudflare provider can't set it",
+	"sst:vercel:DnsRecord":                 "a DNS record, like the CAA record a certificate needs, which stays: SST's never deletes one",
 }
+
+// The type of Pulumi's resource the module makes a Worker's workers.dev URL
+// with, in place of SST's
+const subdomainType = "cloudflare:index/workersScriptSubdomain:WorkersScriptSubdomain"
 
 // generator reads one stack's state: what the eject does with each
 // resource, and each one the module makes, as that stack has it
@@ -144,6 +176,9 @@ type generator struct {
 	// made, by the function's name, then by the function
 	envUpdates map[string]map[string]any
 	addedEnv   map[resource.URN]map[string]any
+	// Where a Worker's code is copied to, by its script, from the project's
+	// folder
+	workerFiles map[resource.URN]string
 }
 
 func (g *generator) remove(r *stateResource, why string) {
@@ -208,6 +243,12 @@ func (g *generator) classify() error {
 				g.envUpdates[fn][key] = value
 			}
 			g.remove(r, "what addEnvironment added to "+fn+"'s environment, which the module puts in its environment")
+		case r.Custom && r.providerURN().Type() == "pulumi:providers:sst" && r.Type == "sst:cloudflare:WorkerUrl":
+			// The URL is turned on or off by Pulumi's resource in the module
+			if g.scriptOf(r) == nil {
+				return fmt.Errorf("%s (%s) is for a Worker's script that isn't in the state.", name, r.Type)
+			}
+			g.remove(r, "the Worker's workers.dev URL, which the module turns on or off with Pulumi's WorkersScriptSubdomain")
 		case r.Custom && r.providerURN().Type() == "pulumi:providers:sst":
 			why, ok := ownResources[r.Type]
 			if !ok {
@@ -265,7 +306,29 @@ func (g *generator) classify() error {
 		keys := sortedKeys(added)
 		g.plan.Updates = append(g.plan.Updates, fmt.Sprintf("%s's environment gets %s, which addEnvironment added after it was made", found.name(), strings.Join(keys, ", ")))
 	}
+	// A Worker's URL, made with Pulumi's resource where SST's was, which the
+	// first `pulumi up` creates by turning the URL on or off, as it already is
+	var withSubdomains []*stateResource
+	for _, r := range g.resources {
+		withSubdomains = append(withSubdomains, r)
+		if g.role[r.URN] != roleRemove || r.Type != "sst:cloudflare:WorkerUrl" {
+			continue
+		}
+		sub := g.subdomainOf(r)
+		withSubdomains = append(withSubdomains, sub)
+		g.byURN[sub.URN] = sub
+		g.role[sub.URN] = rolePart
+		state := "off"
+		if on, _ := sub.Inputs["enabled"].(bool); on {
+			state = "on"
+		}
+		g.plan.Updates = append(g.plan.Updates, fmt.Sprintf("%s is made with Pulumi's WorkersScriptSubdomain, which turns the Worker's workers.dev URL %s, as it already is", sub.name(), state))
+	}
+	g.resources = withSubdomains
 	sort.Strings(g.plan.Updates)
+	if err := g.copyWorkers(); err != nil {
+		return err
+	}
 	// A part made with a provider of the program's is given it by name, and
 	// one SST made isn't written yet
 	for _, r := range g.resources {
@@ -325,6 +388,105 @@ func (g *generator) classify() error {
 		}
 	}
 	return nil
+}
+
+// copyWorkers copies each Worker's code, its last build in the project's
+// .sst, which a checkout of the program doesn't have, beside the module. The
+// module and the state point at the copy, which has the same content, so
+// nothing changes in the cloud.
+func (g *generator) copyWorkers() error {
+	root := g.shared.opts.Root
+	if root == "" {
+		return nil
+	}
+	work := filepath.Join(root, ".sst") + string(filepath.Separator)
+	for _, r := range g.resources {
+		if g.role[r.URN] != rolePart || r.Type != "cloudflare:index/workersScript:WorkersScript" {
+			continue
+		}
+		file, _ := r.Inputs["contentFile"].(string)
+		if !strings.HasPrefix(file, work) {
+			continue
+		}
+		data, err := os.ReadFile(file)
+		sum := fmt.Sprintf("%x", sha256.Sum256(data))
+		if err != nil || sum != r.Inputs["contentSha256"] {
+			return fmt.Errorf("%s's code is its last build, at %s, which isn't there now, or is another build. Run `pulumi up` on the %q stack, then eject.", r.name(), file, g.plan.Name)
+		}
+		rel := WorkerFolder + "/" + r.name() + ".js"
+		// Another stack's copy of it, which has to be the same build
+		copied := false
+		for _, file := range g.shared.files {
+			if file.Path != rel {
+				continue
+			}
+			if file.sum != sum {
+				return fmt.Errorf("%s's code isn't the same in every stack, and sst eject keeps one build of each Worker. Deploy each stack with the same code, then eject.", r.name())
+			}
+			copied = true
+		}
+		if !copied {
+			g.shared.files = append(g.shared.files, copiedFile{CopiedFile{Path: rel, From: file}, sum})
+		}
+		g.workerFiles[r.URN] = rel
+		if g.plan.Inputs == nil {
+			g.plan.Inputs = map[resource.URN]map[string]string{}
+		}
+		g.plan.Inputs[r.URN] = map[string]string{"contentFile": filepath.Join(root, filepath.FromSlash(rel))}
+	}
+	return nil
+}
+
+// projectPath is a path under the project's folder, written from it
+func (g *generator) projectPath(rel string) expr {
+	g.shared.usesPath = true
+	return raw(fmt.Sprintf("path.resolve(%s)", quote(filepath.ToSlash(rel))))
+}
+
+// scriptOf is the Worker's script one of SST's Worker resources is for: the
+// one its scriptName is from, or the one of that name
+func (g *generator) scriptOf(r *stateResource) *stateResource {
+	for _, urn := range r.PropertyDependencies["scriptName"] {
+		if found := g.byURN[urn]; found != nil && found.Type == "cloudflare:index/workersScript:WorkersScript" {
+			return found
+		}
+	}
+	name, _ := revealed(r.Inputs["scriptName"]).(string)
+	for _, found := range g.byURN {
+		if found.Type == "cloudflare:index/workersScript:WorkersScript" && name != "" && (found.Inputs["scriptName"] == name || found.Outputs["scriptName"] == name) {
+			return found
+		}
+	}
+	return nil
+}
+
+// subdomainOf is Pulumi's resource for a Worker's workers.dev URL that SST's
+// WorkerUrl turned on or off: of the same name, in the same Worker, with the
+// script's provider
+func (g *generator) subdomainOf(r *stateResource) *stateResource {
+	script := g.scriptOf(r)
+	parentType := ""
+	if qualified := string(r.URN.QualifiedType()); strings.Contains(qualified, "$") {
+		parentType = qualified[:strings.LastIndex(qualified, "$")]
+	}
+	enabled, _ := revealed(r.Inputs["enabled"]).(bool)
+	return &stateResource{
+		URN:    resource.NewURN(r.URN.Stack(), r.URN.Project(), tokens.Type(parentType), subdomainType, r.URN.Name()),
+		Custom: true,
+		Type:   subdomainType,
+		Inputs: map[string]any{
+			"accountId":  r.Inputs["accountId"],
+			"scriptName": r.Inputs["scriptName"],
+			"enabled":    enabled,
+		},
+		Parent:       r.Parent,
+		Dependencies: []resource.URN{script.URN},
+		Provider:     script.Provider,
+		PropertyDependencies: map[string][]resource.URN{
+			"accountId":  r.PropertyDependencies["accountId"],
+			"scriptName": {script.URN},
+		},
+	}
 }
 
 // hasChildren is whether a component has a component or a part in it
@@ -585,6 +747,11 @@ func (g *generator) inputs(r *stateResource, used map[resource.URN]bool) (*objec
 		if values[key] == nil {
 			continue
 		}
+		// A Worker's code, copied beside the module
+		if rel := g.workerFiles[r.URN]; rel != "" && key == "contentFile" {
+			result.set(key, g.projectPath(rel))
+			continue
+		}
 		at := valueAt{r: r, path: []string{key}, deps: g.declared(r.PropertyDependencies[key]), used: used}
 		value, err := g.value(values[key], key, at)
 		if err != nil {
@@ -733,6 +900,13 @@ func (g *generator) value(value any, key string, at valueAt) (expr, error) {
 	case string:
 		if ref := g.match(value, key, at); ref != nil {
 			return ref, nil
+		}
+		// A path in the project, like a site's files, from wherever it's
+		// checked out
+		if root := g.shared.opts.Root; root != "" && filepath.IsAbs(value) {
+			if rel, err := filepath.Rel(root, value); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return g.projectPath(rel), nil
+			}
 		}
 		if parsed, ok := parseJSONText(value); ok {
 			if indent, ok := jsonIndent(value, parsed); ok {

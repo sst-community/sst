@@ -4,7 +4,7 @@ import { type ComponentArgs, component, named } from "../parts-component";
 import type { Input } from "../input";
 import { notAnExistingPart, plain } from "../args";
 import { binding } from "./binding";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { defaultAccountId } from "./helpers/account";
 import { Worker } from "./worker";
 
 const parts = () => ({
@@ -232,7 +232,7 @@ export class Workflow extends component("sst:cloudflare:Workflow", parts) {
       accountId: args.accountId,
     });
     this.part("workflow", {
-      accountId: args.accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: args.accountId ?? defaultAccountId(this),
       workflowName: "",
       className: args.className,
       scriptName: worker.nodes.worker.scriptName,

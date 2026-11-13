@@ -30,9 +30,8 @@ import { rpc } from "../rpc/rpc";
 import { callBinary } from "../rpc/binary";
 import { prefixName } from "../naming";
 import { binding, type BindingInclude } from "./binding";
-import { DEFAULT_ACCOUNT_ID } from "./account-id";
+import { defaultAccountId } from "./helpers/account";
 import { normalizeCompatibility } from "./helpers/compatibility";
-import { cfFetch } from "./helpers/fetch";
 import { zoneOf } from "./helpers/zone";
 import { WorkerUrl } from "./resources/worker-url";
 import { WorkerPlacement } from "./resources/worker-placement";
@@ -623,7 +622,7 @@ export class Worker extends component("sst:cloudflare:Worker", parts) {
           ? "A Worker builds its own code, so it can't use a script you have. To call another Worker of your app, link it. A script outside the app can't be put in place of a Worker."
           : `A Worker creates it from its args. Change how it's created in "transform.${key}".`,
       );
-    const accountId = args.accountId ?? DEFAULT_ACCOUNT_ID;
+    const accountId = args.accountId ?? defaultAccountId(this);
     const dev = context().dev && args.dev !== false;
     const compatibility = normalizeCompatibility(args);
     const domain = domainOf();
@@ -881,7 +880,10 @@ export class Worker extends component("sst:cloudflare:Worker", parts) {
     }
 
     // The migrations still to apply to the Worker's Durable Objects, from the
-    // tag it has now, as Wrangler works them out
+    // tag it has now, as Wrangler works them out. The tag is read with the
+    // Worker's Cloudflare provider, whose credentials a program Pulumi runs on
+    // its own has, as SST's CLI does: a script that isn't deployed yet isn't
+    // listed, and has none.
     function migrationState(scriptName: string) {
       return all([args.migrations!, accountId]).apply(
         async ([migrations, accountId]) => {
@@ -889,28 +891,13 @@ export class Worker extends component("sst:cloudflare:Worker", parts) {
           if (!latest)
             return { migrationTag: undefined, migrations: undefined };
 
-          let currentTag: string | undefined;
-          try {
-            const published = await cfFetch<
-              { id?: string; migration_tag?: string }[]
-            >(`/accounts/${accountId}/workers/scripts`);
-            currentTag = published.result.find(
-              (script) => script.id === scriptName,
-            )?.migration_tag;
-          } catch (error) {
-            const code =
-              typeof error === "object" &&
-              error !== null &&
-              "errors" in error &&
-              Array.isArray(error.errors) &&
-              typeof error.errors[0]?.code === "number"
-                ? error.errors[0].code
-                : undefined;
-            // Wrangler takes these to mean the script or its environment
-            // isn't deployed yet, so it has no tag:
-            // workers.api.error.service_not_found and environment_not_found
-            if (code !== 10090 && code !== 10092) throw error;
-          }
+          const published = await cf.getWorkersScripts(
+            { accountId },
+            { parent: self },
+          );
+          const currentTag =
+            published.results?.find((script) => script.id === scriptName)
+              ?.migrationTag || undefined;
 
           if (currentTag) {
             const found = migrations.findIndex(

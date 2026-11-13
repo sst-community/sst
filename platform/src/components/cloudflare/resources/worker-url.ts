@@ -4,7 +4,7 @@ import {
   Input,
   Output,
 } from "@pulumi/pulumi";
-import { withPlugin } from "../../plugin";
+import { withCloudflarePlugin } from "../../plugin";
 
 export interface WorkerUrlArgs {
   accountId: Input<string>;
@@ -23,8 +23,9 @@ export interface WorkerUrl {
 /**
  * A Worker's workers.dev URL, turned on or off. One of SST's own resources,
  * which the `sst` binary serves as a Pulumi provider. It calls Cloudflare's
- * API with the CLI's credentials, which aren't in its inputs: those are saved
- * to the state.
+ * API with the CLI's credentials, or in a program Pulumi runs on its own,
+ * those of its component's Cloudflare provider (`withCloudflarePlugin`). They
+ * aren't in its inputs, which are saved to the state.
  */
 export class WorkerUrl extends CustomResource {
   constructor(name: string, args: WorkerUrlArgs, opts?: CustomResourceOptions) {
@@ -32,7 +33,7 @@ export class WorkerUrl extends CustomResource {
       "sst:cloudflare:WorkerUrl",
       name,
       { ...args, url: undefined },
-      withPlugin(opts),
+      withCloudflarePlugin(opts),
     );
   }
 }

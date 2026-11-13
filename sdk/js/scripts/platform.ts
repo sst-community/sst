@@ -21,6 +21,9 @@ import platformPkg from "../../../platform/package.json";
 import { groups } from "../../../platform/src/components/groups";
 import pkg from "../package.json";
 
+// The packages src/runtime/worker/unenv.mjs imports
+const workerBuildDependencies = ["unenv", "@cloudflare/unenv-preset"];
+
 // What the package exports, from the platform's source
 const entries = [
   "components/core.ts",
@@ -76,6 +79,15 @@ export async function copyPlatform() {
       ];
       if (version) dependencies[name] = version;
     }
+  }
+  // What SST's binary runs from the package's platform folder as it builds a
+  // Worker: its unenv config (src/runtime/worker/unenv.mjs, which
+  // pkg/runtime/worker runs), which nothing here imports
+  for (const name of workerBuildDependencies) {
+    const version = (platformPkg.dependencies as Record<string, string>)[name];
+    if (!version)
+      throw new Error(`The platform's package.json doesn't have ${name}`);
+    dependencies[name] = version;
   }
 
   // Written after the analysis, which reads this file's `sideEffects`

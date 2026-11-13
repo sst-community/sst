@@ -27,6 +27,10 @@ type ejector struct {
 	nodeBuild bool
 	// Whether a part was made with a provider SST makes for a region
 	usesRegionProvider bool
+	// Whether a path is written from the project's folder
+	usesPath bool
+	// Each Worker's last build, copied beside the module
+	files []copiedFile
 	// What the module makes, by its URN without its stack and project, in
 	// the order the stacks have them: its name, and the stacks it's in
 	order []string
@@ -87,6 +91,7 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 		used: map[string]bool{
 			"pulumi": true, "config": true, "program": true, "ejected": true,
 			"stacks": true, "onStack": true, "byStack": true, "regionProvider": true,
+			"path": true,
 		},
 		names:        map[string]string{},
 		in:           map[string][]int{},
@@ -105,14 +110,15 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 			return nil, fmt.Errorf("The %q stack has operations Pulumi didn't finish, like a deploy that was stopped. Run `pulumi refresh` on it first, and eject once it's clean.", name)
 		}
 		g := &generator{
-			shared:     e,
-			resources:  parsed.Deployment.Resources,
-			byURN:      map[resource.URN]*stateResource{},
-			role:       map[resource.URN]role{},
-			vars:       map[resource.URN]string{},
-			plan:       &StackPlan{Stack: state.Stack, Name: name},
-			envUpdates: map[string]map[string]any{},
-			addedEnv:   map[resource.URN]map[string]any{},
+			shared:      e,
+			resources:   parsed.Deployment.Resources,
+			byURN:       map[resource.URN]*stateResource{},
+			role:        map[resource.URN]role{},
+			vars:        map[resource.URN]string{},
+			plan:        &StackPlan{Stack: state.Stack, Name: name},
+			envUpdates:  map[string]map[string]any{},
+			addedEnv:    map[resource.URN]map[string]any{},
+			workerFiles: map[resource.URN]string{},
 		}
 		if err := g.classify(); err != nil {
 			if len(states) > 1 {
@@ -149,6 +155,9 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 	}
 	if e.nodeBuild {
 		plan.Build = buildModule
+	}
+	for _, file := range e.files {
+		plan.Files = append(plan.Files, file.CopiedFile)
 	}
 	seen := map[string]bool{}
 	for _, g := range e.stacks {
@@ -423,6 +432,9 @@ func (e *ejector) module() (string, error) {
 		} else {
 			fmt.Fprintf(&b, "// Secret inputs are in the stack's config, under %s.\n", ConfigNamespace)
 		}
+	}
+	if e.usesPath {
+		b.WriteString("import * as path from \"path\";\n")
 	}
 	b.WriteString("import * as pulumi from \"@pulumi/pulumi\";\n")
 	pkgs := make([]string, 0, len(e.imports))
@@ -992,4 +1004,10 @@ func jsonString(value any, indent, current string) (string, bool) {
 		return value.String(), true
 	}
 	return stringify(value, indent, current)
+}
+
+// copiedFile is a Worker's build the eject copies, with its content's hash
+type copiedFile struct {
+	CopiedFile
+	sum string
 }

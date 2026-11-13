@@ -11,7 +11,10 @@
 // every plugin, which the CLI fills (aws.go), never from the provider's
 // config: the state keeps that. A program Pulumi runs on its own has no CLI to
 // fill it, so its config names the AWS profile, region and roles, as its AWS
-// provider's does, and no credentials (awsSettings).
+// provider's does, and no AWS credentials (awsSettings). For Cloudflare and
+// Vercel, whose providers take a token, it has the token of the program's
+// provider, which the state keeps as a secret, as it keeps that provider's
+// (cloudflareSettings, vercelSettings).
 package provider
 
 import (
@@ -82,7 +85,7 @@ func Main(version string) error {
 
 	configured := &settings{}
 	load := envAws(configured.aws)
-	s := newServer(version, resources(load, envCloudflare()))
+	s := newServer(version, resources(load, envCloudflare(configured.cloudflare), configured.vercelToken))
 	s.functions = functions(load)
 	s.configured = configured
 	handle, err := rpcutil.ServeWithOptions(rpcutil.ServeOptions{
@@ -115,14 +118,29 @@ type server struct {
 
 // settings is what the provider's config says, once the engine configured it
 type settings struct {
-	mu       sync.Mutex
-	awsSetup awsSettings
+	mu              sync.Mutex
+	awsSetup        awsSettings
+	cloudflareSetup cloudflareSettings
+	vercelSetup     vercelSettings
 }
 
 func (s *settings) aws() awsSettings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.awsSetup
+}
+
+func (s *settings) cloudflare() cloudflareSettings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cloudflareSetup
+}
+
+// vercelToken is the token the config has for Vercel's API, if any
+func (s *settings) vercelToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vercelSetup.Token
 }
 
 // newServer serves resources, by type. A version that isn't one Pulumi can
@@ -171,17 +189,21 @@ func (s *server) DiffConfig(context.Context, *pulumirpc.DiffRequest) (*pulumirpc
 	return &pulumirpc.DiffResponse{Changes: pulumirpc.DiffResponse_DIFF_NONE}, nil
 }
 
-// Configure reads the AWS setup a program Pulumi runs on its own names, and
-// asks for plain values. With no preview support, the engine doesn't call
-// Create or Update in a preview: it shows the inputs as the outputs.
+// Configure reads the setup a program Pulumi runs on its own gives it, and
+// asks for plain values: a secret, like a token, comes as its value. With no
+// preview support, the engine doesn't call Create or Update in a preview: it
+// shows the inputs as the outputs.
 func (s *server) Configure(_ context.Context, req *pulumirpc.ConfigureRequest) (*pulumirpc.ConfigureResponse, error) {
 	if s.configured != nil {
-		setup, err := readAwsSettings(configOf(req))
+		config := configOf(req)
+		setup, err := readAwsSettings(config)
 		if err != nil {
 			return nil, err
 		}
 		s.configured.mu.Lock()
 		s.configured.awsSetup = setup
+		s.configured.cloudflareSetup = readCloudflareSettings(config)
+		s.configured.vercelSetup = vercelSettings{Token: config["vercelApiToken"]}
 		s.configured.mu.Unlock()
 	}
 	return &pulumirpc.ConfigureResponse{

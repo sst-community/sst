@@ -54,7 +54,11 @@ type Worker interface {
 }
 
 type BuildInput struct {
-	CfgPath       string
+	CfgPath string
+	// PlatformDir is where SST's platform files are, which a build reads, like
+	// a Worker's unenv config, when they aren't in the work folder's platform
+	// (Platform): a Pulumi program's build server has them in the sst package
+	PlatformDir   string
 	Dev           bool                       `json:"dev"`
 	FunctionID    string                     `json:"functionID"`
 	Handler       string                     `json:"handler"`
@@ -71,6 +75,15 @@ type BuildInput struct {
 	// Commands, when it's given, builds and runs the function instead of the
 	// runtime its runtime setting names
 	Commands *CommandSettings `json:"commands,omitempty"`
+}
+
+// Platform is the folder of SST's platform files a build reads: the app's
+// .sst/platform, which SST's CLI writes, or PlatformDir when it's given
+func (input *BuildInput) Platform() string {
+	if input.PlatformDir != "" {
+		return input.PlatformDir
+	}
+	return path.ResolvePlatformDir(input.CfgPath)
 }
 
 func (input *BuildInput) Out() string {
