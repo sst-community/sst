@@ -33,6 +33,7 @@ As tests:
 | 2026-11-12 | **The eject keeps SST's components as Pulumi components of the same type and name**, so every URN stays and no alias is needed, in place of the aliases to a new parent this plan began with. Proposed with the design, with aliases left for the maintainer to ask for; the maintainer said to continue. |
 | 2026-11-13 | **`sst/components` exports `$transform`**, of the two gaps the docs page found (the other: no bootstrap in an account SST's CLI hasn't deployed to). The maintainer chose it, as recommended. |
 | 2026-11-13 | **Under plain Pulumi, a program declares where SST's components keep code and images: an `Assets`, and nothing is made for it.** SST's bootstrap is account-level and outside any stack, like `cdk bootstrap`, which Pulumi has no counterpart of: a fresh account needed an `sst` command first (goals 1 and 2), and ejected code was left in a bucket no stack owns (goal 4). Weighed: an `sst bootstrap` command (the same coupling, made explicit), the components making a store in the stack on their own (works, but a resource no code of the program's makes), each component taking a bucket (too many components make functions inside them), uploading code to Lambda directly (50 MB, and the eject has nothing to point at). The maintainer asked whether the command still coupled SST to the project, then for the store to be declared rather than made in the background, with a way to bring one's own, and for SST apps to keep SST's bootstrap. So: `new Assets("Assets")` makes a bucket and an image repository in the stack; `Assets.use({ bucket, repository })` points the components at the program's own, under SST's CLI too; an SST app that declares neither keeps SST's bootstrap; a Pulumi program that declares neither gets an error in its preview with the line to add. Deleted with the stack by default, emptied first. |
+| 2026-11-13 | **The eject's last AWS cases next**: the database proxy's role lookup and the MicroVM image prune, which leave the state as a router's routes do, each lab-checked under plain Pulumi with its component. Offered with Cloudflare under plain Pulumi and SST's CLI on Pulumi stacks, the maintainer chose it, as recommended. |
 
 ## Where it starts
 
@@ -142,7 +143,7 @@ Exit tests, in the lab: a program with a linked `Function` and a `StaticSite`, d
 Built for those, and passed ([progress](progress.md)). The `StaticSite` has no origin access control: its CloudFront function sets the bucket as its origin, with access control settings of its own. Left for later, each refused with a message until then:
 
 - **SST's origin access control** (`OriginAccessControl`). SST's state doesn't keep its name, which has a random ending, so adopting it needs a read of the cloud with the provider's credentials. Neither the `StaticSite` nor the `Router` makes one ([step 6](#6-the-sweep)).
-- **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's). (The `Router`'s routes, `addEnvironment` and the providers SST makes for a region came in [step 6](#6-the-sweep); several stacks and a component of SST's in a component of the program's in [step 7](#7-the-ejects-other-cases).)
+- **SST's other own resources** (Cloudflare's and Vercel's; the image prune and the role lookup came in [step 9](#9-the-ejects-last-aws-cases)). (The `Router`'s routes, `addEnvironment` and the providers SST makes for a region came in [step 6](#6-the-sweep); several stacks and a component of SST's in a component of the program's in [step 7](#7-the-ejects-other-cases).)
 
 ### 6. The sweep
 
@@ -176,6 +177,12 @@ Done ([progress](progress.md)). The `Router` turned out to have no origin access
 
 Exit tests: the plain-mode tests with a store; tests of `Assets`, `Assets.use` under both, the order, the region, and what's kept on delete. In the lab, in a region SST's CLI has never deployed to: a Pulumi program with `Assets` and a linked `Function` deploys with `pulumi up`, answers, and is ejected and previewed without SST with nothing to change; destroyed, and nothing is left in the region.
 
+### 9. The eject's last AWS cases
+
+[As decided](#decisions): `RdsRoleLookup`, a proxy's wait for the role RDS gives it (`Postgres`, `Mysql`, `Aurora`), and `MicrovmImagePrune`, the deletion of a MicroVM image's old versions after each build (`MicroVm`), make nothing in the cloud and delete nothing when they're deleted, so the eject takes them out of the state with the rest of SST's own resources. After it nothing prunes the image's versions, of which it keeps up to 50; the eject says so.
+
+Exit tests: in the lab, under plain Pulumi, a `MicroVm`, and a `Postgres` with a proxy in a `Vpc`, each deployed with `pulumi up`, ejected, previewed and deployed without SST with nothing to change, and destroyed with nothing left.
+
 ### Later
 
 SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): every provider of a group to install, and runtimes other than Node.js. Step 5 left the eject of the components [listed there](#5-the-eject).
@@ -202,4 +209,5 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | The docs page | Written 2026-11-13: "Components in Pulumi" (`www/src/content/docs/docs/components-in-pulumi.mdx`) |
 | `$transform` for a Pulumi program | Done 2026-11-13: exported from `sst/components` |
 | 8. Asset storage | Done 2026-11-13, lab-checked in a region SST's CLI never deployed to |
+| 9. The eject's last AWS cases | Done 2026-11-13, lab-checked (`MicroVm`, `Postgres` with a proxy) |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |

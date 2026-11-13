@@ -2,6 +2,17 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: step 9, the eject's last AWS cases
+
+The eject takes a database proxy's role lookup and a MicroVM image's pruning out of the state, [as decided](plan.md#decisions). With them, the only own resources of SST's it refuses are Cloudflare's and Vercel's.
+
+**What changed** (`pkg/eject`): `sst:aws:RdsRoleLookup` ("a wait for the role RDS gives a proxy, which is there now") and `sst:aws:MicrovmImagePrune` (which says nothing deletes the image's old versions after the eject, and an image keeps up to 50) are among SST's own resources that leave the state. The code a MicroVM's image was built from is said to be the image's, not a function's. The refusal test uses SST's origin access control, still refused. The docs page lists both among what leaves the state.
+
+**Checked:** Go, `pkg/eject`'s tests (a proxy that waited on the lookup, kept without it; a MicroVM's prune and code). In the lab, `us-west-2`, under plain Pulumi, with a Pulumi home holding every plugin but SST's for the runs without SST (APFS clones; Pulumi doesn't follow a symlinked plugin folder):
+
+- **`MicroVm`** (project `thinmicrovm`, stack `mv`): `Assets` without a repository and a `MicroVm` from a Dockerfile on `node:24-alpine` from AWS's public registry. `pulumi up`: 12 created, the image built in 174 s. `sst eject`: 4 out of the state (the prune, the code, the link record, SST's provider). Without SST: `pulumi preview --diff` and `pulumi up`, 8 unchanged. `pulumi destroy`: 8 deleted; the bucket, the log group (`/aws/lambda-microvms/...`) and both roles checked directly, gone; `lambda-microvms list-microvm-images` lists none; nothing tagged. The stack removed. The image's id in the state is `missing ID`, as the AWS provider has it for that resource.
+- **`Postgres` with a proxy** (project `thinpg`, stack `pg`), in a `Vpc` without NAT, with no `Assets` as nothing is uploaded: `pulumi up`, 33 created in 9 minutes, the proxy `available`. `sst eject`: 1 secret in the config, 4 out of the state (the role lookup, two link records, SST's provider); the password as Pulumi's own `random.RandomPassword`. Without SST: `pulumi preview --diff` and `pulumi up`, 29 unchanged. The proxy's target became `AVAILABLE` (it was `PENDING_PROXY_CAPACITY` for its first minutes), so the proxy reached the database with the secret. `pulumi destroy`: 29 deleted in 9 minutes; the VPC, instance, proxy, subnet and parameter groups, secret (deleted at once: no recovery window), role and Cloud Map namespace checked directly, gone; no snapshot; the tagging API's two entries (a subnet, a security group) checked directly, gone. Left, as an RDS proxy leaves it: its log group `/aws/rds/proxy/<proxy>`, empty, deleted by its name. The stack removed; the account back to 4 VPCs.
+
 ## 2026-11-13: step 8, asset storage
 
 SST's components keep code and images in the store the program declares, [as decided](plan.md#decisions). In the lab, in a region SST's CLI had never deployed to, a program with `Assets` deployed with Pulumi alone, was ejected, ran without SST, and was destroyed with nothing left.
