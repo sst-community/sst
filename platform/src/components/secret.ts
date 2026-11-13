@@ -1,13 +1,16 @@
 import { VisibleError } from "./error";
-import { Output, output, secret } from "@pulumi/pulumi";
+import { Config, Output, output, secret } from "@pulumi/pulumi";
 import { Link } from "./link";
 import { Component, Prettify } from "./component";
 import { Input } from "./input";
+import { underCore } from "./context";
 
 export class SecretMissingError extends VisibleError {
   constructor(public readonly secretName: string) {
     super(
-      `Set a value for ${secretName} with \`sst secret set ${secretName} <value>\``,
+      underCore()
+        ? `Set a value for ${secretName} with \`sst secret set ${secretName} <value>\``
+        : `Set a value for ${secretName} in the stack's config, with \`pulumi config set --secret ${secretName} <value>\``,
     );
   }
 }
@@ -57,6 +60,10 @@ export class SecretMissingError extends VisibleError {
  * :::note
  * If you are not running `sst dev`, you'll need to `sst deploy` to apply the secret.
  * :::
+ *
+ * In a [Pulumi program](/docs/components-in-pulumi/#secrets), the value is the
+ * stack's secret config of the same name, which you set with
+ * `pulumi config set --secret MySecret my-secret-value`.
  *
  * #### Set a fallback for the secret
  *
@@ -117,9 +124,12 @@ export class Secret extends Component implements Link.Linkable {
     );
     this._name = name;
     this._placeholder = placeholder !== undefined ? output(placeholder) : undefined;
-    this._value = output(
-      process.env["SST_SECRET_" + this._name] ?? this._placeholder,
-    ).apply((value) => {
+    // SST's CLI gives the program the stage's secrets. A program Pulumi runs
+    // on its own has them in the stack's config, under the project's name.
+    const given = underCore()
+      ? process.env["SST_SECRET_" + this._name]
+      : new Config().getSecret(this._name);
+    this._value = output(given ?? this._placeholder).apply((value) => {
       if (typeof value !== "string") {
         throw new SecretMissingError(this._name);
       }

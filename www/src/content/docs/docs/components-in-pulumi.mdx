@@ -134,27 +134,24 @@ The components' docs write their examples for an SST app, in `sst.config.ts`, wi
 | `$util` | `import * as pulumi from "@pulumi/pulumi"` |
 | `$asset("files")` | `new pulumi.asset.FileArchive("files")`, or a `FileAsset` for a file |
 | SST's bootstrap of the account | `new Assets("Assets")`, [above](#assets) |
-| `sst.Secret`, and `sst secret set` | A secret in the stack's config, linked with a `Linkable`, [below](#secrets) |
+| `new sst.Secret(...)`, and `sst secret set` | `new Secret(...)`, from `sst/components`, and `pulumi config set --secret`, [below](#secrets) |
 | `app()`'s `providers` | The stack's config, or a provider given to a component |
 | `app()`'s `removal` and `protect` | Pulumi's `protect` option, [below](#removal) |
 | `$transform(sst.aws.Function, ...)` | `$transform(Function, ...)`, with `import { $transform } from "sst/components"` |
 
 ### Secrets
 
-An `sst.Secret` gets its value from SST's CLI, which doesn't run a Pulumi program. Keep the secret in the stack's config instead, and link it with a `Linkable`.
+A `Secret`'s value is the stack's secret config of the same name, where SST's CLI gives an SST app the one `sst secret set` stored. Set it with Pulumi:
 
 ```bash
-pulumi config set --secret stripeKey sk_test_123
+pulumi config set --secret StripeKey sk_test_123
 ```
 
 ```ts title="index.ts"
-import * as pulumi from "@pulumi/pulumi";
-import { Linkable } from "sst/components";
+import { Secret } from "sst/components";
 import { Function } from "sst/components/aws";
 
-const stripe = new Linkable("Stripe", {
-  properties: { key: new pulumi.Config().requireSecret("stripeKey") },
-});
+const stripe = new Secret("StripeKey");
 
 new Function("Api", {
   handler: "functions/api.handler",
@@ -162,7 +159,7 @@ new Function("Api", {
 });
 ```
 
-The function reads it as `Resource.Stripe.key`.
+The function reads it as `Resource.StripeKey.value`. A secret with no value in the stack's config takes its placeholder, if it has one: `new Secret("StripeKey", "sk_test_123")`. With neither, the preview fails and says what to set. Each stack has its own: there's no fallback for every stack, as `sst secret set --fallback` gives an SST app.
 
 ### Removal
 
