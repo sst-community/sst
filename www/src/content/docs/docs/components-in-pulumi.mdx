@@ -99,7 +99,7 @@ The components' docs write their examples for an SST app, in `sst.config.ts`, wi
 | `sst.Secret`, and `sst secret set` | A secret in the stack's config, linked with a `Linkable`, [below](#secrets) |
 | `app()`'s `providers` | The stack's config, or a provider given to a component |
 | `app()`'s `removal` and `protect` | Pulumi's `protect` option, [below](#removal) |
-| `$transform(sst.aws.Function, ...)` | Not yet: each component's `transform` |
+| `$transform(sst.aws.Function, ...)` | `$transform(Function, ...)`, with `import { $transform } from "sst/components"` |
 
 ### Secrets
 
@@ -285,7 +285,6 @@ It stops before it writes anything when it can't eject a stack without a change 
 - **An account SST hasn't deployed to.** SST's CLI makes the bootstrap the components need, so for now an SST app has to have deployed to the region once.
 - **Every provider of a group.** `sst/components/aws` loads `@pulumi/command`, `@pulumi/docker-build`, `@pulumi/random` and `@pulumi/tls`, used or not.
 - **Builds** of Node.js functions are what's been checked. Other runtimes and container images haven't been.
-- **`$transform`** has no import yet. Set a component's `transform`, or make it in a function of yours, with your defaults.
 - **`Resource`'s types** are written by `sst dev` only.
 - **In `sst dev`, not yet:** tasks and the tunnel.
 - **A stage SST's CLI deployed** can't move to a Pulumi stack yet.

@@ -287,6 +287,29 @@ describe("Component parts", () => {
     expect(bucket.inputs.forceDestroy).toBe(false);
   });
 
+  // A Pulumi program has no globals, so it imports it from sst/components
+  it("gives a Pulumi program $transform from sst/components", async () => {
+    const { $transform } = await import("../../src/components/core");
+    const parts = { bucket: aws.s3.Bucket };
+    type Args = import("../../src/components/parts-component").ComponentArgs<
+      typeof parts
+    >;
+    class Shelf extends component("acme:index:Shelf", parts) {
+      constructor(name: string, args: Args) {
+        super(name, args);
+        this.part("bucket", { forceDestroy: true });
+      }
+    }
+    $transform(Shelf, (args) => {
+      args.transform = { bucket: { forceDestroy: false } };
+    });
+    new Shelf("Books", {});
+    await pulumi.settle();
+
+    const bucket = pulumi.resources.find((r) => r.name === "BooksBucket")!;
+    expect(bucket.inputs.forceDestroy).toBe(false);
+  });
+
   // What `functionPart()` does for a function, done here for a bucket
   it("exposes a deferred part as an output", async () => {
     const parts = {

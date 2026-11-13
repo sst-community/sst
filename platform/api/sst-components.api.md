@@ -15,6 +15,12 @@ import { OutputInstance } from '@pulumi/pulumi';
 import { Resource as Resource_2 } from '@pulumi/pulumi';
 import { ResourceTransformationArgs } from '@pulumi/pulumi';
 
+// @public
+function $transform_2<T, Args, Options>(resource: {
+    new (name: string, args: Args, opts?: Options): T;
+}, cb: (args: Args, opts: Options, name: string) => void): void;
+export { $transform_2 as $transform }
+
 // @public (undocumented)
 interface AiBinding {
     // (undocumented)

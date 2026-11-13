@@ -9,7 +9,13 @@ export { VisibleError } from "./error";
 // SST 4's `sst.linkable`, which says what to write
 export { linkable } from "./sst4";
 export { takeover, type Takeover, type OldAddress } from "./takeover";
-export { Component, type NamingRule, type Transform } from "./component";
+// `$transform` is a global under SST's CLI. A Pulumi program imports it.
+export {
+  Component,
+  $transform,
+  type NamingRule,
+  type Transform,
+} from "./component";
 export { runtime, type Runtime, type RuntimeSettings } from "./runtime";
 export type { Target } from "./target";
 export type { DnsAdapter, DnsRecord, DnsAliasRecord } from "./dns-adapter";

@@ -211,6 +211,21 @@ function takeoverAliases(
 }
 
 const ComponentTransforms = new Map<string, any[]>();
+/**
+ * Registers a function that's called when a component or a resource of the
+ * given class is about to be created, with its args, options and name, to
+ * change them. It's called only for those created after it's registered.
+ *
+ * Under SST's CLI it's the `$transform` global. A Pulumi program imports it
+ * from `sst/components`.
+ *
+ * @example
+ * ```ts
+ * $transform(Function, (args) => {
+ *   args.runtime ??= "nodejs24.x";
+ * });
+ * ```
+ */
 export function $transform<T, Args, Options>(
   resource: { new (name: string, args: Args, opts?: Options): T },
   cb: (args: Args, opts: Options, name: string) => void,
