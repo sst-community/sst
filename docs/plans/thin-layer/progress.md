@@ -2,6 +2,38 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: an independent review, and its fixes
+
+[As decided](plan.md#decisions), three reviewers read the branch's own changes (against `v5-pulumi-dev` with `v5` merged in) with the code and the plan alone: one the eject and the rest of the Go, one the components, one the layers. Each finding was checked against the code before it was fixed; none was wrong. The layers' findings are the restructure, to come.
+
+**The eject** (`pkg/eject`):
+
+- **Part of a secret could be written in the code.** A secret that starts with an output of what it depends on, then `/` or `:`, was written as `` pulumi.interpolate`${role.arn}/...` ``, the rest of the secret as text. In a secret, only an exact match is a reference now; anything else goes in the stack's config.
+- **A path in the project was resolved from where the program runs**, which is the folder of the project's `main`, like `src/`, as Pulumi runs it. A Worker's copied build was then looked for in `src/`. It's `path.join(pulumi.getRootDirectory(), ...)` now, as the components' context reads the root.
+- **A config key with a second `:`**, from an object's key in a value each stack has its own of, like a policy's `aws:SourceAccount`, which Pulumi refuses: `:` is `_` in the key now.
+- **A value ending in a newline lost it**, as `pulumi config set` takes one off what it reads: such a string is set as JSON and read with `requireObject`, as is a string read as an object because another stack's value is of another kind (which was set as text and read as JSON before).
+- **Two stacks of one name**, in two organizations, shared their backups' names and their `Pulumi.<name>.yaml`: refused now.
+- **A function's environment that's a secret as a whole** lost what `addEnvironment` added, and an addition that's one secret was written in the clear when the function's own variables weren't secret: both stay secret, with everything in them.
+- **A plain value was set without `--plaintext`**, so Pulumi refused one that looks like a secret.
+- **An object with no `source`**, written from text, crashed the eject.
+- **A stack whose import failed wasn't put back**, though a timed-out import can land; it's put back from its backup now, and the error says when a stack couldn't be.
+- **A Worker's build is hashed again as it's copied**, so one built since the eject read it isn't copied.
+- **A dependency on the program's own provider or component** was written as one the module makes, which would have failed as a circle.
+
+**The components:**
+
+- **A `Service` or `Task` that runs an image it's given needed `Assets`** under plain Pulumi, and stopped one being declared after it: which store a component uses is found when it's first used now (`assetStore`), and a container whose image is a string doesn't ask.
+- **The providers SST makes for a region (`useProvider`) didn't take the stack's roles**, so SST's provider for one, like the certificate's in `us-east-1`, ran with the credentials the roles are taken with: such a provider's SST provider has the stack's setup in its region now (`madeFromStack`).
+- **The dev stub's code in a store from `Assets.use()`**, which other stacks can share, was deleted with a stack: it's kept, as in SST's bootstrap. A store knows whether the stack makes it (`owned`).
+- **What a run shares was kept for the next run in the same process**, as the Automation API runs an inline program: `perRun` starts again for a new stack of Pulumi's, and the stores are kept by run. An inline program still doesn't get the link records or the check of names, which are set up as the components load, outside any stack.
+- **A project or stack name SST's CLI wouldn't take**, like `feature_x`, went into the names of what's made, which AWS refuses for a bucket: the names are held to SST's rule under plain Pulumi, with an error that says so.
+- **A Vercel team given by its slug** was sent as its ID: a slug is sent as `slug` now.
+- **Two stores in one region** gave every dev function the first one's stub code: an error now. **A Worker's migration tag** was looked for in the first 1000 scripts: in all of them now.
+
+**Checked:** each new test fails on the code before (the eject's against it with `go test -overlay`, the components' with the files before put back for the run): `edge_test.go` (8 cases), `run_test.go` (`Run` with a `pulumi` that answers for two stacks and fails an import: `--plaintext` and `--secret`, the stack put back), the Vercel team, `perRun`, the names, `Assets` (a service with a given image, a store from `Assets.use()` shared), the region providers' roles, the scripts' lookup. `tsc`; the platform suite (120 files, 4302 tests); the Go suite; the API reports, unchanged. With `SST_TEST_PLAIN=1`, against the commit before: the same 189 failing tests (SST 4's takeovers and the tests written for SST's CLI), 10 more passing, and the four errors of containers with no store gone.
+
+**Not checked:** the error for two stores of the dev stub's code in one region, which only `sst dev` reaches; in the lab, the eject of a project whose `main` is in a folder, and a `Service` with an image it's given and no `Assets`, which the restructure's lab run is to cover.
+
 ## 2026-11-13: step 11, `sst.Secret` in a Pulumi program
 
 First, [open question 2](plan.md#open-questions): SST's CLI on Pulumi stacks. Offered all of SST's commands on a Pulumi stack, each running the developer's own `pulumi` on the stack's own backend and keeping nothing of SST's, only the ones Pulumi has nothing like (`shell`, `tunnel`, `secret`), or keeping only `sst dev` and `sst eject`, the maintainer chose keeping them ([decisions](plan.md#decisions)). Then an `sst.Secret` in a Pulumi program, which only found `SST_SECRET_<name>` in the environment, and nothing sets it there.
