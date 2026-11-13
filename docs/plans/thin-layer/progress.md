@@ -2,9 +2,35 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: step 3, `sst dev` on SST's components
+
+Under `sst dev`, a Pulumi program's SST components do what they do in an SST app: a `Function` runs on this machine, and a `DevCommand` runs with its links, with no `sst.dev.yaml`. A plain `pulumi up` deploys the real code again. Committed as `b74b7e1df`.
+
+**What changed:**
+
+- **The context reads `sst dev`.** Under plain Pulumi, `context()` is in dev when `SST_DEV` is `true` and `SST_SERVER` is set, both of which `sst dev` gives `pulumi up` (`platform/src/components/context.ts`). Then the command is `deploy`, and the platform's folder is the copy `sst dev` puts in `.sst/platform`, which has the stubs the package leaves out.
+- **The stub's region.** `sst dev` gives `pulumi up` `SST_AWS_REGION`, its own AWS provider's region, which SST's `Function` and `Task` give their stubs, as an SST app's CLI does (`pkg/pulumidev/deploy.go`).
+- **The link records under plain Pulumi.** `link.ts` sets up the link records (`sst:sst:LinkRef`) and the check of the top-level components' names as it loads, when SST's CLI isn't running the program and a Pulumi stack is, as SST's entry (`platform/src/auto/run.ts`) does under the CLI. A plain `pulumi up` writes them too, so a stack has the same records either way; the stacks of steps 1 and 2 would gain them on their next deploy, records only.
+- **`sst dev` reads the components' records** from the stack's export: functions, dev commands, hints, tasks, tunnels and links, through `project.AddRecords`, which an SST app's state is now read with too (`pkg/project/completed.go`). A record that holds a secret is read from `pulumi stack export --show-secrets`, and only that record is kept; other secrets in the state stay hidden. A dev command named both in `sst.dev.yaml` and by a `DevCommand` is an error. The functions SST's components run here are listed under "On this machine" with the file's.
+- **`sst.dev.yaml` is optional for a program that imports SST's components.** The scan of the program's imports that `sst dev` watches (`scanProgram`) also says whether it imports `sst/components` or one of its groups. A program without them still needs the file, and is still offered one.
+- **`sst/pulumi`'s transform tells `sst dev` when a function is made inside one of SST's components** (`PulumiDev.Function`'s `component`, from the nearest ancestor whose type starts `sst:`). Then the component decides: a pattern doesn't take it, and a name the file gives it exactly is an error naming the component.
+
+**Checked:**
+
+- Go: `TestCompletedReadsComponentRecords` (a `Function`'s, a `DevCommand`'s and two links' records, a secret in a record and in a link read from the export in the clear, once, a resource's own secret not read, the dev command's environment with the links, a name in both), `TestCompletedReadsRecordsWithoutSecrets` (no clear read without a secret in a record), `TestCompletedRecordsShownFails`, `TestDevFileWithComponents`, `TestScanFindsComponents` (a group, the core, through a file of the program's, `sst/pulumi` alone, Pulumi's own) and `TestFunctionInComponent` (a pattern and an exact name). `TestUsesNoneOfSSTsState` allows `AddRecords` and `LinkRefType`. The full suite passed.
+- `sst/pulumi`: a function in SST's component, directly and in a component of its, tells `sst dev`, and one in the program's own component doesn't (32 tests).
+- Platform: the context in dev, and neither variable alone; `tsc`, the full suite (112 files, 4247 tests), the API reports unchanged.
+- In the lab, a program with a `Bucket`, a `Function` linked to it and a `DevCommand` linked to it, no `sst.dev.yaml`, on a stack `devlab` with `sst:dev: true`, and the branch's CLI, package and plugin:
+  - `sst dev --mode=basic` deployed it, listing `Api (functions/api.handler)` under "On this machine". The URL answered from this machine (`platform: darwin`) with `Resource.Files.name`. A change to the handler answered at once, rebuilt, with no deploy.
+  - The state had the link records (`FilesLinkRef`, `ApiLinkRef`), which the UI doesn't list. `SST_CHILD=Worker sst dev` ran the dev command with `SST_RESOURCE_Files` and `SST_RESOURCE_App`.
+  - A plain `pulumi up` then deployed the real code (`platform: linux`), with `Resource.Files.name` in Lambda, and took the stub's shared code object out of the state, which keeps it in the bucket: the same object as SST 5's own stub code, which other stages use.
+  - `pulumi destroy` deleted all 19. Nothing left: no function, role, bucket or log group, and the source map SST keeps on delete was deleted. The stack was removed from the scratch backend.
+
+**Not checked:** a `Task` and a `Vpc` bastion's tunnel in `sst dev` on a Pulumi program, Cloudflare's `Worker`, and `sst.dev.yaml` beside SST's components in the lab (in the tests only).
+
 ## 2026-11-12: the components' lookups follow their provider, on `v5`
 
-The lookups found below were fixed on `v5`, as framework fixes are, the maintainer's choice ("Fix on v5 now"): `754dbde82`, not pushed, then `v5` merged into `v5-pulumi-dev` (`bbe23c72f`) and this branch (`0aa256062`). Each of the components' lookups has its component as `parent`, `iamEdit` takes options, and `test/components/lookups.test.ts` fails on a lookup given none. The merge's one conflict, `Function`'s region and bootstrap, keeps both: `{ parent: this }` and `bootstrap.forRegion(region, self)`.
+The lookups found below were fixed on `v5`, as framework fixes are, the maintainer's choice ("Fix on v5 now"): `754dbde82`, then `v5` merged into `v5-pulumi-dev` (`bbe23c72f`) and this branch (`0aa256062`). Pushed with a mock-level test (`60992bfca`), whose CI run failed in the docs build: `iamEdit`'s new options are of a Pulumi type the docs generator didn't render. Fixed on `v5` (`516933d6c`, pushed, CI passed) and merged into both branches. Each of the components' lookups has its component as `parent`, `iamEdit` takes options, and `test/components/lookups.test.ts` fails on a lookup given none. The merge's one conflict, `Function`'s region and bootstrap, keeps both: `{ parent: this }` and `bootstrap.forRegion(region, self)`.
 
 **Checked on the merged branch:** `tsc`, the platform suite (4236 tests), the API reports and the Go suite. In the lab, the case that failed before: a `Function` given `providers: { aws: Lab }`, with `addEnvironment`, in a stack with no AWS config and no AWS credentials, profile or region in the environment. It deployed; the state has no default AWS provider at all, only `Lab` and the SST provider `sst-Lab` with its profile and region; the function answered with the variable SST's resource added. Destroyed, and nothing left (the source map SST keeps was deleted).
 

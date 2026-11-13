@@ -21,6 +21,7 @@ As tests:
 | 2026-11-12 | **Step 1 first: a `Function` on plain Pulumi**, before any of SST's own resources. The maintainer said "yes" to it. |
 | 2026-11-12 | **The components read the context, and the context reads Pulumi when there's no core.** Asked whether the components need redoing not to depend on the context: no. Each field has an equivalent under Pulumi but `paths.platform`, whose files are a matter of packaging, for step 2. |
 | 2026-11-12 | **SST's own resources stay as they are, in the provider the `sst` binary serves, and Pulumi downloads that plugin under plain Pulumi.** Of the three ways in [the pieces](#the-pieces) (4), the maintainer chose this one, as recommended: it's the only one where a stack has the same URNs whether SST or Pulumi runs it ([goal 3](#goal)), and SST 5's stages already have these resources. The cost: each release publishes the plugin's archives, and a stack needs the plugin, which Pulumi downloads, until the eject replaces those resources. [pulumi-dev](../pulumi-dev/plan.md#decisions) turned down a provider of its own because everything SST adds there is for `sst dev` alone; here the provider is already part of what SST 5 deploys. |
+| 2026-11-12 | **Step 3 is `sst dev` on SST's components**, over the eject and the smaller gaps (the default tags, `VisibleError`'s stack trace, a linked function's `Resource` checked at runtime): the maintainer chose it, as recommended. Asked whether a Pulumi program should use only Pulumi's own resources instead, the maintainer, told the components are what SST adds on top of the dev loop and the eject is the way out to plain resources, said to continue. |
 
 ## Where it starts
 
@@ -83,9 +84,23 @@ Exit tests, in the lab:
 
 `StaticSite` (its files, the invalidation, the CDN's waiter), with SST's provider as a plugin Pulumi downloads, and the deploy-time files `paths.platform` names shipped in the package. A site with its own domain, the origin access control and the router's routes weren't in it.
 
+### 3. `sst dev` on SST's components
+
+Under `sst dev`, a Pulumi program's SST components do what they do in an SST app: a `Function` runs on this machine, and a `DevCommand` runs, with its links. `sst.dev.yaml` keeps naming the program's own functions and dev commands. A plain `pulumi up` still deploys the real code.
+
+- **The context reads `sst dev` from the environment** `sst dev` gives `pulumi up` (`SST_DEV`, `SST_SERVER`): `dev` is true, the command is `deploy`, and the platform's folder is `.sst/platform`, which `sst dev` copies there, with the stubs the package leaves out.
+- **The stub's region:** `sst dev` gives `pulumi up` `SST_AWS_REGION`, its own AWS provider's region, as it does for an SST app.
+- **The link records** (`sst:sst:LinkRef`), and the check that the top-level components' names are unique, are set up when the components are imported under plain Pulumi, as SST's program entry (`platform/src/auto/run.ts`) sets them up under SST's CLI. A `DevCommand`'s links then reach its environment, and a stack has the same records either way.
+- **`sst dev` reads the components' records** from the stack's export, as it does an SST app's: the functions, dev commands, hints and links. A record with a secret in it is read from an export with `--show-secrets`, and nothing else of that export is kept.
+- **`sst.dev.yaml` is optional for a program that imports SST's components** (`sst/components` or one of its groups), which `sst dev` finds in the same scan of the program's imports that it watches. A program without them still needs the file, and is still offered one written from a preview.
+- **`sst/pulumi`'s transform leaves the functions made inside SST's components to them**: a pattern like `"*"` doesn't take one, and a name the file gives one exactly is an error that says which component makes it.
+- **A `Task`'s and a `Vpc` bastion's records** are read as an SST app's are, but neither is checked here: tasks and the tunnel in `sst dev` on a Pulumi program come later, as for [pulumi-dev](../pulumi-dev/plan.md#decisions).
+
+Exit tests, in the lab: `sst dev` on a program with a `Function` linked to a bucket and a `DevCommand` linked to the same bucket. The function answers from the local code, a change to it shows without a deploy, and `Resource.<bucket>` works in it. The dev command's environment has the bucket's link. A plain `pulumi up` afterwards puts the real code back. Destroyed, and nothing left.
+
 ### Later
 
-`sst dev` reading the components' reports, the eject, SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): SST's default tags, which plain Pulumi doesn't set; `VisibleError`'s stack trace under Pulumi; every provider of a group to install; and runtimes other than Node.js.
+The eject, SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress](progress.md)): SST's default tags, which plain Pulumi doesn't set; `VisibleError`'s stack trace under Pulumi; every provider of a group to install; and runtimes other than Node.js.
 
 ## Open questions
 
@@ -101,3 +116,4 @@ Exit tests, in the lab:
 | 2. A `StaticSite` on plain Pulumi | Done 2026-11-12, lab-checked, committed (`28c2ed12e`) |
 | SST's provider takes the program's AWS setup | Done 2026-11-12, lab-checked, committed (`18f36ce79`) |
 | The components' lookups follow their provider | Fixed on `v5` (`754dbde82`), merged here (`0aa256062`), lab-checked |
+| 3. `sst dev` on SST's components | Done 2026-11-12, lab-checked, committed (`b74b7e1df`) |
