@@ -2,6 +2,39 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: step 10, Cloudflare under plain Pulumi
+
+SST's Cloudflare components deploy, refresh and destroy under plain Pulumi, with the token in the stack's config alone, and the eject takes Cloudflare's and Vercel's own resources out of the state, [as decided](plan.md#decisions). The eject now refuses only SST's origin access control.
+
+**What changed:**
+
+- **The account** (`cloudflare/helpers/account.ts`): `defaultAccountId(parent)`. Under SST's CLI it's `CLOUDFLARE_DEFAULT_ACCOUNT_ID`, as the CLI sets it. Under plain Pulumi, the variable when it's set, and otherwise the first account `getAccounts` lists through the component's Cloudflare provider, as the CLI picks it, once for each provider in a run; none, or a failed list, is an error that names the variable and `accountId`. Every SST 5 component and SST's own resources use it; `DEFAULT_ACCOUNT_ID`, in the API, is as it was.
+- **SST's provider for Cloudflare and Vercel** (`plugin.ts`): `withCloudflarePlugin` and `withVercelPlugin`, as `withAwsPlugin`. Under plain Pulumi, SST's own resources get an SST provider for the component's provider (`sst-cloudflare` and `sst-vercel` for the stack's, `sst-<name>` for one of the program's), whose config has its token, as a secret: an explicit provider's `apiToken` (or `apiKey` and `email`), or the stack's `cloudflare:apiToken` or `vercel:apiToken`. `pkg/provider` reads them in `Configure`, ahead of the environment. Vercel's record takes `vercel:team`, or an explicit provider's `team`, where SST's CLI reads `VERCEL_TEAM_ID`.
+- **A Worker's migrations** read the script's migration tag with `getWorkersScripts` through the Worker's provider, under SST's CLI too, in place of a request with the environment's credentials.
+- **A Worker's build** (`pkg/runtime/worker`) reads its `unenv` config from the build's platform folder (`BuildInput.Platform()`), which the build server is given by the program (`SST_PLATFORM_DIR`, the package's `platform/`). The package depends on `unenv` and `@cloudflare/unenv-preset`, which the config imports (`sdk/js/scripts/platform.ts`).
+- **The eject** (`pkg/eject`): Cloudflare's and Vercel's DNS records leave the state ("SST's never deletes one"). A Worker's URL leaves it, and the module makes Pulumi's `cloudflare.WorkersScriptSubdomain` in its place, listed among what the first `pulumi up` sets to what it is. A Worker's placement leaves it and stays until the script's next upload, which the eject says. Each Worker's last build, in `.sst/`, is copied to `sst-ejected-workers/<script>.js` once its hash matches the state's, and the module (`path.resolve(...)`) and each script's `contentFile` in the state point at the copy, so nothing changes. A path under the project's folder is written from it. The eject refuses when the folder is there already, and takes it out again with the rest when it stops.
+- **The docs page** has Cloudflare's setup, the Workers' code, and the placement under what the eject leaves.
+
+**Found in the lab:**
+
+- **A Worker's build needed the platform's `.sst/platform`**, which a Pulumi program doesn't have: fixed above. Python's runtime still reads `.sst/platform`, as noted before.
+- **Pulumi's Cloudflare provider can't set a Worker's placement.** An update of a script with `placement` fails: 6.15 sends an upload Cloudflare refuses ("Could not read content for part 'metadata'"), and 6.24.0, the newest, can't serialize the placement's `targets`, which is read-only in both, so it can't be given. Checked on a script of its own too, with nothing of SST's. This is why SST has `WorkerPlacement`.
+- **Cloudflare resets a script's placement on every upload without one**, and SST's `WorkerPlacement` was set again only when the etag, the hash of the code, changed. A deploy that changed only the environment left the placement at Cloudflare's default, under SST's CLI too. Fixed on `v5` (`ff384d74e`): it also takes the script's `modifiedOn`. A Worker's `workers.dev` URL isn't reset by an upload.
+- **A Worker with migrations updates its script on the deploy after the one that applies them**, which drops them: the recorded takeover shows the same under SST's CLI. Left as it is.
+- **The static site's router script is built to a path that has the platform's absolute path inside it** (`.sst/artifacts/<name>-src/<package's platform>/...`). It works, and the eject copies it.
+
+**Checked:** `tsc`; the platform suite (115 files, with the plain-mode setup tests); the Go suite; the API reports (unchanged on this branch; on `v5`, an addition to `WorkerPlacementArgs`). With `SST_TEST_PLAIN=1`, the Cloudflare tests against the commit before: one more failure, the takeover of SST 4's `Hyperdrive`, whose fixture reads the account from the environment where the lookup now runs; a move only happens under SST's CLI. In the lab, the maintainer's Cloudflare account, project `thincf`, under plain Pulumi, the token in the stack's config and no Cloudflare variable in the environment, so the account was looked up:
+
+- the lab app's Cloudflare group (`Kv`, `D1`, `Ai`, `RateLimit`, a Durable Object, a `Workflow`, a `Queue` with a subscriber, a `Cron`, a `Worker` with a URL, placement, migrations and every link, and a `StaticSite`): 42 created; every route answered, the queue's consumer and the cron ran; the token wasn't in the state's export but as ciphertext; every account id was the account's; the placement was `smart`;
+- a deploy that dropped the applied migration, then 42 unchanged;
+- `sst eject`: 19 out of the state, 5 builds copied; then `index.ts` on `ejected()`, `sst` uninstalled, a Pulumi home without SST's plugin and `.sst/` moved away: the preview made the 5 URLs and changed nothing else; deployed, and every route answered;
+- the copied API Worker's code changed and deployed: its URL stayed on;
+- the placement on the script, on 6.15 and on 6.24.0 (the program's provider bumped in the lab alone): refused, as above;
+- the fix: a Worker deployed with SST's package, its environment changed and deployed again, its placement still `smart`;
+- each stack destroyed (28 and 7) and removed; the account has no Worker, namespace, database, queue, workflow or Durable Object left.
+
+**Not checked:** `Bucket` and `Hyperdrive` (no R2 or database), the sites with a server, a Cloudflare DNS record (the account has no zone) and Vercel's (no account), all in the tests only; a Worker in `sst dev` on a Pulumi program.
+
 ## 2026-11-13: step 9, the eject's last AWS cases
 
 The eject takes a database proxy's role lookup and a MicroVM image's pruning out of the state, [as decided](plan.md#decisions). With them, the only own resources of SST's it refuses are Cloudflare's and Vercel's.
