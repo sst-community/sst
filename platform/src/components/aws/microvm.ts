@@ -789,7 +789,7 @@ export class MicroVm extends component("sst:aws:MicroVm", parts) {
       const object = self.part("code", {
         key: interpolate`assets/microvm/${imageName}.zip`,
         bucket: region.apply((region) =>
-          bootstrap.forRegion(region).then((d) => d.asset),
+          bootstrap.forRegion(region, self).then((d) => d.asset),
         ),
         source: zip.path.apply((p) => new asset.FileArchive(p)),
       });

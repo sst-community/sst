@@ -8,6 +8,7 @@ import {
 } from "@pulumi/pulumi";
 import { VisibleError } from "./error.js";
 import { Linkable } from "./linkable.js";
+import { context } from "./context.js";
 
 export namespace Link {
   function normalizeType(type: string) {
@@ -165,10 +166,8 @@ export namespace Link {
           return [`SST_RESOURCE_${key}`, JSON.stringify(value)];
         }),
       );
-      env["SST_RESOURCE_App"] = JSON.stringify({
-        name: $app.name,
-        stage: $app.stage,
-      });
+      const { name, stage } = context().app;
+      env["SST_RESOURCE_App"] = JSON.stringify({ name, stage });
       return env;
     });
   }

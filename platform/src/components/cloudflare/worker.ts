@@ -27,6 +27,7 @@ import { notAnExistingPart, plain, withoutDependencies } from "../args";
 import { VisibleError } from "../error";
 import { context } from "../contract";
 import { rpc } from "../rpc/rpc";
+import { callBinary } from "../rpc/binary";
 import { prefixName } from "../naming";
 import { binding, type BindingInclude } from "./binding";
 import { DEFAULT_ACCOUNT_ID } from "./account-id";
@@ -642,7 +643,7 @@ export class Worker extends component("sst:cloudflare:Worker", parts) {
       }),
     );
     const build = buildInput.apply(async (input) => {
-      const result = await rpc.call<{
+      const result = await callBinary<{
         handler: string;
         out: string;
         errors: string[];

@@ -118,7 +118,7 @@ export interface Context {
         stage: string;
         removal: "remove" | "retain" | "retain-all";
         protect: boolean;
-        home: "aws" | "cloudflare" | "local";
+        home: "aws" | "cloudflare" | "local" | "pulumi";
         providers: Record<string, any>;
     };
     command: string;

@@ -1,6 +1,7 @@
 import { output, secret, CustomResourceOptions } from "@pulumi/pulumi";
 import { Semaphore } from "../../../util/semaphore";
 import { local } from "@pulumi/command";
+import { context } from "../../context";
 
 const limiter = new Semaphore(
   parseInt(process.env.SST_BUILD_CONCURRENCY_SITE || "1"),
@@ -28,7 +29,7 @@ export function siteBuilder(
 
     // When running `sst diff` or `sst refresh`, `local.Command`'s `create` and `update` are not called.
     // So we also run `local.runOutput` to get the output of the command.
-    if ($cli.command === "diff" || $cli.command === "refresh") {
+    if (["diff", "refresh"].includes(context().command)) {
       waitOn = local.runOutput(
         {
           command: args.create!,

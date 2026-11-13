@@ -5,6 +5,7 @@ import crypto from "crypto";
 import type { DurationSeconds } from "../duration";
 import type { Size } from "../size";
 import { minify, minifyBody } from "../../util/minify";
+import { context } from "../context";
 
 // CloudFront Functions have a 10KB limit on the forwarded request size.
 // We reserve 512 bytes for origin-request overhead CloudFront can still add after
@@ -472,7 +473,7 @@ export type ProtectionConfig = {
 export function kvNamespace(name: string) {
   return crypto
     .createHash("md5")
-    .update(`${$app.name}-${$app.stage}-${name}`)
+    .update(`${context().app.name}-${context().app.stage}-${name}`)
     .digest("hex")
     .substring(0, 4);
 }

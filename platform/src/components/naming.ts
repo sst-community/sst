@@ -5,6 +5,7 @@ import {
   type ResourceTransformationResult,
 } from "@pulumi/pulumi";
 import { VisibleError } from "./error.js";
+import { context } from "./context.js";
 import {
   NAMING_RULES,
   UNPREFIXED_TYPES,
@@ -41,7 +42,8 @@ export function prefixName(max: number, name: string) {
 
   name = name.replace(/[^a-zA-Z0-9]/g, "");
 
-  const stageLen = $app.stage.length;
+  const { name: app, stage } = context().app;
+  const stageLen = stage.length;
   const nameLen = name.length;
   const strategy =
     nameLen + 1 >= max
@@ -52,10 +54,8 @@ export function prefixName(max: number, name: string) {
 
   if (strategy === "name") return `${name.substring(0, max)}`;
   if (strategy === "stage+name")
-    return `${$app.stage.substring(0, max - nameLen - 1)}-${name}`;
-  return `${$app.name.substring(0, max - stageLen - nameLen - 2)}-${
-    $app.stage
-  }-${name}`;
+    return `${stage.substring(0, max - nameLen - 1)}-${name}`;
+  return `${app.substring(0, max - stageLen - nameLen - 2)}-${stage}-${name}`;
 }
 
 export function hashNumberToPrettyString(number: number, length: number) {

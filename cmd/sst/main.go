@@ -145,8 +145,9 @@ func run() error {
 		return err
 	}
 
-	// a plain Pulumi program runs the pulumi on the PATH, and uses neither
-	if !flag.SST_SKIP_DEPENDENCY_CHECK && !c.IsPulumiProgram() {
+	// a plain Pulumi program runs the pulumi on the PATH, and uses neither,
+	// and the build server's output is its address alone
+	if !flag.SST_SKIP_DEPENDENCY_CHECK && !c.IsPulumiProgram() && !runsBuildServer(c) {
 		spin := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 		spin.Color("cyan")
 		spin.Suffix = "  Download dependencies..."
@@ -171,6 +172,11 @@ func run() error {
 		spin.Stop()
 	}
 	return c.Run()
+}
+
+func runsBuildServer(c *cli.Cli) bool {
+	path := c.Path()
+	return len(path) > 1 && path[1].Name == CmdBuildServer.Name
 }
 
 var root = &cli.Command{
@@ -994,6 +1000,7 @@ var root = &cli.Command{
 				return nil
 			},
 		},
+		CmdBuildServer,
 		{
 			Name:   "print-and-not-quit",
 			Hidden: true,

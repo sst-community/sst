@@ -29,6 +29,7 @@ import {
 import { VisibleError } from "./error.js";
 import { refuseSst4Name } from "./sst4.js";
 import { checkComponent } from "./check.js";
+import { context } from "./context.js";
 import path from "path";
 import { statSync } from "fs";
 
@@ -244,7 +245,7 @@ export function $transform<T, Args, Options>(
 export function $asset(assetPath: string) {
   const fullPath = path.isAbsolute(assetPath)
     ? assetPath
-    : path.join($cli.paths.root, assetPath);
+    : path.join(context().paths.root, assetPath);
 
   try {
     return statSync(fullPath).isDirectory()

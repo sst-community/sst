@@ -2,7 +2,8 @@ import { type Input, type Inputs, all, output } from "@pulumi/pulumi";
 import { Link } from "./link";
 import { rpc } from "./rpc/rpc";
 import { lazy } from "../util/lazy";
-import type { Target } from "./target";
+
+export { type Context, context, underCore } from "./context";
 
 /**
  * The program contract: what the core gives the program, and what a component
@@ -13,63 +14,6 @@ import type { Target } from "./target";
  * and each record says which version it was written in.
  */
 export const contractVersion = 1;
-
-/**
- * What the core gives the program: the app, the command, and where things are.
- */
-export interface Context {
-  /** The version of the program contract the core speaks. */
-  contract: number;
-  /** The app, as `app()` in `sst.config.ts` returned it, with its stage. */
-  app: {
-    name: string;
-    stage: string;
-    removal: "remove" | "retain" | "retain-all";
-    protect: boolean;
-    home: "aws" | "cloudflare" | "local";
-    providers: Record<string, any>;
-  };
-  /** Whether the program runs for `sst dev`, or a command run with `--dev`. */
-  dev: boolean;
-  /** The command the program runs for, like `deploy`, `diff` or `remove`. */
-  command: string;
-  /**
-   * Whether the stage is moving to new components, in `sst migrate`. Each
-   * component reports what its state map says about its parts then.
-   */
-  move: boolean;
-  paths: {
-    /** The app's folder, where `sst.config.ts` is. */
-    root: string;
-    /** The app's `.sst` folder. */
-    work: string;
-    /** The platform's folder, in `.sst`. */
-    platform: string;
-    /** SST's folder in the user's home. */
-    home: string;
-  };
-  /**
-   * Where the stage's cloud calls go, when it isn't the real cloud: its target
-   * in `app()`. A package's check can turn itself on for its own target's
-   * stages only.
-   */
-  target?: Target;
-}
-
-/** What the core gives the program. It's a copy, so changing it changes nothing. */
-export function context(): Context {
-  return structuredClone({
-    contract: $cli.contract ?? 0,
-    app: $app as Context["app"],
-    dev: $dev,
-    command: $cli.command,
-    move: $cli.move === true,
-    paths: $cli.paths,
-    target: ($app as { targets?: Record<string, Target> }).targets?.[
-      $app.stage
-    ],
-  });
-}
 
 /**
  * A function the core builds, and in `sst dev` runs on the user's machine.

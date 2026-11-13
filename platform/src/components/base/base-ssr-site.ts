@@ -7,6 +7,7 @@ import { Link } from "../link.js";
 import { VisibleError } from "../error.js";
 import { BaseSiteDev } from "./base-site";
 import { siteBuilder } from "../aws/helpers/site-builder";
+import { context } from "../context.js";
 
 export interface BaseSsrSiteArgs {
   dev?: false | Prettify<BaseSiteDev>;
@@ -64,19 +65,19 @@ export function buildApp(
 
         if (
           fs.existsSync(path.join(sitePath, "yarn.lock")) ||
-          fs.existsSync(path.join($cli.paths.root, "yarn.lock"))
+          fs.existsSync(path.join(context().paths.root, "yarn.lock"))
         )
           return "yarn run build";
         if (
           fs.existsSync(path.join(sitePath, "pnpm-lock.yaml")) ||
-          fs.existsSync(path.join($cli.paths.root, "pnpm-lock.yaml"))
+          fs.existsSync(path.join(context().paths.root, "pnpm-lock.yaml"))
         )
           return "pnpm run build";
         if (
           fs.existsSync(path.join(sitePath, "bun.lockb")) ||
-          fs.existsSync(path.join($cli.paths.root, "bun.lockb")) ||
+          fs.existsSync(path.join(context().paths.root, "bun.lockb")) ||
           fs.existsSync(path.join(sitePath, "bun.lock")) ||
-          fs.existsSync(path.join($cli.paths.root, "bun.lock"))
+          fs.existsSync(path.join(context().paths.root, "bun.lock"))
         )
           return "bun run build";
 
@@ -89,8 +90,8 @@ export function buildApp(
         const linkEnvs = output(linkData).apply((linkData) => {
           const envs: Record<string, string> = {
             SST_RESOURCE_App: JSON.stringify({
-              name: $app.name,
-              stage: $app.stage,
+              name: context().app.name,
+              stage: context().app.stage,
             }),
           };
           for (const datum of linkData) {
@@ -107,7 +108,7 @@ export function buildApp(
           {
             create: cmd,
             update: cmd,
-            dir: path.join($cli.paths.root, sitePath),
+            dir: path.join(context().paths.root, sitePath),
             environment: linkEnvs.apply((linkEnvs) => ({
               SST: "1",
               ...Object.fromEntries(

@@ -40,7 +40,7 @@ import {
   plainDeep,
   withoutDependencies,
 } from "../args";
-import { rpc } from "../rpc/rpc";
+import { callBinary } from "../rpc/binary";
 import { inlinePolicies, noPermissionsFor } from "./helpers/iam";
 import { linkEncryptionKey } from "./helpers/function-shared";
 import { RETENTION } from "./logging";
@@ -899,7 +899,7 @@ export class WebFunction extends component("sst:aws:WebFunction", parts) {
           const install = Array.isArray(nodejs?.install)
             ? Object.fromEntries(nodejs.install.map((value) => [value, "*"]))
             : nodejs?.install;
-          const result = await rpc.call<{
+          const result = await callBinary<{
             out: string;
             handler: string;
             errors: string[];

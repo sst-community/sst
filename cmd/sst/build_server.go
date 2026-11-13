@@ -1,0 +1,25 @@
+package main
+
+import (
+	"os"
+
+	"github.com/sst/sst/v3/cmd/sst/cli"
+	"github.com/sst/sst/v3/internal/util"
+	"github.com/sst/sst/v3/pkg/pulumidev"
+	"github.com/sst/sst/v3/pkg/server"
+)
+
+// CmdBuildServer is run by a Pulumi program that uses SST's components
+// without SST's CLI, from the project's folder, to build its functions
+// (pkg/server ServeBuilds). It's hidden: nobody runs it by hand.
+var CmdBuildServer = &cli.Command{
+	Name:   "build-server",
+	Hidden: true,
+	Run: func(c *cli.Cli) error {
+		cfgPath, err := pulumidev.Discover()
+		if err != nil {
+			return util.NewReadableError(err, "sst build-server runs in the folder of a Pulumi project, and there's no Pulumi.yaml here or above.")
+		}
+		return server.ServeBuilds(c.Context, cfgPath, version, os.Stdin, os.Stdout)
+	},
+}

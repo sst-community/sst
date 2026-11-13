@@ -6,6 +6,7 @@ import { Input } from "../input.js";
 import { Prettify } from "../component.js";
 import { BaseSiteFileOptions } from "./base-site.js";
 import { siteBuilder } from "../aws/helpers/site-builder.js";
+import { context } from "../context.js";
 
 export type BaseStaticSiteAssets = {
   /**
@@ -289,7 +290,7 @@ export function buildApp(
       create: output(build).command,
       update: output(build).command,
       dir: output(sitePath).apply((sitePath) =>
-        path.join($cli.paths.root, sitePath),
+        path.join(context().paths.root, sitePath),
       ),
       environment,
       triggers: [Date.now().toString()],

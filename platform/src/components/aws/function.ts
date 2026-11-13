@@ -1797,7 +1797,9 @@ export class Function extends component("sst:aws:Function", parts) {
 
     const partition = getPartitionOutput({}, opts).partition;
     const region = getRegionOutput({}, opts).region;
-    const bootstrapData = region.apply((region) => bootstrap.forRegion(region));
+    const bootstrapData = region.apply((region) =>
+      bootstrap.forRegion(region, self),
+    );
     const assetBucket = bootstrapData.apply((data) => data.asset);
     // The key links are encrypted with is created once for the app, and
     // shared with the 4.x `Function`, so an app with both has one

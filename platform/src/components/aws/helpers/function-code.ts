@@ -5,7 +5,7 @@ import archiver from "archiver";
 import { glob } from "glob";
 import { VisibleError } from "../../error";
 import { toPosix } from "../../path";
-import { rpc } from "../../rpc/rpc";
+import { callBinary } from "../../rpc/binary";
 import { context } from "../../contract";
 
 /** What building a function gives: where its code is, and how it's called. */
@@ -34,7 +34,7 @@ export async function buildBundle(
   input: Record<string, unknown>,
   postbuild?: (dir: string) => Promise<void>,
 ): Promise<FunctionBundle> {
-  const result = await rpc.call<{
+  const result = await callBinary<{
     handler: string;
     out: string;
     errors: string[];

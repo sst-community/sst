@@ -5,12 +5,18 @@ import (
 	"net/rpc"
 
 	"github.com/sst/sst/v3/pkg/bus"
-	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/runtime"
 )
 
+// Builder is what a program's builds need: where its config is, and the
+// runtimes that build its functions. Every project.Program is one.
+type Builder interface {
+	PathConfig() string
+	Runtimes() *runtime.Collection
+}
+
 type Runtime struct {
-	program project.Program
+	program Builder
 }
 
 func (r *Runtime) Build(input *runtime.BuildInput, output *runtime.BuildOutput) error {
@@ -29,7 +35,7 @@ func (r *Runtime) AddTarget(input *runtime.BuildInput, output *bool) error {
 	return nil
 }
 
-func Register(ctx context.Context, p project.Program, r *rpc.Server) error {
+func Register(ctx context.Context, p Builder, r *rpc.Server) error {
 	r.RegisterName("Runtime", &Runtime{
 		program: p,
 	})

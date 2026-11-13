@@ -1370,7 +1370,7 @@ export function containerImage<P extends Parts>(
   },
 ): Output<string> {
   const bootstrapData = build.region.apply((region) =>
-    bootstrap.forRegion(region),
+    bootstrap.forRegion(region, component),
   );
   const linkEnvs = Link.propertiesToEnv(Link.getProperties(build.link));
 

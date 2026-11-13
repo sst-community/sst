@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import * as aws from "@pulumi/aws";
-import { output } from "@pulumi/pulumi";
+import { getRootDirectory, output } from "@pulumi/pulumi";
 import { mockPulumi } from "../helpers/graph";
 
 const pulumi = mockPulumi({ app: "shop", stage: "dev" });
@@ -46,6 +46,55 @@ describe("The program contract", () => {
     });
     expect(context().paths.root).toBe("/");
     expect(context().target).toBeUndefined();
+  });
+
+  // A program Pulumi runs on its own has no $app, $cli or $dev
+  function withoutCore<T>(callback: () => T): T {
+    const globals = globalThis as any;
+    const saved = {
+      $app: globals.$app,
+      $cli: globals.$cli,
+      $dev: globals.$dev,
+    };
+    for (const key of Object.keys(saved)) delete globals[key];
+    try {
+      return callback();
+    } finally {
+      Object.assign(globals, saved);
+    }
+  }
+
+  it("reads the context from Pulumi when SST's CLI doesn't run the program", async () => {
+    const { prefixName } = await import("../../src/components/naming");
+    // The mock's project and stack
+    const read = withoutCore(() => ({
+      context: context(),
+      name: prefixName(64, "Api"),
+    }));
+    expect(read.context).toEqual({
+      contract: 0,
+      app: {
+        name: "project",
+        stage: "stack",
+        removal: "remove",
+        protect: false,
+        home: "pulumi",
+        providers: {},
+      },
+      dev: false,
+      command: "deploy",
+      move: false,
+      // Where Pulumi.yaml is, which Pulumi's mocks call "rootDirectory"
+      paths: {
+        root: getRootDirectory(),
+        work: path.join(getRootDirectory(), ".sst"),
+        platform: path.join(getRootDirectory(), ".sst", "platform"),
+        home: expect.stringMatching(/sst$/),
+      },
+    });
+    // Named as SST's CLI names it, from the app and the stage
+    expect(read.name).toBe("project-stack-Api");
+    expect(prefixName(64, "Api")).toBe("shop-dev-Api");
   });
 
   it("gives the program its stage's target", () => {
