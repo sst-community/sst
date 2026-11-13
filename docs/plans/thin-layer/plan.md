@@ -31,6 +31,7 @@ As tests:
 | 2026-11-12 | **The eject's cases that any program can hit come before the docs page**: several stacks, then SST's components inside a component of the program's. The cases tied to a component (a database's role lookup, the image prune, Cloudflare's and Vercel's resources, SST 4's origin access control) wait for that component's lab check. The maintainer asked whether to handle the other cases first; this was the recommendation. |
 | 2026-11-12 | **For several stacks, the eject writes one module from all of them**: what's the same in every stack as it is, a plain value that isn't from each stack's config, a value with a reference in it picked by stack in the code, and what only some stacks have made only on those. The maintainer chose it, as recommended, over a module for each stack (simpler, but near-identical files to keep) and keeping one stack for now. |
 | 2026-11-12 | **The eject keeps SST's components as Pulumi components of the same type and name**, so every URN stays and no alias is needed, in place of the aliases to a new parent this plan began with. Proposed with the design, with aliases left for the maintainer to ask for; the maintainer said to continue. |
+| 2026-11-13 | **`sst/components` exports `$transform`**, of the two gaps the docs page found (the other: no bootstrap in an account SST's CLI hasn't deployed to). The maintainer chose it, as recommended. |
 
 ## Where it starts
 
@@ -184,4 +185,5 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 5. The eject | Done 2026-11-12 for a linked `Function`, a `Bucket` and a `StaticSite`, lab-checked, committed (`5f0a66a9d`) |
 | 7. The eject's other cases | Several stacks: done 2026-11-13, lab-checked, committed (`447d04e92`). Components inside the program's: done 2026-11-13, lab-checked, committed (`aece8b61c`) |
 | The docs page | Written 2026-11-13: "Components in Pulumi" (`www/src/content/docs/docs/components-in-pulumi.mdx`) |
+| `$transform` for a Pulumi program | Done 2026-11-13: exported from `sst/components` |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |

@@ -2,6 +2,14 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: `$transform` for a Pulumi program
+
+`sst/components` exports `$transform`, the maintainer's choice of the two gaps the docs page found, as recommended. Under SST's CLI it's a global; a Pulumi program had no way to reach it, and Pulumi's own transforms can't change a component's args, which SST's components read before they register anything.
+
+**What changed:** `core.ts` exports `$transform` from `component.ts`, the module SST's CLI takes the global from, so a program's components share its registry. It has a doc comment now, which the API report shows (`api/sst-components.api.md`, an addition). The docs page's table imports it, and it's out of the page's limits.
+
+**Checked:** a test registers a transform through `sst/components` on a component, which takes it (`component.test.ts`, also with `SST_TEST_PLAIN=1`); `tsc`, the full suite, the API reports; the components' docs generate unchanged.
+
 ## 2026-11-13: the docs page
 
 "Components in Pulumi" (`www/src/content/docs/docs/components-in-pulumi.mdx`, in the sidebar after "Use with Pulumi", which links to it), [as decided](plan.md#decisions), in place of rewriting the components' docs:
@@ -10,7 +18,7 @@ The log, newest first. The plan is [plan.md](plan.md).
 - **From SST's docs:** a table from each of SST's globals and `sst.aws.X` to its import or Pulumi's own (`$app.stage` is `pulumi.getStack()`, `$dev` is `context().dev`), with a secret as stack config linked by a `Linkable` in place of `sst.Secret`, and `protect` in place of `removal`.
 - **`sst dev`** on SST's components, and `sst-env.d.ts`.
 - **`sst eject`:** what it writes and takes out, switching the program, the module, several stacks, `ejected()`'s argument, the functions' code and `nodeBuild()`, going back, what it leaves and what it refuses.
-- **Limits**, among them two gaps found while writing it: an account SST's CLI hasn't deployed to has no bootstrap, so an SST app has to have deployed to the region once; and `$transform` has no import for a Pulumi program.
+- **Limits**, among them two gaps found while writing it: an account SST's CLI hasn't deployed to has no bootstrap, so an SST app has to have deployed to the region once; and `$transform` had no import for a Pulumi program (exported since, above).
 
 **Checked:** the page's examples typecheck against the branch's package (`tsc --strict`, `nodenext`); the docs site builds.
 
