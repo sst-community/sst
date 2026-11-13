@@ -14,13 +14,52 @@ import (
 	"github.com/sst/sst/v3/pkg/project/provider"
 )
 
-// envAws is the stage's AWS setup, read from the environment the first time
-// a resource needs it. It's the same for every call: Pulumi starts the
-// provider once for a run.
-func envAws() func() (aws.Config, error) {
+// envAws is the stage's AWS setup, made the first time a resource needs it,
+// which is after the engine configured the provider. It's the same for every
+// call: Pulumi starts the provider once for a run, and once for each of its
+// instances. Under SST's CLI it comes from the environment (awsConfig). A
+// program Pulumi runs on its own names it in the provider's config instead
+// (awsSettings), as its AWS provider is set up.
+func envAws(settings func() awsSettings) func() (aws.Config, error) {
 	return sync.OnceValues(func() (aws.Config, error) {
+		if s := settings(); !s.empty() {
+			return provider.LoadAwsConfig(context.Background(), s.Profile, s.Region, s.Roles)
+		}
 		return awsConfig(context.Background())
 	})
+}
+
+// awsSettings is the AWS setup a program Pulumi runs on its own gives SST's
+// provider in its config (platform/src/components/plugin.ts): the profile,
+// the region and the roles its AWS provider is set up with, so both reach the
+// same account. It names no credentials, which come from that profile or the
+// environment. Under SST's CLI the provider has no config, and this is empty.
+type awsSettings struct {
+	Profile string
+	Region  string
+	Roles   []provider.AwsRole
+}
+
+func (s awsSettings) empty() bool {
+	return s.Profile == "" && s.Region == "" && len(s.Roles) == 0
+}
+
+// readAwsSettings reads awsProfile, awsRegion and awsAssumeRoles, a JSON list
+// of { roleArn, sessionName }, from the provider's config. Each is a string,
+// as the engine gives a provider its config.
+func readAwsSettings(config map[string]string) (awsSettings, error) {
+	settings := awsSettings{Profile: config["awsProfile"], Region: config["awsRegion"]}
+	if roles := config["awsAssumeRoles"]; roles != "" {
+		if err := json.Unmarshal([]byte(roles), &settings.Roles); err != nil {
+			return awsSettings{}, fmt.Errorf("reading awsAssumeRoles: %w", err)
+		}
+		for _, role := range settings.Roles {
+			if role.RoleArn == "" {
+				return awsSettings{}, fmt.Errorf("a role in awsAssumeRoles has no roleArn")
+			}
+		}
+	}
+	return settings, nil
 }
 
 // awsConfig is the stage's AWS setup from the environment Pulumi passes on

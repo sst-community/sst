@@ -1,5 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
-import { withPlugin } from "../../plugin";
+import { withAwsPlugin } from "../../plugin";
 
 /** A file to upload, and how it's served. */
 export interface BucketFile {
@@ -32,6 +32,6 @@ export class BucketFiles extends CustomResource {
     args: BucketFilesArgs,
     opts?: CustomResourceOptions,
   ) {
-    super("sst:aws:BucketFiles", name, { ...args }, withPlugin(opts));
+    super("sst:aws:BucketFiles", name, { ...args }, withAwsPlugin(opts));
   }
 }

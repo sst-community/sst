@@ -7,9 +7,11 @@
 // pkg/server/resource. SST 4's entries of them, which call the CLI's RPC,
 // leave the state when a stage moves (pkg/move), so the RPC serves none.
 //
-// The stage's setup comes from the environment Pulumi gives every plugin,
-// which the CLI fills (aws.go), never from the provider's config: the state
-// keeps that.
+// Under SST's CLI, the stage's setup comes from the environment Pulumi gives
+// every plugin, which the CLI fills (aws.go), never from the provider's
+// config: the state keeps that. A program Pulumi runs on its own has no CLI to
+// fill it, so its config names the AWS profile, region and roles, as its AWS
+// provider's does, and no credentials (awsSettings).
 package provider
 
 import (
@@ -20,6 +22,8 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -76,9 +80,11 @@ func Main(version string) error {
 		close(stop)
 	}()
 
-	load := envAws()
+	configured := &settings{}
+	load := envAws(configured.aws)
 	s := newServer(version, resources(load, envCloudflare()))
 	s.functions = functions(load)
+	s.configured = configured
 	handle, err := rpcutil.ServeWithOptions(rpcutil.ServeOptions{
 		Cancel: stop,
 		Init: func(srv *grpc.Server) error {
@@ -101,9 +107,22 @@ func Main(version string) error {
 
 type server struct {
 	pulumirpc.UnimplementedResourceProviderServer
-	version   string
-	resources map[string]handler
-	functions map[string]function
+	version    string
+	resources  map[string]handler
+	functions  map[string]function
+	configured *settings
+}
+
+// settings is what the provider's config says, once the engine configured it
+type settings struct {
+	mu       sync.Mutex
+	awsSetup awsSettings
+}
+
+func (s *settings) aws() awsSettings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.awsSetup
 }
 
 // newServer serves resources, by type. A version that isn't one Pulumi can
@@ -152,10 +171,19 @@ func (s *server) DiffConfig(context.Context, *pulumirpc.DiffRequest) (*pulumirpc
 	return &pulumirpc.DiffResponse{Changes: pulumirpc.DiffResponse_DIFF_NONE}, nil
 }
 
-// Configure asks for plain values. With no preview support, the engine
-// doesn't call Create or Update in a preview: it shows the inputs as the
-// outputs.
-func (s *server) Configure(context.Context, *pulumirpc.ConfigureRequest) (*pulumirpc.ConfigureResponse, error) {
+// Configure reads the AWS setup a program Pulumi runs on its own names, and
+// asks for plain values. With no preview support, the engine doesn't call
+// Create or Update in a preview: it shows the inputs as the outputs.
+func (s *server) Configure(_ context.Context, req *pulumirpc.ConfigureRequest) (*pulumirpc.ConfigureResponse, error) {
+	if s.configured != nil {
+		setup, err := readAwsSettings(configOf(req))
+		if err != nil {
+			return nil, err
+		}
+		s.configured.mu.Lock()
+		s.configured.awsSetup = setup
+		s.configured.mu.Unlock()
+	}
 	return &pulumirpc.ConfigureResponse{
 		AcceptSecrets:   false,
 		SupportsPreview: false,
@@ -333,4 +361,25 @@ func unmarshal(props *structpb.Struct) (resource.PropertyMap, error) {
 
 func marshal(props resource.PropertyMap) (*structpb.Struct, error) {
 	return plugin.MarshalProperties(props, plugin.MarshalOptions{})
+}
+
+// configOf is the provider's config by key: its inputs, as an explicit
+// provider's are, or the stack's config under the package's name, as a
+// default provider's is (sst:<key>, which the engine gives as
+// sst:config:<key>)
+func configOf(req *pulumirpc.ConfigureRequest) map[string]string {
+	config := map[string]string{}
+	for key, value := range req.GetVariables() {
+		if name, ok := strings.CutPrefix(key, Package+":config:"); ok {
+			config[name] = value
+		} else if name, ok := strings.CutPrefix(key, Package+":"); ok {
+			config[name] = value
+		}
+	}
+	for key, value := range req.GetArgs().GetFields() {
+		if text, ok := value.GetKind().(*structpb.Value_StringValue); ok {
+			config[key] = text.StringValue
+		}
+	}
+	return config
 }

@@ -4,7 +4,7 @@ import {
   Input,
   Output,
 } from "@pulumi/pulumi";
-import { withPlugin } from "../../plugin";
+import { withAwsPlugin } from "../../plugin";
 
 export interface DistributionDeploymentWaiterArgs {
   distributionId: Input<string>;
@@ -34,7 +34,7 @@ export class DistributionDeploymentWaiter extends CustomResource {
       "sst:aws:DistributionDeploymentWaiter",
       name,
       { ...args, isDone: undefined },
-      withPlugin(opts),
+      withAwsPlugin(opts),
     );
   }
 }

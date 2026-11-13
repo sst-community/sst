@@ -1,5 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
-import { withPlugin } from "../../plugin";
+import { withAwsPlugin } from "../../plugin";
 
 export interface KvKeysArgs {
   /** The ARN of the CloudFront key-value store. */
@@ -18,6 +18,6 @@ export interface KvKeysArgs {
  */
 export class KvKeys extends CustomResource {
   constructor(name: string, args: KvKeysArgs, opts?: CustomResourceOptions) {
-    super("sst:aws:KvKeys", name, { ...args }, withPlugin(opts));
+    super("sst:aws:KvKeys", name, { ...args }, withAwsPlugin(opts));
   }
 }

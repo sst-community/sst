@@ -1,5 +1,5 @@
 import { CustomResource, CustomResourceOptions, Input } from "@pulumi/pulumi";
-import { withPlugin } from "../../plugin";
+import { withAwsPlugin } from "../../plugin";
 
 export interface OriginAccessControlArgs {
   /**
@@ -20,6 +20,11 @@ export class OriginAccessControl extends CustomResource {
     args: OriginAccessControlArgs,
     opts?: CustomResourceOptions,
   ) {
-    super("sst:aws:OriginAccessControl", name, { ...args }, withPlugin(opts));
+    super(
+      "sst:aws:OriginAccessControl",
+      name,
+      { ...args },
+      withAwsPlugin(opts),
+    );
   }
 }

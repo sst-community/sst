@@ -16,6 +16,7 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource/plugin"
 	pulumirpc "github.com/pulumi/pulumi/sdk/v3/proto/go"
+	"github.com/sst/sst/v3/pkg/project/provider"
 	sstresource "github.com/sst/sst/v3/pkg/server/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -312,7 +313,7 @@ func TestRead(t *testing.T) {
 func (t typed[I, O]) opened(ctx context.Context) any { return t.open(ctx) }
 
 func TestResources(t *testing.T) {
-	served := resources(envAws(), envCloudflare())
+	served := resources(envAws((&settings{}).aws), envCloudflare())
 	ctx := context.Background()
 	// Each type, with what does its work
 	want := map[string]any{
@@ -679,4 +680,103 @@ func TestPickZone(t *testing.T) {
 	_, err = pickZone(twice, "app.example.com")
 	assert.ErrorContains(t, err, "there are 2 hosted zones named example.com")
 	assert.ErrorContains(t, err, "`zone`")
+}
+
+// A program Pulumi runs on its own names the AWS setup in the provider's
+// config, as its AWS provider is set up: an explicit provider's inputs, or a
+// default provider's stack config
+func TestConfigureAws(t *testing.T) {
+	ctx := context.Background()
+	configure := func(t *testing.T, req *pulumirpc.ConfigureRequest) (awsSettings, error) {
+		configured := &settings{}
+		s := newServer("5.0.0", nil)
+		s.configured = configured
+		_, err := s.Configure(ctx, req)
+		return configured.aws(), err
+	}
+
+	t.Run("an explicit provider's inputs", func(t *testing.T) {
+		args, err := structpb.NewStruct(map[string]any{
+			"awsProfile":     "lab",
+			"awsRegion":      "eu-west-3",
+			"awsAssumeRoles": `[{"roleArn":"arn:aws:iam::123456789012:role/deploy","sessionName":"ci"}]`,
+			"version":        "5.0.0",
+		})
+		require.NoError(t, err)
+		setup, err := configure(t, &pulumirpc.ConfigureRequest{Args: args})
+		require.NoError(t, err)
+		assert.Equal(t, awsSettings{
+			Profile: "lab",
+			Region:  "eu-west-3",
+			Roles:   []provider.AwsRole{{RoleArn: "arn:aws:iam::123456789012:role/deploy", SessionName: "ci"}},
+		}, setup)
+	})
+
+	t.Run("a default provider's stack config", func(t *testing.T) {
+		// sst:dev is sst dev's opt-in for a Pulumi program, which isn't the
+		// provider's
+		setup, err := configure(t, &pulumirpc.ConfigureRequest{Variables: map[string]string{
+			"sst:config:awsRegion": "ca-central-1",
+			"sst:config:dev":       "true",
+		}})
+		require.NoError(t, err)
+		assert.Equal(t, awsSettings{Region: "ca-central-1"}, setup)
+	})
+
+	t.Run("under SST's CLI, none", func(t *testing.T) {
+		setup, err := configure(t, &pulumirpc.ConfigureRequest{})
+		require.NoError(t, err)
+		assert.True(t, setup.empty())
+	})
+
+	t.Run("roles it can't read", func(t *testing.T) {
+		for _, roles := range []string{`{"roleArn":"x"}`, `[{"sessionName":"ci"}]`} {
+			args, err := structpb.NewStruct(map[string]any{"awsAssumeRoles": roles})
+			require.NoError(t, err)
+			_, err = configure(t, &pulumirpc.ConfigureRequest{Args: args})
+			assert.Error(t, err, roles)
+		}
+	})
+}
+
+// The AWS setup the config names wins over the environment's; without one,
+// it's the environment's, as under SST's CLI
+func TestEnvAwsFromSettings(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("the config's profile and region", func(t *testing.T) {
+		isolate(t)
+		dir := t.TempDir()
+		configFile := filepath.Join(dir, "config")
+		credentialsFile := filepath.Join(dir, "credentials")
+		require.NoError(t, os.WriteFile(configFile, []byte("[profile lab]\nregion = sa-east-1\n"), 0600))
+		require.NoError(t, os.WriteFile(credentialsFile, []byte("[lab]\naws_access_key_id = profile-access-key\naws_secret_access_key = profile-secret-key\n"), 0600))
+		t.Setenv("AWS_CONFIG_FILE", configFile)
+		t.Setenv("AWS_SHARED_CREDENTIALS_FILE", credentialsFile)
+		// The shell's, which the config's profile wins over
+		t.Setenv("AWS_PROFILE", "other")
+		t.Setenv("AWS_ACCESS_KEY_ID", "shell-access-key")
+		t.Setenv("AWS_SECRET_ACCESS_KEY", "shell-secret-key")
+
+		cfg, err := envAws(func() awsSettings { return awsSettings{Profile: "lab"} })()
+		require.NoError(t, err)
+		assert.Equal(t, "sa-east-1", cfg.Region)
+		creds, err := cfg.Credentials.Retrieve(ctx)
+		require.NoError(t, err)
+		if creds.AccessKeyID != "profile-access-key" {
+			t.Error("the credentials aren't the config's profile's")
+		}
+
+		cfg, err = envAws(func() awsSettings { return awsSettings{Profile: "lab", Region: "eu-north-1"} })()
+		require.NoError(t, err)
+		assert.Equal(t, "eu-north-1", cfg.Region)
+	})
+
+	t.Run("none, the environment's", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("SST_AWS_REGION", "ap-south-1")
+		cfg, err := envAws(func() awsSettings { return awsSettings{} })()
+		require.NoError(t, err)
+		assert.Equal(t, "ap-south-1", cfg.Region)
+	})
 }
