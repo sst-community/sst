@@ -2,6 +2,28 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-12: step 6, the sweep in the lab
+
+The components an app uses most that steps 1 to 5 hadn't deployed, under plain Pulumi, then ejected. Committed as `9cfaedc6c`, with the `Function` fix on `v5` as `d1adf0d2a`, merged here.
+
+**The program** (project `thinsweep`, stack `sw`): a `Router` with a `Bucket` at `/files`, a `Function` at `/api` by its URL (linked to the bucket, with `addEnvironment` giving it the router's URL), a route to a URL at `/ext`, and a `Nextjs` site at its root; a `Queue` with a subscriber; a `Dynamo` table with a stream subscriber; and a `Cron`.
+
+**What changed:**
+
+- **A bundle's handler is known in a new stack's preview** (`aws/function.ts`). A function built elsewhere, like a site's server that OpenNext built, was built again by the CLI with the links' key, which a new stack's preview doesn't know yet, so its handler wasn't known either, and the AWS provider refused the function: "handler and runtime must be set when PackageType is Zip". Plain `pulumi up` previews first, so every first deploy of a site failed. The CLI's build of a bundle gives the handler it's given, so a preview that can't build it takes that. This is a bug on `v5` too: `sst diff` on a new stage, and a deploy that previews first (a stage with checks or a policy pack), so it's fixed there (`d1adf0d2a`) and merged here. The test of a `Nextjs` site in a new stage's preview now has the key unknown too, and checks every function's handler.
+- **The eject takes a route's entries out of the state** (`KvRoutesUpdate`), as it does a site's.
+- **The eject puts what `addEnvironment` added in the function's environment.** It's in the function in AWS and not in its state, so the first `pulumi up` updates the function in place, to what it already is. The eject says so, and its dry run too.
+- **The eject makes the AWS providers SST makes for a region** (`AwsProvider.sst.<region>`, which a server-rendered site's server is made with), with a `regionProvider` function in the module that makes them as SST does: the stack's AWS config, with the region.
+- **No origin access control to adopt.** The `Router` makes none of its own: its routes set their origin's access in the key-value store. Adopting SST's `OriginAccessControl` waits for a component that makes one.
+
+**Checked:**
+
+- Before the eject: `pulumi preview` (109 to create, which failed without the `Function` fix), `pulumi up` (109 created). The Next.js page at the root, `/api` with the bucket's name and the router's URL from `addEnvironment`, a file in the bucket at `/files`, `/ext` passing its path to example.com; a message on the queue, an item in the table and the cron, each logged by its function.
+- `sst eject --dry-run`, then `sst eject`: 16 secrets put in the config, 33 resources out of the state, one update in place said.
+- The program switched to `ejected()`, `sst` uninstalled, `SST_BIN_PATH` unset, SST's plugin moved out of Pulumi's plugins: `pulumi preview --diff` showed `ApiFunction`'s environment gaining `ROUTER_URL` and 76 unchanged; `pulumi up`, 1 updated. Every route answered as before, and the queue's, the table's and the cron's functions ran. Another preview: 77 unchanged.
+- `pulumi destroy`, still without SST: 77 deleted. Each of the 35 resources the stack had in the cloud checked directly (functions, roles, buckets, the distribution, the CloudFront function, the key-value store, the cache policy, queues, tables, the rule, log groups): gone; the tagging API lists nothing of the app. The 8 code files and 4 source maps the eject left in the asset bucket, where it said, were deleted by their keys. The shared stub objects are as they were.
+- Platform: the `Function`, `Nextjs` and preview tests; the full suite, where three takeover tests that timed out while the lab's Next.js site was building passed when run again. Go: `pkg/eject`'s tests (a route's entries and `addEnvironment` in the fixture), the full suite. The module the lab's state gave typechecked.
+
 ## 2026-11-12: step 6, the sweep in the mock
 
 Every SST 5 component's tests, run as Pulumi runs a program, with none of SST's globals. Committed as `d85d01786`, with the path fix on `v5` as `57d26dd4f`, merged here.

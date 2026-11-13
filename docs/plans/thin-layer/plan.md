@@ -137,9 +137,8 @@ Exit tests, in the lab: a program with a linked `Function` and a `StaticSite`, d
 
 Built for those, and passed ([progress](progress.md)). The `StaticSite` has no origin access control: its CloudFront function sets the bucket as its origin, with access control settings of its own. Left for later, each refused with a message until then:
 
-- **The `Router`'s origin access control and routes** (`OriginAccessControl`, `KvRoutesUpdate`). SST's state doesn't keep the access control's name, which has a random ending, so adopting it needs a read of the cloud with the provider's credentials.
-- **`addEnvironment`** (`FunctionEnvironmentUpdate`): what it adds is in the function's environment in AWS and not in its state, so the module's function would need it merged in.
-- **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's), the providers SST makes for a region, and a component of SST's in a component of the program's.
+- **SST's origin access control** (`OriginAccessControl`). SST's state doesn't keep its name, which has a random ending, so adopting it needs a read of the cloud with the provider's credentials. Neither the `StaticSite` nor the `Router` makes one ([step 6](#6-the-sweep)).
+- **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's), and a component of SST's in a component of the program's. (The `Router`'s routes, `addEnvironment` and the providers SST makes for a region came in [step 6](#6-the-sweep).)
 - **A project with more than one stack.** The module is the stack's it's from, and throws on another.
 
 ### 6. The sweep
@@ -150,6 +149,8 @@ Every one of SST 5's components under plain Pulumi, [as decided](#decisions), in
 - **In the lab**, the components an app uses most that steps 1 to 5 didn't deploy: a `Router` with routes to a function and a bucket, a `Queue` with a subscriber, a `Dynamo` table with a stream subscriber, a `Cron`, and `Nextjs`, deployed by `pulumi up` and called, then ejected where the eject handles them.
 
 Then the eject is extended to what the lab finds it refuses: first the `Router`'s origin access control and routes, and `addEnvironment`.
+
+Done ([progress](progress.md)). The `Router` turned out to have no origin access control of its own: its routes set their origin's access in the key-value store, as the `StaticSite` does, so adopting SST's `OriginAccessControl` (which needs a read of the cloud for its name) waits for a component that makes one. The eject now takes a route's entries out of the state, puts what `addEnvironment` added in the function's environment (an update in place to what the function already has), and makes the AWS providers SST makes for a region (`AwsProvider.sst.<region>`, which a server-rendered site's server uses) as SST does, from the stack's AWS config.
 
 ### Later
 
@@ -173,4 +174,4 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 4. Goals 2 and 3 for what's built | Done 2026-11-12, lab-checked, committed (`d0a4281d7`) |
 | The maintainer's sample program at step 4 | Done 2026-11-12: a `Bucket`, a linked `Function` and a `DevCommand`, nothing deployed |
 | 5. The eject | Done 2026-11-12 for a linked `Function`, a `Bucket` and a `StaticSite`, lab-checked, committed (`5f0a66a9d`) |
-| 6. The sweep | In the mock: done 2026-11-12, committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: next |
+| 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |
