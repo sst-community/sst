@@ -28,6 +28,8 @@ As tests:
 | 2026-11-12 | **After the eject a function keeps its last build, with a build to switch to.** Each function points at the code already in the asset bucket, so nothing changes, and for Node.js the eject writes an esbuild build a function is switched to when its code next changes. The maintainer chose it, as recommended, over building in the program from the start (the first `pulumi up` updates the code) and keeping the last build only. |
 | 2026-11-12 | **SST's own resources leave the state, and what they made stays.** Each one's delete removes what it made (a site's files, the router's keys and routes, the origin access control), so the eject takes them out of the state rather than out of the program, and SST's plugin isn't needed after it. The origin access control is adopted by Pulumi's own resource. A site's files and the router's routes stay as last deployed. The maintainer chose it, as recommended, over keeping them on SST's plugin. |
 | 2026-11-12 | **After step 5: a sweep of SST's components under plain Pulumi**, over moving an SST app to a Pulumi stack, SST's CLI on Pulumi stacks and pushing for review: the maintainer chose it, as recommended, as four components were proven and a real app uses many. |
+| 2026-11-12 | **The eject's cases that any program can hit come before the docs page**: several stacks, then SST's components inside a component of the program's. The cases tied to a component (a database's role lookup, the image prune, Cloudflare's and Vercel's resources, SST 4's origin access control) wait for that component's lab check. The maintainer asked whether to handle the other cases first; this was the recommendation. |
+| 2026-11-12 | **For several stacks, the eject writes one module from all of them**: what's the same in every stack as it is, a plain value that isn't from each stack's config, a value with a reference in it picked by stack in the code, and what only some stacks have made only on those. The maintainer chose it, as recommended, over a module for each stack (simpler, but near-identical files to keep) and keeping one stack for now. |
 | 2026-11-12 | **The eject keeps SST's components as Pulumi components of the same type and name**, so every URN stays and no alias is needed, in place of the aliases to a new parent this plan began with. Proposed with the design, with aliases left for the maintainer to ask for; the maintainer said to continue. |
 
 ## Where it starts
@@ -139,7 +141,6 @@ Built for those, and passed ([progress](progress.md)). The `StaticSite` has no o
 
 - **SST's origin access control** (`OriginAccessControl`). SST's state doesn't keep its name, which has a random ending, so adopting it needs a read of the cloud with the provider's credentials. Neither the `StaticSite` nor the `Router` makes one ([step 6](#6-the-sweep)).
 - **SST's other own resources** (the image prune, the role lookup, Cloudflare's and Vercel's), and a component of SST's in a component of the program's. (The `Router`'s routes, `addEnvironment` and the providers SST makes for a region came in [step 6](#6-the-sweep).)
-- **A project with more than one stack.** The module is the stack's it's from, and throws on another.
 
 ### 6. The sweep
 
@@ -151,6 +152,13 @@ Every one of SST 5's components under plain Pulumi, [as decided](#decisions), in
 Then the eject is extended to what the lab finds it refuses: first the `Router`'s origin access control and routes, and `addEnvironment`.
 
 Done ([progress](progress.md)). The `Router` turned out to have no origin access control of its own: its routes set their origin's access in the key-value store, as the `StaticSite` does, so adopting SST's `OriginAccessControl` (which needs a read of the cloud for its name) waits for a component that makes one. The eject now takes a route's entries out of the state, puts what `addEnvironment` added in the function's environment (an update in place to what the function already has), and makes the AWS providers SST makes for a region (`AwsProvider.sst.<region>`, which a server-rendered site's server uses) as SST does, from the stack's AWS config.
+
+### 7. The eject's other cases
+
+[As decided](#decisions), what any program can hit first:
+
+- **Several stacks.** `sst eject` reads every stack of the project and writes one module. What it makes is lined up across the stacks by URN, which is the same in each but for the stack's name. A value the same in every stack is written as it is; a plain value that isn't, like a resource's name, is read from each stack's config (`config.require("ApiFunction.name")`), where the eject puts it; a value with a reference in it that isn't the same is picked by stack (`byStack({ dev: () => role.arn, prod: () => "arn:..." })`); and what only some stacks have is made only on those (`onStack("prod") ? new ... : undefined`). A stack with none of SST's components is left out, and the module throws on a stack it has no values for. Each stack's state is saved, edited and imported on its own; if one fails, those imported before are put back.
+- **SST's components inside a component of the program's**: next.
 
 ### Later
 
@@ -174,4 +182,5 @@ SST's CLI on Pulumi stacks, other languages. Steps 1 and 2 also found ([progress
 | 4. Goals 2 and 3 for what's built | Done 2026-11-12, lab-checked, committed (`d0a4281d7`) |
 | The maintainer's sample program at step 4 | Done 2026-11-12: a `Bucket`, a linked `Function` and a `DevCommand`, nothing deployed |
 | 5. The eject | Done 2026-11-12 for a linked `Function`, a `Bucket` and a `StaticSite`, lab-checked, committed (`5f0a66a9d`) |
+| 7. The eject's other cases | Several stacks: done 2026-11-13, lab-checked, committed (`447d04e92`). Components inside the program's: next |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |

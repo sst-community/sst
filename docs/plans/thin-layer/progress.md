@@ -2,6 +2,24 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: step 7, the eject for several stacks
+
+`sst eject` writes one module for every stack of the project, [as decided](plan.md#decisions). Committed as `447d04e92`.
+
+**What changed** (`pkg/eject`):
+
+- **Each stack is read as before** (`module.go`): what the eject does with each resource, and each thing the module makes as that stack has it, its inputs written with the stack's references. A secret stays the stack's own value until the merge.
+- **The merge** (`merge.go`) lines up what the module makes across the stacks by its URN without the stack and project, and merges each one's inputs and options value by value: the same in every stack, as it is; a plain value or a secret that isn't, from each stack's config under `sst-ejected`, with the right `config.require…` for its kind (`get…` where only some stacks have it); otherwise, picked by stack with `byStack`. Options are never read from the config. What only some stacks have is made with `onStack(...)`, and referred to with a `!`, only where it's made. One stack is the same as before, but that the module reads its secrets through `config`.
+- **The command** lists the project's stacks (`pulumi stack ls --json`), refuses `--stage`, saves each stack's state, puts each one's values in its config, and imports each one's state; if an import fails, the stacks imported before get their saved state back. What it says groups what each stack takes out, and says when it's the same as the stack before.
+- **Tests**: a second stack made from the fixture (its own names, a role given as an ARN, and a queue only it has), with the module, each stack's settings and what each takes out; and a stack with nothing of SST's, left out.
+
+**Checked:** Go, `pkg/eject`'s tests and the full suite. In the lab, project `thinstacks` with stacks `dev` and `prod`: a `Bucket` and a `Function` linked to it in both, and in `prod` a `Queue` with a subscriber, which the function links to too.
+
+- `pulumi up`: 18 created in `dev`, 28 in `prod`; each function answered with its stack's bucket.
+- `sst eject --dry-run`, then `sst eject`: 6 values in `dev`'s config (2 secret), 8 in `prod`'s (4 secret); 6 and 9 resources out of the states. The module typechecked: the names from the config, the queue's parts with `onStack("prod")`, and the role's policy statements by stack, as `prod`'s refer to the queue.
+- The program switched to `ejected()`, `sst` uninstalled, `SST_BIN_PATH` unset, SST's plugin moved out: `pulumi preview --diff` showed 13 unchanged in `dev` and 20 in `prod`, nothing else; `pulumi up` the same. Both functions answered, and `prod`'s queue subscriber ran.
+- `pulumi destroy`: 13 and 20 deleted. The 13 functions, roles, buckets, queues, event source mappings and log groups checked directly: gone; the tagging API lists nothing of the app. The 6 build files left in the asset bucket deleted by their keys; the shared stub objects as they were. Both stacks removed.
+
 ## 2026-11-12: step 6, the sweep in the lab
 
 The components an app uses most that steps 1 to 5 hadn't deployed, under plain Pulumi, then ejected. Committed as `9cfaedc6c`, with the `Function` fix on `v5` as `d1adf0d2a`, merged here.
