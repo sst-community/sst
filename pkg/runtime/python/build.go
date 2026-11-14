@@ -663,8 +663,8 @@ func installDependenciesForLambda(ctx context.Context, input *runtime.BuildInput
 // re-homed inside the build context by stripping the leading "../" segments
 // (e.g. "../../lib" -> "./lib"), and the requirements.txt line is rewritten to
 // match. If two members would end up at the same path this way (e.g. "../lib"
-// and "../../lib", or "../lib" and "./lib"), the build fails instead of letting
-// one overwrite the other.
+// and "../../lib", or "../lib" and "./lib"), or the path already holds the
+// function's own files, the build fails instead of mixing the two.
 func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *projectInfo) error {
 	workspaceRoot := findWorkspaceRoot(projectInfo)
 
@@ -723,18 +723,25 @@ func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *p
 				trimmed = strings.TrimPrefix(trimmed, "../")
 			}
 			if trimmed == "" || trimmed == "." || trimmed == ".." {
-				slog.Warn("cannot re-home workspace package inside build context", "line", line)
-				continue
+				return fmt.Errorf("workspace member %q contains the workspace root, so it cannot be copied into the container build context", pkgPath)
 			}
 			contextPath = "./" + trimmed
 		}
 
 		key := filepath.Clean(contextPath)
-		if prev, ok := placed[key]; ok && prev.pkgPath != pkgPath && (prev.rehomed || isRehomed) {
+		prev, seen := placed[key]
+		if seen && prev.pkgPath != pkgPath && (prev.rehomed || isRehomed) {
 			return fmt.Errorf("workspace members %q and %q would both be copied to %q in the container build context; rename or move one of them so their paths differ once the leading \"../\" segments are stripped", prev.pkgPath, pkgPath, contextPath)
 		}
-		if _, ok := placed[key]; !ok {
+		if !seen {
 			placed[key] = placement{pkgPath: pkgPath, rehomed: isRehomed}
+			// The function's own source (e.g. a handler in "lib/") may already
+			// sit at the re-homed path. Copying would then only add the
+			// member's pyproject.toml to those files. An unpacked sdist of the
+			// member itself has a pyproject.toml or setup.py and is fine.
+			if isRehomed && dirHoldsOtherFiles(filepath.Join(input.Out(), contextPath)) {
+				return fmt.Errorf("workspace member %q would be copied to %q in the container build context, but that directory already holds other files, such as the function's own source; rename or move one of them", pkgPath, contextPath)
+			}
 		}
 
 		if isRehomed {
@@ -787,6 +794,21 @@ func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *p
 	}
 
 	return nil
+}
+
+// dirHoldsOtherFiles reports whether path exists in the build context and is
+// not a Python project (no pyproject.toml or setup.py), the same test uv
+// applies when it installs a path.
+func dirHoldsOtherFiles(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	for _, name := range []string{"pyproject.toml", "setup.py"} {
+		if _, err := os.Stat(filepath.Join(path, name)); err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // rewritePyprojectWorkspacePaths updates workspace member paths in the artifact's

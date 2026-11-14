@@ -519,19 +519,49 @@ func TestCopyWorkspacePackagesForContainer(t *testing.T) {
 		}
 	})
 
-	t.Run("member that is a parent of the workspace is not re-homed outside the context", func(t *testing.T) {
+	t.Run("member that contains the workspace root fails the build", func(t *testing.T) {
 		input, info, outDir := setup(t, "../..\nboto3==1.34.0\n")
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil || !strings.Contains(err.Error(), `"../.."`) {
+			t.Fatalf("expected an error naming \"../..\", got: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "..", "repo")); err == nil {
+			t.Error("the workspace's parent should not have been copied next to the build context")
+		}
+	})
+
+	t.Run("re-homed member at a path that holds the function's source fails the build", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		// copySourceFilesSimple put a handler directory named lib/ there.
+		if err := os.MkdirAll(filepath.Join(outDir, "lib"), 0755); err != nil {
+			t.Fatalf("failed to create handler dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outDir, "lib", "handler.py"), []byte(""), 0644); err != nil {
+			t.Fatalf("failed to write handler: %v", err)
+		}
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil || !strings.Contains(err.Error(), `"../../lib"`) || !strings.Contains(err.Error(), `"./lib"`) {
+			t.Fatalf("expected an error naming the member and its path, got: %v", err)
+		}
+	})
+
+	t.Run("re-homed member next to its own unpacked sdist is fine", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		// buildPackage unpacked the member's flat-layout sdist at lib/.
+		if err := os.MkdirAll(filepath.Join(outDir, "lib"), 0755); err != nil {
+			t.Fatalf("failed to create sdist dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outDir, "lib", "pyproject.toml"), []byte("[project]\nname = \"shared\"\n"), 0644); err != nil {
+			t.Fatalf("failed to write sdist pyproject: %v", err)
+		}
 
 		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
 			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
 		}
-		got := readRequirements(t, outDir)
-		want := "../..\nboto3==1.34.0\n"
-		if got != want {
-			t.Errorf("requirements.txt = %q, want %q", got, want)
-		}
-		if _, err := os.Stat(filepath.Join(outDir, "pyproject.toml")); err == nil {
-			t.Error("artifact pyproject.toml should not be written when nothing was re-homed")
+		if got := readRequirements(t, outDir); got != "./lib\n" {
+			t.Errorf("requirements.txt = %q, want %q", got, "./lib\n")
 		}
 	})
 
