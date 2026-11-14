@@ -62,7 +62,9 @@ func Build(input EvalOptions) (esbuild.BuildResult, error) {
 	// esbuild reports the real path of a file, so the project's .sst directory is
 	// also compared by its real path, for a project opened through a symlink.
 	sstDirs := []string{filepath.Join(input.Dir, ".sst")}
+	projectDir := input.Dir
 	if realDir, err := filepath.EvalSymlinks(input.Dir); err == nil {
+		projectDir = realDir
 		if realSST := filepath.Join(realDir, ".sst"); realSST != sstDirs[0] {
 			sstDirs = append(sstDirs, realSST)
 		}
@@ -113,6 +115,11 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 								if isWithinDir(args.Path, dir) {
 									return esbuild.OnLoadResult{}, nil
 								}
+							}
+							// Dependencies don't use the globals, and one may declare a
+							// top-level name that matches a provider, such as `postgresql`.
+							if isInNodeModules(args.Path, projectDir) {
+								return esbuild.OnLoadResult{}, nil
 							}
 							contents, err := os.ReadFile(args.Path)
 							if err != nil {
@@ -167,6 +174,22 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 func isWithinDir(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// isInNodeModules reports whether path is inside a node_modules directory,
+// looking only at the part of the path below dir, so that a project that is
+// itself inside a directory named node_modules still gets the globals.
+func isInNodeModules(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "node_modules" {
+			return true
+		}
+	}
+	return false
 }
 
 func FormatError(input []esbuild.Message) string {
