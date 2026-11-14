@@ -2,6 +2,19 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: one stub, and custom runtimes for SST 4
+
+- **How close the lines are.** Measured against `engine`: the Go engine differs from `v5`'s only by `main`'s ports (#262, #267, #269's test) and one test's gate, which `v5` gets with its next merge of `main`. What's SST 4's alone is `pkg/sst4`. The one piece of the engine left on the platform side was the `sst dev` stub's entry point, with a copy on each line that had drifted (SST 5's has #212's HTTP transport). The local runtimes' shims (`functions/nodejs-runtime`, `python-runtime`, `nodejs-bridge`) are on the platform side too, but the same on both lines.
+- **The stub moved into the engine**, at `cmd/bridge/`. Both lines now build a byte-identical stub. On SST 4's line, the HTTP transport is never taken, as no stage has a target.
+- **Custom runtimes on SST 4.** `sst.runtime` and SST 4's `Function` taking one. A runtime and injections given as they are are checked at construction, and through outputs as they resolve. For a runtime's name, the build input is the same as before. Tests are in `platform/test/components/function-runtime.test.ts` on `main`. Main's docs get the "Custom Runtimes" page, and on both lines the generator links the `Runtime` type to it, not to a component page that doesn't exist.
+- **.NET through `sst.runtime`**, for the users who asked for .NET (#264): a sample app on SST 4's line, in the lab.
+  - Two functions on Lambda's `dotnet10`: an executable that starts Lambda's runtime client itself (handler `Hello`), and a class library as AWS's templates write one (handler `Api::Api.Function::Handler`).
+  - Both deployed and answered, and one read its linked bucket by decrypting its links in C#.
+  - In `sst dev` both ran on this machine with `dotnet`. The class library has a one-line `Main` that hosts it with `Amazon.Lambda.RuntimeSupport`'s `RuntimeSupportInitializer`, as Lambda's .NET runtime does; Lambda never calls it.
+  - An edit rebuilt each once, as `watch` only takes top-level files (`dotnet` writes `.cs` files under `obj/`).
+  - Removed and cleaned up. The Custom Runtimes page has a .NET section from it on both lines.
+- **A fix in #262's port**: `sst dev`'s `AddTarget` checked a handler as the Lambda runtime's name would build it, even for a function its own commands build, whose handler may not exist before they run. Now it doesn't (`pkg/server/runtime`'s test).
+
 ## 2026-11-13: no targets on SST 4's line
 
 - **The lab passed on `engine`**, and it's draft PR #272 onto `main`, whose CI passed.

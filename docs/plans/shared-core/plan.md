@@ -17,6 +17,8 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
 - **A platform says what it is in a manifest**: `sst` in `platform/package.json`. It gives the contract's version, the type files an app's `config.d.ts` imports, and the modules an app imports from the platform (`sst/components` and its groups). It replaces the layouts `install.go`, `tsconfig.go` and `programGlobals` had hard-coded. A platform that declares a contract this CLI doesn't have fails as the project loads, with a message.
 - **The helper resources both lines have, byte for byte, are shared**: SST 4's line registers SST 5's own types for them on its RPC. SST 4's copies stay only where the behaviour differs.
 - **Each line has its own commands.** SST 4's leaves out `migrate` (and its `--codemod`), `eject`, `target`, `build-server`, and `sst dev` for a plain Pulumi program, and keeps the rest of 4.25.0's.
+- **The `sst dev` stub is the engine's** (2026-11-13, the maintainer chose to do it in the PR). Its entry point moved from each platform's `functions/bridge/` to `cmd/bridge/`, and both platforms' builds take it from there, so both lines deploy the same stub.
+- **SST 4 gets custom runtimes** (2026-11-13, in the same PR, the maintainer's choice). `sst.runtime(...)` on SST 4's `Function` is SST 5's API, with `runtime.ts` the same file on both lines, so a stage that moves keeps it. The engine needed nothing; SST 4's `Function` passes the runtime's commands with its build, as SST 5's does. It's the one SST 4 feature the shared engine brought so far; packages stay SST 5's.
 
 ## What SST 4's line needs from the engine (contract 0)
 
@@ -38,7 +40,7 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
 
 - **`sst dev`'s stub isn't byte for byte 4.25.0's.**
   - 4.25.0's release stub was built with Go 1.26.10 on CI's Linux, and can't be reproduced on a Mac, even from the `v4.25.0` tag with the same Go.
-  - With the same Go and dependencies, the engine's stub differs from one built from 4.25.0's source too: the bridge's packages changed on `v5` (`cmd/sst/mosaic/aws/bridge`: its connection, and how a closed channel is handled).
+  - With the same Go and dependencies, the engine's stub differs from one built from 4.25.0's source too: the bridge's packages changed on `v5` (`cmd/sst/mosaic/aws/bridge`: its connection, and how a closed channel is handled), and the stub is now the engine's own (`cmd/bridge/`), the same one SST 5 deploys.
   - Deployed stages are untouched. A stage run with `sst dev` gets a new stub object, and its functions pointed at it, on its first `sst dev` with a release built on this engine, as happens with any 4.x release whose CI Go or bridge code changes.
   - Making it the same would mean keeping the stub's packages as `main`'s, which isn't worth it.
 - **A stage named in `targets` in `app()` is refused** ([above](#what-sst-4s-line-needs-from-the-engine-contract-0)). SST 4.25.0 never read `targets`, so it deployed such a stage to the cloud. Only an app that wrote a key SST 4's types don't declare can meet it, and refusing is the safer of the two.
