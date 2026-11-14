@@ -3,6 +3,7 @@ export * as cloudflare from "./cloudflare/index.js";
 export * as vercel from "./vercel/index.js";
 export * from "./secret.js";
 export * from "./linkable.js";
+export { runtime, type Runtime, type RuntimeSettings } from "./runtime.js";
 /**
  * experimental packages, you may be fired for using
  */

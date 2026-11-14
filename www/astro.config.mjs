@@ -70,6 +70,7 @@ const sidebar = [
       { label: "Migrate From v2", slug: "docs/migrate-from-v2" },
       { label: "Migrate From v3", slug: "docs/migrate-from-v3" },
       { label: "Custom Domains", slug: "docs/custom-domains" },
+      { label: "Custom Runtimes", slug: "docs/custom-runtimes" },
       { label: "Import Resources", slug: "docs/import-resources" },
       { label: "Set up a Monorepo", slug: "docs/set-up-a-monorepo" },
       { label: "Configure a Router", slug: "docs/configure-a-router" },
