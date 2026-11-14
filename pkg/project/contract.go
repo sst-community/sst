@@ -51,8 +51,8 @@ type Contract interface {
 	// version the platform's components were written for
 	HoldsProviderMajors() bool
 	// RefuseTarget refuses a stage the app gives a target, when the
-	// contract's components don't run on one. Left alone, the stage would
-	// deploy to the real cloud.
+	// contract's components don't run on one. Not refused, the stage runs on
+	// the target.
 	RefuseTarget(stage string) error
 }
 

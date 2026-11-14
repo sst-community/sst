@@ -146,8 +146,9 @@ func (Contract) RegisterRPC(ctx context.Context, p *project.Project, server *rpc
 func (Contract) HoldsProviderMajors() bool { return false }
 
 // RefuseTarget refuses every target: SST 4's components were never run on
-// one, and SST 4's CLI had none, so the stage is stopped rather than
-// deployed to the real cloud
+// one. SST 4.25.0's CLI never read `targets` and deployed such a stage to
+// the cloud; an app that names a target means the stage to run on it, so
+// it's stopped instead.
 func (Contract) RefuseTarget(stage string) error {
 	return util.NewReadableError(nil, fmt.Sprintf("The %q stage has a target in app(), and SST 4's components deploy only to the cloud. Targets come with SST 5.", stage))
 }
