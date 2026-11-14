@@ -185,8 +185,8 @@ export interface WebFunctionArgs {
      * requests and `lambda:InvokeWebFunctionEndpoint` permission. IAM requests must
      * include `X-Amz-Content-SHA256`, including the empty-payload hash for bodyless requests.
      *
-     * With `domain`, the endpoint uses `iam` and only the CloudFront distribution can call
-     * it, so `"none"` can't be set together with `domain`.
+     * With `domain`, the endpoint uses `iam`, so the CloudFront distribution signs its
+     * requests with origin access control. `"none"` can't be set together with `domain`.
      * @default `"none"`, or `"iam"` with `domain`.
      * @example
      * ```js
@@ -204,10 +204,12 @@ export interface WebFunctionArgs {
    * The certificate must be in `us-east-1`, as CloudFront requires.
    *
    * The distribution calls the endpoint with origin access control. The endpoint uses
-   * `iam` authorization, and SST adds a resource policy to the function that lets only this
-   * distribution invoke it. Requests to the endpoint's own domain need to be signed.
-   * Through the domain, clients don't sign requests or send `X-Amz-Content-SHA256`, and
-   * your application's own `Authorization` header reaches your server.
+   * `iam` authorization, and SST adds a resource policy to the function that grants this
+   * distribution permission to invoke it. Other callers can still reach the endpoint's own
+   * domain directly, with SigV4-signed requests and `lambda:InvokeWebFunctionEndpoint`
+   * permission. Through the domain, clients don't sign requests or send
+   * `X-Amz-Content-SHA256`, and your application's own `Authorization` header reaches your
+   * server.
    *
    * SST owns the function's resource policy. To allow other callers, add statements to it
    * with `transform.resourcePolicy` rather than creating another `ResourcePolicy`, which
@@ -488,12 +490,27 @@ export interface WebFunctionArgs {
      */
     cdn?: Transform<CdnArgs>;
     /**
-     * Transform the function's resource policy, created when `domain` is set. Add
-     * statements here to allow other callers.
+     * Transform the function's resource policy, created when `domain` is set. To allow
+     * other callers, add statements to it and keep the distribution's.
      * @default No transform.
      * @example
      * ```js
-     * { transform: { resourcePolicy: (args) => { args.policy = myPolicy; } } }
+     * {
+     *   transform: {
+     *     resourcePolicy: (args) => {
+     *       args.policy = $resolve([args.policy]).apply(([policy]) => {
+     *         const document = JSON.parse(policy);
+     *         document.Statement.push({
+     *           Effect: "Allow",
+     *           Principal: { AWS: "arn:aws:iam::123456789012:root" },
+     *           Action: "lambda:InvokeWebFunctionEndpoint",
+     *           Resource: "*"
+     *         });
+     *         return JSON.stringify(document);
+     *       });
+     *     }
+     *   }
+     * }
      * ```
      */
     resourcePolicy?: Transform<lambdaweb.ResourcePolicyArgs>;
@@ -523,6 +540,9 @@ export interface WebFunctionArgs {
  * With `vpc`, it also needs permission to create, update and delete Lambda network
  * connectors, `lambda:PassNetworkConnector` to give a revision its connector, and
  * `iam:PassRole` on the operator role.
+ * With `domain`, it also needs permission to manage CloudFront distributions, origin
+ * access controls, cache policies and CloudFront Functions, the function's resource
+ * policy, an ACM certificate in `us-east-1`, and the DNS records.
  * These permissions belong to the deployment role, not the application execution role.
  * The function and code bucket names are retained across ordinary deployments.
  * SST manages both the central CloudWatch group and its HomeRegion `.local` group with
@@ -1493,7 +1513,7 @@ export class WebFunction extends Component implements Link.Linkable {
     function validateDomainAuthorization(authorization: unknown) {
       if (authorization === "none")
         throw new VisibleError(
-          `The "${name}" WebFunction can't set "url.authorization" to "none" with "domain". Its endpoint uses IAM authorization, so that only its CloudFront distribution can call it.`,
+          `The "${name}" WebFunction can't set "url.authorization" to "none" with "domain". Its endpoint uses IAM authorization, so that its CloudFront distribution signs its requests with origin access control.`,
         );
     }
     function integer(
@@ -1679,8 +1699,8 @@ export class WebFunction extends Component implements Link.Linkable {
        */
       originAccessControl: this.originAccessControl,
       /**
-       * The function's resource policy, which lets the distribution invoke the
-       * endpoint. Only created when `domain` is set.
+       * The function's resource policy, which grants the distribution permission to
+       * invoke the endpoint. Only created when `domain` is set.
        */
       resourcePolicy: this.resourcePolicy,
     };

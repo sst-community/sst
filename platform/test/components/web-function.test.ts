@@ -1585,7 +1585,7 @@ describe("WebFunction", () => {
       );
     });
 
-    it("lets only its distribution invoke the endpoint", async () => {
+    it("grants its distribution permission to invoke the endpoint", async () => {
       const fn = new WebFunction("Scoped", {
         entrypoint: "index.mjs",
         bundle: out,
@@ -1635,7 +1635,7 @@ describe("WebFunction", () => {
             domain: { name: "api.example.com", dns: false, cert },
           }),
       ).toThrow(
-        'The "PublicDomain" WebFunction can\'t set "url.authorization" to "none" with "domain".',
+        'The "PublicDomain" WebFunction can\'t set "url.authorization" to "none" with "domain". Its endpoint uses IAM authorization, so that its CloudFront distribution signs its requests with origin access control.',
       );
     });
 
@@ -1648,20 +1648,35 @@ describe("WebFunction", () => {
           cdn: (args) => {
             args.comment = "custom";
           },
+          // As the `transform.resourcePolicy` docs show (with `$resolve`): add a
+          // statement and keep the distribution's.
           resourcePolicy: (args) => {
-            args.policy = "{}";
+            args.policy = pulumi.all([args.policy]).apply(([policy]) => {
+              const document = JSON.parse(policy);
+              document.Statement.push({
+                Effect: "Allow",
+                Principal: { AWS: "arn:aws:iam::123456789012:root" },
+                Action: "lambda:InvokeWebFunctionEndpoint",
+                Resource: "*",
+              });
+              return JSON.stringify(document);
+            });
           },
         },
       });
       await resolved(fn.nodes.cdn!.nodes.distribution.arn);
       await resolved(fn.nodes.resourcePolicy!.policy);
       expect(distribution("DomainTransformed").comment).toBe("custom");
-      expect(
+      const statements = JSON.parse(
         named(
           "DomainTransformedResourcePolicy",
           "aws:lambdaweb/resourcePolicy:ResourcePolicy",
         ).inputs.policy,
-      ).toBe("{}");
+      ).Statement;
+      expect(statements.map((s: any) => s.Principal)).toEqual([
+        { Service: "cloudfront.amazonaws.com" },
+        { AWS: "arn:aws:iam::123456789012:root" },
+      ]);
     });
 
     it("creates no distribution in sst dev while the server runs locally", async () => {
