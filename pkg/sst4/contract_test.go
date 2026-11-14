@@ -309,6 +309,17 @@ func TestRefuseTombstone(t *testing.T) {
 	}
 }
 
+// A stage the app gives a target is stopped, not deployed to the real cloud
+func TestRefuseTarget(t *testing.T) {
+	err := (Contract{}).RefuseTarget("local")
+	if err == nil {
+		t.Fatal("a stage with a target ran on SST 4's components")
+	}
+	if want := `The "local" stage has a target in app(), and SST 4's components deploy only to the cloud. Targets come with SST 5.`; err.Error() != want {
+		t.Fatalf("the refusal is %q", err.Error())
+	}
+}
+
 func TestHoldsNoProviderMajors(t *testing.T) {
 	if (Contract{}).HoldsProviderMajors() {
 		t.Fatal("SST 4 refused a provider's other major version")

@@ -52,3 +52,6 @@ func (programContract) RegisterRPC(ctx context.Context, p *Project, server *rpc.
 }
 
 func (programContract) HoldsProviderMajors() bool { return true }
+
+// RefuseTarget refuses nothing: SST 5's components run on a target
+func (programContract) RefuseTarget(stage string) error { return nil }

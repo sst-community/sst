@@ -154,6 +154,40 @@ func TestLockReleasesAStageTheContractRefuses(t *testing.T) {
 	assert.NotEmpty(t, update.ID)
 }
 
+// noTargets is SST 5's contract, but its components don't run on a target
+type noTargets struct {
+	programContract
+	refuse error
+}
+
+func (n noTargets) RefuseTarget(stage string) error { return n.refuse }
+
+// A stage the app gives a target gets it, unless the contract refuses it:
+// then the project stops, rather than deploy the stage to the real cloud
+func TestStageTarget(t *testing.T) {
+	settings := json.RawMessage(`{"name": "emulator", "endpoint": "http://127.0.0.1:4566", "region": "us-east-1", "credentials": {"accessKeyId": "test", "secretAccessKey": "test"}, "providers": {"aws": {}}}`)
+	app := &App{Name: "my-app", Stage: "local", Providers: map[string]interface{}{}, Targets: map[string]json.RawMessage{"local": settings}}
+	p := sst5(&Project{app: app})
+
+	local, err := p.stageTarget("local")
+	require.NoError(t, err)
+	require.NotNil(t, local)
+	assert.Equal(t, "emulator", local.Name())
+	none, err := p.stageTarget("production")
+	require.NoError(t, err)
+	assert.Nil(t, none)
+
+	refused := errors.New("no targets")
+	p.contract = noTargets{refuse: refused}
+	local, err = p.stageTarget("local")
+	require.ErrorIs(t, err, refused)
+	assert.Nil(t, local)
+	// a stage without a target isn't refused
+	none, err = p.stageTarget("production")
+	require.NoError(t, err)
+	assert.Nil(t, none)
+}
+
 // SST 4's platform, as its manifest has it on main: no modules to import
 var sst4Manifest = &js.PlatformManifest{
 	Contract: 0,

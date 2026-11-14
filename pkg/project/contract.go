@@ -50,6 +50,10 @@ type Contract interface {
 	// HoldsProviderMajors is whether a provider has to be at the major
 	// version the platform's components were written for
 	HoldsProviderMajors() bool
+	// RefuseTarget refuses a stage the app gives a target, when the
+	// contract's components don't run on one. Left alone, the stage would
+	// deploy to the real cloud.
+	RefuseTarget(stage string) error
 }
 
 // The contracts this CLI speaks, by version
