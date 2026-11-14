@@ -13,6 +13,23 @@ The log, newest first. The plan is [plan.md](plan.md).
   - New files under `cmd/sst` are ignored by `.gitignore` (`sst`), so they're added with `-f`. A copy of the changes that lists untracked files misses them, as the SST 4 copy did at checkpoint A: its `cmd/sst` contract test hadn't run there until now.
   - `tcell-term`'s `TestAnywhere` fails under `-race` at `v5-thin-layer`'s tip too, before any of this: a race of its own.
 
+## 2026-11-13: the PR's branch, and `sst dev`'s start
+
+- **`v5` holds the thin layer and the engine**: local `v5` was moved forward to this branch. Pushing it is the maintainer's call.
+- **`engine`** is the branch for the pull request onto `main`: `main` with the engine and nothing else of SST 5's.
+  - Its `cmd`, `pkg` and `internal` are this branch's, with `main`'s Go changes since `7c8a2d529` ported onto them.
+  - **#262** (handlers checked in `sst dev`'s deploy) is ported, and the command runtime of `sst.runtime` checks nothing, as its build command says what a handler is.
+  - **#267's Go part** is ported.
+  - **#269 is superseded**: a global reaches a file through esbuild's `define`, under a name of the CLI's, so a dependency's own top-level `postgresql` (sql-formatter's) never clashes. `TestBuildDependencyDeclaringAGlobalsName` pins it.
+  - `TestSchemaMatchesDevFile` skips on SST 4's platform, whose SDK has no `sst.dev.json`.
+  - Beside the engine, `main` gets the manifest, a CI step that builds the SDK before the Go tests (the runtimes' tests import it), and the Console docs without "Local logs", as on `v5`.
+- **The lab on `engine`'s SST 4 CLI**, against a CLI built from `main`, found one bug of the engine's, in `sst dev`'s start.
+  - `sst dev --mode=basic` exited about 250 ms in, deploying nothing, twice in about six runs.
+  - The UI asks for sst dev's events once the server is ready, and sst dev registered its routes in a goroutine, so the first ask could get a 404. `Stream` took that as the end of the events, and the UI ended the CLI.
+  - The routes are registered before the server serves now (`dev.Register`), and `Stream` waits for sst dev as `Deploy` did.
+  - `TestStreamWaitsForSSTDev` fails on the code before: the stream closed at once. `TestRegisterAddsTheRoutesAtOnce` pins the order.
+  - `main` has the same shapes, so it was there in 4.x too, unseen.
+
 ## 2026-11-13: the lab, SST 4.25.0 against the engine's SST 4 CLI
 
 The other session ran it, as it did for the POC. SST 4.25.0 deployed each stage first. Then came 4.25.0's own diff, the engine's diff and deploy, and 4.25.0's diff after.
