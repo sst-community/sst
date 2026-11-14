@@ -20,7 +20,7 @@ import (
 
 // The engine speaks this contract to a platform that declares version 0
 func TestRegistered(t *testing.T) {
-	contract, err := project.ContractFor(&js.PlatformManifest{Contract: 0})
+	contract, err := project.ContractFor(&js.PlatformManifest{Contract: new(0)})
 	if err != nil {
 		t.Fatal(err)
 	}

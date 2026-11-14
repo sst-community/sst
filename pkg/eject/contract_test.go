@@ -51,7 +51,7 @@ func onSST5Components(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pkg.SST == nil || pkg.SST.Contract != 1 {
+	if !pkg.SST.Speaks(1) {
 		t.Skip("this build's platform doesn't have SST 5's components")
 	}
 }

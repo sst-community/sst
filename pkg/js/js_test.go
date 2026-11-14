@@ -216,8 +216,8 @@ func TestPlatformModulesAreTheGroups(t *testing.T) {
 	pkg, err := platform.PackageJson()
 	require.NoError(t, err)
 	require.NotNil(t, pkg.SST, "platform/package.json has `sst`")
-	if pkg.SST.Contract < 1 {
-		t.Skipf("the platform speaks contract %d, whose app imports no `sst/components` module", pkg.SST.Contract)
+	if pkg.SST.Speaks(0) {
+		t.Skip("the platform speaks contract 0, whose app imports no `sst/components` module")
 	}
 	modules := []string{}
 	for module := range pkg.SST.Modules {

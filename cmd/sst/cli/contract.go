@@ -14,15 +14,15 @@ import (
 // lines have it.
 
 // platformContract is the version of the program contract the CLI's platform
-// speaks, as its manifest says. A manifest that can't be read counts as the
-// oldest's, so none of SST 5's commands are offered: loading a project says
-// what's wrong with it.
+// speaks, as its manifest says. A manifest that can't be read, or doesn't
+// state its contract, counts as the oldest's, so none of SST 5's commands are
+// offered: loading a project says what's wrong with it.
 var platformContract = sync.OnceValue(func() int {
 	manifest, err := project.EmbeddedManifest()
-	if err != nil || manifest == nil {
+	if err != nil || manifest == nil || manifest.Contract == nil {
 		return 0
 	}
-	return manifest.Contract
+	return *manifest.Contract
 })
 
 // PlatformContract is the version of the program contract the CLI's platform

@@ -57,8 +57,9 @@ type PackageJson struct {
 // or SST 5's, and reads what to do with it from here.
 type PlatformManifest struct {
 	// Contract is the version of the program contract its components speak:
-	// 0 for SST 4's, 1 for SST 5's
-	Contract int `json:"contract"`
+	// 0 for SST 4's, 1 for SST 5's. Every platform states it: one that
+	// doesn't is refused, rather than taken for SST 4's.
+	Contract *int `json:"contract"`
 	// Types are what an app's types import from the platform's types
 	Types PlatformTypes `json:"types"`
 	// Modules are the modules an app or a component package imports from the
@@ -66,6 +67,12 @@ type PlatformManifest struct {
 	// `sst/components/aws`, each with its file in the platform's types,
 	// without an extension, like `components/aws/index`
 	Modules map[string]string `json:"modules,omitempty"`
+}
+
+// Speaks is whether the platform states it speaks this version of the
+// program contract
+func (m *PlatformManifest) Speaks(version int) bool {
+	return m != nil && m.Contract != nil && *m.Contract == version
 }
 
 // PlatformTypes are what an app's types import from a platform's types: its

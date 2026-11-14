@@ -74,7 +74,10 @@ func ContractFor(manifest *js.PlatformManifest) (Contract, error) {
 	if manifest == nil {
 		return nil, util.NewReadableError(nil, "The platform this CLI has doesn't say which components it has: its package.json has no `sst`.")
 	}
-	contract, ok := contracts[manifest.Contract]
+	if manifest.Contract == nil {
+		return nil, util.NewReadableError(nil, "The platform this CLI has doesn't say which program contract its components speak: its package.json's `sst` has no `contract`.")
+	}
+	contract, ok := contracts[*manifest.Contract]
 	if !ok {
 		versions := []int{}
 		for version := range contracts {
@@ -83,7 +86,7 @@ func ContractFor(manifest *js.PlatformManifest) (Contract, error) {
 		sort.Ints(versions)
 		return nil, util.NewReadableError(nil, fmt.Sprintf(
 			"The platform this CLI has speaks version %d of the program contract, and this CLI was built with %v.",
-			manifest.Contract, versions,
+			*manifest.Contract, versions,
 		))
 	}
 	return contract, nil
