@@ -284,7 +284,7 @@ func TestServerTakesStoredProviderCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest == nil || manifest.Contract != project.ContractVersion {
+	if !manifest.Speaks(project.ContractVersion) {
 		t.Skip("this build's platform doesn't speak SST 5's contract")
 	}
 	app := t.TempDir()

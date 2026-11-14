@@ -22,7 +22,7 @@ import (
 // tests of the program contract use it, whichever platform this build has:
 // a build with SST 4's runs them too.
 var sst5Manifest = &js.PlatformManifest{
-	Contract: 1,
+	Contract: new(1),
 	Types: js.PlatformTypes{
 		Global: []string{"global.d.ts", "global-aliases.d.ts"},
 		Config: "config.js",
@@ -52,8 +52,8 @@ func TestSST5ManifestIsThePlatforms(t *testing.T) {
 	manifest, err := EmbeddedManifest()
 	require.NoError(t, err)
 	require.NotNil(t, manifest, "platform/package.json has `sst`")
-	if manifest.Contract != ContractVersion {
-		t.Skipf("this build's platform speaks contract %d", manifest.Contract)
+	if !manifest.Speaks(ContractVersion) {
+		t.Skip("this build's platform doesn't speak SST 5's contract")
 	}
 	assert.Equal(t, sst5Manifest, manifest)
 }
@@ -66,8 +66,12 @@ func TestContractFor(t *testing.T) {
 	_, err = ContractFor(nil)
 	assert.ErrorContains(t, err, "doesn't say which components it has")
 
-	_, err = ContractFor(&js.PlatformManifest{Contract: 9})
+	_, err = ContractFor(&js.PlatformManifest{Contract: new(9)})
 	assert.ErrorContains(t, err, "speaks version 9 of the program contract")
+
+	// A manifest that doesn't state its contract isn't taken for SST 4's
+	_, err = ContractFor(&js.PlatformManifest{Types: sst4Manifest.Types})
+	assert.ErrorContains(t, err, "has no `contract`")
 }
 
 // fakeContract is SST 5's, but reads a state as SST 4's does: a function
@@ -190,7 +194,7 @@ func TestStageTarget(t *testing.T) {
 
 // SST 4's platform, as its manifest has it on main: no modules to import
 var sst4Manifest = &js.PlatformManifest{
-	Contract: 0,
+	Contract: new(0),
 	Types:    js.PlatformTypes{Global: []string{"global.d.ts"}, Config: "config"},
 }
 
