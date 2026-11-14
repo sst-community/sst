@@ -505,7 +505,7 @@ commands:
 		"functions:\n  api/a: a.handler\n  api-a: b.handler\n":                   `would share the id "api-a"`,
 		"commands:\n  Web:\n    command: x\n    autostart: maybe\n":              "a string isn't expected here",
 		"functions: [Api]\n":                                                     "a mapping of names to handlers",
-		"functions:\n  Api:\n    handler: crates/api\n    runtime: rust\n":       "runtime is rust, which sst dev doesn't run for a Pulumi program yet",
+		"functions:\n  Api:\n    handler: crates/api\n    runtime: rust\n":       "runtime is rust, which sst pulumi dev doesn't run for a Pulumi program yet",
 		"commands:\n  Web:\n    command: npm run dev\n    directory: /srv/web\n": "/srv/web is a full path",
 	} {
 		_, err := parseDevFile([]byte(text))
@@ -881,7 +881,7 @@ func TestCommandDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// from the file's folder, wherever sst dev runs
+	// from the file's folder, wherever sst pulumi dev runs
 	for cwd, want := range map[string][2]string{
 		root:                         {"web", "."},
 		filepath.Join(root, "infra"): {filepath.Join("..", "web"), ".."},
@@ -987,7 +987,7 @@ func TestDevContractPattern(t *testing.T) {
 	}{
 		"Cron":   {"nodejs22.x", false, "no functions/Cron.handler"},
 		"Image":  {"nodejs22.x", true, "a container image"},
-		"Java":   {"java21", false, "sst dev doesn't run java21"},
+		"Java":   {"java21", false, "sst pulumi dev doesn't run java21"},
 		"Native": {"", false, "its runtime isn't known yet"},
 	} {
 		answer, err := function(name, input.runtime, input.image)
@@ -995,7 +995,7 @@ func TestDevContractPattern(t *testing.T) {
 			t.Errorf("%s: got %+v, %v, %q", name, answer, err, p.cloud[name])
 		}
 	}
-	if got := listFunctions(p.cloud); got != "Cron (no functions/Cron.handler), Image (a container image), Java (sst dev doesn't run java21), Native (its runtime isn't known yet)" {
+	if got := listFunctions(p.cloud); got != "Cron (no functions/Cron.handler), Image (a container image), Java (sst pulumi dev doesn't run java21), Native (its runtime isn't known yet)" {
 		t.Fatalf("got %q", got)
 	}
 	// one whose source is there runs here: recorded, then refused for want of
@@ -1012,7 +1012,7 @@ func TestDevContractPattern(t *testing.T) {
 	if _, err := function("a.b", "nodejs22.x", false); err == nil || !strings.Contains(err.Error(), "aws provider") {
 		t.Fatalf("got %v", err)
 	}
-	if answer, err := function("a-b", "nodejs22.x", false); err != nil || answer.Live || p.cloud["a-b"] != "its id in sst dev, a-b, is a.b's" {
+	if answer, err := function("a-b", "nodejs22.x", false); err != nil || answer.Live || p.cloud["a-b"] != "its id in sst pulumi dev, a-b, is a.b's" {
 		t.Fatalf("got %+v, %v, %q", answer, err, p.cloud["a-b"])
 	}
 	// a pattern that matches no function isn't an error

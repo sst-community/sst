@@ -28,8 +28,8 @@ import (
 	"github.com/sst/sst/v3/pkg/types"
 )
 
-// Run deploys the program to its stack for sst dev, with pulumi up, tells the
-// program it's in dev and where sst dev is, and reads what it left from the
+// Run deploys the program to its stack for sst pulumi dev, with pulumi up, tells the
+// program it's in dev and where sst pulumi dev is, and reads what it left from the
 // stack's state.
 func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 	if input.Command != "deploy" || !input.Dev {
@@ -63,7 +63,7 @@ func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 	p.here = map[string]string{}
 	p.mu.Unlock()
 
-	// one for each stack, as sst dev can run on two stacks of a project at once
+	// one for each stack, as sst pulumi dev can run on two stacks of a project at once
 	eventlogPath := filepath.Join(p.pathWorkingDir(), "pulumi."+url.PathEscape(p.stack)+".events.json")
 	eventlog, err := os.OpenFile(eventlogPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
@@ -102,9 +102,9 @@ func (p *Program) Run(ctx context.Context, input *project.StackInput) error {
 		// what makes --event-log a flag pulumi takes
 		"PULUMI_DEBUG_COMMANDS=true",
 	)
-	// SST's components give their stubs the region of sst dev's own AWS
+	// SST's components give their stubs the region of sst pulumi dev's own AWS
 	// provider, as an SST app's CLI gives it, for the transport the stubs
-	// reach sst dev through
+	// reach sst pulumi dev through
 	if p.awsProvider != nil {
 		cmd.Env = append(cmd.Env, "SST_AWS_REGION="+p.awsProvider.Config().Region)
 	}
@@ -338,7 +338,7 @@ func functionsMade(asked map[string]bool) string {
 	return "The program made " + strings.Join(names, ", ") + "."
 }
 
-// GetCompleted reads what sst dev needs of the stack's state: its outputs,
+// GetCompleted reads what sst pulumi dev needs of the stack's state: its outputs,
 // which the dev commands' environment takes, and its roles' ARNs, for the
 // roles they run as. The state is read with its secrets encrypted; only a
 // secret output a dev command's environment names is read in the clear.
@@ -377,7 +377,7 @@ func (p *Program) revealOutput(name string) (interface{}, error) {
 
 // completedFromExport reads what `pulumi stack export` printed: the stack's
 // outputs, with its secrets hidden as pulumi shows them, what SST's
-// components recorded for sst dev, as an SST app's state is read, and the dev
+// components recorded for sst pulumi dev, as an SST app's state is read, and the dev
 // commands DevFile names, with what they take of the state. reveal reads a
 // secret output in the clear, for a dev command's environment, and
 // showingSecrets the state in the clear, for a record that holds a secret.
@@ -452,7 +452,7 @@ func readExport(data []byte) (apitype.DeploymentV3, error) {
 	return deployment, nil
 }
 
-// addRecords adds what SST's components recorded in the state for sst dev:
+// addRecords adds what SST's components recorded in the state for sst pulumi dev:
 // their reports (a function to run here, a dev command, a hint) and the
 // properties of what can be linked, as an SST app's are read. A record that
 // holds a secret is read from the state in the clear, and only that record.
@@ -503,7 +503,7 @@ func addRecords(complete *project.CompleteEvent, deployment apitype.DeploymentV3
 	return nil
 }
 
-// recordOf is what a resource of the state records for sst dev: a link's
+// recordOf is what a resource of the state records for sst pulumi dev: a link's
 // outputs, a component's report (its _sst output), or nil
 func recordOf(res apitype.ResourceV3) map[string]interface{} {
 	if string(res.Type) == project.LinkRefType {
@@ -710,7 +710,7 @@ func scanProgram(root, entry string) programScan {
 }
 
 // linked is a file's path, and its path through each link to the project's
-// folder or the folder sst dev watches: esbuild gives a file's real path, and
+// folder or the folder sst pulumi dev watches: esbuild gives a file's real path, and
 // the watcher gives it as it's under the folder it watches
 func (p *Program) linked(path string) []string {
 	paths := []string{path}

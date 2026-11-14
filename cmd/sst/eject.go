@@ -31,7 +31,7 @@ var CmdEject = &cli.Command{
 			"",
 			"With `--dry-run`, it prints what it would write and take out of the state, and changes nothing.",
 			"",
-			"It ejects every stack of the project together, and refuses if it can't eject one without a change in the cloud, like a stack last deployed by `sst dev`.",
+			"It ejects every stack of the project together, and refuses if it can't eject one without a change in the cloud, like a stack last deployed by `sst pulumi dev`.",
 		}, "\n"),
 	},
 	Flags: []cli.Flag{

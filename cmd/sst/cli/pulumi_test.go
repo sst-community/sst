@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -17,6 +18,13 @@ func cliFor(command string, flags ...string) *Cli {
 		parsed[flags[i]] = &value
 	}
 	return &Cli{flags: parsed, path: CommandPath{{Name: "sst"}, {Name: command}}}
+}
+
+// pulumiDev is sst pulumi dev, with flags
+func pulumiDev(flags ...string) *Cli {
+	c := cliFor("dev", flags...)
+	c.path = CommandPath{{Name: "sst"}, {Name: "pulumi"}, {Name: "dev"}}
+	return c
 }
 
 func touch(t *testing.T, path string) {
@@ -34,14 +42,16 @@ func TestDiscoverPulumiProject(t *testing.T) {
 	touch(t, filepath.Join(root, "Pulumi.yaml"))
 	t.Chdir(filepath.Join(root))
 
-	// sst dev runs it
-	got, err := cliFor("dev").Discover()
+	// sst pulumi dev runs it
+	got, err := pulumiDev().Discover()
 	if err != nil || got != filepath.Join(root, "Pulumi.yaml") {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	// every other command says to use pulumi
-	if _, err := cliFor("deploy").Discover(); !errors.Is(err, pulumidev.ErrCommand) {
-		t.Fatalf("got %v", err)
+	// every other command, sst dev too, says to use it, and pulumi
+	for _, command := range []string{"dev", "deploy"} {
+		if _, err := cliFor(command).Discover(); !errors.Is(err, pulumidev.ErrCommand) {
+			t.Fatalf("%s: got %v", command, err)
+		}
 	}
 }
 
@@ -57,6 +67,14 @@ func TestDiscoverSSTAppFirst(t *testing.T) {
 		if err != nil || got != filepath.Join(root, "sst.config.ts") {
 			t.Fatalf("%s: got %q, %v", command, got, err)
 		}
+	}
+	// sst pulumi dev, asked for by name, runs the Pulumi project
+	got, err := pulumiDev().Discover()
+	if err != nil || got != filepath.Join(root, "infra", "Pulumi.yaml") {
+		t.Fatalf("sst pulumi dev: got %q, %v", got, err)
+	}
+	if !pulumiDev().IsPulumiProgram() {
+		t.Fatal("sst pulumi dev in a Pulumi project isn't a Pulumi program")
 	}
 }
 
@@ -113,12 +131,30 @@ func TestDiscoverPulumiConfig(t *testing.T) {
 	touch(t, filepath.Join(root, "infra", "Pulumi.yaml"))
 	t.Chdir(root)
 	config := filepath.Join(root, "infra", "Pulumi.yaml")
-	got, err := cliFor("dev", "config", config).Discover()
+	got, err := pulumiDev("config", config).Discover()
 	if err != nil || got != config {
 		t.Fatalf("got %q, %v", got, err)
 	}
+	if _, err := cliFor("dev", "config", config).Discover(); !errors.Is(err, pulumidev.ErrCommand) {
+		t.Fatalf("sst dev: got %v", err)
+	}
+	// sst pulumi dev takes a Pulumi.yaml alone
+	_, err = pulumiDev("config", filepath.Join(root, "sst.config.ts")).Discover()
+	if err == nil || !strings.Contains(err.Error(), "names its Pulumi.yaml") {
+		t.Fatalf("an SST app's config: got %v", err)
+	}
 	if _, err := cliFor("deploy", "config", config).Discover(); !errors.Is(err, pulumidev.ErrCommand) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// The dev loop's panes run its command again
+func TestDevCommand(t *testing.T) {
+	if got := cliFor("dev").DevCommand(); !reflect.DeepEqual(got, []string{"dev"}) {
+		t.Errorf("sst dev: %v", got)
+	}
+	if got := pulumiDev().DevCommand(); !reflect.DeepEqual(got, []string{"pulumi", "dev"}) {
+		t.Errorf("sst pulumi dev: %v", got)
 	}
 }
 

@@ -1007,6 +1007,7 @@ var root = &cli.Command{
 		},
 		CmdBuildServer,
 		CmdEject,
+		CmdPulumi,
 		{
 			Name:   "print-and-not-quit",
 			Hidden: true,

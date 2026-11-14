@@ -1,11 +1,11 @@
-// Package pulumidev runs a plain Pulumi program in sst dev
+// Package pulumidev runs a plain Pulumi program in sst pulumi dev
 // (docs/plans/pulumi-dev/plan.md). Its Pulumi.yaml is the config and its
-// stack the stage. sst dev deploys it with the developer's own pulumi, and
+// stack the stage. sst pulumi dev deploys it with the developer's own pulumi, and
 // does everything after the deploy as for an SST app, through
 // project.Program.
 //
 // Nothing here touches SST's state: no home, no passphrase, no lock, no
-// bootstrap and no move. What sst dev knows of the stack comes from pulumi,
+// bootstrap and no move. What sst pulumi dev knows of the stack comes from pulumi,
 // in the stack's own backend, so it can ship on its own.
 package pulumidev
 
@@ -32,7 +32,7 @@ import (
 	"github.com/sst/sst/v3/pkg/transport"
 )
 
-// Program is a plain Pulumi program on one of its stacks, which sst dev runs.
+// Program is a plain Pulumi program on one of its stacks, which sst pulumi dev runs.
 type Program struct {
 	name   string
 	stage  string
@@ -76,12 +76,12 @@ type Program struct {
 
 var _ project.Program = (*Program)(nil)
 
-// DevKey is the stack config key that lets sst dev deploy a stack: it swaps
+// DevKey is the stack config key that lets sst pulumi dev deploy a stack: it swaps
 // the stack's functions for stubs, so a stack has to ask for it.
 const DevKey = "sst:dev"
 
-// ErrCommand is any command but sst dev in a Pulumi project
-var ErrCommand = util.NewReadableError(nil, "This is a Pulumi project: sst dev runs it, and pulumi does everything else.")
+// ErrCommand is any command but sst pulumi dev in a Pulumi project
+var ErrCommand = util.NewReadableError(nil, "This is a Pulumi project: sst pulumi dev runs it, and pulumi does everything else.")
 
 // IsProgram is whether a config path is a Pulumi project's Pulumi.yaml.
 func IsProgram(cfgPath string) bool {
@@ -111,10 +111,10 @@ func Discover() (string, error) {
 
 // pulumiCLI is the developer's pulumi, which runs the program as they would
 func pulumiCLI() (string, error) {
-	return pulumicli.Find("sst dev deploys a Pulumi project with the Pulumi CLI")
+	return pulumicli.Find("sst pulumi dev deploys a Pulumi project with the Pulumi CLI")
 }
 
-// SelectedStack is the stack sst dev runs in a Pulumi project when none is
+// SelectedStack is the stack sst pulumi dev runs in a Pulumi project when none is
 // named: the one selected in the project, by its fully qualified name.
 func SelectedStack(cfgPath string) (string, error) {
 	cli, err := pulumiCLI()
@@ -157,7 +157,7 @@ func (c configValue) String() string {
 }
 
 // stackAws is what of the stack's config sets up the program's AWS provider,
-// which sst dev reads to set up its own the same way: the program and the
+// which sst pulumi dev reads to set up its own the same way: the program and the
 // CLI then reach the same account. A profile in the config wins over
 // AWS_PROFILE, as it does for the program's provider.
 type stackAws struct {
@@ -174,7 +174,7 @@ func readStackAws(config map[string]configValue) (stackAws, error) {
 	// it, the CLI would reach another account than the program's
 	for _, key := range []string{"aws:profile", "aws:region", "aws:assumeRoles", "aws:assumeRole"} {
 		if value, ok := config[key]; ok && value.Secret && value.Value == nil && len(value.ObjectValue) == 0 {
-			return stackAws{}, fmt.Errorf("sst dev sets up its AWS access as the stack's config sets up the program's, and the stack's %s is a secret, which it doesn't read. A role with an external ID isn't supported yet", key)
+			return stackAws{}, fmt.Errorf("sst pulumi dev sets up its AWS access as the stack's config sets up the program's, and the stack's %s is a secret, which it doesn't read. A role with an external ID isn't supported yet", key)
 		}
 	}
 	result := stackAws{
@@ -200,7 +200,7 @@ func readStackAws(config map[string]configValue) (stackAws, error) {
 	}
 	for _, r := range roles {
 		if r.ExternalID != "" {
-			return result, fmt.Errorf("sst dev can't take a role with an external ID yet, as the stack's aws:assumeRoles asks for %s", r.RoleArn)
+			return result, fmt.Errorf("sst pulumi dev can't take a role with an external ID yet, as the stack's aws:assumeRoles asks for %s", r.RoleArn)
 		}
 		if r.RoleArn != "" {
 			result.roles = append(result.roles, provider.AwsRole{RoleArn: r.RoleArn, SessionName: r.SessionName})
@@ -209,7 +209,7 @@ func readStackAws(config map[string]configValue) (stackAws, error) {
 	return result, nil
 }
 
-// New reads a Pulumi project for sst dev: its Pulumi.yaml, and the stack's
+// New reads a Pulumi project for sst pulumi dev: its Pulumi.yaml, and the stack's
 // config, which has to opt in. The stack is the one named, or the one
 // selected when it's empty.
 func New(cfgPath, stack, version string) (*Program, error) {
@@ -221,12 +221,12 @@ func New(cfgPath, stack, version string) (*Program, error) {
 		return nil, util.NewReadableError(nil, cfgPath+" has no name.")
 	}
 	if runtime := parsed.Runtime; runtime != "nodejs" {
-		return nil, util.NewReadableError(nil, fmt.Sprintf("sst dev runs Pulumi programs in TypeScript or JavaScript, and this one's runtime is %q.", runtime))
+		return nil, util.NewReadableError(nil, fmt.Sprintf("sst pulumi dev runs Pulumi programs in TypeScript or JavaScript, and this one's runtime is %q.", runtime))
 	}
-	// The app and the stage name the channels the stubs and sst dev talk on,
+	// The app and the stage name the channels the stubs and sst pulumi dev talk on,
 	// so they take the same characters as an SST app's
 	if project.InvalidAppRegex.MatchString(parsed.Name) {
-		return nil, util.NewReadableError(nil, fmt.Sprintf("sst dev needs the Pulumi project's name to start with a letter and have only letters, numbers and hyphens, and it's %q.", parsed.Name))
+		return nil, util.NewReadableError(nil, fmt.Sprintf("sst pulumi dev needs the Pulumi project's name to start with a letter and have only letters, numbers and hyphens, and it's %q.", parsed.Name))
 	}
 
 	cli, err := pulumiCLI()
@@ -241,7 +241,7 @@ func New(cfgPath, stack, version string) (*Program, error) {
 	}
 	stage := StageOf(stack)
 	if stage == "" || project.InvalidStageRegex.MatchString(stage) {
-		return nil, util.NewReadableError(nil, fmt.Sprintf("sst dev needs the stack's name to have only letters, numbers and hyphens, and it's %q.", stage))
+		return nil, util.NewReadableError(nil, fmt.Sprintf("sst pulumi dev needs the stack's name to have only letters, numbers and hyphens, and it's %q.", stage))
 	}
 
 	out, err := pulumicli.Run(cli, root, nil, "config", "--json", "--stack", stack)
@@ -253,7 +253,7 @@ func New(cfgPath, stack, version string) (*Program, error) {
 		return nil, err
 	}
 	if config[DevKey].String() != "true" {
-		return nil, util.NewReadableError(nil, fmt.Sprintf("sst dev swaps a stack's functions for stubs, so a stack has to opt in, and %q hasn't. If it's a stack for development, run:\n\n  pulumi config set %s true --stack %s", stack, DevKey, stack))
+		return nil, util.NewReadableError(nil, fmt.Sprintf("sst pulumi dev swaps a stack's functions for stubs, so a stack has to opt in, and %q hasn't. If it's a stack for development, run:\n\n  pulumi config set %s true --stack %s", stack, DevKey, stack))
 	}
 
 	// The CLI's own AWS provider, for the stubs' transport and the dev
@@ -356,7 +356,7 @@ func (p *Program) Home() string {
 	return ""
 }
 
-// Providers is the one whose dev loop sst dev runs: aws
+// Providers is the one whose dev loop sst pulumi dev runs: aws
 func (p *Program) Providers() map[string]interface{} {
 	settings := map[string]interface{}{}
 	if p.aws.region != "" {
@@ -386,7 +386,7 @@ func (p *Program) Transport() (bridge.Transport, bool) {
 }
 
 func (p *Program) NoTransport() error {
-	return util.NewReadableError(nil, "sst dev needs the aws provider to reach its functions")
+	return util.NewReadableError(nil, "sst pulumi dev needs the aws provider to reach its functions")
 }
 
 func (p *Program) Runtimes() *runtime.Collection {
@@ -447,7 +447,7 @@ func (p *Program) ResolvePolicyPackPath(policyPath string) (string, error) {
 
 // AddLive records a function the program asked to run on this machine, by
 // its name in the program, for the deploy running now. Two functions can
-// share an id only with the same handler: the stubs and sst dev tell
+// share an id only with the same handler: the stubs and sst pulumi dev tell
 // functions apart by it, so both then run the same code, each with its own
 // environment and role. When they can't, other is the function that has it.
 func (p *Program) AddLive(name, functionID string, report project.FunctionReport) (other string, ok bool) {
@@ -466,7 +466,7 @@ func (p *Program) AddLive(name, functionID string, report project.FunctionReport
 	return "", true
 }
 
-// How many times sst dev tries to take a dev command's role, and how long it
+// How many times sst pulumi dev tries to take a dev command's role, and how long it
 // waits between: the same deploy can make the role's trust, which IAM takes a
 // few seconds to honor
 const roleAttempts = 10
@@ -480,7 +480,7 @@ func (p *Program) EnvFor(ctx context.Context, complete *project.CompleteEvent, n
 	if dev.Aws != nil && dev.Aws.Role != "" {
 		credentials, err := p.assumeRole(ctx, dev.Aws.Role)
 		if err != nil {
-			return nil, fmt.Errorf("The %q dev command runs as %s, which sst dev couldn't take: %w. A role of the program named in %s's role is let your account take it in sst dev; a role given by its ARN has to let your account take it already.", name, dev.Aws.Role, err, DevFile)
+			return nil, fmt.Errorf("The %q dev command runs as %s, which sst pulumi dev couldn't take: %w. A role of the program named in %s's role is let your account take it in sst pulumi dev; a role given by its ARN has to let your account take it already.", name, dev.Aws.Role, err, DevFile)
 		}
 		for key, value := range credentials {
 			env[key] = value

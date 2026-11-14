@@ -41,6 +41,9 @@ var logFile = (func() *os.File {
 })()
 
 func (c *Cli) Discover() (string, error) {
+	if c.isPulumiDev() {
+		return c.discoverPulumi()
+	}
 	cfgPath := c.String("config")
 	if cfgPath != "" {
 		abs, err := filepath.Abs(cfgPath)
@@ -50,20 +53,21 @@ func (c *Cli) Discover() (string, error) {
 		if _, err := os.Stat(abs); os.IsNotExist(err) {
 			return "", util.NewReadableError(err, "Could not find "+abs)
 		}
+		// sst pulumi dev runs a Pulumi project: every other command says so
 		if isPulumiProgram(abs) {
-			return c.pulumiProgram(abs)
+			return "", pulumidev.ErrCommand
 		}
 		return abs, nil
 	}
 
 	match, err := project.Discover()
 	if err != nil {
-		// sst dev runs a plain Pulumi program too, in a folder with a
-		// Pulumi.yaml and no SST app up from it (pulumi.go): only when there's
-		// no sst.config.ts, not one that couldn't be used
+		// in a folder with a Pulumi.yaml and no SST app up from it, say what
+		// runs it (pulumi.go): only when there's no sst.config.ts, not one
+		// that couldn't be used
 		if runsPulumiPrograms() && !hasSSTConfig() {
-			if found, findErr := pulumidev.Discover(); findErr == nil {
-				return c.pulumiProgram(found)
+			if _, findErr := pulumidev.Discover(); findErr == nil {
+				return "", pulumidev.ErrCommand
 			}
 		}
 		return "", util.NewReadableError(err, "Could not find sst.config.ts")
@@ -82,7 +86,8 @@ func hasSSTConfig() bool {
 	return err == nil
 }
 
-// InitDev loads what sst dev runs: the SST app, or a plain Pulumi program
+// InitDev loads what the dev loop runs: the SST app for sst dev, or a plain
+// Pulumi program for sst pulumi dev
 // (pulumi.go).
 func (c *Cli) InitDev() (project.Program, error) {
 	cfgPath, err := c.Discover()

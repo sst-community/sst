@@ -245,6 +245,8 @@ func CmdMosaic(c *cli.Cli) error {
 	})
 
 	currentExecutable, _ := os.Executable()
+	// a pane runs the dev loop's command again: sst dev, or sst pulumi dev
+	devCommand := append([]string{currentExecutable}, c.DevCommand()...)
 
 	mode := c.String("mode")
 
@@ -350,7 +352,7 @@ func CmdMosaic(c *cli.Cli) error {
 							}
 							multi.AddProcess(multiplexer.PaneConfig{
 								Key:       d.Name,
-								Args:      []string{currentExecutable, "dev"},
+								Args:      slices.Clone(devCommand),
 								Icon:      "→",
 								Title:     title,
 								Cwd:       dir,
@@ -457,7 +459,7 @@ func CmdMosaic(c *cli.Cli) error {
 							}
 							// A command that doesn't parse is started without arguments, so
 							// its process reports the error and the rest of sst dev keeps running.
-							args := []string{currentExecutable, "dev"}
+							args := slices.Clone(devCommand)
 							if words, err := parseDevCommand(d.Name, d.Command); err == nil {
 								args = append(append(args, "--"), words...)
 							}

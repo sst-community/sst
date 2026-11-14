@@ -69,11 +69,11 @@ func TestGuessFunction(t *testing.T) {
 		},
 		"two of the name": {
 			previewedFunction{runtime: "nodejs22.x", handler: "index.handler", code: folder("./dist/users")},
-			guess{handler: "legacy/users.handler", unsure: "sst dev found more than one source like it: legacy/users.ts, src/users.ts"},
+			guess{handler: "legacy/users.handler", unsure: "sst pulumi dev found more than one source like it: legacy/users.ts, src/users.ts"},
 		},
 		"none of the name": {
 			previewedFunction{runtime: "nodejs22.x", handler: "index.handler", code: folder("./dist/nothing")},
-			guess{handler: "path/to/source.handler", unsure: "sst dev couldn't find its source from ./dist/nothing"},
+			guess{handler: "path/to/source.handler", unsure: "sst pulumi dev couldn't find its source from ./dist/nothing"},
 		},
 		"Go": {
 			previewedFunction{runtime: "provided.al2023", handler: "bootstrap", code: folder("./dist/worker")},
@@ -101,7 +101,7 @@ func TestGuessFunction(t *testing.T) {
 		},
 		"Java": {
 			previewedFunction{runtime: "java21", handler: "example.Handler::handleRequest", code: folder("./build/app.jar")},
-			guess{cloud: "sst dev doesn't run java21"},
+			guess{cloud: "sst pulumi dev doesn't run java21"},
 		},
 		"a runtime not known yet": {
 			previewedFunction{handler: "index.handler", code: folder("./functions")},
@@ -174,7 +174,7 @@ func TestDevFileText(t *testing.T) {
 		"  Plain: functions/plain.handler\n",
 		"  Worker: # guessed by its name from ./dist/worker: check it\n    handler: cmd/worker\n    runtime: go\n",
 		"  # Lost: # on provided.al2023, it needs its source, and runtime: go\n  #   handler: path/to/source\n  #   runtime: go\n",
-		`  # "api v2": path/to/source.handler # sst dev couldn't find its source from ./dist/nothing` + "\n",
+		`  # "api v2": path/to/source.handler # sst pulumi dev couldn't find its source from ./dist/nothing` + "\n",
 		"# Cron: its code is written in the program\n",
 		"#       API_URL: ${apiUrl}\n",
 		"# The stack's outputs, for ${name}: apiUrl, reportsBucket\n",
@@ -187,7 +187,7 @@ func TestDevFileText(t *testing.T) {
 	if written.Here != 3 || written.Cloud != 3 || strings.Join(written.Guessed, ",") != "Api,Worker" {
 		t.Fatalf("got %d here, %d in the cloud, guessed %v", written.Here, written.Cloud, written.Guessed)
 	}
-	// sst dev reads what it wrote, and finds the sources
+	// sst pulumi dev reads what it wrote, and finds the sources
 	write(t, filepath.Join(root, DevFile), written.Text)
 	dev, err := readDevFile(root)
 	if err != nil {

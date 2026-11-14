@@ -35,7 +35,7 @@ type FunctionInput struct {
 	// Image is whether its code is a container image
 	Image bool `json:"image"`
 	// Component is the nearest of SST's components it's made in, which
-	// runs it in sst dev, or doesn't, itself
+	// runs it in sst pulumi dev, or doesn't, itself
 	Component *ComponentInput `json:"component,omitempty"`
 }
 
@@ -45,15 +45,15 @@ type ComponentInput struct {
 	Name string `json:"name"`
 }
 
-// FunctionAnswer says whether sst dev runs the function on this machine, and
+// FunctionAnswer says whether sst pulumi dev runs the function on this machine, and
 // what's deployed in its place
 type FunctionAnswer struct {
 	Live bool  `json:"live"`
 	Stub *Stub `json:"stub,omitempty"`
 }
 
-// Stub is what a function sst dev runs is deployed as: the stub, which passes
-// its invocations to sst dev. The program needs to know nothing else of it.
+// Stub is what a function sst pulumi dev runs is deployed as: the stub, which passes
+// its invocations to sst pulumi dev. The program needs to know nothing else of it.
 type Stub struct {
 	// Code is the folder that is the function's code
 	Code          string   `json:"code"`
@@ -79,7 +79,7 @@ func (d *devContract) Function(input *FunctionInput, output *FunctionAnswer) err
 	// name the file gives it exactly is a mistake
 	if component := input.Component; component != nil {
 		if ok && pattern == "" {
-			return fmt.Errorf("%s names the %q function, which SST's %s %q makes. SST's components run their functions in sst dev themselves: take it out of %s", DevFile, input.Name, component.Type, component.Name, DevFile)
+			return fmt.Errorf("%s names the %q function, which SST's %s %q makes. SST's components run their functions in sst pulumi dev themselves: take it out of %s", DevFile, input.Name, component.Type, component.Name, DevFile)
 		}
 		*output = FunctionAnswer{}
 		return nil
@@ -103,7 +103,7 @@ func (d *devContract) Function(input *FunctionInput, output *FunctionAnswer) err
 		case runtimeName == "":
 			reason = "its runtime isn't known yet"
 		case !knownRuntime:
-			reason = fmt.Sprintf("sst dev doesn't run %s", runtimeName)
+			reason = fmt.Sprintf("sst pulumi dev doesn't run %s", runtimeName)
 		case !hasSource(p.root, function.Handler, runtimeName):
 			reason = "no " + function.Handler
 		}
@@ -116,13 +116,13 @@ func (d *devContract) Function(input *FunctionInput, output *FunctionAnswer) err
 		}
 	}
 	if input.Image {
-		return fmt.Errorf("%s names the %q function, whose code is a container image, which sst dev can't run locally: take it out", DevFile, input.Name)
+		return fmt.Errorf("%s names the %q function, whose code is a container image, which sst pulumi dev can't run locally: take it out", DevFile, input.Name)
 	}
 	if runtimeName == "" {
-		return fmt.Errorf("sst dev needs a runtime to run the %q function with: give it one in %s", input.Name, DevFile)
+		return fmt.Errorf("sst pulumi dev needs a runtime to run the %q function with: give it one in %s", input.Name, DevFile)
 	}
 	if !knownRuntime {
-		return fmt.Errorf("sst dev can't run the %q function locally: it doesn't know the runtime %q. Name the one to run it with in %s: nodejs22.x, python3.12 or go", input.Name, runtimeName, DevFile)
+		return fmt.Errorf("sst pulumi dev can't run the %q function locally: it doesn't know the runtime %q. Name the one to run it with in %s: nodejs22.x, python3.12 or go", input.Name, runtimeName, DevFile)
 	}
 	// the file's read found a source for either runtime, and this is the
 	// function's own
@@ -137,12 +137,12 @@ func (d *devContract) Function(input *FunctionInput, output *FunctionAnswer) err
 		// a deploy
 		if pattern != "" {
 			p.mu.Lock()
-			p.cloud[input.Name] = fmt.Sprintf("its id in sst dev, %s, is %s's", functionID, other)
+			p.cloud[input.Name] = fmt.Sprintf("its id in sst pulumi dev, %s, is %s's", functionID, other)
 			p.mu.Unlock()
 			*output = FunctionAnswer{}
 			return nil
 		}
-		return fmt.Errorf("the %q and %q functions would share the id %q in sst dev, with other handlers: rename one", other, input.Name, functionID)
+		return fmt.Errorf("the %q and %q functions would share the id %q in sst pulumi dev, with other handlers: rename one", other, input.Name, functionID)
 	}
 
 	transport, ok := p.Transport()
@@ -232,8 +232,8 @@ func (d *devContract) Role(input *RoleInput, output *RoleAnswer) error {
 }
 
 // buildHandler is a handler as its runtime builds it: Node.js's and Python's
-// find it from the project's folder, and Go's from the folder sst dev runs in,
-// so it's given Go's in full, for sst dev --config infra/Pulumi.yaml
+// find it from the project's folder, and Go's from the folder sst pulumi dev runs in,
+// so it's given Go's in full, for sst pulumi dev --config infra/Pulumi.yaml
 func buildHandler(root, handler, runtimeName string) string {
 	if runtimeName == "go" && !filepath.IsAbs(handler) {
 		return filepath.Join(root, handler)

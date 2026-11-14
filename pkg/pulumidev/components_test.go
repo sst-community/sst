@@ -19,7 +19,7 @@ func noSecretsShown(t *testing.T) func() ([]byte, error) {
 	}
 }
 
-// What SST's components record in a stack's state for sst dev, as `pulumi
+// What SST's components record in a stack's state for sst pulumi dev, as `pulumi
 // stack export` prints it. The DevCommand's token and the secret's value are
 // secrets, encrypted here, and in the clear in exportShown.
 const exportWithRecords = `{"version": 3, "deployment": {"manifest": {"time": "2026-11-12T00:00:00Z", "magic": "", "version": ""}, "resources": [
