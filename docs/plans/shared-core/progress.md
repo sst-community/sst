@@ -2,6 +2,19 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: the reviews' fixes
+
+Two independent reviews of #272's last ten commits, one for compatibility with SST 4.25.0 and one for the architecture. The maintainer chose to fix all seven of what they found, to keep provider booleans and numbers with a release note, and to read `app()` on SST 4's line as 4.25.0 did.
+
+- **`release.yml` builds the SDK** before the Go tests on `main`, as `check.yml` does and `v5`'s release already did. Without it a release tag on `main` would have failed its Go tests.
+- **The manifest's `contract` is required.** A manifest without it was read as contract 0, so a merge that dropped the key from `v5`'s `platform/package.json` would have run SST 5's components as SST 4's. `ContractFor` refuses it now, and `PlatformManifest.Speaks` is what the tests gate on.
+- **SST 4's line skips a newer `_sst` record**, with a warning in the log, and reads the component by SST 4's names, as 4.25.0 did. It stopped every command on the stage before.
+- **One handler check** (`engine` only: `v5` gets #262's check with its next merge of `main`). `Collection.ValidateHandler` picks the runtime as the build does, so a function with its own `bundle` built by `sst.runtime`'s commands isn't checked as Node.js, and `sst dev`'s `AddTarget` uses it too.
+- **The SDK's Pulumi peers take any version**, on both lines, so an app that pins an older `@pulumi/pulumi` installs without npm's `ERESOLVE`. `sst/pulumi` says so under `sst pulumi dev` if it's older than 3.115.
+- **`app()` on SST 4's line loads the providers' modules** the app's files import, as 4.25.0 did (`Contract.LoadsProvidersForApp`, `js.EvalOptions.LoadProviders`). SST 5's line leaves them out, as before. `TestBuildReadingAppLoadsProviders` has both. A namespace import of a left-out module reads as empty there (`aws.defaultRegion` is `undefined`), rather than throwing "only loaded in run()".
+- **#272's description** lists the rest of what changes for an SST 4 user, with the release notes: provider booleans and numbers, a daily update check, `sst dev`'s server on loopback with a token, `sst diff` creating no passphrase, the missing-state refusal, `sst add` within the components' major, the workers that start again after a change, and `lock5` on a team that still runs 4.25.0.
+- **Checked**: both lines' Go suites (46 packages on `engine`, 45 on `v5`), `-race` on the changed packages, and the SDK's build and tests on both lines.
+
 ## 2026-11-13: `sst pulumi dev` on SST 4's line
 
 - **The CLI**: `sst pulumi dev` has no contract of its own any more, and the Pulumi project's discovery isn't gated on the platform's contract. A test runs it on contract 0.

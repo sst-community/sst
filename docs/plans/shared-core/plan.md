@@ -27,10 +27,10 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
 
 1. **`$cli` in SST 4's shape**: `{command, dev, paths{home,root,work,platform}, state{version}}`. The version map is each `sst:sst:Version` record's version, and 1 for any other of SST's resources, by name. It's read in `getCompletedEvent`, as each resource is read and before the event is published: read after it, it raced `sst dev`'s server encoding the event.
 2. **No `sst/components` modules** for the globals.
-3. **Reports from SST 4's output names**: `_metadata` with a handler, `_dev`, `_task`, `_tunnel` and `_hint`, for the SST app's own state. `pkg/pulumidev` keeps reading `_sst`.
+3. **Reports from SST 4's output names**: `_metadata` with a handler, `_dev`, `_task`, `_tunnel` and `_hint`, for the SST app's own state. `pkg/pulumidev` keeps reading `_sst`. A component's `_sst` record is read too, over the names; one from a newer contract is skipped with a warning.
 4. **The RPC serves SST 4's provider resources**: `Resource.Run`, `Resource.Aws.*`, `Resource.Cloudflare.*` and `Resource.Vercel.DnsRecord`. It also serves `Provider.Aws` with `Bootstrap` and `Appsync`, in place of the SST app's own calls (no `Move`).
 5. **The stage refusals the other way round**: a stage on SST 5's components is refused (but not a diff), and so is a move. A stage with the tombstone is refused once its lock is taken, which then releases it and drops the update.
-6. **Install**: SST 4's `config.d.ts` (`./src/global.d.ts`, `./src/config`), no `.sst/tsconfig.json`, and no refusal of a provider's other major version.
+6. **Install**: SST 4's `config.d.ts` (`./src/global.d.ts`, `./src/config`), no `.sst/tsconfig.json`, and no refusal of a provider's other major version. Reading `app()` loads the providers' modules the app's files import, as 4.25.0 did.
 7. **No targets.** A stage the app gives a target in `app()` is refused before anything runs, saying targets come with SST 5. The engine reads `targets` whatever the platform, SST 4's components were never run on one, and SST 4's CLI has no `sst target`. Left alone, it would deploy the stage somewhere untested. The maintainer chose to switch them off "for now" (2026-11-13).
 8. Everything else needed nothing: the home, state and locks, function builds, the bridge, the transports, the server.
 
@@ -47,6 +47,7 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
   - Deployed stages are untouched. A stage run with `sst dev` gets a new stub object, and its functions pointed at it, on its first `sst dev` with a release built on this engine, as happens with any 4.x release whose CI Go or bridge code changes.
   - Making it the same would mean keeping the stub's packages as `main`'s, which isn't worth it.
 - **A stage named in `targets` in `app()` is refused** ([above](#what-sst-4s-line-needs-from-the-engine-contract-0)). SST 4.25.0 never read `targets`, so it deployed such a stage to the cloud. Only an app that wrote a key SST 4's types don't declare can meet it, and refusing is the safer of the two.
+- **What else an SST 4 user sees** is in #272's description, with its release notes: provider settings that are booleans or numbers reach the provider (4.25.0 dropped them), a daily update check, `sst dev`'s server on loopback with a token, `sst diff` creating no passphrase, a refused deploy of a stage whose state is missing, `sst add` within the major the components are built for, the workers that start again after a change, and a crashed run's second lock (`lock5`), which 4.25.0's `sst unlock` doesn't clear.
 - **`sst cert` and the Console's local connection** are gone. The 5.0 rewrite removed them, and they aren't brought back for SST 4. They're the CLI's only, and change nothing an app deploys. The maintainer was told on 2026-11-13; bringing them back would be work of its own.
 
 ## Checks
