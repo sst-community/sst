@@ -41,6 +41,7 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
   - With the same Go and dependencies, the engine's stub differs from one built from 4.25.0's source too: the bridge's packages changed on `v5` (`cmd/sst/mosaic/aws/bridge`: its connection, and how a closed channel is handled).
   - Deployed stages are untouched. A stage run with `sst dev` gets a new stub object, and its functions pointed at it, on its first `sst dev` with a release built on this engine, as happens with any 4.x release whose CI Go or bridge code changes.
   - Making it the same would mean keeping the stub's packages as `main`'s, which isn't worth it.
+- **A stage named in `targets` in `app()` is refused** ([above](#what-sst-4s-line-needs-from-the-engine-contract-0)). SST 4.25.0 never read `targets`, so it deployed such a stage to the cloud. Only an app that wrote a key SST 4's types don't declare can meet it, and refusing is the safer of the two.
 - **`sst cert` and the Console's local connection** are gone. The 5.0 rewrite removed them, and they aren't brought back for SST 4. They're the CLI's only, and change nothing an app deploys. The maintainer was told on 2026-11-13; bringing them back would be work of its own.
 
 ## Checks
