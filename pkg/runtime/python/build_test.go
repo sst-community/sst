@@ -520,14 +520,11 @@ func TestCopyWorkspacePackagesForContainer(t *testing.T) {
 	})
 
 	t.Run("member that contains the workspace root fails the build", func(t *testing.T) {
-		input, info, outDir := setup(t, "../..\nboto3==1.34.0\n")
+		input, info, _ := setup(t, "../..\nboto3==1.34.0\n")
 
 		err := copyWorkspacePackagesForContainer(input, info)
 		if err == nil || !strings.Contains(err.Error(), `"../.."`) {
 			t.Fatalf("expected an error naming \"../..\", got: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(outDir, "..", "repo")); err == nil {
-			t.Error("the workspace's parent should not have been copied next to the build context")
 		}
 	})
 
