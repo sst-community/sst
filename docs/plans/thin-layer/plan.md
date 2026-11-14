@@ -238,5 +238,5 @@ Other languages. Steps 1 and 2 also found ([progress](progress.md)): every provi
 | 9. The eject's last AWS cases | Done 2026-11-13, lab-checked (`MicroVm`, `Postgres` with a proxy) |
 | 10. Cloudflare under plain Pulumi | Done 2026-11-13, lab-checked. The placement fix on `v5` (`ff384d74e`), merged here |
 | 11. `sst.Secret` in a Pulumi program | Done 2026-11-13, checked with a real `pulumi up` on a local backend (a `Secret` makes nothing in the cloud) |
-| The review | 2026-11-13: 18 bugs fixed, with tests (`c454b9722`). The restructure done. The reviewers' check of the fixes and a lab run to come |
+| The review | Done 2026-11-13: 18 bugs fixed, with tests (`c454b9722`); the restructure (`565c175bf`); the reviewers' second look, with what it found fixed, and a lab run (AWS preview, a Cloudflare Worker ejected with `main` in `src/`), lab clean |
 | 6. The sweep | Done 2026-11-12. In the mock: committed (`d85d01786`; the path fix on `v5`, `57d26dd4f`). In the lab: lab-checked, committed (`9cfaedc6c`; the `Function` fix on `v5`, `d1adf0d2a`) |

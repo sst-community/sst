@@ -2,6 +2,28 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: the reviewers' second look, and the lab run
+
+The three reviewers read the fixes and the restructure against their findings. Each fix was right; what they found besides was checked against the code and fixed.
+
+- **The published package left out `plain.ts`** (from the restructure). The package's build reads the platform's `sideEffects`, which didn't list it, so esbuild dropped `import "./plain"`, and a plain Pulumi program got no link records, no check of names and no reserved `App`. The tests run the source unbundled and couldn't see it. `plain.ts` is in `sideEffects`, and the package's build fails on an import it would leave out (`ignored-bare-import`). The lab showed it: a deploy with the package before made no `sst:sst:LinkRef`, and one with the fix made it.
+- **The ejected module's project folder** was `pulumi.getRootDirectory()`, which Pulumi's Node SDK before about 3.150 doesn't have, and which the components read with a fallback: the module now has `projectRoot`, read as the components read it.
+- **The undo re-imported a failed import's backup without reading the stack**, which would roll back a deploy that ran after it. It reads the stack again: the backup goes back when SST's own resources are out of it and nothing else changed; nothing is done when it's as it was; and otherwise it says so and imports nothing.
+- **A secret's reference that was thrown away still marked what it depends on as used**, so the dependency left the module: in a secret, only a whole match is looked for (`exactMatch`).
+- **A dependency on the program's own provider or component** is written again (`dependsOn`, `deletedWith`), without putting it in the module's order, where the first fix had left it out.
+- **Two `Assets.use()` with no provider in one region**, as for a bucket and a repository each on its own: the first was used silently. It's an error that says to declare one for each region and provider.
+- **A Node.js function's esbuild plugins** were run with `.sst/platform`'s script, which a Pulumi program doesn't have: from the build's platform folder now, and the package ships `functions/nodejs-runtime`.
+- **From the layers' second look:** the names SST's TypeScript gives what it makes once for a stack (`AwsProvider.sst.`, `LambdaEncryptionKey`, `DevBridgeCode`) are constants in `classify.go`, with a test that the components still give them; `buildComment` is in `classify.go` and the state's helpers in `state.go`; the eject's boundary test reads everything it depends on (`go list -deps`); its wrapper of `pulumicli.Run` is gone; `resetAssetStores`, which did nothing once the stores were kept by run, is gone, and `sst/testing` imports no AWS helper; the contract tests say what they can't see; the components' guide says `perRun` starts again for a new stack, and `plain.ts` is the one setup done as the components load.
+
+**Left, as found:** a `Service` given an image as an output still asks for the program's assets as it's created, so assets declared after it are refused; `ApiGatewayV1` and `Service` give the stage's name as it is to a stage and a namespace, before any name the check sees, so such a stack's error comes from AWS; an Automation API program loaded outside its stack isn't set up (`plain.ts`).
+
+**The lab:** with the package packed from the branch (its check of the platform's folders passed, the Go builds' too) and the CLI built from it.
+
+- AWS, the lab account, `us-west-2`, preview only: a project whose `main` is `src/index.ts`, with a `Vpc`, a `Cluster` and a `Service` running `public.ecr.aws/nginx/nginx:stable`, and no `Assets`: 31 to create. The package from before the fixes: "There's nowhere to keep the code or images of the "Web" container". A stack named `bad_name`: the preview stops with SST's rule for a stage's name. Both stacks removed; nothing was made.
+- Cloudflare, the maintainer's account, a project whose `main` is `src/index.ts`, the token in the stack's config alone: a `Worker` with a URL, deployed with `pulumi up` and called; `sst eject`, which copied its build and wrote its path from `projectRoot`; the program on `ejected()`, `sst` uninstalled, `.sst` moved away and a Pulumi home without SST's plugin: the preview made the URL's `WorkersScriptSubdomain` and changed nothing else. The module with `path.resolve(...)` in its place, as before the fix: the preview failed, looking for the build in `src/sst-ejected-workers`. Deployed without SST, called, destroyed and removed. The account has no script, namespace, database or queue, and no file of the run has the token in plain text.
+
+**Checked:** each new test fails on the code before; `tsc`; the Go suite; the platform suite (13 files failed while the machine's load stood at 27 to 44 from other work, and passed when run again, one by itself); the plain-mode sweep (the same 189 failing tests, one more passing); the API reports, unchanged.
+
 ## 2026-11-13: the restructure the review proposed
 
 [As decided](plan.md#decisions), after the fixes: what the review of the layers found, moved and tied together, with no change to what's deployed, its URNs or its state.
