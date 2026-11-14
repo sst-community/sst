@@ -2,6 +2,16 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: the three gaps the second look left
+
+What the [second look](#2026-11-13-the-reviewers-second-look-and-the-lab-run) left, as found, closed.
+
+- **A container given its image as an output** asked for the program's assets as it was created, so `Assets` declared after it was refused though the image was one it's given. Whether it keeps anything isn't known until the output resolves: such a component asks as `unsure` (`assetStore`), and a store declared after it is refused only when it turns out to keep an image, as its store is first used, with the same error as before. It still uses only the stores declared before it, and once it has used one, none can be declared, so which store it uses never depends on when a value resolves.
+- **A name SST makes itself from the project's or the stack's**, not with `physicalName`: `ApiGatewayV1`'s stage, `Service`'s Cloud Map service, and `Aurora`'s, `Postgres`'s and `Mysql`'s default database, which took the names as they were. Each takes them from `appAndStage()` (`naming.ts`), which holds them to SST's rule under plain Pulumi, and which a component now gets them from whenever it puts one in a name. Only the `Service` was reachable: with its container's log group named, nothing `physicalName` names came before its Cloud Map service, which was made with `Web.feature_x.my_shop`. `ApiGatewayV1` names its access log group as it's created, and the databases name something first too, so their checks are guards.
+- **An Automation API program loaded outside its stack** got no link records and no check of names, which `plain.ts` sets up as the components load. It's set up once for each stack now: as the components load, as before, and when a component is created in a stack that isn't set up yet (`beforeEachComponent` in `component.ts`, which `plain.ts` hooks, so the base class doesn't import `link.ts`, which imports it). A resource of Pulumi's made linkable before the first component isn't checked in such a program.
+
+**Checked:** each new test fails on the code before (the files before put back for the run): the `Service` whose output image is one it's given, and one whose image is built (`assets.test.ts`); the `Service` with its log group named (`stack-name.test.ts`, with three guards); the setup in a stack and the next (`plain.test.ts`). An Automation API program with a local backend, importing `sst/components` outside any stack and running two `Linkable`s in `dev`, then `prod`, in one process: with the package packed from the branch, each stack has both `LinkRef`s, and two components named `Shop` and `shop` are refused in each; with the package from before, neither. Both stacks destroyed and removed; nothing was made in a cloud. `tsc`; the platform suite (122 files, 4313 tests); the plain-mode sweep (the same 189 failing tests, the new ones passing); the API reports, unchanged; the Go contract and eject tests (no Go changed).
+
 ## 2026-11-13: the reviewers' second look, and the lab run
 
 The three reviewers read the fixes and the restructure against their findings. Each fix was right; what they found besides was checked against the code and fixed.
