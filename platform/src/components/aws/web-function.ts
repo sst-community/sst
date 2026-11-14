@@ -1636,7 +1636,7 @@ export class WebFunction extends Component implements Link.Linkable {
 
   /**
    * The full HTTPS URL (including `https://`). With `domain`, this is the custom domain's
-   * URL. In `sst dev`, while your server runs locally, it's the local URL.
+   * URL. In `sst dev`, if no web function is deployed, it's the local URL.
    */
   public get url(): Output<string> {
     return (
