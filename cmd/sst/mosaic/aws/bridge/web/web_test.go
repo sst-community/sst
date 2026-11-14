@@ -108,6 +108,9 @@ func start(t *testing.T, local http.Handler, noDev bool, live bool, drop func(st
 		FunctionID:  "Api",
 		TakeTimeout: 500 * time.Millisecond,
 		ResendEvery: 100 * time.Millisecond,
+		// longer than the copies of a response sent whole take, as sst dev stops
+		// pinging once it sends the response
+		LostAfter: wholeCopies*wholeCopyEvery + time.Second,
 	}
 	go b.Run(ctx)
 	b.Probe(ctx)
@@ -286,6 +289,68 @@ func TestLocalServerDown(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 502 || !strings.Contains(string(body), "couldn't reach the local server") {
 		t.Fatalf("got %d %q", resp.StatusCode, body)
+	}
+}
+
+// A request sst dev took, then stopped pinging, as when sst dev exits, gets a
+// 504 instead of waiting out the function's timeout.
+func TestTakenRequestLost(t *testing.T) {
+	release := make(chan struct{})
+	local := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release })
+	var pings atomic.Int32
+	drop := func(channel string, packet bridge.Packet) bool {
+		// keep the first ping, which takes the request, and lose the rest
+		return packet.Type == bridge.MessagePing && pings.Add(1) > 1
+	}
+	s := start(t, local, false, true, drop)
+	// after start's, so it runs before the local server is closed
+	t.Cleanup(func() { close(release) })
+	started := time.Now()
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(s.url + "/hang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 504 || !strings.Contains(string(body), "stopped answering") {
+		t.Fatalf("got %d %q", resp.StatusCode, body)
+	}
+	if waited := time.Since(started); waited < s.bridge.LostAfter {
+		t.Fatalf("answered after %s, before LostAfter", waited)
+	}
+}
+
+// A request that fails before it reaches the local server still has the rest of
+// its body read. Otherwise its packets fill the Client's queue for it, and the
+// Client stops delivering every other message, so later requests get no answer.
+func TestFailedRequestDrainsItsBody(t *testing.T) {
+	for _, target := range []string{
+		"://bad",             // bad dev.url
+		"http://127.0.0.1:1", // local server down
+	} {
+		t.Run(target, func(t *testing.T) {
+			url := startWithTarget(t, target)
+			client := &http.Client{Timeout: 20 * time.Second}
+			// more packets than the Client queues for one message
+			payload := make([]byte, 110*bridge.BUFFER_SIZE)
+			resp, err := client.Post(url+"/upload", "application/octet-stream", bytes.NewReader(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != 502 {
+				t.Fatalf("first request: got %d, want 502", resp.StatusCode)
+			}
+			resp, err = client.Get(url + "/next")
+			if err != nil {
+				t.Fatalf("next request got no answer: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != 502 {
+				t.Fatalf("next request: got %d, want 502", resp.StatusCode)
+			}
+		})
 	}
 }
 

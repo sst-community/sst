@@ -48,6 +48,10 @@ const (
 	DefaultTakeTimeout = 5 * time.Second
 	DefaultResendEvery = time.Second
 	DefaultIdle        = 10 * time.Second
+	// DefaultLostAfter is how long a request sst dev took can go without a ping
+	// before the bridge answers it with a 504: several of sst dev's pings, so a
+	// lost one doesn't end it.
+	DefaultLostAfter = 20 * time.Second
 )
 
 // How often a Forwarder pings a request while the local server works on it,
@@ -94,6 +98,9 @@ type Bridge struct {
 	// answers it with a 503, and ResendEvery how often it sends it meanwhile.
 	TakeTimeout time.Duration
 	ResendEvery time.Duration
+	// LostAfter is how long a request sst dev took can go without a ping, as
+	// when sst dev exits, before it answers it with a 504.
+	LostAfter time.Duration
 	// Idle is how long it can go without a request before the next one checks
 	// the subscription first, with Reconnect to reconnect it, if set.
 	Idle      time.Duration
@@ -112,10 +119,20 @@ type Bridge struct {
 type request struct {
 	taken    chan struct{}
 	once     sync.Once
+	pinged   chan struct{}
 	response chan bridge.Message
 }
 
 func (r *request) take() { r.once.Do(func() { close(r.taken) }) }
+
+// ping marks the request taken, and that sst dev is still working on it.
+func (r *request) ping() {
+	r.take()
+	select {
+	case r.pinged <- struct{}{}:
+	default:
+	}
+}
 
 func (b *Bridge) init() {
 	b.mu.Lock()
@@ -148,7 +165,7 @@ func (b *Bridge) Run(ctx context.Context) {
 				json.NewDecoder(msg.Body).Decode(&taken)
 				io.Copy(io.Discard, msg.Body)
 				if r := b.find(taken.RequestID); r != nil {
-					r.take()
+					r.ping()
 				}
 			case bridge.MessageHttpResponse:
 				r := b.find(msg.ID)
@@ -286,7 +303,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	payload.Write(body)
 
 	requestID := id.Ascending()
-	pending := &request{taken: make(chan struct{}), response: make(chan bridge.Message, 1)}
+	pending := &request{taken: make(chan struct{}), pinged: make(chan struct{}, 1), response: make(chan bridge.Message, 1)}
 	b.mu.Lock()
 	b.waiting[requestID] = pending
 	b.mu.Unlock()
@@ -314,27 +331,43 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	send(true)
 
-	takeTimeout, resendEvery := b.TakeTimeout, b.ResendEvery
+	takeTimeout, resendEvery, lostAfter := b.TakeTimeout, b.ResendEvery, b.LostAfter
 	if takeTimeout <= 0 {
 		takeTimeout = DefaultTakeTimeout
 	}
 	if resendEvery <= 0 {
 		resendEvery = DefaultResendEvery
 	}
+	if lostAfter <= 0 {
+		lostAfter = DefaultLostAfter
+	}
 	timeout := time.NewTimer(takeTimeout)
 	defer timeout.Stop()
 	resends := time.NewTicker(resendEvery)
 	defer resends.Stop()
+	// set once sst dev takes the request, and reset by each of its pings
+	lost := time.NewTimer(lostAfter)
+	lost.Stop()
+	defer lost.Stop()
 	taken := pending.taken
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-taken:
-			// it's sst dev's now, until the caller or Lambda gives up
+			// it's sst dev's now, while it keeps pinging it
 			taken = nil
 			timeout.Stop()
 			resends.Stop()
+			lost.Reset(lostAfter)
+		case <-pending.pinged:
+			if taken == nil {
+				lost.Reset(lostAfter)
+			}
+		case <-lost.C:
+			slog.Warn("sst dev stopped answering the request", "requestID", requestID)
+			http.Error(w, "sst dev took this request, then stopped answering it for "+lostAfter.String()+" (worker: "+b.WorkerID+"). Check that `sst dev` is still running.", http.StatusGatewayTimeout)
+			return
 		case <-resends.C:
 			send(false)
 		case <-timeout.C:
@@ -552,11 +585,13 @@ func (f *Forwarder) Handle(ctx context.Context, msg bridge.Message) {
 	base, err := url.Parse(target)
 	if err != nil {
 		fail(http.StatusBadGateway, "sst dev: bad dev.url: "+err.Error())
+		go io.Copy(io.Discard, rest)
 		return
 	}
 	req, err := http.NewRequestWithContext(ctx, head.Method, base.Scheme+"://"+base.Host+head.URI, rest)
 	if err != nil {
 		fail(http.StatusBadGateway, "sst dev: bad request: "+err.Error())
+		go io.Copy(io.Discard, rest)
 		return
 	}
 	req.Header = withoutHop(head.Header)
@@ -577,6 +612,8 @@ func (f *Forwarder) Handle(ctx context.Context, msg bridge.Message) {
 	resp, err := f.HTTP.Do(req)
 	if err != nil {
 		fail(http.StatusBadGateway, fmt.Sprintf("sst dev couldn't reach the local server of %q at %s: %s", head.FunctionID, target, err))
+		// what the transport didn't send of the body
+		go io.Copy(io.Discard, rest)
 		return
 	}
 	defer resp.Body.Close()

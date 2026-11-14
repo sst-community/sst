@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 const packaged = join(dirname(fileURLToPath(import.meta.url)), "bootstrap");
 
 function start(binary) {
-  // The bridge's output goes to the function's own, so it reaches the log group.
+  // The bridge's output goes to the function's own, so it reaches the log
+  // groups as plain text: the HomeRegion `.local` one first, then the central.
   const child = spawn(binary, { stdio: "inherit" });
   child.on("error", (err) => {
     // a package that lost the binary's mode can't run it in place

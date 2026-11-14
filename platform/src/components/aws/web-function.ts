@@ -339,8 +339,15 @@ export interface WebFunctionArgs {
          * Your server still runs locally, with the same links, environment and role.
          * The deployed web function, revision, endpoint, code bucket and log groups are
          * the same as in a deploy, and are billed as such. The bridge is the same on
-         * every deploy, so it doesn't make a new revision while you work. Without
-         * `sst dev` running, the endpoint answers with a `503`. With `vpc`, no network
+         * every deploy, so it doesn't make a new revision while you work.
+         *
+         * Requests go to the scheme, host and port of `url`, with the path and query
+         * of the request; a path in `url` isn't used. Without `sst dev` running, the
+         * endpoint answers with a `503` after 5 seconds. Once `sst dev` has a request,
+         * the function's `timeout` limits it, as in a deploy. If `sst dev` stops
+         * answering it, as when it exits, the request gets a `504` after 20 seconds.
+         *
+         * With `vpc`, no network
          * connector is created: the bridge doesn't need one, and your local server reaches
          * the VPC through `sst tunnel`.
          * @default `false`
