@@ -77,11 +77,36 @@ export function sided(original: () => any, v5: () => any): any {
   return proxy;
 }
 
+// Changes, by the resource's name
+const byName = ([a]: [string, string[]], [b]: [string, string[]]) =>
+  a.localeCompare(b);
+
 /** The ways a takeover case is run. */
 export type TakeoverWay =
   | "as it is"
   | "inside another component"
   | "with another provider";
+
+/**
+ * What a move updates of a redirect, named `redirect`, in place. SST 4's
+ * redirect, as it's frozen in the fixtures, sent the redirect from the
+ * bucket's website. SST 4's since #265 and V5's answer it from the CloudFront
+ * function, with a placeholder origin. 4.x also created the function with the
+ * app's provider, whatever the redirect's was. V5 gives it the redirect's,
+ * which AWS's provider takes without replacing it.
+ */
+export function redirectChanged(
+  redirect: string,
+  way: TakeoverWay,
+): [name: string, fields: string[]][] {
+  return [
+    [`${redirect}Distribution`, ["origins"]],
+    [
+      `${redirect}CloudfrontFunctionRequest`,
+      way === "with another provider" ? ["code", "options.provider"] : ["code"],
+    ],
+  ];
+}
 
 type Create<C> = (
   Component: C,
@@ -569,7 +594,10 @@ export function mockPulumi(input?: MockInput) {
                     .filter((r) => !isWrapper(r))
                     .sort(),
                   wrappers: result.unclaimed.filter(isWrapper).length,
-                  changed: result.changed.map((c) => [c.name, c.fields]),
+                  // By name, as the order they're found in means nothing
+                  changed: result.changed
+                    .map((c): [string, string[]] => [c.name, c.fields])
+                    .sort(byName),
                   unordered: result.unordered.filter(
                     (order) => !suite.needlessOrder?.test(order),
                   ),
@@ -582,7 +610,9 @@ export function mockPulumi(input?: MockInput) {
                   ...(expected(test.unclaimed ?? suite.unclaimed) ?? []),
                 ].sort(),
                 wrappers: wrappers ?? 0,
-                changed: expected(test.changed ?? suite.changed) ?? [],
+                changed: [
+                  ...(expected(test.changed ?? suite.changed) ?? []),
+                ].sort(byName),
                 unordered: expected(test.unordered) ?? [],
                 revealed: [],
               });

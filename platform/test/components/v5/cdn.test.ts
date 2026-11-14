@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { type Output, output } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, redirectChanged } from "../../helpers/graph";
 
 const DISTRIBUTION = "aws:cloudfront/distribution:Distribution";
 const CERT_ARN = "arn:aws:acm:us-east-1:123456789012:certificate/abc";
@@ -130,15 +130,7 @@ describe("Cdn", () => {
             expect(names()).toContain("MyCdnSslCNAMERecordAppexamplecom");
             expect(names()).toContain("MyCdnSslCAAapp.example.comRecord");
           },
-          changed: (way) =>
-            way === "with another provider"
-              ? [
-                  [
-                    "MyCdnRedirectCloudfrontFunctionRequest",
-                    ["options.provider"],
-                  ],
-                ]
-              : [],
+          changed: (way) => redirectChanged("MyCdnRedirect", way),
         },
         "a domain on Cloudflare in a zone it's given": {
           create: (Cdn, opts) => {
@@ -210,18 +202,7 @@ describe("Cdn", () => {
             );
           },
           check: () => expect(names()).toContain("MyCdnRedirect"),
-          // 4.x created the redirect's function with the app's provider,
-          // whatever the redirect's was. V5 gives it the redirect's, which
-          // AWS's provider takes without replacing it
-          changed: (way) =>
-            way === "with another provider"
-              ? [
-                  [
-                    "MyCdnRedirectCloudfrontFunctionRequest",
-                    ["options.provider"],
-                  ],
-                ]
-              : [],
+          changed: (way) => redirectChanged("MyCdnRedirect", way),
         },
         "a domain with a certificate of its own": {
           create: (Cdn, opts) => {

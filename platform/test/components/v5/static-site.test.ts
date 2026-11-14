@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi, sidedClass } from "../../helpers/graph";
+import { mockPulumi, redirectChanged, sidedClass } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
 // A static site, and one that's built. SST 4 builds a site in its folder
@@ -179,16 +179,7 @@ describe("takes over a deployed StaticSite", () => {
             },
             opts,
           ),
-        // The redirect's function, as the Cdn's tests say
-        changed: (way) =>
-          way === "with another provider"
-            ? [
-                [
-                  "WebCdnRedirectCloudfrontFunctionRequest",
-                  ["options.provider"],
-                ],
-              ]
-            : [],
+        changed: (way) => redirectChanged("WebCdnRedirect", way),
       },
       "without edge routing, with a domain": (Site, opts) =>
         new Site(

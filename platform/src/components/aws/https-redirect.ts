@@ -23,16 +23,18 @@ const parts = {
    */
   certificate: named(optional(DnsValidatedCertificate), "Ssl"),
   /**
-   * The bucket whose website sends every request to the target domain.
+   * The bucket whose website redirected every request before the CloudFront function did.
+   * It's kept so that a distribution still deploying can reach it. No request reaches it
+   * after that.
    */
   bucket: Bucket,
   /**
-   * The bucket's website, which redirects every request.
+   * The bucket's website, which redirects every request. It's kept with the bucket.
    */
   bucketWebsite: s3.BucketWebsiteConfiguration,
   /**
-   * The CloudFront function that turns away a request made to the distribution's own
-   * domain.
+   * The CloudFront function that answers every request with the redirect, keeping its path
+   * and query string, and turns away a request made to the distribution's own domain.
    */
   requestFunction: named(cloudfront.Function, "CloudfrontFunctionRequest"),
   /**
@@ -83,6 +85,10 @@ export interface HttpsRedirectArgs extends ComponentArgs<typeof parts> {
  *   with the app's provider. A redirect with a provider of its own gives it that one, and
  *   keeps it.
  * - `transform` takes each part, and `nodes` has them.
+ * - The CloudFront function answers every request with the redirect, and the distribution's
+ *   origin is a placeholder it never reaches, as SST 4's redirect does since #265. A stage
+ *   moved from an SST 4 that sent the redirect from the bucket's website gets the function's
+ *   code and the origin updated in place.
  */
 export class HttpsRedirect extends component("sst:aws:HttpsRedirect", parts) {
   constructor(
@@ -122,6 +128,8 @@ export class HttpsRedirect extends component("sst:aws:HttpsRedirect", parts) {
       ).arn;
 
     const bucket = this.part("bucket", {});
+    // Kept, so edge locations still on the distribution's old origin keep
+    // redirecting while it deploys
     const bucketWebsite = this.part("bucketWebsite", {
       bucket: bucket.name,
       redirectAllRequestsTo: {
@@ -135,67 +143,90 @@ export class HttpsRedirect extends component("sst:aws:HttpsRedirect", parts) {
       {
         name: physicalName(64, `${name}CloudfrontFunctionRequest`),
         runtime: "cloudfront-js-2.0",
-        code: `
-import cf from "cloudfront";
+        // The redirect keeps the path and the raw query string
+        code: output(args.targetDomain).apply(
+          (targetDomain) => `
 async function handler(event) {
   ${CF_BLOCK_CLOUDFRONT_URL_INJECTION}
-  return event.request;
+  var request = event.request;
+  var query = request.rawQueryString();
+  return {
+    statusCode: 301,
+    statusDescription: "Moved Permanently",
+    headers: {
+      location: {
+        value: ${JSON.stringify("https://" + targetDomain)} + request.uri
+          + (query === undefined ? "" : "?" + query)
+      }
+    }
+  };
 }`,
+        ),
       },
       { ignoreChanges: ["name"] },
     );
 
     // The domains the distribution answers to
     const aliases = sourceDomains;
-    const distribution = this.part("distribution", {
-      enabled: true,
-      waitForDeployment: false,
-      aliases,
-      restrictions: {
-        geoRestriction: {
-          restrictionType: "none",
+    const distribution = this.part(
+      "distribution",
+      {
+        enabled: true,
+        waitForDeployment: false,
+        aliases,
+        restrictions: {
+          geoRestriction: {
+            restrictionType: "none",
+          },
         },
-      },
-      comment: output(args.targetDomain).apply((targetDomain) => {
-        const comment = `Redirect to ${targetDomain} from ${sourceDomains.join(
-          ", ",
-        )}`;
-        return comment.length > 128 ? comment.slice(0, 125) + "..." : comment;
-      }),
-      priceClass: "PriceClass_All",
-      viewerCertificate: {
-        acmCertificateArn: certificateArn,
-        sslSupportMethod: "sni-only",
-      },
-      defaultCacheBehavior: {
-        allowedMethods: ["GET", "HEAD", "OPTIONS"],
-        targetOriginId: "s3Origin",
-        viewerProtocolPolicy: "redirect-to-https",
-        cachedMethods: ["GET", "HEAD"],
-        forwardedValues: {
-          cookies: { forward: "none" },
-          queryString: false,
+        comment: output(args.targetDomain).apply((targetDomain) => {
+          const comment = `Redirect to ${targetDomain} from ${sourceDomains.join(
+            ", ",
+          )}`;
+          return comment.length > 128 ? comment.slice(0, 125) + "..." : comment;
+        }),
+        priceClass: "PriceClass_All",
+        viewerCertificate: {
+          acmCertificateArn: certificateArn,
+          sslSupportMethod: "sni-only",
         },
-        functionAssociations: [
+        defaultCacheBehavior: {
+          allowedMethods: ["GET", "HEAD", "OPTIONS"],
+          targetOriginId: "s3Origin",
+          viewerProtocolPolicy: "redirect-to-https",
+          cachedMethods: ["GET", "HEAD"],
+          forwardedValues: {
+            cookies: { forward: "none" },
+            queryString: false,
+          },
+          functionAssociations: [
+            {
+              eventType: "viewer-request",
+              functionArn: requestFunction.arn,
+            },
+          ],
+        },
+        origins: [
           {
-            eventType: "viewer-request",
-            functionArn: requestFunction.arn,
+            // CloudFront needs an origin, though the function answers every
+            // request before it's reached. The sites' HTTPS-only placeholder, so
+            // there's no HTTP-only origin, and no origin access control to need
+            // a permission for.
+            originId: "s3Origin",
+            domainName: "placeholder.sst.dev",
+            customOriginConfig: {
+              httpPort: 80,
+              httpsPort: 443,
+              originProtocolPolicy: "https-only",
+              originSslProtocols: ["TLSv1.2"],
+            },
           },
         ],
       },
-      origins: [
-        {
-          originId: "s3Origin",
-          domainName: bucketWebsite.websiteEndpoint,
-          customOriginConfig: {
-            httpPort: 80,
-            httpsPort: 443,
-            originProtocolPolicy: "http-only",
-            originSslProtocols: ["TLSv1.2"],
-          },
-        },
-      ],
-    });
+      // The website was its origin, and is still reached while it deploys.
+      // So it's removed after the distribution, as it was then.
+      { dependsOn: [bucketWebsite] },
+    );
 
     if (!dns) return;
     // An adapter names a record after its domain, with `*.` left out, so

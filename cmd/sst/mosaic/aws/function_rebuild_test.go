@@ -205,6 +205,8 @@ func (f *rebuildRuntime) ShouldRebuild(functionID string, path string) bool {
 	return strings.HasSuffix(path, ".ts")
 }
 
+func (f *rebuildRuntime) ValidateHandler(input *runtime.BuildInput) error { return nil }
+
 type rebuildWorker struct {
 	logs   *io.PipeReader
 	writer *io.PipeWriter

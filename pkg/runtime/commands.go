@@ -257,6 +257,10 @@ func expand(word string, env []string) string {
 	})
 }
 
+// ValidateHandler checks nothing: the package's own build command is what
+// says what a handler is, so only it can reject one
+func (c *Commands) ValidateHandler(input *BuildInput) error { return nil }
+
 // ShouldRebuild is whether the file is one the function's settings watch, and
 // not in its output.
 func (c *Commands) ShouldRebuild(functionID string, file string) bool {

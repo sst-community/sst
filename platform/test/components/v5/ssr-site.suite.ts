@@ -2,7 +2,12 @@ import fs from "fs";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi, type TakeoverCase, sidedClass } from "../../helpers/graph";
+import {
+  mockPulumi,
+  redirectChanged,
+  type TakeoverCase,
+  sidedClass,
+} from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
 // The tests every site with a server passes, the `Nextjs`, the `Astro` and
@@ -360,19 +365,9 @@ export function ssrSiteSuite(
                 opts,
               ),
             ...expected(),
-            // The redirect's function, as the Cdn's tests say
             changed: (way) =>
-              expected({
-                changed:
-                  way === "with another provider"
-                    ? [
-                        [
-                          `${S}CdnRedirectCloudfrontFunctionRequest`,
-                          ["options.provider"],
-                        ],
-                      ]
-                    : [],
-              }).changed,
+              expected({ changed: redirectChanged(`${S}CdnRedirect`, way) })
+                .changed,
           },
           "in a VPC": {
             create: (Site, opts) =>

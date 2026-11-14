@@ -395,3 +395,33 @@ func TestBuildLeavesTheProjectSSTDirectoryAloneThroughASymlink(t *testing.T) {
 	assert.Contains(t, contents, "own file")
 	assert.NotContains(t, contents, "injectedGlobals")
 }
+
+// A dependency that declares a top-level name one of the globals has, like
+// sql-formatter's `postgresql` beside the PostgreSQL provider, keeps its own:
+// a global reaches a file through a name of the CLI's (define), not an import
+// under its own name, so the two never clash (#269 on main)
+func TestBuildDependencyDeclaringAGlobalsName(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		".sst/platform/postgresql.mjs":     `export const name = "the provider";`,
+		"infra.ts":                         `export const name: string = postgresql.name;`,
+		"node_modules/fmt/package.json":    `{"name":"fmt","type":"module","main":"index.js"}`,
+		"node_modules/fmt/index.js":        "const postgresql = { name: \"its own\" };\nexport const name = postgresql.name;",
+		"node_modules/fmtcjs/package.json": `{"name":"fmtcjs","main":"index.js"}`,
+		"node_modules/fmtcjs/index.js":     "var postgresql = { name: \"its own cjs\" };\nmodule.exports = { name: postgresql.name };",
+	})
+	out := buildAndRun(t, js.EvalOptions{
+		Dir: dir,
+		Globals: []js.Global{{
+			Name:   "postgresql",
+			Module: filepath.ToSlash(filepath.Join(dir, ".sst", "platform", "postgresql.mjs")),
+		}},
+		Code: `
+import * as fmt from "fmt";
+import fmtcjs from "fmtcjs";
+import * as infra from "./infra.ts";
+console.log(fmt.name + "|" + fmtcjs.name + "|" + infra.name);
+`,
+	})
+	assert.Contains(t, out, "its own|its own cjs|the provider")
+}

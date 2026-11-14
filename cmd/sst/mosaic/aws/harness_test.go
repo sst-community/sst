@@ -250,6 +250,8 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 
 func (r *fakeRuntime) ShouldRebuild(functionID string, path string) bool { return r.rebuild }
 
+func (r *fakeRuntime) ValidateHandler(input *runtime.BuildInput) error { return nil }
+
 type fakeWorker struct {
 	runtime  *fakeRuntime
 	api      string
