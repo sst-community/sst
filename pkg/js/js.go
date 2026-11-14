@@ -232,10 +232,7 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 						return esbuild.OnResolveResult{Path: args.Path, Namespace: "not-loaded"}, nil
 					})
 					build.OnLoad(esbuild.OnLoadOptions{Filter: ".*", Namespace: "not-loaded"}, func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
-						contents := fmt.Sprintf(
-							"module.exports = new Proxy({}, { get(_, key) { if (key === \"__esModule\" || typeof key === \"symbol\") return undefined; throw new Error(%q); } });",
-							args.Path+" is only loaded in run()",
-						)
+						contents := leftOut(args.Path + " is only loaded in run()")
 						return esbuild.OnLoadResult{Contents: &contents, Loader: esbuild.LoaderJS}, nil
 					})
 					// A package `sst install` installs, like one the config
@@ -260,10 +257,7 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 						return esbuild.OnResolveResult{Path: args.Path, Namespace: "not-found"}, nil
 					})
 					build.OnLoad(esbuild.OnLoadOptions{Filter: ".*", Namespace: "not-found"}, func(args esbuild.OnLoadArgs) (esbuild.OnLoadResult, error) {
-						contents := fmt.Sprintf(
-							"module.exports = new Proxy({}, { get(_, key) { if (key === \"__esModule\" || typeof key === \"symbol\") return undefined; throw new Error(%q); } });",
-							args.Path+" isn't installed yet. A package that `sst install` installs, like one under `packages`, is only loaded in run()",
-						)
+						contents := leftOut(args.Path + " isn't installed yet. A package that `sst install` installs, like one under `packages`, is only loaded in run()")
 						return esbuild.OnLoadResult{Contents: &contents, Loader: esbuild.LoaderJS}, nil
 					})
 				},
@@ -332,6 +326,20 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 	os.WriteFile(filepath.Join(input.Dir, ".sst", "esbuild.json"), []byte(analysis), 0644)
 
 	return result, nil
+}
+
+// leftOut is a module left out of a build, which throws message when anything
+// is read from it. esbuild's interop copies a CommonJS module's own properties
+// onto an object of its own for a named or namespace import, and makes that
+// object with the module's prototype. So the reads are caught on the
+// prototype: a module with no properties would read as empty. What esbuild
+// and a promise ask of any module, `__esModule` and `then`, reads as
+// undefined.
+func leftOut(message string) string {
+	return fmt.Sprintf(
+		"module.exports = Object.create(new Proxy({}, { get(_, key) { if (key === \"__esModule\" || key === \"then\" || typeof key === \"symbol\") return undefined; throw new Error(%q); } }));",
+		message,
+	)
 }
 
 func isWithinDir(path, dir string) bool {
