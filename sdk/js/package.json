@@ -2,7 +2,9 @@
   "$schema": "https://json.schemastore.org/package.json",
   "name": "sst",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/pulumi/index.js"
+  ],
   "version": "0.0.0",
   "main": "./dist/index.js",
   "repository": {
@@ -33,6 +35,13 @@
     "./*": {
       "import": "./dist/*.js",
       "types": "./dist/*.d.ts"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "pulumi": [
+        "./dist/pulumi/index.d.ts"
+      ]
     }
   },
   "scripts": {
