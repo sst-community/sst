@@ -303,3 +303,311 @@ func TestHasBuildConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestCopyWorkspacePackagesForContainer(t *testing.T) {
+	// Builds a workspace where the member lives above the workspace root:
+	//
+	//   repo/
+	//     lib/                  <- workspace member ("../../lib" from app)
+	//     projects/app/         <- workspace root (has [tool.uv.workspace])
+	//
+	// and a build output dir seeded with the given requirements.txt.
+	setup := func(t *testing.T, requirements string) (*runtime.BuildInput, *projectInfo, string) {
+		tmp := t.TempDir()
+		appDir := filepath.Join(tmp, "repo", "projects", "app")
+		libDir := filepath.Join(tmp, "repo", "lib")
+
+		if err := os.MkdirAll(filepath.Join(libDir, "src", "shared"), 0755); err != nil {
+			t.Fatalf("failed to create lib dir: %v", err)
+		}
+		if err := os.MkdirAll(appDir, 0755); err != nil {
+			t.Fatalf("failed to create app dir: %v", err)
+		}
+		files := map[string]string{
+			filepath.Join(appDir, "pyproject.toml"):               "[project]\nname = \"app\"\n\n[tool.uv.workspace]\nmembers = [\"../../lib\"]\n",
+			filepath.Join(libDir, "pyproject.toml"):               "[project]\nname = \"shared\"\n",
+			filepath.Join(libDir, "src", "shared", "__init__.py"): "",
+		}
+		for path, content := range files {
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				t.Fatalf("failed to write %s: %v", path, err)
+			}
+		}
+
+		input := &runtime.BuildInput{
+			CfgPath:     filepath.Join(tmp, "sst.config.ts"),
+			FunctionID:  "testfn",
+			IsContainer: true,
+		}
+		outDir := input.Out()
+		if err := os.MkdirAll(outDir, 0755); err != nil {
+			t.Fatalf("failed to create output dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outDir, "requirements.txt"), []byte(requirements), 0644); err != nil {
+			t.Fatalf("failed to write requirements.txt: %v", err)
+		}
+
+		info := &projectInfo{
+			ProjectRoot:   tmp,
+			SourceRoot:    appDir,
+			PyprojectPath: filepath.Join(appDir, "pyproject.toml"),
+		}
+		return input, info, outDir
+	}
+
+	readRequirements := func(t *testing.T, outDir string) string {
+		content, err := os.ReadFile(filepath.Join(outDir, "requirements.txt"))
+		if err != nil {
+			t.Fatalf("failed to read requirements.txt: %v", err)
+		}
+		return string(content)
+	}
+
+	t.Run("member above workspace root is re-homed and requirements rewritten", func(t *testing.T) {
+		input, info, outDir := setup(t, "# generated\n.\n../../lib\nboto3==1.34.0\n")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+
+		got := readRequirements(t, outDir)
+		want := "# generated\n.\n./lib\nboto3==1.34.0\n"
+		if got != want {
+			t.Errorf("requirements.txt = %q, want %q", got, want)
+		}
+
+		// Package copied inside the build context, not above it
+		if _, err := os.Stat(filepath.Join(outDir, "lib", "pyproject.toml")); err != nil {
+			t.Error("lib/pyproject.toml should have been copied into the build context")
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "lib", "src", "shared", "__init__.py")); err != nil {
+			t.Error("lib package source should have been copied into the build context")
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(outDir)), "lib")); err == nil {
+			t.Error("lib should not have been copied outside the build context")
+		}
+
+		// The artifact's pyproject.toml must point at the re-homed member, or
+		// uv's workspace validation fails when building the project in-image.
+		pyproject, err := os.ReadFile(filepath.Join(outDir, "pyproject.toml"))
+		if err != nil {
+			t.Fatalf("artifact pyproject.toml should exist: %v", err)
+		}
+		if !strings.Contains(string(pyproject), "\"./lib\"") {
+			t.Errorf("artifact pyproject.toml should reference \"./lib\", got: %s", pyproject)
+		}
+		if strings.Contains(string(pyproject), "../../lib") {
+			t.Errorf("artifact pyproject.toml still references \"../../lib\": %s", pyproject)
+		}
+
+		// The source tree's pyproject.toml must be untouched
+		srcPyproject, err := os.ReadFile(info.PyprojectPath)
+		if err != nil {
+			t.Fatalf("failed to read source pyproject.toml: %v", err)
+		}
+		if !strings.Contains(string(srcPyproject), "../../lib") {
+			t.Error("source pyproject.toml should not have been modified")
+		}
+	})
+
+	t.Run("extras and markers are preserved on rewritten lines", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib[crypto] ; python_version >= \"3.11\"\n")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+
+		got := readRequirements(t, outDir)
+		want := "./lib[crypto] ; python_version >= \"3.11\"\n"
+		if got != want {
+			t.Errorf("requirements.txt = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("member inside workspace root is unchanged", func(t *testing.T) {
+		input, info, outDir := setup(t, "./core\nboto3==1.34.0\n")
+
+		coreDir := filepath.Join(filepath.Dir(info.PyprojectPath), "core")
+		if err := os.MkdirAll(coreDir, 0755); err != nil {
+			t.Fatalf("failed to create core dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(coreDir, "pyproject.toml"), []byte("[project]\nname = \"core\"\n"), 0644); err != nil {
+			t.Fatalf("failed to write core pyproject: %v", err)
+		}
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+
+		got := readRequirements(t, outDir)
+		want := "./core\nboto3==1.34.0\n"
+		if got != want {
+			t.Errorf("requirements.txt = %q, want %q", got, want)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "core", "pyproject.toml")); err != nil {
+			t.Error("core package should have been copied into the build context")
+		}
+	})
+
+	t.Run("missing member directory leaves requirements unchanged", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../missing\nboto3==1.34.0\n")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+
+		got := readRequirements(t, outDir)
+		want := "../../missing\nboto3==1.34.0\n"
+		if got != want {
+			t.Errorf("requirements.txt = %q, want %q", got, want)
+		}
+	})
+
+	// mkMember creates a member package at dir (relative to the setup's tmp
+	// root) with the given project name.
+	mkMember := func(t *testing.T, info *projectInfo, dir, name string) {
+		full := filepath.Join(info.ProjectRoot, dir)
+		if err := os.MkdirAll(full, 0755); err != nil {
+			t.Fatalf("failed to create %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(full, "pyproject.toml"), []byte("[project]\nname = \""+name+"\"\n"), 0644); err != nil {
+			t.Fatalf("failed to write %s pyproject: %v", dir, err)
+		}
+	}
+
+	t.Run("two members re-homed to the same path fail the build", func(t *testing.T) {
+		input, info, _ := setup(t, "../lib\n../../lib\n")
+		mkMember(t, info, "repo/projects/lib", "other")
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil {
+			t.Fatal("expected an error for two members that map to ./lib")
+		}
+		for _, want := range []string{`"../lib"`, `"../../lib"`, `"./lib"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should name %s, got: %v", want, err)
+			}
+		}
+	})
+
+	t.Run("re-homed member next to an in-workspace member with the same path fails the build", func(t *testing.T) {
+		for _, requirements := range []string{"./lib\n../lib\n", "../lib\n./lib\n"} {
+			input, info, _ := setup(t, requirements)
+			mkMember(t, info, "repo/projects/lib", "above")
+			mkMember(t, info, "repo/projects/app/lib", "inside")
+
+			err := copyWorkspacePackagesForContainer(input, info)
+			if err == nil {
+				t.Fatalf("expected an error for ../lib and ./lib with requirements %q", requirements)
+			}
+			if !strings.Contains(err.Error(), `"../lib"`) || !strings.Contains(err.Error(), `"./lib"`) {
+				t.Errorf("error should name both members, got: %v", err)
+			}
+		}
+	})
+
+	t.Run("the same member listed twice is not a collision", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n../../lib ; sys_platform == 'linux'\n")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		got := readRequirements(t, outDir)
+		want := "./lib\n./lib ; sys_platform == 'linux'\n"
+		if got != want {
+			t.Errorf("requirements.txt = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("member that contains the workspace root fails the build", func(t *testing.T) {
+		input, info, _ := setup(t, "../..\nboto3==1.34.0\n")
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil || !strings.Contains(err.Error(), `"../.."`) {
+			t.Fatalf("expected an error naming \"../..\", got: %v", err)
+		}
+	})
+
+	t.Run("re-homed member at a path that holds the function's source fails the build", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		// copySourceFilesSimple put a handler directory named lib/ there.
+		if err := os.MkdirAll(filepath.Join(outDir, "lib"), 0755); err != nil {
+			t.Fatalf("failed to create handler dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outDir, "lib", "handler.py"), []byte(""), 0644); err != nil {
+			t.Fatalf("failed to write handler: %v", err)
+		}
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil || !strings.Contains(err.Error(), `"../../lib"`) || !strings.Contains(err.Error(), `"./lib"`) {
+			t.Fatalf("expected an error naming the member and its path, got: %v", err)
+		}
+	})
+
+	t.Run("re-homed member next to its own unpacked sdist is fine", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		// buildPackage unpacked the member's flat-layout sdist at lib/.
+		if err := os.MkdirAll(filepath.Join(outDir, "lib"), 0755); err != nil {
+			t.Fatalf("failed to create sdist dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outDir, "lib", "pyproject.toml"), []byte("[project]\nname = \"shared\"\n"), 0644); err != nil {
+			t.Fatalf("failed to write sdist pyproject: %v", err)
+		}
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		if got := readRequirements(t, outDir); got != "./lib\n" {
+			t.Errorf("requirements.txt = %q, want %q", got, "./lib\n")
+		}
+	})
+
+	t.Run("re-homed member next to a different Python project fails the build", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		if err := os.MkdirAll(filepath.Join(outDir, "lib"), 0755); err != nil {
+			t.Fatalf("failed to create dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outDir, "lib", "pyproject.toml"), []byte("[project]\nname = \"handlers\"\n"), 0644); err != nil {
+			t.Fatalf("failed to write pyproject: %v", err)
+		}
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil || !strings.Contains(err.Error(), `"../../lib"`) {
+			t.Fatalf("expected an error naming the member, got: %v", err)
+		}
+	})
+
+	t.Run("member spelled with a trailing slash in pyproject.toml is rewritten", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		if err := os.WriteFile(info.PyprojectPath, []byte("[project]\nname = \"app\"\n\n[tool.uv.workspace]\nmembers = [\"../../lib/\"]\n"), 0644); err != nil {
+			t.Fatalf("failed to write pyproject: %v", err)
+		}
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		pyproject, err := os.ReadFile(filepath.Join(outDir, "pyproject.toml"))
+		if err != nil {
+			t.Fatalf("artifact pyproject.toml should exist: %v", err)
+		}
+		if !strings.Contains(string(pyproject), `members = ["./lib"]`) {
+			t.Errorf("artifact pyproject.toml should reference \"./lib\", got: %s", pyproject)
+		}
+	})
+
+	t.Run("in-workspace members leave the artifact files alone", func(t *testing.T) {
+		requirements := "# generated\n./core\n    # via app\nboto3==1.34.0 \\\n    --hash=sha256:abc\n"
+		input, info, outDir := setup(t, requirements)
+		mkMember(t, info, "repo/projects/app/core", "core")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		if got := readRequirements(t, outDir); got != requirements {
+			t.Errorf("requirements.txt = %q, want it unchanged %q", got, requirements)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "pyproject.toml")); err == nil {
+			t.Error("artifact pyproject.toml should not be written when nothing was re-homed")
+		}
+	})
+}
