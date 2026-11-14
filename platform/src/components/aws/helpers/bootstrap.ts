@@ -93,6 +93,13 @@ const stores = perRun(() => ({
   firstToAsk: undefined as string | undefined,
 }));
 
+// A store declared after a component that keeps its code or images in one
+function comesAfter(label: string, what: string) {
+  return new VisibleError(
+    `${label} comes after ${what}, which keeps its code or images in the program's assets. Declare the assets before the components that use them.`,
+  );
+}
+
 /**
  * Declares a store, as `Assets` and `Assets.use()` do.
  *
@@ -110,10 +117,7 @@ export function declareStore(store: DeclaredStore) {
  */
 export function checkDeclarable(label: string) {
   const { firstToAsk } = stores();
-  if (firstToAsk !== undefined)
-    throw new VisibleError(
-      `${label} comes after ${firstToAsk}, which keeps its code or images in the program's assets. Declare the assets before the components that use them.`,
-    );
+  if (firstToAsk !== undefined) throw comesAfter(label, firstToAsk);
 }
 
 /**
@@ -128,12 +132,29 @@ export function checkDeclarable(label: string) {
  *
  * @param component The component that keeps code or images.
  * @param what The component, in messages: `the "Api" function`.
+ * @param opts.unsure Whether the component doesn't know yet if it keeps
+ * anything, as a container given its image as an output doesn't: a store
+ * declared after it is refused only if it keeps something, when it first
+ * uses its store. It still uses only the stores declared before it.
  */
-export function assetStore(component: Resource, what: string) {
+export function assetStore(
+  component: Resource,
+  what: string,
+  opts?: { unsure?: boolean },
+) {
   const run = stores();
-  run.firstToAsk ??= what;
+  if (!opts?.unsure) run.firstToAsk ??= what;
   const declared = [...run.declared];
   const provider = component.getProvider("aws::");
+  // A component that wasn't sure finds out it keeps something: a store
+  // declared after it is refused, as it would have been had it been sure,
+  // and from then on none can be declared
+  const confirm = lazy(() => {
+    if (!opts?.unsure) return;
+    const later = run.declared[declared.length];
+    if (later) throw comesAfter(later.label, what);
+    run.firstToAsk ??= what;
+  });
   return {
     /** The store in a region. */
     forRegion(region: Input<string>): AssetStore {
@@ -143,6 +164,7 @@ export function assetStore(component: Resource, what: string) {
       const chosen = lazy(() =>
         all([region, all(declared.map((store) => store.region))]).apply(
           ([region, regions]) => {
+            confirm();
             const here = declared.filter(
               (_, index) => regions[index] === region,
             );

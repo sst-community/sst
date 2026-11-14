@@ -1379,11 +1379,13 @@ export function containerImage<P extends Parts>(
   // doesn't stop the program's assets from being declared after it
   if (typeof container.image === "string") return output(container.image);
   // Where a built image is pushed: the program's assets, or under SST's
-  // CLI, SST's bootstrap. Found only for an image that's built.
-  const store = assetStore(
-    component,
-    `the "${container.name}" container`,
-  ).forRegion(build.region);
+  // CLI, SST's bootstrap. Found only for an image that's built. One given
+  // as an output may be an image it's given too, which isn't known yet.
+  const store = assetStore(component, `the "${container.name}" container`, {
+    unsure:
+      Output.isInstance(container.image) ||
+      typeof (container.image as any)?.then === "function",
+  }).forRegion(build.region);
   const linkEnvs = Link.propertiesToEnv(Link.getProperties(build.link));
 
   return all([container.image, build.architecture]).apply(

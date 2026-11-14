@@ -10,6 +10,7 @@ import { mapArg, plain, withDefault, onlyExisting } from "../../args";
 import type { Input } from "../../input";
 import type { SizeGbTb } from "../../size";
 import { context } from "../../contract";
+import { appAndStage } from "../../naming";
 import {
   createCredentials,
   createRdsProxy,
@@ -323,7 +324,7 @@ export function createRdsInstance(
   const username = withDefault(args.username, engine.defaults.username);
   const dbName = withDefault(
     args.database,
-    context().app.name.replaceAll("-", "_"),
+    appAndStage().app.replaceAll("-", "_"),
   );
 
   // Given a database that's already deployed, it uses its secret and its

@@ -55,7 +55,13 @@ tests. It's written for AWS; for Cloudflare, read `cloudflare/` for `aws/` and
   of Pulumi's in one process, so a test sees what a run creates whatever ran before
   it. The functions' are in `helpers/function-shared.ts`. The one exception is
   `plain.ts`, a plain Pulumi program's run setup, which is done as the components
-  load, before anything is made, as a stack transformation has to be.
+  load, before anything is made, as a stack transformation has to be, and for an
+  Automation API program loaded outside its stack, before its first component in
+  each stack.
+- **A name with the app's or the stage's name in it** that `physicalName` doesn't
+  make, like a stage's or a database's, takes them from `appAndStage()`
+  (`naming.ts`), not from `context()`, so a Pulumi project's or stack's name SST's
+  CLI wouldn't take is SST's error, not the cloud's.
 - **Reproduce what SST 4 deployed, not what it meant to.** SST 4's `Function` trusted
   the account in every role because a check never passed, and SST 5's wrote the same
   policy until `main` fixed SST 4. Changing what a stage has is a decision of its own,

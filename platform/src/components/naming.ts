@@ -33,11 +33,16 @@ export function physicalName(max: number, name: string, suffix: string = "") {
   return `${main}-${random}${suffix}`;
 }
 
-// The app and the stage, which SST's components put in the names of what
-// they make. SST's CLI holds them to its rule (pkg/project). A program Pulumi
-// runs on its own has its project's and stack's, which Pulumi lets have
-// characters, like "_" and ".", that the cloud's names don't.
-function appAndStage() {
+/**
+ * The app and the stage, which SST's components put in the names of what
+ * they make: a component that puts one in a name gets it here, not from
+ * `context()`. SST's CLI holds them to its rule (pkg/project). A program
+ * Pulumi runs on its own has its project's and stack's, which Pulumi lets
+ * have characters, like "_" and ".", that the cloud's names don't: they're
+ * held to the same rule here, so a name SST's CLI wouldn't take is SST's
+ * error, not the cloud's.
+ */
+export function appAndStage() {
   const { name: app, stage } = context().app;
   if (!underCore()) {
     if (!/^[a-zA-Z][a-zA-Z0-9-]*$/.test(app))

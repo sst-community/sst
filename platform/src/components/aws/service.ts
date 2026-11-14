@@ -29,7 +29,7 @@ import { type DurationMinutes, toSeconds } from "../duration";
 import { VisibleError } from "../error";
 import { DevCommand } from "../experimental/dev-command";
 import type { Input } from "../input";
-import { hashStringToPrettyString } from "../naming";
+import { appAndStage, hashStringToPrettyString } from "../naming";
 import { transformPart } from "../transform";
 import { context } from "../contract";
 import { isAlb } from "./helpers/alb";
@@ -2107,6 +2107,7 @@ export class Service extends component("sst:aws:Service", parts) {
     registry: ServiceArgs["serviceRegistry"],
   ) {
     const name = this.componentName;
+    const { app, stage } = appAndStage();
     const part = this.partHandle("cloudmapService");
     const create = (namespaceId: Input<string>) =>
       new servicediscovery.Service(
@@ -2114,7 +2115,7 @@ export class Service extends component("sst:aws:Service", parts) {
           part.transform,
           part.name,
           {
-            name: `${name}.${context().app.stage}.${context().app.name}`,
+            name: `${name}.${stage}.${app}`,
             namespaceId,
             forceDestroy: true,
             dnsConfig: {

@@ -18,11 +18,10 @@ import {
 } from "../parts-component";
 import type { Prettify } from "../component";
 import { knownValue, notAnOption, plain } from "../args";
-import { context } from "../contract";
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import { sst4NodesOn } from "../sst4";
-import { hashStringToPrettyString, logicalName } from "../naming";
+import { appAndStage, hashStringToPrettyString, logicalName } from "../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { Function } from "./function";
 import { ApiGatewayRestUsagePlan } from "./apigateway-rest-usage-plan";
@@ -769,7 +768,7 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
         )
       : interpolate`https://${api.id}.execute-api.${
           this.region
-        }.amazonaws.com/${stage?.stageName ?? context().app.stage}/`;
+        }.amazonaws.com/${stage?.stageName ?? appAndStage().stage}/`;
   }
 
   /**
@@ -1342,7 +1341,7 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
     const logGroup = this.part("logGroup", ...this.logGroupArgs);
     const stage = this.part("stage", {
       restApi: api.id,
-      stageName: context().app.stage,
+      stageName: appAndStage().stage,
       deployment: deployment.id,
       accessLogSettings: {
         destinationArn: logGroup.arn,

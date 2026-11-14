@@ -49,6 +49,19 @@ export type Prettify<T> = {
   [K in keyof T]: T[K];
 } & {};
 
+// What runs before each component is created. plain.ts sets up a program
+// Pulumi runs on its own here, for a stack it's loaded outside of.
+const beforeCreate: (() => void)[] = [];
+
+/**
+ * Runs `hook` before each component is created, before it's registered.
+ *
+ * @internal
+ */
+export function beforeEachComponent(hook: () => void) {
+  beforeCreate.push(hook);
+}
+
 /**
  * The class every component extends. It names the component's resources and
  * applies `$transform`.
@@ -77,6 +90,7 @@ export class Component extends ComponentResource {
     args?: Inputs,
     opts?: ComponentResourceOptions,
   ) {
+    for (const hook of beforeCreate) hook();
     const transforms = ComponentTransforms.get(type) ?? [];
     for (const transform of transforms) {
       transform({ name, props: args, opts });

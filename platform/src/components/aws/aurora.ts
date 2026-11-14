@@ -14,6 +14,7 @@ import { VisibleError } from "../error";
 import { type DurationHours, toSeconds } from "../duration";
 import { transformPart } from "../transform";
 import { context } from "../contract";
+import { appAndStage } from "../naming";
 import {
   createCredentials,
   createRdsProxy,
@@ -677,7 +678,7 @@ export class Aurora extends component("sst:aws:Aurora", parts) {
     );
     const dbName = withDefault(
       args.database,
-      context().app.name.replaceAll("-", "_"),
+      appAndStage().app.replaceAll("-", "_"),
     );
 
     const owner = `the "${name}" Aurora database`;

@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Provider } from "@pulumi/aws";
-import { ComponentResource, type Output } from "@pulumi/pulumi";
+import { ComponentResource, type Output, output } from "@pulumi/pulumi";
 import { mockPulumi } from "../../../src/testing/mock";
 import { rejectionsOf } from "../../helpers/rejections";
 
@@ -240,6 +240,53 @@ describe("Assets, in a Pulumi program", () => {
     new Service("MyService", { cluster, image: "nginx:latest" });
     expect(() => new Assets("Assets")).not.toThrow();
     await pulumi.settle();
+  });
+
+  it("can be declared after a service given its image as an output, when the image is one it's given", async () => {
+    const cluster = new Cluster("MyCluster", { vpc });
+    new Service("MyService", { cluster, image: output("nginx:latest") });
+    expect(() => new Assets("Assets")).not.toThrow();
+    const failures = await rejectionsOf(() => pulumi.settle());
+    expect(failures).toEqual([]);
+  });
+
+  it("is refused after a service given its image as an output, when the image is built", async () => {
+    // Building it adds `.sst` to the ignore file next to its Dockerfile
+    const app = fs.mkdtempSync(path.join(os.tmpdir(), "sst-assets-"));
+    fs.writeFileSync(path.join(app, "Dockerfile"), "FROM scratch\n");
+    const failures = await rejectionsOf(async () => {
+      const cluster = new Cluster("MyCluster", { vpc });
+      new Service("MyService", { cluster, image: output({ context: app }) });
+      new Assets("Assets");
+      await pulumi.settle();
+    });
+    expect(failures.length).toBeGreaterThan(0);
+    expect((failures[0] as Error).message).toMatch(
+      /Assets\("Assets"\) comes after the "MyService" container/,
+    );
+    // Nothing is built, as the service only uses the assets declared before
+    // it, and there are none
+    expect(
+      pulumi.resources.filter((r) => r.type === "docker-build:index:Image"),
+    ).toEqual([]);
+  });
+
+  it("can't be declared once a service given its image as an output keeps it", async () => {
+    const app = fs.mkdtempSync(path.join(os.tmpdir(), "sst-assets-"));
+    fs.writeFileSync(path.join(app, "Dockerfile"), "FROM scratch\n");
+    Assets.use({
+      repository: "123456789012.dkr.ecr.us-east-1.amazonaws.com/images",
+    });
+    const cluster = new Cluster("MyCluster", { vpc });
+    new Service("MyService", { cluster, image: output({ context: app }) });
+    const failures = await rejectionsOf(() => pulumi.settle());
+    expect(failures).toEqual([]);
+    expect(
+      pulumi.resources.filter((r) => r.type === "docker-build:index:Image"),
+    ).toHaveLength(1);
+    expect(() => Assets.use({ bucket: "my-code" })).toThrow(
+      /Assets\.use\(\) comes after the "MyService" container/,
+    );
   });
 
   it("is shared when it's from Assets.use(), as another stack's can be", async () => {
