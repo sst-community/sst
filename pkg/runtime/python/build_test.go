@@ -565,6 +565,39 @@ func TestCopyWorkspacePackagesForContainer(t *testing.T) {
 		}
 	})
 
+	t.Run("re-homed member next to a different Python project fails the build", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		if err := os.MkdirAll(filepath.Join(outDir, "lib"), 0755); err != nil {
+			t.Fatalf("failed to create dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outDir, "lib", "pyproject.toml"), []byte("[project]\nname = \"handlers\"\n"), 0644); err != nil {
+			t.Fatalf("failed to write pyproject: %v", err)
+		}
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil || !strings.Contains(err.Error(), `"../../lib"`) {
+			t.Fatalf("expected an error naming the member, got: %v", err)
+		}
+	})
+
+	t.Run("member spelled with a trailing slash in pyproject.toml is rewritten", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n")
+		if err := os.WriteFile(info.PyprojectPath, []byte("[project]\nname = \"app\"\n\n[tool.uv.workspace]\nmembers = [\"../../lib/\"]\n"), 0644); err != nil {
+			t.Fatalf("failed to write pyproject: %v", err)
+		}
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		pyproject, err := os.ReadFile(filepath.Join(outDir, "pyproject.toml"))
+		if err != nil {
+			t.Fatalf("artifact pyproject.toml should exist: %v", err)
+		}
+		if !strings.Contains(string(pyproject), `members = ["./lib"]`) {
+			t.Errorf("artifact pyproject.toml should reference \"./lib\", got: %s", pyproject)
+		}
+	})
+
 	t.Run("in-workspace members leave the artifact files alone", func(t *testing.T) {
 		requirements := "# generated\n./core\n    # via app\nboto3==1.34.0 \\\n    --hash=sha256:abc\n"
 		input, info, outDir := setup(t, requirements)

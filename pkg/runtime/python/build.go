@@ -738,8 +738,8 @@ func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *p
 			// The function's own source (e.g. a handler in "lib/") may already
 			// sit at the re-homed path. Copying would then only add the
 			// member's pyproject.toml to those files. An unpacked sdist of the
-			// member itself has a pyproject.toml or setup.py and is fine.
-			if isRehomed && dirHoldsOtherFiles(filepath.Join(input.Out(), contextPath)) {
+			// member itself is fine.
+			if isRehomed && dirHoldsOtherFiles(filepath.Join(input.Out(), contextPath), fullPath) {
 				return fmt.Errorf("workspace member %q would be copied to %q in the container build context, but that directory already holds other files, such as the function's own source; rename or move one of them", pkgPath, contextPath)
 			}
 		}
@@ -796,19 +796,33 @@ func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *p
 	return nil
 }
 
-// dirHoldsOtherFiles reports whether path exists in the build context and is
-// not a Python project (no pyproject.toml or setup.py), the same test uv
-// applies when it installs a path.
-func dirHoldsOtherFiles(path string) bool {
+// dirHoldsOtherFiles reports whether path already exists in the build context
+// with something other than the member at memberDir: no pyproject.toml or
+// setup.py (the test uv applies when it installs a path), or a pyproject.toml
+// for a different project than the member's.
+func dirHoldsOtherFiles(path, memberDir string) bool {
 	if _, err := os.Stat(path); err != nil {
 		return false
 	}
-	for _, name := range []string{"pyproject.toml", "setup.py"} {
-		if _, err := os.Stat(filepath.Join(path, name)); err == nil {
+	existing := filepath.Join(path, "pyproject.toml")
+	if _, err := os.Stat(existing); err == nil {
+		have, haveErr := parsePyprojectToml(existing)
+		want, wantErr := parsePyprojectToml(filepath.Join(memberDir, "pyproject.toml"))
+		if haveErr != nil || wantErr != nil {
 			return false
 		}
+		return normalizeProjectName(have.Project.Name) != normalizeProjectName(want.Project.Name)
+	}
+	if _, err := os.Stat(filepath.Join(path, "setup.py")); err == nil {
+		return false
 	}
 	return true
+}
+
+// normalizeProjectName compares Python project names the way packaging does:
+// case-insensitive, with "-", "_" and "." treated alike.
+func normalizeProjectName(name string) string {
+	return strings.NewReplacer("_", "-", ".", "-").Replace(strings.ToLower(name))
 }
 
 // rewritePyprojectWorkspacePaths updates workspace member paths in the artifact's
@@ -842,7 +856,10 @@ func rewritePyprojectWorkspacePaths(input *runtime.BuildInput, projectInfo *proj
 	updated := string(content)
 	for oldPath, newPath := range rehomed {
 		for _, quote := range []string{`"`, `'`} {
-			updated = strings.ReplaceAll(updated, quote+oldPath+quote, quote+newPath+quote)
+			// uv exports "../lib/" as "../lib", so match both spellings.
+			for _, spelling := range []string{oldPath, oldPath + "/"} {
+				updated = strings.ReplaceAll(updated, quote+spelling+quote, quote+newPath+quote)
+			}
 		}
 	}
 
