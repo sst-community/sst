@@ -12,7 +12,7 @@ import (
 
 // What a Pulumi program uses of SST's project code: the program contract's
 // types and the dev loop's helpers, and none of an SST app's own, like its
-// home, state, passphrase, lock or bootstrap. So sst dev for Pulumi can ship
+// home, state, passphrase, lock or bootstrap. So sst pulumi dev for Pulumi can ship
 // without SST's state, and reaching for it is a decision made here.
 var allowed = map[string][]string{
 	"project": {

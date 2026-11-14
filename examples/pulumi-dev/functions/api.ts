@@ -2,7 +2,7 @@ import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 import postgres from "postgres";
 
-// Change it while `sst dev` runs: the next call answers with the new one
+// Change it while `sst pulumi dev` runs: the next call answers with the new one
 const VERSION = "1";
 
 const s3 = new S3Client({});
@@ -19,7 +19,7 @@ export async function handler(event: { rawPath?: string }) {
   switch (event.rawPath) {
     case "/version":
       return { version: VERSION, greeting: process.env.GREETING };
-    // Who the code runs as: the function's role, in AWS and in `sst dev`
+    // Who the code runs as: the function's role, in AWS and in `sst pulumi dev`
     case "/whoami":
       return (await new STSClient({}).send(new GetCallerIdentityCommand({}))).Arn;
     case "/reports":

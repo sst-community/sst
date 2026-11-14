@@ -24,7 +24,7 @@ import (
 	"github.com/sst/sst/v3/pkg/server"
 )
 
-// ErrNoDevFile is why a program can't run in sst dev without its DevFile,
+// ErrNoDevFile is why a program can't run in sst pulumi dev without its DevFile,
 // which WriteDevFile can write a first one of
 var ErrNoDevFile = fmt.Errorf("no %s: %w", DevFile, os.ErrNotExist)
 
@@ -43,7 +43,7 @@ type Written struct {
 }
 
 // WriteDevFile writes a first DevFile for a program that has none, from a
-// preview of its stack as sst dev deploys it: each function with its source
+// preview of its stack as sst pulumi dev deploys it: each function with its source
 // handler, found or guessed, and the stack's outputs and roles, for the dev
 // commands. The stack is the one named, or the one selected when it's empty.
 func WriteDevFile(ctx context.Context, cfgPath, stack string) (*Written, error) {
@@ -66,7 +66,7 @@ func WriteDevFile(ctx context.Context, cfgPath, stack string) (*Written, error) 
 		return nil, err
 	}
 	written := devFileText(root, StageOf(stack), found)
-	// what's written is read as sst dev reads it
+	// what's written is read as sst pulumi dev reads it
 	if _, err := parseDevFile([]byte(written.Text)); err != nil {
 		return nil, fmt.Errorf("the %s it would write can't be read: %w", DevFile, err)
 	}
@@ -93,7 +93,7 @@ type previewedFunction struct {
 	code map[string]interface{}
 }
 
-// previewStack previews the stack with pulumi preview, as sst dev deploys it:
+// previewStack previews the stack with pulumi preview, as sst pulumi dev deploys it:
 // in dev, with the transform told to run nothing on this machine
 func previewStack(ctx context.Context, cli, root, stack string) (*previewed, error) {
 	srv, err := server.New()
@@ -239,7 +239,7 @@ func guessFunction(root, search string, function previewedFunction) guess {
 	case strings.HasPrefix(function.runtime, "provided"):
 		return guessNative(root, search, function)
 	case !strings.HasPrefix(function.runtime, "nodejs") && !strings.HasPrefix(function.runtime, "python"):
-		return guess{cloud: "sst dev doesn't run " + function.runtime}
+		return guess{cloud: "sst pulumi dev doesn't run " + function.runtime}
 	case function.handler == "":
 		return guess{cloud: "its handler isn't known before it's deployed"}
 	}
@@ -270,14 +270,14 @@ func guessFunction(root, search string, function previewedFunction) guess {
 	case 1:
 		return guess{handler: handler(candidates[0]), note: "guessed by its name from " + shown}
 	case 0:
-		return guess{handler: "path/to/source" + export, unsure: "sst dev couldn't find its source from " + shown}
+		return guess{handler: "path/to/source" + export, unsure: "sst pulumi dev couldn't find its source from " + shown}
 	}
 	listed := []string{}
 	for _, candidate := range candidates[:min(3, len(candidates))] {
 		rel, _ := filepath.Rel(root, candidate)
 		listed = append(listed, filepath.ToSlash(rel))
 	}
-	return guess{handler: handler(candidates[0]), unsure: "sst dev found more than one source like it: " + strings.Join(listed, ", ")}
+	return guess{handler: handler(candidates[0]), unsure: "sst pulumi dev found more than one source like it: " + strings.Join(listed, ", ")}
 }
 
 // guessNative finds a Go function's source, a folder of Go named as its build
@@ -599,21 +599,21 @@ func devFileText(root, stage string, found *previewed) *Written {
 
 	var text strings.Builder
 	fmt.Fprintf(&text, "# yaml-language-server: $schema=%s\n", schemaPath(root))
-	fmt.Fprintf(&text, "#\n# What sst dev runs of the program. It was written from a preview of the\n# %q stack: a function's handler is its source, from this folder, so check\n# the ones it guessed.\n\n", stage)
+	fmt.Fprintf(&text, "#\n# What sst pulumi dev runs of the program. It was written from a preview of the\n# %q stack: a function's handler is its source, from this folder, so check\n# the ones it guessed.\n\n", stage)
 	if len(found.functions) == 0 {
 		text.WriteString("# The program made no function.\n")
 	}
 	text.WriteString("functions:\n")
 	text.WriteString(functions.String())
 	if cloud.Len() > 0 {
-		text.WriteString("\n# What sst dev can't run on this machine, which stays in the cloud:\n")
+		text.WriteString("\n# What sst pulumi dev can't run on this machine, which stays in the cloud:\n")
 		text.WriteString(cloud.String())
 	}
 	example := "API_URL: ${apiUrl}"
 	if len(found.outputs) > 0 {
 		example = envName(found.outputs[0]) + ": ${" + found.outputs[0] + "}"
 	}
-	fmt.Fprintf(&text, "\n# Dev commands run beside sst dev, each in a pane of its own, like:\n#\n# commands:\n#   Web:\n#     command: npm run dev\n#     directory: web\n#     environment:\n#       %s\n", example)
+	fmt.Fprintf(&text, "\n# Dev commands run beside sst pulumi dev, each in a pane of its own, like:\n#\n# commands:\n#   Web:\n#     command: npm run dev\n#     directory: web\n#     environment:\n#       %s\n", example)
 	if len(found.outputs) > 0 {
 		fmt.Fprintf(&text, "#\n# The stack's outputs, for ${name}: %s\n", strings.Join(found.outputs, ", "))
 	}

@@ -1,13 +1,13 @@
 /**
- * SST's dev loop for a plain Pulumi program: `sst dev` deploys the program's
- * stack with `pulumi up`, runs the functions `sst.dev.yaml` names on this
- * machine, and runs its dev commands. Pulumi does everything else.
+ * SST's dev loop for a plain Pulumi program: `sst pulumi dev` deploys the
+ * program's stack with `pulumi up`, runs the functions `sst.dev.yaml` names on
+ * this machine, and runs its dev commands. Pulumi does everything else.
  *
  * Import it once, first, before the program makes any resource. Under
- * `sst dev` it registers one transform for the whole stack, which asks `sst
- * dev` about each function and role as the program makes it. Outside `sst dev`
- * it does nothing, so a stack deployed with plain `pulumi up` has nothing of
- * SST in it.
+ * `sst pulumi dev` it registers one transform for the whole stack, which asks
+ * `sst pulumi dev` about each function and role as the program makes it.
+ * Outside `sst pulumi dev` it does nothing, so a stack deployed with plain
+ * `pulumi up` has nothing of SST in it.
  *
  * @example
  * ```ts
@@ -22,7 +22,7 @@ import * as aws from "@pulumi/aws";
 import http from "node:http";
 
 /**
- * Whether the program is running under `sst dev`, which deploys it to a dev
+ * Whether the program is running under `sst pulumi dev`, which deploys it to a dev
  * stack. Use it for what's different in dev: a local database in place of
  * one in the cloud, or the frontend's dev server in place of the deployed
  * site. It's `process.env.SST_DEV === "true"`, which a program can read
@@ -38,12 +38,12 @@ import http from "node:http";
 export const dev =
   process.env.SST_DEV === "true" && Boolean(process.env.SST_SERVER);
 
-/** Where `sst dev` is, with its token, read with {@link dev}. */
+/** Where `sst pulumi dev` is, with its token, read with {@link dev}. */
 const server = process.env.SST_SERVER;
 
 /**
- * What a function is deployed as in `sst dev`: the stub, which passes its
- * invocations to `sst dev`. The CLI says what it is.
+ * What a function is deployed as in `sst pulumi dev`: the stub, which passes its
+ * invocations to `sst pulumi dev`. The CLI says what it is.
  */
 interface Stub {
   code: string;
@@ -54,7 +54,7 @@ interface Stub {
   permissions: { actions: string[]; resources: string[] }[];
 }
 
-/** Calls `sst dev`, at the address it gives the program. */
+/** Calls `sst pulumi dev`, at the address it gives the program. */
 function call<T>(method: string, args: unknown): Promise<T> {
   return new Promise((resolve, reject) => {
     const url = new URL(server + "/rpc");
@@ -73,7 +73,7 @@ function call<T>(method: string, args: unknown): Promise<T> {
           if (response.statusCode !== 200)
             return reject(
               new Error(
-                `sst dev answered ${method} with ${response.statusCode}: ${data}`,
+                `sst pulumi dev answered ${method} with ${response.statusCode}: ${data}`,
               ),
             );
           try {
@@ -93,7 +93,7 @@ function call<T>(method: string, args: unknown): Promise<T> {
 }
 
 /**
- * The transform the import registers for the whole stack under `sst dev`. A
+ * The transform the import registers for the whole stack under `sst pulumi dev`. A
  * function `sst.dev.yaml` names is deployed as the stub, and a role one of its
  * dev commands runs as lets the developer's account take it. Everything else
  * is left as it is.
@@ -116,8 +116,8 @@ if (dev) {
 
 /**
  * The nearest of SST's components a resource is made in, by its type and name.
- * SST's components run their functions in `sst dev` themselves, deploying
- * the stub where it's needed, so `sst dev` is only told of such a function.
+ * SST's components run their functions in `sst pulumi dev` themselves, deploying
+ * the stub where it's needed, so `sst pulumi dev` is only told of such a function.
  */
 function sstComponent(
   parent: pulumi.Resource | undefined,
@@ -140,9 +140,9 @@ function sstComponent(
 
 /**
  * A function `sst.dev.yaml` names, deployed as a stub that passes its
- * invocations to this machine, where `sst dev` runs it from its source with
+ * invocations to this machine, where `sst pulumi dev` runs it from its source with
  * its own environment and the credentials of its own role. Its role is let
- * reach `sst dev`.
+ * reach `sst pulumi dev`.
  */
 async function live({
   name,
@@ -169,7 +169,7 @@ async function live({
   if (stub.permissions.length > 0) {
     if (!props.role)
       throw new Error(
-        `The "${name}" function has no role, which sst dev's stub needs to reach it.`,
+        `The "${name}" function has no role, which sst pulumi dev's stub needs to reach it.`,
       );
     new aws.iam.RolePolicy(
       `${name}SstDev`,
@@ -220,7 +220,7 @@ async function live({
 
 /**
  * A role one of `sst.dev.yaml`'s dev commands runs as, which lets the
- * developer's account take it, so `sst dev` can run the command with its
+ * developer's account take it, so `sst pulumi dev` can run the command with its
  * credentials.
  */
 async function trust({

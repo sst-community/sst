@@ -6,10 +6,10 @@ description: Use SST's components in a plain Pulumi program, deployed by Pulumi 
 A Pulumi program can use SST's components as it uses any other Pulumi component. Pulumi deploys them, with `pulumi up`, `pulumi preview` and `pulumi destroy`, on any backend, and no `sst` command running.
 
 - **The components are the ones an SST app uses.** A `Function`, a `Bucket` or a `Nextjs` site makes the same resources, named the same way, and links the same way.
-- **`sst dev` runs them** as it does in an SST app: functions on your machine, and dev commands beside them.
+- **`sst pulumi dev` runs them** as `sst dev` does in an SST app: functions on your machine, and dev commands beside them.
 - **`sst eject` takes SST out.** It writes the components as Pulumi's own resources, from the stack's state, so nothing in the cloud is replaced and the program needs nothing of SST's.
 
-To run the program's own Lambda functions in `sst dev` too, see [Use with Pulumi](/docs/use-with-pulumi).
+To run the program's own Lambda functions in `sst pulumi dev` too, see [Use with Pulumi](/docs/use-with-pulumi).
 
 :::note
 It runs Pulumi programs in TypeScript or JavaScript, with SST's AWS components.
@@ -104,7 +104,7 @@ Assets.use({
 });
 ```
 
-They have to be in the components' region, and writable by the credentials that deploy. A bucket that `pulumi destroy` deletes needs `forceDestroy`, as old builds are left in it. A store another stack has is that stack's: protect it there, as services in other stacks pull their images from it. As other stacks can share it, the code of `sst dev`'s stub, which every stack in a bucket uses, is kept in it when a stack is destroyed, as it is in SST's bootstrap.
+They have to be in the components' region, and writable by the credentials that deploy. A bucket that `pulumi destroy` deletes needs `forceDestroy`, as old builds are left in it. A store another stack has is that stack's: protect it there, as services in other stacks pull their images from it. As other stacks can share it, the code of `sst pulumi dev`'s stub, which every stack in a bucket uses, is kept in it when a stack is destroyed, as it is in SST's bootstrap.
 
 An SST app needs none of this: SST's CLI keeps its code and images in SST's bootstrap of the account, which every app shares. It can use `Assets` or `Assets.use()` too, in place of it.
 
@@ -173,15 +173,15 @@ new Bucket("Uploads", {}, { protect: true });
 
 ---
 
-## `sst dev`
+## `sst pulumi dev`
 
-`sst dev` runs a Pulumi program's SST components as it runs an SST app's: each `Function` on your machine, from its source, and each `DevCommand` in a pane of its own, both with their links. They need no `sst.dev.yaml`. The program's own functions and dev commands still go there, as in [Use with Pulumi](/docs/use-with-pulumi).
+`sst pulumi dev` runs a Pulumi program's SST components as `sst dev` runs an SST app's: each `Function` on your machine, from its source, and each `DevCommand` in a pane of its own, both with their links. They need no `sst.dev.yaml`. The program's own functions and dev commands still go there, as in [Use with Pulumi](/docs/use-with-pulumi).
 
 Let a stack for development opt in, and start it.
 
 ```bash
 pulumi config set sst:dev true --stack dev
-npx sst dev --stage dev
+npx sst pulumi dev --stage dev
 ```
 
 After each deploy it writes `sst-env.d.ts`, which types `Resource` in the functions from the components' links. If your `tsconfig.json` lists its files, add it there. A plain `pulumi up` doesn't write it, as no `sst` command runs.
@@ -315,7 +315,7 @@ A Worker's placement stays as it is until its script is next uploaded, and is Cl
 
 It stops before it writes anything when it can't eject a stack without a change in the cloud:
 
-- **A stack `sst dev` deployed last**, whose functions run the stub. Deploy it with `pulumi up` first.
+- **A stack `sst pulumi dev` deployed last**, whose functions run the stub. Deploy it with `pulumi up` first.
 - **A stack with an operation Pulumi didn't finish**, or a resource waiting to be deleted or replaced.
 - **SST's origin access control**, which it can't adopt yet, as its name isn't in the state.
 - **A provider one of SST's components made**, other than the one for a region that a site's server uses.
@@ -329,6 +329,6 @@ It stops before it writes anything when it can't eject a stack without a change 
 - **TypeScript or JavaScript.** Of Cloudflare's components, `Bucket` and `Hyperdrive`, and the sites with a server, haven't been deployed with Pulumi alone yet. Vercel's DNS hasn't been either.
 - **Every provider of a group.** `sst/components/aws` loads `@pulumi/command`, `@pulumi/docker-build`, `@pulumi/random` and `@pulumi/tls`, used or not.
 - **Builds** of Node.js functions and Cloudflare Workers are what's been checked. Other runtimes and container images haven't been.
-- **`Resource`'s types** are written by `sst dev` only.
-- **In `sst dev`, not yet:** tasks and the tunnel.
+- **`Resource`'s types** are written by `sst pulumi dev` only.
+- **In `sst pulumi dev`, not yet:** tasks and the tunnel.
 - **A stage SST's CLI deployed** can't move to a Pulumi stack yet.

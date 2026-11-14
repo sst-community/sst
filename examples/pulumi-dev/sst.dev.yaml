@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=./node_modules/sst/schema/sst.dev.json
-# What `sst dev` runs of this program: the functions to run on this machine,
+# What `sst pulumi dev` runs of this program: the functions to run on this machine,
 # by their name in the program, and the dev commands, each in a pane of its
 # own. ${name} is the stack's output of that name.
 functions:
@@ -17,7 +17,7 @@ commands:
       API_URL: ${apiUrl}
   Report:
     command: node scripts/report.mjs
-    # a role of the program, by name: sst dev lets your account take it
+    # a role of the program, by name: sst pulumi dev lets your account take it
     role: Reporter
     environment:
       REPORTS_BUCKET: ${reportsBucket}

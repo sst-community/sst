@@ -240,6 +240,8 @@ func CmdMosaic(c *cli.Cli) error {
 	})
 
 	currentExecutable, _ := os.Executable()
+	// a pane runs the dev loop's command again: sst dev, or sst pulumi dev
+	devCommand := append([]string{currentExecutable}, c.DevCommand()...)
 
 	mode := c.String("mode")
 
@@ -343,7 +345,7 @@ func CmdMosaic(c *cli.Cli) error {
 							}
 							multi.AddProcess(multiplexer.PaneConfig{
 								Key:       d.Name,
-								Args:      []string{currentExecutable, "dev"},
+								Args:      slices.Clone(devCommand),
 								Icon:      "→",
 								Title:     title,
 								Cwd:       dir,
@@ -456,7 +458,7 @@ func CmdMosaic(c *cli.Cli) error {
 							}
 							mono.AddProcess(
 								d.Name,
-								append([]string{currentExecutable, "dev", "--"}, words...),
+								append(append(slices.Clone(devCommand), "--"), words...),
 								dir,
 								title,
 								d.Autostart,

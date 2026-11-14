@@ -27,7 +27,10 @@ export interface Context {
     home: "aws" | "cloudflare" | "local" | "pulumi";
     providers: Record<string, any>;
   };
-  /** Whether the program runs for `sst dev`, or a command run with `--dev`. */
+  /**
+   * Whether the program runs for `sst dev` or `sst pulumi dev`, or a command
+   * run with `--dev`.
+   */
   dev: boolean;
   /** The command the program runs for, like `deploy`, `diff` or `remove`. */
   command: string;
@@ -87,13 +90,13 @@ function fromCore(): Context {
 
 // No core speaks a version of the contract to a program Pulumi runs, and
 // nothing moves it. Pulumi runs the program for a preview and a deploy;
-// `pulumi refresh` and `pulumi destroy` don't run it. `sst dev` runs it with
+// `pulumi refresh` and `pulumi destroy` don't run it. `sst pulumi dev` runs it with
 // `pulumi up` (pkg/pulumidev), and says so in the environment it gives it, as
 // `sst/pulumi` reads it: then it's a deploy in dev, as `sst dev` is for an SST
 // app. The work folder is the one SST's CLI uses for a Pulumi project: `.sst`
 // next to Pulumi.yaml. The platform's files a deploy reads are in the `sst`
-// package (sdk/js/scripts/platform.ts), and `sst dev`'s stubs aren't: in
-// `sst dev` they're in the copy of the platform the CLI puts in `.sst`.
+// package (sdk/js/scripts/platform.ts), and `sst pulumi dev`'s stubs aren't:
+// in `sst pulumi dev` they're in the copy of the platform the CLI puts in `.sst`.
 function fromPulumi(): Context {
   const root = pulumi.getRootDirectory?.() || process.cwd();
   const work = path.join(root, ".sst");
@@ -110,7 +113,7 @@ function fromPulumi(): Context {
       providers: {},
     },
     dev,
-    // `sst dev` runs `pulumi up --skip-preview`, so a dev run is a deploy
+    // `sst pulumi dev` runs `pulumi up --skip-preview`, so a dev run is a deploy
     command: pulumi.runtime.isDryRun() ? "diff" : "deploy",
     move: false,
     paths: {

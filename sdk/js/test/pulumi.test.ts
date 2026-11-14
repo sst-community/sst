@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import http from "node:http";
 import * as pulumi from "@pulumi/pulumi";
 
-// What sst dev says a function is deployed as
+// What sst pulumi dev says a function is deployed as
 const stub = {
   code: "/app/.sst/platform/dist/bridge",
   handler: "bootstrap",
@@ -54,7 +54,7 @@ async function eventually<T>(read: () => T | undefined): Promise<T> {
   throw new Error("never registered");
 }
 
-// sst/pulumi reads whether it's in sst dev when it's loaded, so each case
+// sst/pulumi reads whether it's in sst pulumi dev when it's loaded, so each case
 // loads its own copy
 type Library = typeof import("../src/pulumi/index.ts");
 const load = (copy: string) =>
@@ -129,7 +129,7 @@ const role = (name: string, assumeRolePolicy: unknown) => ({
   props: { assumeRolePolicy },
 });
 
-describe("outside sst dev", () => {
+describe("outside sst pulumi dev", () => {
   it("isn't dev, and registers nothing", () => {
     expect(plain.dev).toBe(false);
     expect(transformsBeforeDev).toBe(0);
@@ -137,14 +137,14 @@ describe("outside sst dev", () => {
   });
 });
 
-describe("in sst dev", () => {
+describe("in sst pulumi dev", () => {
   it("is dev, and registers one transform for the stack", async () => {
     expect(sst.dev).toBe(true);
     await eventually(() => (registeredTransforms > 0 ? true : undefined));
     expect(registeredTransforms).toBe(1);
   });
 
-  it("deploys the stub in place of a function sst dev runs", async () => {
+  it("deploys the stub in place of a function sst pulumi dev runs", async () => {
     const result = await sst.transform(fn);
     expect(calls.at(-1)).toEqual({
       path: "/token/rpc",
@@ -172,7 +172,7 @@ describe("in sst dev", () => {
       variables: { DB_HOST: "localhost", ...stub.environment },
     });
 
-    // its role may reach sst dev
+    // its role may reach sst pulumi dev
     const policy = await eventually(() =>
       created.find((r) => r.type === "aws:iam/rolePolicy:RolePolicy"),
     );
@@ -184,12 +184,12 @@ describe("in sst dev", () => {
     });
   });
 
-  it("leaves a function sst dev doesn't run as it is", async () => {
+  it("leaves a function sst pulumi dev doesn't run as it is", async () => {
     expect(await sst.transform({ ...fn, name: "Cron" })).toBeUndefined();
     expect(calls.at(-1)!.body.params[0].name).toBe("Cron");
   });
 
-  it("tells sst dev a function is made in one of SST's components", async () => {
+  it("tells sst pulumi dev a function is made in one of SST's components", async () => {
     // SST's Function, and a part of it made in a component of its own
     const component = new pulumi.ComponentResource("sst:aws:Function", "Web");
     const inner = new pulumi.ComponentResource(
@@ -217,7 +217,7 @@ describe("in sst dev", () => {
     expect(calls.at(-1)!.body.params[0].component).toBeUndefined();
   });
 
-  it("tells sst dev a function is a container image, or its runtime isn't known yet", async () => {
+  it("tells sst pulumi dev a function is a container image, or its runtime isn't known yet", async () => {
     await sst.transform({
       ...fn,
       name: "Image",

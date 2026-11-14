@@ -18,16 +18,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DevFile is the file next to Pulumi.yaml that says what sst dev runs of the
+// DevFile is the file next to Pulumi.yaml that says what sst pulumi dev runs of the
 // program: the functions to run on this machine, and the dev commands.
 const DevFile = "sst.dev.yaml"
 
 // devFile is what DevFile says
 type devFile struct {
-	// Functions run on this machine in sst dev, by their name in the program
+	// Functions run on this machine in sst pulumi dev, by their name in the program
 	// or a pattern of names
 	Functions devFunctions `yaml:"functions"`
-	// Commands run beside sst dev, each in a pane of its own, by name
+	// Commands run beside sst pulumi dev, each in a pane of its own, by name
 	Commands map[string]devCommand `yaml:"commands"`
 	// dir is the folder the file is in, which a command's directory is from
 	dir string
@@ -47,7 +47,7 @@ func (f *devFile) UnmarshalYAML(node *yaml.Node) error {
 	return node.Decode((*plain)(f))
 }
 
-// devFunction is a function sst dev runs on this machine: its source
+// devFunction is a function sst pulumi dev runs on this machine: its source
 // handler, from the project's folder, alone or with its settings
 type devFunction struct {
 	Handler string
@@ -156,12 +156,12 @@ func (f devFunctions) all() map[string]devFunction {
 	return result
 }
 
-// devCommand is a command sst dev runs in a pane of its own
+// devCommand is a command sst pulumi dev runs in a pane of its own
 type devCommand struct {
 	Command string `yaml:"command"`
 	// Directory it runs in, from the file's folder
 	Directory string `yaml:"directory"`
-	// Autostart is whether it starts with sst dev; it does when it's unset
+	// Autostart is whether it starts with sst pulumi dev; it does when it's unset
 	Autostart *bool  `yaml:"autostart"`
 	Title     string `yaml:"title"`
 	// Environment it runs with, where ${name} is the stack's output of that
@@ -221,7 +221,7 @@ commands:
       API_URL: ${apiUrl}`
 
 // readDevFileFor reads the project's DevFile, for a program that imports
-// SST's components or doesn't. SST's components say what runs in sst dev
+// SST's components or doesn't. SST's components say what runs in sst pulumi dev
 // themselves, so such a program needs no DevFile, and without one has none.
 func readDevFileFor(root string, components bool) (*devFile, error) {
 	dev, err := readDevFile(root)
@@ -236,7 +236,7 @@ func readDevFile(root string) (*devFile, error) {
 	path := filepath.Join(root, DevFile)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, util.NewReadableError(ErrNoDevFile, fmt.Sprintf("sst dev runs what %s next to Pulumi.yaml names, and there's none. Add one, like:\n\n%s", DevFile, devFileExample))
+		return nil, util.NewReadableError(ErrNoDevFile, fmt.Sprintf("sst pulumi dev runs what %s next to Pulumi.yaml names, and there's none. Add one, like:\n\n%s", DevFile, devFileExample))
 	}
 	if err != nil {
 		return nil, err
@@ -254,7 +254,7 @@ func readDevFile(root string) (*devFile, error) {
 
 // checkSources refuses a function named in the file whose handler has no
 // source, before a deploy: one a pattern names is checked as the program
-// makes it, as a pattern can name what sst dev can't run
+// makes it, as a pattern can name what sst pulumi dev can't run
 func (f *devFile) checkSources(root string) error {
 	for _, name := range sortedKeys(f.Functions.byName) {
 		function, _, _ := f.Functions.find(name)
@@ -297,7 +297,7 @@ func yamlError(err error) string {
 var yamlTypes = regexp.MustCompile(` in type [\w.*\[\]]+`)
 var yamlKinds = regexp.MustCompile("cannot unmarshal !!(\\w+)( `[^`]*`)? into \\S+")
 
-// check refuses what sst dev couldn't run
+// check refuses what sst pulumi dev couldn't run
 func (f *devFile) check() error {
 	ids := map[string]string{}
 	all := f.Functions.all()
@@ -312,15 +312,15 @@ func (f *devFile) check() error {
 		// Rust's handlers aren't paths as the others' are, and running one
 		// from a Pulumi program hasn't been tried
 		if runtime := all[name].Runtime; strings.HasPrefix(runtime, "rust") {
-			return fmt.Errorf("the %q function's runtime is %s, which sst dev doesn't run for a Pulumi program yet", name, runtime)
+			return fmt.Errorf("the %q function's runtime is %s, which sst pulumi dev doesn't run for a Pulumi program yet", name, runtime)
 		}
 		if _, ok := f.Functions.byName[name]; !ok {
 			continue
 		}
-		// the stubs and sst dev tell functions apart by their ids
+		// the stubs and sst pulumi dev tell functions apart by their ids
 		id := liveID(name)
 		if other, ok := ids[id]; ok {
-			return fmt.Errorf("the %q and %q functions would share the id %q in sst dev: rename one", other, name, id)
+			return fmt.Errorf("the %q and %q functions would share the id %q in sst pulumi dev: rename one", other, name, id)
 		}
 		ids[id] = name
 	}
@@ -344,7 +344,7 @@ func sortedKeys[V any](values map[string]V) []string {
 	return keys
 }
 
-// liveID is the id sst dev knows a function by, from its name in the program:
+// liveID is the id sst pulumi dev knows a function by, from its name in the program:
 // it names the function's folder of built code too, so it keeps letters,
 // numbers, hyphens and underscores, and has a hyphen for anything else.
 func liveID(name string) string {
@@ -406,7 +406,7 @@ func fillOutputs(value string, outputs map[string]interface{}, reveal func(name 
 	return filled, nil
 }
 
-// directory is a command's directory as sst dev takes it, from the folder it
+// directory is a command's directory as sst pulumi dev takes it, from the folder it
 // runs in, which can be under the project's
 func (f *devFile) directory(directory string) string {
 	cwd, err := os.Getwd()
@@ -420,7 +420,7 @@ func (f *devFile) directory(directory string) string {
 	return rel
 }
 
-// devs are the dev commands, as sst dev runs them: their environment with the
+// devs are the dev commands, as sst pulumi dev runs them: their environment with the
 // stack's outputs, and their role's ARN, from the roles in the state by name.
 // A command that can't be run is left out, with an error that says why.
 func (f *devFile) devs(outputs map[string]interface{}, roles map[string][]string, reveal func(name string) (interface{}, error)) (project.Devs, []project.Error) {

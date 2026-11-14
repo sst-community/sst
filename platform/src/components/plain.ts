@@ -5,7 +5,7 @@ import { Link } from "./link";
 
 // The setup of a run of a program Pulumi runs on its own, in place of SST's
 // entry (platform/src/auto/run.ts), which only SST's CLI runs: the link
-// records, which `sst dev` reads for a dev command's links, and the check of
+// records, which `sst pulumi dev` reads for a dev command's links, and the check of
 // the components' names. `sst/components` and each group import it.
 //
 // It's done once for each stack, as the components load: Pulumi loads the

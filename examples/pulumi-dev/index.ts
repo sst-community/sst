@@ -1,4 +1,4 @@
-// First, before the program makes anything: under `sst dev` it runs what
+// First, before the program makes anything: under `sst pulumi dev` it runs what
 // sst.dev.yaml names, and outside it, it does nothing
 import { dev } from "sst/pulumi";
 import * as pulumi from "@pulumi/pulumi";
@@ -15,7 +15,7 @@ const readReports = pulumi.jsonStringify({
   Statement: [{ Effect: "Allow", Action: ["s3:ListBucket"], Resource: [reports.arn] }],
 });
 
-// The API's role. In `sst dev` its code runs on this machine with this role's
+// The API's role. In `sst pulumi dev` its code runs on this machine with this role's
 // credentials, so what it can't do in AWS, it can't do here either.
 const role = new aws.iam.Role("ApiRole", {
   assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "lambda.amazonaws.com" }),
@@ -26,7 +26,7 @@ new aws.iam.RolePolicyAttachment("ApiLogs", {
 });
 new aws.iam.RolePolicy("ApiReports", { role: role.id, policy: readReports });
 
-// Postgres in a container on this machine in `sst dev`, from the Postgres dev
+// Postgres in a container on this machine in `sst pulumi dev`, from the Postgres dev
 // command, and in the cloud otherwise
 const database = dev
   ? {
@@ -38,7 +38,7 @@ const database = dev
     }
   : createDatabase();
 
-// In `sst dev` it runs from its source on this machine, as sst.dev.yaml says
+// In `sst pulumi dev` it runs from its source on this machine, as sst.dev.yaml says
 const api = new aws.lambda.Function("Api", {
   runtime: "nodejs22.x",
   role: role.arn,
@@ -77,14 +77,14 @@ new aws.lambda.Permission("ApiUrlInvoke", {
   invokedViaFunctionUrl: true,
 });
 
-// A report job's role. In `sst dev` the Report dev command runs as it, so
+// A report job's role. In `sst pulumi dev` the Report dev command runs as it, so
 // the account may take it there.
 const reporter = new aws.iam.Role("Reporter", {
   assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "ecs-tasks.amazonaws.com" }),
 });
 new aws.iam.RolePolicy("ReporterReports", { role: reporter.id, policy: readReports });
 
-// The frontend's files in a bucket, and in `sst dev` its dev server instead,
+// The frontend's files in a bucket, and in `sst pulumi dev` its dev server instead,
 // from the Web dev command
 if (!dev) deploySite(url.functionUrl);
 

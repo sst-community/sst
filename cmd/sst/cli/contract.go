@@ -9,7 +9,7 @@ import (
 
 // The components the CLI's platform has decide which of the CLI's commands it
 // has (Command.Contract): moving a stage to SST 5's components, ejecting
-// them, targets, and sst dev in a plain Pulumi program are SST 5's, and a CLI
+// them, targets, and sst pulumi dev are SST 5's, and a CLI
 // built with SST 4's platform runs SST 4's commands.
 
 // platformContract is the version of the program contract the CLI's platform
@@ -49,7 +49,7 @@ func Commands(commands []*Command, contract int) []*Command {
 }
 
 // isPulumiProgram is whether cfgPath is a plain Pulumi program's Pulumi.yaml
-// that sst dev runs: one with SST 5's components, which only a CLI with
+// that sst pulumi dev runs: one with SST 5's components, which only a CLI with
 // SST 5's platform runs
 func isPulumiProgram(cfgPath string) bool {
 	return runsPulumiPrograms() && pulumidev.IsProgram(cfgPath)

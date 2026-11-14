@@ -1,4 +1,4 @@
-// A report job, run by `sst dev` as the Reporter role
+// A report job, run by `sst pulumi dev` as the Reporter role
 import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { GetCallerIdentityCommand, STSClient } from "@aws-sdk/client-sts";
 
