@@ -13,7 +13,9 @@ import (
 )
 
 var CmdTarget = &cli.Command{
-	Name: "target",
+	// SST 5's alone
+	Contract: 1,
+	Name:     "target",
 	Description: cli.Description{
 		Short: "Manage a stage's target",
 		Long: strings.Join([]string{

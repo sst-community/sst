@@ -25,6 +25,9 @@ import (
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/provider"
 	"github.com/sst/sst/v3/pkg/telemetry"
+
+	// SST 4's components, which a CLI built with SST 4's platform runs
+	_ "github.com/sst/sst/v3/pkg/sst4"
 )
 
 var version = "dev"
@@ -131,6 +134,8 @@ func run() error {
 		slog.Info("interrupted")
 		cancel()
 	}()
+	// The commands the platform's components have
+	root.Children = cli.Commands(root.Children, cli.PlatformContract())
 	c, err := cli.New(ctx, cancel, root, version)
 	if err != nil {
 		return err

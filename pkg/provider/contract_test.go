@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sst/sst/v3/pkg/global"
+	"github.com/sst/sst/v3/platform"
 )
 
 // What SST's components (platform/src/components) and the provider agree on
@@ -19,9 +20,23 @@ import (
 
 const components = "../../platform/src/components"
 
+// onSST5Components skips a test that reads SST 5's components when this
+// build's platform has another line's, as its manifest says
+func onSST5Components(t *testing.T) {
+	t.Helper()
+	pkg, err := platform.PackageJson()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.SST == nil || pkg.SST.Contract != 1 {
+		t.Skip("this build's platform doesn't have SST 5's components")
+	}
+}
+
 // read is a file of the components
 func read(t *testing.T, path string) string {
 	t.Helper()
+	onSST5Components(t)
 	data, err := os.ReadFile(filepath.Join(components, path))
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +57,7 @@ func matches(pattern *regexp.Regexp, text string) []string {
 }
 
 func TestServesWhatTheComponentsMake(t *testing.T) {
+	onSST5Components(t)
 	files, err := filepath.Glob(filepath.Join(components, "*", "resources", "*.ts"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no resources in %s: %v", components, err)

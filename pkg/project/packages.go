@@ -20,10 +20,11 @@ import (
 // the build that imports `sst/components` is checked against the CLI and the
 // app's providers before the app runs. Otherwise a missing provider is still
 // found, as the platform depends on some providers itself, and its resources
-// are created with a provider the app hasn't configured.
-func checkPackages(meta js.Metafile, version string, lock ProviderLock) error {
+// are created with a provider the app hasn't configured. modules are the
+// platform's (platformModules).
+func checkPackages(meta js.Metafile, version string, lock ProviderLock, modules map[string]string) error {
 	problems := []string{}
-	for _, dir := range componentPackages(meta) {
+	for _, dir := range componentPackages(meta, modules) {
 		data, err := os.ReadFile(filepath.Join(dir, "package.json"))
 		if err != nil {
 			continue
@@ -65,11 +66,12 @@ func checkPackages(meta js.Metafile, version string, lock ProviderLock) error {
 
 // The directories of the packages in the build that import the platform's
 // modules, like `sst/components`
-func componentPackages(meta js.Metafile) []string {
+func componentPackages(meta js.Metafile, modules map[string]string) []string {
 	found := map[string]bool{}
 	for file, input := range meta.Inputs {
 		imports := slices.ContainsFunc(input.Imports, func(i js.MetafileImport) bool {
-			return slices.Contains(js.PlatformModules, i.Original)
+			_, ok := modules[i.Original]
+			return ok
 		})
 		if !imports {
 			continue

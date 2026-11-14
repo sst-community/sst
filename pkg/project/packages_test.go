@@ -61,30 +61,30 @@ func TestCheckPackages(t *testing.T) {
 	aws := &ProviderLockEntry{Name: "aws", Package: "@pulumi/aws", Version: "7.48.0"}
 
 	t.Run("a provider the app doesn't have", func(t *testing.T) {
-		err := checkPackages(meta, "5.0.0", ProviderLock{aws})
+		err := checkPackages(meta, "5.0.0", ProviderLock{aws}, sst5Modules)
 		require.Error(t, err)
 		assert.Equal(t, `"@acme/email" needs the cloudflare provider. Add it with "sst add cloudflare".`, err.Error())
 	})
 
 	t.Run("a provider's version the package doesn't work with", func(t *testing.T) {
 		cloudflare := &ProviderLockEntry{Name: "cloudflare", Package: "@pulumi/cloudflare", Version: "5.40.0"}
-		err := checkPackages(meta, "5.0.0", ProviderLock{aws, cloudflare})
+		err := checkPackages(meta, "5.0.0", ProviderLock{aws, cloudflare}, sst5Modules)
 		require.Error(t, err)
 		assert.Equal(t, `"@acme/email" needs @pulumi/cloudflare ^6, and the app has 5.40.0.`, err.Error())
 	})
 
 	t.Run("a version of SST the package doesn't work with", func(t *testing.T) {
 		cloudflare := &ProviderLockEntry{Name: "cloudflare", Package: "@pulumi/cloudflare", Version: "6.15.0"}
-		err := checkPackages(meta, "4.17.3", ProviderLock{aws, cloudflare})
+		err := checkPackages(meta, "4.17.3", ProviderLock{aws, cloudflare}, sst5Modules)
 		require.Error(t, err)
 		assert.Equal(t, `"@acme/email" needs sst >=5.0.0-0, and this is 4.17.3.`, err.Error())
 	})
 
 	t.Run("everything it needs", func(t *testing.T) {
 		cloudflare := &ProviderLockEntry{Name: "cloudflare", Package: "@pulumi/cloudflare", Version: "6.15.0"}
-		assert.NoError(t, checkPackages(meta, "5.0.0-alpha.1", ProviderLock{aws, cloudflare}))
+		assert.NoError(t, checkPackages(meta, "5.0.0-alpha.1", ProviderLock{aws, cloudflare}, sst5Modules))
 		// A dev build isn't checked against the package's range
-		assert.NoError(t, checkPackages(meta, "dev", ProviderLock{aws, cloudflare}))
+		assert.NoError(t, checkPackages(meta, "dev", ProviderLock{aws, cloudflare}, sst5Modules))
 	})
 }
 
@@ -119,7 +119,7 @@ func TestComponentPackagesImportingAGroup(t *testing.T) {
 	var meta js.Metafile
 	require.NoError(t, json.Unmarshal([]byte(result.Metafile), &meta))
 
-	found := componentPackages(meta)
+	found := componentPackages(meta, sst5Modules)
 	require.Len(t, found, 1)
 	assert.True(t, strings.HasSuffix(filepath.ToSlash(found[0]), "node_modules/@acme/uploads"), found[0])
 }
@@ -130,7 +130,7 @@ func TestCheckConfigPackages(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"devDependencies":{"@acme/both":"1.0.0"}}`), 0644))
 	check := func(packages map[string]string) error {
-		p := &Project{root: dir, app: &App{Packages: packages}}
+		p := sst5(&Project{root: dir, app: &App{Packages: packages}})
 		return p.checkConfigPackages()
 	}
 	assert.NoError(t, check(nil))
@@ -157,7 +157,7 @@ func TestPackagesNeedInstall(t *testing.T) {
 	dir := t.TempDir()
 	platform := filepath.Join(dir, ".sst", "platform")
 	require.NoError(t, os.MkdirAll(platform, 0755))
-	p := &Project{root: dir, app: &App{}}
+	p := sst5(&Project{root: dir, app: &App{}})
 	assert.False(t, p.packagesNeedInstall(), "none, and none installed")
 
 	p.app.Packages = map[string]string{"@acme/email": "1.2.0"}
@@ -190,7 +190,7 @@ func TestWritePackageJsonWithPackages(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(platform, "package.json"), []byte(`{"dependencies":{"esbuild":"0.21.5","@acme/old":"1.0.0"}}`), 0644))
 	old := filepath.Join(platform, "node_modules", "@acme", "old")
 	require.NoError(t, os.MkdirAll(old, 0755))
-	p := &Project{root: dir, app: &App{Packages: map[string]string{"@acme/old": "1.0.0"}}}
+	p := sst5(&Project{root: dir, app: &App{Packages: map[string]string{"@acme/old": "1.0.0"}}})
 	require.NoError(t, p.writeInstalledPackages())
 
 	p.app.Packages = map[string]string{"@acme/email": "1.2.0"}

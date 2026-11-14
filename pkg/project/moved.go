@@ -51,6 +51,9 @@ type StageState struct {
 	// Stranded are the components of SST 4's that a stage it deployed has,
 	// which have no 5.0 form (move.FindStranded)
 	Stranded []move.Stranded
+	// Contract is what the platform's contract kept of the state for itself
+	// as it was read (CompleteEvent.Contract)
+	Contract any
 }
 
 // stageState reads what the program is told from what the stage's state has.
@@ -75,6 +78,7 @@ func stageState(completed *CompleteEvent) StageState {
 		Empty:      !holdsResources(completed.Resources),
 		Adopt:      move.Adoptable(completed.Resources),
 		Stranded:   stranded,
+		Contract:   completed.Contract,
 	}
 }
 

@@ -168,11 +168,7 @@ func (p *Project) programGlobals() ([]js.Global, map[string]string) {
 	}
 	components := path.Join(filepath.ToSlash(p.PathPlatformDir()), "src/components")
 	globals = append(globals, js.Global{Name: "sst", Module: components})
-	platform := map[string]string{}
-	for module, file := range platformModuleFiles() {
-		platform[module] = path.Join(components, file+".ts")
-	}
-	return globals, platform
+	return globals, p.platformModules()
 }
 
 // providerConfigArgs is the `--config` Pulumi gets for each provider setting

@@ -2,6 +2,25 @@
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@sst/platform",
   "type": "module",
+  "sst": {
+    "contract": 1,
+    "types": {
+      "global": [
+        "global.d.ts",
+        "global-aliases.d.ts"
+      ],
+      "config": "config.js",
+      "paths": {
+        "sst/testing": "testing/index"
+      }
+    },
+    "modules": {
+      "sst/components": "components/core",
+      "sst/components/aws": "components/aws/index",
+      "sst/components/cloudflare": "components/cloudflare/index",
+      "sst/components/vercel": "components/vercel/index"
+    }
+  },
   "prettier": {},
   "scripts": {
     "test": "vitest run --pool=forks",

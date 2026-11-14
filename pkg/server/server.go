@@ -174,7 +174,7 @@ func (s *Server) Start(ctx context.Context, p project.Program) error {
 
 	runtime.Register(ctx, p, s.Rpc)
 	s.Rpc.RegisterName("Dev", &devContract{program: p})
-	p.RegisterRPC(s.Rpc)
+	p.RegisterRPC(ctx, s.Rpc)
 	return s.Serve(ctx)
 }
 

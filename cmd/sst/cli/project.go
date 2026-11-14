@@ -50,7 +50,7 @@ func (c *Cli) Discover() (string, error) {
 		if _, err := os.Stat(abs); os.IsNotExist(err) {
 			return "", util.NewReadableError(err, "Could not find "+abs)
 		}
-		if pulumidev.IsProgram(abs) {
+		if isPulumiProgram(abs) {
 			return c.pulumiProgram(abs)
 		}
 		return abs, nil
@@ -61,7 +61,7 @@ func (c *Cli) Discover() (string, error) {
 		// sst dev runs a plain Pulumi program too, in a folder with a
 		// Pulumi.yaml and no SST app up from it (pulumi.go): only when there's
 		// no sst.config.ts, not one that couldn't be used
-		if !hasSSTConfig() {
+		if runsPulumiPrograms() && !hasSSTConfig() {
 			if found, findErr := pulumidev.Discover(); findErr == nil {
 				return c.pulumiProgram(found)
 			}
@@ -89,7 +89,7 @@ func (c *Cli) InitDev() (project.Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	if pulumidev.IsProgram(cfgPath) {
+	if isPulumiProgram(cfgPath) {
 		return c.initPulumi(cfgPath)
 	}
 	p, err := c.InitProject()

@@ -10,6 +10,7 @@ import (
 
 	esbuild "github.com/evanw/esbuild/pkg/api"
 	"github.com/sst/sst/v3/pkg/js"
+	"github.com/sst/sst/v3/platform"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -209,8 +210,19 @@ func TestBuildErrorLineInAFileWithGlobals(t *testing.T) {
 }
 
 // Each group of SST's components the `sst` global has, in groups.ts, is a
-// module an app or a package imports, like `sst/components/aws`
+// module an app or a package imports, like `sst/components/aws`, as the
+// platform's manifest says. SST 4's platform has neither.
 func TestPlatformModulesAreTheGroups(t *testing.T) {
+	pkg, err := platform.PackageJson()
+	require.NoError(t, err)
+	require.NotNil(t, pkg.SST, "platform/package.json has `sst`")
+	if pkg.SST.Contract < 1 {
+		t.Skipf("the platform speaks contract %d, whose app imports no `sst/components` module", pkg.SST.Contract)
+	}
+	modules := []string{}
+	for module := range pkg.SST.Modules {
+		modules = append(modules, module)
+	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "platform", "src", "components", "groups.ts"))
 	require.NoError(t, err)
 	expected := []string{"sst/components"}
@@ -219,7 +231,7 @@ func TestPlatformModulesAreTheGroups(t *testing.T) {
 		expected = append(expected, "sst/components/"+match[1])
 	}
 	require.Greater(t, len(expected), 1, "groups.ts lists the groups")
-	assert.ElementsMatch(t, expected, js.PlatformModules)
+	assert.ElementsMatch(t, expected, modules)
 }
 
 // Before the first install, a package `sst install` installs, like one the

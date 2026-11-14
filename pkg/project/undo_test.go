@@ -170,7 +170,7 @@ func deployedSince(t *testing.T, home provider.Home, state []byte) {
 }
 
 func undoProject(home provider.Home) *Project {
-	return &Project{app: &App{Name: undoApp, Stage: undoStage}, home: home, version: "5.0.0"}
+	return sst5(&Project{app: &App{Name: undoApp, Stage: undoStage}, home: home, version: "5.0.0"})
 }
 
 func stateIn(t *testing.T, home provider.Home) *apitype.CheckpointV3 {

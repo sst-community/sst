@@ -1,6 +1,7 @@
 package project
 
 import (
+	"context"
 	"fmt"
 	"net/rpc"
 
@@ -9,12 +10,10 @@ import (
 	"github.com/sst/sst/v3/pkg/project/provider"
 )
 
-// RegisterRPC registers the program contract's calls only an SST app's
-// program makes: Provider.Aws, for SST's bootstrap in a region, and Move,
-// while a stage moves to new components.
-func (p *Project) RegisterRPC(server *rpc.Server) {
-	server.RegisterName("Provider.Aws", &awsContract{project: p})
-	server.RegisterName("Move", &moveContract{})
+// RegisterRPC registers the calls only an SST app's program makes, as the
+// platform's contract has them
+func (p *Project) RegisterRPC(ctx context.Context, server *rpc.Server) {
+	p.speaks().RegisterRPC(ctx, p, server)
 }
 
 // awsContract is the program contract's calls about AWS, as

@@ -105,7 +105,7 @@ func TestStageState(t *testing.T) {
 }
 
 func TestRefuseUnmoved(t *testing.T) {
-	p := &Project{app: &App{Name: "app", Stage: "dev"}}
+	p := sst5(&Project{app: &App{Name: "app", Stage: "dev"}})
 	unmoved := StageState{}
 	moved := StageState{Moved: true}
 	empty := StageState{Empty: true}

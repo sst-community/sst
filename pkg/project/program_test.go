@@ -20,7 +20,7 @@ import (
 func TestProgramDefine(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "app")
 	retention := 5
-	p := &Project{
+	p := sst5(&Project{
 		root:   root,
 		config: filepath.Join(root, "sst.config.ts"),
 		app: &App{
@@ -31,7 +31,7 @@ func TestProgramDefine(t *testing.T) {
 			Providers: map[string]interface{}{"aws": map[string]interface{}{"region": "us-west-2"}},
 			State:     &State{Retention: &retention},
 		},
-	}
+	})
 	define, err := p.programDefine(&StackInput{Command: "deploy", Dev: true}, StageState{
 		Moved:      true,
 		Components: map[string]int{"sst:aws:Bucket": 1},
@@ -137,10 +137,10 @@ func TestProgramDefine(t *testing.T) {
 }
 
 func TestProgramEnv(t *testing.T) {
-	p := &Project{
+	p := sst5(&Project{
 		app: &App{Name: "my-app", Stage: "dev"},
 		env: map[string]string{"SST_AWS_REGION": "us-west-2"},
-	}
+	})
 	base := []string{"HOME=/home/me", "NODE_OPTIONS=--max-old-space-size=4096"}
 	env := p.programEnv(
 		base,
@@ -203,7 +203,7 @@ func TestProgramEnvOnTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &Project{app: &App{Name: "my-app", Stage: "local"}, target: local}
+	p := sst5(&Project{app: &App{Name: "my-app", Stage: "local"}, target: local})
 	got := map[string]string{}
 	for _, entry := range p.programEnv([]string{"AWS_PROFILE=mine", "HTTPS_PROXY=http://corp:8080"}, "p", "w", nil, nil, "") {
 		key, value, _ := strings.Cut(entry, "=")
@@ -225,13 +225,13 @@ func TestProgramEnvOnTarget(t *testing.T) {
 
 func TestProgramGlobals(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "app")
-	p := &Project{
+	p := sst5(&Project{
 		root: root,
 		lock: ProviderLock{
 			{Name: "aws", Package: "@pulumi/aws", Alias: "aws"},
 			{Name: "cloudflare", Package: "@pulumi/cloudflare", Alias: "cloudflare"},
 		},
-	}
+	})
 	globals, platform := p.programGlobals()
 	components := filepath.ToSlash(filepath.Join(root, ".sst", "platform", "src", "components"))
 	want := []js.Global{

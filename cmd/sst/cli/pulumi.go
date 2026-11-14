@@ -33,6 +33,9 @@ func (c *Cli) pulumiProgram(cfgPath string) (string, error) {
 // SST's own pulumi and bun, which only an SST app uses, aren't installed for
 // one: it runs the pulumi on the PATH.
 func (c *Cli) IsPulumiProgram() bool {
+	if !runsPulumiPrograms() {
+		return false
+	}
 	if cfgPath := c.String("config"); cfgPath != "" {
 		return pulumidev.IsProgram(cfgPath)
 	}

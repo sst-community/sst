@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,8 +23,9 @@ type EvalOptions struct {
 	Banner  string
 	Inject  []string
 	Define  map[string]string
-	// The file each of the platform's modules is, like `sst/components`, in a
-	// build that runs the app.
+	// The modules the app imports from its platform, like `sst/components`
+	// (PlatformManifest), each with its file. A build that runs the app
+	// resolves each to its file; one that reads only `app()` leaves them out.
 	Platform map[string]string
 }
 
@@ -33,11 +35,6 @@ type notFoundCheck struct{}
 
 var notFound = notFoundCheck{}
 
-// The modules an app or a component package imports from the app's own
-// platform, rather than from its node_modules: what SST's components share,
-// and the components of each provider
-var PlatformModules = []string{"sst/components", "sst/components/aws", "sst/components/cloudflare", "sst/components/vercel"}
-
 // A module that every file of the app, and every package it imports, can use
 // by name without importing it, like `sst` and `aws` in `sst.config.ts`.
 type Global struct {
@@ -46,10 +43,42 @@ type Global struct {
 }
 
 type PackageJson struct {
-	Version         string                 `json:"version"`
-	Dependencies    map[string]string      `json:"dependencies"`
-	DevDependencies map[string]string      `json:"devDependencies"`
-	Other           map[string]interface{} `json:"-"`
+	Version         string            `json:"version"`
+	Dependencies    map[string]string `json:"dependencies"`
+	DevDependencies map[string]string `json:"devDependencies"`
+	// SST is a platform's manifest, in the platform's own package.json
+	SST   *PlatformManifest      `json:"sst,omitempty"`
+	Other map[string]interface{} `json:"-"`
+}
+
+// PlatformManifest is what a platform says it is, as `sst` in its
+// package.json: the program contract its components speak, its types, and
+// the modules an app imports from it. The CLI embeds one platform, SST 4's
+// or SST 5's, and reads what to do with it from here.
+type PlatformManifest struct {
+	// Contract is the version of the program contract its components speak:
+	// 0 for SST 4's, 1 for SST 5's
+	Contract int `json:"contract"`
+	// Types are what an app's types import from the platform's types
+	Types PlatformTypes `json:"types"`
+	// Modules are the modules an app or a component package imports from the
+	// app's own platform, rather than from its node_modules, like
+	// `sst/components/aws`, each with its file in the platform's types,
+	// without an extension, like `components/aws/index`
+	Modules map[string]string `json:"modules,omitempty"`
+}
+
+// PlatformTypes are what an app's types import from a platform's types: its
+// compiled declarations in a released CLI, and its source in a build
+// without them
+type PlatformTypes struct {
+	// Global are the files that declare the globals, like `global.d.ts`
+	Global []string `json:"global"`
+	// Config is the module of the config's types, like `config.js`
+	Config string `json:"config"`
+	// Paths are the modules TypeScript finds in the platform's types besides
+	// its Modules, like `sst/testing`, each with its file as Modules has it
+	Paths map[string]string `json:"paths,omitempty"`
 }
 
 type Metafile struct {
@@ -151,7 +180,14 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 				// imports them shares the app's components.
 				Name: "PlatformModules",
 				Setup: func(build esbuild.PluginBuild) {
-					filter := "^(" + strings.Join(PlatformModules, "|") + ")$"
+					if len(input.Platform) == 0 {
+						return
+					}
+					modules := []string{}
+					for module := range input.Platform {
+						modules = append(modules, regexp.QuoteMeta(module))
+					}
+					filter := "^(" + strings.Join(modules, "|") + ")$"
 					build.OnResolve(esbuild.OnResolveOptions{Filter: filter}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
 						if path, ok := input.Platform[args.Path]; ok && runsApp {
 							// Resolved as any import is, symlinks included, so the

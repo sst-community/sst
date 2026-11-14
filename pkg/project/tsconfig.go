@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sst/sst/v3/pkg/js"
+	"path"
 )
 
 // Where the platform's types are, relative to the platform: compiled
@@ -18,20 +18,21 @@ func platformTypes(platformDir string) string {
 	return "src"
 }
 
-// Where each module a package imports from the app's platform is
-// (js.PlatformModules), in the platform's components folder and without an
-// extension: `sst/components` is what SST's components share, and each group,
-// like `sst/components/aws`, is the components of a provider.
-func platformModuleFiles() map[string]string {
-	files := map[string]string{}
-	for _, module := range js.PlatformModules {
-		if group, ok := strings.CutPrefix(module, "sst/components/"); ok {
-			files[module] = group + "/index"
-			continue
-		}
-		files[module] = "core"
+// platformModules are the modules an app or a package imports from the app's
+// platform, as the platform's manifest has them, each with its source file:
+// `sst/components` is what SST's components share, and each group, like
+// `sst/components/aws`, is the components of a provider. A platform with
+// none, as SST 4's, leaves those imports to the app's node_modules.
+func (p *Project) platformModules() map[string]string {
+	modules := map[string]string{}
+	if p.manifest == nil {
+		return modules
 	}
-	return files
+	dir := filepath.ToSlash(p.PathPlatformDir())
+	for module, file := range p.manifest.Modules {
+		modules[module] = path.Join(dir, "src", file+".ts")
+	}
+	return modules
 }
 
 // Writes .sst/tsconfig.json, for an app, or the repo of a component package,
@@ -39,8 +40,12 @@ func platformModuleFiles() map[string]string {
 // `sst/testing` and the providers are: they're installed in .sst/platform,
 // where TypeScript doesn't look for them. Each is a file, with its extension:
 // under `moduleResolution: "NodeNext"`, TypeScript doesn't add one to a path
-// or look in a folder, as it does under `bundler`.
+// or look in a folder, as it does under `bundler`. A platform with no
+// modules to import, as SST 4's, has none.
 func (p *Project) writeTsconfig() error {
+	if p.manifest == nil || len(p.manifest.Modules) == 0 {
+		return nil
+	}
 	platformDir := p.PathPlatformDir()
 	dir := platformTypes(platformDir)
 	types := "./platform/" + dir
@@ -48,11 +53,11 @@ func (p *Project) writeTsconfig() error {
 	if dir == "src" {
 		ext = ".ts"
 	}
-	paths := map[string][]string{
-		"sst/testing": {types + "/testing/index" + ext},
-	}
-	for module, file := range platformModuleFiles() {
-		paths[module] = []string{types + "/components/" + file + ext}
+	paths := map[string][]string{}
+	for _, modules := range []map[string]string{p.manifest.Modules, p.manifest.Types.Paths} {
+		for module, file := range modules {
+			paths[module] = []string{types + "/" + file + ext}
+		}
 	}
 	installed := func(name string) {
 		dir := "./platform/node_modules/" + name

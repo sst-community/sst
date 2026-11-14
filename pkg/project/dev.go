@@ -52,8 +52,9 @@ type Program interface {
 	// deploy left
 	EnvFor(ctx context.Context, complete *CompleteEvent, name string) (map[string]string, error)
 	// RegisterRPC registers the program contract's calls only this program
-	// makes, beside the ones the server registers for every program
-	RegisterRPC(server *rpc.Server)
+	// makes, beside the ones the server registers for every program, served
+	// for as long as ctx is live
+	RegisterRPC(ctx context.Context, server *rpc.Server)
 }
 
 var _ Program = (*Project)(nil)

@@ -194,11 +194,13 @@ func (p *Project) writeTypes() error {
 	}
 	defer file.Close()
 
+	// The globals' and the config's types, from where the platform has them
 	types := "./" + platformTypes(p.PathPlatformDir())
-	file.WriteString(`import "` + types + `/global.d.ts"` + "\n")
-	file.WriteString(`import "` + types + `/global-aliases.d.ts"` + "\n")
+	for _, global := range p.manifest.Types.Global {
+		file.WriteString(`import "` + types + `/` + global + `"` + "\n")
+	}
 	file.WriteString(`import "../types.generated"` + "\n")
-	file.WriteString(`import { AppInput, App, Config } from "` + types + `/config.js"` + "\n")
+	file.WriteString(`import { AppInput, App, Config } from "` + types + `/` + p.manifest.Types.Config + `"` + "\n")
 
 	for _, entry := range p.lock {
 		file.WriteString(`import * as _` + entry.Alias + ` from "` + entry.Package + `";` + "\n")
@@ -306,7 +308,7 @@ func (p *Project) generateProviderLock() error {
 						Needed:  match,
 					}
 				}
-				if line, ok := providerLine(semver.MustParse(result.Version), semver.MustParse(match)); !ok {
+				if line, ok := providerLine(semver.MustParse(result.Version), semver.MustParse(match)); !ok && p.speaks().HoldsProviderMajors() {
 					results <- *result
 					return &ErrProviderMajorVersion{
 						Name:    result.Name,

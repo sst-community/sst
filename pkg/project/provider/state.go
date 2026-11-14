@@ -361,6 +361,16 @@ func ListUpdates(backend Home, app, stage string) ([]Update, error) {
 	return updates, nil
 }
 
+// HasTombstone is whether the stage keeps the tombstone at the lock SST 4
+// reads: it's on SST 5's components
+func HasTombstone(backend Home, app, stage string) (bool, error) {
+	var sst4 lockData
+	if err := getJSON(backend, sst4LockKey(app, stage), false, &sst4); err != nil {
+		return false, err
+	}
+	return sst4.Tombstone, nil
+}
+
 // RemoveTombstone takes out the tombstone a stage on SST 5's components keeps
 // at the lock SST 4 reads, so that SST 4 can deploy the stage again. A lock
 // SST 4 holds stays.

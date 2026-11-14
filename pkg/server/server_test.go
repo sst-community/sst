@@ -236,7 +236,8 @@ func TestServerFile(t *testing.T) {
 // program's, to read or delete one. The RPC serves none of their methods, and
 // the code takes a missing one as done: a read keeps what the state has, so
 // `sst refresh` runs on a stage that hasn't moved, and a delete deletes
-// nothing, so `sst remove` refuses one (pkg/project, refuseUnmoved).
+// nothing, so `sst remove` refuses one (pkg/project, refuseUnmoved). That's
+// SST 5's contract: SST 4's (pkg/sst4) serves them.
 func TestServerTakesStoredProviderCode(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -278,13 +279,31 @@ func TestServerTakesStoredProviderCode(t *testing.T) {
 		.then((read) => provider.delete("zone", {}).then(() => console.log("read " + read.props.zoneId + ", deleted")))
 		.catch((err) => console.log("failed: " + err.message))`
 
+	// An SST app on this build's platform, which serves SST 5's contract
+	manifest, err := project.EmbeddedManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest == nil || manifest.Contract != project.ContractVersion {
+		t.Skip("this build's platform doesn't speak SST 5's contract")
+	}
+	app := t.TempDir()
+	config := filepath.Join(app, "sst.config.ts")
+	if err := os.WriteFile(config, []byte(`export default $config({ app() { return { name: "stored", home: "local" } }, async run() {} })`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := project.New(&project.ProjectConfig{Version: "dev", Stage: "test", Config: config})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	s, err := New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go s.Start(ctx, &project.Project{})
+	go s.Start(ctx, p)
 	run := func(sstServer string) string {
 		cmd := exec.Command(node, "-e", driver, filepath.Join(dir, "provider.js"))
 		cmd.Env = append(os.Environ(), "SST_SERVER="+sstServer)

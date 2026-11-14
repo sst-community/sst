@@ -17,7 +17,7 @@ import (
 
 // RegisterRPC registers the calls sst/pulumi's transform makes, as
 // PulumiDev.<method>. The program makes none of SST's own.
-func (p *Program) RegisterRPC(server *rpc.Server) {
+func (p *Program) RegisterRPC(ctx context.Context, server *rpc.Server) {
 	server.RegisterName("PulumiDev", &devContract{program: p})
 }
 

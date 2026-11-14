@@ -176,6 +176,10 @@ type Project struct {
 	// stage as, which its unlock keeps in the lock SST 4 reads
 	locked     *provider.Update
 	stageAfter provider.StageAfter
+	// What the platform says it is, and the contract its components speak,
+	// from the platform this CLI has (New)
+	manifest *js.PlatformManifest
+	contract Contract
 }
 
 func Discover() (string, error) {
@@ -272,17 +276,28 @@ func New(input *ProjectConfig) (*Project, error) {
 	rootPath := filepath.Dir(input.Config)
 	tmp := filepath.Join(rootPath, ".sst")
 
+	manifest, err := EmbeddedManifest()
+	if err != nil {
+		return nil, err
+	}
+	contract, err := ContractFor(manifest)
+	if err != nil {
+		return nil, err
+	}
+
 	proj := &Project{
-		version: input.Version,
-		root:    rootPath,
-		config:  input.Config,
-		env:     map[string]string{},
-		target:  target.Cloud{},
+		version:  input.Version,
+		root:     rootPath,
+		config:   input.Config,
+		env:      map[string]string{},
+		target:   target.Cloud{},
+		manifest: manifest,
+		contract: contract,
 	}
 
 	proj.Runtime = NewRuntimes(input.Config, input.Version)
 
-	_, err := os.Stat(tmp)
+	_, err = os.Stat(tmp)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, err
@@ -303,6 +318,8 @@ func New(input *ProjectConfig) (*Project, error) {
 			Define: map[string]string{
 				"$input": string(inputBytes),
 			},
+			// Its imports of the platform's modules are left out
+			Platform: proj.platformModules(),
 			Code: fmt.Sprintf(`
 import mod from '%s';
 console.log("~n" + process.versions.node)

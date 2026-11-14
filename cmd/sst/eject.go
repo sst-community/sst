@@ -11,7 +11,9 @@ import (
 )
 
 var CmdEject = &cli.Command{
-	Name: "eject",
+	// SST 5's alone
+	Contract: 1,
+	Name:     "eject",
 	Description: cli.Description{
 		Short: "Write a Pulumi program's SST components as Pulumi's own resources",
 		Long: strings.Join([]string{

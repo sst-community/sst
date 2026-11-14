@@ -111,12 +111,16 @@ type CompleteEvent struct {
 	// RecordedVersions are the version of each component the last deploy
 	// that finished created, by type (VersionsRecord)
 	RecordedVersions map[string]int
-	Errors           []Error
-	Finished         bool
-	Old              bool
-	Resources        []apitype.ResourceV3
-	ImportDiffs      map[string][]ImportDiff
-	Tunnels          map[string]Tunnel
+	// Contract is what the platform's contract keeps of the state for itself
+	// (Contract.Read), like SST 4's components' versions. It's read where the
+	// state is read, and isn't sent.
+	Contract    any `json:"-"`
+	Errors      []Error
+	Finished    bool
+	Old         bool
+	Resources   []apitype.ResourceV3
+	ImportDiffs map[string][]ImportDiff
+	Tunnels     map[string]Tunnel
 }
 
 type Tunnel struct {
@@ -178,6 +182,13 @@ func ResolvePolicyPack(root, policyPath string) (string, error) {
 func (p *Project) Lock(command string) (*provider.Update, error) {
 	update, err := provider.Lock(p.home, p.Version(), command, p.app.Name, p.app.Stage)
 	if err != nil {
+		return nil, err
+	}
+	// The contract can refuse the stage only once it's locked, so another
+	// CLI can't change what it was refused for in between
+	if err := p.speaks().Locked(p); err != nil {
+		provider.Unlock(p.home, p.app.Name, p.app.Stage, update, provider.StageAfter{})
+		provider.RemoveUpdate(p.home, p.app.Name, p.app.Stage, update.ID)
 		return nil, err
 	}
 	p.locked = update

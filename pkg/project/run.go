@@ -178,16 +178,11 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 		}
 	}
 
-	// A move saves the state as it was, and releases what the components'
-	// maps say it does: marked retained in the state this deploy runs from,
-	// under its lock
-	if input.Command == "deploy" && input.Move {
-		if err := p.beginMove(workdir, update.ID, input.Release); err != nil {
-			return util.NewReadableError(err, "The move can't start: "+err.Error()+".")
-		}
+	if err := p.speaks().Begin(p, workdir, update, input); err != nil {
+		return err
 	}
 
-	completed, err := getCompletedEvent(ctx, passphrase, workdir)
+	completed, err := getCompletedEvent(ctx, passphrase, workdir, p.speaks())
 	if err != nil {
 		bus.Publish(&BuildFailedEvent{
 			Error: err.Error(),
@@ -203,7 +198,7 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	state := stageState(completed)
 	// Until the run ends, the stage is as its state has it
 	p.stageAfter = provider.StageAfter{Moved: state.Moved}
-	if err := p.refuseUnmoved(input, state); err != nil {
+	if err := p.speaks().Refuse(p, input, state); err != nil {
 		// Locking the stage put this run in its history
 		if input.Locked == nil {
 			p.DropUpdate(update)
@@ -218,7 +213,7 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 		}
 	}
 
-	define, err := p.programDefine(input, state)
+	define, err := p.speaks().Define(p, input, state)
 	if err != nil {
 		return err
 	}
@@ -280,7 +275,7 @@ func (p *Project) run(ctx context.Context, input *StackInput) error {
 	})
 	log.Info("tracked files")
 
-	if err := checkPackages(meta, p.version, p.lock); err != nil {
+	if err := checkPackages(meta, p.version, p.lock, p.platformModules()); err != nil {
 		return util.NewReadableError(nil, err.Error())
 	}
 
@@ -782,7 +777,7 @@ loop:
 	}
 
 	log.Info("parsing state")
-	complete, err := getCompletedEvent(context.Background(), passphrase, workdir)
+	complete, err := getCompletedEvent(context.Background(), passphrase, workdir, p.speaks())
 	if err != nil {
 		return err
 	}

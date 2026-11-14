@@ -14,8 +14,10 @@ import (
 // (pkg/server ServeBuilds). The program gives it the sst package's platform
 // folder in SST_PLATFORM_DIR. It's hidden: nobody runs it by hand.
 var CmdBuildServer = &cli.Command{
-	Name:   "build-server",
-	Hidden: true,
+	// SST 5's alone
+	Contract: 1,
+	Name:     "build-server",
+	Hidden:   true,
 	Run: func(c *cli.Cli) error {
 		cfgPath, err := pulumidev.Discover()
 		if err != nil {

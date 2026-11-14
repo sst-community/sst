@@ -16,7 +16,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/project"
-	"github.com/sst/sst/v3/pkg/pulumidev"
 )
 
 type Cli struct {
@@ -142,6 +141,10 @@ type Command struct {
 	Examples    []Example            `json:"examples"`
 	Children    []*Command           `json:"children"`
 	Run         func(cli *Cli) error `json:"-"`
+	// Contract is the least version of the program contract the CLI's
+	// platform speaks for it to have the command: 1 for one of SST 5's
+	// components only (PlatformContract)
+	Contract int `json:"-"`
 }
 
 func (c *Command) init(parsed map[string]interface{}) {
@@ -304,7 +307,7 @@ func (c CommandPath) PrintHelp() error {
 }
 
 func (c *Cli) Stage(cfgPath string) (string, error) {
-	if pulumidev.IsProgram(cfgPath) {
+	if isPulumiProgram(cfgPath) {
 		return c.pulumiStage(cfgPath)
 	}
 	stage := c.String("stage")

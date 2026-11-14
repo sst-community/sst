@@ -18,11 +18,11 @@ func makeProviderResource(provider string, version string) apitype.ResourceV3 {
 }
 
 func TestCheckProviderUpgrade_AWSV6ToV7(t *testing.T) {
-	p := &Project{
+	p := sst5(&Project{
 		lock: ProviderLock{
 			{Name: "aws", Package: "@pulumi/aws", Alias: "aws", Version: "7.0.0"},
 		},
-	}
+	})
 
 	resources := []apitype.ResourceV3{
 		makeProviderResource("aws", "6.52.0"),
@@ -38,11 +38,11 @@ func TestCheckProviderUpgrade_AWSV6ToV7(t *testing.T) {
 }
 
 func TestCheckProviderUpgrade_AWSAlreadyOnV7(t *testing.T) {
-	p := &Project{
+	p := sst5(&Project{
 		lock: ProviderLock{
 			{Name: "aws", Package: "@pulumi/aws", Alias: "aws", Version: "7.0.0"},
 		},
-	}
+	})
 
 	resources := []apitype.ResourceV3{
 		makeProviderResource("aws", "7.0.0"),
@@ -55,11 +55,11 @@ func TestCheckProviderUpgrade_AWSAlreadyOnV7(t *testing.T) {
 }
 
 func TestCheckProviderUpgrade_NoMatchingProvider(t *testing.T) {
-	p := &Project{
+	p := sst5(&Project{
 		lock: ProviderLock{
 			{Name: "aws", Package: "@pulumi/aws", Alias: "aws", Version: "7.0.0"},
 		},
-	}
+	})
 
 	resources := []apitype.ResourceV3{
 		makeProviderResource("vercel", "1.11.0"),

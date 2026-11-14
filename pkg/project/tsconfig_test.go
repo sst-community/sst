@@ -26,7 +26,7 @@ func TestWriteTsconfig(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(platform, "node_modules/@pulumi/aws/package.json"), []byte(`{"types": "./index.d.ts"}`), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(platform, "node_modules/@pulumi/aws/index.d.ts"), nil, 0644))
 
-	p := &Project{root: dir}
+	p := sst5(&Project{root: dir})
 	require.NoError(t, p.writeTsconfig())
 
 	data, err := os.ReadFile(filepath.Join(dir, ".sst", "tsconfig.json"))
@@ -58,7 +58,7 @@ func TestWriteTsconfig(t *testing.T) {
 func TestWriteTsconfigWithPackages(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".sst", "platform"), 0755))
-	p := &Project{root: dir, app: &App{Packages: map[string]string{"@acme/email": "1.2.0"}}}
+	p := sst5(&Project{root: dir, app: &App{Packages: map[string]string{"@acme/email": "1.2.0"}}})
 	require.NoError(t, p.writeTsconfig())
 
 	data, err := os.ReadFile(filepath.Join(dir, ".sst", "tsconfig.json"))

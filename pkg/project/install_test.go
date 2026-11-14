@@ -102,9 +102,9 @@ func fakeRegistry(t *testing.T) (built *semver.Version, newer string, major stri
 func TestGenerateProviderLock(t *testing.T) {
 	built, newer, major := fakeRegistry(t)
 	lock := func(name string, version string) error {
-		p := &Project{app: &App{Providers: map[string]any{
+		p := sst5(&Project{app: &App{Providers: map[string]any{
 			name: map[string]any{"version": version},
-		}}}
+		}}})
 		return p.generateProviderLock()
 	}
 

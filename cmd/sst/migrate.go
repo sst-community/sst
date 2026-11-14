@@ -20,7 +20,9 @@ import (
 )
 
 var CmdMigrate = &cli.Command{
-	Name: "migrate",
+	// SST 5's alone
+	Contract: 1,
+	Name:     "migrate",
 	Description: cli.Description{
 		Short: "Move a stage to new components",
 		Long: strings.Join([]string{

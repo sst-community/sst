@@ -27,10 +27,13 @@ func (p *Project) GetCompleted(ctx context.Context) (*CompleteEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return getCompletedEvent(ctx, passphrase, workdir)
+	return getCompletedEvent(ctx, passphrase, workdir, p.speaks())
 }
 
-func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWorkdir) (*CompleteEvent, error) {
+// getCompletedEvent reads what the stage's state has, as the contract reads
+// each resource. The event it returns is published, and read by others from
+// then on: nothing writes it after.
+func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWorkdir, contract Contract) (*CompleteEvent, error) {
 	complete := &CompleteEvent{
 		Links:       common.Links{},
 		ImportDiffs: map[string][]ImportDiff{},
@@ -72,7 +75,7 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 		if !ok {
 			continue
 		}
-		if err := AddRecords(complete, res.URN, string(res.Type), outputs); err != nil {
+		if err := contract.Read(complete, res, outputs); err != nil {
 			return nil, err
 		}
 	}
@@ -102,16 +105,24 @@ func AddRecords(complete *CompleteEvent, urn resource.URN, typ string, outputs m
 	if err != nil {
 		return err
 	}
+	complete.AddRecords(urn, typ, outputs, report)
+	return nil
+}
+
+// AddRecords adds to what the deploy left what one of the state's resources
+// records, given what its component reported, if it reported anything, as
+// the platform's contract reads it: the report, and a link's properties.
+func (complete *CompleteEvent) AddRecords(urn resource.URN, typ string, outputs map[string]interface{}, report *Report) {
 	if report != nil {
 		complete.add(urn, report)
 	}
 	if typ != LinkRefType {
-		return nil
+		return
 	}
 	target, targetOk := outputs["target"].(string)
 	properties, propertiesOk := outputs["properties"].(map[string]interface{})
 	if !targetOk || !propertiesOk {
-		return nil
+		return
 	}
 	link := common.Link{
 		Properties: properties,
@@ -134,7 +145,6 @@ func AddRecords(complete *CompleteEvent, urn resource.URN, typ string, outputs m
 		}
 	}
 	complete.Links[target] = link
-	return nil
 }
 
 // add adds what a component reported to what the deploy left
