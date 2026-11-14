@@ -153,6 +153,20 @@ func (c *Collection) forBuild(input *BuildInput) (Runtime, bool) {
 	return c.Runtime(input.Runtime)
 }
 
+// ValidateHandler checks a function's handler as the runtime that builds it
+// (forBuild) does, so sst dev's deploy and a build check the same thing. A
+// function its commands build isn't checked as the Lambda runtime it names
+// would be: its commands say what its handler is. A runtime this CLI doesn't
+// build, like provided.al2023 for Swift or Dart, has nothing to check
+// against, so nothing's checked.
+func (c *Collection) ValidateHandler(input *BuildInput) error {
+	runtime, ok := c.forBuild(input)
+	if !ok {
+		return nil
+	}
+	return runtime.ValidateHandler(input)
+}
+
 // forFunction is the runtime a function was built with, or the one its runtime
 // setting names, before it's built.
 func (c *Collection) forFunction(runtime, functionID string) (Runtime, bool) {
@@ -176,14 +190,8 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		if !filepath.IsAbs(out) {
 			out = filepath.Join(path.ResolveRootDir(input.CfgPath), out)
 		}
-		// Only runtimes we build know how to resolve a handler. Custom-bundle
-		// functions on a runtime with no implementation (e.g. provided.al2,
-		// provided.al2023 for Swift or Dart) have nothing to validate against,
-		// so skip the check rather than failing the deploy.
-		if runtime, ok := c.Runtime(input.Runtime); ok {
-			if err := runtime.ValidateHandler(input); err != nil {
-				return nil, err
-			}
+		if err := c.ValidateHandler(input); err != nil {
+			return nil, err
 		}
 		result = &BuildOutput{
 			Handler: input.Handler,
