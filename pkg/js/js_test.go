@@ -203,10 +203,10 @@ export const region = aws.defaultRegion;
 	read := js.EvalOptions{
 		Dir:    dir,
 		Banner: `function $config(input) { return input }`,
-		Code:   "import mod from './sst.config.ts';\nconsole.log(JSON.stringify(await mod.app({})));",
+		Code:   "import mod from './sst.config.ts';\ntry { console.log(JSON.stringify(await mod.app({}))) } catch (e) { console.log(e.message) }",
 	}
-	// Left out, as SST 5's line does, the helper reads nothing from it
-	assert.Equal(t, `{"name":"my-app","providers":{"aws":{}}}`, buildAndRun(t, read))
+	// Left out, as SST 5's line does, it says so when the helper reads it
+	assert.Equal(t, "@pulumi/aws is only loaded in run()", buildAndRun(t, read))
 
 	read.LoadProviders = true
 	assert.Equal(t, `{"name":"my-app","providers":{"aws":{"region":"us-west-2"}}}`, buildAndRun(t, read))
@@ -288,22 +288,31 @@ export default $config({
 		"infra.ts": `import { Uploads } from "@acme/uploads";
 export const uploads = Uploads;
 `,
+		// Each kind of import says so when it's read: esbuild reads a named
+		// or namespace import through an object of its own
 		"used.ts": `import stages from "@acme/stages";
-export function read() {
+import * as regions from "@acme/regions";
+import { zone } from "@acme/zones";
+function read(get) {
   try {
-    return stages.stage;
+    return String(get());
   } catch (e) {
     return e.message;
   }
+}
+export async function reads() {
+  const awaited = await import("@acme/awaited");
+  return [read(() => stages.stage), read(() => regions.region), read(() => zone), read(() => awaited.value)];
 }
 `,
 	})
 	out := buildAndRun(t, js.EvalOptions{
 		Dir:    dir,
 		Banner: `function $config(input) { return input }`,
-		Code:   "import mod from './sst.config.ts';\nimport { read } from './used.ts';\nconsole.log(JSON.stringify(await mod.app({})));\nconsole.log(read());",
+		Code:   "import mod from './sst.config.ts';\nimport { reads } from './used.ts';\nconsole.log(JSON.stringify(await mod.app({})));\nconsole.log((await reads()).join(\"\\n\"));",
 	})
-	assert.Equal(t, "{\"name\":\"my-app\"}\n@acme/stages isn't installed yet. A package that `sst install` installs, like one under `packages`, is only loaded in run()", out)
+	notInstalled := " isn't installed yet. A package that `sst install` installs, like one under `packages`, is only loaded in run()"
+	assert.Equal(t, "{\"name\":\"my-app\"}\n@acme/stages"+notInstalled+"\n@acme/regions"+notInstalled+"\n@acme/zones"+notInstalled+"\n@acme/awaited"+notInstalled, out)
 
 	_, err := js.Build(js.EvalOptions{
 		Dir:     dir,
