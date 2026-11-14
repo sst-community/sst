@@ -273,4 +273,15 @@ describe("The program contract", () => {
       'The "Web" component (acme.index.Site) reported to SST after it registered its outputs. Call report() before registerOutputs(), in its constructor.',
     );
   });
+
+  // The CLI speaks to the components in the version their package.json
+  // declares. A merge of main into v5 that took main's, 0, would have the CLI
+  // run them as SST 4's, and nothing else would fail.
+  it("is the version the platform's package.json declares", async () => {
+    const { contractVersion } = await import("../../src/components/contract");
+    const manifest = JSON.parse(
+      readFileSync(path.join(__dirname, "../../package.json"), "utf8"),
+    );
+    expect(manifest.sst.contract).toBe(contractVersion);
+  });
 });
