@@ -79,43 +79,75 @@ for (const [index, kind] of ["Http", "Rest", "WebSocket"].entries()) {
         ).toContain(`${arn}:live`);
       }
     });
-    it("preserves a published Function target when using its qualified ARN", async () => {
-      const { Function } = await import("../../src/components/aws/function");
-      // Match the Function getter fixture used by function-builder.test.ts.
-      const fn = Object.create(Function.prototype) as InstanceType<
-        typeof Function
-      >;
-      Object.assign(fn, {
-        durable: false,
-        function: pulumi.output({
-          arn,
-          qualifiedArn: `${arn}:42`,
-          publish: true,
-        }),
-      });
-      const prefix = `${kind}Published`;
-      const api = new types[index](prefix);
-      const handler = api.addHandler("Backend", fn.nodes.function.qualifiedArn);
-      const shared = api.route(index === 2 ? "shared" : "GET /shared", handler);
-      await value(shared.nodes.integration.id);
-      expect(await value(fn.arn)).toBe(arn);
-      expect(await value(handler.arn)).toBe(await value(fn.targetArn));
-      expect(permissions(prefix)).toHaveLength(1);
-      for (const permission of permissions(prefix))
-        expect(permission.inputs).toMatchObject({
-          function: arn,
-          qualifier: "42",
+    // PR #217 review: `addHandler("Backend", fn.arn)` passed the unqualified ARN, so
+    // a published or durable function moved from its version to `$LATEST`. A
+    // Function is invoked at its `targetArn`, as `route(..., fn)` does.
+    for (const publish of [true, false])
+      it(`invokes ${
+        publish ? "a published" : "an unpublished"
+      } Function at its target`, async () => {
+        const { Function } = await import("../../src/components/aws/function");
+        // Match the Function getter fixture used by function-builder.test.ts.
+        const fn = Object.create(Function.prototype) as InstanceType<
+          typeof Function
+        >;
+        Object.assign(fn, {
+          durable: false,
+          function: pulumi.output({ arn, qualifiedArn: `${arn}:42`, publish }),
         });
-      const integrations = resources.filter(
-        (r) =>
-          r.name.startsWith(prefix) &&
-          r.type.endsWith("/integration:Integration"),
-      );
-      expect(integrations).toHaveLength(1);
-      for (const integration of integrations)
+        const target = publish ? `${arn}:42` : arn;
+        const prefix = `${kind}${publish ? "Published" : "Unpublished"}`;
+        const api = new types[index](prefix);
+        const handler = api.addHandler("Backend", fn);
+        const shared = api.route(
+          index === 2 ? "shared" : "GET /shared",
+          handler,
+        );
+        await value(shared.nodes.integration.id);
+        expect(await value(handler.arn)).toBe(target);
+        expect(await value(handler.arn)).toBe(await value(fn.targetArn));
+        expect(permissions(prefix)).toHaveLength(1);
+        expect(permissions(prefix)[0].inputs).toMatchObject({
+          function: arn,
+          ...(publish ? { qualifier: "42" } : {}),
+        });
+        if (!publish)
+          expect(permissions(prefix)[0].inputs.qualifier).toBeUndefined();
+        const integrations = resources.filter(
+          (r) =>
+            r.name.startsWith(prefix) &&
+            r.type.endsWith("/integration:Integration"),
+        );
+        expect(integrations).toHaveLength(1);
+        // The target, not followed by another qualifier.
         expect(
-          integration.inputs.integrationUri ?? integration.inputs.uri,
-        ).toContain(`${arn}:42`);
+          integrations[0].inputs.integrationUri ?? integrations[0].inputs.uri,
+        ).toMatch(new RegExp(`${target}($|/)`));
+      });
+
+    // PR #217 review: invalid names and ARNs are rejected with the user's handler
+    // name, not the internal permission's, and `function:*` is not an ARN.
+    it("rejects invalid handler names", () => {
+      const api = new types[index](`${kind}BadName`);
+      for (const name of ["", "1Backend", "Back-end", "Back end"])
+        expect(() => api.addHandler(name, arn)).toThrow(
+          `The shared handler name "${name}" must start with a letter`,
+        );
+    });
+    it("rejects invalid ARNs, naming the handler", () => {
+      const api = new types[index](`${kind}BadArn`);
+      for (const bad of [
+        "my-function",
+        "arn:aws:s3:::bucket",
+        "arn:aws:lambda:us-east-1:123456789012:function:*",
+        "arn:aws:lambda:us-east-1:123456789012:function:shared:*",
+        "arn:aws:lambda:us-east-1:*:function:shared",
+      ])
+        expect(() => api.addHandler("Backend", bad)).toThrow(
+          `The shared handler "Backend" needs a Lambda function, alias or version ARN, not "${bad}".`,
+        );
+      // A rejected call doesn't take the name.
+      expect(() => api.addHandler("Backend", arn)).not.toThrow();
     });
     it("inherits the API provider and keeps the grant without routes", async () => {
       const prefix = `${kind}Provider`;

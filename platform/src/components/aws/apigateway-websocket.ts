@@ -15,7 +15,7 @@ import {
 } from "../component";
 import { Link } from "../link";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
+import { Function, FunctionArgs, FunctionArn } from "./function.js";
 import { hashStringToPrettyString, physicalName, logicalName } from "../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { RETENTION } from "./logging";
@@ -360,7 +360,6 @@ export interface ApiGatewayWebSocketRouteArgs {
  * ```
  */
 export class ApiGatewayWebSocket extends Component implements Link.Linkable {
-  private readonly sharedHandlerNames = new Set<string>();
   private constructorName: string;
   private constructorArgs: ApiGatewayWebSocketArgs;
   private constructorOpts: ComponentResourceOptions;
@@ -663,50 +662,32 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
   }
 
   /**
-   * Register a Lambda ARN once and share its invocation permission across routes.
-   * Use a stable name and reuse the returned handler for every route with this target.
-   * The ARN can reference a function, alias, or version, including one created in this app.
-   * For a versioned or durable SST Function, pass `fn.nodes.function.qualifiedArn`
-   * to preserve the version used by `route(..., fn)`. `fn.arn` is unqualified.
-   * This grants the same API-wide access as ordinary routes, without a policy statement
-   * per route. Authentication and authorization settings on the routes are unchanged.
+   * Add a shared handler for a Lambda function. Routes that use it share one invoke
+   * permission, instead of each adding a statement to the function's resource policy,
+   * which is limited to 20 KB.
    *
-   * The permission belongs to this API and remains until this call is removed, even when
-   * no routes use it. Different aliases or versions need separate named handlers.
+   * Pass a `Function` to invoke it as `route(..., fn)` does, at its version when it's
+   * published or durable. Or pass the ARN of a function, alias or version.
    *
-   * To consolidate existing routes, add the handler, pass it to the routes, and deploy.
-   * Integrations depend on the replacement permissions before old grants are removed.
-   * To switch back, pass the Lambda ARN to the routes, remove the unused handler, and
-   * deploy. No intermediate deployment is needed when both policy forms fit the quota.
+   * To switch routes over, pass them the handler and deploy. To switch back, pass them
+   * the function again, remove the `addHandler` call and deploy.
    *
-   * If the Lambda policy is already full, first remove a redundant API-wide statement
-   * through its owning infrastructure while retaining a working grant. Switching back
-   * to per-route grants also needs enough policy space; use batches or keep sharing.
-   *
-   * @param name A unique, stable name starting with a letter and containing only letters and numbers.
-   * @param arn The Lambda ARN to invoke. Use `fn.arn` for an unversioned function, or a qualified Lambda ARN for an alias or version.
+   * @param name A stable name, unique in this API, that starts with a letter and contains only letters and numbers.
+   * @param handler The `Function`, or the Lambda ARN, to invoke.
    * @example
    * ```js
-   * const handler = api.addHandler("Backend", fn.arn);
-   * api.route("$connect", handler);
-   * api.route("sendMessage", handler);
+   * const backend = api.addHandler("Backend", fn);
+   * api.route("$connect", backend);
+   * api.route("sendMessage", backend);
    * ```
    */
-  public addHandler(name: string, arn: Input<string>) {
-    if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name))
-      throw new VisibleError(
-        "A shared handler name must start with a letter and contain only letters and numbers.",
-      );
-    if (this.sharedHandlerNames.has(name))
-      throw new VisibleError(
-        `The shared handler "${name}" already exists in this API.`,
-      );
-    this.sharedHandlerNames.add(name);
+  public addHandler(name: string, handler: Function | Input<string>) {
     return new ApiGatewayLambdaHandler(
-      `${this.constructorName}Handler${name}Permission`,
-      arn,
       this,
+      this.constructorName,
       this.api.executionArn,
+      name,
+      handler,
     );
   }
 
