@@ -2,6 +2,10 @@
 
 What's been done on [the plan](plan.md), newest first.
 
+## 2026-11-13: on SST 4's line
+
+- `sst pulumi dev` is on both lines ([decision](plan.md#decisions)): the CLI's contract gate for a Pulumi project is gone, and SST 4's `sst` package ships `sst/pulumi` and `schema/sst.dev.json`. Checked in the lab with an SST 4 CLI and package: the stub deployed, the function answered from its local source and after each edit, a dev command ran, and a plain `pulumi up` put the deployed code back ([shared-core's progress](../shared-core/progress.md)).
+
 ## 2026-11-13: `sst pulumi dev`
 
 - **The dev loop for a Pulumi project is `sst pulumi dev`** ([decision](plan.md#decisions)), a `pulumi` command with `dev` under it, on SST 5's line as the Pulumi path was. Its flags are `sst dev`'s: `--mode`, `--policy`, and `--stage` and `--config` as before.

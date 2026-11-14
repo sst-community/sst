@@ -2,6 +2,13 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: `sst pulumi dev` on SST 4's line
+
+- **The CLI**: `sst pulumi dev` has no contract of its own any more, and the Pulumi project's discovery isn't gated on the platform's contract. A test runs it on contract 0.
+- **SST 4's `sst` package** ships `sst/pulumi`, `schema/sst.dev.json` and `sst/pulumi`'s tests, the same files as SST 5's, with `@pulumi/pulumi` and `@pulumi/aws` as optional peers, and the versions SST 4's platform has as dev dependencies. `TestSchemaMatchesDevFile` runs on both builds now.
+- **Main's docs** have "Use with Pulumi", SST 5's page with SST 4's package to install, and SST 5's components in a Pulumi program sent to SST 5's docs.
+- **In the lab**, with an SST 4 CLI and SST 4's package packed from `engine`, on a plain TypeScript program with a role, a Lambda function and its URL, on a local backend: `sst pulumi dev` deployed the stub, the function answered from its local source and again after each edit, the dev command ran, a plain `pulumi up` put the deployed code back and took SST's dev policy off, and `pulumi destroy` left only the function's log group, deleted.
+
 ## 2026-11-13: shared platform files, and SST 5's report on SST 4's line
 
 - **Nine platform files are shared**, of the 15 top-level component files both platforms have: the eight that were already the same, and `error.ts`, whose one dependency on SST 5's `context.ts` is written out in it. `shared.test.ts` lists them and fails on an import of a file that isn't one of them; with `error.ts` as it was, it named `./context.js`. `error.ts` on SST 4's line now keeps an error's message as it's written: Pulumi added the property it was serializing to it.

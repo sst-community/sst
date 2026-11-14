@@ -41,6 +41,7 @@ The maintainer doesn't want "a bunch of revisions on this", so the public parts 
 | 2026-11-12 | **TypeScript and JavaScript Pulumi programs first.** What the library sends and writes is language-neutral (environment, one RPC call, `_sst` records), so a Python or Go library can follow without changing `sst dev`. |
 | 2026-11-12 | **Only `sst dev` works in a Pulumi project.** Every other command says to use `pulumi`. |
 | 2026-11-13 | **The command is `sst pulumi dev`**, not `sst dev`. The maintainer: "We should change the name of the command though so it's not confusing with the other SST dev", and chose `sst pulumi dev` alone, with `sst eject` left where it is. `sst dev` runs an SST app alone, and in a Pulumi project says to run `sst pulumi dev`. Asked for by name, `sst pulumi dev` runs the nearest `Pulumi.yaml` up from the folder, in an SST app's folder too, or the one `--config` names. The first decision above, one binary, holds: it's the same CLI. `sst.dev.yaml` and the stack's `sst:dev` keep their names. Renamed before any release had it. |
+| 2026-11-13 | **SST 4's line runs it too**, as the shared engine does: the maintainer asked to finish SST 4's support for it, in the engine's PR onto `main`. It runs none of either line's components, so nothing in it is SST 5's: SST 4's `sst` package ships `sst/pulumi` and the dev file's schema, the same files. SST 5's components in a Pulumi program stay SST 5's. |
 
 ## Design
 
