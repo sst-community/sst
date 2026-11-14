@@ -32,9 +32,6 @@ func (m *mockRuntime) ShouldRebuild(functionID string, path string) bool {
 func (m *mockRuntime) ValidateHandler(input *runtime.BuildInput) error {
 	return nil
 }
-func (m *mockRuntime) ShouldRunEagerly() bool {
-	return true
-}
 
 // outputRuntime returns a build output, like a real runtime does
 type outputRuntime struct{ mockRuntime }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -21,6 +22,7 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui/common"
 	"github.com/sst/sst/v3/pkg/flag"
+	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/types/typescript"
 
@@ -29,7 +31,7 @@ import (
 
 type ProgressMode string
 
-var IGNORED_RESOURCES = []string{"sst:sst:Version", "sst:sst:LinkRef", "pulumi:pulumi:Stack"}
+var IGNORED_RESOURCES = []string{"sst:sst:Version", "sst:sst:LinkRef", "sst:sst:Moved", "pulumi:pulumi:Stack"}
 
 const (
 	ProgressModeDeploy  ProgressMode = "deploy"
@@ -57,6 +59,7 @@ type UI struct {
 	buffer     []interface{}
 	hasBlank   bool
 	hasHeader  bool
+	hasUpdate  bool
 	options    *Options
 	log        *os.File
 }
@@ -282,6 +285,7 @@ func (u *UI) Event(unknown interface{}) {
 	case *project.StackCommandEvent:
 		u.reset()
 		u.header(evt.Version, evt.App, evt.Stage)
+		u.update(evt.Version)
 		u.blank()
 		if evt.Command == "deploy" {
 			u.mode = ProgressModeDeploy
@@ -470,7 +474,8 @@ func (u *UI) Event(unknown interface{}) {
 			}
 			u.println()
 			if len(evt.Hints) > 0 {
-				for k, v := range evt.Hints {
+				for _, k := range slices.Sorted(maps.Keys(evt.Hints)) {
+					v := evt.Hints[k]
 					splits := strings.Split(k, "::")
 					u.println(
 						TEXT_GRAY_BOLD.Render("   "),
@@ -672,13 +677,8 @@ func (u *UI) functionName(functionID string) string {
 	if u.complete == nil {
 		return functionID
 	}
-	for _, resource := range u.complete.Resources {
-		if resource.Type == "sst:aws:Function" && resource.URN.Name() == functionID {
-			return strings.TrimPrefix(resource.Outputs["_metadata"].(map[string]interface{})["handler"].(string), "./")
-		}
-		if resource.Type == "sst:cloudflare:Worker" && resource.URN.Name() == functionID {
-			return strings.TrimPrefix(resource.Outputs["_metadata"].(map[string]interface{})["handler"].(string), "./")
-		}
+	if fn, ok := u.complete.Functions[functionID]; ok && fn.Handler != "" {
+		return strings.TrimPrefix(fn.Handler, "./")
 	}
 	return functionID
 }
@@ -689,6 +689,20 @@ func (u *UI) printProgress(barColor lipgloss.Style, label string, duration time.
 		message += fmt.Sprintf(" (%.1fs)", duration.Seconds())
 	}
 	u.printEvent(barColor, label, message)
+}
+
+// update says when the last check found a newer SST, once for the UI, as
+// `sst dev` deploys again on each change
+func (u *UI) update(version string) {
+	if u.hasUpdate {
+		return
+	}
+	newest, ok := global.NewerVersion(version)
+	if !ok {
+		return
+	}
+	u.hasUpdate = true
+	u.printEvent(TEXT_INFO, "Info", fmt.Sprintf("SST %s is available. Run `sst upgrade` to update.", newest))
 }
 
 func (u *UI) printEvent(barColor lipgloss.Style, label string, message ...string) {

@@ -19,9 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -172,12 +170,16 @@ type fakeRuntime struct {
 	stopDelay time.Duration
 
 	starts atomic.Int32
+	// the workers it started, the first first
+	startedMu sync.Mutex
+	started   []*fakeWorker
 	// failRuns makes starting a worker fail, as when its runtime can't run it
 	failRuns atomic.Bool
 	// failBuilds makes a function's build fail
 	failBuilds atomic.Bool
-	// lazy starts a worker only when it's invoked, as the Python runtime does,
-	// instead of again straight after a rebuild
+	// lazy has sst dev start a worker only when it's invoked, instead of again
+	// straight after a rebuild, as it does for the functions not among the
+	// startAtOnce invoked last
 	lazy bool
 	// crash makes a worker report an init error and exit without asking for an
 	// invocation, as a Node.js worker does when its handler throws on import
@@ -193,6 +195,9 @@ type fakeRuntime struct {
 	recordedAfterTaking bool
 	// failInvocations has a worker answer each invocation with an error
 	failInvocations bool
+	// initErrorOnStop has a worker that's stopped as it asks for an invocation
+	// report it as an init error, as Ruby's runtime interface client does
+	initErrorOnStop bool
 }
 
 func (r *fakeRuntime) Match(runtime string) bool { return runtime == "fake" }
@@ -224,6 +229,9 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 	r.starts.Add(1)
 	logs, output := io.Pipe()
 	w := &fakeWorker{runtime: r, api: "http://" + input.Server + "/2018-06-01/runtime", stop: make(chan struct{}), logs: logs, askedAgain: make(chan struct{}), took: make(chan struct{})}
+	r.startedMu.Lock()
+	r.started = append(r.started, w)
+	r.startedMu.Unlock()
 	go w.run(ctx, output)
 	if r.recordedLate || r.recordedAfterTaking {
 		signal := w.askedAgain
@@ -241,8 +249,6 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 }
 
 func (r *fakeRuntime) ShouldRebuild(functionID string, path string) bool { return r.rebuild }
-
-func (r *fakeRuntime) ShouldRunEagerly() bool { return !r.lazy }
 
 func (r *fakeRuntime) ValidateHandler(input *runtime.BuildInput) error { return nil }
 
@@ -312,6 +318,16 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 		}
 		if err != nil {
 			cancel()
+			select {
+			case <-w.stop:
+				if w.runtime.initErrorOnStop {
+					resp, err := http.Post(w.api+"/init/error", "application/json", strings.NewReader(`{"errorMessage":"interrupted with a SIGTERM SIGNAL, gracefully shutting down","errorType":"Init<LambdaErrors::InvocationError>"}`))
+					if err == nil {
+						resp.Body.Close()
+					}
+				}
+			default:
+			}
 			return
 		}
 		event, _ := io.ReadAll(resp.Body)
@@ -349,7 +365,7 @@ func (w *fakeWorker) run(ctx context.Context, output *io.PipeWriter) {
 // harness runs function against the fakes.
 type harness struct {
 	t       *testing.T
-	mux     *http.ServeMux
+	server  *server.Server
 	ctx     context.Context
 	appsync *fakeAppSync
 	runtime *fakeRuntime
@@ -380,17 +396,14 @@ func newHarness(t *testing.T, rt *fakeRuntime) *harness {
 			t.Logf("what sst dev logged:\n%s", logged)
 		}
 	})
-	mux := http.NewServeMux()
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	// cleanups run last first: the workers stop before the server waits for
-	// their requests to end
+	// cleanups run last first: the workers stop before the server does
+	srv := newServer(t, context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
 	h := &harness{
 		t:             t,
-		mux:           mux,
+		server:        srv,
 		ctx:           ctx,
 		appsync:       &fakeAppSync{},
 		runtime:       rt,
@@ -404,12 +417,17 @@ func newHarness(t *testing.T, rt *fakeRuntime) *harness {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
+		atOnce := startAtOnce
+		if rt.lazy {
+			atOnce = 0
+		}
 		function(ctx, input{
-			project: &project.Project{Runtime: runtime.NewCollection(h.cfgPath, rt)},
-			server:  &server.Server{Mux: mux, Port: srv.Listener.Addr().(*net.TCPAddr).Port},
-			client:  client,
-			msg:     msg,
-			prefix:  h.prefix,
+			project:     &project.Project{Runtime: runtime.NewCollection(h.cfgPath, rt)},
+			server:      srv,
+			client:      client,
+			msg:         msg,
+			prefix:      h.prefix,
+			startAtOnce: atOnce,
 		})
 	}()
 	// the loop has stopped, and left the bus, before the next test starts
@@ -662,4 +680,25 @@ func TestHarnessConcurrentEnvironments(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// newServer starts a dev server, as sst dev does, which serves until ctx is
+// done or the test ends.
+func newServer(t *testing.T, ctx context.Context) *server.Server {
+	t.Helper()
+	srv, err := server.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	go srv.Serve(ctx)
+	return srv
+}
+
+// workerPath is the path of a route of the Lambda runtime API, such as
+// "/2018-06-01/runtime/invocation/next", for one worker.
+func workerPath(srv *server.Server, workerID, route string) string {
+	address := srv.WorkerAddress(workerID)
+	return address[strings.Index(address, "/"):] + route
 }

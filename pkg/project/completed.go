@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
+	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/sst/sst/v3/pkg/id"
 	"github.com/sst/sst/v3/pkg/project/common"
 	"github.com/sst/sst/v3/pkg/project/provider"
@@ -26,15 +27,18 @@ func (p *Project) GetCompleted(ctx context.Context) (*CompleteEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return getCompletedEvent(ctx, passphrase, workdir)
+	return getCompletedEvent(ctx, passphrase, workdir, p.speaks())
 }
 
-func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWorkdir) (*CompleteEvent, error) {
+// getCompletedEvent reads what the stage's state has, as the contract reads
+// each resource. The event it returns is published, and read by others from
+// then on: nothing writes it after.
+func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWorkdir, contract Contract) (*CompleteEvent, error) {
 	complete := &CompleteEvent{
 		Links:       common.Links{},
-		Versions:    map[string]int{},
 		ImportDiffs: map[string][]ImportDiff{},
 		Devs:        Devs{},
+		Functions:   map[string]FunctionReport{},
 		Tunnels:     map[string]Tunnel{},
 		Hints:       map[string]string{},
 		Outputs:     map[string]interface{}{},
@@ -57,98 +61,22 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 	}
 	complete.Resources = deployment.Resources
 
-	for _, resource := range complete.Resources {
-		outputs, ok := parsePlaintext(resource.Outputs).(map[string]interface{})
+	for _, res := range complete.Resources {
+		if res.Type == MovedMarker {
+			complete.Moved = true
+			complete.MovedComponents = movedComponents(parsePlaintext(res.Outputs))
+			continue
+		}
+		if res.Type == VersionsRecord {
+			complete.RecordedVersions = movedComponents(parsePlaintext(res.Outputs))
+			continue
+		}
+		outputs, ok := parsePlaintext(res.Outputs).(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if resource.URN.Type().Module().Package().Name() == "sst" {
-			if resource.Type == "sst:sst:Version" {
-				target, targetOk := outputs["target"].(string)
-				version, versionOk := outputs["version"].(float64)
-				if targetOk && versionOk {
-					complete.Versions[target] = int(version)
-				}
-			}
-
-			if resource.Type != "sst:sst:Version" {
-				name := resource.URN.Name()
-				_, ok := complete.Versions[name]
-				if !ok {
-					complete.Versions[name] = 1
-				}
-			}
-		}
-		if match, ok := outputs["_dev"].(map[string]interface{}); ok {
-			data, _ := json.Marshal(match)
-			var entry Dev
-			json.Unmarshal(data, &entry)
-			entry.Name = resource.URN.Name()
-			complete.Devs[entry.Name] = entry
-		}
-
-		if match, ok := outputs["_task"].(map[string]interface{}); ok {
-			data, _ := json.Marshal(match)
-			var entry Task
-			json.Unmarshal(data, &entry)
-			entry.Name = resource.URN.Name()
-			complete.Tasks[entry.Name] = entry
-		}
-
-		if match, ok := outputs["_tunnel"].(map[string]interface{}); ok {
-			ip, ipOk := match["ip"].(string)
-			username, usernameOk := match["username"].(string)
-			privateKey, privateKeyOk := match["privateKey"].(string)
-			if !ipOk || !usernameOk || !privateKeyOk {
-				continue
-			}
-			tunnel := Tunnel{
-				IP:         ip,
-				Username:   username,
-				PrivateKey: privateKey,
-				Subnets:    []string{},
-			}
-			if subnets, ok := match["subnets"].([]interface{}); ok {
-				for _, subnet := range subnets {
-					if s, ok := subnet.(string); ok {
-						tunnel.Subnets = append(tunnel.Subnets, s)
-					}
-				}
-				complete.Tunnels[resource.URN.Name()] = tunnel
-			}
-		}
-
-		if hint, ok := outputs["_hint"].(string); ok {
-			complete.Hints[string(resource.URN)] = hint
-		}
-
-		if resource.Type == "sst:sst:LinkRef" {
-			target, targetOk := outputs["target"].(string)
-			properties, propertiesOk := outputs["properties"].(map[string]interface{})
-			if !targetOk || !propertiesOk {
-				continue
-			}
-			link := common.Link{
-				Properties: properties,
-				Include:    []common.LinkInclude{},
-			}
-			if includeSlice, ok := outputs["include"].([]interface{}); ok {
-				for _, inc := range includeSlice {
-					incMap, ok := inc.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					incType, ok := incMap["type"].(string)
-					if !ok {
-						continue
-					}
-					link.Include = append(link.Include, common.LinkInclude{
-						Type:  incType,
-						Other: incMap,
-					})
-				}
-			}
-			complete.Links[target] = link
+		if err := contract.Read(complete, res, outputs); err != nil {
+			return nil, err
 		}
 	}
 
@@ -162,6 +90,89 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 	}
 
 	return complete, nil
+}
+
+// LinkRefType is the record of a resource that can be linked: its
+// properties, which a dev command or `sst shell` it's linked to is given
+const LinkRefType = "sst:sst:LinkRef"
+
+// AddRecords adds to what the deploy left what one of the state's resources
+// records for the core, from its outputs, decrypted: a component's report
+// (its _sst output), and a link's properties. An SST app's state and a Pulumi
+// program's are read the same way.
+func AddRecords(complete *CompleteEvent, urn resource.URN, typ string, outputs map[string]interface{}) error {
+	report, err := readReport(outputs)
+	if err != nil {
+		return err
+	}
+	complete.AddRecords(urn, typ, outputs, report)
+	return nil
+}
+
+// AddRecords adds to what the deploy left what one of the state's resources
+// records, given what its component reported, if it reported anything, as
+// the platform's contract reads it: the report, and a link's properties.
+func (complete *CompleteEvent) AddRecords(urn resource.URN, typ string, outputs map[string]interface{}, report *Report) {
+	if report != nil {
+		complete.add(urn, report)
+	}
+	if typ != LinkRefType {
+		return
+	}
+	target, targetOk := outputs["target"].(string)
+	properties, propertiesOk := outputs["properties"].(map[string]interface{})
+	if !targetOk || !propertiesOk {
+		return
+	}
+	link := common.Link{
+		Properties: properties,
+		Include:    []common.LinkInclude{},
+	}
+	if includeSlice, ok := outputs["include"].([]interface{}); ok {
+		for _, inc := range includeSlice {
+			incMap, ok := inc.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			incType, ok := incMap["type"].(string)
+			if !ok {
+				continue
+			}
+			link.Include = append(link.Include, common.LinkInclude{
+				Type:  incType,
+				Other: incMap,
+			})
+		}
+	}
+	complete.Links[target] = link
+}
+
+// add adds what a component reported to what the deploy left
+func (complete *CompleteEvent) add(urn resource.URN, report *Report) {
+	name := urn.Name()
+	if report.Function != nil {
+		complete.Functions[name] = *report.Function
+	}
+	if report.Dev != nil {
+		dev := *report.Dev
+		dev.Name = name
+		complete.Devs[name] = dev
+	}
+	if report.Task != nil {
+		task := *report.Task
+		task.Name = name
+		complete.Tasks[name] = task
+	}
+	// a tunnel is only of use with all three
+	if tunnel := report.Tunnel; tunnel != nil && tunnel.IP != "" && tunnel.Username != "" && tunnel.PrivateKey != "" {
+		if tunnel.Subnets == nil {
+			tunnel.Subnets = []string{}
+		}
+		complete.Tunnels[name] = *tunnel
+	}
+	if report.Hint != "" {
+		complete.Hints[string(urn)] = report.Hint
+	}
 }
 
 func parsePlaintext(input interface{}) interface{} {

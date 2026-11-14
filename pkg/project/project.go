@@ -3,6 +3,7 @@ package project
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/evanw/esbuild/pkg/api"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
 	"github.com/sst/sst/v3/internal/fs"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/flag"
@@ -25,6 +27,8 @@ import (
 	"github.com/sst/sst/v3/pkg/runtime/python"
 	"github.com/sst/sst/v3/pkg/runtime/rust"
 	"github.com/sst/sst/v3/pkg/runtime/worker"
+	"github.com/sst/sst/v3/pkg/target"
+	"github.com/sst/sst/v3/pkg/transport"
 )
 
 type App struct {
@@ -32,13 +36,17 @@ type App struct {
 	Stage     string                 `json:"stage"`
 	Removal   string                 `json:"removal"`
 	Providers map[string]interface{} `json:"providers"`
+	Packages  map[string]string      `json:"packages"` // installed in the platform, for an app without a package.json
 	Home      string                 `json:"home"`
-	Version   string                 `json:"version"`
-	Protect   bool                   `json:"protect"`
-	Watch     Watch                  `json:"watch"`
-	State     *State                 `json:"state"`
-	Dev       *AppDev                `json:"dev"`
-	Types     struct {
+	// Targets are where a stage's cloud calls go, by stage, when it isn't the
+	// real cloud: each a target's settings, a plain object of the type Target
+	Targets map[string]json.RawMessage `json:"targets,omitempty"`
+	Version string                     `json:"version"`
+	Protect bool                       `json:"protect"`
+	Watch   Watch                      `json:"watch"`
+	State   *State                     `json:"state"`
+	Dev     *AppDev                    `json:"dev"`
+	Types   struct {
 		Ignore []string `json:"ignore"`
 	} `json:"types"`
 	// Deprecated: Backend is now Home
@@ -75,6 +83,31 @@ func validateDev(dev *AppDev) error {
 		return nil
 	}
 	return util.NewReadableError(nil, fmt.Sprintf(`The "dev.appsync" property must be "shared" or "stage", not %q.`, dev.AppSync))
+}
+
+// Transport is how the stage's stubs in sst dev reach the CLI: AppSync, when
+// the app has the aws provider and the stage is in the real cloud, and HTTP on
+// this machine on a target's stage, whose functions run in containers here.
+// HTTP keeps its port and token in the working folder, so each run gives the
+// stubs the same ones.
+func (p *Project) Transport() (bridge.Transport, bool) {
+	if !target.IsCloud(p.Target()) {
+		return transport.NewHTTP(filepath.Join(p.PathWorkingDir(), p.app.Stage+".transport.json")), true
+	}
+	unknown, ok := p.Provider("aws")
+	if !ok {
+		return nil, false
+	}
+	aws, ok := unknown.(*provider.AwsProvider)
+	if !ok {
+		return nil, false
+	}
+	return transport.NewAppSync(aws, p.AppSyncScope(), p.app.Name, p.app.Stage), true
+}
+
+// NoTransport says why the stage has no transport for sst dev's functions.
+func (p *Project) NoTransport() error {
+	return util.NewReadableError(nil, "sst dev needs the aws provider to reach its functions")
 }
 
 // AppSyncScope is which Event API sst dev and its stubs use: the shared one, or
@@ -134,10 +167,19 @@ type Project struct {
 	config          string
 	app             *App
 	home            provider.Home
+	target          target.Target
 	env             map[string]string
 	loadedProviders map[string]provider.Provider
 	nodeVersion     string
 	Runtime         *runtime.Collection
+	// The stage's lock this CLI holds, and what the run under it left the
+	// stage as, which its unlock keeps in the lock SST 4 reads
+	locked     *provider.Update
+	stageAfter provider.StageAfter
+	// What the platform says it is, and the contract its components speak,
+	// from the platform this CLI has (New)
+	manifest *js.PlatformManifest
+	contract Contract
 }
 
 func Discover() (string, error) {
@@ -189,6 +231,31 @@ func (err *ErrVersionMismatch) Error() string {
 	return "ErrorVersionMismatch"
 }
 
+// Whether the app's `version` rule allows the CLI's version. A pre-release is
+// also checked as the release it leads to, since semver ranges leave
+// pre-releases out: 5.0.0-alpha.1 meets ">= 4" and "5.x", and not "4.x".
+func versionAllowed(rule string, cli string) (bool, error) {
+	constraint, err := semver.NewConstraint(rule)
+	if err != nil {
+		return false, ErrVersionInvalid
+	}
+	version, err := semver.NewVersion(cli)
+	if err != nil {
+		return false, ErrVersionInvalid
+	}
+	if constraint.Check(version) {
+		return true, nil
+	}
+	if version.Prerelease() == "" {
+		return false, nil
+	}
+	release, err := version.SetPrerelease("")
+	if err != nil {
+		return false, ErrVersionInvalid
+	}
+	return constraint.Check(&release), nil
+}
+
 type ErrBuildFailed struct {
 	msg    string
 	Errors []api.Message
@@ -209,25 +276,28 @@ func New(input *ProjectConfig) (*Project, error) {
 	rootPath := filepath.Dir(input.Config)
 	tmp := filepath.Join(rootPath, ".sst")
 
-	pythonRuntime := python.New()
-
-	proj := &Project{
-		version: input.Version,
-		root:    rootPath,
-		config:  input.Config,
-		env:     map[string]string{},
+	manifest, err := EmbeddedManifest()
+	if err != nil {
+		return nil, err
+	}
+	contract, err := ContractFor(manifest)
+	if err != nil {
+		return nil, err
 	}
 
-	proj.Runtime = runtime.NewCollection(
-		input.Config,
-		node.New(input.Version),
-		worker.New(),
-		pythonRuntime,
-		golang.New(),
-		rust.New(),
-	)
+	proj := &Project{
+		version:  input.Version,
+		root:     rootPath,
+		config:   input.Config,
+		env:      map[string]string{},
+		target:   target.Cloud{},
+		manifest: manifest,
+		contract: contract,
+	}
 
-	_, err := os.Stat(tmp)
+	proj.Runtime = NewRuntimes(input.Config, input.Version)
+
+	_, err = os.Stat(tmp)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, err
@@ -248,6 +318,8 @@ func New(input *ProjectConfig) (*Project, error) {
 			Define: map[string]string{
 				"$input": string(inputBytes),
 			},
+			// Its imports of the platform's modules are left out
+			Platform: proj.platformModules(),
 			Code: fmt.Sprintf(`
 import mod from '%s';
 console.log("~n" + process.versions.node)
@@ -350,7 +422,19 @@ console.log("~j" + JSON.stringify(await mod.app({
 				return nil, util.NewReadableError(nil, `You must specify a "home" provider in the project configuration file.`)
 			}
 
-			if _, ok := proj.app.Providers[proj.app.Home]; !ok && proj.app.Home != "local" {
+			// The stage's target is in the config, so a command on the stage
+			// can't reach the real cloud by leaving out a flag. Its home is the
+			// target's, so the home's provider isn't added.
+			if settings, ok := proj.app.Targets[input.Stage]; ok {
+				local, err := target.Parse(settings)
+				if err != nil {
+					return nil, util.NewReadableError(err, fmt.Sprintf("The target for the %q stage: %v", input.Stage, err))
+				}
+				if err := target.CheckProviders(local, proj.app.Providers); err != nil {
+					return nil, util.NewReadableError(err, err.Error())
+				}
+				proj.target = local
+			} else if _, ok := proj.app.Providers[proj.app.Home]; !ok && proj.app.Home != "local" {
 				proj.app.Providers[proj.app.Home] = map[string]interface{}{}
 			}
 
@@ -370,16 +454,16 @@ console.log("~j" + JSON.stringify(await mod.app({
 				return nil, err
 			}
 
+			if err := proj.checkConfigPackages(); err != nil {
+				return nil, err
+			}
+
 			if proj.app.Version != "" && input.Version != "dev" {
-				constraint, err := semver.NewConstraint(proj.app.Version)
+				allowed, err := versionAllowed(proj.app.Version, input.Version)
 				if err != nil {
-					return nil, ErrVersionInvalid
+					return nil, err
 				}
-				version, err := semver.NewVersion(input.Version)
-				if err != nil {
-					return nil, ErrVersionInvalid
-				}
-				if !constraint.Check(version) {
+				if !allowed {
 					return nil, &ErrVersionMismatch{Needed: input.Version, Received: proj.app.Version}
 				}
 			}
@@ -402,57 +486,65 @@ console.log("~j" + JSON.stringify(await mod.app({
 	return proj, nil
 }
 
-func (proj *Project) LoadHome() error {
-	slog.Info("loading home")
-	loadedProviders := make(map[string]provider.Provider)
+// NewRuntimes are the runtimes that build a program's functions and run them
+// in sst dev
+func NewRuntimes(cfgPath, version string) *runtime.Collection {
+	return runtime.NewCollection(
+		cfgPath,
+		node.New(version),
+		worker.New(),
+		python.New(),
+		golang.New(),
+		rust.New(),
+	)
+}
 
-	for key, args := range proj.app.Providers {
-		var match provider.Provider
-		switch key {
-		case "cloudflare":
-			match = &provider.CloudflareProvider{}
-		case "aws":
-			match = provider.NewAwsProvider()
-		}
-		if match == nil {
-			continue
-		}
-		err := match.Init(proj.app.Name, proj.app.Stage, args.(map[string]interface{}))
-		if err != nil {
-			return util.NewReadableError(err, key+": "+err.Error())
-		}
-		env, err := match.Env()
+func (proj *Project) LoadHome() error {
+	slog.Info("loading home", "target", proj.target.Name())
+	ctx := context.Background()
+	if err := proj.target.Start(ctx); err != nil {
+		return util.NewReadableError(err, err.Error())
+	}
+	loadedProviders, err := proj.target.Providers(ctx, proj.app.Name, proj.app.Stage, proj.app.Providers)
+	if err != nil {
+		return err
+	}
+	for _, loaded := range loadedProviders {
+		env, err := loaded.Env()
 		if err != nil {
 			return err
 		}
 		for key, value := range env {
 			proj.env[key] = value
 		}
-		loadedProviders[key] = match
 	}
-
-	var home provider.Home
+	// What the CLI starts on the stage gets the target's credentials, and
+	// none of the developer's
+	if local, ok := proj.target.(*target.Local); ok {
+		local.Apply()
+	}
 
 	compress := proj.app.State != nil && proj.app.State.Compress
-
-	switch proj.app.Home {
-	case "local":
-		home = provider.NewLocalHome()
-	case "aws":
-		home = provider.NewAwsHome(loadedProviders["aws"].(*provider.AwsProvider), compress)
-	case "cloudflare":
-		home = provider.NewCloudflareHome(loadedProviders["cloudflare"].(*provider.CloudflareProvider), compress)
-	default:
-		return fmt.Errorf("Home provider %s is invalid", proj.app.Home)
+	home, err := proj.target.Home(proj.app.Home, loadedProviders, compress)
+	if err != nil {
+		return err
 	}
-
-	err := home.Bootstrap()
+	err = home.Bootstrap()
 	if err != nil {
 		return fmt.Errorf("Error initializing %s:\n   %w", proj.app.Home, err)
 	}
 	proj.home = home
 	proj.loadedProviders = loadedProviders
 	return nil
+}
+
+// Target is where the stage's cloud calls go: the real cloud, or the target
+// the config names for the stage.
+func (p *Project) Target() target.Target {
+	if p.target == nil {
+		return target.Cloud{}
+	}
+	return p.target
 }
 
 func (p Project) getPath(path ...string) string {

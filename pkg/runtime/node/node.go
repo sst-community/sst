@@ -368,7 +368,7 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 		}
 	}
 	cmd.Env = append(cmd.Env, "AWS_LAMBDA_RUNTIME_API="+input.Server)
-	slog.Info("starting worker", "server", input.Server)
+	slog.Info("starting worker", "workerID", input.WorkerID)
 	cmd.Dir = input.Build.Out
 	worker, err := process.StartWorker(cmd)
 	if err != nil {
@@ -379,13 +379,6 @@ func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Wor
 
 func (r *Runtime) Match(runtime string) bool {
 	return strings.HasPrefix(runtime, "node")
-}
-
-// ShouldRunEagerly returns true for Node.js - the worker invoked last restarts immediately after rebuild.
-// Node.js uses esbuild's metafile for precise per-function dependency tracking,
-// so only functions that actually import a changed file will rebuild.
-func (r *Runtime) ShouldRunEagerly() bool {
-	return true
 }
 
 func findHandlerFile(rootDir string, handler string) (string, bool) {

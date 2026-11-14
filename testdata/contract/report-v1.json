@@ -1,0 +1,19 @@
+{
+  "contract": 1,
+  "function": { "handler": "src/server.handler", "dev": true },
+  "dev": {
+    "command": "npm run dev",
+    "directory": "web",
+    "environment": { "MODE": "local" },
+    "autostart": true,
+    "links": ["Docs"]
+  },
+  "task": { "command": "node seed.js", "directory": "scripts" },
+  "tunnel": {
+    "ip": "10.0.0.1",
+    "username": "ec2-user",
+    "privateKey": "key",
+    "subnets": ["10.0.0.0/16"]
+  },
+  "hint": "https://shop-dev-webbucket-drrmzcfu.example.com"
+}

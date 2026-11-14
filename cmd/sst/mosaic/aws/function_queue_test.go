@@ -276,8 +276,9 @@ func TestQueuedInvocationFailsWhenTheWorkerCantRestart(t *testing.T) {
 	}
 }
 
-// A deploy stops every worker. A runtime that starts workers only when they're
-// invoked, as Python's does, doesn't start one again then. An invocation already
+// A deploy stops every worker. A function whose worker starts only when it's
+// invoked, as one that isn't among those invoked last, doesn't start one again
+// then. An invocation already
 // queued for a worker that was stopped is still run, instead of waiting for one
 // that isn't coming.
 func TestQueuedInvocationRunsAfterADeployWithALazyRuntime(t *testing.T) {
@@ -327,7 +328,7 @@ func TestWorkerThatFailsToStartIsNotStartedOverAndOver(t *testing.T) {
 	}
 }
 
-// A deploy starts again each lazy runtime's worker that has an invocation
+// A deploy starts again each worker that starts when it's invoked and has an invocation
 // queued, once, however many environments there are.
 func TestDeployStartsEachQueuedLazyWorkerOnce(t *testing.T) {
 	polling := make(chan struct{})
@@ -388,8 +389,8 @@ func TestNextPutsBackAnInvocationForAWorkerThatLeft(t *testing.T) {
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
 	for range 20 {
-		r := httptest.NewRequest(http.MethodGet, "/lambda/"+b.workerID+"/2018-06-01/runtime/invocation/next", nil).WithContext(gone)
-		h.mux.ServeHTTP(httptest.NewRecorder(), r)
+		r := httptest.NewRequest(http.MethodGet, workerPath(h.server, b.workerID, "/2018-06-01/runtime/invocation/next"), nil).WithContext(gone)
+		h.server.ServeHTTP(httptest.NewRecorder(), r)
 	}
 
 	close(polling)

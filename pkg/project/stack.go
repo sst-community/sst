@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"reflect"
 
+	"github.com/pulumi/pulumi/sdk/v3/go/auto/events"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
+	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/project/common"
 	"github.com/sst/sst/v3/pkg/project/provider"
 )
@@ -19,12 +21,25 @@ type StackInput struct {
 	Command    string
 	Target     []string
 	Exclude    []string
-	ServerPort int
+	Server     string
 	Dev        bool
 	Verbose    bool
 	Continue   bool
 	SkipHash   string
 	PolicyPath string
+	// Move runs the program as the stage moves to new components, which apply
+	// their state maps and report their parts (pkg/move)
+	Move bool
+	// Release is what a move takes out of the state without deleting it,
+	// marked retained before the deploy runs (release.go)
+	Release []Released
+	// Locked is the stage's lock, when the caller took it and keeps it after
+	// the run, as Lock returned it: sst migrate holds it from its check to
+	// the end of the move, so nothing changes the stage in between
+	Locked *provider.Update
+	// previewFirst runs a deploy with Pulumi's preview first, as when the
+	// program turned out to have checks
+	previewFirst bool
 }
 
 type ConcurrentUpdateEvent struct{}
@@ -53,10 +68,19 @@ type Dev struct {
 	Links       []string          `json:"links"`
 	Title       string            `json:"title"`
 	Environment map[string]string `json:"environment"`
-	Aws         *struct {
-		Role string `json:"role"`
-	} `json:"aws"`
-	Cloudflare *DevCloudflare `json:"cloudflare"`
+	Aws         *DevAws           `json:"aws"`
+	Cloudflare  *DevCloudflare    `json:"cloudflare"`
+}
+
+// DevAws is the AWS a dev command runs with
+type DevAws struct {
+	// Role is the role it runs as
+	Role string `json:"role"`
+	// Only is whether it runs with the role's credentials alone: the profile
+	// in the developer's environment isn't passed to it, as the AWS SDKs take
+	// a profile over the role's credentials. An SST app's components don't
+	// set it.
+	Only bool `json:"only,omitempty"`
 }
 type Devs map[string]Dev
 
@@ -71,13 +95,26 @@ type Task struct {
 }
 
 type CompleteEvent struct {
-	UpdateID    string
-	Links       common.Links
-	Devs        Devs
-	Tasks       map[string]Task
-	Outputs     map[string]interface{}
-	Hints       map[string]string
-	Versions    map[string]int
+	UpdateID  string
+	Links     common.Links
+	Devs      Devs
+	Functions map[string]FunctionReport
+	Tasks     map[string]Task
+	Outputs   map[string]interface{}
+	Hints     map[string]string
+	// Moved is whether the state has the marker of a stage on SST 5's
+	// components (MovedMarker), and MovedComponents the version of each
+	// component it says the stage has in a 5.0 form, by type, and of those
+	// inside SST's components by their type after ">"
+	Moved           bool
+	MovedComponents map[string]int
+	// RecordedVersions are the version of each component the last deploy
+	// that finished created, by type (VersionsRecord)
+	RecordedVersions map[string]int
+	// Contract is what the platform's contract keeps of the state for itself
+	// (Contract.Read), like SST 4's components' versions. It's read where the
+	// state is read, and isn't sent.
+	Contract    any `json:"-"`
 	Errors      []Error
 	Finished    bool
 	Old         bool
@@ -123,11 +160,16 @@ var ErrPolicyViolation = fmt.Errorf("policy violations detected")
 var ErrPolicyConfigError = fmt.Errorf("policy configuration error")
 
 func (p *Project) ResolvePolicyPackPath(policyPath string) (string, error) {
+	return ResolvePolicyPack(p.PathRoot(), policyPath)
+}
+
+// ResolvePolicyPack is the folder of a policy pack, from a program's folder
+func ResolvePolicyPack(root, policyPath string) (string, error) {
 	var resolvedPath string
 	if filepath.IsAbs(policyPath) {
 		resolvedPath = policyPath
 	} else {
-		resolvedPath = filepath.Join(p.PathRoot(), policyPath)
+		resolvedPath = filepath.Join(root, policyPath)
 	}
 
 	if _, err := os.Stat(resolvedPath); err != nil {
@@ -138,15 +180,48 @@ func (p *Project) ResolvePolicyPackPath(policyPath string) (string, error) {
 }
 
 func (p *Project) Lock(command string) (*provider.Update, error) {
-	return provider.Lock(p.home, p.Version(), command, p.app.Name, p.app.Stage)
+	update, err := provider.Lock(p.home, p.Version(), command, p.app.Name, p.app.Stage)
+	if err != nil {
+		return nil, err
+	}
+	// The contract can refuse the stage only once it's locked, so another
+	// CLI can't change what it was refused for in between
+	if err := p.speaks().Locked(p); err != nil {
+		provider.Unlock(p.home, p.app.Name, p.app.Stage, update, provider.StageAfter{})
+		provider.RemoveUpdate(p.home, p.app.Name, p.app.Stage, update.ID)
+		return nil, err
+	}
+	p.locked = update
+	p.stageAfter = provider.StageAfter{}
+	return update, nil
 }
 
+// DropUpdate takes an update out of the stage's history: one whose lock was
+// taken for a run that didn't happen, like a move whose check failed.
+func (p *Project) DropUpdate(update *provider.Update) error {
+	return provider.RemoveUpdate(p.home, p.app.Name, p.app.Stage, update.ID)
+}
+
+// Unlock releases the lock this CLI took. On a stage that's on SST 5's
+// components after the run, the lock SST 4 reads stays as its tombstone.
 func (s *Project) Unlock() error {
-	return provider.Unlock(s.home, s.version, s.app.Name, s.app.Stage)
+	update := s.locked
+	s.locked = nil
+	return provider.Unlock(s.home, s.app.Name, s.app.Stage, update, s.stageAfter)
 }
 
-func (s *Project) ForceUnlock() error {
+// ForceUnlock takes out a lock a run left. It says whether the stage keeps a
+// tombstone at the lock SST 4 reads, which it leaves.
+func (s *Project) ForceUnlock() (bool, error) {
 	return provider.ForceUnlock(s.home, s.version, s.app.Name, s.app.Stage)
+}
+
+// PublishEngineEvent publishes each part of a Pulumi engine event that's set,
+// as the UI reads them
+func PublishEngineEvent(event events.EngineEvent) {
+	for _, field := range getNotNilFields(event) {
+		bus.Publish(field)
+	}
 }
 
 func getNotNilFields(v interface{}) []interface{} {

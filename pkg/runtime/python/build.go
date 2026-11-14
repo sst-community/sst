@@ -217,7 +217,7 @@ func ensureDockerfile(input *runtime.BuildInput, projectInfo *projectInfo) error
 		}
 	}
 
-	defaultDockerfile := filepath.Join(path.ResolvePlatformDir(input.CfgPath), "dist", "dockerfiles", "python.Dockerfile")
+	defaultDockerfile := filepath.Join(input.Platform(), "dist", "dockerfiles", "python.Dockerfile")
 	if _, err := os.Stat(defaultDockerfile); err != nil {
 		return fmt.Errorf("default Python Dockerfile not found at %s: %w", defaultDockerfile, err)
 	}

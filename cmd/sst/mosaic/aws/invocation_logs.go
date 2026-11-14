@@ -18,12 +18,12 @@ const invocationLogsKept = 100
 
 // fileLogger writes what each invocation of a function gets, prints and returns
 // to a file of its own, under the project's log folder.
-func fileLogger(p *project.Project) {
+func fileLogger(p project.Program) {
 	logInvocations(context.Background(), invocationLogsDir(p))
 }
 
 // invocationLogsDir is the folder of the invocation logs: .sst/log/lambda.
-func invocationLogsDir(p *project.Project) string {
+func invocationLogsDir(p project.Program) string {
 	return filepath.Join(p.PathLog(""), "lambda")
 }
 

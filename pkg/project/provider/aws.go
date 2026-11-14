@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
-	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -19,7 +18,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"github.com/aws/smithy-go"
 	"github.com/sst/sst/v3/internal/util"
 
 	ecrTypes "github.com/aws/aws-sdk-go-v2/service/ecr/types"
@@ -30,6 +28,7 @@ import (
 type AwsProvider struct {
 	config         aws.Config
 	profile        string
+	roles          []AwsRole
 	credentials    sync.Once
 	lock           sync.Mutex
 	bootstrapCache map[string]*AwsBootstrapData
@@ -61,14 +60,101 @@ func (a *AwsProvider) Env() (map[string]string, error) {
 	env["SST_AWS_SECRET_ACCESS_KEY"] = creds.SecretAccessKey
 	env["SST_AWS_SESSION_TOKEN"] = creds.SessionToken
 	env["SST_AWS_REGION"] = a.config.Region
+	if creds.CanExpire {
+		env[EnvAwsExpires] = creds.Expires.UTC().Format(time.RFC3339)
+	}
 	if a.profile != "" {
 		env["AWS_PROFILE"] = a.profile
+	}
+	// How the credentials were made, so SST's provider makes its own the same
+	// way, and they don't run out in a long deploy
+	if len(a.roles) > 0 {
+		roles, err := json.Marshal(a.roles)
+		if err != nil {
+			return nil, err
+		}
+		env[EnvAwsAssumeRoles] = string(roles)
 	}
 	return env, nil
 }
 
+// EnvAwsAssumeRoles is the environment variable with the roles the CLI
+// assumed, as JSON
+const EnvAwsAssumeRoles = "SST_AWS_ASSUME_ROLES"
+
+// EnvAwsExpires is the environment variable with when the credentials in
+// SST_AWS_* expire, for those that do
+const EnvAwsExpires = "SST_AWS_CREDENTIALS_EXPIRE"
+
+// AwsRole is a role assumed after the profile's credentials, from app()'s
+// providers.aws.assumeRoles.
+type AwsRole struct {
+	RoleArn     string `json:"roleArn"`
+	SessionName string `json:"sessionName,omitempty"`
+}
+
+// LoadAwsConfig is the AWS setup for a profile, a region and the roles to
+// assume in turn, with credentials that refresh themselves. The CLI makes a
+// stage's with it, and SST's provider makes its own the same way from what
+// the CLI gives it (Env).
+func LoadAwsConfig(ctx context.Context, profile, region string, roles []AwsRole) (aws.Config, error) {
+	cfg, err := config.LoadDefaultConfig(
+		ctx,
+		config.WithRetryMaxAttempts(10),
+		func(lo *config.LoadOptions) error {
+			// A profile that's named wins over keys in the environment
+			lo.SharedConfigProfile = profile
+			if region != "" {
+				lo.Region = region
+				lo.DefaultRegion = "us-east-1"
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		return aws.Config{}, err
+	}
+	for _, role := range roles {
+		// Each role is assumed with the credentials before it
+		cfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(cfg), role.RoleArn, func(options *stscreds.AssumeRoleOptions) {
+			if role.SessionName != "" {
+				options.RoleSessionName = role.SessionName
+			}
+		}))
+	}
+	if cfg.Region == "" {
+		cfg.Region = "us-east-1"
+	}
+	return cfg, nil
+}
+
+// awsRoles reads app()'s providers.aws.assumeRoles
+func awsRoles(args map[string]interface{}) []AwsRole {
+	roles := []AwsRole{}
+	list, _ := args["assumeRoles"].([]interface{})
+	for _, item := range list {
+		role, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		arn, _ := role["roleArn"].(string)
+		session, _ := role["sessionName"].(string)
+		roles = append(roles, AwsRole{RoleArn: arn, SessionName: session})
+	}
+	return roles
+}
+
 func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}) error {
-	ctx := context.Background()
+	if err := a.Load(app, stage, args); err != nil {
+		return err
+	}
+	_, err := a.Bootstrap(a.config.Region)
+	return err
+}
+
+// Load sets the provider up from an SST app's args and finds its credentials,
+// as Init does, without SST's bootstrap.
+func (a *AwsProvider) Load(app string, stage string, args map[string]interface{}) error {
 	if os.Getenv("SST_AWS_NO_PROFILE") != "" {
 		delete(args, "profile")
 	}
@@ -83,42 +169,41 @@ func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}
 		a.profile = value
 	}
 
-	cfg, err := config.LoadDefaultConfig(
-		ctx,
-		config.WithRetryMaxAttempts(10),
-		func(lo *config.LoadOptions) error {
-			lo.SharedConfigProfile = a.profile
-			if region, ok := args["region"].(string); ok && region != "" {
-				lo.Region = region
-				lo.DefaultRegion = "us-east-1"
-			}
-			return nil
-		},
-	)
+	region, _ := args["region"].(string)
+	if err := a.LoadFrom(a.profile, region, awsRoles(args)); err != nil {
+		return err
+	}
+	tags(app, stage, args)
+	if args["region"] == nil {
+		args["region"] = a.config.Region
+	}
+	return nil
+}
+
+// LoadFrom sets the provider up with the profile, region and roles given, as
+// they are, and finds its credentials, without SST's bootstrap: `sst dev` in a
+// Pulumi project sets it up as the stack's config sets up the program's
+// provider, and creates nothing of SST's in the account but the Event API its
+// stubs talk through.
+func (a *AwsProvider) LoadFrom(profile, region string, roles []AwsRole) error {
+	ctx := context.Background()
+	cfg, err := LoadAwsConfig(ctx, profile, region, roles)
 	if err != nil {
 		return err
 	}
-	if assumeRoles, ok := args["assumeRoles"].([]interface{}); ok {
-		for _, role := range assumeRoles {
-			if roleMap, ok := role.(map[string]interface{}); ok {
-				stsclient := sts.NewFromConfig(cfg)
-				cfg.Credentials = stscreds.NewAssumeRoleProvider(stsclient, roleMap["roleArn"].(string), func(aro *stscreds.AssumeRoleOptions) {
-					if sessionName, ok := roleMap["sessionName"].(string); ok {
-						aro.RoleSessionName = sessionName
-					}
-				})
-			}
-		}
-	}
-	_, err = cfg.Credentials.Retrieve(ctx)
-	if err != nil {
+	if _, err := cfg.Credentials.Retrieve(ctx); err != nil {
 		return err
 	}
-	if cfg.Region == "" {
-		cfg.Region = "us-east-1"
-	}
-	slog.Info("aws credentials found", "region", cfg.Region, "profile", a.profile)
+	slog.Info("aws credentials found", "region", cfg.Region, "profile", profile)
+	a.profile = profile
+	a.roles = roles
 	a.config = cfg
+	return nil
+}
+
+// tags gives every resource the provider creates the app's and the stage's
+// names, beside the app's own default tags.
+func tags(app, stage string, args map[string]interface{}) {
 	defaultTags, ok := args["defaultTags"].(map[string]interface{})
 	if !ok {
 		defaultTags = map[string]interface{}{}
@@ -131,14 +216,6 @@ func (a *AwsProvider) Init(app string, stage string, args map[string]interface{}
 	tags["sst:app"] = app
 	tags["sst:stage"] = stage
 	args["defaultTags"] = defaultTags
-	if args["region"] == nil {
-		args["region"] = cfg.Region
-	}
-	_, err = a.Bootstrap(cfg.Region)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (a *AwsProvider) Config() aws.Config {
@@ -469,435 +546,4 @@ var steps = []bootstrapStep{
 	func(ctx context.Context, cfg aws.Config, data *AwsBootstrapData) error {
 		return nil
 	},
-}
-
-type AwsHome struct {
-	provider *AwsProvider
-	compress bool
-}
-
-func NewAwsHome(provider *AwsProvider, compress bool) *AwsHome {
-	return &AwsHome{
-		provider: provider,
-		compress: compress,
-	}
-}
-
-func (a *AwsHome) pathForData(key, app, stage string) string {
-	return path.Join(key, app, fmt.Sprintf("%v.json", stage))
-}
-
-func (a *AwsHome) pathForPassphrase(app string, stage string) string {
-	return "/" + strings.Join([]string{"sst", "passphrase", app, stage}, "/")
-}
-
-func (a *AwsHome) getData(key, app, stage string) (io.Reader, error) {
-	bootstrap, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return nil, err
-	}
-	s3Client := s3.NewFromConfig(a.provider.config)
-
-	result, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: aws.String(bootstrap.State),
-		Key:    aws.String(a.pathForData(key, app, stage)),
-	})
-	if err != nil {
-		var apiErr smithy.APIError
-		if errors.As(err, &apiErr) {
-			if apiErr.ErrorCode() == "NoSuchBucket" {
-				return nil, ErrBucketMissing
-			}
-		}
-		var nsk *s3types.NoSuchKey
-		if errors.As(err, &nsk) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return gzipDecode(result.Body)
-}
-
-func (a *AwsHome) putData(key, app, stage string, data io.Reader) error {
-	bootstrap, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return err
-	}
-	s3Client := s3.NewFromConfig(a.provider.config)
-
-	var contentEncoding *string
-	if a.compress {
-		data, err = gzipEncode(data)
-		if err != nil {
-			return err
-		}
-		contentEncoding = aws.String("gzip")
-	}
-
-	_, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket:          aws.String(bootstrap.State),
-		Key:             aws.String(a.pathForData(key, app, stage)),
-		Body:            data,
-		ContentType:     aws.String("application/json"),
-		ContentEncoding: contentEncoding,
-	})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (a *AwsHome) removeData(key, app, stage string) error {
-	bootstrap, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return err
-	}
-	s3Client := s3.NewFromConfig(a.provider.config)
-
-	_, err = s3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
-		Bucket: aws.String(bootstrap.State),
-		Key:    aws.String(a.pathForData(key, app, stage)),
-	})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (a *AwsHome) cleanup(key, app, stage string) error {
-	bootstrap, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return err
-	}
-	s3Client := s3.NewFromConfig(a.provider.config)
-
-	folderPrefix := path.Join(key, app, stage) + "/"
-	slog.Info("cleaning up folder", "bucket", bootstrap.State, "prefix", folderPrefix)
-
-	var continuationToken *string
-	for {
-		listObjectsInput := &s3.ListObjectsV2Input{
-			Bucket: aws.String(bootstrap.State),
-			Prefix: aws.String(folderPrefix),
-		}
-		if continuationToken != nil {
-			listObjectsInput.ContinuationToken = continuationToken
-		}
-
-		listObjectsOutput, err := s3Client.ListObjectsV2(context.TODO(), listObjectsInput)
-		if err != nil {
-			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) {
-				if apiErr.ErrorCode() == "NoSuchBucket" {
-					return ErrBucketMissing
-				}
-			}
-			return err
-		}
-
-		if len(listObjectsOutput.Contents) == 0 {
-			break
-		}
-
-		objectIdentifiers := make([]s3types.ObjectIdentifier, len(listObjectsOutput.Contents))
-		for i, object := range listObjectsOutput.Contents {
-			objectIdentifiers[i] = s3types.ObjectIdentifier{Key: object.Key}
-		}
-
-		_, err = s3Client.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
-			Bucket: aws.String(bootstrap.State),
-			Delete: &s3types.Delete{Objects: objectIdentifiers},
-		})
-		if err != nil {
-			return err
-		}
-
-		if listObjectsOutput.IsTruncated == nil || !*listObjectsOutput.IsTruncated {
-			break
-		}
-		continuationToken = listObjectsOutput.NextContinuationToken
-	}
-
-	slog.Info("folder cleanup complete", "prefix", folderPrefix)
-	return nil
-}
-
-func (a *AwsHome) prune(app, stage string, retention int) error {
-	bootstrap, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return err
-	}
-	s3Client := s3.NewFromConfig(a.provider.config)
-	prefix := path.Join("snapshot", app, stage) + "/"
-
-	var keys []string
-	var continuationToken *string
-	for {
-		out, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-			Bucket:            aws.String(bootstrap.State),
-			Prefix:            aws.String(prefix),
-			ContinuationToken: continuationToken,
-		})
-		if err != nil {
-			return err
-		}
-		for _, object := range out.Contents {
-			keys = append(keys, aws.ToString(object.Key))
-		}
-		if out.IsTruncated == nil || !*out.IsTruncated {
-			break
-		}
-		continuationToken = out.NextContinuationToken
-	}
-
-	for _, updateID := range staleUpdateIDs(keys, retention) {
-		for _, kind := range historyKinds {
-			key := a.pathForData(kind, app, path.Join(stage, updateID))
-			if err := a.purgePrefix(s3Client, bootstrap.State, key); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Completed snapshots are the retained history, so intermediate versions of
-	// the mutable current-state object are redundant once the snapshot is stored.
-	if err := a.pruneNoncurrentVersions(s3Client, bootstrap.State, a.pathForData("app", app, stage)); err != nil {
-		return err
-	}
-	// Preserve the active lock while removing versions left by prior updates.
-	return a.pruneNoncurrentVersions(s3Client, bootstrap.State, a.pathForData("lock", app, stage))
-}
-
-func (a *AwsHome) pruneNoncurrentVersions(s3Client *s3.Client, bucket, key string) error {
-	var keyMarker, versionMarker *string
-	var ids []s3types.ObjectIdentifier
-	for {
-		out, err := s3Client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
-			Bucket:          aws.String(bucket),
-			Prefix:          aws.String(key),
-			KeyMarker:       keyMarker,
-			VersionIdMarker: versionMarker,
-		})
-		if err != nil {
-			return err
-		}
-
-		ids = append(ids, noncurrentVersionIdentifiers(out, key)...)
-
-		if out.IsTruncated == nil || !*out.IsTruncated {
-			break
-		}
-		keyMarker = out.NextKeyMarker
-		versionMarker = out.NextVersionIdMarker
-	}
-	return a.deleteObjectVersions(s3Client, bucket, ids)
-}
-
-func noncurrentVersionIdentifiers(out *s3.ListObjectVersionsOutput, key string) []s3types.ObjectIdentifier {
-	ids := make([]s3types.ObjectIdentifier, 0, len(out.Versions)+len(out.DeleteMarkers))
-	for _, version := range out.Versions {
-		if aws.ToString(version.Key) == key && !aws.ToBool(version.IsLatest) {
-			ids = append(ids, s3types.ObjectIdentifier{Key: version.Key, VersionId: version.VersionId})
-		}
-	}
-	for _, marker := range out.DeleteMarkers {
-		if aws.ToString(marker.Key) == key && !aws.ToBool(marker.IsLatest) {
-			ids = append(ids, s3types.ObjectIdentifier{Key: marker.Key, VersionId: marker.VersionId})
-		}
-	}
-	return ids
-}
-
-func (a *AwsHome) deleteObjectVersions(s3Client *s3.Client, bucket string, ids []s3types.ObjectIdentifier) error {
-	for i := 0; i < len(ids); i += 1000 {
-		end := i + 1000
-		if end > len(ids) {
-			end = len(ids)
-		}
-		out, err := s3Client.DeleteObjects(context.TODO(), &s3.DeleteObjectsInput{
-			Bucket: aws.String(bucket),
-			Delete: &s3types.Delete{Objects: ids[i:end], Quiet: aws.Bool(true)},
-		})
-		if err != nil {
-			return err
-		}
-		if len(out.Errors) > 0 {
-			item := out.Errors[0]
-			return fmt.Errorf("failed to delete state object %s version %s: %s", aws.ToString(item.Key), aws.ToString(item.VersionId), aws.ToString(item.Message))
-		}
-	}
-	return nil
-}
-
-func (a *AwsHome) purge(app, stage string) error {
-	bootstrap, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return err
-	}
-	s3Client := s3.NewFromConfig(a.provider.config)
-
-	prefixes := []string{
-		a.pathForData("app", app, stage),
-		a.pathForData("secret", app, stage),
-		path.Join("update", app, stage) + "/",
-		path.Join("summary", app, stage) + "/",
-		path.Join("eventlog", app, stage) + "/",
-		path.Join("snapshot", app, stage) + "/",
-	}
-	for _, prefix := range prefixes {
-		if err := a.purgePrefix(s3Client, bootstrap.State, prefix); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (a *AwsHome) purgePrefix(s3Client *s3.Client, bucket, prefix string) error {
-	slog.Info("purging prefix", "bucket", bucket, "prefix", prefix)
-
-	var keyMarker, versionMarker *string
-	for {
-		out, err := s3Client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
-			Bucket:          aws.String(bucket),
-			Prefix:          aws.String(prefix),
-			KeyMarker:       keyMarker,
-			VersionIdMarker: versionMarker,
-		})
-		if err != nil {
-			var apiErr smithy.APIError
-			if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchBucket" {
-				return nil
-			}
-			return err
-		}
-
-		ids := make([]s3types.ObjectIdentifier, 0, len(out.Versions)+len(out.DeleteMarkers))
-		for _, v := range out.Versions {
-			ids = append(ids, s3types.ObjectIdentifier{Key: v.Key, VersionId: v.VersionId})
-		}
-		for _, dm := range out.DeleteMarkers {
-			ids = append(ids, s3types.ObjectIdentifier{Key: dm.Key, VersionId: dm.VersionId})
-		}
-
-		if err := a.deleteObjectVersions(s3Client, bucket, ids); err != nil {
-			return err
-		}
-
-		if out.IsTruncated == nil || !*out.IsTruncated {
-			break
-		}
-		keyMarker = out.NextKeyMarker
-		versionMarker = out.NextVersionIdMarker
-	}
-	return nil
-}
-
-func (a *AwsHome) getPassphrase(app string, stage string) (string, error) {
-	ssmClient := ssm.NewFromConfig(a.provider.config)
-
-	result, err := ssmClient.GetParameter(context.TODO(), &ssm.GetParameterInput{
-		Name:           aws.String(a.pathForPassphrase(app, stage)),
-		WithDecryption: aws.Bool(true),
-	})
-	if err != nil {
-		pnf := &ssmTypes.ParameterNotFound{}
-		if errors.As(err, &pnf) {
-			return "", nil
-		}
-
-		return "", err
-	}
-	return *result.Parameter.Value, nil
-}
-
-func (a *AwsHome) removePassphrase(app, stage string) error {
-	ssmClient := ssm.NewFromConfig(a.provider.config)
-
-	_, err := ssmClient.DeleteParameter(context.TODO(), &ssm.DeleteParameterInput{
-		Name: aws.String(a.pathForPassphrase(app, stage)),
-	})
-	if err != nil {
-		var pnf *ssmTypes.ParameterNotFound
-		if errors.As(err, &pnf) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (a *AwsHome) setPassphrase(app, stage, passphrase string) error {
-	ssmClient := ssm.NewFromConfig(a.provider.config)
-
-	_, err := ssmClient.PutParameter(context.TODO(), &ssm.PutParameterInput{
-		Name:        aws.String(a.pathForPassphrase(app, stage)),
-		Type:        ssmTypes.ParameterTypeSecureString,
-		Value:       aws.String(passphrase),
-		Description: aws.String("DO NOT DELETE STATE WILL BECOME UNRECOVERABLE"),
-		Overwrite:   aws.Bool(false),
-	})
-	return err
-}
-
-func (a *AwsHome) listStages(app string) ([]string, error) {
-	bootstrap, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return nil, err
-	}
-	s3Client := s3.NewFromConfig(a.provider.config)
-
-	data, err := s3Client.ListObjects(context.TODO(), &s3.ListObjectsInput{
-		Bucket: aws.String(bootstrap.State),
-		Prefix: aws.String(path.Join("app", app)),
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	stages := []string{}
-
-	for _, obj := range data.Contents {
-		filename := path.Base(*obj.Key)
-		if strings.HasSuffix(filename, ".json") {
-			stageName := strings.TrimSuffix(filename, ".json")
-			if hasResources(a, app, stageName) {
-				stages = append(stages, stageName)
-			}
-		}
-	}
-
-	return stages, nil
-}
-
-func (c *AwsHome) info() (util.KeyValuePairs[string], error) {
-	caller := sts.NewFromConfig(c.provider.config)
-	identity, err := caller.GetCallerIdentity(context.Background(), &sts.GetCallerIdentityInput{})
-	if err != nil {
-		return nil, err
-	}
-
-	lines := util.KeyValuePairs[string]{
-		{Key: "Provider", Value: "AWS"},
-		{Key: "Region", Value: c.provider.config.Region},
-		{Key: "Account", Value: *identity.Account},
-	}
-
-	if len(c.provider.profile) != 0 {
-		lines = append(lines, util.KeyValuePair[string]{
-			Key: "Profile", Value: c.provider.profile,
-		})
-	}
-
-	return lines, nil
-}
-
-func (a *AwsHome) Bootstrap() error {
-	_, err := a.provider.Bootstrap(a.provider.config.Region)
-	if err != nil {
-		return err
-	}
-	return err
 }

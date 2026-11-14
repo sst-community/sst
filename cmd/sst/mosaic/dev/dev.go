@@ -3,13 +3,21 @@ package dev
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
+	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/server"
@@ -21,7 +29,7 @@ type Message struct {
 	Event json.RawMessage `json:"event"`
 }
 
-func Start(ctx context.Context, p *project.Project, server *server.Server) error {
+func Start(ctx context.Context, p project.Program, server *server.Server) error {
 	var complete *project.CompleteEvent
 	var wg errgroup.Group
 
@@ -41,7 +49,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		}
 	})
 
-	server.Mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("content-type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
 		log.Info("subscribed", "addr", r.RemoteAddr)
@@ -75,18 +83,21 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		}
 	})
 
-	server.Mux.HandleFunc(("/api/deploy"), func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("POST /api/deploy", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("deploy requested")
 		bus.Publish(&deployer.DeployRequestedEvent{})
 	})
 
-	server.Mux.HandleFunc("/api/env", func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("GET /api/env", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		name := r.URL.Query().Get("name")
 		resolved := complete
-		latest, err := p.GetCompleted(ctx)
-		if err == nil && (resolved == nil || resolved.Old) {
-			resolved = latest
+		// The state is read only when the last deploy's isn't known, as a
+		// read can take a while
+		if resolved == nil || resolved.Old {
+			if latest, err := p.GetCompleted(ctx); err == nil {
+				resolved = latest
+			}
 		}
 		if resolved == nil {
 			http.Error(w, "dev state not ready", http.StatusServiceUnavailable)
@@ -105,6 +116,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 				body, err := json.Marshal(map[string]interface{}{
 					"env":     env,
 					"command": d.Command,
+					"awsOnly": d.Aws != nil && d.Aws.Only,
 				})
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -121,7 +133,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 		return
 	})
 
-	server.Mux.HandleFunc("/api/completed", func(w http.ResponseWriter, r *http.Request) {
+	server.Mux.HandleFunc("GET /api/completed", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("content-type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(complete)
@@ -133,12 +145,7 @@ func Start(ctx context.Context, p *project.Project, server *server.Server) error
 
 func Stream(ctx context.Context, url string, types ...interface{}) (chan any, error) {
 	out := make(chan any)
-	req, err := http.NewRequestWithContext(ctx, "GET", url+"/stream", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := send(ctx, "GET", url, "/stream")
 	if err != nil {
 		return nil, err
 	}
@@ -187,18 +194,34 @@ func Stream(ctx context.Context, url string, types ...interface{}) (chan any, er
 type EnvResponse struct {
 	Env     map[string]string `json:"env"`
 	Command string            `json:"command"`
+	// AwsOnly is whether the command runs with its role's credentials alone
+	// (project.DevAws)
+	AwsOnly bool `json:"awsOnly"`
+}
+
+// Inherit is what a dev command keeps of the CLI's environment: all of it,
+// but the AWS profile when it runs with its role's credentials alone, as the
+// AWS SDKs would take the profile over them
+func (r *EnvResponse) Inherit(environ []string) []string {
+	if !r.AwsOnly {
+		return environ
+	}
+	return slices.DeleteFunc(slices.Clone(environ), func(entry string) bool {
+		return strings.HasPrefix(entry, "AWS_PROFILE=") || strings.HasPrefix(entry, "AWS_DEFAULT_PROFILE=")
+	})
 }
 
 func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url+"/api/env?"+query, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := send(ctx, "GET", url, "/api/env?"+query)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// what sst dev said went wrong, like a role it couldn't take
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, util.NewReadableError(nil, strings.TrimSpace(string(body)))
+	}
 	var result EnvResponse
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {
@@ -207,24 +230,35 @@ func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
 	return &result, nil
 }
 
+// Deploy asks `sst dev` to deploy again. It tries for a few seconds: the UI
+// can ask as `sst dev` starts, before it takes the request.
 func Deploy(ctx context.Context, url string) error {
-	req, err := http.NewRequestWithContext(ctx, "POST", url+"/api/deploy", nil)
-	if err != nil {
-		return err
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		if attempt > 0 {
+			slog.Warn("asking sst dev to deploy again", "err", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+		var resp *http.Response
+		resp, err = send(ctx, "POST", url, "/api/deploy")
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		err = fmt.Errorf("POST /api/deploy: %s", resp.Status)
 	}
-	_, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func Completed(ctx context.Context, url string) (*project.CompleteEvent, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url+"/api/completed", nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := send(ctx, "GET", url, "/api/completed")
 	if err != nil {
 		return nil, err
 	}
@@ -235,4 +269,21 @@ func Completed(ctx context.Context, url string) (*project.CompleteEvent, error) 
 		return nil, err
 	}
 	return &result, nil
+}
+
+// send makes a request of `sst dev` at server, its URL with the token. An
+// error leaves out the URL, as errors are logged.
+func send(ctx context.Context, method, server, path string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, server+path, nil)
+	if err == nil {
+		var resp *http.Response
+		if resp, err = http.DefaultClient.Do(req); err == nil {
+			return resp, nil
+		}
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return nil, fmt.Errorf("%s %s: %w", method, path, err)
 }

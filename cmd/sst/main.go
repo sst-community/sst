@@ -23,10 +23,19 @@ import (
 	"github.com/sst/sst/v3/pkg/global"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/provider"
 	"github.com/sst/sst/v3/pkg/telemetry"
+
+	// SST 4's components, which a CLI built with SST 4's platform runs
+	_ "github.com/sst/sst/v3/pkg/sst4"
 )
 
 var version = "dev"
+
+// diffOnly is set to "true" with -ldflags for a pre-release that only runs
+// `sst diff`: it checks a new core against an app's real state, and can't
+// change anything.
+var diffOnly = ""
 
 func getAliasName(entry *project.ProviderLockEntry) string {
 	name := entry.Name
@@ -44,10 +53,21 @@ func getAliasName(entry *project.ProviderLockEntry) string {
 }
 
 func main() {
+	// Pulumi runs the binary as the provider of SST's own resources, by the
+	// plugin's name the CLI links it as (pkg/project). os.Args[0] is that name
+	// whether it's a link or a copy; os.Executable may be the link's target.
+	if plugin := strings.TrimSuffix(strings.ToLower(filepath.Base(os.Args[0])), ".exe"); plugin == provider.Executable {
+		if err := provider.Main(version); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	// check if node_modules/.bin/sst exists
 	nodeModulesBinPath := filepath.Join("node_modules", ".bin", "sst")
 	binary, _ := os.Executable()
-	if _, err := os.Stat(nodeModulesBinPath); err == nil && !strings.Contains(binary, "node_modules") && os.Getenv("SST_SKIP_LOCAL") != "true" && version != "dev" {
+	// A diff-only build never hands off: the point of it is to run its own core.
+	if _, err := os.Stat(nodeModulesBinPath); err == nil && !strings.Contains(binary, "node_modules") && os.Getenv("SST_SKIP_LOCAL") != "true" && version != "dev" && diffOnly != "true" {
 		// forward command to node_modules/.bin/sst
 		fmt.Fprintln(os.Stderr, ui.TEXT_WARNING_BOLD.Render("Warning: ")+"You are using a global installation of SST but you also have a local installation specified in your package.json. The local installation will be used but you should typically run it through your package manager.")
 		cmd := process.Command(nodeModulesBinPath, os.Args[1:]...)
@@ -114,16 +134,25 @@ func run() error {
 		slog.Info("interrupted")
 		cancel()
 	}()
+	// The commands the platform's components have
+	root.Children = cli.Commands(root.Children, cli.PlatformContract())
 	c, err := cli.New(ctx, cancel, root, version)
 	if err != nil {
 		return err
+	}
+	if diffOnly == "true" {
+		if err := checkDiffOnly(c.Path(), c.Bool("help")); err != nil {
+			return err
+		}
 	}
 	_, err = user.Current()
 	if err != nil {
 		return err
 	}
 
-	if !flag.SST_SKIP_DEPENDENCY_CHECK {
+	// a plain Pulumi program runs the pulumi on the PATH, and uses neither,
+	// and the build server's output is its address alone
+	if !flag.SST_SKIP_DEPENDENCY_CHECK && !c.IsPulumiProgram() && !runsBuildServer(c) {
 		spin := spinner.New(spinner.CharSets[14], 100*time.Millisecond)
 		spin.Color("cyan")
 		spin.Suffix = "  Download dependencies..."
@@ -148,6 +177,11 @@ func run() error {
 		spin.Stop()
 	}
 	return c.Run()
+}
+
+func runsBuildServer(c *cli.Cli) bool {
+	path := c.Path()
+	return len(path) > 1 && path[1].Name == CmdBuildServer.Name
 }
 
 var root = &cli.Command{
@@ -513,6 +547,7 @@ var root = &cli.Command{
 		},
 		CmdDeploy,
 		CmdDiff,
+		CmdMigrate,
 		{
 			Name: "add",
 			Description: cli.Description{
@@ -535,7 +570,7 @@ var root = &cli.Command{
 					"  providers: {",
 					"    aws: {",
 					"      package: \"@pulumi/aws\",",
-					"      version: \"6.27.0\"",
+					"      version: \"7.50.0\"",
 					"    }",
 					"  }",
 					"}",
@@ -547,14 +582,14 @@ var root = &cli.Command{
 					"Running `sst add aws` above is the same as manually adding the provider to your config and running `sst install`.",
 					":::",
 					"",
-					"By default, the latest version of the provider is installed. If you want to use a specific version, you can change it in your config.",
+					"By default, the latest version of the provider is installed. For a provider SST's own components use, like `aws`, it's the latest version in the major version they're built for. If you want to use a specific version, you can change it in your config.",
 					"",
 					"```ts title=\"sst.config.ts\"",
 					"{",
 					"  providers: {",
 					"    aws: {",
 					"      package: \"@pulumi/aws\",",
-					"      version: \"6.26.0\"",
+					"      version: \"7.49.0\"",
 					"    }",
 					"  }",
 					"}",
@@ -616,7 +651,7 @@ var root = &cli.Command{
 						return err
 					}
 				}
-				entry, err := project.FindProvider(pkg, "latest", pkg)
+				entry, err := project.FindProviderToAdd(pkg)
 				if err != nil {
 					return util.NewReadableError(err, "Could not find provider "+pkg)
 				}
@@ -864,6 +899,8 @@ var root = &cli.Command{
 					"However, if something unexpectedly kills the `sst deploy` process, or if you manage to run `sst deploy` concurrently, the lock might not be released.",
 					"",
 					"This should not usually happen, but it can prevent you from deploying. You can run `sst unlock` to release the lock.",
+					"",
+					"A stage on SST 5's components also keeps a lock where SST 4 looks for one, so that SST 4 can't deploy, remove or refresh it. `sst unlock` leaves that one. Don't remove it with SST 4's `sst unlock`: SST 4 would then deploy over what SST 5 created.",
 				}, "\n"),
 			},
 			Run: func(c *cli.Cli) error {
@@ -873,17 +910,21 @@ var root = &cli.Command{
 				}
 				defer p.Cleanup()
 
-				err = p.ForceUnlock()
+				tombstone, err := p.ForceUnlock()
 				if err != nil {
 					return err
 				}
 				color.New(color.FgGreen, color.Bold).Print("✓ ")
 				color.New(color.FgWhite).Print(" Unlocked the app state for: ")
 				color.New(color.FgWhite, color.Bold).Println(p.App().Name, "/", p.App().Stage)
+				if tombstone {
+					color.New(color.FgWhite).Println("   The lock SST 4 looks for stays, so SST 4 can't deploy this stage. Don't remove it with SST 4's `sst unlock`.")
+				}
 				return nil
 			},
 		},
 		CmdVersion,
+		CmdTarget,
 		{
 			Name: "upgrade",
 			Description: cli.Description{
@@ -894,6 +935,8 @@ var root = &cli.Command{
 					"```bash frame=\"none\"",
 					"sst upgrade 0.10",
 					"```",
+					"",
+					"Once a day, the commands that run your app, like `sst deploy`, `sst diff` and `sst dev`, look for a newer version in your major version, and say when there is one. Nothing is looked for in CI, or when `SST_SKIP_UPDATE_CHECK=1` is set.",
 				}, "\n"),
 			},
 			Args: cli.ArgumentList{
@@ -962,6 +1005,8 @@ var root = &cli.Command{
 				return nil
 			},
 		},
+		CmdBuildServer,
+		CmdEject,
 		{
 			Name:   "print-and-not-quit",
 			Hidden: true,
@@ -1040,8 +1085,20 @@ var root = &cli.Command{
 			Run: CmdRefresh,
 		},
 		CmdState,
-		CmdCert,
 		CmdTunnel,
 		CmdDiagnostic,
 	},
+}
+
+// checkDiffOnly refuses every command but `sst diff`, `sst version` and help
+// in a diff-only build.
+func checkDiffOnly(path cli.CommandPath, help bool) error {
+	if help || len(path) < 2 {
+		return nil
+	}
+	switch path[1].Name {
+	case "diff", "version":
+		return nil
+	}
+	return util.NewReadableError(nil, "This build of SST only runs `sst diff`. It's a pre-release for checking the 5.0 core against your app's state: it doesn't deploy, and it doesn't write your app's state. Use your usual `sst` for `sst "+path[1].Name+"`.")
 }

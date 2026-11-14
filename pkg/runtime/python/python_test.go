@@ -14,9 +14,9 @@ import (
 // TestWorkspacePackageIsolation verifies that workspace packages get only their
 // own dependencies, not dependencies from other packages.
 func TestWorkspacePackageIsolation(t *testing.T) {
-	exampleDir := filepath.Join("..", "..", "..", "examples", "python-modern-uv")
+	exampleDir := filepath.Join("testdata", "python-modern-uv")
 	if _, err := os.Stat(exampleDir); os.IsNotExist(err) {
-		t.Skip("python-modern-uv example not found, skipping")
+		t.Skip("testdata/python-modern-uv not found, skipping")
 	}
 
 	t.Run("api package discovers its own packages", func(t *testing.T) {
@@ -132,13 +132,13 @@ func TestDeploymentWorkflow(t *testing.T) {
 	}{
 		{
 			name:        "flat-layout",
-			examplePath: "examples/python-layouts/flat-layout",
+			examplePath: "pkg/runtime/python/testdata/python-layouts/flat-layout",
 			handler:     "handler.lambda_handler",
 			runtime:     "python3.11",
 		},
 		{
 			name:        "monorepo-layout-worker",
-			examplePath: "examples/python-layouts/monorepo-layout",
+			examplePath: "pkg/runtime/python/testdata/python-layouts/monorepo-layout",
 			handler:     "services/worker/handler.main",
 			runtime:     "python3.12",
 		},
