@@ -28,8 +28,18 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
 6. **Install**: SST 4's `config.d.ts` (`./src/global.d.ts`, `./src/config`), no `.sst/tsconfig.json`, and no refusal of a provider's other major version.
 7. Everything else needed nothing: the home, state and locks, function builds, the bridge, the transports, the server.
 
+## Before the engine goes into `main`
+
+- **`main`'s Go changes since the branch's base have to come in first.** The branch's merge base with `main` is `7c8a2d529`. Since then `main` has three commits that change the engine: #262 (`5dc360c7c`, the runtime checks a handler's path in `sst dev`'s deploy), #267 (`8818b87e9`, partly Go: `sst dev` says what's wrong with an empty or badly quoted command, where it panicked) and #269 (`8647face8`, `pkg/js` doesn't put the provider globals in files under `node_modules`). Together that's 14 Go files and about 277 lines. Unless `main` is merged into this branch (or into `v5`, then into this branch) before the engine replaces `main`'s, those fixes are lost. Doing the merge is the maintainer's call.
+- **A release note for #267** when it ships: a `Service` no longer makes a `DevCommand` for a container with no `dev.command`. So the next deploy of an app with such a container deletes those `DevCommand` components. They're components only, with nothing in the cloud.
+
 ## Known differences of SST 4's line on this engine
 
+- **`sst dev`'s stub isn't byte for byte 4.25.0's.**
+  - 4.25.0's release stub was built with Go 1.26.10 on CI's Linux, and can't be reproduced on a Mac, even from the `v4.25.0` tag with the same Go.
+  - With the same Go and dependencies, the engine's stub differs from one built from 4.25.0's source too: the bridge's packages changed on `v5` (`cmd/sst/mosaic/aws/bridge`: its connection, and how a closed channel is handled).
+  - Deployed stages are untouched. A stage run with `sst dev` gets a new stub object, and its functions pointed at it, on its first `sst dev` with a release built on this engine, as happens with any 4.x release whose CI Go or bridge code changes.
+  - Making it the same would mean keeping the stub's packages as `main`'s, which isn't worth it.
 - **`sst cert` and the Console's local connection** are gone. The 5.0 rewrite removed them, and they aren't brought back for SST 4. They're the CLI's only, and change nothing an app deploys. The maintainer was told on 2026-11-13; bringing them back would be work of its own.
 
 ## Checks
@@ -50,5 +60,6 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
 | --- | --- |
 | Plan | Started 2026-11-13 |
 | A. The contract, `pkg/sst4` and the manifest | Done 2026-11-13, both builds' Go suites passing; reviewed and approved, with one change (done in B) |
-| B. Shared resources' guard, each line's commands | Done 2026-11-13, both builds' Go suites passing; for review |
-| C. The SST 4 CLI for the lab | Built 2026-11-13; its commands are `main`'s but `cert`; the lab is the other session's |
+| B. Shared resources' guard, each line's commands | Done 2026-11-13, both builds' Go suites passing, reviewed and approved. Committed with A (`4490a44f4`, plans `65b2f6286`) |
+| C. The SST 4 CLI for the lab | Built 2026-11-13; its commands are `main`'s but `cert`. The lab passed on four stages, run by the other session against 4.25.0, and is cleaned up |
+| Into `main` | Waits on `main`'s Go changes being merged in first ([above](#before-the-engine-goes-into-main)), and on the maintainer |

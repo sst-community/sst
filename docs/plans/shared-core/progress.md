@@ -13,6 +13,24 @@ The log, newest first. The plan is [plan.md](plan.md).
   - New files under `cmd/sst` are ignored by `.gitignore` (`sst`), so they're added with `-f`. A copy of the changes that lists untracked files misses them, as the SST 4 copy did at checkpoint A: its `cmd/sst` contract test hadn't run there until now.
   - `tcell-term`'s `TestAnywhere` fails under `-race` at `v5-thin-layer`'s tip too, before any of this: a race of its own.
 
+## 2026-11-13: the lab, SST 4.25.0 against the engine's SST 4 CLI
+
+The other session ran it, as it did for the POC. SST 4.25.0 deployed each stage first. Then came 4.25.0's own diff, the engine's diff and deploy, and 4.25.0's diff after.
+
+- **Serverless**: no changes in any of the three diffs, and the engine's deploy changed nothing.
+- **Websites**: the same 22 changes in all three, the server-rendered sites' usual rebuilds, and the engine's deploy changed only those.
+- **Cloudflare with its sites**: the same 26 changes in all three, which are 4.25.0's own settling on a second deploy and the sites' rebuilds.
+- **Containers**: these differed, but not because of the engine. The SST 4 copy had `main`'s platform at `8818b87e9`, where #267 stops a `Service` making a `DevCommand` for a container with no `dev.command`. So the engine deleted two that 4.25.0 keeps. The same engine with 4.25.0's own platform (and the contract-0 manifest) diffed as 4.25.0 does, and 4.25.0's diff after its deploy had no changes.
+- **Everything else**: every route, worker, service and data store answered as under SST 4. `sst dev` ran on the serverless and Cloudflare stages, without the POC's crash. The engine removed every stage, including SST 4's 28 resources the RPC serves on the websites' stage (25 through the shared ones). Every lock was released.
+- **Findings for the plan**:
+  - `main`'s Go changes since the branch's base have to come in before the engine replaces `main`'s ([plan](plan.md#before-the-engine-goes-into-main)).
+  - #267 needs a release note.
+  - The dev stub isn't byte for byte 4.25.0's, and the POC's lab hadn't shown that: its `sst dev` used the `.sst/platform` 4.25.0 left, as both CLIs were labelled 4.25.0. It's recorded under [known differences](plan.md#known-differences-of-sst-4s-line-on-this-engine).
+- **Seen once**:
+  - 4.25.0's own first deploy can exit 0 while its log says "✕ Failed" when several stages start at once, which is 4.25.0's own behaviour.
+  - One `sst dev` with the engine stopped about 2 ms after starting Pulumi, exited 0 and left an empty log. It didn't happen again, and its cause wasn't found.
+- Everything the lab made is removed and cleaned up.
+
 ## 2026-11-13: checkpoint C, the SST 4 CLI for the lab
 
 - Built from the SST 4 copy as 4.25.0, labelled `sst-community-core4` (`sst version` prints `sst 4.25.0 (sst-community-core4)`).
