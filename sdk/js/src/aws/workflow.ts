@@ -1,4 +1,10 @@
 import * as durable from "@aws/durable-execution-sdk-js";
+import type {
+  SQSBatchItemFailure,
+  SQSBatchResponse,
+  SQSEvent,
+  SQSRecord,
+} from "aws-lambda";
 import { awsFetch, type AwsOptions } from "./client.js";
 
 /**
@@ -271,6 +277,128 @@ export namespace workflow {
       arn: response.headers.get("X-Amz-Durable-Execution-Arn") ?? undefined,
       statusCode: response.status,
       version: response.headers.get("X-Amz-Executed-Version") ?? undefined,
+    };
+  }
+
+  /**
+   * A queue message, as `dispatcher()` passes it to a workflow.
+   */
+  export interface QueueMessage<TBody = unknown> {
+    /**
+     * The message's `MessageGroupId`. On a standard queue, SQS uses it as the tenant
+     * for [fair queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fair-queues.html).
+     */
+    tenant?: string;
+    /**
+     * The message body, parsed as JSON. A body that isn't JSON is passed as a string.
+     */
+    body: TBody;
+  }
+
+  export interface DispatcherInput<
+    TBody = unknown,
+    TPayload = QueueMessage<TBody>,
+  > {
+    /**
+     * The name of the execution to start for a message.
+     *
+     * Derive it from what identifies the job, such as a job ID in the body, so that a
+     * message delivered twice starts the execution only once. Lambda starts no second
+     * execution with a name that's already used, and it doesn't check that the payload
+     * is the same. So two different jobs with the same name run once, with the first
+     * one's payload.
+     *
+     * A name is 1 to 64 letters, digits, `-` and `_`. A message whose name Lambda
+     * refuses is retried, and then goes to the queue's dead-letter queue.
+     */
+    name: (message: QueueMessage<TBody>, record: SQSRecord) => string;
+    /**
+     * The payload to start the execution with.
+     *
+     * @default The `QueueMessage`.
+     */
+    payload?: (message: QueueMessage<TBody>, record: SQSRecord) => TPayload;
+  }
+
+  /**
+   * Create a queue subscriber that starts a workflow execution for each message.
+   *
+   * Use it for a workflow that may run longer than a queue can wait for, which is 15
+   * minutes. The subscriber is done with a message once the execution has started, so
+   * it doesn't hold the message while the workflow runs.
+   *
+   * It returns the messages it couldn't start as `batchItemFailures`, so subscribe it
+   * with `batch.partialResponses` turned on. Otherwise SQS deletes the whole batch,
+   * including the messages that failed.
+   *
+   * @example
+   * ```ts title="sst.config.ts"
+   * const queue = new sst.aws.Queue("MyQueue", {
+   *   dlq: new sst.aws.Queue("MyDLQ").arn,
+   * });
+   *
+   * const workflow = new sst.aws.Workflow("MyWorkflow", {
+   *   handler: "src/workflow.handler",
+   * });
+   *
+   * queue.subscribe(
+   *   { handler: "src/dispatcher.handler", link: [workflow] },
+   *   { batch: { partialResponses: true } },
+   * );
+   * ```
+   *
+   * ```ts title="src/dispatcher.ts"
+   * import { Resource } from "sst";
+   * import { workflow } from "sst/aws/workflow";
+   *
+   * export const handler = workflow.dispatcher<{ jobId: string }>(
+   *   Resource.MyWorkflow,
+   *   { name: (message) => `job-${message.body.jobId}` },
+   * );
+   * ```
+   */
+  export function dispatcher<TBody = unknown, TPayload = QueueMessage<TBody>>(
+    resource: Resource,
+    input: DispatcherInput<TBody, TPayload>,
+    options?: Options,
+  ): (event: SQSEvent) => Promise<SQSBatchResponse> {
+    return async (event) => {
+      const results = await Promise.allSettled(
+        event.Records.map(async (record) => {
+          const message: QueueMessage<TBody> = {
+            tenant: record.attributes.MessageGroupId,
+            body: parseBody(record.body) as TBody,
+          };
+          const name = input.name(message, record);
+          try {
+            await start(
+              resource,
+              {
+                name,
+                payload: input.payload
+                  ? input.payload(message, record)
+                  : message,
+              },
+              options,
+            );
+          } catch (error) {
+            throw await describeStartFailure(error, name);
+          }
+        }),
+      );
+
+      const batchItemFailures: SQSBatchItemFailure[] = [];
+      results.forEach((result, i) => {
+        if (result.status === "fulfilled") return;
+        const record = event.Records[i];
+        console.error("Failed to start workflow for message", {
+          messageId: record.messageId,
+          tenant: record.attributes.MessageGroupId,
+          error: result.reason,
+        });
+        batchItemFailures.push({ itemIdentifier: record.messageId });
+      });
+      return { batchItemFailures };
     };
   }
 
@@ -792,6 +920,25 @@ function parseTimestamp(timestamp: string | number): Date {
   }
 
   return new Date(timestamp);
+}
+
+function parseBody(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body;
+  }
+}
+
+// Lambda's error type, like `DurableExecutionAlreadyStartedException`, is in the
+// response body. Put it in the message, so it's in the subscriber's logs.
+async function describeStartFailure(error: unknown, name: string) {
+  if (!(error instanceof workflow.StartError)) return error;
+  const body = await error.response.text().catch(() => "");
+  return new Error(
+    `Failed to start workflow "${name}": ${error.response.status} ${body}`.trim(),
+    { cause: error },
+  );
 }
 
 function resolveWaitUntilDuration(until: Date): durable.Duration {
