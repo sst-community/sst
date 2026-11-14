@@ -196,9 +196,12 @@ func CmdMosaic(c *cli.Cli) error {
 	}
 	defer removeServerFile()
 
+	// sst dev's routes are there before the server serves (server.Start), as
+	// the UI asks for them as soon as it's ready
+	devRoutes := dev.Register(p, server)
 	wg.Go(func() error {
 		defer c.Cancel()
-		return dev.Start(c.Context, p, server)
+		return devRoutes.Run(c.Context)
 	})
 
 	wg.Go(func() error {

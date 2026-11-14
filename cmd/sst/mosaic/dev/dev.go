@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
@@ -21,7 +22,6 @@ import (
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/server"
-	"golang.org/x/sync/errgroup"
 )
 
 type Message struct {
@@ -29,25 +29,53 @@ type Message struct {
 	Event json.RawMessage `json:"event"`
 }
 
-func Start(ctx context.Context, p project.Program, server *server.Server) error {
-	var complete *project.CompleteEvent
-	var wg errgroup.Group
+// Dev is sst dev's routes on the CLI's server: its events, a request to
+// deploy, a dev command's environment, and the last deploy's result
+type Dev struct {
+	program   project.Program
+	completes <-chan any
 
+	mu       sync.Mutex
+	complete *project.CompleteEvent
+}
+
+// Register registers sst dev's routes on the server. It's called before the
+// server serves, so the first request finds them: the UI asks for the events
+// as soon as the server is ready. Run keeps what they answer with.
+func Register(p project.Program, server *server.Server) *Dev {
+	d := &Dev{program: p, completes: bus.Subscribe(&project.CompleteEvent{})}
+	d.routes(server)
+	return d
+}
+
+// Run keeps the last deploy's result, which the routes answer with, for as
+// long as ctx lasts
+func (d *Dev) Run(ctx context.Context) error {
 	log := slog.Default().With("service", "dev")
 	log.Info("starting")
 	defer log.Info("done")
-
-	wg.Go(func() error {
-		evts := bus.Subscribe(&project.CompleteEvent{})
-		for {
-			select {
-			case <-ctx.Done():
-				return nil
-			case evt := <-evts:
-				complete = evt.(*project.CompleteEvent)
-			}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case evt := <-d.completes:
+			d.mu.Lock()
+			d.complete = evt.(*project.CompleteEvent)
+			d.mu.Unlock()
 		}
-	})
+	}
+}
+
+// last is the last deploy's result, if one finished since sst dev started
+func (d *Dev) last() *project.CompleteEvent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.complete
+}
+
+func (d *Dev) routes(server *server.Server) {
+	p := d.program
+	log := slog.Default().With("service", "dev")
 
 	server.Mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("content-type", "application/x-ndjson")
@@ -58,7 +86,7 @@ func Start(ctx context.Context, p project.Program, server *server.Server) error 
 		ctx := r.Context()
 		events := bus.SubscribeAll()
 		defer bus.Unsubscribe(events)
-		if complete != nil {
+		if complete := d.last(); complete != nil {
 			go func() {
 				events <- complete
 			}()
@@ -91,11 +119,11 @@ func Start(ctx context.Context, p project.Program, server *server.Server) error 
 	server.Mux.HandleFunc("GET /api/env", func(w http.ResponseWriter, r *http.Request) {
 		directory := r.URL.Query().Get("directory")
 		name := r.URL.Query().Get("name")
-		resolved := complete
+		resolved := d.last()
 		// The state is read only when the last deploy's isn't known, as a
 		// read can take a while
 		if resolved == nil || resolved.Old {
-			if latest, err := p.GetCompleted(ctx); err == nil {
+			if latest, err := p.GetCompleted(r.Context()); err == nil {
 				resolved = latest
 			}
 		}
@@ -104,19 +132,19 @@ func Start(ctx context.Context, p project.Program, server *server.Server) error 
 			return
 		}
 		cwd, _ := os.Getwd()
-		for _, d := range resolved.Devs {
-			full := filepath.Join(cwd, d.Directory)
+		for _, command := range resolved.Devs {
+			full := filepath.Join(cwd, command.Directory)
 			log.Info("matching dev", "full", full, "directory", directory)
-			if (directory != "" && full == directory) || (name != "" && d.Name == name) {
-				env, err := p.EnvFor(ctx, resolved, d.Name)
+			if (directory != "" && full == directory) || (name != "" && command.Name == name) {
+				env, err := p.EnvFor(r.Context(), resolved, command.Name)
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
 				body, err := json.Marshal(map[string]interface{}{
 					"env":     env,
-					"command": d.Command,
-					"awsOnly": d.Aws != nil && d.Aws.Only,
+					"command": command.Command,
+					"awsOnly": command.Aws != nil && command.Aws.Only,
 				})
 				if err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -136,16 +164,29 @@ func Start(ctx context.Context, p project.Program, server *server.Server) error 
 	server.Mux.HandleFunc("GET /api/completed", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("content-type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(complete)
+		json.NewEncoder(w).Encode(d.last())
 		return
 	})
-
-	return wg.Wait()
 }
 
+// Stream subscribes to sst dev's events, of the given types. It tries for a
+// few seconds, as Deploy does: the UI can ask as sst dev starts, before it
+// takes the request. The channel closes when the events end.
 func Stream(ctx context.Context, url string, types ...interface{}) (chan any, error) {
 	out := make(chan any)
-	resp, err := send(ctx, "GET", url, "/stream")
+	var resp *http.Response
+	err := askUntilTaken(ctx, "asking sst dev for its events again", func() error {
+		var err error
+		resp, err = send(ctx, "GET", url, "/stream")
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return fmt.Errorf("GET /stream: %s", resp.Status)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -233,26 +274,35 @@ func Env(ctx context.Context, query string, url string) (*EnvResponse, error) {
 // Deploy asks `sst dev` to deploy again. It tries for a few seconds: the UI
 // can ask as `sst dev` starts, before it takes the request.
 func Deploy(ctx context.Context, url string) error {
+	return askUntilTaken(ctx, "asking sst dev to deploy again", func() error {
+		resp, err := send(ctx, "POST", url, "/api/deploy")
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("POST /api/deploy: %s", resp.Status)
+		}
+		return nil
+	})
+}
+
+// askUntilTaken asks sst dev with ask until it's taken, for up to five
+// seconds, saying again before each try after the first
+func askUntilTaken(ctx context.Context, again string, ask func() error) error {
 	var err error
 	for attempt := 0; attempt < 20; attempt++ {
 		if attempt > 0 {
-			slog.Warn("asking sst dev to deploy again", "err", err)
+			slog.Warn(again, "err", err)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(250 * time.Millisecond):
 			}
 		}
-		var resp *http.Response
-		resp, err = send(ctx, "POST", url, "/api/deploy")
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		if err = ask(); err == nil {
 			return nil
 		}
-		err = fmt.Errorf("POST /api/deploy: %s", resp.Status)
 	}
 	return err
 }
