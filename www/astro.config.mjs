@@ -72,6 +72,7 @@ const sidebar = [
       { label: "Custom Domains", slug: "docs/custom-domains" },
       { label: "Custom Runtimes", slug: "docs/custom-runtimes" },
       { label: "Import Resources", slug: "docs/import-resources" },
+      { label: "Use with Pulumi", slug: "docs/use-with-pulumi" },
       { label: "Set up a Monorepo", slug: "docs/set-up-a-monorepo" },
       { label: "Configure a Router", slug: "docs/configure-a-router" },
       { label: "Share Across Stages", slug: "docs/share-across-stages" },

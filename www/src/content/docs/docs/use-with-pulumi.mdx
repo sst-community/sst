@@ -1,0 +1,412 @@
+---
+title: Use with Pulumi
+description: Run a plain Pulumi program with SST's dev loop, live functions and dev commands, while Pulumi does everything else.
+---
+
+A team that writes plain Pulumi can use `sst pulumi dev` without moving to SST. SST runs the local dev loop, and Pulumi does everything else: the program, providers, state and its backend, stacks, config, secrets, previews, CI and `pulumi destroy`.
+
+- **`sst pulumi dev` deploys a dev stack** with your own `pulumi up`, and deploys again when a file of the program changes.
+- **Its functions run on your machine**, from their source, with the credentials of their own role. A change to the code answers the next call, with no deploy.
+- **Its dev commands run beside it**, like a database in a container or the frontend's dev server, with the stack's outputs in their environment.
+
+SST's components in the program too, like a `Function` linked to a `Bucket`, are SST 5's: see its [Components in Pulumi](/sst/v5/docs/components-in-pulumi/). A program that installs SST 5's package for them gets its CLI too, which runs `sst pulumi dev` the same way.
+
+The program changes by one line. What `sst pulumi dev` runs is in a file of its own, `sst.dev.yaml`. Outside `sst pulumi dev` nothing of SST changes the program, so a stack deployed with plain `pulumi up` has nothing of SST in it, and `pulumi destroy` works without SST installed.
+
+:::note
+It runs Pulumi programs in TypeScript or JavaScript, on AWS.
+:::
+
+---
+
+## Set up
+
+Add SST to the Pulumi project.
+
+```bash
+npm install -D sst@npm:@sst-community/sst
+```
+
+Import it first in the program, before it makes anything.
+
+```ts title="index.ts" {1}
+import "sst/pulumi";
+import * as aws from "@pulumi/aws";
+import * as pulumi from "@pulumi/pulumi";
+```
+
+Under `sst pulumi dev` it registers one transform for the whole stack, which asks `sst pulumi dev` about each function and role as the program makes it, so it reaches the ones a library's components make too. Outside `sst pulumi dev` it does nothing.
+
+Then let a stack for development opt in. `sst pulumi dev` swaps its functions for stubs, so it refuses a stack that hasn't.
+
+```bash
+pulumi config set sst:dev true --stack dev
+```
+
+Leave it out of every other stack, so `sst pulumi dev` can't touch your CI or production stacks.
+
+When developers share an AWS account, give each a stack of their own, like `dev-alice`, even if their backends are apart: `sst pulumi dev` tells stacks apart by the project's and the stack's names.
+
+`sst pulumi dev` keeps what it builds and its logs in `.sst/`, so add it to your `.gitignore`.
+
+---
+
+## `sst.dev.yaml`
+
+Next to `Pulumi.yaml`, it says what `sst pulumi dev` runs: the functions to run on your machine, and the dev commands, each in a pane of its own.
+
+```yaml title="sst.dev.yaml"
+functions:
+  Api: functions/api.handler
+
+commands:
+  Postgres:
+    command: docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:17
+  Web:
+    command: npm run dev
+    directory: web
+    environment:
+      API_URL: ${apiUrl}
+  Report:
+    command: node scripts/report.mjs
+    role: Reporter
+```
+
+It's read when `sst pulumi dev` starts, and a change to it deploys again. Each read checks it before anything deploys:
+
+- **A field it doesn't know is an error**, so a misspelt one isn't left out, and it names the field you likely meant.
+- **A function's handler has to have its source**, so a wrong path is found before the deploy rather than at the first call, with the path you likely meant: `functions/apii.handler` gets "did you mean functions/api.handler?". A pattern's handlers are checked as the program makes each function.
+
+`sst` ships a schema for it, so an editor completes its fields and marks a mistake as you type. With VS Code's YAML extension, or any editor that uses the YAML language server, start the file with:
+
+```yaml title="sst.dev.yaml"
+# yaml-language-server: $schema=./node_modules/sst/schema/sst.dev.json
+```
+
+The path is from the file to where `sst` is installed, which in a monorepo can be a folder up.
+
+### Have `sst pulumi dev` write it
+
+Without the file, `sst pulumi dev` offers to write one, from a preview of the stack. The preview changes nothing. It runs the program as `sst pulumi dev` deploys it, and the file it writes names each function with its handler:
+
+- **From a folder of source**, like plain JavaScript or Python deployed as it is, the handler is exact.
+- **From a build**, like `./dist/api`, it's guessed from the build's source map, or from the one source file named like the build, and marked `# check it`.
+- **When it can't tell**, the function is left commented out, with why, for you to fill in.
+- **What `sst pulumi dev` can't run**, like a container image or code written in the program, is listed in a comment.
+
+The file ends with the stack's outputs and roles as comments, for a dev command's `${name}` and `role`. `sst pulumi dev` shows the file, and asks whether to start with it.
+
+```yaml title="sst.dev.yaml"
+functions:
+  Api: functions/api.handler # guessed by its name from ./dist/api: check it
+
+# What sst pulumi dev can't run on this machine, which stays in the cloud:
+# Cron: its code is written in the program
+
+# The stack's outputs, for ${name}: apiUrl, reportsBucket
+# Its roles, for a command's role: ApiRole, Reporter
+```
+
+---
+
+## Run a function locally
+
+Name it under `functions`, by its name in the program, with its source handler from the folder of `Pulumi.yaml`.
+
+```yaml title="sst.dev.yaml"
+functions:
+  Api: functions/api.handler
+  Worker:
+    handler: cmd/worker
+    runtime: go
+```
+
+The function stays as the program makes it:
+
+```ts title="index.ts"
+const api = new aws.lambda.Function("Api", {
+  runtime: "nodejs22.x",
+  role: role.arn,
+  code: new pulumi.asset.FileArchive("./dist/api"),
+  handler: "index.handler",
+});
+```
+
+In `sst pulumi dev` it's deployed as a stub that passes its invocations to your machine, and its role is given what the stub needs. Your code runs there with:
+
+- **The function's own environment.** What the program gives it in dev is what it gets.
+- **The credentials of the function's role.** What it can't do in AWS, it can't do locally either.
+
+The function keeps its URN, so naming it replaces nothing: in `sst pulumi dev` it's updated in place to the stub, and a plain `pulumi up` updates it back. A function from a container image can't run locally, and `sst pulumi dev` refuses to.
+
+| Field | What it is |
+| --- | --- |
+| `handler` | The source handler, from the folder of `Pulumi.yaml`. A function given alone is its handler. `{name}` is the function's name. |
+| `runtime` | What builds and runs it. Defaults to the function's own: Node.js and Python. A function on `provided.al2023` needs one: `go`. |
+| `streaming` | Whether it streams its response, as one behind a function URL with `invokeMode: "RESPONSE_STREAM"` does. |
+
+Functions are told apart by their names, so two can't have the same one. If a deploy goes through and never made a function the file names, `sst pulumi dev` says so. When the program made one with a name like it, that's the one it asks about ("did you mean"), as a name misspelt or changed in the program. Otherwise it lists the ones the program made: the program doesn't have it, or made it before it imported `sst/pulumi`.
+
+After each deploy, `sst pulumi dev` lists the functions that run on your machine, each with its handler, under `On this machine`.
+
+### Many functions
+
+A name can be a pattern, where `*` is any text and `?` one character, and `{name}` in its handler is the function's name. So a naming convention names every function at once.
+
+```yaml title="sst.dev.yaml"
+functions:
+  Legacy: old/legacy.handler          # a name wins over a pattern
+  orders-*: orders/{name}.handler
+  "*": functions/{name}.handler
+```
+
+A function takes its own name if the file has it, or else the first pattern that matches, in the file's order. A function a pattern matches stays in the cloud when `sst pulumi dev` can't run it: it has no source at its handler, it's a container image, or its runtime is one `sst pulumi dev` doesn't run. After each deploy `sst pulumi dev` lists them, with why, under `In the cloud`, so `"*"` never fails a deploy. `On this machine` shows what each pattern ran, and from which handler.
+
+---
+
+## What's different in dev
+
+`dev` is whether the program runs under `sst pulumi dev`. Use it for what you don't want in the cloud while you develop. `sst pulumi dev` runs the program with `SST_DEV=true`, so a program can also read `process.env.SST_DEV` without importing anything.
+
+```ts title="index.ts"
+import { dev } from "sst/pulumi";
+
+// Postgres in a container on this machine in dev, RDS otherwise
+const database = dev
+  ? { host: pulumi.output("localhost"), port: pulumi.output("5432") }
+  : createDatabase();
+
+// The frontend's dev server in dev, deployed otherwise
+if (!dev) deploySite();
+```
+
+---
+
+## Dev commands
+
+Name them under `commands`. `sst pulumi dev` runs each in a pane of its own, and they leave nothing in the stack.
+
+```yaml title="sst.dev.yaml"
+commands:
+  Web:
+    command: npm run dev
+    directory: web
+    environment:
+      API_URL: ${apiUrl}
+```
+
+| Field | What it is |
+| --- | --- |
+| `command` | The command. |
+| `directory` | The folder it runs in, from the folder of `Pulumi.yaml`. |
+| `autostart` | Whether it starts with `sst pulumi dev`, or waits to be started. Defaults to `true`. |
+| `title` | The title of its pane. Defaults to its name. |
+| `environment` | Environment variables. `${name}` is the stack's output of that name, so export what a command needs. |
+| `role` | A role it runs as: it gets that role's credentials, and none of yours. |
+
+`role` is a role of the program, by name, and `sst pulumi dev` lets your account take it, only in dev:
+
+```ts title="index.ts"
+const reporter = new aws.iam.Role("Reporter", {
+  assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal({ Service: "ecs-tasks.amazonaws.com" }),
+});
+```
+
+It can also be a role's ARN, which has to let your account take it already. If `sst pulumi dev` can't take the role, the command doesn't run, rather than run with your credentials.
+
+A command whose output or role the stack doesn't have isn't run, and `sst pulumi dev` says why, with the output or role you likely meant.
+
+---
+
+## Start it
+
+```bash
+npx sst pulumi dev
+```
+
+It runs the selected stack, or the one you name with `--stage`, like `--stage dev` or `--stage acme/shop/dev`; `SST_STAGE` names one too. Every other `sst` command says to use `pulumi`.
+
+It runs `pulumi` with your shell's environment, as you would: `.env` files aren't read for it, though a dev command gets the `.env` of its own folder. As everything runs without a prompt, a stack whose secrets are encrypted with a passphrase needs `PULUMI_CONFIG_PASSPHRASE` or `PULUMI_CONFIG_PASSPHRASE_FILE` set.
+
+To reach the same account as the program, it sets up its own AWS access as the stack's config sets up the program's: `aws:profile`, `aws:region` and `aws:assumeRoles`, then your environment. A profile in the config wins over `AWS_PROFILE`, as it does for the program. A role with an external ID isn't supported yet, and neither is an `aws:` setting stored as a secret, as an external ID set with `--secret` makes the whole list: `sst pulumi dev` says so rather than reach another account than the program's.
+
+It runs the Pulumi project with the nearest `Pulumi.yaml` up from the folder, in an SST app's folder or not: there, `sst dev` runs the SST app, and `sst pulumi dev` the Pulumi project. To run one elsewhere, point at it: `sst pulumi dev --config infra/Pulumi.yaml`. In a Pulumi project, `sst dev` says to run `sst pulumi dev`.
+
+What `sst pulumi dev` adds, only on the dev stack and only while it deploys with it:
+
+- The stub's code in place of each function it runs, and a role policy for each.
+- A statement in each role a dev command runs as, which lets your account take it.
+
+Outside the stack, `sst pulumi dev` uses the AppSync Event API named `sst` in the account and region, which every `sst pulumi dev` there shares, and creates it if it isn't there. It creates nothing else of SST's in the account.
+
+A plain `pulumi up` on the dev stack takes all of it out again.
+
+Of the stack's state, `sst pulumi dev` reads its outputs and its roles, with its secrets encrypted. Its secret outputs show as `[secret]`, as `pulumi` shows them. A secret output a dev command's environment names is read in the clear, with `pulumi stack output`, and no other secret is.
+
+---
+
+## Recipes
+
+How `sst.dev.yaml` names the functions of a few common kinds of program. In each, a function's handler is its source, from the folder of `Pulumi.yaml`.
+
+### A bundle for each function
+
+The program bundles each function with esbuild, into a folder of its own. Name each function as its source file, and one pattern names them all.
+
+```ts title="index.ts"
+import { buildSync } from "esbuild";
+
+function nodeFunction(name: string) {
+  buildSync({
+    entryPoints: [`functions/${name}.ts`],
+    outfile: `dist/${name}/index.mjs`,
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    sourcemap: true,
+  });
+  return new aws.lambda.Function(name, {
+    runtime: "nodejs22.x",
+    role: role.arn,
+    handler: "index.handler",
+    code: new pulumi.asset.FileArchive(`./dist/${name}`),
+  });
+}
+
+nodeFunction("orders-create");
+nodeFunction("orders-list");
+```
+
+```yaml title="sst.dev.yaml"
+functions:
+  "*": functions/{name}.handler
+```
+
+`sst pulumi dev` builds each function from its source itself, so the program's bundles are only what a plain `pulumi up` deploys. With `sourcemap: true`, the file `sst pulumi dev` writes finds each function's source in its bundle's map.
+
+### A folder of JavaScript or Python
+
+When the code the program deploys is the source itself, the handler is that folder and the function's handler.
+
+```ts title="index.ts"
+new aws.lambda.Function("Api", {
+  runtime: "nodejs22.x",
+  role: role.arn,
+  handler: "api.handler",
+  code: new pulumi.asset.FileArchive("./functions"),
+});
+
+new aws.lambda.Function("Worker", {
+  runtime: "python3.12",
+  role: role.arn,
+  handler: "main.handler",
+  code: new pulumi.asset.FileArchive("./worker"),
+});
+```
+
+```yaml title="sst.dev.yaml"
+functions:
+  Api: functions/api.handler
+  Worker: worker/main.handler
+```
+
+`sst pulumi dev` runs a Python function as `sst dev` runs an SST app's: with [uv](https://docs.astral.sh/uv/), which has to be installed, in a uv workspace with a `pyproject.toml` whose `requires-python` matches the function's runtime. Run `uv sync --all-packages` before `sst pulumi dev`.
+
+### Go
+
+A Go function runs on `provided.al2023`, so give its runtime too. Its handler is the folder of its `main` package, in a Go module.
+
+```ts title="index.ts"
+// built with: GOOS=linux GOARCH=amd64 go build -o dist/worker/bootstrap ./cmd/worker
+new aws.lambda.Function("Worker", {
+  runtime: "provided.al2023",
+  architectures: ["x86_64"],
+  role: role.arn,
+  handler: "bootstrap",
+  code: new pulumi.asset.FileArchive("./dist/worker"),
+});
+```
+
+```yaml title="sst.dev.yaml"
+functions:
+  Worker:
+    handler: cmd/worker
+    runtime: go
+```
+
+`sst pulumi dev` builds it with your `go`, and builds it again when a `.go` file of its module changes.
+
+### Functions in a component
+
+The transform sees every function the program makes, a component's too, by the function's own name rather than the component's.
+
+```ts title="index.ts"
+class Api extends pulumi.ComponentResource {
+  constructor(name: string, args: { role: aws.iam.Role }, opts?: pulumi.ComponentResourceOptions) {
+    super("acme:index:Api", name, {}, opts);
+    new aws.lambda.Function(
+      `${name}-handler`,
+      {
+        runtime: "nodejs22.x",
+        role: args.role.arn,
+        handler: "index.handler",
+        code: new pulumi.asset.FileArchive(`./dist/${name}`),
+      },
+      { parent: this },
+    );
+  }
+}
+
+new Api("orders", { role });
+new Api("users", { role });
+```
+
+```yaml title="sst.dev.yaml"
+functions:
+  orders-handler: functions/orders.handler
+  users-handler: functions/users.handler
+```
+
+A library's components name their functions their own way. The file `sst pulumi dev` writes names them all, and a deploy whose file names a function the program didn't make lists the ones it made.
+
+### A monorepo
+
+`sst.dev.yaml` is next to `Pulumi.yaml`, and its paths are from there, so a function in another package is a folder up.
+
+```txt
+my-repo/
+├── node_modules/
+├── infra/
+│   ├── Pulumi.yaml
+│   ├── index.ts
+│   └── sst.dev.yaml
+└── packages/
+    ├── functions/src/api.ts
+    └── web/
+```
+
+```yaml title="infra/sst.dev.yaml"
+# yaml-language-server: $schema=../node_modules/sst/schema/sst.dev.json
+functions:
+  Api: ../packages/functions/src/api.handler
+
+commands:
+  Web:
+    command: npm run dev
+    directory: ../packages/web
+    environment:
+      API_URL: ${apiUrl}
+```
+
+Run `npx sst pulumi dev` in `infra`, or from the repository's root with `npx sst pulumi dev --config infra/Pulumi.yaml`. It watches the sources across the repository, so a change in `packages/` reaches the function with no deploy.
+
+---
+
+## Limits
+
+- **Pulumi programs in TypeScript or JavaScript.** `sst pulumi dev` reads `sst.dev.yaml` and answers the transform, so another language needs only its own transform.
+- **The project's and the stack's names** can have only letters, numbers and hyphens, and the project's starts with a letter. They name the channels the stubs and `sst pulumi dev` talk on. A stack's organization can be anything.
+- **The functions' sources** are watched across the program's repository, or the project's folder outside one.
+- **TypeScript's `moduleResolution`.** `sst/pulumi` is an ES module. A CommonJS program finds it with `node`, Pulumi's default, or `nodenext`, and runs it on Node.js 22.12 or later.
+- **A role whose `inlinePolicies` Pulumi manages** has the stub's role policy taken off on its next update. Give a function `sst pulumi dev` runs a role without them.
+- **Not yet:** links (`Resource`) for the program's own functions, tasks, tunnels, Cloudflare workers and Rust functions. SST 5's components link as they do in an SST app: see its [Components in Pulumi](/sst/v5/docs/components-in-pulumi/).
