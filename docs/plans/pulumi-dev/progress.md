@@ -2,6 +2,14 @@
 
 What's been done on [the plan](plan.md), newest first.
 
+## 2026-11-13: `sst pulumi dev`
+
+- **The dev loop for a Pulumi project is `sst pulumi dev`** ([decision](plan.md#decisions)), a `pulumi` command with `dev` under it, on SST 5's line as the Pulumi path was. Its flags are `sst dev`'s: `--mode`, `--policy`, and `--stage` and `--config` as before.
+- **`sst dev` runs an SST app alone.** In a Pulumi project, with `--config` naming a `Pulumi.yaml` too, it stops with `ErrCommand`, which says to run `sst pulumi dev`, as every other command does.
+- **`sst pulumi dev` finds the nearest `Pulumi.yaml`**, in an SST app's folder too, as it's asked for by name, and takes a `--config` that names a `Pulumi.yaml` alone.
+- **The dev loop's panes run its own command again** (`Cli.DevCommand`): `sst pulumi dev` with `SST_CHILD`, where they ran `sst dev`, which would now find no Pulumi project.
+- **What it says, and the docs, say `sst pulumi dev`**: `pkg/pulumidev`'s messages, `sst/pulumi`, the dev file's schema, the platform's notes on a program Pulumi runs, the example and the two docs pages. Where they compare with an SST app, they say `sst dev`.
+
 ## 2026-11-12: no download of SST's own Pulumi for a Pulumi program
 
 The maintainer asked what happens when a Pulumi project's Pulumi differs from the one SST ships, and chose to skip the downloads ([decisions](plan.md#decisions)).
