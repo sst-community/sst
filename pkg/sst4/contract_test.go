@@ -83,6 +83,44 @@ func TestReadReportNothing(t *testing.T) {
 	}
 }
 
+// A component that reports as SST 5's do, with a record (_sst), is read on
+// SST 4's line too, so one of a package's can report the same way on either.
+// A record wins over SST 4's output names, and one from a newer contract
+// stops the read, as on SST 5's line.
+func TestReadSST5Record(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "contract", "report-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]interface{}
+	json.Unmarshal(data, &record)
+	urn := resource.URN("urn:pulumi:dev::shop::pkg:index:Web::Web")
+
+	complete := newComplete()
+	res := apitype.ResourceV3{URN: urn, Type: "pkg:index:Web"}
+	if err := (Contract{}).Read(complete, res, map[string]interface{}{"_sst": record}); err != nil {
+		t.Fatal(err)
+	}
+	if complete.Devs["Web"].Command != "npm run dev" || complete.Functions["Web"].Handler != "src/server.handler" || complete.Tasks["Web"].Directory != "scripts" || complete.Tunnels["Web"].IP != "10.0.0.1" || complete.Hints[string(urn)] != "https://shop-dev-webbucket-drrmzcfu.example.com" {
+		t.Fatalf("read %+v", complete)
+	}
+
+	complete = newComplete()
+	both := map[string]interface{}{"_sst": record, "_hint": "https://sst4.example.com", "_dev": map[string]interface{}{"command": "sst4"}}
+	if err := (Contract{}).Read(complete, res, both); err != nil {
+		t.Fatal(err)
+	}
+	if complete.Hints[string(urn)] != "https://shop-dev-webbucket-drrmzcfu.example.com" || complete.Devs["Web"].Command != "npm run dev" {
+		t.Fatalf("SST 4's names were read over the record: %+v", complete)
+	}
+
+	newer := map[string]interface{}{"_sst": map[string]interface{}{"contract": float64(2), "hint": "x"}}
+	var errNewer *project.ErrNewerContract
+	if err := (Contract{}).Read(newComplete(), res, newer); !errors.As(err, &errNewer) {
+		t.Fatalf("a record from a newer contract was read: %v", err)
+	}
+}
+
 var recordedStates = []string{"serverless-sites", "vpc-containers-databases", "serverless-dev"}
 
 func recordedResources(t *testing.T, name string) []apitype.ResourceV3 {

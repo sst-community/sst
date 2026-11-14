@@ -45,7 +45,7 @@ func readJSON(t *testing.T, path string) map[string]interface{} {
 
 func TestReadReportRecord(t *testing.T) {
 	record := readJSON(t, filepath.Join("..", "..", "testdata", "contract", "report-v1.json"))
-	report, err := readReport(map[string]interface{}{"_sst": record, "url": "https://example.com"})
+	report, err := ReadReport(map[string]interface{}{"_sst": record, "url": "https://example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestReadReportNothing(t *testing.T) {
 			"_hint":     "https://example.com",
 		},
 	} {
-		report, err := readReport(outputs)
+		report, err := ReadReport(outputs)
 		if err != nil || report != nil {
 			t.Fatalf("%v: read %+v, %v", outputs, report, err)
 		}
@@ -77,7 +77,7 @@ func TestReadReportNothing(t *testing.T) {
 }
 
 func TestReadReportNewerContract(t *testing.T) {
-	_, err := readReport(map[string]interface{}{"_sst": map[string]interface{}{"contract": float64(2), "hint": "x"}})
+	_, err := ReadReport(map[string]interface{}{"_sst": map[string]interface{}{"contract": float64(2), "hint": "x"}})
 	var newer *ErrNewerContract
 	if !errors.As(err, &newer) || newer.Version != 2 {
 		t.Fatalf("got %v", err)
@@ -86,7 +86,7 @@ func TestReadReportNewerContract(t *testing.T) {
 
 // A field of the wrong type is left out, and the rest is read.
 func TestReadReportWrongType(t *testing.T) {
-	report, err := readReport(map[string]interface{}{"_sst": map[string]interface{}{
+	report, err := ReadReport(map[string]interface{}{"_sst": map[string]interface{}{
 		"contract": float64(1),
 		"dev":      map[string]interface{}{"command": float64(5), "directory": "web"},
 		"hint":     "https://example.com",
@@ -146,7 +146,7 @@ func TestReadReportRecordedStates(t *testing.T) {
 			if _, ok := outputs["_hint"]; ok {
 				named++
 			}
-			report, err := readReport(outputs)
+			report, err := ReadReport(outputs)
 			if err != nil || report != nil {
 				t.Fatalf("%v: read %+v, %v", name, report, err)
 			}

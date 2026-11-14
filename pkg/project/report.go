@@ -12,8 +12,8 @@ const ContractVersion = 1
 
 // Report is what a component told the core through the program contract: its
 // record, the _sst output. SST 4's components named each item as an output
-// of its own (_metadata, _dev, _task, _tunnel, _hint), which the core doesn't
-// read: it runs only SST 5's.
+// of its own (_metadata, _dev, _task, _tunnel, _hint), which only SST 4's
+// contract reads (pkg/sst4).
 type Report struct {
 	Contract int             `json:"contract"`
 	Function *FunctionReport `json:"function,omitempty"`
@@ -40,10 +40,11 @@ func (e *ErrNewerContract) Error() string {
 	return fmt.Sprintf("This stage was deployed by a newer version of SST: its components report in version %d of the program contract, and this CLI reads up to version %d. Upgrade SST.", e.Version, ContractVersion)
 }
 
-// readReport reads what a component reported from its outputs, already
+// ReadReport reads what a component reported from its outputs, already
 // decrypted. It's nil when it reported nothing. A field of the wrong type is
-// left out, and the rest is read, as the core always has.
-func readReport(outputs map[string]interface{}) (*Report, error) {
+// left out, and the rest is read, as the core always has. SST 4's contract
+// (pkg/sst4) reads it too, so a component can report this way on either line.
+func ReadReport(outputs map[string]interface{}) (*Report, error) {
 	record, ok := outputs["_sst"].(map[string]interface{})
 	if !ok {
 		return nil, nil
