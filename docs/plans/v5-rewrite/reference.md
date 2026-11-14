@@ -79,7 +79,7 @@ Read from [v5-progress.md](../v5-progress.md), [v5-port-notes.md](../v5-port-not
 - **How long:** 0.33 s at the median for a caller, over 40 calls in AWS ([v5-progress.md](../v5-progress.md)).
 - **`bridge.Conn`** (`cmd/sst/mosaic/aws/bridge/bridge.go`) is two methods, `Publish` and `Subscribe`. Nothing says what a transport does about order, copies, loss, a channel with no subscriber, or closing. AppSync's closes every subscription when it shuts down, and #212's keeps them open.
 - **The bridge does the rest:** it cuts messages into packets, puts them back in order, drops copies, and asks again for what's lost (`bridge.go`, `resend.go`).
-- **The stub** (`platform/functions/bridge/`) is a Go binary, so it starts fast in any Lambda runtime.
+- **The stub** (`cmd/bridge/`) is a Go binary, so it starts fast in any Lambda runtime.
 - **What `sst dev` deploys differently:** the stub's code in place of the function's, shared by every function in a region and kept on delete; the stub's environment; permission to reach AppSync; a trust policy that lets the CLI take the role; and the `_live` output.
 - **Tests:** the `bridge` package has fake connections that lose, shuffle, delay and fail packets (`lossyAppSync`, `shuffled`, `slowConn`, `failingConn`), and `cmd/sst/mosaic/aws/harness_test.go` runs the real dispatch loop against a fake AppSync and a fake stub. Each fake replaces the transport rather than testing one, and the stub's own loop isn't run by any test.
 

@@ -1,3 +1,8 @@
+// The stub sst dev deploys in place of a function's code: it hands each
+// invocation to sst dev on this machine, over the stage's transport, and
+// its answer back to Lambda. Both lines' platforms build it from here
+// (platform/scripts/build), so SST 4's and SST 5's functions run the same
+// stub.
 package main
 
 import (
