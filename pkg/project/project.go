@@ -425,14 +425,11 @@ console.log("~j" + JSON.stringify(await mod.app({
 			// The stage's target is in the config, so a command on the stage
 			// can't reach the real cloud by leaving out a flag. Its home is the
 			// target's, so the home's provider isn't added.
-			if settings, ok := proj.app.Targets[input.Stage]; ok {
-				local, err := target.Parse(settings)
-				if err != nil {
-					return nil, util.NewReadableError(err, fmt.Sprintf("The target for the %q stage: %v", input.Stage, err))
-				}
-				if err := target.CheckProviders(local, proj.app.Providers); err != nil {
-					return nil, util.NewReadableError(err, err.Error())
-				}
+			local, err := proj.stageTarget(input.Stage)
+			if err != nil {
+				return nil, err
+			}
+			if local != nil {
 				proj.target = local
 			} else if _, ok := proj.app.Providers[proj.app.Home]; !ok && proj.app.Home != "local" {
 				proj.app.Providers[proj.app.Home] = map[string]interface{}{}
@@ -545,6 +542,26 @@ func (p *Project) Target() target.Target {
 		return target.Cloud{}
 	}
 	return p.target
+}
+
+// stageTarget is the target the app gives the stage in app(), or nil. A
+// contract whose components don't run on one refuses it.
+func (p *Project) stageTarget(stage string) (*target.Local, error) {
+	settings, ok := p.app.Targets[stage]
+	if !ok {
+		return nil, nil
+	}
+	if err := p.speaks().RefuseTarget(stage); err != nil {
+		return nil, err
+	}
+	local, err := target.Parse(settings)
+	if err != nil {
+		return nil, util.NewReadableError(err, fmt.Sprintf("The target for the %q stage: %v", stage, err))
+	}
+	if err := target.CheckProviders(local, p.app.Providers); err != nil {
+		return nil, util.NewReadableError(err, err.Error())
+	}
+	return local, nil
 }
 
 func (p Project) getPath(path ...string) string {

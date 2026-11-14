@@ -145,6 +145,13 @@ func (Contract) RegisterRPC(ctx context.Context, p *project.Project, server *rpc
 // major version
 func (Contract) HoldsProviderMajors() bool { return false }
 
+// RefuseTarget refuses every target: SST 4's components were never run on
+// one, and SST 4's CLI had none, so the stage is stopped rather than
+// deployed to the real cloud
+func (Contract) RefuseTarget(stage string) error {
+	return util.NewReadableError(nil, fmt.Sprintf("The %q stage has a target in app(), and SST 4's components deploy only to the cloud. Targets come with SST 5.", stage))
+}
+
 // Versions are the components' versions as SST 4's CLI read them from the
 // state, by name: each `sst:sst:Version` record's, and 1 for any other of
 // SST's resources it has none for
