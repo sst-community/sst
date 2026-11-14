@@ -50,6 +50,7 @@ func Start(
 
 	functionsChan := make(chan bridge.Message, 1000)
 	tasksChan := make(chan bridge.Message, 1000)
+	webChan := make(chan bridge.Message, 1000)
 
 	in := input{
 		config:  config,
@@ -66,12 +67,21 @@ func Start(
 	in.msg = tasksChan
 	go task(ctx, in)
 
+	in.msg = webChan
+	go webFunction(ctx, in)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case msg := <-client.Read():
 			if msg.Source == "dev" {
+				continue
+			}
+			// a web function's request goes only to its loop, as nothing
+			// else reads it
+			if msg.Type == bridge.MessageHttpRequest {
+				webChan <- msg
 				continue
 			}
 			functionsChan <- msg

@@ -31,17 +31,18 @@ func (p *Project) GetCompleted(ctx context.Context) (*CompleteEvent, error) {
 
 func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWorkdir) (*CompleteEvent, error) {
 	complete := &CompleteEvent{
-		Links:       common.Links{},
-		Versions:    map[string]int{},
-		ImportDiffs: map[string][]ImportDiff{},
-		Devs:        Devs{},
-		Tunnels:     map[string]Tunnel{},
-		Hints:       map[string]string{},
-		Outputs:     map[string]interface{}{},
-		Tasks:       map[string]Task{},
-		Errors:      []Error{},
-		Finished:    false,
-		Resources:   []apitype.ResourceV3{},
+		Links:        common.Links{},
+		Versions:     map[string]int{},
+		ImportDiffs:  map[string][]ImportDiff{},
+		Devs:         Devs{},
+		Tunnels:      map[string]Tunnel{},
+		Hints:        map[string]string{},
+		Outputs:      map[string]interface{}{},
+		Tasks:        map[string]Task{},
+		WebFunctions: map[string]WebFunction{},
+		Errors:       []Error{},
+		Finished:     false,
+		Resources:    []apitype.ResourceV3{},
 	}
 	checkpoint, err := workdir.Export()
 	if err != nil {
@@ -93,6 +94,10 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 			json.Unmarshal(data, &entry)
 			entry.Name = resource.URN.Name()
 			complete.Tasks[entry.Name] = entry
+		}
+
+		if fn, ok := webFunctionOf(resource.URN.Name(), outputs); ok {
+			complete.WebFunctions[fn.Name] = fn
 		}
 
 		if match, ok := outputs["_tunnel"].(map[string]interface{}); ok {
@@ -162,6 +167,20 @@ func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWo
 	}
 
 	return complete, nil
+}
+
+// webFunctionOf reads the web function a resource's outputs say is live in sst
+// dev, with the URL of its local server.
+func webFunctionOf(name string, outputs map[string]interface{}) (WebFunction, bool) {
+	match, ok := outputs["_webFunction"].(map[string]interface{})
+	if !ok {
+		return WebFunction{}, false
+	}
+	url, ok := match["url"].(string)
+	if !ok || url == "" {
+		return WebFunction{}, false
+	}
+	return WebFunction{Name: name, URL: url}, true
 }
 
 func parsePlaintext(input interface{}) interface{} {

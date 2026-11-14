@@ -51,6 +51,16 @@ const api = new sst.aws.WebFunction("Api", {
 
 This example uses `us-east-1` for its HomeRegion endpoint. Confirm that Lambda Web Functions are available in your target region. `sst dev` runs the local command without creating a cloud web function revision or endpoint. Setting `dev: false` deploys cloud resources even during `sst dev`.
 
+## Test the real integration in `sst dev`
+
+Set `dev.live` to also deploy the web function in `sst dev`, with a bridge in place of your code. Its HTTPS endpoint sends each request to your local server and streams the response back, so IAM authorization, callers in AWS and webhooks work against the real URL while the code runs on your machine.
+
+```ts
+dev: { command: "npm run dev", url: "http://127.0.0.1:3000", live: true },
+```
+
+`api.url` is then the endpoint's URL. The bridge is the same on every deploy, so it doesn't make a new revision while you work. Without `sst dev` running, the endpoint answers with a `503`.
+
 The deployment identity needs permissions for the Lambda Web Function control plane, `iam:PassRole` on the execution role, and the component's IAM, versioned S3 code, and CloudWatch resources. The native provider internally uses Cloud Control to create the empty function before adding its revision, so the deployment identity also needs `cloudformation:CreateResource` and `cloudformation:GetResourceRequestStatus` on `Resource: "*"`. These are deployment permissions, not execution-role permissions. The component does not create a CloudFormation stack. See the [provider implementation](https://github.com/hashicorp/terraform-provider-aws/blob/v6.72.0/internal/service/lambdaweb/function.go) and [Cloud Control IAM guidance](https://docs.aws.amazon.com/cloudcontrolapi/latest/userguide/security.html).
 
 To try the example on AWS, first prepare the SST CLI containing this change and AWS credentials. Then use the usual example workflow:

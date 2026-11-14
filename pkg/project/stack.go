@@ -70,20 +70,28 @@ type Task struct {
 	Directory string  `json:"directory"`
 }
 
+// WebFunction is a web function that's live in sst dev: its bridge in AWS
+// sends the requests it gets to the local server at URL.
+type WebFunction struct {
+	Name string `json:"-"`
+	URL  string `json:"url"`
+}
+
 type CompleteEvent struct {
-	UpdateID    string
-	Links       common.Links
-	Devs        Devs
-	Tasks       map[string]Task
-	Outputs     map[string]interface{}
-	Hints       map[string]string
-	Versions    map[string]int
-	Errors      []Error
-	Finished    bool
-	Old         bool
-	Resources   []apitype.ResourceV3
-	ImportDiffs map[string][]ImportDiff
-	Tunnels     map[string]Tunnel
+	UpdateID     string
+	Links        common.Links
+	Devs         Devs
+	Tasks        map[string]Task
+	WebFunctions map[string]WebFunction
+	Outputs      map[string]interface{}
+	Hints        map[string]string
+	Versions     map[string]int
+	Errors       []Error
+	Finished     bool
+	Old          bool
+	Resources    []apitype.ResourceV3
+	ImportDiffs  map[string][]ImportDiff
+	Tunnels      map[string]Tunnel
 }
 
 type Tunnel struct {

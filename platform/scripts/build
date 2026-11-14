@@ -16,6 +16,11 @@ mkdir -p ./dist/nodejs-bridge
 cp ./functions/nodejs-bridge/index.mjs ./dist/nodejs-bridge/index.mjs
 cp ./dist/bridge/bootstrap ./dist/nodejs-bridge/bootstrap
 
+# A web function runs Node.js on Arm64, which starts the bridge
+mkdir -p ./dist/web-bridge
+cp ./functions/web-bridge/index.mjs ./dist/web-bridge/index.mjs
+CGO_ENABLED=0 GOARCH=arm64 GOOS=linux go build -trimpath -buildvcs=false -mod=readonly -ldflags="-buildid=" -o ./dist/web-bridge/bootstrap ./functions/web-bridge
+
 mkdir -p ./dist/python-runtime/
 cp ./functions/python-runtime/index.py ./dist/python-runtime/index.py
 
