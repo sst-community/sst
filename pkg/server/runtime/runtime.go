@@ -37,8 +37,10 @@ func (r *Runtime) AddTarget(input *runtime.BuildInput, output *bool) error {
 	input.CfgPath = r.program.PathConfig()
 	// Validate only when a runtime we build matches. provided.al2/al2023
 	// functions (Swift, Dart) have no runtime implementation and nothing to
-	// validate against, so leave them to register as before.
-	if rt, ok := r.program.Runtimes().Runtime(input.Runtime); ok {
+	// validate against, so leave them to register as before. A function with
+	// a runtime from sst.runtime is built by its commands, which say what its
+	// handler is: it isn't checked as the Lambda runtime it names would be.
+	if rt, ok := r.program.Runtimes().Runtime(input.Runtime); ok && input.Commands == nil {
 		if err := rt.ValidateHandler(input); err != nil {
 			return err
 		}
