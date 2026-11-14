@@ -54,9 +54,9 @@ type Contract interface {
 	// contract's components don't run on one. Not refused, the stage runs on
 	// the target.
 	RefuseTarget(stage string) error
-	// LoadsProvidersForApp is whether reading `app()` loads the providers'
-	// modules the app's files import (js.EvalOptions.LoadProviders)
-	LoadsProvidersForApp() bool
+	// LoadsImportsForApp is whether reading `app()` loads what the app's
+	// files import, as running the app does (js.EvalOptions.LoadImports)
+	LoadsImportsForApp() bool
 }
 
 // The contracts this CLI speaks, by version

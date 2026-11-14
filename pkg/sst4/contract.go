@@ -171,10 +171,10 @@ func (Contract) RefuseTarget(stage string) error {
 	return util.NewReadableError(nil, fmt.Sprintf("The %q stage has a target in app(), and SST 4's components deploy only to the cloud. Targets come with SST 5.", stage))
 }
 
-// LoadsProvidersForApp is true: SST 4.25.0 loaded the providers' modules an
-// app's files import when it read `app()`, so a helper `app()` calls can use
-// them once they're installed
-func (Contract) LoadsProvidersForApp() bool { return true }
+// LoadsImportsForApp is true: SST 4.25.0 read `app()` with what the app's
+// files import, so a helper `app()` calls can use the providers' modules once
+// they're installed, and a package that isn't there fails the build
+func (Contract) LoadsImportsForApp() bool { return true }
 
 // Versions are the components' versions as SST 4's CLI read them from the
 // state, by name: each `sst:sst:Version` record's, and 1 for any other of

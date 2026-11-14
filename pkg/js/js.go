@@ -27,10 +27,11 @@ type EvalOptions struct {
 	// (PlatformManifest), each with its file. A build that runs the app
 	// resolves each to its file; one that reads only `app()` leaves them out.
 	Platform map[string]string
-	// LoadProviders is whether a build that only reads `app()` loads the
-	// providers' modules the app's files import, like `@pulumi/aws`, as SST 4
-	// did, rather than leaving them out (NotLoaded)
-	LoadProviders bool
+	// LoadImports is whether a build that only reads `app()` loads what the
+	// app's files import as a build that runs the app does, as SST 4 did: the
+	// providers' modules, like `@pulumi/aws`, and a package that can't be
+	// found fails it. Without it, they're left out (NotLoaded).
+	LoadImports bool
 }
 
 // Marks the resolve that checks whether a package can be found when `app()`
@@ -222,11 +223,14 @@ const __dirname = topLevelFileUrlToPath(new topLevelURL(".", import.meta.url))
 				// modules to the top of the bundle, where they'd be loaded
 				// before the platform and the providers are installed. So the
 				// platform's and the providers' modules are left out, but for
-				// a platform that loads the providers (LoadProviders).
+				// a platform that loads what's imported (LoadImports).
 				Name: "NotLoaded",
 				Setup: func(build esbuild.PluginBuild) {
+					if input.LoadImports {
+						return
+					}
 					build.OnResolve(esbuild.OnResolveOptions{Filter: `^(@pulumi|@pulumiverse|@sst-provider)/`}, func(args esbuild.OnResolveArgs) (esbuild.OnResolveResult, error) {
-						if runsApp || input.LoadProviders || filepath.Base(args.Importer) == "sst.config.ts" {
+						if runsApp || filepath.Base(args.Importer) == "sst.config.ts" {
 							return esbuild.OnResolveResult{}, nil
 						}
 						return esbuild.OnResolveResult{Path: args.Path, Namespace: "not-loaded"}, nil

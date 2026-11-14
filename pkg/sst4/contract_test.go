@@ -27,8 +27,8 @@ func TestRegistered(t *testing.T) {
 	if _, ok := contract.(Contract); !ok {
 		t.Fatalf("version 0 is %T", contract)
 	}
-	if !contract.LoadsProvidersForApp() {
-		t.Fatal("SST 4's line leaves the providers out of reading app(), which SST 4.25.0 loaded")
+	if !contract.LoadsImportsForApp() {
+		t.Fatal("SST 4's line leaves imports out of reading app(), which SST 4.25.0 loaded")
 	}
 }
 
