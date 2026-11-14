@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/pulumidev"
 )
 
 // The package's tests are of SST 5's commands, whichever platform this build
@@ -21,25 +23,22 @@ func onContract(t *testing.T, contract int) {
 	t.Cleanup(func() { platformContract = func() int { return project.ContractVersion } })
 }
 
-// SST 4's platform has no plain Pulumi programs: sst dev doesn't find one, and
-// a Pulumi.yaml given with --config isn't one
-func TestNoPulumiProgramsOnSST4(t *testing.T) {
+// SST 4's line runs a plain Pulumi program with sst pulumi dev, as SST 5's
+// does: it runs none of either line's components
+func TestPulumiProgramsOnSST4(t *testing.T) {
 	onContract(t, 0)
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	touch(t, filepath.Join(root, "Pulumi.yaml"))
 	t.Chdir(root)
-	if _, err := cliFor("dev").Discover(); err == nil {
-		t.Fatal("sst dev found a Pulumi program")
-	}
-	if cliFor("dev").IsPulumiProgram() {
-		t.Fatal("it's a Pulumi program")
-	}
 	config := filepath.Join(root, "Pulumi.yaml")
-	if got, err := cliFor("dev", "config", config).Discover(); err != nil || got != config {
-		t.Fatalf("got %q, %v", got, err)
+	if got, err := pulumiDev().Discover(); err != nil || got != config {
+		t.Fatalf("sst pulumi dev: got %q, %v", got, err)
 	}
-	if isPulumiProgram(config) {
-		t.Fatal("--config's Pulumi.yaml is a Pulumi program")
+	if !pulumiDev().IsPulumiProgram() {
+		t.Fatal("sst pulumi dev's project isn't a Pulumi program")
+	}
+	if _, err := cliFor("dev").Discover(); !errors.Is(err, pulumidev.ErrCommand) {
+		t.Fatalf("sst dev: got %v", err)
 	}
 }
 
