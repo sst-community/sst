@@ -1420,6 +1420,11 @@ function renderType(
       }</code>](#${type.name.toLowerCase()})`;
     }
 
+    // A runtime from sst.runtime has a guide, not a component's doc
+    if (fileName === "platform/src/components/runtime.ts") {
+      return `[<code class="type">sst.runtime</code>](/docs/custom-runtimes/)`;
+    }
+
     // types in different doc
     if (fileName?.startsWith("platform/src/components/")) {
       const docHash = type.name.endsWith("Args")
