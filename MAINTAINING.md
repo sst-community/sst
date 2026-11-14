@@ -7,6 +7,8 @@ This is for maintainers and the agents working with them: how SST's releases are
 - **`main`** is the 4.x line: an SST release plus the fork's commits. It is shared history. Merge SST into it. Never rebase it or force-push it.
 - **`v5`** is the fork's own major version, a rewrite of the components. It releases as 5.x and doesn't follow SST's numbering. Its plans and progress are in `docs/plans/` on that branch. Don't tag a 5.x release yet: `release.yml` publishes any `vX.Y.Z` tag, from any branch, to npm as `latest`.
 
+**Both lines run one engine**: `cmd`, `pkg`, `internal` and `go.mod`, and a few platform files, listed in `platform/test/components/shared.test.ts`. Change them on `main`, and `v5` gets them when `main` is merged into it. What only SST 4's components need is in `pkg/sst4`. Each platform says which it is in `sst` in `platform/package.json`.
+
 `git log upstream/v<the SST release main is on>..main --first-parent` lists every commit the fork adds.
 
 ## Your clone
