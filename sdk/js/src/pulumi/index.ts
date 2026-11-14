@@ -107,10 +107,16 @@ export const transform: pulumi.ResourceTransform = async (args) => {
 };
 
 if (dev) {
-  // registerStackTransform is its name before @pulumi/pulumi 3.120
+  // registerStackTransform is its name before @pulumi/pulumi 3.120. The
+  // package's peer range doesn't hold an app to a version, so an older one is
+  // refused here, where it matters.
   const register =
     pulumi.runtime.registerResourceTransform ??
     pulumi.runtime.registerStackTransform;
+  if (!register)
+    throw new Error(
+      "`sst pulumi dev` needs @pulumi/pulumi 3.115.0 or newer, and this program has an older one.",
+    );
   register(transform);
 }
 

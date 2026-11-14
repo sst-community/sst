@@ -92,8 +92,8 @@
   },
   "optionalDependencies": {},
   "peerDependencies": {
-    "@pulumi/aws": ">=6.0.0",
-    "@pulumi/pulumi": ">=3.115.0 <4"
+    "@pulumi/aws": "*",
+    "@pulumi/pulumi": "*"
   },
   "peerDependenciesMeta": {
     "@pulumi/aws": {
