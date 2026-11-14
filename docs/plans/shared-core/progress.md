@@ -2,6 +2,12 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: no targets on SST 4's line
+
+- **The lab passed on `engine`**, and it's draft PR #272 onto `main`, whose CI passed.
+- **A target was still open to SST 4's line.** The engine reads `targets` from `app()` whatever the platform. So an SST 4 app that wrote it, which SST 4's types don't declare, would have had its stage run on an emulator nobody has tried SST 4's components on, without `sst target stop` or `reset`.
+- **The contract says now** (`RefuseTarget`). SST 4's refuses a stage with a target before anything runs: "The "local" stage has a target in app(), and SST 4's components deploy only to the cloud. Targets come with SST 5." SST 5's refuses none. `TestStageTarget` and `pkg/sst4`'s `TestRefuseTarget` pin it.
+
 ## 2026-11-13: checkpoint B, the shared resources' guard and each line's commands
 
 - **A project without a contract stops at once** (the review's one change to A). SST 4's stored provider code takes a call the RPC doesn't serve as done, so a remove run without a contract would drop a site's files, routes or DNS records from the state and leave them in the cloud. The engine reads the contract only through `speaks()`, which panics, saying a `Project` is made with `project.New`. `New` is the only place one gets a contract. `pkg/server`'s test of SST 4's stored provider code makes its project with `New`, and runs on a platform that speaks SST 5's contract.
