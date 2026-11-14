@@ -33,7 +33,7 @@ func TestCommandsForEachContract(t *testing.T) {
 		}
 		return found
 	}
-	sst4 := []string{"init", "ui", "dev", "deploy", "diff", "add", "install", "secret", "shell", "remove", "unlock", "version", "upgrade", "telemetry", "introspect", "print-and-not-quit", "refresh", "state", "tunnel", "diagnostic"}
+	sst4 := []string{"init", "ui", "dev", "deploy", "diff", "add", "install", "secret", "shell", "remove", "unlock", "version", "upgrade", "telemetry", "introspect", "pulumi", "print-and-not-quit", "refresh", "state", "tunnel", "diagnostic"}
 	if got := names(0); !reflect.DeepEqual(got, sst4) {
 		t.Errorf("SST 4's line has\n%v\nnot\n%v", got, sst4)
 	}

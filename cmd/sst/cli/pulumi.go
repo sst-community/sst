@@ -60,9 +60,6 @@ func (c *Cli) discoverPulumi() (string, error) {
 // SST's own pulumi and bun, which only an SST app uses, aren't installed for
 // one: it runs the pulumi on the PATH.
 func (c *Cli) IsPulumiProgram() bool {
-	if !runsPulumiPrograms() {
-		return false
-	}
 	if c.isPulumiDev() {
 		_, err := c.discoverPulumi()
 		return err == nil

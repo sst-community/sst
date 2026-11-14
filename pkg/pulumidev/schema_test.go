@@ -8,18 +8,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/sst/sst/v3/platform"
 )
 
 // The schema editors check sst.dev.yaml with, which the sst package ships,
-// has the fields the CLI reads, and no other. It's SST 5's: with SST 4's
-// platform, sst dev runs no plain Pulumi program, and its sst package has no
-// schema.
+// has the fields the CLI reads, and no other
 func TestSchemaMatchesDevFile(t *testing.T) {
-	if pkg, err := platform.PackageJson(); err != nil || pkg.SST == nil || pkg.SST.Contract < 1 {
-		t.Skip("this build's platform doesn't have SST 5's components")
-	}
 	data, err := os.ReadFile(filepath.Join("..", "..", "sdk", "js", "schema", "sst.dev.json"))
 	if err != nil {
 		t.Fatal(err)

@@ -7,11 +7,10 @@ import (
 )
 
 // CmdPulumi is what SST does for a plain Pulumi project: its dev loop, under
-// a name of its own, so `sst dev` means an SST app's alone
+// a name of its own, so `sst dev` means an SST app's alone. Both lines have
+// it, as it runs none of their components.
 var CmdPulumi = &cli.Command{
-	// SST 5's alone
-	Contract: 1,
-	Name:     "pulumi",
+	Name: "pulumi",
 	Description: cli.Description{
 		Short: "Run a plain Pulumi project with SST's dev loop",
 		Long: strings.Join([]string{

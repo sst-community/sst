@@ -65,7 +65,7 @@ func (c *Cli) Discover() (string, error) {
 		// in a folder with a Pulumi.yaml and no SST app up from it, say what
 		// runs it (pulumi.go): only when there's no sst.config.ts, not one
 		// that couldn't be used
-		if runsPulumiPrograms() && !hasSSTConfig() {
+		if !hasSSTConfig() {
 			if _, findErr := pulumidev.Discover(); findErr == nil {
 				return "", pulumidev.ErrCommand
 			}
