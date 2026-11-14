@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/rpc"
 	"strings"
 
@@ -58,11 +59,18 @@ func (Contract) Begin(p *project.Project, workdir *project.PulumiWorkdir, update
 // Read reads a component's report, a link's properties, and the component's
 // version as SST 4 recorded it. A report is SST 4's output names, or SST 5's
 // record (_sst), which a component of an app's or a package's own can write
-// on either line; a component that has both is read by its record.
+// on either line; a component that has both is read by its record. A record
+// from a newer contract than this CLI reads is left out, with a warning in the
+// log, and the component is read by SST 4's names, as SST 4.25.0, which never
+// read a record, did: one package built for a newer SST doesn't stop every
+// command on the stage.
 func (Contract) Read(complete *project.CompleteEvent, res apitype.ResourceV3, outputs map[string]interface{}) error {
 	report := readReport(outputs)
 	record, err := project.ReadReport(outputs)
-	if err != nil {
+	var newer *project.ErrNewerContract
+	if errors.As(err, &newer) {
+		slog.Warn("a component's report is from a newer program contract, so it's read by SST 4's names", "urn", res.URN, "contract", newer.Version)
+	} else if err != nil {
 		return err
 	}
 	if record != nil {
@@ -162,6 +170,11 @@ func (Contract) HoldsProviderMajors() bool { return false }
 func (Contract) RefuseTarget(stage string) error {
 	return util.NewReadableError(nil, fmt.Sprintf("The %q stage has a target in app(), and SST 4's components deploy only to the cloud. Targets come with SST 5.", stage))
 }
+
+// LoadsProvidersForApp is true: SST 4.25.0 loaded the providers' modules an
+// app's files import when it read `app()`, so a helper `app()` calls can use
+// them once they're installed
+func (Contract) LoadsProvidersForApp() bool { return true }
 
 // Versions are the components' versions as SST 4's CLI read them from the
 // state, by name: each `sst:sst:Version` record's, and 1 for any other of

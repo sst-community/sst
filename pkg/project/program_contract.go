@@ -55,3 +55,7 @@ func (programContract) HoldsProviderMajors() bool { return true }
 
 // RefuseTarget refuses nothing: SST 5's components run on a target
 func (programContract) RefuseTarget(stage string) error { return nil }
+
+// LoadsProvidersForApp is false: `app()` is read before the first install,
+// so the providers' modules the app's files import are left out until run()
+func (programContract) LoadsProvidersForApp() bool { return false }
