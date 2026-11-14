@@ -2,6 +2,13 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: shared platform files, and SST 5's report on SST 4's line
+
+- **Nine platform files are shared**, of the 15 top-level component files both platforms have: the eight that were already the same, and `error.ts`, whose one dependency on SST 5's `context.ts` is written out in it. `shared.test.ts` lists them and fails on an import of a file that isn't one of them; with `error.ts` as it was, it named `./context.js`. `error.ts` on SST 4's line now keeps an error's message as it's written: Pulumi added the property it was serializing to it.
+- **`pkg/sst4` reads a component's `_sst` record** with the engine's reader (`project.ReadReport`, exported for it), over SST 4's output names when a component has both, and stops on a record from a newer contract, as SST 5's line does. `TestReadSST5Record` fails on the read before. SST 4's recorded states read as before.
+- **End to end**, with no cloud: an SST 4 app with a local home and one plain Pulumi component that writes `_sst`. A CLI from before showed no hint after its deploy; one with the change showed it, and its `sst dev` ran the component's pane.
+- **Checked**: both lines' Go tests of the contract packages under `-race`; SST 4's platform (41 files, 418 tests) and `tsc`; SST 5's platform (123 files, 4322 tests) and its API reports, unchanged.
+
 ## 2026-11-13: one stub, and custom runtimes for SST 4
 
 - **How close the lines are.** Measured against `engine`: the Go engine differs from `v5`'s only by `main`'s ports (#262, #267, #269's test) and one test's gate, which `v5` gets with its next merge of `main`. What's SST 4's alone is `pkg/sst4`. The one piece of the engine left on the platform side was the `sst dev` stub's entry point, with a copy on each line that had drifted (SST 5's has #212's HTTP transport). The local runtimes' shims (`functions/nodejs-runtime`, `python-runtime`, `nodejs-bridge`) are on the platform side too, but the same on both lines.
