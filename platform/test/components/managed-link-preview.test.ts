@@ -3,6 +3,9 @@ import * as pulumi from "@pulumi/pulumi";
 import { Provider } from "@pulumi/aws";
 import { createManagedLinkPermissions } from "../../src/components/aws/helpers/managed-link-permissions";
 
+// @ts-ignore
+global.$app = { name: "app", stage: "test" };
+
 const resources: pulumi.runtime.MockResourceArgs[] = [];
 pulumi.runtime.setMocks(
   {

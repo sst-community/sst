@@ -741,11 +741,6 @@ export interface FunctionArgs {
    * - **To move resources between groups:** do the same, with `retainInline: true`
    *   during the deploy that changes the groups.
    *
-   * If no grants are left inline, SST doesn't set an inline policy, as for a function
-   * without permissions. An inline policy left from before opting in then stays on
-   * the role, with the same grants as the managed policies, until a grant is
-   * inline again.
-   *
    * The deploy role needs permission to create, update and delete IAM managed policies.
    *
    * @example
@@ -2414,12 +2409,16 @@ export class Function extends Component implements Link.Linkable {
         linkPermissions,
         dev,
         dev.apply((dev) => (dev ? Function.appsync() : undefined)),
+        managedLinks?.fallback ?? [],
       ]).apply(
-        ([argsPermissions, linkPermissions, dev, appsync]) =>
+        ([argsPermissions, linkPermissions, dev, appsync, fallback]) =>
           iam.getPolicyDocumentOutput({
             statements: [
               ...argsPermissions,
               ...linkPermissions,
+              ...(!argsPermissions.length && !linkPermissions.length && !dev
+                ? fallback
+                : []),
               ...(dev
                 ? [
                     {

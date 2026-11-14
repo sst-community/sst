@@ -2,6 +2,7 @@ import { iam } from "@pulumi/aws";
 import { all, ComponentResourceOptions, Input, output } from "@pulumi/pulumi";
 import { Link } from "../../link";
 import { VisibleError } from "../../error";
+import { physicalName } from "../../naming";
 import type { Permission } from "../permission";
 import type { FunctionArgs } from "../function";
 
@@ -91,6 +92,13 @@ export function createManagedLinkPermissions(
       : selection.apply(({ remaining }) =>
           Link.getInclude<Permission>("aws.permission", remaining),
         ),
+    // A copy of one grouped grant, for a role with nothing else inline. Its inline
+    // policy is then never empty, so the old one is always replaced and can't keep
+    // grants for a resource that was unlinked. It grants nothing the managed policy
+    // doesn't.
+    fallback: selection.apply(({ permissions }) =>
+      permissions[names[0]].slice(0, 1),
+    ),
     // Names, not resolved document sizes, determine resource identity during preview.
     policies: names.map((group) => {
       const policy = selection.apply(({ permissions }) =>
@@ -111,11 +119,12 @@ export function createManagedLinkPermissions(
       return new iam.Policy(
         `${name}Link${group}Policy`,
         {
+          name: physicalName(128, `${name}Link${group}Policy`),
           policy: policy.json.apply((json) =>
             managedPolicyDocument(group, json),
           ),
         },
-        opts,
+        { ...opts, ignoreChanges: ["name"] },
       );
     }),
   };

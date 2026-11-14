@@ -233,7 +233,9 @@ describe("Function managed link permissions", () => {
   // which detaches its managed policies on delete, must depend on every policy.
   it("deletes the role before its managed policies", async () => {
     const files = linked("RemoveFiles");
-    const jobs = linked("RemoveJobs", ["arn:aws:sqs:us-east-1:111111111111:jobs"]);
+    const jobs = linked("RemoveJobs", [
+      "arn:aws:sqs:us-east-1:111111111111:jobs",
+    ]);
     new Function("Remove", {
       ...args,
       link: [files, jobs],
@@ -241,8 +243,12 @@ describe("Function managed link permissions", () => {
     });
     await settle();
     const role = dependencies.get("RemoveRole")!;
-    expect(role).toContainEqual(expect.stringContaining("::RemoveLinkStoragePolicy"));
-    expect(role).toContainEqual(expect.stringContaining("::RemoveLinkJobsPolicy"));
+    expect(role).toContainEqual(
+      expect.stringContaining("::RemoveLinkStoragePolicy"),
+    );
+    expect(role).toContainEqual(
+      expect.stringContaining("::RemoveLinkJobsPolicy"),
+    );
     // No other resource holds an attachment that could outlive the role.
     expect(ownershipFor("Remove")).toEqual([]);
   });
@@ -253,7 +259,9 @@ describe("Function managed link permissions", () => {
     await settle();
     expect(policiesFor("Default")).toHaveLength(0);
     expect(ownershipFor("Default")).toEqual([]);
-    expect(inlineFor("Default")[0].Resource).toEqual(["arn:aws:s3:::example/*"]);
+    expect(inlineFor("Default")[0].Resource).toEqual([
+      "arn:aws:s3:::example/*",
+    ]);
     expect(roleFor("Default").managedPolicyArns).toEqual([
       "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
     ]);
@@ -267,7 +275,9 @@ describe("Function managed link permissions", () => {
     await settle();
     expect(policiesFor("Restored")).toHaveLength(0);
     expect(ownershipFor("Restored")).toEqual([]);
-    expect(inlineFor("Restored")[0].Resource).toEqual(["arn:aws:s3:::example/*"]);
+    expect(inlineFor("Restored")[0].Resource).toEqual([
+      "arn:aws:s3:::example/*",
+    ]);
     expect(roleFor("Restored").managedPolicyArns).toHaveLength(1);
   });
 
@@ -280,7 +290,9 @@ describe("Function managed link permissions", () => {
     } as any);
     await settle();
     expect(policiesFor("Migration")).toHaveLength(1);
-    expect(inlineFor("Migration")[0].Resource).toEqual(["arn:aws:s3:::example/*"]);
+    expect(inlineFor("Migration")[0].Resource).toEqual([
+      "arn:aws:s3:::example/*",
+    ]);
     expect(roleFor("Migration").managedPolicyArns).toContain(
       "arn:aws:test:::MigrationLinkStoragePolicy",
     );
@@ -312,10 +324,14 @@ describe("Function managed link permissions", () => {
     expect(documents).toHaveLength(3);
     expect(documents.reduce((n, p) => n + p.length, 0)).toBeGreaterThan(10240);
     expect(documents.every((p) => p.length <= 6144)).toBe(true);
-    // With nothing left inline, no inline policy is set, as for a default function.
-    // Not an empty `{}` block: the Pulumi bridge names it `inline`, and a later
-    // update deleted the real inline policy on AWS.
-    expect(roleFor("Large").inlinePolicies).toEqual([]);
+    // With nothing else inline, the role keeps a copy of one grouped grant inline,
+    // from the first group by name ("One"), so its old inline policy is replaced.
+    expect(inlineFor("Large")).toEqual(
+      JSON.parse(policiesFor("LargeLinkOne")[0].inputs.policy).Statement.slice(
+        0,
+        1,
+      ),
+    );
     expect(roleFor("Large").managedPolicyArns).toHaveLength(4);
   });
 
@@ -352,7 +368,84 @@ describe("Function managed link permissions", () => {
       Resource: ["arn:aws:s3:::example/*"],
       Condition: { StringEquals: { "aws:PrincipalTag/team": ["read only"] } },
     });
-    expect(roleFor("Denied").inlinePolicies).toEqual([]);
+    expect(inlineFor("Denied")).toEqual(
+      JSON.parse(policiesFor("Denied")[0].inputs.policy).Statement,
+    );
+  });
+
+  // PR #218 review: with every grant in groups and no inline policy set, the inline
+  // policy from before opting in stayed on the role, so unlinking a resource didn't
+  // remove the function's access to it. The role must always pass an inline policy.
+  it("replaces the inline policy when every grant is in a group", async () => {
+    const uploads = linked("AllUploads", ["arn:aws:s3:::uploads/*"]);
+    const reports = linked("AllReports", ["arn:aws:s3:::reports/*"]);
+    const jobs = linked("AllJobs", ["arn:aws:sqs:us-east-1:111111111111:jobs"]);
+    new Function("AllGrouped", {
+      ...args,
+      link: [uploads, reports, jobs],
+      linkPermissions: {
+        managed: { Storage: [uploads, reports], Jobs: [jobs] },
+      },
+    });
+    // The same function after `reports` is unlinked.
+    new Function("Unlinked", {
+      ...args,
+      link: [uploads, jobs],
+      linkPermissions: { managed: { Storage: [uploads], Jobs: [jobs] } },
+    });
+    await settle();
+    for (const name of ["AllGrouped", "Unlinked"]) {
+      expect(roleFor(name).inlinePolicies).toHaveLength(1);
+      expect(roleFor(name).inlinePolicies[0].name).toBe("inline");
+      // A copy of the first grant of the first group by name, "Jobs".
+      expect(inlineFor(name)).toEqual([
+        {
+          Effect: "Allow",
+          Action: ["s3:GetObject"],
+          Resource: ["arn:aws:sqs:us-east-1:111111111111:jobs"],
+        },
+      ]);
+    }
+    expect(JSON.stringify(roleFor("Unlinked").inlinePolicies)).not.toContain(
+      "reports",
+    );
+  });
+
+  it("adds no copy when other grants are inline", async () => {
+    const storage = linked("CopyStorage");
+    new Function("NoCopy", {
+      ...args,
+      link: [storage],
+      linkPermissions: { managed: { Storage: [storage] } },
+      permissions: [
+        {
+          actions: ["sqs:SendMessage"],
+          resources: ["arn:aws:sqs:us-east-1:111111111111:queue"],
+        },
+      ],
+    });
+    await settle();
+    expect(inlineFor("NoCopy")).toEqual([
+      {
+        Effect: "Allow",
+        Action: ["sqs:SendMessage"],
+        Resource: ["arn:aws:sqs:us-east-1:111111111111:queue"],
+      },
+    ]);
+  });
+
+  it("names the managed policies like the role", async () => {
+    const storage = linked("NamedStorage");
+    new Function("Named", {
+      ...args,
+      link: [storage],
+      linkPermissions: { managed: { Storage: [storage] } },
+    });
+    await settle();
+    const [policy] = policiesFor("Named");
+    expect(policy.inputs.name).toMatch(
+      /^app-test-NamedLinkStoragePolicy-\w{8}$/,
+    );
   });
 
   it("keeps live-dev bridge grants inline and exposes the same runtime bindings", async () => {
