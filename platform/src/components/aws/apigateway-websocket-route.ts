@@ -43,6 +43,8 @@ export interface Args extends ApiGatewayWebSocketRouteArgs {
    * @internal
    */
   handlerTransform?: Transform<FunctionArgs>;
+  /** @internal */
+  sharedPermission?: lambda.Permission;
 }
 
 /**
@@ -70,7 +72,7 @@ export class ApiGatewayWebSocketRoute extends Component {
 
     validateJwtAuth();
     const fn = createFunction();
-    const permission = createPermission();
+    const permission = args.sharedPermission ?? createPermission();
     const integration = createIntegration();
     const apiRoute = createApiRoute();
 

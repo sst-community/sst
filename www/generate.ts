@@ -1210,6 +1210,10 @@ function renderType(
         '<code class="primitive">"arn:aws:lambda:$&#123;string&#125;"</code>',
       ].join("");
     }
+    // Returned by addHandler(); documented on each API rather than a separate component page.
+    if (type.name === "ApiGatewayLambdaHandler") {
+      return `<code class="type">${type.name}</code>`;
+    }
     if (type.name === "SsrSite") {
       return ['<code class="primitive">All SSR sites</code>'].join("");
     }
