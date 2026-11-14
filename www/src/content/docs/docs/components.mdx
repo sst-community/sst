@@ -418,6 +418,40 @@ Read more about [`$resolve`](/docs/reference/global/#resolve).
 
 ---
 
+## Report to `sst dev`
+
+A component of your own, or one from a package, can tell SST's CLI about itself: a command for `sst dev` to run in a pane of its own, and a URL to show once a deploy is done. It writes them as its `_sst` output, which SST 4 and SST 5 read the same way.
+
+```ts title="sst.config.ts"
+class Docs extends $util.ComponentResource {
+  constructor(name: string, opts?: $util.ComponentResourceOptions) {
+    super("acme:index:Docs", name, {}, opts);
+    // The component's resources go here, with { parent: this }
+
+    this.registerOutputs({
+      _sst: {
+        contract: 1,
+        dev: {
+          command: "npm run dev",
+          directory: "docs",
+          title: "Docs",
+          autostart: true,
+        },
+        hint: "https://docs.example.com",
+      },
+    });
+  }
+}
+```
+
+- **`contract`** is `1`, the version of the record.
+- **`dev`** is the command: `command`, `directory` from the app's folder, `title` for its pane, `environment`, `autostart` (`true` starts it with `sst dev`; otherwise you start it from its pane), and `links`, the names of the app's linkable resources, like `MyBucket`, whose properties its environment gets.
+- **`hint`** is a URL the CLI shows once a deploy is done.
+
+The record has a few more items SST's own components use, like a `tunnel` for `sst tunnel`.
+
+---
+
 ## Versioning
 
 SST components evolve over time, sometimes introducing breaking changes. To maintain backwards compatibility, we implement a component versioning scheme.

@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,7 +22,6 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/mosaic/dev"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/monoplexer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/multiplexer"
-	"github.com/sst/sst/v3/cmd/sst/mosaic/socket"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/watcher"
 	"github.com/sst/sst/v3/internal/util"
@@ -51,7 +53,7 @@ func CmdMosaic(c *cli.Cli) error {
 		if err != nil {
 			return err
 		}
-		slog.Info("found server", "url", url)
+		slog.Info("found server")
 		evts, err := dev.Stream(c.Context, url, project.CompleteEvent{})
 		if err != nil {
 			return err
@@ -94,9 +96,9 @@ func CmdMosaic(c *cli.Cli) error {
 				if !ok {
 					return nil
 				}
-				query := "directory=" + cwd
+				query := "directory=" + neturl.QueryEscape(cwd)
 				if child != "" {
-					query = "name=" + child
+					query = "name=" + neturl.QueryEscape(child)
 				}
 				nextEnv, err := dev.Env(c.Context, query, url)
 				if err != nil {
@@ -131,7 +133,7 @@ func CmdMosaic(c *cli.Cli) error {
 						fields[0],
 						fields[1:]...,
 					)
-					cmd.Env = os.Environ()
+					cmd.Env = nextEnv.Inherit(os.Environ())
 					cmd.Env = append(cmd.Env, "FORCE_COLOR=1")
 					for k, v := range nextEnv.Env {
 						cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
@@ -164,12 +166,9 @@ func CmdMosaic(c *cli.Cli) error {
 		return util.NewReadableError(nil, "The dev command for this process does not look right. Check your dev script in package.json to make sure it is simply starting your process and not running `sst dev`. More info here: https://sst-community.github.io/sst/docs/reference/cli/#dev")
 	}
 
-	p, err := c.InitProject()
+	p, err := c.InitDev()
 	if err != nil {
 		return err
-	}
-	if p.App().Protect {
-		return project.ErrProtectedDevStage
 	}
 	policyPath := c.String("policy")
 	if policyPath != "" {
@@ -182,8 +181,8 @@ func CmdMosaic(c *cli.Cli) error {
 	wg.Go(func() error {
 		defer c.Cancel()
 		return watcher.Start(c.Context, watcher.WatchConfig{
-			Root:  p.PathRoot(),
-			Watch: p.App().Watch,
+			Root:  p.PathWatch(),
+			Watch: p.Watch(),
 		})
 	})
 
@@ -191,15 +190,18 @@ func CmdMosaic(c *cli.Cli) error {
 	if err != nil {
 		return err
 	}
+	removeServerFile, err := server.WriteDiscoveryFile(p.PathConfig(), p.Stage())
+	if err != nil {
+		return err
+	}
+	defer removeServerFile()
 
+	// sst dev's routes are there before the server serves (server.Start), as
+	// the UI asks for them as soon as it's ready
+	devRoutes := dev.Register(p, server)
 	wg.Go(func() error {
 		defer c.Cancel()
-		return dev.Start(c.Context, p, server)
-	})
-
-	wg.Go(func() error {
-		defer c.Cancel()
-		return socket.Start(c.Context, p, server)
+		return devRoutes.Run(c.Context)
 	})
 
 	wg.Go(func() error {
@@ -211,14 +213,14 @@ func CmdMosaic(c *cli.Cli) error {
 			case evt := <-evts:
 				switch evt := evt.(type) {
 				case *runtime.BuildInput:
-					p.Runtime.AddTarget(evt)
+					p.Runtimes().AddTarget(evt)
 				}
 			}
 		}
 	})
 
-	os.Setenv("SST_SERVER", fmt.Sprintf("http://localhost:%v", server.Port))
-	for name, a := range p.App().Providers {
+	os.Setenv("SST_SERVER", server.URL())
+	for name, a := range p.Providers() {
 		args := a
 		switch name {
 		case "aws":
@@ -243,6 +245,8 @@ func CmdMosaic(c *cli.Cli) error {
 	})
 
 	currentExecutable, _ := os.Executable()
+	// a pane runs the dev loop's command again: sst dev, or sst pulumi dev
+	devCommand := append([]string{currentExecutable}, c.DevCommand()...)
 
 	mode := c.String("mode")
 
@@ -267,12 +271,12 @@ func CmdMosaic(c *cli.Cli) error {
 		}
 		multiEnv := append(
 			c.Env(),
-			fmt.Sprintf("SST_SERVER=http://localhost:%v", server.Port),
-			"SST_STAGE="+p.App().Stage,
+			"SST_SERVER="+server.URL(),
+			"SST_STAGE="+p.Stage(),
 		)
-		serverURL := fmt.Sprintf("http://localhost:%v", server.Port)
-		_, hasAWS := p.App().Providers["aws"]
-		showWorkers := p.App().Home == "cloudflare" && !hasAWS
+		serverURL := server.URL()
+		_, hasAWS := p.Providers()["aws"]
+		showWorkers := p.Home() == "cloudflare" && !hasAWS
 		fnTitle := "Functions"
 		fnFilter := "function"
 		if showWorkers {
@@ -305,21 +309,16 @@ func CmdMosaic(c *cli.Cli) error {
 					return nil
 				}
 				var options []multiplexer.FilterOption
-				for _, r := range completed.Resources {
-					if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:cloudflare:Worker" {
-						name := r.URN.Name()
-						handler := name
-						if meta, ok := r.Outputs["_metadata"].(map[string]interface{}); ok {
-							if h, ok := meta["handler"].(string); ok {
-								handler = h
-							}
-						}
-						options = append(options, multiplexer.FilterOption{
-							Label:       name,
-							Description: handler,
-							Value:       name,
-						})
+				for _, name := range slices.Sorted(maps.Keys(completed.Functions)) {
+					handler := completed.Functions[name].Handler
+					if handler == "" {
+						handler = name
 					}
+					options = append(options, multiplexer.FilterOption{
+						Label:       name,
+						Description: handler,
+						Value:       name,
+					})
 				}
 				return options
 			},
@@ -353,7 +352,7 @@ func CmdMosaic(c *cli.Cli) error {
 							}
 							multi.AddProcess(multiplexer.PaneConfig{
 								Key:       d.Name,
-								Args:      []string{currentExecutable, "dev"},
+								Args:      slices.Clone(devCommand),
 								Icon:      "→",
 								Title:     title,
 								Cwd:       dir,
@@ -365,7 +364,7 @@ func CmdMosaic(c *cli.Cli) error {
 						for name := range evt.Tunnels {
 							multi.AddProcess(multiplexer.PaneConfig{
 								Key:       "tunnel",
-								Args:      []string{currentExecutable, "tunnel", "--stage", p.App().Stage},
+								Args:      []string{currentExecutable, "tunnel", "--stage", p.Stage()},
 								Icon:      "⇌",
 								Title:     "Tunnel",
 								Killable:  true,
@@ -408,13 +407,7 @@ func CmdMosaic(c *cli.Cli) error {
 								Env: append(multiEnv, "SST_LOG="+p.PathLog("ui-task")),
 							})
 						}
-						var fnNames []string
-						for _, r := range evt.Resources {
-							if string(r.Type) == "sst:aws:Function" || string(r.Type) == "sst:cloudflare:Worker" {
-								fnNames = append(fnNames, r.URN.Name())
-							}
-						}
-						multi.CheckFilter("function", fnNames)
+						multi.CheckFilter("function", slices.Collect(maps.Keys(evt.Functions)))
 						var taskNames []string
 						for name := range evt.Tasks {
 							taskNames = append(taskNames, name)
@@ -436,10 +429,10 @@ func CmdMosaic(c *cli.Cli) error {
 
 	if mode == "mono" {
 		mono := monoplexer.New()
-		_, hasAWS := p.App().Providers["aws"]
+		_, hasAWS := p.Providers()["aws"]
 		fnTitle := "Function"
 		fnFilter := "function"
-		if p.App().Home == "cloudflare" && !hasAWS {
+		if p.Home() == "cloudflare" && !hasAWS {
 			fnTitle = "Worker"
 			fnFilter = "worker"
 		}
@@ -466,7 +459,7 @@ func CmdMosaic(c *cli.Cli) error {
 							}
 							// A command that doesn't parse is started without arguments, so
 							// its process reports the error and the rest of sst dev keeps running.
-							args := []string{currentExecutable, "dev"}
+							args := slices.Clone(devCommand)
 							if words, err := parseDevCommand(d.Name, d.Command); err == nil {
 								args = append(append(args, "--"), words...)
 							}
@@ -485,7 +478,7 @@ func CmdMosaic(c *cli.Cli) error {
 							)
 						}
 						for range evt.Tunnels {
-							mono.AddProcess("tunnel", []string{currentExecutable, "tunnel", "--stage", p.App().Stage}, "", "Tunnel", true)
+							mono.AddProcess("tunnel", []string{currentExecutable, "tunnel", "--stage", p.Stage()}, "", "Tunnel", true)
 						}
 						break
 					}

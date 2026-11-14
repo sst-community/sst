@@ -1,0 +1,459 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
+	"github.com/sst/sst/v3/cmd/sst/cli"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
+	"github.com/sst/sst/v3/internal/util"
+	"github.com/sst/sst/v3/pkg/bus"
+	"github.com/sst/sst/v3/pkg/move"
+	"github.com/sst/sst/v3/pkg/project"
+	"github.com/sst/sst/v3/pkg/project/provider"
+	"github.com/sst/sst/v3/pkg/server"
+	"golang.org/x/sync/errgroup"
+)
+
+var CmdMigrate = &cli.Command{
+	// SST 5's alone
+	Contract: 1,
+	Name:     "migrate",
+	Description: cli.Description{
+		Short: "Move a stage to new components",
+		Long: strings.Join([]string{
+			"Move a stage deployed with SST 4 to the components in your `sst.config.ts`.",
+			"",
+			"With `--check`, it previews the move and changes nothing. It shows what the move keeps, what it updates in place, and anything else it would do, and it fails when the move would do something it may not:",
+			"",
+			"- delete or replace a resource that holds data, like a bucket, a table, a database or a log group;",
+			"- create, delete or replace a resource no component's state map lists.",
+			"",
+			"Where a resource changes because an object in a `transform` of one of SST's components is merged into the component's settings, where SST 4 put it in their place, it says which settings the merge keeps.",
+			"",
+			"Before it previews anything, it refuses a stage that has a component of SST 4's with no 5.0 form, like a `Vector` or a `.v1`, and names each one with what to do about it with SST 4.",
+			"",
+			"```bash frame=\"none\"",
+			"sst migrate --check --stage dev",
+			"```",
+			"",
+			"Without `--check`, it moves the stage. It takes the stage's lock, checks the move, and stops there if the check fails. Then it saves a copy of the stage's state in its home, takes out of the state what the components' state maps release, without deleting it, and deploys, with a preview first. It holds the lock from the check to the end, so nothing else deploys the stage in between. The deploy runs your config again, so don't change it while the move runs, or what it deploys isn't what it checked:",
+			"",
+			"```bash frame=\"none\"",
+			"sst migrate --stage dev",
+			"```",
+			"",
+			"A resource is released when the one that takes its place can't be carried over from it, like a site's files, which SST now uploads with a resource of a new type. The new one writes the same thing again.",
+			"",
+			"A stage deployed with SST 4 can't be deployed with `sst deploy` or `sst dev`, or removed with `sst remove`, until it has moved. Its `sst diff` and `sst refresh` still run. To remove a stage you won't move, use SST 4.",
+			"",
+			"With `--undo`, it puts a stage that moved back on SST 4. It puts the state the move saved in place of the stage's, brought up to date where the move changed something in place, and lets SST 4 deploy the stage again. It changes nothing in the cloud: SST 4's next `sst deploy` puts back what the move changed. It's refused once SST 5 has created, deleted or replaced anything on the stage since the move. A deploy that only updated something in place, uploaded a function's code again or built a site again, like each start of `sst dev`, doesn't stop it.",
+			"",
+			"```bash frame=\"none\"",
+			"sst migrate --undo --stage dev",
+			"```",
+			"",
+			"With `--codemod`, it rewrites your `sst.config.ts`, and the files it imports, for the new components first: their names, and the changes to their args that are mechanical. It lists each change, and each thing it couldn't do with what to write. It leaves a file with changes git hasn't committed as it is, unless you pass `--force`, so its changes show as a diff. With `--dry-run`, it prints the diff and writes nothing.",
+			"",
+			"```bash frame=\"none\"",
+			"sst migrate --codemod",
+			"```",
+		}, "\n"),
+	},
+	Flags: []cli.Flag{
+		{
+			Name: "check",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Preview the move",
+				Long:  "Preview the move and check it, without changing anything.",
+			},
+		},
+		{
+			Name: "dev",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Move the stage as sst dev deploys it",
+				Long:  "Check or move the stage as `sst dev` deploys it, with a stub in place of each function.",
+			},
+		},
+		{
+			Name: "undo",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Put a stage that moved back on SST 4",
+				Long:  "Put the state the move saved back in place of the stage's, brought up to date where the move changed something in place, so that SST 4 can deploy the stage again.",
+			},
+		},
+		{
+			Name: "codemod",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Rewrite the config for the new components",
+				Long:  "Rewrite `sst.config.ts`, and the files it imports, for the new components, and list what it couldn't do. It needs no stage.",
+			},
+		},
+		{
+			Name: "dry-run",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Print the codemod's diff",
+				Long:  "With `--codemod`, print the changes as a diff and write nothing.",
+			},
+		},
+		{
+			Name: "force",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Rewrite files git hasn't committed",
+				Long:  "With `--codemod`, rewrite files that have changes git hasn't committed.",
+			},
+		},
+		{
+			Name: "json",
+			Type: "bool",
+			Description: cli.Description{
+				Short: "Output as JSON",
+				Long:  "Output what the move would do as JSON to stdout. Only with `--check`.",
+			},
+		},
+	},
+	Examples: []cli.Example{
+		{
+			Content: "sst migrate --codemod",
+			Description: cli.Description{
+				Short: "Rewrite the config for the new components",
+			},
+		},
+		{
+			Content: "sst migrate --check --stage production",
+			Description: cli.Description{
+				Short: "Check what moving production would do",
+			},
+		},
+		{
+			Content: "sst migrate --stage production",
+			Description: cli.Description{
+				Short: "Move production",
+			},
+		},
+		{
+			Content: "sst migrate --undo --stage production",
+			Description: cli.Description{
+				Short: "Put production back on SST 4",
+			},
+		},
+	},
+	Run: func(c *cli.Cli) error {
+		// SST 4's: going back to it (migrate_undo.go)
+		if c.Bool("undo") {
+			for _, other := range []string{"check", "dev", "codemod", "dry-run", "force", "json"} {
+				if c.Bool(other) {
+					return util.NewReadableError(nil, fmt.Sprintf("`--undo` goes on its own, not with `--%v`.", other))
+				}
+			}
+			return runUndo(c)
+		}
+		if c.Bool("codemod") {
+			return runCodemod(c)
+		}
+		if c.Bool("dry-run") || c.Bool("force") {
+			return util.NewReadableError(nil, "`--dry-run` and `--force` go with `--codemod`.")
+		}
+		moving := !c.Bool("check")
+		jsonOutput := c.Bool("json")
+		if moving && jsonOutput {
+			return util.NewReadableError(nil, "`--json` goes with `--check`: it prints what a move would do.")
+		}
+
+		p, err := c.InitProject()
+		if err != nil {
+			return err
+		}
+		defer p.Cleanup()
+
+		// One server and one UI for the check and the move: stopping the
+		// server cancels the command's context, so it's stopped once, at the
+		// end
+		var wg errgroup.Group
+		uiOptions := []ui.Option{}
+		if jsonOutput {
+			uiOptions = append(uiOptions, ui.WithSilent)
+		}
+		u := ui.New(c.Context, uiOptions...)
+		defer u.Destroy()
+		s, err := server.New()
+		if err != nil {
+			return err
+		}
+		wg.Go(func() error {
+			defer c.Cancel()
+			return s.Start(c.Context, p)
+		})
+		events := bus.SubscribeAll()
+		if !jsonOutput {
+			wg.Go(func() error {
+				for evt := range events {
+					u.Event(evt)
+				}
+				return nil
+			})
+		}
+		finish := func(err error) error {
+			bus.Unsubscribe(events)
+			close(events)
+			c.Cancel()
+			if waitErr := wg.Wait(); waitErr != nil && err == nil {
+				return waitErr
+			}
+			return err
+		}
+
+		// A move holds the stage's lock from its check to its end, so nothing
+		// else deploys the stage between them. The deploy runs the config
+		// again, which the guide and the help ask not to change meanwhile: a
+		// guard on the deploy itself was weighed and left out (plan.md,
+		// decisions, 2026-11-09)
+		var locked *provider.Update
+		if moving {
+			locked, err = p.Lock("deploy")
+			if err != nil {
+				if errors.Is(err, provider.ErrLockExists) {
+					bus.Publish(&project.ConcurrentUpdateEvent{})
+				}
+				return finish(err)
+			}
+			defer p.Unlock()
+		}
+		// Taking the lock put the move in the stage's history; one that
+		// doesn't run leaves it out
+		forget := func() {
+			if locked != nil {
+				p.DropUpdate(locked)
+			}
+		}
+
+		result, err := checkMove(c, p, s.URL())
+		if err != nil {
+			forget()
+			return finish(err)
+		}
+		if jsonOutput {
+			encoder := json.NewEncoder(os.Stdout)
+			encoder.SetIndent("", "  ")
+			if err := encoder.Encode(result); err != nil {
+				return finish(err)
+			}
+		} else {
+			renderMove(result, u)
+		}
+		if !result.OK() {
+			unchanged := ""
+			if moving {
+				forget()
+				unchanged = " Nothing was changed."
+			}
+			return finish(util.NewReadableError(nil, fmt.Sprintf("The stage can't move as it is: %v.%v", count(len(result.Problems), "change a move may not make", "changes a move may not make"), unchanged)))
+		}
+		if !moving {
+			return finish(nil)
+		}
+
+		// The move the check passed. Under the same lock, the state is saved
+		// and what the maps release is marked retained, so it leaves the state
+		// without its delete, and the components apply their maps. So is what
+		// the move replaces but keeps in the cloud.
+		released := []project.Released{}
+		for _, r := range result.Released {
+			released = append(released, project.Released{URN: r.URN, Type: r.Type})
+		}
+		// SST 4's stub code a replace keeps (move.keepReplaced)
+		for _, r := range result.Retained {
+			released = append(released, project.Released{URN: r.URN, Type: r.Type})
+		}
+		err = p.Run(c.Context, &project.StackInput{
+			Command: "deploy",
+			Move:    true,
+			Release: released,
+			Locked:  locked,
+			Dev:     c.Bool("dev"),
+			Server:  s.URL(),
+			Verbose: c.Bool("verbose"),
+		})
+		// Nothing serves the stage's functions during a move with `--dev`, so
+		// one the config invokes as it deploys stops it, and `sst dev`, which
+		// serves them, finishes it (plan.md, decisions, 2026-11-11)
+		if c.Bool("dev") && errors.Is(err, project.ErrStackRunFailed) {
+			err = util.NewReadableError(err, "The move stopped partway. If it stopped at a function your config invokes as it deploys, run `sst dev`: its deploy finishes the move, with the function run on your machine.")
+		}
+		return finish(err)
+	},
+}
+
+// checkMove runs Pulumi's preview of the move and sorts its steps. It reads
+// the steps and the reported parts from a subscription of its own: the UI's
+// drops events when it falls behind, and a step lost would be a change the
+// check didn't see.
+func checkMove(c *cli.Cli, p *project.Project, server string) (*move.Result, error) {
+	steps := []apitype.StepEventMetadata{}
+	parts := []move.Part{}
+	// SST 4's: where a transform's object is merged, which it replaced
+	// (move.Explain)
+	merged := []move.Merged{}
+	var summary *apitype.SummaryEvent
+	collected := bus.Subscribe(&apitype.ResOutputsEvent{}, &move.Part{}, &move.Merged{}, &apitype.SummaryEvent{})
+	collect := func(evt interface{}) {
+		switch evt := evt.(type) {
+		case *apitype.ResOutputsEvent:
+			steps = append(steps, evt.Metadata)
+		case *move.Part:
+			parts = append(parts, *evt)
+		case *move.Merged:
+			merged = append(merged, *evt)
+		case *apitype.SummaryEvent:
+			summary = evt
+		}
+	}
+	stop := make(chan struct{})
+	collecting := make(chan struct{})
+	go func() {
+		defer close(collecting)
+		for {
+			select {
+			case evt := <-collected:
+				collect(evt)
+			case <-stop:
+				// What's left once nothing more is published
+				for {
+					select {
+					case evt := <-collected:
+						collect(evt)
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
+	err := p.Run(c.Context, &project.StackInput{
+		Command: "diff",
+		Move:    true,
+		Server:  server,
+		Dev:     c.Bool("dev"),
+		Verbose: c.Bool("verbose"),
+	})
+	lost := bus.DroppedFrom(collected)
+	bus.Unsubscribe(collected)
+	close(stop)
+	<-collecting
+	if err != nil {
+		return nil, err
+	}
+	if lost > 0 {
+		return nil, util.NewReadableError(nil, "Some of the preview's events were lost, so the move can't be checked. Run it again.")
+	}
+	if err := move.Seen(steps, summary); err != nil {
+		return nil, util.NewReadableError(err, "The move can't be checked: "+err.Error()+". Run it again.")
+	}
+	result := move.Check(steps, parts)
+	result.Explain(merged)
+	return result, nil
+}
+
+func renderMove(result *move.Result, u *ui.UI) {
+	moved, updated := 0, 0
+	for _, kept := range result.Kept {
+		if kept.From != "" {
+			moved++
+		}
+		if len(kept.Fields) > 0 {
+			updated++
+		}
+	}
+	line := func(number int, what string) {
+		fmt.Println(ui.TEXT_NORMAL_BOLD.Render(fmt.Sprintf("%6d", number)) + "  " + what)
+	}
+	fmt.Println(ui.TEXT_HIGHLIGHT_BOLD.Render("➜") + "  " + ui.TEXT_NORMAL_BOLD.Render("The move"))
+	fmt.Println()
+	line(len(result.Kept), fmt.Sprintf("kept, %v at a new address and %v updated in place", moved, updated))
+	line(len(result.Left), "taken out of the state, with nothing in the cloud behind them")
+	line(len(result.Released), "released: taken out of the state without being deleted")
+	line(len(result.Created), "created")
+	line(len(result.Replaced), "replaced")
+	fmt.Println()
+
+	for _, kept := range result.Kept {
+		if len(kept.Fields) == 0 {
+			continue
+		}
+		fmt.Println(ui.TEXT_WARNING_BOLD.Render("*") + "  " + ui.TEXT_NORMAL_BOLD.Render(u.FormatURN(kept.URN)))
+		fmt.Println("   " + ui.TEXT_DIM.Render("Updated in place: "+strings.Join(kept.Fields, ", ")))
+		for _, field := range kept.Merged {
+			fmt.Println("   " + ui.TEXT_DIM.Render(mergedLine(field)))
+		}
+	}
+	changes := func(icon string, list []move.Change) {
+		for _, change := range list {
+			fmt.Println(icon + "  " + ui.TEXT_NORMAL_BOLD.Render(u.FormatURN(change.URN)))
+			fmt.Println("   " + ui.TEXT_DIM.Render(change.Why))
+		}
+	}
+	changes(ui.TEXT_DIM_BOLD.Render("-"), result.Released)
+	changes(ui.TEXT_SUCCESS_BOLD.Render("+"), result.Created)
+	changes(ui.TEXT_WARNING_BOLD.Render("±"), result.Replaced)
+	for _, problem := range result.Problems {
+		fmt.Println(ui.TEXT_DANGER_BOLD.Render("✕") + "  " + ui.TEXT_NORMAL_BOLD.Render(u.FormatURN(problem.URN)) + ui.TEXT_DANGER.Render(" would be "+done(problem.Does)))
+		fmt.Println("   " + problem.Why)
+		for _, field := range problem.Merged {
+			fmt.Println("   " + ui.TEXT_DIM.Render(mergedLine(field)))
+		}
+	}
+	if result.OK() {
+		fmt.Println()
+		fmt.Println(ui.TEXT_SUCCESS_BOLD.Render("✓") + "  " + ui.TEXT_NORMAL_BOLD.Render("The stage can move."))
+	}
+	fmt.Println()
+}
+
+func done(does string) string {
+	switch does {
+	case "create":
+		return "created"
+	case "delete":
+		return "deleted"
+	case "replace":
+		return "replaced"
+	case "update":
+		return "updated"
+	}
+	return does
+}
+
+func count(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%v %v", n, many)
+}
+
+// mergedLine says why a field a transform sets changes: SST 5 merges the
+// transform's object into the component's settings, where SST 4 put an
+// object in their place. The transform may be one SST 4 didn't have, like a
+// part that's new in SST 5, so it says what SST 4 did with objects, not with
+// this one.
+func mergedLine(field move.MergedField) string {
+	kept := field.Kept
+	more := ""
+	if len(kept) > 4 {
+		more = fmt.Sprintf(" and %d more", len(kept)-4)
+		kept = kept[:4]
+	}
+	return fmt.Sprintf(
+		"Your transform sets %q as an object, which SST 5 merges into the component's settings, keeping %s%s. SST 4 put an object in place of them. To replace them, set it in a function.",
+		field.Field, strings.Join(kept, ", "), more,
+	)
+}

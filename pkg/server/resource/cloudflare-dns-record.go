@@ -10,32 +10,30 @@ import (
 	"strings"
 
 	cloudflare "github.com/cloudflare/cloudflare-go"
-	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/project/provider"
 )
 
-// Base resource for Cloudflare providers
+// CloudflareResource is what SST's Cloudflare resources share: the context
+// their calls run in, and where they get the credentials for Cloudflare's API.
+// The RPC reads them from the project's provider, and the provider the sst
+// binary serves (pkg/provider) from its environment, so both run the same
+// code. They're never in a resource's inputs, which are saved to the state.
 type CloudflareResource struct {
 	context context.Context
-	project *project.Project
+	load    func() (*cloudflare.API, error)
 }
 
-// authorize sets the credentials the CLI has for Cloudflare's API on a
-// request: the app's cloudflare provider's, or else the environment's. They're
-// not in the resource's inputs, which are saved to the state.
+// NewCloudflareResource is a CloudflareResource whose calls run in ctx, with
+// the credentials load gives. load is called for each request.
+func NewCloudflareResource(ctx context.Context, load func() (*cloudflare.API, error)) *CloudflareResource {
+	return &CloudflareResource{ctx, load}
+}
+
+// authorize sets the credentials on a request to Cloudflare's API
 func (r *CloudflareResource) authorize(req *http.Request) error {
-	var api *cloudflare.API
-	if loaded, ok := r.project.Provider("cloudflare"); ok {
-		cf, ok := loaded.(*provider.CloudflareProvider)
-		if !ok {
-			return fmt.Errorf("the cloudflare provider is a %T", loaded)
-		}
-		api = cf.Api()
-	} else {
-		var err error
-		if api, err = provider.NewCloudflareAPI(nil); err != nil {
-			return err
-		}
+	api, err := r.load()
+	if err != nil {
+		return err
 	}
 	provider.AuthorizeCloudflare(api, req)
 	return nil
@@ -91,7 +89,7 @@ func (r *CloudflareDnsRecord) Update(input *UpdateInput[CloudflareDnsRecordInput
 
 func (r *CloudflareDnsRecord) createOrUpdateRecord(input *CloudflareDnsRecordInputs) (string, error) {
 	// Construct the URL for the DNS record
-	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones/%s/dns_records", input.ZoneId)
+	url := fmt.Sprintf("%s/zones/%s/dns_records", cloudflareAPI, input.ZoneId)
 	
 	// Create the payload based on record type
 	var payloadBytes []byte
@@ -133,7 +131,7 @@ func (r *CloudflareDnsRecord) createOrUpdateRecord(input *CloudflareDnsRecordInp
 		return "", err
 	}
 	
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequestWithContext(r.context, "POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return "", err
 	}

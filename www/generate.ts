@@ -1229,6 +1229,10 @@ function renderType(
       (type.reflection as TypeDoc.DeclarationReflection)?.sources?.[0].fileName ||
       // Some local helper types only carry a ReflectionSymbolId target.
       ((type as any)._target?.fileName as string | undefined);
+    // A runtime from sst.runtime has a guide, not a component's doc
+    if (fileName === "platform/src/components/runtime.ts") {
+      return `[<code class="type">sst.runtime</code>](/docs/custom-runtimes/)`;
+    }
     if (fileName?.startsWith("platform/src/components/")) {
       const docHash = type.name.endsWith("Args")
         ? `#${type.name.toLowerCase()}`

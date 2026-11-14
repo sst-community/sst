@@ -188,7 +188,7 @@ var CmdDeploy = &cli.Command{
 			Target:     target,
 			Exclude:    exclude,
 			Dev:        c.Bool("dev"),
-			ServerPort: s.Port,
+			Server:     s.URL(),
 			Verbose:    c.Bool("verbose"),
 			Continue:   c.Bool("continue"),
 			PolicyPath: c.String("policy"),

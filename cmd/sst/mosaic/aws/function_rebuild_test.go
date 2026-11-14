@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/sst/sst/v3/pkg/bus"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/runtime"
-	"github.com/sst/sst/v3/pkg/server"
 )
 
 // The builds run at once, and each result is in the place of its function.
@@ -74,12 +72,12 @@ func TestFunctionRebuildsChangedFilesTogether(t *testing.T) {
 	dir := t.TempDir()
 	fake := &rebuildRuntime{started: make(chan string, 16)}
 	proj := &project.Project{Runtime: runtime.NewCollection("", fake)}
-	srv := &server.Server{Mux: http.NewServeMux()}
+	srv := newServer(t, ctx)
 	msg := make(chan bridge.Message)
 	// the loop takes events from the bus, so it's stopped before the next test
 	stopped := make(chan struct{})
 	go func() {
-		function(ctx, input{server: srv, msg: msg, project: proj})
+		function(ctx, input{server: srv, msg: msg, project: proj, startAtOnce: startAtOnce})
 		close(stopped)
 	}()
 	defer func() {
@@ -206,8 +204,6 @@ func (f *rebuildRuntime) Run(ctx context.Context, input *runtime.RunInput) (runt
 func (f *rebuildRuntime) ShouldRebuild(functionID string, path string) bool {
 	return strings.HasSuffix(path, ".ts")
 }
-
-func (f *rebuildRuntime) ShouldRunEagerly() bool { return true }
 
 func (f *rebuildRuntime) ValidateHandler(input *runtime.BuildInput) error { return nil }
 

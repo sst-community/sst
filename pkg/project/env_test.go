@@ -9,12 +9,12 @@ import (
 )
 
 func TestEnvForIncludesWranglerPath(t *testing.T) {
-	project := &Project{
+	project := sst5(&Project{
 		app: &App{
 			Name:  "my-app",
 			Stage: "test",
 		},
-	}
+	})
 
 	complete := &CompleteEvent{
 		Devs: Devs{
@@ -58,12 +58,12 @@ func TestEnvForIncludesWranglerPath(t *testing.T) {
 }
 
 func TestEnvForOmitsWranglerPathWhenMissing(t *testing.T) {
-	project := &Project{
+	project := sst5(&Project{
 		app: &App{
 			Name:  "my-app",
 			Stage: "test",
 		},
-	}
+	})
 
 	complete := &CompleteEvent{
 		Devs: Devs{

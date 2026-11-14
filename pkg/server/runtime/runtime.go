@@ -5,17 +5,27 @@ import (
 	"net/rpc"
 
 	"github.com/sst/sst/v3/pkg/bus"
-	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/runtime"
 )
 
+// Builder is what a program's builds need: where its config is, where
+// SST's platform files are, and the runtimes that build its functions. Every
+// project.Program is one, with the platform in its work folder, and so is a
+// Pulumi program's build server, with it in the sst package.
+type Builder interface {
+	PathConfig() string
+	PathPlatformDir() string
+	Runtimes() *runtime.Collection
+}
+
 type Runtime struct {
-	project *project.Project
+	program Builder
 }
 
 func (r *Runtime) Build(input *runtime.BuildInput, output *runtime.BuildOutput) error {
-	input.CfgPath = r.project.PathConfig()
-	result, err := r.project.Runtime.Build(context.Background(), input)
+	input.CfgPath = r.program.PathConfig()
+	input.PlatformDir = r.program.PathPlatformDir()
+	result, err := r.program.Runtimes().Build(context.Background(), input)
 	if err != nil {
 		return err
 	}
@@ -24,23 +34,20 @@ func (r *Runtime) Build(input *runtime.BuildInput, output *runtime.BuildOutput) 
 }
 
 func (r *Runtime) AddTarget(input *runtime.BuildInput, output *bool) error {
-	input.CfgPath = r.project.PathConfig()
-	// Validate only when a runtime we build matches. provided.al2/al2023
-	// functions (Swift, Dart) have no runtime implementation and nothing to
-	// validate against, so leave them to register as before.
-	if rt, ok := r.project.Runtime.Runtime(input.Runtime); ok {
-		if err := rt.ValidateHandler(input); err != nil {
-			return err
-		}
+	input.CfgPath = r.program.PathConfig()
+	// Checked as a build checks it (Collection.ValidateHandler), so a missing
+	// handler fails the deploy rather than the first invocation
+	if err := r.program.Runtimes().ValidateHandler(input); err != nil {
+		return err
 	}
 	bus.Publish(input)
 	*output = true
 	return nil
 }
 
-func Register(ctx context.Context, p *project.Project, r *rpc.Server) error {
+func Register(ctx context.Context, p Builder, r *rpc.Server) error {
 	r.RegisterName("Runtime", &Runtime{
-		project: p,
+		program: p,
 	})
 	return nil
 }

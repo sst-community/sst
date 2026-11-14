@@ -11,11 +11,37 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/sst/sst/v3/pkg/project/path"
 )
 
+// Runtime builds a function, and in sst dev runs it on this machine. The core
+// does the rest, in Collection and sst dev: it picks a function's runtime by
+// its runtime setting, gives each function a folder to build into, copies its
+// files, encrypts its links into it, and starts again the workers of the
+// functions in use after a change. Node.js, Python, Go and Rust are built in,
+// Cloudflare's workers are built here and run by Cloudflare in sst dev, and
+// Commands is a runtime made of commands. A runtime has to do this much:
+//
+//   - Build builds the function into input.Out(), which the core sets as
+//     BuildOutput.Out. An error in the function's own code, for the developer
+//     to fix, is in BuildOutput.Errors; the error it returns is the runtime
+//     failing. Different functions are built at once.
+//   - In sst dev, a function is built again into the same folder after a
+//     change to a file ShouldRebuild says it uses, while its worker may still
+//     run from that folder.
+//   - Run starts a worker that asks for the function's invocations from the
+//     Lambda runtime API at input.Server, with input.Env in its environment,
+//     and of the CLI's only what it needs, like PATH, never its AWS_*
+//     variables. input.Server is a host and port, as AWS_LAMBDA_RUNTIME_API is
+//     in Lambda, followed by the worker's path.
+//   - A Worker's Logs is what it prints, and ends when it exits. Stop stops it,
+//     and what it started, without waiting for it to exit.
+//   - ShouldRebuild says whether a function uses a file, once it's built. It's
+//     asked while other functions build.
 type Runtime interface {
+	// Match is whether it's the runtime for a function's runtime setting.
 	Match(runtime string) bool
 	Build(ctx context.Context, input *BuildInput) (*BuildOutput, error)
 	Run(ctx context.Context, input *RunInput) (Worker, error)
@@ -24,25 +50,6 @@ type Runtime interface {
 	// fail at deploy instead of at first invocation. It must be no stricter than
 	// Build: it should reject only a handler that Build would also reject.
 	ValidateHandler(input *BuildInput) error
-	// ShouldRunEagerly controls whether workers are started immediately after a rebuild
-	// or lazily on first invocation.
-	//
-	// Background: When a file changes, SST stops all affected workers and rebuilds them.
-	// By default (returning true), the function's worker that was invoked last is
-	// restarted immediately after rebuild, and the others when they're invoked.
-	// This works well for runtimes like Node.js where esbuild provides precise per-function
-	// dependency tracking, so only a few functions rebuild on each change.
-	//
-	// For Python, we lack precise dependency tracking - a change to shared library code
-	// triggers rebuilds for ALL 50+ functions. Starting all workers immediately causes:
-	// - 50+ processes competing for CPU/memory during startup
-	// - ~2 second startup time per worker
-	// - Long delays before the system is responsive again
-	//
-	// By returning false, Python opts into lazy startup: workers are stopped and marked
-	// as needing rebuild, but only actually start when invoked. This means only the
-	// functions you're actively using restart immediately.
-	ShouldRunEagerly() bool
 }
 
 type Worker interface {
@@ -51,7 +58,11 @@ type Worker interface {
 }
 
 type BuildInput struct {
-	CfgPath       string
+	CfgPath string
+	// PlatformDir is where SST's platform files are, which a build reads, like
+	// a Worker's unenv config, when they aren't in the work folder's platform
+	// (Platform): a Pulumi program's build server has them in the sst package
+	PlatformDir   string
 	Dev           bool                       `json:"dev"`
 	FunctionID    string                     `json:"functionID"`
 	Handler       string                     `json:"handler"`
@@ -65,6 +76,18 @@ type BuildInput struct {
 		To   string `json:"to"`
 	} `json:"copyFiles"`
 	IsContainer bool `json:"isContainer,omitempty"`
+	// Commands, when it's given, builds and runs the function instead of the
+	// runtime its runtime setting names
+	Commands *CommandSettings `json:"commands,omitempty"`
+}
+
+// Platform is the folder of SST's platform files a build reads: the app's
+// .sst/platform, which SST's CLI writes, or PlatformDir when it's given
+func (input *BuildInput) Platform() string {
+	if input.PlatformDir != "" {
+		return input.PlatformDir
+	}
+	return path.ResolvePlatformDir(input.CfgPath)
 }
 
 func (input *BuildInput) Out() string {
@@ -94,15 +117,21 @@ type RunInput struct {
 
 type Collection struct {
 	runtimes []Runtime
+	commands *Commands
 	cfgPath  string
 	targets  map[string]*BuildInput
+	// the runtime each function was last built with, which runs it
+	mu    sync.Mutex
+	built map[string]Runtime
 }
 
 func NewCollection(platform string, runtimes ...Runtime) *Collection {
 	return &Collection{
 		runtimes: runtimes,
+		commands: NewCommands(),
 		cfgPath:  platform,
 		targets:  map[string]*BuildInput{},
+		built:    map[string]Runtime{},
 	}
 }
 
@@ -113,6 +142,41 @@ func (c *Collection) Runtime(input string) (Runtime, bool) {
 		}
 	}
 	return nil, false
+}
+
+// forBuild is the runtime that builds a function: its commands, if it has
+// them, or the one its runtime setting names.
+func (c *Collection) forBuild(input *BuildInput) (Runtime, bool) {
+	if input.Commands != nil {
+		return c.commands, true
+	}
+	return c.Runtime(input.Runtime)
+}
+
+// ValidateHandler checks a function's handler as the runtime that builds it
+// (forBuild) does, so sst dev's deploy and a build check the same thing. A
+// function its commands build isn't checked as the Lambda runtime it names
+// would be: its commands say what its handler is. A runtime this CLI doesn't
+// build, like provided.al2023 for Swift or Dart, has nothing to check
+// against, so nothing's checked.
+func (c *Collection) ValidateHandler(input *BuildInput) error {
+	runtime, ok := c.forBuild(input)
+	if !ok {
+		return nil
+	}
+	return runtime.ValidateHandler(input)
+}
+
+// forFunction is the runtime a function was built with, or the one its runtime
+// setting names, before it's built.
+func (c *Collection) forFunction(runtime, functionID string) (Runtime, bool) {
+	c.mu.Lock()
+	r, ok := c.built[functionID]
+	c.mu.Unlock()
+	if ok {
+		return r, true
+	}
+	return c.Runtime(runtime)
 }
 
 func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput, error) {
@@ -126,19 +190,22 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		if !filepath.IsAbs(out) {
 			out = filepath.Join(path.ResolveRootDir(input.CfgPath), out)
 		}
-		// Only runtimes we build know how to resolve a handler. Custom-bundle
-		// functions on a runtime with no implementation (e.g. provided.al2,
-		// provided.al2023 for Swift or Dart) have nothing to validate against,
-		// so skip the check rather than failing the deploy.
-		if runtime, ok := c.Runtime(input.Runtime); ok {
-			if err := runtime.ValidateHandler(input); err != nil {
-				return nil, err
-			}
+		if err := c.ValidateHandler(input); err != nil {
+			return nil, err
 		}
 		result = &BuildOutput{
 			Handler: input.Handler,
 			Errors:  []string{},
 		}
+		// it's run by its commands, if it has them, or by its runtime setting
+		c.mu.Lock()
+		delete(c.built, input.FunctionID)
+		if input.Commands != nil {
+			dir, output, _ := locate(input)
+			c.commands.remember(input, dir, output)
+			c.built[input.FunctionID] = c.commands
+		}
+		c.mu.Unlock()
 	}
 
 	if input.Bundle == "" {
@@ -153,7 +220,7 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		if err != nil {
 			return nil, err
 		}
-		runtime, ok := c.Runtime(input.Runtime)
+		runtime, ok := c.forBuild(input)
 		if !ok {
 			return nil, fmt.Errorf("runtime not found: %v", input.Runtime)
 		}
@@ -161,6 +228,9 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 		if err != nil {
 			return nil, err
 		}
+		c.mu.Lock()
+		c.built[input.FunctionID] = runtime
+		c.mu.Unlock()
 	}
 
 	result.Out = out
@@ -265,7 +335,7 @@ func (c *Collection) Build(ctx context.Context, input *BuildInput) (*BuildOutput
 
 func (c *Collection) Run(ctx context.Context, input *RunInput) (Worker, error) {
 	slog.Info("running function", "runtime", input.Runtime, "functionID", input.FunctionID)
-	runtime, ok := c.Runtime(input.Runtime)
+	runtime, ok := c.forFunction(input.Runtime, input.FunctionID)
 	input.Env = append(input.Env, "SST_LIVE=true")
 	input.Env = append(input.Env, "SST_DEV=true")
 	if !ok {
@@ -276,21 +346,13 @@ func (c *Collection) Run(ctx context.Context, input *RunInput) (Worker, error) {
 
 func (c *Collection) ShouldRebuild(runtime string, functionID string, file string) bool {
 	slog.Info("checking if function should be rebuilt", "runtime", runtime, "functionID", functionID, "file", file, "runtime", runtime)
-	r, ok := c.Runtime(runtime)
+	r, ok := c.forFunction(runtime, functionID)
 	if !ok {
 		return false
 	}
 	result := r.ShouldRebuild(functionID, file)
 	slog.Info("should rebuild", "result", result, "functionID", functionID)
 	return result
-}
-
-func (c *Collection) ShouldRunEagerly(runtime string) bool {
-	r, ok := c.Runtime(runtime)
-	if !ok {
-		return true // Default to eager for unknown runtimes
-	}
-	return r.ShouldRunEagerly()
 }
 
 func (c *Collection) AddTarget(input *BuildInput) {

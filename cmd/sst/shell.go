@@ -63,8 +63,9 @@ func CmdShell(c *cli.Cli) error {
 	} else {
 		cmd = process.Command(args[0], args[1:]...)
 	}
-	// Initialize with current environment variables
-	cmd.Env = os.Environ()
+	// Initialize with current environment variables, as the stage's target
+	// gives them
+	cmd.Env = p.Target().Env(os.Environ())
 	// Add SST-specific environment variables
 	cmd.Env = append(cmd.Env,
 		fmt.Sprintf("PS1=%s/%s> ", p.App().Name, p.App().Stage),

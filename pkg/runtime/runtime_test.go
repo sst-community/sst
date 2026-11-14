@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,9 +32,6 @@ func (m *mockRuntime) ShouldRebuild(functionID string, path string) bool {
 }
 func (m *mockRuntime) ValidateHandler(input *runtime.BuildInput) error {
 	return nil
-}
-func (m *mockRuntime) ShouldRunEagerly() bool {
-	return true
 }
 
 // outputRuntime returns a build output, like a real runtime does
@@ -105,6 +103,30 @@ func TestCollectionBuildCustomBundle(t *testing.T) {
 			assert.Equal(t, filepath.Join(tt.want, "lambda.handler"), filepath.Join(result.Out, result.Handler))
 		})
 	}
+}
+
+// refusingRuntime finds no handler
+type refusingRuntime struct{ mockRuntime }
+
+func (m *refusingRuntime) ValidateHandler(input *runtime.BuildInput) error {
+	return errors.New("no handler")
+}
+
+// A function with its own bundle is checked as the runtime that builds it
+// checks it: as Node.js for a Node.js function, and not at all for one its
+// commands build, whose handler only they know
+func TestCollectionBuildBundleChecksAsItsBuilder(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "sst.config.ts")
+	node := &refusingRuntime{mockRuntime{matchFn: func(r string) bool { return r == "nodejs24.x" }}}
+	collection := runtime.NewCollection(cfgPath, node)
+
+	_, err := collection.Build(context.Background(), &runtime.BuildInput{CfgPath: cfgPath, FunctionID: "Api", Bundle: "./dist", Handler: "index.handler", Runtime: "nodejs24.x"})
+	assert.ErrorContains(t, err, "no handler")
+
+	commands := &runtime.CommandSettings{}
+	commands.Dev.Command = "node index.mjs"
+	_, err = collection.Build(context.Background(), &runtime.BuildInput{CfgPath: cfgPath, FunctionID: "Own", Bundle: "./dist", Handler: "index.handler", Runtime: "nodejs24.x", Commands: commands})
+	assert.NoError(t, err)
 }
 
 func TestCollectionRuntime(t *testing.T) {

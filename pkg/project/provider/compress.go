@@ -17,8 +17,7 @@ func gzipEncode(r io.Reader) (io.Reader, error) {
 	if err := gw.Close(); err != nil {
 		return nil, err
 	}
-	// A reader that can seek, so the AWS SDK can send it again when S3 asks
-	// for a retry
+	// A reader that can seek, so the SDK can send it again when it retries.
 	return bytes.NewReader(buf.Bytes()), nil
 }
 

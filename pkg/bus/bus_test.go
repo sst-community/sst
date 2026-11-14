@@ -18,6 +18,8 @@ type testEventE struct{ Value string }
 type testEventF struct{ Value int }
 type testEventG struct{ Value int }
 type testEventH struct{ Value string }
+type testEventI struct{ Value int }
+type testEventJ struct{ Value int }
 
 func TestBus(t *testing.T) {
 	t.Run("subscribe and publish", func(t *testing.T) {
@@ -274,4 +276,24 @@ func TestUnsubscribeTypedSubscriber(t *testing.T) {
 	for _, stat := range bus.Stats() {
 		assert.NotEqual(t, "bus_test.testEventH", stat.Label, "subscriber still registered")
 	}
+}
+
+// DroppedFrom counts one subscription's losses, found by its channel: not by
+// its label, which another subscription to the same types shares, and which
+// changes when a type is added to the subscription.
+func TestDroppedFromCountsOneSubscription(t *testing.T) {
+	wedged := bus.Subscribe(testEventI{}, testEventJ{})
+	for i := 0; i < 20_000; i++ {
+		bus.Publish(testEventI{Value: i})
+	}
+	drained := bus.Subscribe(testEventI{}, testEventJ{})
+	bus.Publish(testEventJ{Value: 1})
+	<-drained
+
+	assert.Greater(t, bus.DroppedFrom(wedged), uint64(0), "a subscriber nobody reads loses events")
+	assert.Equal(t, uint64(0), bus.DroppedFrom(drained), "the other subscription to the same types lost none")
+
+	bus.Unsubscribe(wedged)
+	bus.Unsubscribe(drained)
+	assert.Equal(t, uint64(0), bus.DroppedFrom(wedged), "an unsubscribed channel has nothing to report")
 }

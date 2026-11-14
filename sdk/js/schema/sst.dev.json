@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "sst.dev.yaml",
+  "description": "What sst pulumi dev runs of a Pulumi program: the functions to run on this machine, and the dev commands. It's next to Pulumi.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "functions": {
+      "description": "Functions to run on this machine in sst pulumi dev, by their name in the program. A name can be a pattern, where * is any text and ? one character: a function takes its own name if the file has it, or else the first pattern that matches. What a pattern matches but sst pulumi dev can't run stays in the cloud.",
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "description": "The source handler, from the folder of Pulumi.yaml, like functions/api.handler. {name} is the function's name.",
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["handler"],
+            "properties": {
+              "handler": {
+                "description": "The source handler, from the folder of Pulumi.yaml, like functions/api.handler. {name} is the function's name.",
+                "type": "string",
+                "minLength": 1
+              },
+              "runtime": {
+                "description": "What builds and runs it. Defaults to the function's own: Node.js and Python. A function on provided.al2023 needs one: go.",
+                "type": "string",
+                "examples": ["nodejs22.x", "python3.12", "go"]
+              },
+              "streaming": {
+                "description": "Whether it streams its response, as one behind a function URL with invokeMode RESPONSE_STREAM does.",
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    "commands": {
+      "description": "Commands sst pulumi dev runs beside it, each in a pane of its own, by name. They leave nothing in the stack.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "description": "The command.",
+            "type": "string",
+            "minLength": 1
+          },
+          "directory": {
+            "description": "The folder it runs in, from the folder of Pulumi.yaml.",
+            "type": "string"
+          },
+          "autostart": {
+            "description": "Whether it starts with sst pulumi dev, or waits to be started.",
+            "type": "boolean",
+            "default": true
+          },
+          "title": {
+            "description": "The title of its pane. Defaults to its name.",
+            "type": "string"
+          },
+          "environment": {
+            "description": "Environment variables. ${name} is the stack's output of that name.",
+            "type": "object",
+            "additionalProperties": {
+              "type": ["string", "number", "boolean", "null"]
+            }
+          },
+          "role": {
+            "description": "A role it runs as: a role of the program, by name, which sst pulumi dev lets your account take, or a role's ARN. It gets that role's credentials, and none of yours.",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

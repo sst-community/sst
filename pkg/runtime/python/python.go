@@ -93,13 +93,6 @@ func (r *PythonRuntime) Match(runtime string) bool {
 	return strings.HasPrefix(runtime, "python")
 }
 
-// ShouldRunEagerly returns false to enable lazy worker startup.
-// Python lacks static import analysis, so any file change triggers ShouldRebuild()
-// for ALL functions. Lazy startup avoids a startup storm of 50+ processes.
-func (r *PythonRuntime) ShouldRunEagerly() bool {
-	return false
-}
-
 func (r *PythonRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Worker, error) {
 	isLegacyLayout, err := r.syncArtifactsIfNeeded(input)
 	if err != nil {
