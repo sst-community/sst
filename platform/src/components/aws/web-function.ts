@@ -281,9 +281,9 @@ export interface WebFunctionArgs {
         privateSubnets: Input<Input<string>[]>;
       }>;
   /**
-   * Run your server locally in `sst dev`, without deploying a web function. The command
-   * receives links, environment variables, AWS credentials for the execution role, and
-   * `AWS_LAMBDA_HTTP_ENDPOINT` derived from `url`.
+   * Run your server locally in `sst dev`. By default no web function is deployed. The
+   * command receives links, environment variables, AWS credentials for the execution
+   * role, and `AWS_LAMBDA_HTTP_ENDPOINT` derived from `url`.
    *
    * Set `live: true` to also deploy the web function, with a bridge that sends its
    * requests to your local server, so you can test the real integration.
@@ -319,9 +319,10 @@ export interface WebFunctionArgs {
          */
         directory?: Input<string>;
         /**
-         * The local server URL returned by this component. Its path and query are
-         * preserved in the returned URL. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the
-         * hostname and port, since an HTTP listener cannot bind to a URL path.
+         * The URL of your local server. Without `live`, it's also the URL this component
+         * returns, with its path and query preserved. With `live`, the component returns
+         * the endpoint's URL instead. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the hostname
+         * and port, since an HTTP listener cannot bind to a URL path.
          * @default `"http://localhost:8080"`
          * @example
          * ```js
@@ -332,7 +333,8 @@ export interface WebFunctionArgs {
         /**
          * Deploy the web function in `sst dev` too, with a bridge in place of your code,
          * so its real HTTPS endpoint sends each request to your local server at `url`
-         * and streams the response back. Use it to test the real integration: IAM
+         * and streams the response back. It only applies in `sst dev`; a deploy always
+         * runs your code. Use it to test the real integration: IAM
          * authorization, callers in AWS, webhooks, and anything else that needs the
          * endpoint. `url` and the links to this component are then the endpoint's.
          *

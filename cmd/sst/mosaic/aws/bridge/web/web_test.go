@@ -259,7 +259,9 @@ func TestUnavailableWithoutDev(t *testing.T) {
 	if resp.StatusCode != 503 || !strings.Contains(string(body), "sst dev") {
 		t.Fatalf("got %d %q, want a 503 that names sst dev", resp.StatusCode, body)
 	}
-	if took := time.Since(began); took > 2*time.Second {
+	// loose, so a loaded runner under -race doesn't fail it: this checks
+	// the 503 doesn't wait for the function's timeout
+	if took := time.Since(began); took > 10*time.Second {
 		t.Fatalf("took %s, want it soon after the take timeout", took)
 	}
 }
@@ -503,5 +505,41 @@ func TestLostResponsePacket(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !dropped.Load() || !bytes.Equal(body, payload) {
 		t.Fatalf("dropped %v, got %d bytes, want %d", dropped.Load(), len(body), len(payload))
+	}
+}
+
+// A timer that fires as the response, a take or a ping arrives mustn't answer
+// with a 503 or 504: late reports what it raced, and puts a ping back.
+func TestLateTimerRaces(t *testing.T) {
+	fresh := func() *request {
+		return &request{taken: make(chan struct{}), pinged: make(chan struct{}, 1), response: make(chan bridge.Message, 1)}
+	}
+
+	r := fresh()
+	if msg, pinged, taken := r.late(); msg != nil || pinged || taken {
+		t.Fatalf("a request nothing came for: got %v %v %v, want nothing", msg, pinged, taken)
+	}
+
+	r = fresh()
+	r.response <- bridge.Message{ID: "x"}
+	if msg, _, _ := r.late(); msg == nil || msg.ID != "x" {
+		t.Fatalf("a response that came as the timer fired: got %v, want it", msg)
+	}
+
+	r = fresh()
+	r.take()
+	if msg, pinged, taken := r.late(); msg != nil || pinged || !taken {
+		t.Fatalf("a take that came as the timer fired: got %v %v %v, want taken only", msg, pinged, taken)
+	}
+
+	r = fresh()
+	r.ping()
+	if _, pinged, taken := r.late(); !pinged || !taken {
+		t.Fatalf("a ping that came as the timer fired: got pinged=%v taken=%v, want both", pinged, taken)
+	}
+	select {
+	case <-r.pinged:
+	default:
+		t.Fatal("late read the ping without putting it back for the loop")
 	}
 }

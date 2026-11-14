@@ -134,6 +134,29 @@ func (r *request) ping() {
 	}
 }
 
+// late is what a timer that just fired may have raced: a response that's
+// already here, a ping that's waiting, or whether sst dev has taken the
+// request. A ping it reads is put back for the loop.
+func (r *request) late() (msg *bridge.Message, pinged bool, taken bool) {
+	select {
+	case m := <-r.response:
+		msg = &m
+	default:
+	}
+	select {
+	case <-r.pinged:
+		pinged = true
+		r.ping()
+	default:
+	}
+	select {
+	case <-r.taken:
+		taken = true
+	default:
+	}
+	return msg, pinged, taken
+}
+
 func (b *Bridge) init() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -365,12 +388,28 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				lost.Reset(lostAfter)
 			}
 		case <-lost.C:
+			// a response or ping that came as the timer fired wins
+			if msg, pinged, _ := pending.late(); msg != nil {
+				writeResponse(w, *msg)
+				return
+			} else if pinged {
+				lost.Reset(lostAfter)
+				continue
+			}
 			slog.Warn("sst dev stopped answering the request", "requestID", requestID)
 			http.Error(w, "sst dev took this request, then stopped answering it for "+lostAfter.String()+" (worker: "+b.WorkerID+"). Check that `sst dev` is still running.", http.StatusGatewayTimeout)
 			return
 		case <-resends.C:
 			send(false)
 		case <-timeout.C:
+			// a response or take that came as the timer fired wins; the
+			// take case then runs next
+			if msg, pinged, taken := pending.late(); msg != nil {
+				writeResponse(w, *msg)
+				return
+			} else if pinged || taken {
+				continue
+			}
 			slog.Warn("sst dev didn't take the request", "requestID", requestID)
 			http.Error(w, unavailable(b.WorkerID, takeTimeout), http.StatusServiceUnavailable)
 			return
