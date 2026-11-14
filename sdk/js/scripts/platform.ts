@@ -114,6 +114,7 @@ const deployFiles = [
   "dist/ssr-warmer",
   "functions/cf-static-site-router-worker-experimental",
   "functions/empty-function",
+  "functions/nodejs-runtime",
   "functions/react-server",
   "functions/remix-server",
 ];
@@ -176,6 +177,9 @@ async function compilePlatform() {
     sourcesContent: false,
     tsconfig: "../../platform/tsconfig.json",
     logLevel: "error",
+    // An import for what a file does as it loads, like plain.ts's, which
+    // esbuild leaves out of a file the platform's sideEffects doesn't list
+    logOverride: { "ignored-bare-import": "error" },
   });
   // Each export loads with plain Node, Pulumi and the providers from this
   // repo's node_modules

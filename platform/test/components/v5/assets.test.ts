@@ -211,6 +211,21 @@ describe("Assets, in a Pulumi program", () => {
     );
   });
 
+  it("is an error when two in a region have the component's provider", async () => {
+    // As a bucket and a repository each given on its own
+    Assets.use({ bucket: "my-code" });
+    Assets.use({
+      repository: "123456789012.dkr.ecr.us-east-1.amazonaws.com/images",
+    });
+    const failures = await rejectionsOf(async () => {
+      new Function("Api", { handler });
+      await pulumi.settle();
+    });
+    expect((failures[0] as Error).message).toMatch(
+      /more than one assets in us-east-1 with the provider of the "Api" function: Assets\.use\(\), Assets\.use\(\)\. Declare one for each region and provider/,
+    );
+  });
+
   it("isn't needed by a service that runs an image it's given", async () => {
     const failures = await rejectionsOf(async () => {
       const cluster = new Cluster("MyCluster", { vpc });

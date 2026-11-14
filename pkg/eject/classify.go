@@ -35,8 +35,18 @@ const (
 	roleRegionProvider
 )
 
-// SST's own resources the eject takes out of the state, with what's left of
-// what they made
+// Names SST's TypeScript gives what it makes once for a stack, which the
+// eject knows them by (contract_test.go checks the components still do)
+const (
+	// The AWS provider SST makes for a region, followed by the region
+	// (aws/helpers/provider.ts)
+	regionProviderPrefix = "AwsProvider.sst."
+	// The key links are encrypted with (aws/helpers/function-shared.ts)
+	linkKeyName = "LambdaEncryptionKey"
+	// The dev stub's code, followed by its region and bundle (aws/function.ts)
+	devStubCodePrefix = "DevBridgeCode"
+)
+
 // The two of SST's own resources the module makes something in the place of
 const (
 	// addEnvironment's update: what it added goes in the function's
@@ -53,6 +63,8 @@ var refusedResources = map[string]string{
 	"sst:aws:OriginAccessControl": "adopting it with Pulumi's resource needs its name, which isn't in the state",
 }
 
+// ownResources are SST's own resources the eject takes out of the state, with
+// what's left of what they made
 var ownResources = map[string]string{
 	"sst:aws:BucketFiles":                  "the site's files, which stay as last deployed",
 	"sst:aws:KvKeys":                       "entries in a site's or a router's key-value store, which stay as last deployed",
@@ -96,7 +108,7 @@ func (g *generator) classify() error {
 			g.role[r.URN] = roleProgram
 		case r.Type == "pulumi:providers:sst":
 			g.remove(r, "SST's provider, which SST's own resources were made with")
-		case r.Type == "pulumi:providers:aws" && r.Parent == stack && strings.HasPrefix(name, "AwsProvider.sst."):
+		case r.Type == "pulumi:providers:aws" && r.Parent == stack && strings.HasPrefix(name, regionProviderPrefix):
 			g.role[r.URN] = roleRegionProvider
 		case strings.HasPrefix(r.Type, "pulumi:providers:"):
 			if inComponent {
@@ -154,9 +166,9 @@ func (g *generator) classify() error {
 				return fmt.Errorf("%s (%s) is one of SST's own resources, which sst eject doesn't take out of the state yet%s.", name, r.Type, reason)
 			}
 			g.remove(r, why)
-		case r.Custom && r.Parent == stack && r.Type == "random:index/randomBytes:RandomBytes" && name == "LambdaEncryptionKey":
+		case r.Custom && r.Parent == stack && r.Type == "random:index/randomBytes:RandomBytes" && name == linkKeyName:
 			g.remove(r, "the key SST encrypts links with, with nothing in the cloud: each function has it in its environment")
-		case r.Custom && r.Parent == stack && strings.HasPrefix(name, "DevBridgeCode"):
+		case r.Custom && r.Parent == stack && strings.HasPrefix(name, devStubCodePrefix):
 			return fmt.Errorf("The %q stack has been deployed by sst dev, and its state still has the stub's code. Run `pulumi up` first, then eject.", g.plan.Name)
 		case r.Custom && inComponent:
 			if built(r) {
@@ -382,31 +394,6 @@ func (g *generator) subdomainOf(r *stateResource) *stateResource {
 	}
 }
 
-// hasChildren is whether a component has a component or a part in it
-func (g *generator) hasChildren(urn resource.URN) bool {
-	for _, r := range g.resources {
-		if r.Parent == urn {
-			if role := g.role[r.URN]; role == roleComponent || role == rolePart {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isDefaultProvider(r *stateResource) bool {
-	return strings.HasPrefix(r.name(), "default")
-}
-
-func containsURN(list []resource.URN, urn resource.URN) bool {
-	for _, item := range list {
-		if item == urn {
-			return true
-		}
-	}
-	return false
-}
-
 // recordedFunction is the function one of SST's components recorded for
 // SST's CLI, or nil
 func recordedFunction(r *stateResource) map[string]any {
@@ -429,27 +416,6 @@ func built(r *stateResource) bool {
 	return kind == sig.AssetSig || kind == sig.ArchiveSig
 }
 
-// uses is what of the program's own uses a component or a part, which the
-// program then takes from what the module returns
-func (g *generator) uses() []string {
-	var result []string
-	for _, r := range g.resources {
-		if g.role[r.URN] != roleProgram || !r.Custom || strings.HasPrefix(r.Type, "pulumi:providers:") {
-			continue
-		}
-		var names []string
-		for _, dependency := range r.Dependencies {
-			if role := g.role[dependency]; role == roleComponent || role == rolePart {
-				names = append(names, dependency.Name())
-			}
-		}
-		if len(names) > 0 {
-			result = append(result, fmt.Sprintf("%s uses %s", r.name(), strings.Join(names, ", ")))
-		}
-	}
-	return result
-}
-
 // regionProviderHelper makes an AWS provider for a region as SST's
 // components made it (useProvider in aws/helpers/provider.ts): from the
 // stack's AWS config, with the region, so its inputs are the same
@@ -469,7 +435,7 @@ function regionProvider(region: string) {
       config[name] = value;
     }
   }
-  return new aws.Provider(` + "`AwsProvider.sst.${region}`" + `, {
+  return new aws.Provider(` + "`" + regionProviderPrefix + "${region}`" + `, {
     ...config,
     region: region as aws.Region,
   });
@@ -520,4 +486,22 @@ func withEnvironment(environment any, added map[string]any) any {
 	}
 	result["variables"] = asSecret(variables)
 	return result
+}
+
+// buildComment says how to switch a Node.js function from the last build
+// SST made to one made in the program
+func (g *generator) buildComment(r *stateResource) string {
+	if r.Type != "aws:lambda/function:Function" {
+		return ""
+	}
+	runtime, _ := r.Inputs["runtime"].(string)
+	if !strings.HasPrefix(runtime, "nodejs") || r.Inputs["s3Key"] == nil {
+		return ""
+	}
+	handler, _ := recordedFunction(g.byURN[r.Parent])["handler"].(string)
+	if handler == "" {
+		return ""
+	}
+	g.shared.nodeBuild = true
+	return comment(fmt.Sprintf("The last build SST made of %s, in the asset bucket. To build it here, take out handler, s3Bucket and s3Key, and add ...nodeBuild(%s) from ./%s. SST_KEY and SST_KEY_FILE in its environment are for the links in SST's build: give the handler what it links to in its environment instead.", handler, quote(handler), strings.TrimSuffix(BuildFile, ".ts")), "  ")
 }

@@ -47,7 +47,7 @@ type generator struct {
 // from the folder of the project's main, like src/
 func (g *generator) projectPath(rel string) expr {
 	g.shared.usesPath = true
-	return raw(fmt.Sprintf("path.join(pulumi.getRootDirectory(), %s)", quote(filepath.ToSlash(rel))))
+	return raw(fmt.Sprintf("path.join(projectRoot, %s)", quote(filepath.ToSlash(rel))))
 }
 
 // revealed is a value with its secret shown, as the state has it with its
@@ -146,24 +146,6 @@ func (g *generator) class(token string) (string, error) {
 		return alias + "." + parts[2], nil
 	}
 	return alias + "." + module + "." + parts[2], nil
-}
-
-// buildComment says how to switch a Node.js function from the last build
-// SST made to one made in the program
-func (g *generator) buildComment(r *stateResource) string {
-	if r.Type != "aws:lambda/function:Function" {
-		return ""
-	}
-	runtime, _ := r.Inputs["runtime"].(string)
-	if !strings.HasPrefix(runtime, "nodejs") || r.Inputs["s3Key"] == nil {
-		return ""
-	}
-	handler, _ := recordedFunction(g.byURN[r.Parent])["handler"].(string)
-	if handler == "" {
-		return ""
-	}
-	g.shared.nodeBuild = true
-	return comment(fmt.Sprintf("The last build SST made of %s, in the asset bucket. To build it here, take out handler, s3Bucket and s3Key, and add ...nodeBuild(%s) from ./%s. SST_KEY and SST_KEY_FILE in its environment are for the links in SST's build: give the handler what it links to in its environment instead.", handler, quote(handler), strings.TrimSuffix(BuildFile, ".ts")), "  ")
 }
 
 // valueAt is where a value is in a resource's inputs, for the config key
@@ -410,10 +392,8 @@ func (g *generator) secret(value map[string]any, key string, at valueAt) (expr, 
 	if text, ok := inner.(string); ok {
 		// Only the whole of it: a reference with text after it would write
 		// that text, part of the secret, in the code
-		if ref := g.match(text, key, at); ref != nil {
-			if _, partly := ref.(interpolated); !partly {
-				return ref, nil
-			}
+		if ref := g.exactMatch(text, key, at); ref != nil {
+			return ref, nil
 		}
 	}
 	if object, ok := inner.(map[string]any); ok {
@@ -480,20 +460,13 @@ func (g *generator) candidates(deps []resource.URN) []candidate {
 // `arn:aws:s3:::bucket/*`. Short strings, which could be the same by
 // chance, aren't matched.
 func (g *generator) match(text, key string, at valueAt) expr {
+	if ref := g.exactMatch(text, key, at); ref != nil {
+		return ref
+	}
 	if len(text) < 8 || len(at.deps) == 0 {
 		return nil
 	}
 	all := g.candidates(at.deps)
-	var exact []candidate
-	for _, c := range all {
-		if c.value == text {
-			exact = append(exact, c)
-		}
-	}
-	if best, ok := bestOf(exact, key); ok {
-		at.used[best.urn] = true
-		return raw(g.vars[best.urn] + "." + best.key)
-	}
 	var prefix []candidate
 	for _, c := range all {
 		if len(c.value) >= 12 && len(text) > len(c.value) && strings.HasPrefix(text, c.value) && strings.ContainsRune("/:", rune(text[len(c.value)])) {
@@ -513,6 +486,25 @@ func (g *generator) match(text, key string, at valueAt) expr {
 		best, _ := bestOf(same, key)
 		at.used[best.urn] = true
 		return interpolated{ref: g.vars[best.urn] + "." + best.key, suffix: text[len(best.value):]}
+	}
+	return nil
+}
+
+// exactMatch is the output of what a value depends on that the value is,
+// whole, as a reference, or nil
+func (g *generator) exactMatch(text, key string, at valueAt) expr {
+	if len(text) < 8 || len(at.deps) == 0 {
+		return nil
+	}
+	var exact []candidate
+	for _, c := range g.candidates(at.deps) {
+		if c.value == text {
+			exact = append(exact, c)
+		}
+	}
+	if best, ok := bestOf(exact, key); ok {
+		at.used[best.urn] = true
+		return raw(g.vars[best.urn] + "." + best.key)
 	}
 	return nil
 }
@@ -575,19 +567,25 @@ func (g *generator) options(r *stateResource, used map[resource.URN]bool) (*obje
 	seen := map[resource.URN]bool{}
 	for _, urn := range r.Dependencies {
 		name, ok := g.vars[urn]
-		if !ok || strings.HasPrefix(name, "program.") || used[urn] || seen[urn] || urn == r.Parent {
+		if !ok || used[urn] || seen[urn] || urn == r.Parent {
 			continue
 		}
 		seen[urn] = true
 		dependsOn = append(dependsOn, raw(name))
-		needs = append(needs, urn)
+		// What the program gives the module is made before it, and isn't one
+		// of the module's to put in order
+		if !strings.HasPrefix(name, "program.") {
+			needs = append(needs, urn)
+		}
 	}
 	if len(dependsOn) > 0 {
 		opts.set("dependsOn", dependsOn)
 	}
-	if name, ok := g.vars[r.DeletedWith]; ok && r.DeletedWith != "" && !strings.HasPrefix(name, "program.") {
+	if name, ok := g.vars[r.DeletedWith]; ok && r.DeletedWith != "" {
 		opts.set("deletedWith", raw(name))
-		needs = append(needs, r.DeletedWith)
+		if !strings.HasPrefix(name, "program.") {
+			needs = append(needs, r.DeletedWith)
+		}
 	}
 	if r.Protect {
 		opts.set("protect", literal{true})
@@ -623,6 +621,27 @@ func stringList(values []string) array {
 	result := make(array, len(values))
 	for i, value := range values {
 		result[i] = literal{value}
+	}
+	return result
+}
+
+// uses is what of the program's own uses a component or a part, which the
+// program then takes from what the module returns
+func (g *generator) uses() []string {
+	var result []string
+	for _, r := range g.resources {
+		if g.role[r.URN] != roleProgram || !r.Custom || strings.HasPrefix(r.Type, "pulumi:providers:") {
+			continue
+		}
+		var names []string
+		for _, dependency := range r.Dependencies {
+			if role := g.role[dependency]; role == roleComponent || role == rolePart {
+				names = append(names, dependency.Name())
+			}
+		}
+		if len(names) > 0 {
+			result = append(result, fmt.Sprintf("%s uses %s", r.name(), strings.Join(names, ", ")))
+		}
 	}
 	return result
 }

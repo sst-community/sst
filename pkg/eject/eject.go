@@ -61,11 +61,11 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 	plains := map[string][]byte{}
 	var states []StackState
 	for _, name := range stacks {
-		plain, err := pulumi(cli, root, nil, "stack", "export", "--stack", name)
+		plain, err := pulumicli.Run(cli, root, nil, "stack", "export", "--stack", name)
 		if err != nil {
 			return util.NewReadableError(err, fmt.Sprintf("Could not read the state of the %q stack: %v", name, err))
 		}
-		shown, err := pulumi(cli, root, nil, "stack", "export", "--show-secrets", "--stack", name)
+		shown, err := pulumicli.Run(cli, root, nil, "stack", "export", "--show-secrets", "--stack", name)
 		if err != nil {
 			return util.NewReadableError(err, fmt.Sprintf("Could not read the state of the %q stack: %v", name, err))
 		}
@@ -109,17 +109,31 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 	type key struct{ stack, key string }
 	var set []key
 	var imported []string
+	// The stack whose import failed, which may have landed anyway, as when it
+	// timed out after the backend took it
+	var unsure *StackPlan
 	undo := func(cause error) error {
 		// A folder after what's in it
 		for i := len(written) - 1; i >= 0; i-- {
 			os.Remove(written[i])
 		}
 		for _, s := range set {
-			pulumi(cli, root, nil, "config", "rm", s.key, "--stack", s.stack)
+			pulumicli.Run(cli, root, nil, "config", "rm", s.key, "--stack", s.stack)
 		}
 		failed := ""
-		for _, stack := range imported {
-			if _, err := pulumi(cli, root, nil, "stack", "import", "--file", backups[stack], "--stack", stack); err != nil {
+		putBack := imported
+		if unsure != nil {
+			switch landed, err := importLanded(cli, root, unsure, plains[unsure.Stack]); {
+			case err != nil:
+				failed += fmt.Sprintf("\nCould not read the state of the %q stack again: if SST's own resources are out of it, put it back with `pulumi stack import --file %s --stack %s`.", unsure.Name, backups[unsure.Stack], unsure.Stack)
+			case landed == importChanged:
+				failed += fmt.Sprintf("\nThe %q stack's state changed since sst eject tried to take SST's own resources out of it, as when a deploy ran, so it's left as it is: check it, and put it back with `pulumi stack import --file %s --stack %s` only if SST's own resources are out of it and nothing else changed.", unsure.Name, backups[unsure.Stack], unsure.Stack)
+			case landed == importLandedWhole:
+				putBack = append(putBack, unsure.Stack)
+			}
+		}
+		for _, stack := range putBack {
+			if _, err := pulumicli.Run(cli, root, nil, "stack", "import", "--file", backups[stack], "--stack", stack); err != nil {
 				failed += fmt.Sprintf("\nCould not put back the state of the %q stack: run `pulumi stack import --file %s --stack %s`.", stack, backups[stack], stack)
 			}
 		}
@@ -171,7 +185,7 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 			if setting.Secret {
 				args[len(args)-1] = "--secret"
 			}
-			if _, err := pulumi(cli, root, strings.NewReader(setting.Value), args...); err != nil {
+			if _, err := pulumicli.Run(cli, root, strings.NewReader(setting.Value), args...); err != nil {
 				return undo(fmt.Errorf("Could not put %s in the %q stack's config: %w", setting.Key, sp.Name, err))
 			}
 			set = append(set, key{sp.Stack, setting.Key})
@@ -180,7 +194,7 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 
 	for _, sp := range plan.Stacks {
 		// A deploy since the state was read isn't undone
-		again, err := pulumi(cli, root, nil, "stack", "export", "--stack", sp.Stack)
+		again, err := pulumicli.Run(cli, root, nil, "stack", "export", "--stack", sp.Stack)
 		if err != nil {
 			return undo(fmt.Errorf("Could not read the state of the %q stack again: %w", sp.Name, err))
 		}
@@ -197,15 +211,13 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 			os.Remove(file.Name())
 			return undo(writeErr)
 		}
-		_, err = pulumi(cli, root, nil, "stack", "import", "--file", file.Name(), "--stack", sp.Stack)
+		_, err = pulumicli.Run(cli, root, nil, "stack", "import", "--file", file.Name(), "--stack", sp.Stack)
 		os.Remove(file.Name())
-		// A failed import may have landed anyway, as when it timed out after
-		// the backend took it, and putting the state read just before back
-		// changes nothing if it didn't
-		imported = append(imported, sp.Stack)
 		if err != nil {
+			unsure = sp
 			return undo(fmt.Errorf("Could not take SST's own resources out of the %q stack's state: %w", sp.Name, err))
 		}
+		imported = append(imported, sp.Stack)
 	}
 
 	report(out, plan, project, root, backups)
@@ -214,7 +226,7 @@ func Run(ctx context.Context, cfgPath, stack string, dryRun bool, out io.Writer)
 
 // listStacks is the project's stacks, as Pulumi names them
 func listStacks(cli, root string) ([]string, error) {
-	data, err := pulumi(cli, root, nil, "stack", "ls", "--json")
+	data, err := pulumicli.Run(cli, root, nil, "stack", "ls", "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -244,6 +256,46 @@ func readProject(cfgPath string) (string, error) {
 	return project.Name, nil
 }
 
+// What an import that failed did, read from the stack's state after it
+type importResult int
+
+const (
+	// The state is as it was before it
+	importNotLanded importResult = iota
+	// SST's own resources are out of it, and nothing else changed it
+	importLandedWhole
+	// Something else changed it, like a deploy
+	importChanged
+)
+
+// importLanded reads a stack's state again after its import failed, and
+// says what the import did: before is the state as it was read before it
+func importLanded(cli, root string, sp *StackPlan, before []byte) (importResult, error) {
+	now, err := pulumicli.Run(cli, root, nil, "stack", "export", "--stack", sp.Stack)
+	if err != nil {
+		return importChanged, err
+	}
+	if same, err := sameResources(before, now); err != nil {
+		return importChanged, err
+	} else if same {
+		return importNotLanded, nil
+	}
+	parsed, err := readExport(now)
+	if err != nil {
+		return importChanged, err
+	}
+	left := map[resource.URN]bool{}
+	for _, r := range parsed.Deployment.Resources {
+		left[r.URN] = true
+	}
+	for _, urn := range sp.Remove {
+		if left[urn] {
+			return importChanged, nil
+		}
+	}
+	return importLandedWhole, nil
+}
+
 // sameResources is whether two exports of a state have the same resources
 func sameResources(a, b []byte) (bool, error) {
 	read := func(data []byte) (json.RawMessage, error) {
@@ -264,12 +316,6 @@ func sameResources(a, b []byte) (bool, error) {
 		return false, err
 	}
 	return bytes.Equal(first, second), nil
-}
-
-// pulumi runs the Pulumi CLI in the project's folder, with what to read on
-// its input
-func pulumi(cli, dir string, stdin io.Reader, args ...string) ([]byte, error) {
-	return pulumicli.Run(cli, dir, stdin, args...)
 }
 
 // report says what the eject did and what's left to do

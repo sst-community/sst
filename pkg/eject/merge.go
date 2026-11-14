@@ -145,7 +145,7 @@ func (e *ejector) name() {
 			if _, ok := e.names[key]; !ok {
 				name := varName(r.name())
 				if g.role[r.URN] == roleRegionProvider {
-					name = varName("aws " + strings.TrimPrefix(r.name(), "AwsProvider.sst."))
+					name = varName("aws " + strings.TrimPrefix(r.name(), regionProviderPrefix))
 				}
 				e.names[key] = e.unique(name)
 				e.order = append(e.order, key)
@@ -351,6 +351,9 @@ func (e *ejector) module() (string, error) {
 	if m.usesConfig {
 		fmt.Fprintf(&b, "\nconst config = new pulumi.Config(%s);\n", quote(ConfigNamespace))
 	}
+	if e.usesPath {
+		b.WriteString(projectRootHelper)
+	}
 	if conditional {
 		b.WriteString(onStackHelper)
 	}
@@ -448,7 +451,7 @@ func (e *ejector) declaration(m *merger, key string, in []int, present []*decl) 
 	var build func(indent string) string
 	switch first.kind {
 	case roleRegionProvider:
-		region := quote(strings.TrimPrefix(first.r.name(), "AwsProvider.sst."))
+		region := quote(strings.TrimPrefix(first.r.name(), regionProviderPrefix))
 		build = func(string) string { return "regionProvider(" + region + ")" }
 	case roleComponent:
 		build = func(string) string {
@@ -534,6 +537,15 @@ func (e *ejector) declaration(m *merger, key string, in []int, present []*decl) 
 	b.WriteString("    : undefined;\n")
 	return b.String(), nil
 }
+
+// projectRootHelper is the project's folder, which a path in the project is
+// written from, read as SST's components read it (context.ts): Pulumi gives
+// it to a program from 3.150 or so, which runs from main's folder
+const projectRootHelper = `
+/** The project's folder, where Pulumi.yaml is. */
+const projectRoot: string =
+  (pulumi as any).getRootDirectory?.() || process.cwd();
+`
 
 const onStackHelper = `
 /** Whether this is one of the stacks something is made on. */

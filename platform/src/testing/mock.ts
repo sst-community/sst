@@ -9,7 +9,6 @@ import { contractVersion } from "../components/contract";
 import { checkResource } from "../components/check";
 import type { MovedPart } from "../components/move";
 import { newRun } from "../util/lazy";
-import { resetAssetStores } from "../components/aws/helpers/bootstrap";
 import {
   ARCHIVE,
   ASSET,
@@ -639,9 +638,9 @@ export function mockPulumi(input?: MockInput) {
      * are encrypted with, is created again.
      */
     reset() {
+      // The stores a program declares, with `Assets`, are its own: they're
+      // kept for each run
       newRun();
-      // The stores a program declares, with `Assets`, are its own
-      resetAssetStores();
       resources.length = 0;
       findings.length = 0;
       moved.length = 0;

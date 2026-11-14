@@ -107,3 +107,28 @@ func readExport(data []byte) (*export, error) {
 	}
 	return &parsed, nil
 }
+
+// hasChildren is whether a component has a component or a part in it
+func (g *generator) hasChildren(urn resource.URN) bool {
+	for _, r := range g.resources {
+		if r.Parent == urn {
+			if role := g.role[r.URN]; role == roleComponent || role == rolePart {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isDefaultProvider(r *stateResource) bool {
+	return strings.HasPrefix(r.name(), "default")
+}
+
+func containsURN(list []resource.URN, urn resource.URN) bool {
+	for _, item := range list {
+		if item == urn {
+			return true
+		}
+	}
+	return false
+}

@@ -117,17 +117,6 @@ export function checkDeclarable(label: string) {
 }
 
 /**
- * Forgets the stores declared, for a new run of a program in the tests.
- *
- * @internal
- */
-export function resetAssetStores() {
-  const run = stores();
-  run.declared.length = 0;
-  run.firstToAsk = undefined;
-}
-
-/**
  * Where a component keeps its code and images: the store the program
  * declared for the component's region, or under SST's CLI, SST's bootstrap
  * when it declared none there.
@@ -157,18 +146,25 @@ export function assetStore(component: Resource, what: string) {
             const here = declared.filter(
               (_, index) => regions[index] === region,
             );
+            // More than one in the region: the one with the component's
+            // provider, if just one has it
+            const withProvider = here.filter(
+              (store) => store.provider === provider,
+            );
             const store =
               here.length === 1
                 ? here[0]
-                : here.find((store) => store.provider === provider);
-            if (here.length > 1 && !store)
+                : withProvider.length === 1
+                  ? withProvider[0]
+                  : undefined;
+            if (here.length > 1 && !store) {
+              const labels = here.map((store) => store.label).join(", ");
               throw new VisibleError(
-                `The program declares more than one assets in ${region}: ${here
-                  .map((store) => store.label)
-                  .join(
-                    ", ",
-                  )}. Give ${what} the provider of the one it keeps its code or images in.`,
+                withProvider.length > 1
+                  ? `The program declares more than one assets in ${region} with the provider of ${what}: ${labels}. Declare one for each region and provider, like \`Assets.use({ bucket, repository })\` for a bucket and a repository of your own.`
+                  : `The program declares more than one assets in ${region}: ${labels}. Give ${what} the provider of the one it keeps its code or images in.`,
               );
+            }
             if (store) return { region, index: declared.indexOf(store) };
             if (underCore()) return { region, index: -1 };
             if (declared.length === 0)

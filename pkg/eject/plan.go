@@ -127,7 +127,7 @@ func Build(states []StackState, opts Options) (*Plan, error) {
 		used: map[string]bool{
 			"pulumi": true, "config": true, "program": true, "ejected": true,
 			"stacks": true, "onStack": true, "byStack": true, "regionProvider": true,
-			"path": true,
+			"path": true, "projectRoot": true,
 		},
 		names:        map[string]string{},
 		in:           map[string][]int{},

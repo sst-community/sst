@@ -65,6 +65,9 @@ func TestServesWhatTheComponentsMake(t *testing.T) {
 	}
 }
 
+// The keys are read as they're written, a literal key in plugin.ts's objects
+// and config["..."] here: one read through a constant or a helper on either
+// side isn't seen, so keep them literal.
 func TestReadsTheConfigTheComponentsWrite(t *testing.T) {
 	// The keys plugin.ts sets in SST's provider's config
 	written := matches(regexp.MustCompile(`\b((?:aws|cloudflare|vercel)[A-Z][A-Za-z]*):`), read(t, "plugin.ts"))

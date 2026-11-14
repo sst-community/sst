@@ -109,7 +109,9 @@ func (r *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 		},
 	}
 	if properties.Plugins != "" {
-		plugins = append(plugins, plugin(properties.Plugins))
+		// The script that runs them is in the platform's files, which a Pulumi
+		// program has in the sst package
+		plugins = append(plugins, plugin(properties.Plugins, filepath.Join(input.Platform(), "functions", "nodejs-runtime", "plugin.mjs")))
 	}
 	external := append(forceExternal, resolveInstallPackages(properties.Install)...)
 	external = append(external, properties.ESBuild.External...)

@@ -805,8 +805,9 @@ func TestBuildCopiesAWorkersBuild(t *testing.T) {
 	}
 	for _, want := range []string{
 		`import * as path from "path";`,
-		`contentFile: path.join(pulumi.getRootDirectory(), "sst-ejected-workers/EdgeScript.js"),`,
-		`assets: { directory: path.join(pulumi.getRootDirectory(), "sites/web") },`,
+		"const projectRoot: string =\n  (pulumi as any).getRootDirectory?.() || process.cwd();",
+		`contentFile: path.join(projectRoot, "sst-ejected-workers/EdgeScript.js"),`,
+		`assets: { directory: path.join(projectRoot, "sites/web") },`,
 	} {
 		if !strings.Contains(plan.Module, want) {
 			t.Errorf("the module has no %q:\n%s", want, plan.Module)

@@ -12,7 +12,8 @@
   },
   "sideEffects": [
     "./src/components/aws/takeover/*.ts",
-    "./src/components/cloudflare/takeover/*.ts"
+    "./src/components/cloudflare/takeover/*.ts",
+    "./src/components/plain.ts"
   ],
   "trustedDependencies": [
     "esbuild",

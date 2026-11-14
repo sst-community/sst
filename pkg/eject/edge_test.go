@@ -202,19 +202,50 @@ func TestBuildTakesAnObjectWithNoSource(t *testing.T) {
 	}
 }
 
-func TestBuildLeavesOutADependencyOnTheProgramsProvider(t *testing.T) {
-	// A dependency on a provider of the program's, which the module is given
-	// and doesn't make
+func TestBuildKeepsADependencyOnTheProgramsProvider(t *testing.T) {
+	// A dependency on a provider of the program's, and a part deleted with
+	// it, which the module is given and doesn't make, so they're kept without
+	// putting it in the module's order
 	shown := editFixture(t, func(resources []map[string]any) []map[string]any {
 		fn := named(resources, "ApiFunction")
 		fn["dependencies"] = append(fn["dependencies"].([]any), "urn:pulumi:dev::shop::pulumi:providers:aws::east")
+		named(resources, "ApiLogGroup")["deletedWith"] = "urn:pulumi:dev::shop::pulumi:providers:aws::east"
 		return resources
 	})
 	plan, err := build(t, shown)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(plan.Module, "dependsOn: [program.providers.east]") {
-		t.Errorf("the module depends on the program's provider:\n%s", plan.Module)
+	for _, want := range []string{"program.providers.east,", "deletedWith: program.providers.east"} {
+		if !strings.Contains(plan.Module, want) {
+			t.Errorf("the module has no %s:\n%s", want, plan.Module)
+		}
+	}
+}
+
+func TestBuildKeepsTheDependencyOfASecretItWritesInTheConfig(t *testing.T) {
+	// A secret that starts with an output of what it depends on goes in the
+	// config, and what it depends on stays a dependency
+	shown := editFixture(t, func(resources []map[string]any) []map[string]any {
+		logGroup := named(resources, "ApiLogGroup")
+		arn := logGroup["outputs"].(map[string]any)["arn"].(string)
+		invoke := named(resources, "ApiUrlInvoke")
+		invoke["inputs"].(map[string]any)["sourceArn"] = secretOf(t, arn+":hunter2token")
+		invoke["propertyDependencies"].(map[string]any)["sourceArn"] = []any{logGroup["urn"]}
+		invoke["dependencies"] = append(invoke["dependencies"].([]any), logGroup["urn"])
+		return resources
+	})
+	plan, err := build(t, shown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(plan.Module, "const apiUrlInvoke")
+	if start == -1 {
+		t.Fatalf("no apiUrlInvoke in:\n%s", plan.Module)
+	}
+	declaration := plan.Module[start:]
+	declaration = declaration[:strings.Index(declaration, ");")]
+	if !strings.Contains(declaration, "dependsOn: [apiLogGroup]") {
+		t.Errorf("apiUrlInvoke doesn't depend on apiLogGroup:\n%s", declaration)
 	}
 }

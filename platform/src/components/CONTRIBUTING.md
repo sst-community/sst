@@ -51,8 +51,11 @@ tests. It's written for AWS; for Cloudflare, read `cloudflare/` for `aws/` and
 - **What an app creates once is made once in each run** of the program. A resource
   its components share, like the key a function's links are encrypted with, is kept
   in a `perRun()` value (`src/util/lazy.ts`), not a static of a class: the CLI's run
-  and the mock's `reset()` start a new run with `newRun()`, so a test sees what a run
-  creates whatever ran before it. The functions' are in `helpers/function-shared.ts`.
+  and the mock's `reset()` start a new run with `newRun()`, and so does a new stack
+  of Pulumi's in one process, so a test sees what a run creates whatever ran before
+  it. The functions' are in `helpers/function-shared.ts`. The one exception is
+  `plain.ts`, a plain Pulumi program's run setup, which is done as the components
+  load, before anything is made, as a stack transformation has to be.
 - **Reproduce what SST 4 deployed, not what it meant to.** SST 4's `Function` trusted
   the account in every role because a check never passed, and SST 5's wrote the same
   policy until `main` fixed SST 4. Changing what a stage has is a decision of its own,
