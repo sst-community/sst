@@ -662,7 +662,9 @@ func installDependenciesForLambda(ctx context.Context, input *runtime.BuildInput
 // against the requirements.txt location (/var/task) and fail. Such members are
 // re-homed inside the build context by stripping the leading "../" segments
 // (e.g. "../../lib" -> "./lib"), and the requirements.txt line is rewritten to
-// match.
+// match. If two members would end up at the same path this way (e.g. "../lib"
+// and "../../lib", or "../lib" and "./lib"), the build fails instead of letting
+// one overwrite the other.
 func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *projectInfo) error {
 	workspaceRoot := findWorkspaceRoot(projectInfo)
 
@@ -675,6 +677,14 @@ func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *p
 	lines := strings.Split(string(content), "\n")
 	rewritten := false
 	rehomed := map[string]string{}
+	// Where each member lands in the build context, keyed by the normalized
+	// in-context path, so a re-homed member cannot silently share a directory
+	// with another member.
+	type placement struct {
+		pkgPath string
+		rehomed bool
+	}
+	placed := map[string]placement{}
 
 	for i, line := range lines {
 		line = strings.TrimSpace(line)
@@ -704,16 +714,30 @@ func copyWorkspacePackagesForContainer(input *runtime.BuildInput, projectInfo *p
 		// Re-home members that live above the workspace root inside the build
 		// context, and rewrite their requirements.txt line to the new path.
 		contextPath := pkgPath
-		if strings.HasPrefix(pkgPath, "../") {
-			trimmed := pkgPath
+		isRehomed := strings.HasPrefix(pkgPath, "../")
+		if isRehomed {
+			// Clean first so "../a/../lib" or "../.." cannot leave a ".."
+			// behind and escape the build context after the prefix is stripped.
+			trimmed := filepath.ToSlash(filepath.Clean(pkgPath))
 			for strings.HasPrefix(trimmed, "../") {
 				trimmed = strings.TrimPrefix(trimmed, "../")
 			}
-			if trimmed == "" || trimmed == "." {
+			if trimmed == "" || trimmed == "." || trimmed == ".." {
 				slog.Warn("cannot re-home workspace package inside build context", "line", line)
 				continue
 			}
 			contextPath = "./" + trimmed
+		}
+
+		key := filepath.Clean(contextPath)
+		if prev, ok := placed[key]; ok && prev.pkgPath != pkgPath && (prev.rehomed || isRehomed) {
+			return fmt.Errorf("workspace members %q and %q would both be copied to %q in the container build context; rename or move one of them so their paths differ once the leading \"../\" segments are stripped", prev.pkgPath, pkgPath, contextPath)
+		}
+		if _, ok := placed[key]; !ok {
+			placed[key] = placement{pkgPath: pkgPath, rehomed: isRehomed}
+		}
+
+		if isRehomed {
 			lines[i] = contextPath + strings.TrimPrefix(line, pkgPath)
 			rewritten = true
 			rehomed[pkgPath] = contextPath

@@ -462,4 +462,92 @@ func TestCopyWorkspacePackagesForContainer(t *testing.T) {
 			t.Errorf("requirements.txt = %q, want %q", got, want)
 		}
 	})
+
+	// mkMember creates a member package at dir (relative to the setup's tmp
+	// root) with the given project name.
+	mkMember := func(t *testing.T, info *projectInfo, dir, name string) {
+		full := filepath.Join(info.ProjectRoot, dir)
+		if err := os.MkdirAll(full, 0755); err != nil {
+			t.Fatalf("failed to create %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(full, "pyproject.toml"), []byte("[project]\nname = \""+name+"\"\n"), 0644); err != nil {
+			t.Fatalf("failed to write %s pyproject: %v", dir, err)
+		}
+	}
+
+	t.Run("two members re-homed to the same path fail the build", func(t *testing.T) {
+		input, info, _ := setup(t, "../lib\n../../lib\n")
+		mkMember(t, info, "repo/projects/lib", "other")
+
+		err := copyWorkspacePackagesForContainer(input, info)
+		if err == nil {
+			t.Fatal("expected an error for two members that map to ./lib")
+		}
+		for _, want := range []string{`"../lib"`, `"../../lib"`, `"./lib"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should name %s, got: %v", want, err)
+			}
+		}
+	})
+
+	t.Run("re-homed member next to an in-workspace member with the same path fails the build", func(t *testing.T) {
+		for _, requirements := range []string{"./lib\n../lib\n", "../lib\n./lib\n"} {
+			input, info, _ := setup(t, requirements)
+			mkMember(t, info, "repo/projects/lib", "above")
+			mkMember(t, info, "repo/projects/app/lib", "inside")
+
+			err := copyWorkspacePackagesForContainer(input, info)
+			if err == nil {
+				t.Fatalf("expected an error for ../lib and ./lib with requirements %q", requirements)
+			}
+			if !strings.Contains(err.Error(), `"../lib"`) || !strings.Contains(err.Error(), `"./lib"`) {
+				t.Errorf("error should name both members, got: %v", err)
+			}
+		}
+	})
+
+	t.Run("the same member listed twice is not a collision", func(t *testing.T) {
+		input, info, outDir := setup(t, "../../lib\n../../lib ; sys_platform == 'linux'\n")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		got := readRequirements(t, outDir)
+		want := "./lib\n./lib ; sys_platform == 'linux'\n"
+		if got != want {
+			t.Errorf("requirements.txt = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("member that is a parent of the workspace is not re-homed outside the context", func(t *testing.T) {
+		input, info, outDir := setup(t, "../..\nboto3==1.34.0\n")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		got := readRequirements(t, outDir)
+		want := "../..\nboto3==1.34.0\n"
+		if got != want {
+			t.Errorf("requirements.txt = %q, want %q", got, want)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "pyproject.toml")); err == nil {
+			t.Error("artifact pyproject.toml should not be written when nothing was re-homed")
+		}
+	})
+
+	t.Run("in-workspace members leave the artifact files alone", func(t *testing.T) {
+		requirements := "# generated\n./core\n    # via app\nboto3==1.34.0 \\\n    --hash=sha256:abc\n"
+		input, info, outDir := setup(t, requirements)
+		mkMember(t, info, "repo/projects/app/core", "core")
+
+		if err := copyWorkspacePackagesForContainer(input, info); err != nil {
+			t.Fatalf("copyWorkspacePackagesForContainer failed: %v", err)
+		}
+		if got := readRequirements(t, outDir); got != requirements {
+			t.Errorf("requirements.txt = %q, want it unchanged %q", got, requirements)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "pyproject.toml")); err == nil {
+			t.Error("artifact pyproject.toml should not be written when nothing was re-homed")
+		}
+	})
 }
