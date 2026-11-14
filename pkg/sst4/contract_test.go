@@ -27,6 +27,9 @@ func TestRegistered(t *testing.T) {
 	if _, ok := contract.(Contract); !ok {
 		t.Fatalf("version 0 is %T", contract)
 	}
+	if !contract.LoadsProvidersForApp() {
+		t.Fatal("SST 4's line leaves the providers out of reading app(), which SST 4.25.0 loaded")
+	}
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -114,10 +117,14 @@ func TestReadSST5Record(t *testing.T) {
 		t.Fatalf("SST 4's names were read over the record: %+v", complete)
 	}
 
-	newer := map[string]interface{}{"_sst": map[string]interface{}{"contract": float64(2), "hint": "x"}}
-	var errNewer *project.ErrNewerContract
-	if err := (Contract{}).Read(newComplete(), res, newer); !errors.As(err, &errNewer) {
-		t.Fatalf("a record from a newer contract was read: %v", err)
+	// A record from a newer contract is left out, and SST 4's names are read
+	complete = newComplete()
+	newer := map[string]interface{}{"_sst": map[string]interface{}{"contract": float64(2), "hint": "x"}, "_hint": "https://sst4.example.com"}
+	if err := (Contract{}).Read(complete, res, newer); err != nil {
+		t.Fatalf("a record from a newer contract stopped the read: %v", err)
+	}
+	if complete.Hints[string(urn)] != "https://sst4.example.com" {
+		t.Fatalf("read %+v", complete.Hints)
 	}
 }
 

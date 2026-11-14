@@ -179,6 +179,39 @@ export const files = component("acme:index:Files", { files: Bucket });
 	assert.Equal(t, `{"name":"my-app"}`, out)
 }
 
+// SST 4's line reads `app()` as SST 4.25.0 did: a provider's module the app's
+// files import is loaded, so a helper `app()` calls can use it
+func TestBuildReadingAppLoadsProviders(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"sst.config.ts": `
+export default $config({
+  async app() {
+    const { region } = await import("./region");
+    return { name: "my-app", providers: { aws: { region } } };
+  },
+  async run() {},
+});
+`,
+		"region.ts": `import * as aws from "@pulumi/aws";
+export const region = aws.defaultRegion;
+`,
+		// Installed with the platform, beside the build's output
+		".sst/platform/node_modules/@pulumi/aws/package.json": `{"name":"@pulumi/aws","type":"module","main":"index.mjs"}`,
+		".sst/platform/node_modules/@pulumi/aws/index.mjs":    `export const defaultRegion = "us-west-2";`,
+	})
+	read := js.EvalOptions{
+		Dir:    dir,
+		Banner: `function $config(input) { return input }`,
+		Code:   "import mod from './sst.config.ts';\nconsole.log(JSON.stringify(await mod.app({})));",
+	}
+	// Left out, as SST 5's line does, the helper reads nothing from it
+	assert.Equal(t, `{"name":"my-app","providers":{"aws":{}}}`, buildAndRun(t, read))
+
+	read.LoadProviders = true
+	assert.Equal(t, `{"name":"my-app","providers":{"aws":{"region":"us-west-2"}}}`, buildAndRun(t, read))
+}
+
 // An error in a file that's given the globals is reported at its own line
 func TestBuildErrorLineInAFileWithGlobals(t *testing.T) {
 	node, err := exec.LookPath("node")
