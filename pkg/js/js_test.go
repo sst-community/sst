@@ -180,8 +180,9 @@ export const files = component("acme:index:Files", { files: Bucket });
 }
 
 // SST 4's line reads `app()` as SST 4.25.0 did: a provider's module the app's
-// files import is loaded, so a helper `app()` calls can use it
-func TestBuildReadingAppLoadsProviders(t *testing.T) {
+// files import is loaded, so a helper `app()` calls can use it, and a package
+// that can't be found fails the build
+func TestBuildReadingAppLoadsImports(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
 		"sst.config.ts": `
@@ -208,8 +209,14 @@ export const region = aws.defaultRegion;
 	// Left out, as SST 5's line does, it says so when the helper reads it
 	assert.Equal(t, "@pulumi/aws is only loaded in run()", buildAndRun(t, read))
 
-	read.LoadProviders = true
+	read.LoadImports = true
 	assert.Equal(t, `{"name":"my-app","providers":{"aws":{"region":"us-west-2"}}}`, buildAndRun(t, read))
+
+	writeFiles(t, dir, map[string]string{"region.ts": `import kebab from "lodash.kebabcase";
+export const region = kebab("us west 2");
+`})
+	_, err := js.Build(read)
+	assert.ErrorContains(t, err, `Could not resolve "lodash.kebabcase"`)
 }
 
 // An error in a file that's given the globals is reported at its own line

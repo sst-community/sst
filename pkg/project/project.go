@@ -319,8 +319,8 @@ func New(input *ProjectConfig) (*Project, error) {
 				"$input": string(inputBytes),
 			},
 			// Its imports of the platform's modules are left out
-			Platform:      proj.platformModules(),
-			LoadProviders: contract.LoadsProvidersForApp(),
+			Platform:    proj.platformModules(),
+			LoadImports: contract.LoadsImportsForApp(),
 			Code: fmt.Sprintf(`
 import mod from '%s';
 console.log("~n" + process.versions.node)
