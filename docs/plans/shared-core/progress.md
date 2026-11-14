@@ -2,6 +2,17 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-13: `main` merged into `v5`, and the re-check's fixes
+
+- **`main` merged into `v5`** (the maintainer chose to merge before #272 lands rather than after), with #262, #265, #267, #269 and #271. The engine's files take #272's resolution, so with #272's handler fix the Go engine is the same on both lines but for #271, which #272 doesn't have yet. #265 is ported to SST 5's `HttpsRedirect`: its CloudFront function answers with the redirect, keeping the path and query string, the origin is the sites' HTTPS-only placeholder, and the bucket's website is kept, with the distribution depending on it so a remove deletes them in SST 4's order. A stage moved from an SST 4 before #265 gets the function's code and the origin updated in place; the move tests of `Cdn`, `StaticSite` and the nine server-rendered sites expect it, through one helper, and the move harness compares changes by name. #267 needed nothing in SST 5's `Service`, which makes a dev command only for a container with one and refuses a top-level `dev.command` with containers.
+- **Two independent re-checks** of #272's fixes. Fixed from them, on both lines:
+  - **A left-out module throws however it's imported.** esbuild reads a named or namespace import of a CommonJS module through an object of its own, copied from the module's own properties, so the stub that said "only loaded in run()" read as empty unless it was a default import. The stub's reads are caught on its prototype now, which esbuild's copy keeps. A promise's `then` reads as undefined, so an awaited import still resolves.
+  - **SST 4's line reads `app()` with what its files import** (`LoadsImportsForApp`, `js.EvalOptions.LoadImports`, renamed from `LoadsProvidersForApp` and `LoadProviders`): a package that can't be found fails the build, as in 4.25.0, rather than being left out.
+  - **`sst/pulumi` needs `@pulumi/pulumi` 3.118**, not 3.115: `registerStackTransform` first appears in 3.118.0, and `registerResourceTransform` in 3.121.0 (checked on npm).
+  - **`v5`'s platform test says its `package.json` declares contract 1** (`contract.test.ts`), so a merge that took `main`'s 0 fails.
+  - On `main` only: SST 4's `sst` package marks only `sst/pulumi` as having side effects and lists its types for `moduleResolution: "node"`, as `v5`'s has since `sst/pulumi` came; and #272's description lists #262's handler check as a change from 4.25.0.
+- **Checked**: both lines' Go suites (46 packages each), `v5`'s platform suite (124 files, 4,332 tests), `tsc` and the API reports, the SDK's build and tests, and `sst/pulumi`'s types under `node` resolution.
+
 ## 2026-11-13: the reviews' fixes
 
 Two independent reviews of #272's last ten commits, one for compatibility with SST 4.25.0 and one for the architecture. The maintainer chose to fix all seven of what they found, to keep provider booleans and numbers with a release note, and to read `app()` on SST 4's line as 4.25.0 did.
@@ -10,7 +21,7 @@ Two independent reviews of #272's last ten commits, one for compatibility with S
 - **The manifest's `contract` is required.** A manifest without it was read as contract 0, so a merge that dropped the key from `v5`'s `platform/package.json` would have run SST 5's components as SST 4's. `ContractFor` refuses it now, and `PlatformManifest.Speaks` is what the tests gate on.
 - **SST 4's line skips a newer `_sst` record**, with a warning in the log, and reads the component by SST 4's names, as 4.25.0 did. It stopped every command on the stage before.
 - **One handler check** (`engine` only: `v5` gets #262's check with its next merge of `main`). `Collection.ValidateHandler` picks the runtime as the build does, so a function with its own `bundle` built by `sst.runtime`'s commands isn't checked as Node.js, and `sst dev`'s `AddTarget` uses it too.
-- **The SDK's Pulumi peers take any version**, on both lines, so an app that pins an older `@pulumi/pulumi` installs without npm's `ERESOLVE`. `sst/pulumi` says so under `sst pulumi dev` if it's older than 3.115.
+- **The SDK's Pulumi peers take any version**, on both lines, so an app that pins an older `@pulumi/pulumi` installs without npm's `ERESOLVE`. `sst/pulumi` says so under `sst pulumi dev` if it's older than 3.118 (3.115 at first, which the re-check found wrong).
 - **`app()` on SST 4's line loads the providers' modules** the app's files import, as 4.25.0 did (`Contract.LoadsProvidersForApp`, `js.EvalOptions.LoadProviders`). SST 5's line leaves them out, as before. `TestBuildReadingAppLoadsProviders` has both. A namespace import of a left-out module reads as empty there (`aws.defaultRegion` is `undefined`), rather than throwing "only loaded in run()".
 - **#272's description** lists the rest of what changes for an SST 4 user, with the release notes: provider booleans and numbers, a daily update check, `sst dev`'s server on loopback with a token, `sst diff` creating no passphrase, the missing-state refusal, `sst add` within the components' major, the workers that start again after a change, and `lock5` on a team that still runs 4.25.0.
 - **Checked**: both lines' Go suites (46 packages on `engine`, 45 on `v5`), `-race` on the changed packages, and the SDK's build and tests on both lines.

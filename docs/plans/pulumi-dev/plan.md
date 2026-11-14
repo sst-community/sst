@@ -42,12 +42,13 @@ The maintainer doesn't want "a bunch of revisions on this", so the public parts 
 | 2026-11-12 | **Only `sst dev` works in a Pulumi project.** Every other command says to use `pulumi`. |
 | 2026-11-13 | **The command is `sst pulumi dev`**, not `sst dev`. The maintainer: "We should change the name of the command though so it's not confusing with the other SST dev", and chose `sst pulumi dev` alone, with `sst eject` left where it is. `sst dev` runs an SST app alone, and in a Pulumi project says to run `sst pulumi dev`. Asked for by name, `sst pulumi dev` runs the nearest `Pulumi.yaml` up from the folder, in an SST app's folder too, or the one `--config` names. The first decision above, one binary, holds: it's the same CLI. `sst.dev.yaml` and the stack's `sst:dev` keep their names. Renamed before any release had it. |
 | 2026-11-13 | **SST 4's line runs it too**, as the shared engine does: the maintainer asked to finish SST 4's support for it, in the engine's PR onto `main`. It runs none of either line's components, so nothing in it is SST 5's: SST 4's `sst` package ships `sst/pulumi` and the dev file's schema, the same files. SST 5's components in a Pulumi program stay SST 5's. |
+| 2026-11-13 | **A program on `@pulumi/pulumi` older than 3.118 is refused under `sst pulumi dev`, with a message.** The 2026-11-12 decision didn't take a clearer error, while the `sst` package's peer range kept an older Pulumi out at install. The peers take any version since #272's review, as a range made npm refuse an app that pinned another, so without it such a program fails with `register is not a function`. The error was added without asking, the maintainer was told, and chose to keep it. |
 
 ## Design
 
 ### What the program writes: `sst/pulumi`
 
-A new entry in the `sst` package, `sdk/js/src/pulumi/index.ts`, with `@pulumi/pulumi` (3.115.0 or later, the first with the `transforms` option) and `@pulumi/aws` as optional peer dependencies. It imports nothing of SST's platform. Its types are also under `typesVersions`, so a program with Pulumi's default `moduleResolution: "node"` finds them.
+A new entry in the `sst` package, `sdk/js/src/pulumi/index.ts`, with `@pulumi/pulumi` and `@pulumi/aws` as optional peer dependencies of any version (since 2026-11-13: a range made npm refuse an app that pinned another). It needs `@pulumi/pulumi` 3.118.0 or later, the first with `registerStackTransform`; 3.115 to 3.117 have only `xRegisterStackTransform`. It imports nothing of SST's platform. Its types are also under `typesVersions`, so a program with Pulumi's default `moduleResolution: "node"` finds them.
 
 ```ts
 import * as aws from "@pulumi/aws";
