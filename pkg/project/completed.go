@@ -101,7 +101,7 @@ const LinkRefType = "sst:sst:LinkRef"
 // (its _sst output), and a link's properties. An SST app's state and a Pulumi
 // program's are read the same way.
 func AddRecords(complete *CompleteEvent, urn resource.URN, typ string, outputs map[string]interface{}) error {
-	report, err := readReport(outputs)
+	report, err := ReadReport(outputs)
 	if err != nil {
 		return err
 	}

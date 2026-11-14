@@ -55,10 +55,20 @@ func (Contract) Begin(p *project.Project, workdir *project.PulumiWorkdir, update
 	return nil
 }
 
-// Read reads a component's report from SST 4's output names, a link's
-// properties, and the component's version as SST 4 recorded it
+// Read reads a component's report, a link's properties, and the component's
+// version as SST 4 recorded it. A report is SST 4's output names, or SST 5's
+// record (_sst), which a component of an app's or a package's own can write
+// on either line; a component that has both is read by its record.
 func (Contract) Read(complete *project.CompleteEvent, res apitype.ResourceV3, outputs map[string]interface{}) error {
-	complete.AddRecords(res.URN, string(res.Type), outputs, readReport(outputs))
+	report := readReport(outputs)
+	record, err := project.ReadReport(outputs)
+	if err != nil {
+		return err
+	}
+	if record != nil {
+		report = record
+	}
+	complete.AddRecords(res.URN, string(res.Type), outputs, report)
 	versions, ok := complete.Contract.(Versions)
 	if !ok {
 		versions = Versions{}

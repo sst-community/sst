@@ -201,6 +201,42 @@ A scoped package, like `@acme/email-domain`, is private on npm unless you publis
 
 ---
 
+## On SST 4 too
+
+A package whose components are Pulumi's own `ComponentResource`, with no import of `sst/components`, works in SST 4 apps too. It reports to `sst dev` by writing its `_sst` output itself, which SST 4 and SST 5 read the same way:
+
+```ts title="src/index.ts"
+import * as pulumi from "@pulumi/pulumi";
+
+export class Docs extends pulumi.ComponentResource {
+  constructor(name: string, opts?: pulumi.ComponentResourceOptions) {
+    super("acme:index:Docs", name, {}, opts);
+    // The component's resources go here, with { parent: this }
+
+    this.registerOutputs({
+      _sst: {
+        contract: 1,
+        dev: {
+          command: "npm run dev",
+          directory: "docs",
+          title: "Docs",
+          autostart: true,
+        },
+        hint: "https://docs.example.com",
+      },
+    });
+  }
+}
+```
+
+- **`contract`** is `1`, the version of the record.
+- **`dev`** is the command: `command`, `directory` from the app's folder, `title` for its pane, `environment`, `autostart` (`true` starts it with `sst dev`; otherwise you start it from its pane), and `links`, the names of the app's linkable resources, like `MyBucket`, whose properties its environment gets.
+- **`hint`** is a URL the CLI shows once a deploy is done.
+
+A component built with `component()` reports with `this.report()` instead, and writes the same record.
+
+---
+
 ## Use it in an app
 
 In an app, install the package, add the providers it needs, and import it in `run()`.
