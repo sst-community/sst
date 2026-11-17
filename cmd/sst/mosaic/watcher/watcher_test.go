@@ -358,3 +358,42 @@ func waitForFileChangedEvent(events <-chan interface{}, path string, timeout tim
 		}
 	}
 }
+
+// The node_modules rule applies to directories in the watched tree, not to
+// the path the project itself lives at.
+func TestShouldSkipDirIgnoresNodeModulesAboveTheRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node_modules-demo", "app")
+	_, ignore, err := resolveWatch(root, project.Watch{})
+	require.NoError(t, err)
+
+	src := mustInfo(t, filepath.Join(root, "src"))
+	deps := mustInfo(t, filepath.Join(root, "node_modules"))
+	nested := mustInfo(t, filepath.Join(root, "packages", "api", "node_modules"))
+
+	assert.False(t, shouldSkipDir(root, ignore, root, mustInfo(t, root)))
+	assert.False(t, shouldSkipDir(root, ignore, filepath.Join(root, "src"), src))
+	assert.True(t, shouldSkipDir(root, ignore, filepath.Join(root, "node_modules"), deps))
+	assert.True(t, shouldSkipDir(root, ignore, filepath.Join(root, "packages", "api", "node_modules"), nested))
+}
+
+func TestStartWatchesProjectUnderNodeModulesNamedDir(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node_modules-demo", "app")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0755))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
+	}()
+
+	// waitForWatcherReady fails the test if no event ever arrives, which is
+	// what happened: the whole project was skipped.
+	waitForWatcherReady(t, filepath.Join(root, "src", "handler.ts"), events)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}

@@ -149,7 +149,10 @@ func shouldSkipDir(root string, ignore []string, path string, info os.FileInfo) 
 		return true
 	}
 
-	if strings.Contains(path, "node_modules") {
+	// Match the directory's own name, as for hidden directories. The walk
+	// skips a node_modules directory before entering it, so nothing below one
+	// is reached, and the path the project itself lives at doesn't count.
+	if strings.Contains(info.Name(), "node_modules") {
 		return true
 	}
 
