@@ -389,6 +389,9 @@ func (b *fseventsBackend) send(event fsnotify.Event) {
 	}
 }
 
+// sendError is best-effort: watchLoop only logs errors and drains them as
+// they come, so when 16 are already waiting a new one is dropped rather than
+// holding up the dispatch queue.
 func (b *fseventsBackend) sendError(err error) {
 	select {
 	case b.errors <- err:

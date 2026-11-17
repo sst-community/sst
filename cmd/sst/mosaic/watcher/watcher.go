@@ -147,6 +147,8 @@ type dirEntry interface {
 	IsDir() bool
 }
 
+// shouldSkipDir's built-in rules, hidden directories and node_modules, are
+// repeated in inSkippedDir for the recursive backend. Change both together.
 func shouldSkipDir(root string, ignore []string, path string, info dirEntry) bool {
 	if !info.IsDir() {
 		return false
@@ -423,7 +425,9 @@ func isWithinPath(root string, path string) bool {
 }
 
 // inSkippedDir reports whether path is inside a directory the per-directory
-// walk never enters: a hidden directory or node_modules, below tree.
+// walk never enters: a hidden directory or node_modules, below tree. It is
+// the recursive backend's copy of shouldSkipDir's built-in rules, so a rule
+// added there belongs here too. watch.ignore is left to the loop.
 func inSkippedDir(tree string, path string) bool {
 	rel, err := filepath.Rel(tree, path)
 	if err != nil {
