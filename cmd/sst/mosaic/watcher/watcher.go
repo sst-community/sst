@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"os"
 	pathpkg "path"
@@ -140,7 +141,13 @@ func resolveRoots(root string, paths []string) ([]string, error) {
 	return roots, nil
 }
 
-func shouldSkipDir(root string, ignore []string, path string, info os.FileInfo) bool {
+// dirEntry is the part of os.FileInfo and fs.DirEntry that shouldSkipDir needs.
+type dirEntry interface {
+	Name() string
+	IsDir() bool
+}
+
+func shouldSkipDir(root string, ignore []string, path string, info dirEntry) bool {
 	if !info.IsDir() {
 		return false
 	}
@@ -242,16 +249,23 @@ func Start(ctx context.Context, config WatchConfig) error {
 	if err != nil {
 		return err
 	}
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
-	defer watcher.Close()
 
-	err = watcher.AddWith(config.Root)
+	// The project root plus any watched path outside it. A recursive backend
+	// watches these trees whole; a per-directory backend walks them.
+	trees := []string{filepath.Clean(config.Root)}
+	for _, match := range roots {
+		if !isWithinPath(config.Root, match) {
+			trees = append(trees, match)
+		}
+	}
+
+	headFile := filepath.Join(config.Root, ".git/HEAD")
+	b, err := newBackend(trees, headFile, log)
 	if err != nil {
 		return err
 	}
+	defer b.Close()
+	log.Info("watching", "backend", b.Name(), "recursive", b.Recursive())
 
 	limiter := map[string]fileChange{}
 
@@ -267,8 +281,13 @@ func Start(ctx context.Context, config WatchConfig) error {
 		bus.Publish(&FileChangedEvent{Path: path})
 	}
 
+	// watchTree walks a directory tree. It adds each directory to a
+	// per-directory backend, and when publish is set it reports the files it
+	// finds, which covers a directory that is created or moved in with files
+	// already inside it. WalkDir reads entry types from the directory listing,
+	// so it doesn't stat every file.
 	watchTree := func(path string, publish bool) error {
-		return filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+		return filepath.WalkDir(path, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				if os.IsNotExist(err) {
 					return nil
@@ -276,16 +295,19 @@ func Start(ctx context.Context, config WatchConfig) error {
 				return err
 			}
 
-			if info.IsDir() {
-				if shouldSkipDir(config.Root, ignore, path, info) {
+			if d.IsDir() {
+				if shouldSkipDir(config.Root, ignore, path, d) {
 					return filepath.SkipDir
 				}
 				if !shouldWatchDir(config.Root, roots, path) {
 					return filepath.SkipDir
 				}
+				if b.Recursive() {
+					return nil
+				}
 
 				log.Info("watching", "path", path)
-				return watcher.Add(path)
+				return b.Add(path)
 			}
 
 			if publish && isWatchedPath(roots, path) && !isIgnored(config.Root, ignore, path) {
@@ -297,24 +319,19 @@ func Start(ctx context.Context, config WatchConfig) error {
 		})
 	}
 
-	err = watchTree(config.Root, false)
-	if err != nil {
-		return err
-	}
-
-	for _, match := range roots {
-		if isWithinPath(config.Root, match) {
-			continue
-		}
-		err = watchTree(match, false)
-		if err != nil {
+	if !b.Recursive() {
+		if err := b.Add(config.Root); err != nil {
 			return err
 		}
+		for _, tree := range trees {
+			if err := watchTree(tree, false); err != nil {
+				return err
+			}
+		}
+		b.Add(headFile)
 	}
 
-	headFile := filepath.Join(config.Root, ".git/HEAD")
-	watcher.Add(headFile)
-	return watchLoop(ctx, watcher.Events, watcher.Errors, log, config.Root, roots, ignore, watchTree, publishChange)
+	return watchLoop(ctx, b.Events(), b.Errors(), log, config.Root, roots, ignore, watchTree, publishChange)
 }
 
 // watchLoop runs the fsnotify event loop. It drains both the Events and
@@ -403,4 +420,20 @@ func isWithinPath(root string, path string) bool {
 
 	rel = normalizePath(rel)
 	return rel == "." || (!strings.HasPrefix(rel, "../") && rel != "..")
+}
+
+// inSkippedDir reports whether path is inside a directory the per-directory
+// walk never enters: a hidden directory or node_modules, below tree.
+func inSkippedDir(tree string, path string) bool {
+	rel, err := filepath.Rel(tree, path)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, part := range parts[:len(parts)-1] {
+		if strings.HasPrefix(part, ".") || strings.Contains(part, "node_modules") {
+			return true
+		}
+	}
+	return false
 }

@@ -274,6 +274,18 @@ export interface App {
    *
    * You can configure it with `paths` and `ignore`.
    *
+   * On macOS, SST watches with FSEvents, which holds no file descriptor per
+   * file, however big the project is. On Linux it uses inotify, which takes
+   * one watch for each directory, counted against the
+   * `fs.inotify.max_user_watches` limit. `paths` and `ignore` keep that count
+   * down in a large repo.
+   *
+   * :::tip
+   * If FSEvents can't be used, SST falls back to kqueue, which holds a file
+   * descriptor for every file and directory it watches. Set
+   * `SST_WATCHER=kqueue` to choose kqueue yourself.
+   * :::
+   *
    * :::caution
    * Passing an array directly is supported for backward compatibility
    * and will be deprecated in the next major version.
@@ -291,7 +303,7 @@ export interface App {
    *
    * @example
    *
-   * Watch all dictories except `*.egg-info`.
+   * Watch all directories except `*.egg-info`.
    * ```ts
    * {
    *   watch: {

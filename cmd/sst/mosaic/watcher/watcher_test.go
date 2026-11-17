@@ -358,3 +358,130 @@ func waitForFileChangedEvent(events <-chan interface{}, path string, timeout tim
 		}
 	}
 }
+
+func TestInSkippedDir(t *testing.T) {
+	root := "/repo"
+	assert.True(t, inSkippedDir(root, "/repo/node_modules/pkg/index.js"))
+	assert.True(t, inSkippedDir(root, "/repo/packages/api/node_modules/pkg/index.js"))
+	assert.True(t, inSkippedDir(root, "/repo/.sst/types.d.ts"))
+	assert.True(t, inSkippedDir(root, "/repo/.git/objects/ab/cdef"))
+	// Hidden files are watched; only hidden directories are skipped.
+	assert.False(t, inSkippedDir(root, "/repo/.env"))
+	assert.False(t, inSkippedDir(root, "/repo/src/.env"))
+	assert.False(t, inSkippedDir(root, "/repo/src/handler.ts"))
+	// The tree itself may live under a hidden directory.
+	assert.False(t, inSkippedDir("/home/me/.worktrees/app", "/home/me/.worktrees/app/src/handler.ts"))
+}
+
+func TestStartSkipsHiddenDirsAndNodeModules(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"node_modules/pkg", ".sst", "src"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0755))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
+	}()
+	waitForWatcherReady(t, filepath.Join(root, "watcher-ready.txt"), events)
+
+	skipped := []string{
+		filepath.Join(root, "node_modules", "pkg", "index.js"),
+		filepath.Join(root, ".sst", "types.d.ts"),
+	}
+	for _, path := range skipped {
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0644))
+	}
+	watched := filepath.Join(root, "src", "handler.ts")
+	require.NoError(t, os.WriteFile(watched, []byte("x"), 0644))
+
+	seen := collectFileChangedEvents(events, 750*time.Millisecond)
+	assert.True(t, seen[watched], "expected file change for %s", watched)
+	for _, path := range skipped {
+		assert.False(t, seen[path], "did not expect file change for %s", path)
+	}
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestStartDiscoversDirectoryMovedIn(t *testing.T) {
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, "app")
+	require.NoError(t, os.MkdirAll(root, 0755))
+	outside := filepath.Join(workspace, "staging", "newpkg")
+	require.NoError(t, os.MkdirAll(outside, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "handler.go"), []byte("package newpkg\n"), 0644))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
+	}()
+	waitForWatcherReady(t, filepath.Join(root, "watcher-ready.txt"), events)
+
+	moved := filepath.Join(root, "newpkg")
+	require.NoError(t, os.Rename(outside, moved))
+	path := filepath.Join(moved, "handler.go")
+	require.True(t, waitForFileChangedEvent(events, path, 5*time.Second), "expected file change for %s", path)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestStartReportsGitHead(t *testing.T) {
+	root := t.TempDir()
+	head := filepath.Join(root, ".git", "HEAD")
+	require.NoError(t, os.MkdirAll(filepath.Dir(head), 0755))
+	require.NoError(t, os.WriteFile(head, []byte("ref: refs/heads/main\n"), 0644))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
+	}()
+	waitForWatcherReady(t, filepath.Join(root, "watcher-ready.txt"), events)
+
+	// FSEvents can report the write above, made just before the stream
+	// started, and the 500ms debounce then drops a second write right after.
+	// Retry the write like the other tests do.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		require.NoError(t, os.WriteFile(head, []byte(time.Now().String()), 0644))
+		if waitForFileChangedEvent(events, head, 200*time.Millisecond) {
+			cancel()
+			require.NoError(t, <-errCh)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected file change for %s", head)
+}
+
+func collectFileChangedEvents(events <-chan interface{}, window time.Duration) map[string]bool {
+	seen := map[string]bool{}
+	deadline := time.After(window)
+	for {
+		select {
+		case evt := <-events:
+			if changed, ok := evt.(*FileChangedEvent); ok {
+				seen[changed.Path] = true
+			}
+		case <-deadline:
+			return seen
+		}
+	}
+}
