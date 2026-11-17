@@ -284,7 +284,8 @@ export interface App {
    * :::tip
    * If FSEvents can't be used, SST falls back to kqueue, which holds a file
    * descriptor for every file and directory it watches. Set
-   * `SST_WATCHER=kqueue` to choose kqueue yourself.
+   * `SST_WATCHER=kqueue` to choose kqueue yourself, or `SST_WATCHER=fsevents`
+   * to have `sst dev` stop with the error instead of falling back.
    * :::
    *
    * :::caution
@@ -520,6 +521,9 @@ export interface AppWatch {
    * still applies. In the legacy `watch: [...]` array form, a glob that
    * matches `node_modules` or a hidden directory still skips it. Like every
    * entry here, the directory has to exist when `sst dev` starts.
+   *
+   * Symbolic links aren't followed, so list the directory a link points to,
+   * not the link.
    */
   paths?: string[];
   /**
