@@ -189,7 +189,10 @@ func (b *Bridge) Run(ctx context.Context) {
 				}
 			case bridge.MessagePing:
 				var taken bridge.HttpTakenBody
-				json.NewDecoder(msg.Body).Decode(&taken)
+				if err := json.NewDecoder(msg.Body).Decode(&taken); err != nil {
+					// its request then waits for LostAfter, as if not pinged
+					slog.Warn("failed to read a ping from sst dev", "messageID", msg.ID, "err", err)
+				}
 				io.Copy(io.Discard, msg.Body)
 				if r := b.find(taken.RequestID); r != nil {
 					r.ping()

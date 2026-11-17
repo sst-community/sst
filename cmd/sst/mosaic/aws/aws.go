@@ -79,7 +79,11 @@ func Start(
 			// a web function's request goes only to its loop, as nothing
 			// else reads it
 			if msg.Type == bridge.MessageHttpRequest {
-				webChan <- msg
+				select {
+				case webChan <- msg:
+				case <-ctx.Done():
+					return nil
+				}
 				continue
 			}
 			functionsChan <- msg

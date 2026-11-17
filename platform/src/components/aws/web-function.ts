@@ -424,6 +424,14 @@ export interface WebFunctionArgs {
          * the function's `timeout` limits it, as in a deploy. If `sst dev` stops
          * answering it, as when it exits, the request gets a `504` after 20 seconds.
          *
+         * The endpoint takes the same `url.authorization` as in a deploy. With the
+         * default, `none`, anyone with its URL can send requests to your local server,
+         * which runs with the execution role's permissions, as your deployed code would.
+         * That role is the one `sst dev` always makes, which your AWS account can assume
+         * so your local server can use it, as a `Function`'s can in `sst dev`; `live`
+         * adds only the AppSync access the bridge needs. Set `url.authorization` to
+         * `"iam"` to accept only signed requests.
+         *
          * With `vpc`, no network
          * connector is created: the bridge doesn't need one, and your local server reaches
          * the VPC through `sst tunnel`.
