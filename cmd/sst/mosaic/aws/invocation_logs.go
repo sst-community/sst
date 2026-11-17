@@ -63,10 +63,14 @@ func invocationLogsTotal(value string) int64 {
 	return megabytes("SST_DEV_INVOCATION_LOGS_TOTAL", value, defaultInvocationLogsTotal)
 }
 
+// The biggest size in MB that's read, 1 PB, far past any disk and far from
+// overflowing a size in bytes.
+const maxMegabytes = 1 << 30
+
 // megabytes reads a size in MB, or warns and returns fallback if it's not one.
 func megabytes(name, value string, fallback int64) int64 {
 	mb, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err != nil || mb <= 0 {
+	if err != nil || !(mb > 0 && mb <= maxMegabytes) {
 		slog.Warn(name+" is not a size in MB, so the default is used", "value", value, "defaultMB", fallback>>20)
 		return fallback
 	}
@@ -266,6 +270,8 @@ func (l *invocationLogs) file(path string) *os.File {
 				return log.file
 			}
 			l.closeLog(path)
+			// moved, as by a tool that rotates logs, maybe to <path>.1
+			l.recount(path + ".1")
 		} else {
 			return log.file
 		}
@@ -298,6 +304,23 @@ func (l *invocationLogs) file(path string) *os.File {
 	l.size += size - l.sizes[path]
 	l.sizes[path] = size
 	return file
+}
+
+// recount counts the size of the file at path from what's on disk, as it may
+// have been changed outside sst dev.
+func (l *invocationLogs) recount(path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		l.size -= l.sizes[path]
+		delete(l.sizes, path)
+		delete(l.rotated, path)
+		return
+	}
+	l.size += info.Size() - l.sizes[path]
+	l.sizes[path] = info.Size()
+	if _, ok := l.rotated[path]; !ok && strings.HasSuffix(path, ".1") {
+		l.rotated[path] = info.ModTime()
+	}
 }
 
 // isFileAt says whether file is still the one at path.

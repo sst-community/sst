@@ -339,6 +339,27 @@ func TestInvocationLogsReopenARemovedLog(t *testing.T) {
 	if got := readLog(t, filepath.Join(dir, "Fn.log")); !strings.Contains(got, " r3 responded") || strings.Contains(got, " r2 ") {
 		t.Fatalf("Fn.log is %q, want only r3", got)
 	}
+
+	// moved to Fn.log.1, as by a tool that rotates logs, which is counted
+	// toward the total from what's on disk
+	if err := os.Rename(filepath.Join(dir, "Fn.log"), filepath.Join(dir, "Fn.log.1")); err != nil {
+		t.Fatal(err)
+	}
+	tick = tick.Add(time.Second)
+	invoke(logs, "Fn", "r4")
+	var onDisk int64
+	for _, name := range entries(t, dir) {
+		// moved above, and not a log
+		if name != "moved" {
+			onDisk += size(t, filepath.Join(dir, name))
+		}
+	}
+	if logs.size != onDisk {
+		t.Fatalf("logs take %d bytes on disk, but %d are counted", onDisk, logs.size)
+	}
+	if _, ok := logs.rotated[filepath.Join(dir, "Fn.log.1")]; !ok {
+		t.Fatal("Fn.log.1 isn't counted as a rotated log, to be removed first")
+	}
 }
 
 func size0(dir, name string) int64 {
@@ -390,6 +411,11 @@ func TestInvocationLogLimit(t *testing.T) {
 		{" 0.5 ", 512 << 10, true},
 		{"lots", defaultInvocationLogLimit, true},
 		{"-1", defaultInvocationLogLimit, true},
+		{"1048576", 1 << 40, true},
+		// would overflow a size in bytes
+		{"99999999999999", defaultInvocationLogLimit, true},
+		{"+Inf", defaultInvocationLogLimit, true},
+		{"NaN", defaultInvocationLogLimit, true},
 	} {
 		limit, on := invocationLogLimit(tc.value)
 		if limit != tc.limit || on != tc.on {
