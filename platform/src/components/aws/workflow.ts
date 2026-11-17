@@ -1,4 +1,9 @@
-import { ComponentResourceOptions, Input, output } from "@pulumi/pulumi";
+import {
+  ComponentResourceOptions,
+  Input,
+  Output,
+  output,
+} from "@pulumi/pulumi";
 import { Duration, DurationDays, DurationMinutes } from "../duration.js";
 import { Component } from "../component.js";
 import { RETENTION } from "./logging.js";
@@ -263,6 +268,104 @@ export interface WorkflowArgs
  *
  * [Check out the full example](/docs/examples/#aws-workflow-bus).
  *
+ * #### Process a queue
+ *
+ * A workflow that finishes within 15 minutes can subscribe to a
+ * [`Queue`](/docs/component/aws/queue). Link the queue to it, so it can read and delete
+ * the messages.
+ *
+ * ```ts title="sst.config.ts"
+ * const queue = new sst.aws.Queue("MyQueue", {
+ *   visibilityTimeout: "15 minutes",
+ * });
+ *
+ * const workflow = new sst.aws.Workflow("MyWorkflow", {
+ *   handler: "src/workflow.handler",
+ *   link: [queue],
+ *   timeout: { execution: "15 minutes" },
+ * });
+ *
+ * queue.subscribe(workflow, { batch: { size: 1 } });
+ * ```
+ *
+ * The workflow gets the SQS event. A longer workflow is started by a function that
+ * subscribes to the queue, with [`workflow.dispatcher()`](#dispatcher).
+ *
+ * ```ts title="sst.config.ts"
+ * const workflow = new sst.aws.Workflow("MyWorkflow", {
+ *   handler: "src/workflow.handler",
+ * });
+ *
+ * queue.subscribe(
+ *   { handler: "src/dispatcher.handler", link: [workflow] },
+ *   { batch: { partialResponses: true } },
+ * );
+ * ```
+ *
+ * ```ts title="src/dispatcher.ts"
+ * import { Resource } from "sst";
+ * import { workflow } from "sst/aws/workflow";
+ *
+ * export const handler = workflow.dispatcher<{ jobId: string }>(
+ *   Resource.MyWorkflow,
+ *   { name: (message) => `job-${message.body.jobId}` },
+ * );
+ * ```
+ *
+ * [Check out the full example](/docs/examples/#aws-workflow-queue).
+ *
+ * ---
+ *
+ * ### Queues and tenants
+ *
+ * There are two ways to start a workflow from a queue.
+ *
+ * - **Subscribe the workflow.** SQS invokes it and waits for the execution to finish,
+ *   so `timeout.execution` can be at most 15 minutes, and the queue's
+ *   `visibilityTimeout` should be at least as long. A message that's delivered again,
+ *   or retried after a failure, starts a new execution. Use a batch size of 1, so
+ *   each message is its own execution and is retried on its own.
+ * - **Subscribe a dispatcher.** `workflow.dispatcher()` starts an execution for each
+ *   message, named after the job, and is done with the message once it has started.
+ *   A message that's delivered again starts no second execution, since its name is
+ *   already used. It reports the messages it couldn't start as `batchItemFailures`,
+ *   so turn on `batch.partialResponses`.
+ *
+ * Messages that keep failing go to the queue's `dlq` after its `retry` count.
+ *
+ * #### Fair queues
+ *
+ * If many tenants share a queue, set each message's `MessageGroupId` to the tenant's ID
+ * when you send it. Take the ID from something you trust, like the signed-in user, and
+ * not from the request body.
+ *
+ * ```ts title="src/enqueue.ts"
+ * await sqs.send(
+ *   new SendMessageCommand({
+ *     QueueUrl: Resource.MyQueue.url,
+ *     MessageBody: JSON.stringify({ jobId }),
+ *     MessageGroupId: tenantId,
+ *   }),
+ * );
+ * ```
+ *
+ * On a standard queue, SQS then
+ * [delivers the messages of quieter tenants first](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fair-queues.html)
+ * when one tenant has a backlog. There's nothing to turn on, and it's not a FIFO queue.
+ * SQS only treats a tenant as noisy once it has many messages in flight, and messages
+ * that a subscriber has already received aren't reordered. So it needs a subscriber that
+ * works on many messages at once: about 50, as maximum concurrency times batch size.
+ * Without a `maximumConcurrency`, Lambda adds concurrency while there's a backlog. SST
+ * warns if a workflow subscriber is capped below that.
+ * `dispatcher()` passes the `MessageGroupId` to the workflow as `tenant`. The
+ * `ApproximateNumberOfNoisyGroups` and `ApproximateAgeOfOldestMessageInQuietGroups`
+ * CloudWatch metrics show how it's working.
+ *
+ * This makes delivery fair, not the work. SQS doesn't limit how many of a tenant's
+ * messages are in flight, and once a dispatcher has started an execution, SQS no
+ * longer sees it. So the steps, waits and retries of one tenant's executions can still
+ * take most of your Lambda concurrency, or of an API you call.
+ *
  * ---
  *
  * ### Limitations
@@ -306,6 +409,7 @@ export interface WorkflowArgs
  */
 export class Workflow extends Component {
   private readonly fn: Function;
+  private readonly executionTimeout: Output<Duration>;
 
   constructor(
     name: string,
@@ -316,6 +420,7 @@ export class Workflow extends Component {
 
     const timeouts = normalizeTimeouts();
     const logging = normalizeLogging();
+    this.executionTimeout = timeouts.execution;
 
     this.fn = new Function(
       `${name}Handler`,
@@ -368,6 +473,11 @@ export class Workflow extends Component {
   /** @internal */
   public getFunction() {
     return this.fn;
+  }
+
+  /** @internal */
+  public getExecutionTimeout() {
+    return this.executionTimeout;
   }
 
   /**

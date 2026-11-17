@@ -61,6 +61,11 @@ jobs:
         with:
           version: "latest"
 
+      # The runtimes' tests build a function that imports the SDK, like
+      # `sst/resource/cloudflare`, from the workspace's sdk/js
+      - name: Build the SDK
+        run: bun run build:sdk
+
       - name: Run Go tests
         run: go test -vet=all ./...
 

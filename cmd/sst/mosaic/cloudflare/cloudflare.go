@@ -33,7 +33,7 @@ type WorkerInvokedEvent struct {
 	TailEvent *TailEvent
 }
 
-func Start(ctx context.Context, proj *project.Project, args map[string]interface{}) error {
+func Start(ctx context.Context, proj project.Program, args map[string]interface{}) error {
 	prov, ok := proj.Provider("cloudflare")
 	if !ok {
 		return util.NewReadableError(nil, "Cloudflare provider not found in project configuration")
@@ -103,15 +103,15 @@ exit:
 				if _, ok := builds[target.FunctionID]; ok {
 					continue
 				}
-				output, err := proj.Runtime.Build(ctx, target)
+				output, err := proj.Runtimes().Build(ctx, target)
 				if err != nil {
 					continue
 				}
 				builds[target.FunctionID] = output
 			case *watcher.FileChangedEvent:
 				for workerID, target := range targets {
-					if proj.Runtime.ShouldRebuild(target.Runtime, workerID, evt.Path) {
-						output, err := proj.Runtime.Build(ctx, target)
+					if proj.Runtimes().ShouldRebuild(target.Runtime, workerID, evt.Path) {
+						output, err := proj.Runtimes().Build(ctx, target)
 						if err != nil {
 							continue
 						}

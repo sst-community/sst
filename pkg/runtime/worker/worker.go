@@ -58,7 +58,7 @@ func (w *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 	build := properties.Build
 	unenv, err := w.getUnenv(
 		ctx,
-		input.CfgPath,
+		input.Platform(),
 		properties.Compatibility,
 	)
 	if err != nil {
@@ -116,7 +116,7 @@ func (w *Runtime) Build(ctx context.Context, input *runtime.BuildInput) (*runtim
 			Loader:     esbuild.LoaderTS,
 		},
 		NodePaths: append([]string{
-			filepath.Join(path.ResolvePlatformDir(input.CfgPath), "node_modules"),
+			filepath.Join(input.Platform(), "node_modules"),
 		}, build.ESBuild.NodePaths...),
 		Alias:             alias,
 		Inject:            unenv.Polyfill,
@@ -234,7 +234,7 @@ func stripAliasedExternals(alias map[string]string, external []string) map[strin
 	return result
 }
 
-func (w *Runtime) getUnenv(ctx context.Context, cfgPath string, compatibility compatibility) (*unenv, error) {
+func (w *Runtime) getUnenv(ctx context.Context, platform string, compatibility compatibility) (*unenv, error) {
 	payload, err := json.Marshal(compatibility)
 	if err != nil {
 		return nil, err
@@ -251,10 +251,10 @@ func (w *Runtime) getUnenv(ctx context.Context, cfgPath string, compatibility co
 	cmd := process.CommandContext(
 		ctx,
 		"node",
-		filepath.Join(path.ResolvePlatformDir(cfgPath), "src/runtime/worker/unenv.mjs"),
+		filepath.Join(platform, "src/runtime/worker/unenv.mjs"),
 		string(payload),
 	)
-	cmd.Dir = path.ResolvePlatformDir(cfgPath)
+	cmd.Dir = platform
 	cmd.Env = []string{}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -332,12 +332,6 @@ func (r *Runtime) ShouldRebuild(functionID string, file string) bool {
 	}
 
 	return false
-}
-
-// ShouldRunEagerly returns true for Cloudflare Workers - the worker invoked last restarts immediately after rebuild.
-// Workers use esbuild's metafile for precise per-function dependency tracking.
-func (r *Runtime) ShouldRunEagerly() bool {
-	return true
 }
 
 func (r *Runtime) Run(ctx context.Context, input *runtime.RunInput) (runtime.Worker, error) {

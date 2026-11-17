@@ -2,12 +2,17 @@ package js_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	esbuild "github.com/evanw/esbuild/pkg/api"
 	"github.com/sst/sst/v3/pkg/js"
+	"github.com/sst/sst/v3/platform"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormatError(t *testing.T) {
@@ -37,84 +42,402 @@ func TestFormatError(t *testing.T) {
 	})
 }
 
-func TestBuildInjectsGlobalsForProjectPathContainingSST(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "app.sst-branch")
-	assert.NoError(t, os.MkdirAll(filepath.Join(dir, ".sst"), 0755))
-	assert.NoError(t, os.WriteFile(filepath.Join(dir, "source.ts"), []byte(`if (!injected) throw new Error("missing globals")`), 0644))
+// Builds the code in dir and runs it with node, returning what it printed
+func buildAndRun(t *testing.T, input js.EvalOptions) string {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	result, err := js.Build(input)
+	require.NoError(t, err)
+	defer js.Cleanup(result)
+	var bundle string
+	for _, file := range result.OutputFiles {
+		if strings.HasSuffix(file.Path, ".mjs") {
+			bundle = file.Path
+		}
+	}
+	out, err := exec.Command(node, bundle).CombinedOutput()
+	require.NoError(t, err, string(out))
+	return strings.TrimSpace(string(out))
+}
 
-	outfile := filepath.Join(dir, ".sst", "platform", "config.mjs")
-	assert.NoError(t, os.MkdirAll(filepath.Dir(outfile), 0755))
+func writeFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, contents := range files {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0644))
+	}
+}
+
+// The globals a config is given, like `sst` and `aws`, reach every file that
+// uses them without declaring them: the config's own files and the packages
+// it imports. A file that imports a module under the same name keeps its own,
+// and a .cjs file is left as it is.
+func TestBuildGlobals(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		".sst/platform/fake.mjs":             `export const name = "the global";`,
+		"infra.ts":                           `export const name: string = fake.name;`,
+		"node_modules/esm/package.json":      `{"name":"esm","type":"module","main":"index.mjs"}`,
+		"node_modules/esm/index.mjs":         `export const name = fake.name;`,
+		"node_modules/commonjs/package.json": `{"name":"commonjs","main":"index.js"}`,
+		"node_modules/commonjs/index.js":     `module.exports = { name: fake.name };`,
+		"node_modules/own/package.json":      `{"name":"own","type":"module","main":"index.js"}`,
+		"node_modules/own/index.js":          "import * as fake from \"./fake.js\";\nexport const name = fake.name;",
+		"node_modules/own/fake.js":           `export const name = "its own";`,
+		"node_modules/cjs/package.json":      `{"name":"cjs","main":"index.cjs"}`,
+		"node_modules/cjs/index.cjs":         "module.exports = { name: \"commonjs only\" };\nif (true) return;",
+	})
+
+	out := buildAndRun(t, js.EvalOptions{
+		Dir: dir,
+		Globals: []js.Global{{
+			Name:   "fake",
+			Module: filepath.ToSlash(filepath.Join(dir, ".sst", "platform", "fake.mjs")),
+		}},
+		Code: `
+import { name as infra } from "./infra.ts";
+import { name as esm } from "esm";
+import commonjs from "commonjs";
+import { name as own } from "own";
+import cjs from "cjs";
+console.log(JSON.stringify([infra, esm, commonjs.name, own, cjs.name]));
+`,
+	})
+	assert.Equal(t, `["the global","the global","the global","its own","commonjs only"]`, out)
+}
+
+// An app file or a package that imports \`sst/components\`, or the components
+// of a provider like \`sst/components/aws\`, gets the files the \`sst\` global
+// is made of, so they share one copy of the components.
+func TestBuildPlatformModules(t *testing.T) {
+	dir := t.TempDir()
+	components := filepath.ToSlash(filepath.Join(dir, ".sst", "platform", "src", "components"))
+	writeFiles(t, dir, map[string]string{
+		".sst/platform/src/components/index.ts":     "export * from \"./core\";\nexport * as aws from \"./aws/index\";",
+		".sst/platform/src/components/core.ts":      `export function component() {}`,
+		".sst/platform/src/components/aws/index.ts": `export class Bucket {}`,
+		"global.ts":                     `export const component = sst.component; export const Bucket = sst.aws.Bucket;`,
+		"infra.ts":                      "export { component } from \"sst/components\";\nexport { Bucket } from \"sst/components/aws\";",
+		"node_modules/pkg/package.json": `{"name":"pkg","type":"module","main":"index.mjs"}`,
+		"node_modules/pkg/index.mjs":    "export { component } from \"sst/components\";\nexport { Bucket } from \"sst/components/aws\";",
+	})
+
+	out := buildAndRun(t, js.EvalOptions{
+		Dir:     dir,
+		Globals: []js.Global{{Name: "sst", Module: components + "/index.ts"}},
+		Platform: map[string]string{
+			"sst/components":     components + "/core.ts",
+			"sst/components/aws": components + "/aws/index.ts",
+		},
+		Code: `
+import * as global from "./global.ts";
+import * as infra from "./infra.ts";
+import * as pkg from "pkg";
+console.log(typeof global.component, global.component === infra.component, infra.component === pkg.component);
+console.log(typeof global.Bucket, global.Bucket === infra.Bucket, infra.Bucket === pkg.Bucket);
+`,
+	})
+	assert.Equal(t, "function true true\nfunction true true", out)
+}
+
+// Reading \`app()\` doesn't load what \`run()\` imports from the platform or the
+// providers. That build runs before they're installed.
+func TestBuildReadingApp(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"sst.config.ts": `
+export default $config({
+  app() {
+    return { name: "my-app" };
+  },
+  async run() {
+    await import("./infra");
+    await import("pkg");
+  },
+});
+`,
+		"infra.ts": `
+import { component } from "sst/components";
+import { Bucket } from "sst/components/aws";
+import * as aws from "@pulumi/aws";
+export const bucket = component("acme:index:Bucket", { bucket: aws.s3.Bucket });
+export const files = component("acme:index:Files", { files: Bucket });
+`,
+		"node_modules/pkg/package.json": `{"name":"pkg","type":"module","main":"index.mjs"}`,
+		"node_modules/pkg/index.mjs":    "import * as cloudflare from \"@pulumi/cloudflare\";\nexport const record = cloudflare.DnsRecord;",
+	})
+
+	out := buildAndRun(t, js.EvalOptions{
+		Dir:    dir,
+		Banner: `function $config(input) { return input }`,
+		Code:   "import mod from './sst.config.ts';\nconsole.log(JSON.stringify(await mod.app({})));",
+	})
+	assert.Equal(t, `{"name":"my-app"}`, out)
+}
+
+// SST 4's line reads `app()` as SST 4.25.0 did: a provider's module the app's
+// files import is loaded, so a helper `app()` calls can use it, and a package
+// that can't be found fails the build
+func TestBuildReadingAppLoadsImports(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"sst.config.ts": `
+export default $config({
+  async app() {
+    const { region } = await import("./region");
+    return { name: "my-app", providers: { aws: { region } } };
+  },
+  async run() {},
+});
+`,
+		"region.ts": `import * as aws from "@pulumi/aws";
+export const region = aws.defaultRegion;
+`,
+		// Installed with the platform, beside the build's output
+		".sst/platform/node_modules/@pulumi/aws/package.json": `{"name":"@pulumi/aws","type":"module","main":"index.mjs"}`,
+		".sst/platform/node_modules/@pulumi/aws/index.mjs":    `export const defaultRegion = "us-west-2";`,
+	})
+	read := js.EvalOptions{
+		Dir:    dir,
+		Banner: `function $config(input) { return input }`,
+		Code:   "import mod from './sst.config.ts';\ntry { console.log(JSON.stringify(await mod.app({}))) } catch (e) { console.log(e.message) }",
+	}
+	// Left out, as SST 5's line does, it says so when the helper reads it
+	assert.Equal(t, "@pulumi/aws is only loaded in run()", buildAndRun(t, read))
+
+	read.LoadImports = true
+	assert.Equal(t, `{"name":"my-app","providers":{"aws":{"region":"us-west-2"}}}`, buildAndRun(t, read))
+
+	writeFiles(t, dir, map[string]string{"region.ts": `import kebab from "lodash.kebabcase";
+export const region = kebab("us west 2");
+`})
+	_, err := js.Build(read)
+	assert.ErrorContains(t, err, `Could not resolve "lodash.kebabcase"`)
+}
+
+// An error in a file that's given the globals is reported at its own line
+func TestBuildErrorLineInAFileWithGlobals(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed")
+	}
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"sst.ts":   `export const name = "sst";`,
+		"aws.ts":   `export const name = "aws";`,
+		"infra.ts": "export function fail() {\n  throw new Error(sst.name + aws.name);\n}",
+	})
+	result, err := js.Build(js.EvalOptions{
+		Dir:     dir,
+		Globals: []js.Global{{Name: "sst", Module: filepath.Join(dir, "sst.ts")}, {Name: "aws", Module: filepath.Join(dir, "aws.ts")}},
+		Code:    "const { fail } = await import(\"./infra.ts\");\nfail();",
+	})
+	require.NoError(t, err)
+	defer js.Cleanup(result)
+	var bundle string
+	for _, file := range result.OutputFiles {
+		if strings.HasSuffix(file.Path, ".mjs") {
+			bundle = file.Path
+		}
+	}
+	out, _ := exec.Command(node, "--enable-source-maps", bundle).CombinedOutput()
+	assert.Contains(t, string(out), "Error: sstaws")
+	assert.Contains(t, string(out), "infra.ts:2:", string(out))
+}
+
+// Each group of SST's components the `sst` global has, in groups.ts, is a
+// module an app or a package imports, like `sst/components/aws`, as the
+// platform's manifest says. SST 4's platform has neither.
+func TestPlatformModulesAreTheGroups(t *testing.T) {
+	pkg, err := platform.PackageJson()
+	require.NoError(t, err)
+	require.NotNil(t, pkg.SST, "platform/package.json has `sst`")
+	if pkg.SST.Speaks(0) {
+		t.Skip("the platform speaks contract 0, whose app imports no `sst/components` module")
+	}
+	modules := []string{}
+	for module := range pkg.SST.Modules {
+		modules = append(modules, module)
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "platform", "src", "components", "groups.ts"))
+	require.NoError(t, err)
+	expected := []string{"sst/components"}
+	for _, match := range regexp.MustCompile(`(\w+): \(\) => import\("\./(\w+)/index"\)`).FindAllStringSubmatch(string(data), -1) {
+		require.Equal(t, match[1], match[2], "a group is named for its folder")
+		expected = append(expected, "sst/components/"+match[1])
+	}
+	require.Greater(t, len(expected), 1, "groups.ts lists the groups")
+	assert.ElementsMatch(t, expected, modules)
+}
+
+// Before the first install, a package `sst install` installs, like one the
+// config lists under `packages`, can't be found. Reading `app()` leaves it out,
+// and says so if something uses it then. A build that runs the app still
+// fails on it.
+func TestBuildReadingAppBeforeInstall(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"sst.config.ts": `
+export default $config({
+  app() {
+    return { name: "my-app" };
+  },
+  async run() {
+    await import("./infra");
+    await import("@acme/email");
+  },
+});
+`,
+		"infra.ts": `import { Uploads } from "@acme/uploads";
+export const uploads = Uploads;
+`,
+		// Each kind of import says so when it's read: esbuild reads a named
+		// or namespace import through an object of its own
+		"used.ts": `import stages from "@acme/stages";
+import * as regions from "@acme/regions";
+import { zone } from "@acme/zones";
+function read(get) {
+  try {
+    return String(get());
+  } catch (e) {
+    return e.message;
+  }
+}
+export async function reads() {
+  const awaited = await import("@acme/awaited");
+  return [read(() => stages.stage), read(() => regions.region), read(() => zone), read(() => awaited.value)];
+}
+`,
+	})
+	out := buildAndRun(t, js.EvalOptions{
+		Dir:    dir,
+		Banner: `function $config(input) { return input }`,
+		Code:   "import mod from './sst.config.ts';\nimport { reads } from './used.ts';\nconsole.log(JSON.stringify(await mod.app({})));\nconsole.log((await reads()).join(\"\\n\"));",
+	})
+	notInstalled := " isn't installed yet. A package that `sst install` installs, like one under `packages`, is only loaded in run()"
+	assert.Equal(t, "{\"name\":\"my-app\"}\n@acme/stages"+notInstalled+"\n@acme/regions"+notInstalled+"\n@acme/zones"+notInstalled+"\n@acme/awaited"+notInstalled, out)
+
 	_, err := js.Build(js.EvalOptions{
 		Dir:     dir,
-		Outfile: outfile,
-		Code:    `import "./source"`,
-		Globals: `const injected = true`,
+		Globals: []js.Global{{Name: "sst", Module: filepath.Join(dir, "used.ts")}},
+		Banner:  `function $config(input) { return input }`,
+		Code:    "import mod from './sst.config.ts';\nconsole.log(typeof mod.run);",
 	})
-	assert.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `Could not resolve "@acme/uploads"`)
+	assert.Contains(t, err.Error(), `Could not resolve "@acme/email"`)
+}
 
-	contents, err := os.ReadFile(outfile)
-	assert.NoError(t, err)
-	assert.Contains(t, string(contents), "injected = true")
+// A global made of a module that only sets `injectedGlobals`, so a bundle has
+// it only when some file was given the globals. The module is in the project's
+// .sst folder, as the platform is.
+func injectedGlobal(t *testing.T, dir string) []js.Global {
+	t.Helper()
+	writeFiles(t, dir, map[string]string{
+		".sst/platform/injected.mjs": "globalThis.injectedGlobals = true;\nexport const yes = true;",
+	})
+	return []js.Global{{Name: "injected", Module: filepath.ToSlash(filepath.Join(dir, ".sst", "platform", "injected.mjs"))}}
+}
+
+func buildToFile(t *testing.T, input js.EvalOptions) string {
+	t.Helper()
+	input.Outfile = filepath.Join(input.Dir, ".sst", "platform", "config.mjs")
+	result, err := js.Build(input)
+	require.NoError(t, err)
+	defer js.Cleanup(result)
+	contents, err := os.ReadFile(input.Outfile)
+	require.NoError(t, err)
+	return string(contents)
+}
+
+func TestBuildInjectsGlobalsForProjectPathContainingSST(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "app.sst-branch")
+	writeFiles(t, dir, map[string]string{
+		"source.ts": `if (!injected.yes) throw new Error("missing globals")`,
+	})
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     dir,
+		Code:    `import "./source"`,
+		Globals: injectedGlobal(t, dir),
+	})
+	assert.Contains(t, contents, "injectedGlobals = true")
 }
 
 func TestBuildInjectsGlobalsForDirectoryNextToSST(t *testing.T) {
 	dir := t.TempDir()
-	assert.NoError(t, os.MkdirAll(filepath.Join(dir, ".sst-old"), 0755))
-	assert.NoError(t, os.WriteFile(filepath.Join(dir, ".sst-old", "source.ts"), []byte(`if (!injected) throw new Error("missing globals")`), 0644))
-
-	outfile := filepath.Join(dir, ".sst", "platform", "config.mjs")
-	assert.NoError(t, os.MkdirAll(filepath.Dir(outfile), 0755))
-	_, err := js.Build(js.EvalOptions{
-		Dir:     dir,
-		Outfile: outfile,
-		Code:    `import "./.sst-old/source"`,
-		Globals: `const injected = true`,
+	writeFiles(t, dir, map[string]string{
+		".sst-old/source.ts": `if (!injected.yes) throw new Error("missing globals")`,
 	})
-	assert.NoError(t, err)
-
-	contents, err := os.ReadFile(outfile)
-	assert.NoError(t, err)
-	assert.Contains(t, string(contents), "injected = true")
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     dir,
+		Code:    `import "./.sst-old/source"`,
+		Globals: injectedGlobal(t, dir),
+	})
+	assert.Contains(t, contents, "injectedGlobals = true")
 }
 
 func TestBuildLeavesTheProjectSSTDirectoryAlone(t *testing.T) {
 	dir := t.TempDir()
-	outfile := filepath.Join(dir, ".sst", "platform", "config.mjs")
-	assert.NoError(t, os.MkdirAll(filepath.Dir(outfile), 0755))
-	assert.NoError(t, os.WriteFile(filepath.Join(dir, ".sst", "platform", "own.ts"), []byte(`export const own = "own file"`), 0644))
-
-	_, err := js.Build(js.EvalOptions{
-		Dir:     dir,
-		Outfile: outfile,
-		Code:    `import { own } from "./.sst/platform/own"; console.log(own)`,
-		Globals: `globalThis.injectedGlobals = true`,
+	writeFiles(t, dir, map[string]string{
+		// It uses the global, since an import a .ts file doesn't use is dropped
+		".sst/platform/own.ts": `export const own = typeof injected === "undefined" ? "own file" : "given the globals"`,
 	})
-	assert.NoError(t, err)
-
-	contents, err := os.ReadFile(outfile)
-	assert.NoError(t, err)
-	assert.Contains(t, string(contents), "own file")
-	assert.NotContains(t, string(contents), "injectedGlobals")
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     dir,
+		Code:    `import { own } from "./.sst/platform/own"; console.log(own)`,
+		Globals: injectedGlobal(t, dir),
+	})
+	assert.Contains(t, contents, "own file")
+	assert.NotContains(t, contents, "injectedGlobals")
 }
 
 func TestBuildLeavesTheProjectSSTDirectoryAloneThroughASymlink(t *testing.T) {
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "link")
-	assert.NoError(t, os.Symlink(real, link))
-	outfile := filepath.Join(link, ".sst", "platform", "config.mjs")
-	assert.NoError(t, os.MkdirAll(filepath.Dir(outfile), 0755))
-	assert.NoError(t, os.WriteFile(filepath.Join(real, ".sst", "platform", "own.ts"), []byte(`export const own = "own file"`), 0644))
-
-	_, err := js.Build(js.EvalOptions{
-		Dir:     link,
-		Outfile: outfile,
-		Code:    `import { own } from "./.sst/platform/own"; console.log(own)`,
-		Globals: `globalThis.injectedGlobals = true`,
+	require.NoError(t, os.Symlink(real, link))
+	writeFiles(t, real, map[string]string{
+		// It uses the global, since an import a .ts file doesn't use is dropped
+		".sst/platform/own.ts": `export const own = typeof injected === "undefined" ? "own file" : "given the globals"`,
 	})
-	assert.NoError(t, err)
+	contents := buildToFile(t, js.EvalOptions{
+		Dir:     link,
+		Code:    `import { own } from "./.sst/platform/own"; console.log(own)`,
+		Globals: injectedGlobal(t, link),
+	})
+	assert.Contains(t, contents, "own file")
+	assert.NotContains(t, contents, "injectedGlobals")
+}
 
-	contents, err := os.ReadFile(outfile)
-	assert.NoError(t, err)
-	assert.Contains(t, string(contents), "own file")
-	assert.NotContains(t, string(contents), "injectedGlobals")
+// A dependency that declares a top-level name one of the globals has, like
+// sql-formatter's `postgresql` beside the PostgreSQL provider, keeps its own:
+// a global reaches a file through a name of the CLI's (define), not an import
+// under its own name, so the two never clash (#269 on main)
+func TestBuildDependencyDeclaringAGlobalsName(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		".sst/platform/postgresql.mjs":     `export const name = "the provider";`,
+		"infra.ts":                         `export const name: string = postgresql.name;`,
+		"node_modules/fmt/package.json":    `{"name":"fmt","type":"module","main":"index.js"}`,
+		"node_modules/fmt/index.js":        "const postgresql = { name: \"its own\" };\nexport const name = postgresql.name;",
+		"node_modules/fmtcjs/package.json": `{"name":"fmtcjs","main":"index.js"}`,
+		"node_modules/fmtcjs/index.js":     "var postgresql = { name: \"its own cjs\" };\nmodule.exports = { name: postgresql.name };",
+	})
+	out := buildAndRun(t, js.EvalOptions{
+		Dir: dir,
+		Globals: []js.Global{{
+			Name:   "postgresql",
+			Module: filepath.ToSlash(filepath.Join(dir, ".sst", "platform", "postgresql.mjs")),
+		}},
+		Code: `
+import * as fmt from "fmt";
+import fmtcjs from "fmtcjs";
+import * as infra from "./infra.ts";
+console.log(fmt.name + "|" + fmtcjs.name + "|" + infra.name);
+`,
+	})
+	assert.Contains(t, out, "its own|its own cjs|the provider")
 }

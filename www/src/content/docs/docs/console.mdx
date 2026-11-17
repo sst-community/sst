@@ -12,8 +12,6 @@ import consoleLogsLight from '../../../assets/docs/console/sst-console-logs-ligh
 import consoleLogsDark from '../../../assets/docs/console/sst-console-logs-dark.png';
 import consoleIssuesLight from '../../../assets/docs/console/sst-console-issues-light.png';
 import consoleIssuesDark from '../../../assets/docs/console/sst-console-issues-dark.png';
-import consoleLocalLight from '../../../assets/docs/console/sst-console-local-light.png';
-import consoleLocalDark from '../../../assets/docs/console/sst-console-local-dark.png';
 import consoleResourcesLight from '../../../assets/docs/console/sst-console-resources-light.png';
 import consoleResourcesDark from '../../../assets/docs/console/sst-console-resources-dark.png';
 import consoleUpdatesLight from '../../../assets/docs/console/sst-console-updates-light.png';
@@ -310,10 +308,9 @@ Here are a few of the things the Console does for you.
 
 1. [**Logs**](#logs): View logs from any log group in your app
 2. [**Issues**](#issues): Get real-time alerts for any errors in your app
-3. [**Local logs**](#local-logs): View logs from your local `sst dev` session
-4. [**Updates**](#updates): View the details of every update made to your app
-5. [**Resources**](#resources): View all the resources in your app and their props
-6. [**Autodeploy**](#autodeploy): Auto-deploy your app when you _git push_ to your repo
+3. [**Updates**](#updates): View the details of every update made to your app
+4. [**Resources**](#resources): View all the resources in your app and their props
+5. [**Autodeploy**](#autodeploy): Auto-deploy your app when you _git push_ to your repo
 
 ---
 
@@ -706,52 +703,6 @@ AWS will bill you for the **CodeBuild build minutes** that are used to run your 
 
 ---
 
-### Local logs
-
-When the Console starts up, it checks if you are running `sst dev` locally. If so, then it'll show you real-time logs from your local terminal. This works by connecting to a local server that's run as a part of the SST CLI.
-
-<picture>
-  <source srcset={consoleLocalDark.src} media="(prefers-color-scheme: dark)" />
-  <source srcset={consoleLocalLight.src} media="(prefers-color-scheme: light)" />
-  <Image src={consoleLocalLight} alt="SST Console Local logs" />
-</picture>
-
-:::info
-The local server only allows access from `localhost` and `console.sst.dev`.
-:::
-
-The local logs works in all browsers and environments. But for certain browsers like Safari or Brave, and Gitpod, it needs some additional configuration.
-
----
-
-#### Safari & Brave
-
-Certain browsers like Safari and Brave require the local connection between the browser and the `sst dev` CLI to be running on HTTPS.
-
-SST can automatically generate a locally-trusted certificate using the [`sst cert`](/docs/reference/cli#cert) command.
-
-```bash
-sst cert
-```
-
-You'll only need to **run this once** on your machine.
-
----
-
-#### Gitpod
-
-If you are using [Gitpod](https://www.gitpod.io/), you can use the Gitpod Local Companion app to connect to the `sst dev`  process running inside your Gitpod workspace.
-
-To get started:
-
-1. [Install Gitpod Local Companion app](https://www.gitpod.io/blog/local-app#installation)
-2. [Run the Companion app](https://www.gitpod.io/blog/local-app#running)
-3. Navigate to Console in the browser
-
-The companion app runs locally and creates a tunnelled connection to your Gitpod workspace.
-
----
-
 ## FAQ
 
 Here are some frequently asked questions about the Console.
@@ -769,8 +720,6 @@ Here are some frequently asked questions about the Console.
 - What happens if I go over the free tier?
 
   You won't be able to access the _production_ or deployed stages till you add your billing details in the workspace settings.
-
-  Note that, you can continue to **access your personal stages**. Just make sure you have `sst dev` running locally. Otherwise the Console won't be able to detect that it's a personal stage.
 
 - What counts as a resource?
 
