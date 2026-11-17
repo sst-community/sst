@@ -53,7 +53,7 @@ func TestStartDescriptorsDoNotGrowWithProjectSize(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	makeTree(t, root, 100, 20) // 2,000 files in 300 directories
+	makeTree(t, root, 100, 20) // 2,000 files in 201 directories
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

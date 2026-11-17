@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -178,10 +179,12 @@ type fseventsBackend struct {
 	done   chan struct{}
 	close  sync.Once
 
-	// Directories already reported as created. FSEvents can repeat an item's
-	// flags in later batches, and a repeated Create on a directory would make
-	// the watcher walk it and report every file in it again.
-	created map[string]bool
+	// The inode of each directory already reported as created. FSEvents can
+	// repeat an item's flags in later batches, and a repeated Create on a
+	// directory would make the watcher walk it and report every file in it
+	// again. A directory removed and made again has a new inode, so it is
+	// reported, even when both happen within one batch.
+	created map[string]uint64
 }
 
 func newFSEventsBackend(trees []string, headFile string) (*fseventsBackend, error) {
@@ -194,7 +197,7 @@ func newFSEventsBackend(trees []string, headFile string) (*fseventsBackend, erro
 		events:   make(chan fsnotify.Event, 1024),
 		errors:   make(chan error, 16),
 		done:     make(chan struct{}),
-		created:  map[string]bool{},
+		created:  map[string]uint64{},
 	}
 
 	var strings_ []uintptr
@@ -305,7 +308,7 @@ func (b *fseventsBackend) handle(path string, flags uint32) {
 		return
 	}
 
-	_, err := os.Lstat(path)
+	info, err := os.Lstat(path)
 	exists := err == nil
 
 	if flags&fsEventFlagItemIsDir != 0 {
@@ -313,10 +316,14 @@ func (b *fseventsBackend) handle(path string, flags uint32) {
 			delete(b.created, path)
 			return
 		}
-		if flags&(fsEventFlagItemCreated|fsEventFlagItemRenamed) == 0 || b.created[path] {
+		if flags&(fsEventFlagItemCreated|fsEventFlagItemRenamed) == 0 {
 			return
 		}
-		b.created[path] = true
+		ino := inode(info)
+		if seen, ok := b.created[path]; ok && seen == ino {
+			return
+		}
+		b.created[path] = ino
 		b.send(fsnotify.Event{Name: path, Op: fsnotify.Create})
 		return
 	}
@@ -330,6 +337,13 @@ func (b *fseventsBackend) handle(path string, flags uint32) {
 		return
 	}
 	b.send(fsnotify.Event{Name: path, Op: fsnotify.Write})
+}
+
+func inode(info os.FileInfo) uint64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return st.Ino
+	}
+	return 0
 }
 
 func (b *fseventsBackend) mapPath(path string) (string, string, bool) {

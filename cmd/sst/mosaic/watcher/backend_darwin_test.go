@@ -35,7 +35,7 @@ func newTestFSEventsBackend(trees []treeMapping, headFile string) *fseventsBacke
 		events:   make(chan fsnotify.Event, 16),
 		errors:   make(chan error, 16),
 		done:     make(chan struct{}),
-		created:  map[string]bool{},
+		created:  map[string]uint64{},
 	}
 }
 
@@ -148,6 +148,33 @@ func TestFSEventsHandleReportsCreatedDirOnce(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0755))
 	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemCreated)
 	assert.Len(t, drainEvents(b), 1)
+}
+
+// When a directory is removed and made again within one batch, FSEvents
+// sends one item with Created and Removed set and the directory exists. It is
+// a new directory, so it is reported, but a repeat of that item is not.
+func TestFSEventsHandleReportsDirRecreatedWithinOneBatch(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "newpkg")
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	b := newTestFSEventsBackend([]treeMapping{{real: root, tree: root}}, "")
+
+	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemCreated)
+	assert.Len(t, drainEvents(b), 1)
+
+	// Hold the old directory open so the new one can't reuse its inode.
+	old, err := os.Open(dir)
+	require.NoError(t, err)
+	defer old.Close()
+	require.NoError(t, os.Rename(dir, filepath.Join(root, "trash")))
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "handler.ts"), nil, 0644))
+
+	recreated := uint32(fsEventFlagItemIsDir | fsEventFlagItemCreated | fsEventFlagItemRemoved)
+	b.handle(dir, recreated)
+	assert.Equal(t, []fsnotify.Event{{Name: dir, Op: fsnotify.Create}}, drainEvents(b))
+	b.handle(dir, recreated)
+	assert.Empty(t, drainEvents(b), "a repeated item is not a new directory")
 }
 
 func TestFSEventsHandleReportsDroppedEvents(t *testing.T) {
