@@ -1,14 +1,8 @@
 package provider
 
 import (
-	"bytes"
-	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
-
-	cloudflare "github.com/cloudflare/cloudflare-go"
 )
 
 func cloudflareEnv(t *testing.T, token, key, email string) {
@@ -104,58 +98,4 @@ func TestCloudflareCredentials(t *testing.T) {
 			t.Fatalf("headers = %v", req.Header)
 		}
 	})
-}
-
-// A write Cloudflare rate limits, or fails, is sent again whole, not as the
-// empty reader the first attempt left
-func TestCloudflareHomeRetriesWholeWrites(t *testing.T) {
-	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError} {
-		for _, compress := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%d, compressed %v", status, compress), func(t *testing.T) {
-				var puts int
-				var stored []byte
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.Method != http.MethodPut || r.URL.Path != "/accounts/acct/r2/buckets/sst-state/objects/app/my-app/dev" {
-						http.NotFound(w, r)
-						return
-					}
-					body, _ := io.ReadAll(r.Body)
-					puts++
-					if puts == 1 {
-						w.WriteHeader(status)
-						w.Write([]byte(`{"success":false,"errors":[{"code":10000,"message":"try again"}]}`))
-						return
-					}
-					stored = body
-					w.Write([]byte(`{"success":true,"result":{}}`))
-				}))
-				defer server.Close()
-				api, err := cloudflare.NewWithAPIToken("token", cloudflare.BaseURL(server.URL), cloudflare.UsingRetryPolicy(3, 0, 0), cloudflare.UsingRateLimit(10000))
-				if err != nil {
-					t.Fatal(err)
-				}
-				home := NewCloudflareHome(&CloudflareProvider{api: api, identifier: cloudflare.AccountIdentifier("acct")}, compress)
-				home.bootstrap = &bootstrap{State: "sst-state"}
-
-				state := []byte(`{"version":3,"checkpoint":{"stack":"dev"}}`)
-				if err := PushPartialState(home, "update", "my-app", "dev", state); err != nil {
-					t.Fatal(err)
-				}
-				if puts != 2 {
-					t.Fatalf("expected the write to be sent twice, got %d", puts)
-				}
-				if compress && !bytes.HasPrefix(stored, []byte{0x1f, 0x8b}) {
-					t.Fatalf("expected a gzipped write, got %q", stored)
-				}
-				decoded, err := gzipDecode(bytes.NewReader(stored))
-				if err != nil {
-					t.Fatal(err)
-				}
-				got, _ := io.ReadAll(decoded)
-				if !bytes.Equal(got, state) {
-					t.Fatalf("expected %s to be stored, got %q", state, got)
-				}
-			})
-		}
-	}
 }

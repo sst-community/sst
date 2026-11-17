@@ -29,6 +29,7 @@ var transformers = []ErrorTransformer{
 	exact(project.ErrPolicyViolation, ""),
 	exact(project.ErrPolicyConfigError, ""),
 	exact(provider.ErrLockExists, ""),
+	passthrough(provider.ErrStateMissing),
 	exact(project.ErrVersionInvalid, "The version range defined in the config is invalid"),
 	exact(provider.ErrCloudflareMissingAccount, "The Cloudflare Account ID was not able to be determined from this token. Make sure it has permissions to fetch account information or you can set the CLOUDFLARE_DEFAULT_ACCOUNT_ID environment variable to the account id you want to use."),
 	exact(server.ErrServerNotFound, "Could not find an `sst dev` session to connect to. Since you are running a command outside of the multiplexer be sure to start `sst dev` first."),
@@ -51,6 +52,9 @@ var transformers = []ErrorTransformer{
 	}),
 	match(func(err *project.ErrProviderVersionTooLow) string {
 		return fmt.Sprintf("You specified version %s of the \"%s\" provider. SST needs %s or higher.", err.Version, err.Name, err.Needed)
+	}),
+	match(func(err *project.ErrProviderMajorVersion) string {
+		return fmt.Sprintf("You specified version %s of the \"%s\" provider. SST's components are built for %s, and a new major version can remove what they use. Use a %s version, %s or higher.", err.Version, err.Name, err.Line, err.Line, err.Needed)
 	}),
 	match(func(err *project.ErrVersionMismatch) string {
 		return fmt.Sprintf("You are using v%s which does not match v%s in your \"sst.config.ts\".", err.Needed, err.Received)

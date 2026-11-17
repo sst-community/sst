@@ -5,9 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -73,16 +73,25 @@ type FunctionWorkerForgottenEvent struct {
 
 type input struct {
 	config  aws.Config
-	project *project.Project
+	project project.Program
 	server  *server.Server
 	client  *bridge.Client
 	msg     chan bridge.Message
 	prefix  string
+	// how many functions' workers start again as soon as they're built, the
+	// ones invoked last, usually startAtOnce
+	startAtOnce int
 }
+
+// After a change, the workers of the functions invoked last start again as soon
+// as they're built, as they're likely to be invoked next, and the others when
+// they're invoked. So a change to code many functions share doesn't start a
+// worker for each of them at once, whatever the runtime, and the ones in use are
+// ready.
+const startAtOnce = 3
 
 func function(ctx context.Context, input input) {
 	log := slog.Default().With("service", "aws.function")
-	server := fmt.Sprintf("localhost:%d/lambda/", input.server.Port)
 	type WorkerInfo struct {
 		FunctionID       string
 		WorkerID         string
@@ -110,6 +119,10 @@ func function(ctx context.Context, input input) {
 		// Stopped is whether it was stopped. It takes a moment to exit, and
 		// isn't handed an invocation meanwhile.
 		Stopped bool
+		// Run is which start of the worker's process this is, which is in the
+		// address it's given, so what a process that was stopped sends as it
+		// exits can be told from what the one that replaced it does
+		Run string
 	}
 	workerShutdownChan := make(chan *WorkerInfo, 1000)
 	nextChan := map[string]chan io.Reader{}
@@ -285,9 +298,33 @@ func function(ctx context.Context, input input) {
 	}
 	evts := bus.Subscribe(&watcher.FileChangedEvent{}, &project.CompleteEvent{}, &runtime.BuildInput{})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/next`, func(w http.ResponseWriter, r *http.Request) {
+	// stale is whether a worker's request comes from a start of its process that
+	// sst dev stopped, or that another replaced. What it sends isn't the
+	// worker's any more, and it isn't handed an invocation: a runtime interface
+	// client can go on asking, or report being stopped, as Ruby's reports an
+	// init error, as it exits. One with no run is sst dev's own.
+	stale := func(r *http.Request, workerID string) bool {
+		run := r.PathValue("run")
+		if run == "" {
+			return false
+		}
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		info, ok := workers[workerID]
+		stale := !ok || info.Run != run || info.Stopped
+		if stale {
+			log.Info("left out the request of a worker that was stopped", "workerID", workerID, "run", run, "path", r.URL.Path)
+		}
+		return stale
+	}
+
+	input.server.HandleWorker("GET", "/2018-06-01/runtime/invocation/next", func(w http.ResponseWriter, r *http.Request) {
 		log.Info("got next request", "workerID", r.PathValue("workerID"))
 		workerID := r.PathValue("workerID")
+		if stale(r, workerID) {
+			<-r.Context().Done()
+			return
+		}
 		stateMu.Lock()
 		info, ok := workers[workerID]
 		if ok {
@@ -372,9 +409,13 @@ func function(ctx context.Context, input input) {
 		}
 	})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/init/error`, func(w http.ResponseWriter, r *http.Request) {
+	input.server.HandleWorker("POST", "/2018-06-01/runtime/init/error", func(w http.ResponseWriter, r *http.Request) {
 		workerID := r.PathValue("workerID")
 		log.Info("got init error", "workerID", workerID, "requestID", r.PathValue("requestID"))
+		if stale(r, workerID) {
+			w.WriteHeader(200)
+			return
+		}
 		// an init error has no request ID, so its copies share one made here, and
 		// the bridge passes on only one of them
 		messageID := id.Ascending()
@@ -402,10 +443,15 @@ func function(ctx context.Context, input input) {
 		}
 	})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/{requestID}/response`, func(w http.ResponseWriter, r *http.Request) {
+	input.server.HandleWorker("POST", "/2018-06-01/runtime/invocation/{requestID}/response", func(w http.ResponseWriter, r *http.Request) {
 		workerID := r.PathValue("workerID")
 		requestID := r.PathValue("requestID")
 		log.Info("got response", "workerID", workerID, "requestID", r.PathValue("requestID"))
+		if stale(r, workerID) {
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(202)
+			return
+		}
 		writer := firstReply(bridge.MessageResponse, workerID, requestID)
 		defer sendLogs(workerID, requestID)
 		info, ok := loadWorker(workerID)
@@ -442,10 +488,15 @@ func function(ctx context.Context, input input) {
 		}
 	})
 
-	input.server.Mux.HandleFunc(`/lambda/{workerID}/2018-06-01/runtime/invocation/{requestID}/error`, func(w http.ResponseWriter, r *http.Request) {
+	input.server.HandleWorker("POST", "/2018-06-01/runtime/invocation/{requestID}/error", func(w http.ResponseWriter, r *http.Request) {
 		workerID := r.PathValue("workerID")
 		requestID := r.PathValue("requestID")
 		log.Info("got error", "workerID", workerID, "requestID", r.PathValue("requestID"))
+		if stale(r, workerID) {
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(202)
+			return
+		}
 		writer := firstReply(bridge.MessageError, workerID, requestID)
 		var buf bytes.Buffer
 		if _, err := buf.ReadFrom(r.Body); err != nil {
@@ -522,7 +573,7 @@ func function(ctx context.Context, input input) {
 			delete(builds, functionID)
 		}
 		target, _ := targets[functionID]
-		build, err := input.project.Runtime.Build(ctx, target)
+		build, err := input.project.Runtimes().Build(ctx, target)
 		return record(functionID, build, err)
 	}
 
@@ -531,7 +582,7 @@ func function(ctx context.Context, input input) {
 	buildEach := func(toBuild []*runtime.BuildInput) map[string]bool {
 		failed := map[string]bool{}
 		results := buildAll(toBuild, func(target *runtime.BuildInput) (*runtime.BuildOutput, error) {
-			return input.project.Runtime.Build(ctx, target)
+			return input.project.Runtimes().Build(ctx, target)
 		})
 		for _, result := range results {
 			if record(result.FunctionID, result.Output, result.Err) == nil {
@@ -570,6 +621,7 @@ func function(ctx context.Context, input input) {
 			FunctionID: functionID,
 			WorkerID:   workerID,
 			Streaming:  streaming,
+			Run:        id.Ascending(),
 		}
 		stateMu.Lock()
 		previous, hadPrevious := workers[workerID]
@@ -579,14 +631,15 @@ func function(ctx context.Context, input input) {
 		// recorded, and put back if it doesn't start
 		stopped, wasStopped := stoppedAt[workerID]
 		delete(stoppedAt, workerID)
-		worker, err := input.project.Runtime.Run(ctx, &runtime.RunInput{
+		worker, err := input.project.Runtimes().Run(ctx, &runtime.RunInput{
 			CfgPath:    input.project.PathConfig(),
 			Runtime:    target.Runtime,
-			Server:     server + workerID,
+			Server:     input.server.WorkerRunAddress(workerID, info.Run),
 			WorkerID:   workerID,
 			FunctionID: functionID,
 			Build:      build,
-			Env:        workerEnv[workerID],
+			// What the stub runs with, as the stage's target gives it
+			Env: input.project.Target().Env(workerEnv[workerID]),
 		})
 		if err != nil {
 			stateMu.Lock()
@@ -669,7 +722,7 @@ func function(ctx context.Context, input input) {
 		// and the loop doesn't wait on that
 		go func() {
 			client := http.Client{Timeout: 10 * time.Second}
-			result, err := client.Post("http://"+server+workerID+"/2018-06-01/runtime/init/error", "application/json", bytes.NewReader(body))
+			result, err := client.Post("http://"+input.server.WorkerAddress(workerID)+"/2018-06-01/runtime/init/error", "application/json", bytes.NewReader(body))
 			if err != nil {
 				log.Error("failed to report a worker that didn't start", "workerID", workerID, "err", err)
 				return
@@ -692,11 +745,10 @@ func function(ctx context.Context, input input) {
 	// restartOrDeferWorker starts a worker again after its function was built,
 	// or, when it isn't to start eagerly, once it's next invoked
 	restartOrDeferWorker := func(workerID string, info *WorkerInfo, eager bool) {
-		target, ok := targets[info.FunctionID]
-		if !ok {
+		if _, ok := targets[info.FunctionID]; !ok {
 			return
 		}
-		if eager && input.project.Runtime.ShouldRunEagerly(target.Runtime) {
+		if eager {
 			startWorker(info.FunctionID, workerID)
 		} else {
 			log.Info("lazy startup: deferring worker restart until invoked", "workerID", workerID, "functionID", info.FunctionID)
@@ -806,35 +858,55 @@ func function(ctx context.Context, input input) {
 		}
 	}
 
-	// restartAfterBuild starts again, of each function that was built, the
-	// worker invoked last, which is likely to be invoked next. The others start
-	// when they're invoked, so a save doesn't start a worker for every
-	// environment of a function at once. One that's still running an
-	// invocation is replaced once it's done.
+	// lastOf is the worker of each function invoked last, of those given, and
+	// whether it's one of the startAtOnce functions invoked last of all.
+	lastOf := func(infos map[string]*WorkerInfo) (map[string]*WorkerInfo, map[string]bool) {
+		last := map[string]*WorkerInfo{}
+		for _, info := range infos {
+			if latest, ok := last[info.FunctionID]; !ok || info.LastInvoked.After(latest.LastInvoked) {
+				last[info.FunctionID] = info
+			}
+		}
+		functions := slices.SortedFunc(maps.Keys(last), func(a, b string) int {
+			return last[b].LastInvoked.Compare(last[a].LastInvoked)
+		})
+		atOnce := map[string]bool{}
+		for _, functionID := range functions[:min(len(functions), input.startAtOnce)] {
+			atOnce[functionID] = true
+		}
+		return last, atOnce
+	}
+
+	// restartAfterBuild starts again, of the startAtOnce functions built that
+	// were invoked last, the worker of each invoked last, which is likely to be
+	// invoked next. The others start when they're invoked, so a save doesn't
+	// start a worker for every function or every environment of one at once.
+	// One that's still running an invocation is replaced once it's done.
 	restartAfterBuild := func(built func(functionID string) bool) {
 		stateMu.Lock()
-		last := map[string]*WorkerInfo{}
+		builtWorkers := map[string]*WorkerInfo{}
 		toRestart := map[string]*WorkerInfo{}
 		for workerID, info := range workers {
 			if !built(info.FunctionID) {
 				continue
 			}
-			if latest, ok := last[info.FunctionID]; !ok || info.LastInvoked.After(latest.LastInvoked) {
-				last[info.FunctionID] = info
-			}
+			builtWorkers[workerID] = info
 			if info.Outdated {
 				continue
 			}
 			toRestart[workerID] = info
 		}
-		for _, info := range last {
+		last, atOnce := lastOf(builtWorkers)
+		// one still running an invocation starts again once it's done if it's
+		// one to start at once now, whatever it was after an earlier build
+		for _, info := range builtWorkers {
 			if info.Outdated {
-				info.Eager = true
+				info.Eager = atOnce[info.FunctionID] && last[info.FunctionID] == info
 			}
 		}
 		stateMu.Unlock()
 		for workerID, info := range toRestart {
-			restartOrDeferWorker(workerID, info, last[info.FunctionID] == info)
+			restartOrDeferWorker(workerID, info, atOnce[info.FunctionID] && last[info.FunctionID] == info)
 		}
 	}
 
@@ -846,7 +918,7 @@ func function(ctx context.Context, input input) {
 				continue
 			}
 			for path := range paths {
-				if !input.project.Runtime.ShouldRebuild(target.Runtime, target.FunctionID, path) {
+				if !input.project.Runtimes().ShouldRebuild(target.Runtime, target.FunctionID, path) {
 					continue
 				}
 				for _, worker := range workers {
@@ -1006,12 +1078,13 @@ func function(ctx context.Context, input input) {
 					stopWhenDone(info)
 				}
 				builds = map[string]*runtime.BuildOutput{}
-				// the functions whose workers start again now are built at once,
-				// not one by one as each starts
+				// the functions with a worker are built at once, not one by one
+				// in this loop as each is invoked, and restartAfterBuild starts
+				// again those of the ones invoked last
 				toBuild := []*runtime.BuildInput{}
 				for _, info := range workers {
 					target, ok := targets[info.FunctionID]
-					if !ok || slices.Contains(toBuild, target) || !input.project.Runtime.ShouldRunEagerly(target.Runtime) {
+					if !ok || slices.Contains(toBuild, target) {
 						continue
 					}
 					toBuild = append(toBuild, target)
