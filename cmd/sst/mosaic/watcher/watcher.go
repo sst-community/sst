@@ -427,7 +427,10 @@ func isWithinPath(root string, path string) bool {
 // inSkippedDir reports whether path is inside a directory the per-directory
 // walk never enters: a hidden directory or node_modules, below tree. It is
 // the recursive backend's copy of shouldSkipDir's built-in rules, so a rule
-// added there belongs here too. watch.ignore is left to the loop.
+// added there belongs here too. watch.ignore is left to the loop. One
+// difference: this only looks at the path below tree, while shouldSkipDir
+// matches node_modules anywhere in the absolute path, so a project whose own
+// path contains node_modules is skipped whole by the per-directory walk.
 func inSkippedDir(tree string, path string) bool {
 	rel, err := filepath.Rel(tree, path)
 	if err != nil {

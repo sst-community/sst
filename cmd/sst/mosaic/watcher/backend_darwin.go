@@ -24,12 +24,13 @@ import (
 // It is loaded with purego, which keeps the CLI buildable with CGO_ENABLED=0.
 // If it can't be loaded, the watcher falls back to fsnotify.
 func newBackend(trees []string, headFile string, log *slog.Logger) (backend, error) {
-	switch v := os.Getenv("SST_WATCHER"); v {
+	v := os.Getenv("SST_WATCHER")
+	switch v {
 	case "", "fsevents", "kqueue":
 	default:
 		log.Warn("ignoring unknown SST_WATCHER value, use kqueue or fsevents", "value", v)
 	}
-	if os.Getenv("SST_WATCHER") != "kqueue" {
+	if v != "kqueue" {
 		if err := loadFSEvents(); err != nil {
 			log.Warn("fsevents can't be loaded, falling back to kqueue", "err", err)
 			return newFsnotifyBackend()
