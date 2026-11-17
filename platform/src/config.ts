@@ -504,9 +504,9 @@ export interface AppWatch {
    * `../shared/node_modules`. So is one under a skipped directory, like
    * `.config/types`, though nothing else in `.config` is. Hidden directories
    * and `node_modules` *under* a listed directory are still skipped. `ignore`
-   * still applies, and a glob in the legacy array form isn't written out by
-   * name. Like every entry here, the directory has to exist when `sst dev`
-   * starts.
+   * still applies. In the legacy `watch: [...]` array form, a glob that
+   * matches `node_modules` or a hidden directory still skips it. Like every
+   * entry here, the directory has to exist when `sst dev` starts.
    */
   paths?: string[];
   /**
