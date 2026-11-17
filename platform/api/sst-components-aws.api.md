@@ -100,6 +100,7 @@ import { Method } from '@pulumi/aws/apigateway/method.js';
 import { MethodResponse } from '@pulumi/aws/apigateway/methodResponse.js';
 import { MountTarget } from '@pulumi/aws/efs/mountTarget.js';
 import { NatGateway } from '@pulumi/aws/ec2/natGateway.js';
+import { OriginAccessControl as OriginAccessControl_2 } from '@pulumi/aws/cloudfront/originAccessControl.js';
 import { Output } from '@pulumi/pulumi';
 import { OutputInstance } from '@pulumi/pulumi';
 import { Parameter } from '@pulumi/aws/ssm/parameter.js';
@@ -124,6 +125,7 @@ import { Repository } from '@pulumi/aws/ecr/repository.js';
 import { Resolver } from '@pulumi/aws/appsync/resolver.js';
 import { Resource } from '@pulumi/pulumi';
 import { Resource as Resource_2 } from '@pulumi/aws/apigateway/resource.js';
+import { ResourcePolicy } from '@pulumi/aws/lambdaweb/resourcePolicy.js';
 import { ResourceTransformationArgs } from '@pulumi/pulumi';
 import { Response as Response_2 } from '@pulumi/aws/apigateway/response.js';
 import { RestApi } from '@pulumi/aws/apigateway/restApi.js';
@@ -3641,6 +3643,11 @@ const parts_50: {
     endpoint: FunctionEndpoint;
     operatorRole: OptionalPart<Role>;
     networkConnector: OptionalPart<CoreNetworkConnector>;
+    originAccessControl: OptionalPart<OriginAccessControl_2>;
+    cachePolicy: OptionalPart<CachePolicy>;
+    requestFunction: OptionalPart<Function_4>;
+    cdn: OptionalPart<typeof Cdn>;
+    resourcePolicy: OptionalPart<ResourcePolicy>;
 };
 
 // @public (undocumented)
@@ -5395,6 +5402,7 @@ export class WebFunction extends WebFunction_base {
     constructor(name: string, args: WebFunctionArgs, opts?: ComponentResourceOptions);
     get arn(): Output<string> | undefined;
     get endpointArn(): Output<string> | undefined;
+    get endpointUrl(): Output<string> | undefined;
     link(): {
         properties: {
             url: Output<string>;
@@ -5439,6 +5447,11 @@ revision: FunctionRevision;
 endpoint: FunctionEndpoint;
 operatorRole: OptionalPart<Role>;
 networkConnector: OptionalPart<CoreNetworkConnector>;
+originAccessControl: OptionalPart<OriginAccessControl_2>;
+cachePolicy: OptionalPart<CachePolicy>;
+requestFunction: OptionalPart<Function_4>;
+cdn: OptionalPart<typeof Cdn>;
+resourcePolicy: OptionalPart<ResourcePolicy>;
 }>;
 
 // @public (undocumented)
@@ -5451,6 +5464,7 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts_50> {
         url?: Input<string>;
         autostart?: Input<boolean>;
     };
+    domain?: string | Prettify<CdnDomainArgs>;
     entrypoint: string;
     environment?: FunctionArgs["environment"];
     link?: FunctionArgs["link"];

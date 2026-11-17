@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
-import { mockPulumi, sidedClass } from "../../helpers/graph";
+import { mockPulumi, redirectChanged, sidedClass } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
 
 // The app's folder, with a server's source and a prebuilt bundle
@@ -22,6 +22,10 @@ write("src/caller.ts", "export const handler = () => {};\n");
 
 const ROLE = "aws:iam/role:Role";
 const CONNECTOR = "aws:lambda/coreNetworkConnector:CoreNetworkConnector";
+const ENDPOINT = "aws:lambdaweb/functionEndpoint:FunctionEndpoint";
+const DISTRIBUTION = "aws:cloudfront/distribution:Distribution";
+const CERT =
+  "arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000";
 
 // As the CLI builds a web function: the server, and its links encrypted into
 // `resource.enc`, in the bundle when it's given one. What's in the file
@@ -29,9 +33,9 @@ const CONNECTOR = "aws:lambda/coreNetworkConnector:CoreNetworkConnector";
 const builds = path.join(root, ".builds");
 const pulumi = mockPulumi({
   root,
-  // The key the links are encrypted with
   // The key the links are encrypted with, a role's creation time, which the
-  // network connector waits on, and the connector's version
+  // network connector waits on, the connector's version, the endpoint's
+  // domain, and a distribution's, which a domain's records point at
   state: (args) =>
     args.type === "random:index/randomBytes:RandomBytes"
       ? { base64: Buffer.alloc(32, 1).toString("base64") }
@@ -41,7 +45,14 @@ const pulumi = mockPulumi({
           ? {
               latestVersionArn: `arn:aws:lambda:us-east-1:123456789012:network-connector:${args.name}:1`,
             }
-          : {},
+          : args.type === ENDPOINT
+            ? { domainName: `${args.name.toLowerCase()}.lambda-web.example.com` }
+            : args.type === DISTRIBUTION
+              ? {
+                  domainName: `${args.name.toLowerCase()}.cloudfront.net`,
+                  hostedZoneId: "Z2FDTNDATAQYW2",
+                }
+              : {},
   call: (args) =>
     args.token === "aws:index/getAvailabilityZones:getAvailabilityZones"
       ? { names: ["us-east-1a", "us-east-1b"] }
@@ -314,6 +325,93 @@ describe("WebFunction", () => {
           check: () =>
             expect(pulumi.reportOf("Web")?.dev.links).toEqual(["MyBucket"]),
         },
+        // #276: a distribution in front of the endpoint, with what it needs,
+        // under the names SST 4's gave them
+        "a server on a domain on Route 53": {
+          create: (WebFunction, opts) => {
+            new WebFunction(
+              "Web",
+              { entrypoint: "src/server.ts", domain: "api.example.com" },
+              opts,
+            );
+          },
+          check: () => {
+            for (const part of [
+              "WebOriginAccessControl",
+              "WebCachePolicy",
+              "WebRequestFunction",
+              "WebCdnDistribution",
+              "WebCdnSslCertificate",
+              "WebResourcePolicy",
+            ])
+              expect(resource(part)).toBeDefined();
+            expect(resource("WebEndpoint").inputs.authType).toBe("IamAuth");
+          },
+        },
+        "a server on a domain with an alias and a certificate it's given": (
+          WebFunction,
+          opts,
+        ) => {
+          new WebFunction(
+            "Web",
+            {
+              entrypoint: "src/server.ts",
+              timeout: "2 minutes",
+              url: { authorization: "iam" },
+              domain: {
+                name: "api.example.com",
+                aliases: ["www.api.example.com"],
+                dns: false,
+                cert: CERT,
+              },
+            },
+            opts,
+          );
+        },
+        // SST 4's fixture has its HttpsRedirect from before #265
+        "a server on a domain with a redirect": {
+          create: (WebFunction, opts) => {
+            new WebFunction(
+              "Web",
+              {
+                entrypoint: "src/server.ts",
+                domain: { name: "api.example.com", redirects: ["old.example.com"] },
+              },
+              opts,
+            );
+          },
+          changed: (way) => redirectChanged("WebCdnRedirect", way),
+        },
+        "a server on a domain, its distribution and policy transformed": (
+          WebFunction,
+          opts,
+        ) => {
+          new WebFunction(
+            "Web",
+            {
+              entrypoint: "src/server.ts",
+              domain: { name: "api.example.com", dns: false, cert: CERT },
+              transform: {
+                cdn: (args: any) => {
+                  args.comment = "custom";
+                },
+                resourcePolicy: (args: any) => {
+                  args.policy = output(args.policy).apply((policy: string) => {
+                    const document = JSON.parse(policy);
+                    document.Statement.push({
+                      Effect: "Allow",
+                      Principal: { AWS: "arn:aws:iam::123456789012:root" },
+                      Action: "lambda:InvokeWebFunctionEndpoint",
+                      Resource: "*",
+                    });
+                    return JSON.stringify(document);
+                  });
+                },
+              } as any,
+            },
+            opts,
+          );
+        },
         "in sst dev, deployed": {
           create: (WebFunction, opts) => {
             // @ts-ignore
@@ -338,6 +436,8 @@ describe("WebFunction", () => {
     await pulumi.settle();
 
     expect(Object.keys(web.nodes).sort()).toEqual([
+      "cachePolicy",
+      "cdn",
       "codeBucket",
       "codeBucketPolicy",
       "codeObject",
@@ -348,10 +448,15 @@ describe("WebFunction", () => {
       "logGroup",
       "networkConnector",
       "operatorRole",
+      "originAccessControl",
+      "requestFunction",
+      "resourcePolicy",
       "revision",
       "role",
       "versioning",
     ]);
+    expect(web.nodes.cdn).toBeUndefined();
+    expect(ofType(DISTRIBUTION)).toEqual([]);
     expect(web.nodes.networkConnector).toBeUndefined();
     expect(ofType(CONNECTOR)).toEqual([]);
     expect(
@@ -542,6 +647,8 @@ describe("WebFunction", () => {
       "function",
       "endpoint",
       "networkConnector",
+      "cdn",
+      "resourcePolicy",
     ]) {
       pulumi.reset();
       expect(
@@ -640,6 +747,180 @@ describe("WebFunction", () => {
       await pulumi.settle();
     });
     expect(error?.message).toMatch(/"url.authorization".*"none" or "iam"/);
+  });
+
+  describe("on a domain", () => {
+    const onDomain = (name: string, args: Record<string, unknown> = {}) =>
+      new WebFunction(name, {
+        entrypoint: "src/server.ts",
+        domain: { name: "api.example.com", dns: false, cert: CERT },
+        ...args,
+      });
+
+    it("serves the domain through CloudFront, which signs its requests to the endpoint", async () => {
+      const web = onDomain("Web", { timeout: "2 minutes" });
+      await pulumi.settle();
+
+      expect(await pulumi.resolve(web.url)).toBe("https://api.example.com");
+      expect(await pulumi.resolve(web.endpointUrl!)).toBe(
+        "https://webendpoint.lambda-web.example.com",
+      );
+      expect(pulumi.reportOf("Web")?.hint).toBe("https://api.example.com");
+      // Only what's signed reaches the endpoint
+      expect(resource("WebEndpoint").inputs.authType).toBe("IamAuth");
+      expect(resource("WebOriginAccessControl").inputs).toMatchObject({
+        originAccessControlOriginType: "lambda",
+        signingBehavior: "always-amz-auth",
+        signingProtocol: "sigv4",
+      });
+      expect(resource("WebOriginAccessControl").inputs.name).toMatch(/\S/);
+
+      const distribution = resource("WebCdnDistribution").inputs;
+      expect(distribution.aliases).toEqual(["api.example.com"]);
+      expect(distribution.viewerCertificate).toMatchObject({
+        acmCertificateArn: CERT,
+        sslSupportMethod: "sni-only",
+      });
+      expect(distribution.origins).toEqual([
+        expect.objectContaining({
+          originId: "default",
+          domainName: "webendpoint.lambda-web.example.com",
+          originAccessControlId: "WebOriginAccessControl_id",
+          customOriginConfig: expect.objectContaining({
+            originProtocolPolicy: "https-only",
+            originSslProtocols: ["TLSv1.2"],
+            // CloudFront's default limit, below the two-minute timeout
+            originReadTimeout: 60,
+          }),
+        }),
+      ]);
+      const behavior = distribution.defaultCacheBehavior;
+      expect(behavior).toMatchObject({
+        targetOriginId: "default",
+        viewerProtocolPolicy: "redirect-to-https",
+        cachePolicyId: "WebCachePolicy_id",
+        originRequestPolicyId: "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+      });
+      expect([...behavior.allowedMethods].sort()).toEqual([
+        "DELETE",
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PUT",
+      ]);
+      // A web function origin takes no Lambda@Edge origin trigger
+      expect(behavior.lambdaFunctionAssociations ?? []).toEqual([]);
+      expect(behavior.functionAssociations).toEqual([
+        {
+          eventType: "viewer-request",
+          functionArn: expect.stringContaining("WebRequestFunction"),
+        },
+      ]);
+      expect(resource("WebRequestFunction").inputs.code).toContain(
+        "x-forwarded-host",
+      );
+      const policy = resource("WebCachePolicy").inputs;
+      expect(policy).toMatchObject({ defaultTtl: 0, minTtl: 0 });
+      expect(policy.parametersInCacheKeyAndForwardedToOrigin).toMatchObject({
+        headersConfig: {
+          headerBehavior: "whitelist",
+          headers: { items: ["authorization", "x-forwarded-host"] },
+        },
+        cookiesConfig: { cookieBehavior: "all" },
+        queryStringsConfig: { queryStringBehavior: "all" },
+      });
+      // What links it is given the domain
+      expect(await pulumi.resolve(web.link().properties.url)).toBe(
+        "https://api.example.com",
+      );
+    });
+
+    it("grants its distribution permission to invoke the endpoint", async () => {
+      const web = onDomain("Web");
+      await pulumi.settle();
+
+      const policy = resource("WebResourcePolicy").inputs;
+      expect(policy.resourceArn).toBe(await pulumi.resolve(web.arn!));
+      expect(JSON.parse(policy.policy).Statement).toEqual([
+        {
+          Sid: "AllowCloudFrontInvoke",
+          Effect: "Allow",
+          Principal: { Service: "cloudfront.amazonaws.com" },
+          Action: "lambda:InvokeWebFunctionEndpoint",
+          Resource: await pulumi.resolve(web.endpointArn!),
+          Condition: {
+            StringEquals: {
+              "aws:SourceArn": await pulumi.resolve(
+                web.nodes.cdn!.nodes.distribution.arn,
+              ),
+            },
+          },
+        },
+      ]);
+    });
+
+    it("takes iam authorization, and refuses none", async () => {
+      onDomain("Web", { url: { authorization: "iam" } });
+      await pulumi.settle();
+      expect(resource("WebEndpoint").inputs.authType).toBe("IamAuth");
+      expect(() =>
+        onDomain("Open", { url: { authorization: "none" } }),
+      ).toThrow(
+        'The "url.authorization" of the "Open" web function can\'t be "none" with "domain". Its endpoint takes IAM authorization, so its CloudFront distribution signs its requests with origin access control.',
+      );
+      await pulumi.settle();
+    });
+
+    it("refuses a domain in an output", () => {
+      expect(() =>
+        onDomain("Web", { domain: output("api.example.com") }),
+      ).toThrow(/"domain" of the "Web" web function has to be a plain value/);
+    });
+
+    it("transforms the distribution and the resource policy", async () => {
+      onDomain("Web", {
+        transform: {
+          cdn: { comment: "custom" },
+          resourcePolicy: (args: any) => {
+            args.policy = output(args.policy).apply((policy: string) => {
+              const document = JSON.parse(policy);
+              document.Statement.push({
+                Effect: "Allow",
+                Principal: { AWS: "arn:aws:iam::123456789012:root" },
+                Action: "lambda:InvokeWebFunctionEndpoint",
+                Resource: "*",
+              });
+              return JSON.stringify(document);
+            });
+          },
+        },
+      });
+      await pulumi.settle();
+      expect(resource("WebCdnDistribution").inputs.comment).toBe("custom");
+      expect(
+        JSON.parse(resource("WebResourcePolicy").inputs.policy).Statement.map(
+          (statement: any) => statement.Principal,
+        ),
+      ).toEqual([
+        { Service: "cloudfront.amazonaws.com" },
+        { AWS: "arn:aws:iam::123456789012:root" },
+      ]);
+    });
+
+    it("creates no distribution in sst dev while the server runs locally", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const web = onDomain("Web", { dev: { url: "http://localhost:3000" } });
+      await pulumi.settle();
+      expect(await pulumi.resolve(web.url)).toBe("http://localhost:3000");
+      expect(web.endpointUrl).toBeUndefined();
+      expect(ofType(DISTRIBUTION)).toHaveLength(0);
+      expect(
+        ofType("aws:lambdaweb/resourcePolicy:ResourcePolicy"),
+      ).toHaveLength(0);
+    });
   });
 
   describe("in sst dev", () => {

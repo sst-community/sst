@@ -147,6 +147,7 @@ export const NAMING_RULES: Record<string, BuiltInNamingRule> = {
   "aws:cloudwatch/eventTarget:EventTarget": ["targetId", 64],
   "aws:cloudwatch/eventRule:EventRule": ["name", 64],
   "aws:cloudfront/function:Function": ["name", 64],
+  "aws:cloudfront/originAccessControl:OriginAccessControl": ["name", 64],
   "aws:cloudfront/keyValueStore:KeyValueStore": ["name", 64],
   "aws:cognito/identityPool:IdentityPool": ["identityPoolName", 128],
   "aws:cognito/userPool:UserPool": ["name", 128],
