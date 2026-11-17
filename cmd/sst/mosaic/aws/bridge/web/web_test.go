@@ -266,6 +266,65 @@ func TestUnavailableWithoutDev(t *testing.T) {
 	}
 }
 
+// A request that sst dev never answered doesn't count as activity, so the
+// next request after an idle spell checks the subscription again, as the
+// failure may be the subscription's. One sst dev answered does count.
+func TestFailedRequestIsNotActivity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	var probes atomic.Int32
+	appsync := &fakeAppSync{drop: func(channel string, packet bridge.Packet) bool {
+		if packet.Type == bridge.MessageProbe {
+			probes.Add(1)
+		}
+		return false
+	}}
+	client := bridge.NewClient(ctx, appsync, "worker1", prefix+"/worker1")
+	b := &Bridge{
+		Client:     client,
+		Prefix:     prefix,
+		WorkerID:   "worker1",
+		FunctionID: "Api",
+		// longer than Idle, so a request that's marked active when it ends
+		// leaves the next one fresh, and one that isn't leaves it stale
+		TakeTimeout: 600 * time.Millisecond,
+		ResendEvery: 100 * time.Millisecond,
+		Idle:        200 * time.Millisecond,
+	}
+	go b.Run(ctx)
+	b.Probe(ctx)
+	front := httptest.NewServer(b)
+	t.Cleanup(front.Close)
+	get := func() int {
+		t.Helper()
+		resp, err := http.Get(front.URL + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	before := probes.Load()
+	if status := get(); status != 503 {
+		t.Fatalf("got %d without sst dev, want 503", status)
+	}
+	// stale after the idle spell, so it was probed
+	afterFirst := probes.Load()
+	if afterFirst == before {
+		t.Fatal("the request after an idle spell didn't check the subscription")
+	}
+	// right away, but the 503 took longer than Idle, and sst dev sent nothing
+	if status := get(); status != 503 {
+		t.Fatalf("got %d without sst dev, want 503", status)
+	}
+	if probes.Load() == afterFirst {
+		t.Fatal("a request that sst dev never answered counted as activity, so the next one didn't check the subscription")
+	}
+}
+
 func TestUnavailableWhenNotLive(t *testing.T) {
 	s := start(t, echo(), false, false, nil)
 	resp, err := http.Get(s.url + "/")

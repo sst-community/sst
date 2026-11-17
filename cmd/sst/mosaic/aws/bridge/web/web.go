@@ -169,7 +169,10 @@ func (b *Bridge) init() {
 func (b *Bridge) channel() string { return b.Prefix + "/" + b.WorkerID + "/in" }
 
 // Run reads what sst dev sends the bridge, and passes each on to the request
-// it's for. It runs until ctx is done.
+// it's for. It runs until ctx is done. Each message it reads came over the
+// subscription, so the bridge is marked active then, and only then: a request
+// that fails before sst dev answers it, as when sst dev isn't running, doesn't
+// put off the next check of the subscription.
 func (b *Bridge) Run(ctx context.Context) {
 	b.init()
 	for {
@@ -177,6 +180,7 @@ func (b *Bridge) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-b.Client.Read():
+			b.active()
 			switch msg.Type {
 			case bridge.MessageProbe:
 				select {
@@ -334,7 +338,6 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		delete(b.waiting, requestID)
 		b.mu.Unlock()
-		b.active()
 	}()
 
 	// the first copy goes over the WebSocket where it can, as it reaches sst dev
