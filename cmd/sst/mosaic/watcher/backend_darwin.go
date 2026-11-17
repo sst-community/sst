@@ -254,6 +254,12 @@ func newFSEventsBackend(trees []string, headFile string) (*fseventsBackend, erro
 
 	label := []byte("sst.watcher\x00")
 	b.queue = fsevents.dispatchQueueCreate(&label[0], 0)
+	if b.queue == 0 {
+		// The stream was never scheduled, so it only needs releasing.
+		fsevents.streamRelease(b.stream)
+		b.unregister()
+		return nil, errors.New("fsevents: can't create a dispatch queue")
+	}
 	fsevents.streamSetDispatchQueue(b.stream, b.queue)
 	if !fsevents.streamStart(b.stream) {
 		fsevents.streamInvalidate(b.stream)
