@@ -70,4 +70,4 @@ So there is one Go engine (`cmd/`, `pkg/`, `internal/`, `go.mod`) and two platfo
 | A. The contract, `pkg/sst4` and the manifest | Done 2026-11-13, both builds' Go suites passing; reviewed and approved, with one change (done in B) |
 | B. Shared resources' guard, each line's commands | Done 2026-11-13, both builds' Go suites passing, reviewed and approved. Committed with A (`4490a44f4`, plans `65b2f6286`) |
 | C. The SST 4 CLI for the lab | Built 2026-11-13; its commands are `main`'s but `cert`. The lab passed on four stages, run by the other session against 4.25.0, and is cleaned up |
-| Into `main` | Waits on `main`'s Go changes being merged in first ([above](#before-the-engine-goes-into-main)), and on the maintainer |
+| Into `main` | Done 2026-11-17: #272 merged (`fe8f86ba7`), and `main` merged into `v5` (`04371830c`) |

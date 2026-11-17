@@ -2,6 +2,18 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-17: #272 in `main`, and `main` merged into `v5` with #243
+
+- **#272 merged into `main`** (`fe8f86ba7`), and `main` merged into `v5` (`04371830c`): the engine is the same on both lines. `v5`'s CI then failed its check of the SDK's types: `sst/pulumi`'s declarations import `@pulumi/pulumi`, an optional peer the Pulumi program has, and the check took only what `sst` installs, `hono`, `zod` and `valibot`. It takes the peers now (`5e6313e72`). `main` doesn't run that check.
+- **#243 ported to SST 5's `Queue` and `Workflow`.** SST 5's `Queue.subscribe` already took a workflow and subscribed its published version, with no function of its own, as SST 4's did before #243. From #243 it gets:
+  - the refusal of a workflow whose `timeout.execution` is over 15 minutes, which the event source mapping waits on, so AWS never sees the mapping;
+  - the warning when the queue's `transform.eventSourceMapping` caps a workflow subscriber below about 50 messages in flight, read from the mapping;
+  - the docs: "Process a queue" and "Queues and tenants" on the `Workflow`'s page, and a workflow in `subscribe`'s.
+
+  A workflow whose function is given in `existing` isn't checked, since its timeout is the function's own; SST 4's `Workflow` had no `existing`. The `Workflow` has an internal `getExecutionTimeout()` for it, in the API report. The SDK's `workflow.dispatcher()` came with the merge as it is. SST 4's example app and the test of SST 4's subscriber stay out of `v5`.
+- **Checked**: `v5`'s platform suite (124 files, 4,342 tests), with a move of SST 4's `queue.subscribe(workflow)` run three ways; each new test fails with the code it covers broken; `tsc`, the API reports, the SDK's build, types check and tests (36), and the generated pages.
+- **In the lab**, on a stage of its own: a queue subscribed by a 15-minute workflow, capped at two at a time, and a queue whose dispatcher starts a 14-day workflow. `sst diff` and the deploy both gave the warning; the mapping targeted the workflow's published version; a message to each queue ran its workflow, with its tenant. A queue subscribing the 14-day workflow directly was refused by `sst diff` and by the deploy, and AWS had no mapping for it. Removed and cleaned up: the state's versions, the passphrase and three source maps.
+
 ## 2026-11-13: `main` merged into `v5`, and the re-check's fixes
 
 - **`main` merged into `v5`** (the maintainer chose to merge before #272 lands rather than after), with #262, #265, #267, #269 and #271. The engine's files take #272's resolution, so with #272's handler fix the Go engine is the same on both lines but for #271, which #272 doesn't have yet. #265 is ported to SST 5's `HttpsRedirect`: its CloudFront function answers with the redirect, keeping the path and query string, the origin is the sites' HTTPS-only placeholder, and the bucket's website is kept, with the distribution depending on it so a remove deletes them in SST 4's order. A stage moved from an SST 4 before #265 gets the function's code and the origin updated in place; the move tests of `Cdn`, `StaticSite` and the nine server-rendered sites expect it, through one helper, and the move harness compares changes by name. #267 needed nothing in SST 5's `Service`, which makes a dev command only for a container with one and refuses a top-level `dev.command` with containers.
