@@ -461,7 +461,62 @@ func TestSkipDirHonorsIgnoreOnListedPaths(t *testing.T) {
 
 	assert.False(t, skipDir(root, roots, nil, listed, info), "listed by name")
 	assert.True(t, skipDir(root, roots, ignore, listed, info), "watch.ignore still wins")
-	assert.True(t, skipDir(root, []string{root}, nil, listed, info), "not listed: the built-in rule applies")
+	assert.True(t, skipDir(root, nil, nil, listed, info), "nothing listed: the built-in rule applies")
+	// Listing the root exempts the root, not what's under it.
+	assert.True(t, skipDir(root, []string{root}, nil, listed, info), "under a listed root: the built-in rule applies")
+}
+
+// Listing a directory exempts it and the directories on the way to it, not
+// the ones under it: watch.paths ["."] or ["packages/api"] still skips
+// node_modules and hidden directories inside.
+func TestStartListedPathStillSkipsNodeModulesInside(t *testing.T) {
+	for _, paths := range [][]string{{"."}, {"packages/api"}} {
+		t.Run(paths[0], func(t *testing.T) {
+			root := t.TempDir()
+			base := filepath.Join(root, filepath.FromSlash(paths[0]))
+			for _, dir := range []string{"node_modules/pkg", ".cache", "src"} {
+				require.NoError(t, os.MkdirAll(filepath.Join(base, dir), 0755))
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events := bus.SubscribeAll()
+			defer bus.Unsubscribe(events)
+
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{Paths: paths}})
+			}()
+			waitForWatcherReady(t, filepath.Join(base, "src", "ready.ts"), events)
+
+			skipped := []string{
+				filepath.Join(base, "node_modules", "pkg", "index.js"),
+				filepath.Join(base, ".cache", "x"),
+			}
+			for _, path := range skipped {
+				require.NoError(t, os.WriteFile(path, []byte("x"), 0644))
+			}
+			seen := map[string]bool{}
+			deadline := time.After(750 * time.Millisecond)
+		collect:
+			for {
+				select {
+				case evt := <-events:
+					if changed, ok := evt.(*FileChangedEvent); ok {
+						seen[changed.Path] = true
+					}
+				case <-deadline:
+					break collect
+				}
+			}
+			for _, path := range skipped {
+				assert.False(t, seen[path], "did not expect file change for %s", path)
+			}
+
+			cancel()
+			require.NoError(t, <-errCh)
+		})
+	}
 }
 
 // A legacy array glob can match node_modules or hidden folders. Only paths
