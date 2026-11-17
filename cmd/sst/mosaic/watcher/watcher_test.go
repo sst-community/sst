@@ -361,16 +361,41 @@ func waitForFileChangedEvent(events <-chan interface{}, path string, timeout tim
 
 func TestInSkippedDir(t *testing.T) {
 	root := "/repo"
-	assert.True(t, inSkippedDir(root, "/repo/node_modules/pkg/index.js"))
-	assert.True(t, inSkippedDir(root, "/repo/packages/api/node_modules/pkg/index.js"))
-	assert.True(t, inSkippedDir(root, "/repo/.sst/types.d.ts"))
-	assert.True(t, inSkippedDir(root, "/repo/.git/objects/ab/cdef"))
+	assert.True(t, inSkippedDir(root, nil, "/repo/node_modules/pkg/index.js"))
+	assert.True(t, inSkippedDir(root, nil, "/repo/packages/api/node_modules/pkg/index.js"))
+	assert.True(t, inSkippedDir(root, nil, "/repo/.sst/types.d.ts"))
+	assert.True(t, inSkippedDir(root, nil, "/repo/.git/objects/ab/cdef"))
 	// Hidden files are watched; only hidden directories are skipped.
-	assert.False(t, inSkippedDir(root, "/repo/.env"))
-	assert.False(t, inSkippedDir(root, "/repo/src/.env"))
-	assert.False(t, inSkippedDir(root, "/repo/src/handler.ts"))
+	assert.False(t, inSkippedDir(root, nil, "/repo/.env"))
+	assert.False(t, inSkippedDir(root, nil, "/repo/src/.env"))
+	assert.False(t, inSkippedDir(root, nil, "/repo/src/handler.ts"))
 	// The tree itself may live under a hidden directory.
-	assert.False(t, inSkippedDir("/home/me/.worktrees/app", "/home/me/.worktrees/app/src/handler.ts"))
+	assert.False(t, inSkippedDir("/home/me/.worktrees/app", nil, "/home/me/.worktrees/app/src/handler.ts"))
+}
+
+// The recursive backend exempts what the walk does: a watch.paths entry
+// listed by name and the directories on the way to it, not those under it.
+func TestInSkippedDirListedPaths(t *testing.T) {
+	root := "/repo"
+	listed := []string{"/repo/packages/.generated", "/repo/.config/types", "/repo/node_modules/pkg"}
+	assert.False(t, inSkippedDir(root, listed, "/repo/packages/.generated/types.ts"))
+	assert.False(t, inSkippedDir(root, listed, "/repo/.config/types/env.d.ts"))
+	assert.False(t, inSkippedDir(root, listed, "/repo/node_modules/pkg/index.js"))
+	// Beside a listed path, under the folders on the way to it, nothing is
+	// skipped by these rules, as the walk passes through those folders too.
+	// What isn't in watch.paths is dropped by the loop's isWatchedPath, as
+	// shouldWatchDir prunes it from the walk.
+	// TestStartWatchesListedPathsUnderSkippedFolders checks both backends.
+	assert.False(t, inSkippedDir(root, listed, "/repo/.config/top.ts"))
+	assert.False(t, inSkippedDir(root, listed, "/repo/.config/other/x.ts"))
+	assert.False(t, inSkippedDir(root, listed, "/repo/node_modules/other/index.js"))
+	// under a listed path, the built-in rules apply again
+	assert.True(t, inSkippedDir(root, listed, "/repo/packages/.generated/.cache/x"))
+	assert.True(t, inSkippedDir(root, listed, "/repo/node_modules/pkg/node_modules/dep/index.js"))
+	// and to folders not on the way to one
+	assert.True(t, inSkippedDir(root, listed, "/repo/.sst/types.d.ts"))
+	// listing the root exempts nothing under it
+	assert.True(t, inSkippedDir(root, []string{root}, "/repo/node_modules/pkg/index.js"))
 }
 
 func TestStartSkipsHiddenDirsAndNodeModules(t *testing.T) {

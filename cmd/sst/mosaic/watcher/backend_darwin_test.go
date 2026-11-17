@@ -25,7 +25,7 @@ func TestNewBackendUsesFSEventsOnDarwin(t *testing.T) {
 		t.Skip("kqueue forced")
 	}
 	root := t.TempDir()
-	b, err := newBackend([]string{root}, filepath.Join(root, ".git/HEAD"), slog.Default())
+	b, err := newBackend([]string{root}, nil, filepath.Join(root, ".git/HEAD"), slog.Default())
 	require.NoError(t, err)
 	defer b.Close()
 	assert.Equal(t, "fsevents", b.Name())
@@ -231,7 +231,7 @@ func TestFSEventsSendAfterCloseDoesNotBlock(t *testing.T) {
 
 func TestFSEventsWatchesSeveralTrees(t *testing.T) {
 	a, ext := t.TempDir(), t.TempDir()
-	b, err := newFSEventsBackend([]string{a, ext}, filepath.Join(a, ".git/HEAD"))
+	b, err := newFSEventsBackend([]string{a, ext}, nil, filepath.Join(a, ".git/HEAD"))
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -277,7 +277,7 @@ func TestFSEventsCloseWhileCallbacksRun(t *testing.T) {
 	}()
 
 	for range 30 {
-		b, err := newFSEventsBackend([]string{root}, filepath.Join(root, ".git/HEAD"))
+		b, err := newFSEventsBackend([]string{root}, nil, filepath.Join(root, ".git/HEAD"))
 		require.NoError(t, err)
 		// Read a few events so callbacks are running, then stop reading.
 		for range 3 {

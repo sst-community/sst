@@ -23,7 +23,7 @@ import (
 // single stream and holds no descriptors per file, so it is the default here.
 // It is loaded with purego, which keeps the CLI buildable with CGO_ENABLED=0.
 // If it can't be loaded, the watcher falls back to fsnotify.
-func newBackend(trees []string, headFile string, log *slog.Logger) (backend, error) {
+func newBackend(trees []string, listed []string, headFile string, log *slog.Logger) (backend, error) {
 	v := os.Getenv("SST_WATCHER")
 	switch v {
 	case "", "fsevents", "kqueue":
@@ -35,7 +35,7 @@ func newBackend(trees []string, headFile string, log *slog.Logger) (backend, err
 			log.Warn("fsevents can't be loaded, falling back to kqueue", "err", err)
 			return newFsnotifyBackend()
 		}
-		b, err := newFSEventsBackend(trees, headFile)
+		b, err := newFSEventsBackend(trees, listed, headFile)
 		if err == nil {
 			return b, nil
 		}
@@ -193,6 +193,9 @@ type fseventsBackend struct {
 	queue    uintptr
 	trees    []treeMapping
 	headFile string
+	// the watch.paths entries listed by name, which the built-in rules
+	// exempt (see skippedByName)
+	listed []string
 
 	events chan fsnotify.Event
 	errors chan error
@@ -207,13 +210,14 @@ type fseventsBackend struct {
 	created map[string]uint64
 }
 
-func newFSEventsBackend(trees []string, headFile string) (*fseventsBackend, error) {
+func newFSEventsBackend(trees []string, listed []string, headFile string) (*fseventsBackend, error) {
 	if err := loadFSEvents(); err != nil {
 		return nil, err
 	}
 
 	b := &fseventsBackend{
 		headFile: filepath.Clean(headFile),
+		listed:   listed,
 		events:   make(chan fsnotify.Event, 1024),
 		errors:   make(chan error, 16),
 		done:     make(chan struct{}),
@@ -325,7 +329,7 @@ func (b *fseventsBackend) Close() error {
 // handle turns one FSEvents item into the Create and Write events the
 // fsnotify loop understands. FSEvents watches the whole tree, so it also
 // drops events from the directories the per-directory walk never enters:
-// hidden directories and node_modules.
+// hidden directories and node_modules, unless watch.paths lists them.
 func (b *fseventsBackend) handle(path string, flags uint32) {
 	// Events under path were dropped. The item can still carry a change of
 	// its own, so it is handled below as well. The tree isn't re-walked:
@@ -339,7 +343,7 @@ func (b *fseventsBackend) handle(path string, flags uint32) {
 	if !ok {
 		return
 	}
-	if path != b.headFile && inSkippedDir(tree, path) {
+	if path != b.headFile && inSkippedDir(tree, b.listed, path) {
 		return
 	}
 

@@ -4,6 +4,6 @@ package watcher
 
 import "log/slog"
 
-func newBackend(trees []string, headFile string, log *slog.Logger) (backend, error) {
+func newBackend(trees []string, listed []string, headFile string, log *slog.Logger) (backend, error) {
 	return newFsnotifyBackend()
 }

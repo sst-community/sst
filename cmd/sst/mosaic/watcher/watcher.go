@@ -258,27 +258,30 @@ type dirEntry interface {
 	IsDir() bool
 }
 
-// shouldSkipDir's built-in rules, hidden directories and node_modules, are
-// repeated in inSkippedDir for the recursive backend. Change both together.
-func shouldSkipDir(root string, ignore []string, path string, info dirEntry) bool {
-	if !info.IsDir() {
+// skippedByName holds the built-in rules, for the walk (skipDir) and for the
+// recursive backend (inSkippedDir) alike. They skip a directory by its own
+// name: hidden, or with node_modules in it, which also catches copies such as
+// node_modules.old that can be as big. A directory listed by name in
+// watch.paths (see listedRoots) is exempt, and so are the directories on the
+// way to it, such as .config for .config/types, as the walk has to pass
+// through them. Directories under a listed one aren't exempt, so a listed
+// packages/api still skips its node_modules.
+func skippedByName(path string, listed []string) bool {
+	name := filepath.Base(path)
+	if !strings.HasPrefix(name, ".") && !strings.Contains(name, "node_modules") {
 		return false
 	}
-
-	// The built-in rules skip a directory by its own name: hidden, or with
-	// node_modules in it, which also catches copies such as node_modules.old
-	// that can be as big. The walk skips such a directory before entering it,
-	// so nothing below one is reached. The project root itself is always
-	// watched, whatever it or the directories above it are called, and
-	// skipDir exempts the paths listed by name in watch.paths.
-	if filepath.Clean(path) != filepath.Clean(root) {
-		name := info.Name()
-		if strings.HasPrefix(name, ".") || strings.Contains(name, "node_modules") {
-			return true
+	for _, r := range listed {
+		if isWithinPath(path, r) {
+			return false
 		}
 	}
+	return true
+}
 
-	return isIgnored(root, ignore, path)
+// shouldSkipDir is skipDir with nothing listed in watch.paths.
+func shouldSkipDir(root string, ignore []string, path string, info dirEntry) bool {
+	return skipDir(root, nil, ignore, path, info)
 }
 
 func isIgnored(root string, ignore []string, path string) bool {
@@ -320,22 +323,21 @@ func matchesIgnore(pattern string, path string) bool {
 	return false
 }
 
-// skipDir is shouldSkipDir for the walk and the event loop. A directory
-// listed by name in watch.paths (see listedRoots) is watched even when it is
-// hidden or named node_modules, and so are the directories on the way to it,
-// such as .config for .config/types: the walk has to pass through them.
-// shouldWatchDir still prunes everything else under those, so .config/other
-// isn't watched. watch.ignore still applies.
+// skipDir reports whether the walk and the event loop skip a directory: by
+// the built-in rules (skippedByName), or by watch.ignore, which applies to
+// listed paths too. The walk skips a directory before entering it, so nothing
+// below one is reached. The project root itself is always watched, whatever
+// it or the directories above it are called. On the way to a listed path,
+// shouldWatchDir still prunes everything else, so .config/other isn't watched
+// for a listed .config/types.
 func skipDir(root string, listed []string, ignore []string, path string, info dirEntry) bool {
 	if !info.IsDir() {
 		return false
 	}
-	for _, r := range listed {
-		if isWithinPath(path, r) {
-			return isIgnored(root, ignore, path)
-		}
+	if filepath.Clean(path) != filepath.Clean(root) && skippedByName(path, listed) {
+		return true
 	}
-	return shouldSkipDir(root, ignore, path, info)
+	return isIgnored(root, ignore, path)
 }
 
 func isWatchedPath(roots []string, path string) bool {
@@ -400,7 +402,7 @@ func Start(ctx context.Context, config WatchConfig) error {
 	}
 
 	headFile := filepath.Join(config.Root, ".git/HEAD")
-	b, err := newBackend(trees, headFile, log)
+	b, err := newBackend(trees, listed, headFile, log)
 	if err != nil {
 		return err
 	}
@@ -556,20 +558,14 @@ func isWithinPath(root string, path string) bool {
 }
 
 // inSkippedDir reports whether path is inside a directory the per-directory
-// walk never enters: a hidden directory or node_modules, below tree. It is
-// the recursive backend's copy of shouldSkipDir's built-in rules, so a rule
-// added there belongs here too. watch.ignore is left to the loop. One
-// difference: this only looks at the path below tree, while shouldSkipDir
-// matches node_modules anywhere in the absolute path, so a project whose own
-// path contains node_modules is skipped whole by the per-directory walk.
-func inSkippedDir(tree string, path string) bool {
-	rel, err := filepath.Rel(tree, path)
-	if err != nil {
-		return false
-	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for _, part := range parts[:len(parts)-1] {
-		if strings.HasPrefix(part, ".") || strings.Contains(part, "node_modules") {
+// walk never enters, for the recursive backend, which watches whole trees.
+// It applies skippedByName to each directory between tree and path, as the
+// walk does from the root down; tree itself is always watched. watch.ignore
+// is left to the loop.
+func inSkippedDir(tree string, listed []string, path string) bool {
+	tree = filepath.Clean(tree)
+	for dir := filepath.Dir(filepath.Clean(path)); dir != tree && isWithinPath(tree, dir); dir = filepath.Dir(dir) {
+		if skippedByName(dir, listed) {
 			return true
 		}
 	}
