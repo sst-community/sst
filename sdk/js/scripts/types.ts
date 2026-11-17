@@ -16,8 +16,14 @@ import pkg from "../package.json";
 const root = path.resolve(import.meta.dir, "..");
 
 // The packages an app brings itself, for the modules that use them:
-// `sst/auth` is built on hono, and `sst/event` validates with zod or valibot
-const brought = new Set(["hono", "zod", "valibot"]);
+// `sst/auth` is built on hono, `sst/event` validates with zod or valibot, and
+// `sst/pulumi` runs in a Pulumi program, which has its peers
+const brought = new Set([
+  "hono",
+  "zod",
+  "valibot",
+  ...Object.keys(pkg.peerDependencies),
+]);
 
 let failed = false;
 
