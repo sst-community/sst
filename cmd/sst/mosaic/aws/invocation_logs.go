@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -85,7 +86,8 @@ func invocationLogsDir(p *project.Project) string {
 // removeInvocationFolders removes what an earlier sst dev wrote to dir: a
 // folder for each function, with a file for each invocation. Logs are now
 // files in dir, so its folders are all from then. There can be hundreds of
-// thousands of files in them, so this runs on its own.
+// thousands of files in them, so this runs on its own. A symlink isn't a
+// folder here, so what one points to is left alone.
 func removeInvocationFolders(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -203,8 +205,8 @@ func (l *invocationLogs) handle(evt interface{}) {
 		}
 		// Node's trace starts with the error, which is already there
 		trace := evt.Trace
-		if len(trace) > 0 && trace[0] == text {
-			trace = trace[1:]
+		if lines := strings.Count(text, "\n") + 1; len(trace) >= lines && strings.Join(trace[:lines], "\n") == text {
+			trace = trace[lines:]
 		}
 		if len(trace) > 0 {
 			text += "\n" + strings.Join(trace, "\n")
@@ -242,17 +244,31 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 	if err != nil {
 		slog.Error("failed to write invocation log", "path", path, "err", err)
 	}
+	// one event bigger than the limit, as a big payload, is moved on its own
+	if l.sizes[path] > l.limit {
+		l.rotate(path)
+	}
 	if l.size > l.total {
 		l.shrink()
 	}
 }
 
-// logPath is the path of a function's log. Its ID is a name in the app, but
-// a separator in it would put the log in a folder, which the next sst dev
-// would take to be an old one and remove.
+// logPath is the path of a function's log. Its ID is a name in the app, which
+// can have characters a file name can't: a separator would put the log in a
+// folder, which the next sst dev would take to be an old one and remove, and
+// Windows refuses others. They're escaped as %XX, % included, so two IDs never
+// share a log.
 func (l *invocationLogs) logPath(functionID string) string {
-	name := strings.NewReplacer("/", "_", "\\", "_").Replace(functionID)
-	return filepath.Join(l.dir, name+".log")
+	var name strings.Builder
+	for i := 0; i < len(functionID); i++ {
+		c := functionID[i]
+		if c < 0x20 || strings.IndexByte(`%/\:*?"<>|`, c) >= 0 {
+			fmt.Fprintf(&name, "%%%02X", c)
+		} else {
+			name.WriteByte(c)
+		}
+	}
+	return filepath.Join(l.dir, name.String()+".log")
 }
 
 // file returns the log at path, opened to add to if it's not open, and the

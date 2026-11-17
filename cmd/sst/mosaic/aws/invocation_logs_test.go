@@ -114,7 +114,10 @@ func TestInvocationLogsWriteAnError(t *testing.T) {
 	logs, dir := testInvocationLogs(t, 1<<20)
 	logs.handle(&FunctionErrorEvent{FunctionID: "Fn", RequestID: "r1", ErrorType: "Error", ErrorMessage: "boom", Trace: []string{"Error: boom", "at a", "at b"}})
 	logs.handle(&FunctionErrorEvent{FunctionID: "Fn", ErrorMessage: "Function failed to build"})
-	want := at + "r1 failed Error: boom\n" + at + "r1 failed at a\n" + at + "r1 failed at b\n" + at + "- failed Function failed to build\n"
+	// a message of more than one line isn't repeated by the trace either
+	logs.handle(&FunctionErrorEvent{FunctionID: "Fn", RequestID: "r2", ErrorType: "Error", ErrorMessage: "two\nlines", Trace: []string{"Error: two", "lines", "at c"}})
+	want := at + "r1 failed Error: boom\n" + at + "r1 failed at a\n" + at + "r1 failed at b\n" + at + "- failed Function failed to build\n" +
+		at + "r2 failed Error: two\n" + at + "r2 failed lines\n" + at + "r2 failed at c\n"
 	if got := readLog(t, filepath.Join(dir, "Fn.log")); got != want {
 		t.Fatalf("log is %q, want %q", got, want)
 	}
@@ -148,12 +151,33 @@ func TestInvocationLogsKeepFunctionsApart(t *testing.T) {
 }
 
 // A separator in a function's ID doesn't put its log in a folder, which the
-// next sst dev would remove as an old one.
+// next sst dev would remove as an old one, and IDs that differ only there
+// don't share a log.
 func TestInvocationLogsSeparatorInFunctionID(t *testing.T) {
 	logs, dir := testInvocationLogs(t, 1<<20)
-	logs.handle(&FunctionLogEvent{FunctionID: `a/b\c`, Line: "x"})
-	if got := entries(t, dir); len(got) != 1 || got[0] != "a_b_c.log" {
-		t.Fatalf("entries %v, want a_b_c.log", got)
+	for _, id := range []string{`a/b\c`, "a_b_c", "a%2Fb", "x:y"} {
+		logs.handle(&FunctionLogEvent{FunctionID: id, Line: id})
+	}
+	want := []string{"a%252Fb.log", "a%2Fb%5Cc.log", "a_b_c.log", "x%3Ay.log"}
+	if got := entries(t, dir); !slices.Equal(got, want) {
+		t.Fatalf("entries %v, want %v", got, want)
+	}
+	if got := readLog(t, filepath.Join(dir, "a_b_c.log")); got != at+"- | a_b_c\n" {
+		t.Fatalf("a_b_c.log is %q, want only its own line", got)
+	}
+}
+
+// An event bigger than the limit, as a big payload, is moved to .log.1 on its
+// own, so .log keeps to the limit.
+func TestInvocationLogsRotateABigEvent(t *testing.T) {
+	logs, dir := testInvocationLogs(t, 100)
+	logs.handle(&FunctionInvokedEvent{FunctionID: "Fn", RequestID: "r1", Input: []byte(strings.Repeat("x", 500))})
+	logs.handle(&FunctionResponseEvent{FunctionID: "Fn", RequestID: "r1"})
+	if got := size(t, filepath.Join(dir, "Fn.log.1")); got < 500 {
+		t.Fatalf("Fn.log.1 is %d bytes, want the big event", got)
+	}
+	if got := readLog(t, filepath.Join(dir, "Fn.log")); got != at+"r1 responded\n" {
+		t.Fatalf("Fn.log is %q, want only the response", got)
 	}
 }
 
@@ -380,9 +404,18 @@ func TestRemoveInvocationFolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// a symlink to a folder elsewhere is left, and so is what's in it
+	elsewhere := t.TempDir()
+	writeFile(t, filepath.Join(elsewhere, "keep"), "x")
+	if err := os.Symlink(elsewhere, filepath.Join(dir, "Linked")); err != nil {
+		t.Fatal(err)
+	}
 	removeInvocationFolders(dir)
-	if got := entries(t, dir); len(got) != 2 || got[0] != "Fn.log" || got[1] != "Fn.log.1" {
-		t.Fatalf("entries %v, want only Fn.log and Fn.log.1", got)
+	if got := entries(t, dir); !slices.Equal(got, []string{"Fn.log", "Fn.log.1", "Linked"}) {
+		t.Fatalf("entries %v, want only Fn.log, Fn.log.1 and Linked", got)
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, "keep")); err != nil {
+		t.Fatalf("what the symlink points to was removed: %v", err)
 	}
 	// a project that never ran sst dev has no folder
 	removeInvocationFolders(filepath.Join(dir, "missing"))
