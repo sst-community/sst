@@ -146,11 +146,10 @@ func shouldSkipDir(root string, ignore []string, path string, info os.FileInfo) 
 	}
 
 	// The built-in rules skip hidden and node_modules directories by the
-	// directory's own name, as internal/fs does, for every directory except
-	// the project root, including those under watch.paths outside the
-	// project. The walk skips such a directory before entering it, so nothing
-	// below one is reached. The project root itself is always watched,
-	// whatever it or the directories above it are called.
+	// directory's own name, as internal/fs does. The walk skips such a
+	// directory before entering it, so nothing below one is reached. The
+	// project root itself is always watched, whatever it or the directories
+	// above it are called, and skipDir exempts the roots in watch.paths.
 	if filepath.Clean(path) != filepath.Clean(root) {
 		name := info.Name()
 		if strings.HasPrefix(name, ".") || name == "node_modules" {
@@ -198,6 +197,21 @@ func matchesIgnore(pattern string, path string) bool {
 	}
 
 	return false
+}
+
+// skipDir is shouldSkipDir for the walk and the event loop. A directory
+// listed in watch.paths is watched even when it is hidden or named
+// node_modules, as it was asked for by name; watch.ignore still applies.
+func skipDir(root string, roots []string, ignore []string, path string, info os.FileInfo) bool {
+	if !info.IsDir() {
+		return false
+	}
+	for _, r := range roots {
+		if filepath.Clean(r) == filepath.Clean(path) {
+			return isIgnored(root, ignore, path)
+		}
+	}
+	return shouldSkipDir(root, ignore, path, info)
 }
 
 func isWatchedPath(roots []string, path string) bool {
@@ -282,7 +296,7 @@ func Start(ctx context.Context, config WatchConfig) error {
 			}
 
 			if info.IsDir() {
-				if shouldSkipDir(config.Root, ignore, path, info) {
+				if skipDir(config.Root, roots, ignore, path, info) {
 					return filepath.SkipDir
 				}
 				if !shouldWatchDir(config.Root, roots, path) {
@@ -353,7 +367,7 @@ func watchLoop(
 					return err
 				}
 				if err == nil && info.IsDir() {
-					if shouldSkipDir(root, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
+					if skipDir(root, roots, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
 						log.Info("ignoring created directory", "path", event.Name)
 						continue
 					}

@@ -419,3 +419,47 @@ func TestStartWatchesProjectWhateverItsPath(t *testing.T) {
 		})
 	}
 }
+
+// A directory listed in watch.paths is watched even when it is hidden or
+// named node_modules, inside the project or outside it.
+func TestStartWatchesHiddenAndNodeModulesPathsListedByName(t *testing.T) {
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, "app")
+	inside := filepath.Join(root, "packages", ".generated")
+	outside := filepath.Join(workspace, "shared", "node_modules")
+	for _, dir := range []string{inside, outside, filepath.Join(root, ".sst")} {
+		require.NoError(t, os.MkdirAll(dir, 0755))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{
+			Paths: []string{"packages/.generated", "../shared/node_modules"},
+		}})
+	}()
+
+	waitForWatcherReady(t, filepath.Join(inside, "types.ts"), events)
+	waitForWatcherReady(t, filepath.Join(outside, "lib.js"), events)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestSkipDirHonorsIgnoreOnListedPaths(t *testing.T) {
+	root := t.TempDir()
+	listed := filepath.Join(root, "packages", ".generated")
+	info := mustInfo(t, listed)
+	roots, _, err := resolveWatch(root, project.Watch{Paths: []string{"packages/.generated"}})
+	require.NoError(t, err)
+	_, ignore, err := resolveWatch(root, project.Watch{Ignore: []string{"packages/.generated"}})
+	require.NoError(t, err)
+
+	assert.False(t, skipDir(root, roots, nil, listed, info), "listed by name")
+	assert.True(t, skipDir(root, roots, ignore, listed, info), "watch.ignore still wins")
+	assert.True(t, skipDir(root, []string{root}, nil, listed, info), "not listed: the built-in rule applies")
+}
