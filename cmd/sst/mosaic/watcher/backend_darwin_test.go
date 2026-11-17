@@ -3,6 +3,7 @@
 package watcher
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/sst/sst/v3/pkg/bus"
+	"github.com/sst/sst/v3/pkg/project"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +120,10 @@ func TestFSEventsHandle(t *testing.T) {
 		{"hidden dir", hidden, isFile | fsEventFlagItemModified, nil},
 		{"node_modules", deps, isFile | fsEventFlagItemModified, nil},
 		{"hidden file", dotfile, isFile | fsEventFlagItemModified, []fsnotify.Event{{Name: dotfile, Op: fsnotify.Write}}},
-		{"created dir", dir, fsEventFlagItemIsDir | fsEventFlagItemCreated, []fsnotify.Event{{Name: dir, Op: fsnotify.Create}}},
+		// A directory made here: its files come as their own events.
+		{"created dir", dir, fsEventFlagItemIsDir | fsEventFlagItemCreated, nil},
+		// A directory moved in: nothing comes for its files, so it is walked.
+		{"moved-in dir", dir, fsEventFlagItemIsDir | fsEventFlagItemRenamed, []fsnotify.Event{{Name: dir, Op: fsnotify.Create}}},
 		{"modified dir", filepath.Join(root, "src"), fsEventFlagItemIsDir | inodeMeta, nil},
 		{"outside the trees", "/elsewhere/a.ts", isFile | fsEventFlagItemModified, nil},
 	}
@@ -130,7 +136,7 @@ func TestFSEventsHandle(t *testing.T) {
 	}
 }
 
-func TestFSEventsHandleReportsCreatedDirOnce(t *testing.T) {
+func TestFSEventsHandleReportsMovedInDirOnce(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "newpkg")
 	require.NoError(t, os.MkdirAll(dir, 0755))
@@ -138,29 +144,30 @@ func TestFSEventsHandleReportsCreatedDirOnce(t *testing.T) {
 
 	// FSEvents repeats an item's flags in later batches. Reporting the
 	// directory again would make the watcher report all its files again.
-	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemCreated)
-	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemCreated)
+	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemRenamed)
+	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemRenamed)
 	assert.Len(t, drainEvents(b), 1)
 
-	// Once it is removed and made again, it is new again.
+	// Once it is removed and another is moved in, it is new again.
 	require.NoError(t, os.Remove(dir))
-	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemCreated|fsEventFlagItemRemoved)
+	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemRenamed|fsEventFlagItemRemoved)
 	assert.Empty(t, drainEvents(b))
 	require.NoError(t, os.MkdirAll(dir, 0755))
-	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemCreated)
+	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemRenamed)
 	assert.Len(t, drainEvents(b), 1)
 }
 
-// When a directory is removed and made again within one batch, FSEvents
-// sends one item with Created and Removed set and the directory exists. It is
-// a new directory, so it is reported, but a repeat of that item is not.
-func TestFSEventsHandleReportsDirRecreatedWithinOneBatch(t *testing.T) {
+// When a directory is moved away and another moved to the same path within
+// one batch, FSEvents sends one item with Renamed and Removed set and the
+// directory exists. It is a different directory, so it is reported, but a
+// repeat of that item is not.
+func TestFSEventsHandleReportsDirReplacedWithinOneBatch(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "newpkg")
 	require.NoError(t, os.MkdirAll(dir, 0755))
 	b := newTestFSEventsBackend([]treeMapping{{real: root, tree: root}}, "")
 
-	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemCreated)
+	b.handle(dir, fsEventFlagItemIsDir|fsEventFlagItemRenamed)
 	assert.Len(t, drainEvents(b), 1)
 
 	// Hold the old directory open so the new one can't reuse its inode.
@@ -171,7 +178,7 @@ func TestFSEventsHandleReportsDirRecreatedWithinOneBatch(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "handler.ts"), nil, 0644))
 
-	recreated := uint32(fsEventFlagItemIsDir | fsEventFlagItemCreated | fsEventFlagItemRemoved)
+	recreated := uint32(fsEventFlagItemIsDir | fsEventFlagItemRenamed | fsEventFlagItemRemoved)
 	b.handle(dir, recreated)
 	assert.Equal(t, []fsnotify.Event{{Name: dir, Op: fsnotify.Create}}, drainEvents(b))
 	b.handle(dir, recreated)
@@ -291,4 +298,48 @@ func TestFSEventsCloseWhileCallbacksRun(t *testing.T) {
 			t.Fatal("Close hung while callbacks were running")
 		}
 	}
+}
+
+// A file written into a directory made while the watcher runs is reported
+// once. FSEvents reports the file itself, so walking the new directory as
+// well reported it twice, and every rebuild or deploy ran twice. (inotify on
+// Linux can still report it twice, depending on timing; that's older and
+// separate.)
+func TestStartReportsFileInNewDirectoryOnce(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
+	}()
+	waitForWatcherReady(t, filepath.Join(root, "watcher-ready.txt"), events)
+	// Let the probe's own events pass the 500ms debounce.
+	time.Sleep(700 * time.Millisecond)
+
+	dir := filepath.Join(root, "src", "newpkg")
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	path := filepath.Join(dir, "handler.ts")
+	require.NoError(t, os.WriteFile(path, []byte("export {}\n"), 0644))
+
+	n := 0
+	deadline := time.After(2 * time.Second)
+collect:
+	for {
+		select {
+		case evt := <-events:
+			if changed, ok := evt.(*FileChangedEvent); ok && changed.Path == path {
+				n++
+			}
+		case <-deadline:
+			break collect
+		}
+	}
+	assert.Equal(t, 1, n, "events for %s", path)
+
+	cancel()
+	require.NoError(t, <-errCh)
 }

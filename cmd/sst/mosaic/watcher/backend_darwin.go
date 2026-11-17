@@ -199,11 +199,11 @@ type fseventsBackend struct {
 	done   chan struct{}
 	close  sync.Once
 
-	// The inode of each directory already reported as created. FSEvents can
+	// The inode of each directory already reported as moved in. FSEvents can
 	// repeat an item's flags in later batches, and a repeated Create on a
 	// directory would make the watcher walk it and report every file in it
-	// again. A directory removed and made again has a new inode, so it is
-	// reported, even when both happen within one batch.
+	// again. A different directory moved to the same path has a new inode, so
+	// it is reported, even within one batch.
 	created map[string]uint64
 }
 
@@ -351,7 +351,11 @@ func (b *fseventsBackend) handle(path string, flags uint32) {
 			delete(b.created, path)
 			return
 		}
-		if flags&(fsEventFlagItemCreated|fsEventFlagItemRenamed) == 0 {
+		// Only a directory moved in needs the watcher to walk it: FSEvents
+		// reports the move and nothing for what's inside. In a directory made
+		// here, FSEvents reports each file as it's created, so a walk would
+		// report them a second time and cause a second rebuild.
+		if flags&fsEventFlagItemRenamed == 0 {
 			return
 		}
 		ino := inode(info)

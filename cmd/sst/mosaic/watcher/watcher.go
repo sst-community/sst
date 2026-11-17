@@ -8,6 +8,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -24,9 +25,91 @@ type WatchConfig struct {
 	Watch project.Watch
 }
 
+// changeLimiter publishes at most one change per file in each window. The
+// first change is published at once. Changes during the window are folded
+// into one more publish when it ends, so a quick second save isn't lost. That
+// one is skipped when the file's size and modification time are what they
+// were at the last publish: FSEvents can report one write as a create and
+// then a modify, and that shouldn't rebuild twice. A file the walk
+// discovered is only published once per window.
+type changeLimiter struct {
+	mu      sync.Mutex
+	window  time.Duration
+	files   map[string]fileChange
+	publish func(path string)
+	closed  bool
+}
+
 type fileChange struct {
-	timestamp  time.Time
-	discovered bool
+	timestamp time.Time
+	stamp     fileStamp
+	pending   bool
+}
+
+type fileStamp struct {
+	exists bool
+	size   int64
+	mod    int64
+}
+
+func newChangeLimiter(window time.Duration, publish func(path string)) *changeLimiter {
+	return &changeLimiter{window: window, files: map[string]fileChange{}, publish: publish}
+}
+
+func stampOf(path string) fileStamp {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}
+	}
+	return fileStamp{exists: true, size: info.Size(), mod: info.ModTime().UnixNano()}
+}
+
+func (l *changeLimiter) change(path string, discovered bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
+
+	now := time.Now()
+	last, ok := l.files[path]
+	if !ok || now.Sub(last.timestamp) > l.window {
+		l.files[path] = fileChange{timestamp: now, stamp: stampOf(path)}
+		l.publish(path)
+		return
+	}
+	if discovered || last.pending {
+		return
+	}
+	last.pending = true
+	l.files[path] = last
+	time.AfterFunc(last.timestamp.Add(l.window).Sub(now), func() { l.flush(path) })
+}
+
+func (l *changeLimiter) flush(path string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	last, ok := l.files[path]
+	if l.closed || !ok || !last.pending {
+		return
+	}
+
+	last.pending = false
+	stamp := stampOf(path)
+	if stamp == last.stamp {
+		l.files[path] = last
+		return
+	}
+	l.files[path] = fileChange{timestamp: time.Now(), stamp: stamp}
+	l.publish(path)
+}
+
+// close stops publishing, including from a window still waiting to end, so a
+// watcher that has stopped publishes nothing more.
+func (l *changeLimiter) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.closed = true
 }
 
 func resolveWatch(root string, watch project.Watch) ([]string, []string, error) {
@@ -269,19 +352,11 @@ func Start(ctx context.Context, config WatchConfig) error {
 	defer b.Close()
 	log.Info("watching", "backend", b.Name(), "recursive", b.Recursive())
 
-	limiter := map[string]fileChange{}
-
-	publishChange := func(path string, discovered bool) {
-		last, ok := limiter[path]
-		if ok && time.Since(last.timestamp) <= 500*time.Millisecond {
-			if discovered || !last.discovered {
-				return
-			}
-		}
-
-		limiter[path] = fileChange{timestamp: time.Now(), discovered: discovered}
+	limiter := newChangeLimiter(500*time.Millisecond, func(path string) {
 		bus.Publish(&FileChangedEvent{Path: path})
-	}
+	})
+	defer limiter.close()
+	publishChange := limiter.change
 
 	// watchTree walks a directory tree. It adds each directory to a
 	// per-directory backend, and when publish is set it reports the files it
