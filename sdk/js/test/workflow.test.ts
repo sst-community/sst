@@ -314,6 +314,145 @@ describe("workflow client", () => {
   });
 });
 
+describe("workflow dispatcher", () => {
+  const originalFetch = aws.fetch;
+  const originalError = console.error;
+  const resource = { name: "my-workflow", qualifier: "live" };
+
+  function record(messageId: string, body: string, tenant?: string) {
+    return {
+      messageId,
+      body,
+      attributes: tenant ? { MessageGroupId: tenant } : {},
+    } as any;
+  }
+
+  beforeEach(() => {
+    console.error = () => {};
+  });
+
+  afterEach(() => {
+    aws.fetch = originalFetch;
+    console.error = originalError;
+  });
+
+  it("starts one named execution per message with the tenant and body", async () => {
+    const started: { name: unknown; payload: unknown }[] = [];
+    aws.fetch = async (_service, path, init) => {
+      expect(path).toBe(
+        "/2015-03-31/functions/my-workflow/invocations?Qualifier=live",
+      );
+      const headers = init.headers as Record<string, string>;
+      expect(headers["X-Amz-Invocation-Type"]).toBe("Event");
+      started.push({
+        name: headers["X-Amz-Durable-Execution-Name"],
+        payload: JSON.parse(String(init.body)),
+      });
+      return new Response(undefined, { status: 202 });
+    };
+
+    const handler = workflow.dispatcher<{ jobId: string }>(resource, {
+      name: (message) => `job-${message.body.jobId}`,
+    });
+    const result = await handler({
+      Records: [
+        record("m1", JSON.stringify({ jobId: "1" }), "tenant-a"),
+        record("m2", JSON.stringify({ jobId: "2" }), "tenant-b"),
+      ],
+    });
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(started).toEqual([
+      { name: "job-1", payload: { tenant: "tenant-a", body: { jobId: "1" } } },
+      { name: "job-2", payload: { tenant: "tenant-b", body: { jobId: "2" } } },
+    ]);
+  });
+
+  it("sends the same name and payload when a message is delivered again", async () => {
+    const started: string[] = [];
+    aws.fetch = async (_service, _path, init) => {
+      const headers = init.headers as Record<string, string>;
+      started.push(`${headers["X-Amz-Durable-Execution-Name"]} ${init.body}`);
+      return new Response(undefined, { status: 202 });
+    };
+    const handler = workflow.dispatcher<{ jobId: string }>(resource, {
+      name: (message) => `job-${message.body.jobId}`,
+    });
+    const message = record("m1", JSON.stringify({ jobId: "1" }), "tenant-a");
+
+    await handler({ Records: [message] });
+    await handler({
+      Records: [
+        {
+          ...message,
+          attributes: { ...message.attributes, ApproximateReceiveCount: "2" },
+        },
+      ],
+    });
+
+    expect(started).toHaveLength(2);
+    expect(started[1]).toBe(started[0]);
+  });
+
+  it("returns only the messages it couldn't start", async () => {
+    const errors: unknown[] = [];
+    console.error = (...args: unknown[]) => errors.push(args);
+    aws.fetch = async (_service, _path, init) => {
+      const headers = init.headers as Record<string, string>;
+      if (headers["X-Amz-Durable-Execution-Name"] === "job-2")
+        return jsonResponse(
+          {
+            Type: "User",
+            message: "TooManyRequestsException: Rate exceeded",
+          },
+          { status: 429 },
+        );
+      return new Response(undefined, { status: 202 });
+    };
+
+    const handler = workflow.dispatcher<{ jobId: string }>(resource, {
+      name: (message) => {
+        if (message.body.jobId === "3") throw new Error("no job ID");
+        return `job-${message.body.jobId}`;
+      },
+    });
+    const result = await handler({
+      Records: [
+        record("m1", JSON.stringify({ jobId: "1" })),
+        record("m2", JSON.stringify({ jobId: "2" })),
+        record("m3", JSON.stringify({ jobId: "3" })),
+      ],
+    });
+
+    expect(result).toEqual({
+      batchItemFailures: [{ itemIdentifier: "m2" }, { itemIdentifier: "m3" }],
+    });
+    expect(
+      JSON.stringify(errors, (_k, v) => (v instanceof Error ? v.message : v)),
+    ).toContain('Failed to start workflow \\"job-2\\": 429');
+    expect(
+      JSON.stringify(errors, (_k, v) => (v instanceof Error ? v.message : v)),
+    ).toContain("TooManyRequestsException");
+  });
+
+  it("passes a body that isn't JSON as a string, and takes a custom payload", async () => {
+    let payload: unknown;
+    aws.fetch = async (_service, _path, init) => {
+      payload = JSON.parse(String(init.body));
+      return new Response(undefined, { status: 202 });
+    };
+
+    const handler = workflow.dispatcher<string, { id: string }>(resource, {
+      name: (_message, record) => `message-${record.messageId}`,
+      payload: (message) => ({ id: message.body }),
+    });
+    const result = await handler({ Records: [record("m1", "plain text")] });
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(payload).toEqual({ id: "plain text" });
+  });
+});
+
 describe("workflow rollback runner", () => {
   beforeAll(async () => {
     await LocalDurableTestRunner.setupTestEnvironment({ skipTime: true });
