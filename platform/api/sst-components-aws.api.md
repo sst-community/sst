@@ -5483,6 +5483,8 @@ type Whole = readonly any[] | ((...args: any[]) => any) | Promise<any> | OutputI
 export class Workflow extends Workflow_base {
     constructor(name: string, args: WorkflowArgs, opts?: ComponentResourceOptions);
     get arn(): Output<string>;
+    // @internal
+    getExecutionTimeout(): Output<`${number} minute` | `${number} minutes` | `${number} hour` | `${number} hours` | `${number} second` | `${number} seconds` | `${number} day` | `${number} days`> | undefined;
     getFunction(): Function_2;
     link(): {
         properties: {

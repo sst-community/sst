@@ -1,4 +1,4 @@
-import { Input, Output, output } from "@pulumi/pulumi";
+import { all, Input, Output, output } from "@pulumi/pulumi";
 import type { lambda } from "@pulumi/aws";
 import { DurationMinutes, toSeconds } from "../../duration";
 import { VisibleError } from "../../error";
@@ -115,6 +115,11 @@ export function eventSourceSubscriber(
       lambda.EventSourceMappingArgs,
       "eventSourceArn" | "functionName"
     >;
+    /**
+     * What the mapping waits for: a check of the subscriber, so a mapping
+     * that would fail isn't created.
+     */
+    ready?: Output<unknown>;
   },
 ) {
   const owner = `the "${args.component}" ${args.kind}`;
@@ -134,7 +139,9 @@ export function eventSourceSubscriber(
       : functionPart(builder.component, "subscriber", id, definition, defaults);
   const mapping = {
     eventSourceArn: args.source,
-    functionName: fn.targetArn,
+    functionName: args.ready
+      ? all([fn.targetArn, args.ready]).apply(([arn]) => arn)
+      : fn.targetArn,
     ...args.mapping,
   };
   // The component's own parts, which its types know and these don't

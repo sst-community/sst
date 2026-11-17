@@ -1,6 +1,8 @@
 import {
+  all,
   ComponentResourceOptions,
   jsonStringify,
+  Output,
   output,
 } from "@pulumi/pulumi";
 import { lambda, sqs } from "@pulumi/aws";
@@ -20,11 +22,13 @@ import {
 import type { Input } from "../input";
 import { VisibleError } from "../error";
 import {
+  type Duration,
   type DurationHours,
   type DurationMinutes,
   toSeconds,
 } from "../duration";
 import { Function } from "./function";
+import { Workflow } from "./workflow";
 import { parseQueueArn } from "./helpers/arn";
 import {
   batchSettings,
@@ -472,8 +476,8 @@ export class Queue extends component("sst:aws:Queue", parts) {
    * Subscribe to this queue. A queue can have one subscriber.
    *
    * @param subscriber The function that'll be notified: the handler of one to create, its
-   * args, a function component, or the ARN of a function you have. Only a function you
-   * have, or its ARN, can be an output.
+   * args, a function component, a workflow, or the ARN of a function you have. Only a
+   * function or workflow you have, or its ARN, can be an output.
    * @param args Configure the subscription.
    *
    * @example
@@ -504,6 +508,22 @@ export class Queue extends component("sst:aws:Queue", parts) {
    * queue.subscribe("arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
    *
+   * Or pass in a [`Workflow`](/docs/component/aws/workflow). Link the queue to the
+   * workflow, so it can read and delete the messages.
+   *
+   * ```js title="sst.config.ts"
+   * const workflow = new sst.aws.Workflow("MyWorkflow", {
+   *   handler: "src/workflow.handler",
+   *   link: [queue],
+   *   timeout: { execution: "15 minutes" },
+   * });
+   *
+   * queue.subscribe(workflow, { batch: { size: 1 } });
+   * ```
+   *
+   * The queue waits for each execution to finish, so the workflow's `timeout.execution`
+   * can be at most 15 minutes. [Learn more](/docs/component/aws/workflow#process-a-queue).
+   *
    * To change how the subscriber is created, use the queue's `transform`.
    *
    * ```js title="sst.config.ts"
@@ -530,8 +550,10 @@ export class Queue extends component("sst:aws:Queue", parts) {
         `Cannot subscribe to the "${this.componentName}" queue multiple times. An SQS Queue can only have one subscriber.`,
       );
 
+    const name = this.componentName;
+    const workflow = workflowSubscriber(subscriber);
     eventSourceSubscriber(this.builder(), undefined, subscriber, {
-      component: this.componentName,
+      component: name,
       kind: "queue",
       source: this.arn,
       actions: [
@@ -545,7 +567,32 @@ export class Queue extends component("sst:aws:Queue", parts) {
         filterCriteria: filterCriteria(args.filters),
         ...batchSettings(args.batch),
       },
+      // SQS waits for a workflow's execution, and AWS refuses the mapping of
+      // one that can take longer than that: say why first
+      ready: workflow?.apply((workflow) =>
+        workflow?.timeout === undefined
+          ? undefined
+          : checkWorkflowTimeout(name, workflow.timeout),
+      ),
     });
+
+    // Read from the mapping, which has what the queue's transform set
+    // Read again: the check above narrowed it to undefined
+    const mapping = this.nodes.eventSourceMapping as
+      | lambda.EventSourceMapping
+      | undefined;
+    if (workflow && mapping)
+      all([workflow, mapping.scalingConfig, mapping.batchSize]).apply(
+        ([workflow, scaling, batchSize]) => {
+          if (!workflow) return;
+          const warning = inFlightWarning(
+            name,
+            scaling?.maximumConcurrency,
+            batchSize,
+          );
+          if (warning) console.warn(warning);
+        },
+      );
 
     return this;
   }
@@ -607,4 +654,66 @@ export class Queue extends component("sst:aws:Queue", parts) {
       include: [permission({ actions: ["sqs:*"], resources: [this.arn] })],
     };
   }
+}
+
+/**
+ * What a subscriber is, if it's a workflow: its execution timeout, which isn't
+ * known for one whose function was given in `existing`. Undefined for a
+ * subscriber that's plainly not a workflow.
+ */
+function workflowSubscriber(
+  subscriber: FunctionInput,
+): Output<{ timeout?: Duration } | undefined> | undefined {
+  const of = (value: unknown): Output<{ timeout?: Duration } | undefined> =>
+    value instanceof Workflow
+      ? output(value.getExecutionTimeout()).apply((timeout) => ({ timeout }))
+      : output(undefined);
+  if (
+    Output.isInstance(subscriber) ||
+    typeof (subscriber as any)?.then === "function"
+  )
+    return output(subscriber as Input<any>).apply((value: unknown) =>
+      of(value),
+    );
+  return subscriber instanceof Workflow ? of(subscriber) : undefined;
+}
+
+/**
+ * SQS invokes a workflow and waits for its execution, so AWS refuses to
+ * create the mapping of one whose execution may take longer than a
+ * synchronous invocation can: 15 minutes.
+ */
+function checkWorkflowTimeout(name: string, timeout: Duration) {
+  if (toSeconds(timeout) <= 15 * 60) return;
+  throw new VisibleError(
+    `The subscriber of the "${name}" queue is a workflow with an execution timeout of "${timeout}". A queue waits for a workflow to finish, so its "timeout.execution" can be at most "15 minutes". For a longer workflow, subscribe a function that starts it with "workflow.dispatcher()".`,
+  );
+}
+
+/**
+ * The messages in flight SQS fair queues need to take effect. A subscriber has
+ * at most its maximum concurrency times its batch size in flight, and AWS says
+ * a tenant needs at least 30. Measured on AWS (one tenant's backlog, then 5
+ * messages from another, a batch size of 1, 10 s a message), the second
+ * tenant's messages waited for the whole backlog at a maximum concurrency of
+ * 10, 20 and 30, about half of it at 40, and about 33 s of a 165 s backlog at
+ * 50.
+ */
+const FAIR_QUEUE_MIN_IN_FLIGHT = 50;
+
+/**
+ * A workflow subscriber capped below what fair queues need gets no fairness
+ * between tenants. That can be what's meant, for messages without a
+ * `MessageGroupId`, so it's a warning.
+ */
+function inFlightWarning(
+  name: string,
+  maximumConcurrency: number | undefined,
+  batchSize: number | undefined,
+) {
+  if (maximumConcurrency === undefined) return;
+  const size = batchSize ?? 10;
+  const inFlight = maximumConcurrency * size;
+  if (inFlight >= FAIR_QUEUE_MIN_IN_FLIGHT) return;
+  return `The subscriber of the "${name}" queue is a workflow with at most ${inFlight} messages in flight (a maximum concurrency of ${maximumConcurrency} and a batch size of ${size}). If its messages have a MessageGroupId, SQS fair queues need about ${FAIR_QUEUE_MIN_IN_FLIGHT} in flight to deliver the messages of quieter tenants first.`;
 }

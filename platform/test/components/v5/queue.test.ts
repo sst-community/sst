@@ -1,15 +1,33 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentResourceOptions } from "@pulumi/pulumi";
-import { mockPulumi } from "../../helpers/graph";
+import { mockPulumi, sidedClass } from "../../helpers/graph";
 import { applyErrors } from "../../helpers/apply-errors";
 import {
   hashStringToPrettyString,
   logicalName,
 } from "../../../src/components/naming";
 
-// A queue that's looked up by its URL has the ARN that URL is for
+// A queue that's looked up by its URL has the ARN that URL is for. A function
+// that publishes versions, like a workflow's, is invoked by its version.
 const pulumi = mockPulumi({
   state: (args) => {
+    if (args.type === "aws:lambda/function:Function") {
+      const arn = `arn:aws:mock:us-east-1:123456789012:${args.name}`;
+      const invoke = (api: string, path: string) =>
+        `arn:aws:apigateway:us-east-1:lambda:path/${api}/functions/${arn}/${path}`;
+      return {
+        qualifiedArn: `${arn}:3`,
+        invokeArn: invoke("2015-03-31", "invocations"),
+        qualifiedInvokeArn: invoke("2015-03-31", "invocations").replace(
+          arn,
+          `${arn}:3`,
+        ),
+        responseStreamingInvokeArn: invoke(
+          "2021-11-15",
+          "response-streaming-invocations",
+        ),
+      };
+    }
     if (args.type !== "aws:sqs/queue:Queue" || !args.id) return {};
     const [, , host, account, name] = args.id.split("/");
     const region = host.split(".")[1];
@@ -36,10 +54,22 @@ type QueueArgs = import("../../../src/components/aws/queue").QueueArgs;
 describe("Queue", () => {
   let OriginalQueue: typeof import("../../fixtures/v4/components/aws/queue").Queue;
   let Queue: typeof import("../../../src/components/aws/queue").Queue;
+  // SST 4's for SST 4's side, SST 5's for SST 5's
+  let SidedWorkflow: any;
+  let Workflow: typeof import("../../../src/components/aws/workflow").Workflow;
+  let Function: typeof import("../../../src/components/aws/function").Function;
 
   beforeAll(async () => {
     OriginalQueue = (await import("../../fixtures/v4/components/aws/queue")).Queue;
     Queue = (await import("../../../src/components/aws/queue")).Queue;
+    SidedWorkflow = await sidedClass(
+      "Workflow",
+      import("../../fixtures/v4/components/aws/workflow"),
+      import("../../../src/components/aws/workflow"),
+      import("../../../src/components/aws/takeover/workflow"),
+    );
+    Workflow = (await import("../../../src/components/aws/workflow")).Workflow;
+    Function = (await import("../../../src/components/aws/function")).Function;
     await import("../../../src/components/aws/takeover/queue");
     await import("../../../src/components/aws/takeover/function");
   });
@@ -159,6 +189,28 @@ describe("Queue", () => {
           check: () =>
             expect(pulumi.resources.map((r) => r.name)).toContain(
               "SharedOrdersEventSourceMapping",
+            ),
+        },
+        // SST 4 subscribed a workflow's published version, with no
+        // function of its own. The workflow moves in its own suite.
+        "a workflow subscriber": {
+          create: (Queue, opts) => {
+            const workflow = new SidedWorkflow("MyWorkflow", {
+              handler: "src/workflow.handler",
+              timeout: { execution: "15 minutes" },
+            });
+            new Queue("MyQueue", {}, opts).subscribe(workflow, {
+              batch: { size: 1 },
+            });
+          },
+          unclaimed: [WRAPPER],
+          check: () =>
+            expect(
+              pulumi.resources.find(
+                (r) => r.name === "MyQueueEventSourceMapping",
+              )?.inputs.functionName,
+            ).toBe(
+              "arn:aws:mock:us-east-1:123456789012:MyWorkflowHandlerFunction:3",
             ),
         },
         "a subscriber of a queue referenced with get": {
@@ -361,6 +413,130 @@ describe("Queue", () => {
       'The "MyQueue" queue is given an existing "queue", which it uses the way it is. Remove "fifo", "dlq" from its args.',
     );
     await pulumi.settle();
+  });
+
+  describe("with a workflow subscriber", () => {
+    const WORKFLOW_VERSION =
+      "arn:aws:mock:us-east-1:123456789012:MyWorkflowHandlerFunction:3";
+    const mapping = () =>
+      pulumi.resources.find((r) => r.name === "MyQueueEventSourceMapping");
+    const workflow = (timeout?: string) =>
+      new Workflow("MyWorkflow", {
+        handler: "src/workflow.handler",
+        ...(timeout ? { timeout: { execution: timeout as any } } : {}),
+      });
+
+    it("subscribes the workflow's published version, with no function of its own", async () => {
+      const subscribed = workflow("15 minutes");
+      const queue = new Queue("MyQueue").subscribe(subscribed, {
+        batch: { size: 1 },
+      });
+      await pulumi.settle();
+
+      expect(mapping()!.inputs.functionName).toBe(WORKFLOW_VERSION);
+      expect(mapping()!.inputs.batchSize).toBe(1);
+      expect(
+        pulumi.resources
+          .filter((r) => r.type === "sst:aws:Function")
+          .map((r) => r.name),
+      ).toEqual(["MyWorkflowHandler"]);
+      expect(await pulumi.resolve(queue.nodes.subscriber)).toBe(
+        subscribed.getFunction(),
+      );
+    });
+
+    // SQS waits for the execution, and AWS refuses the mapping of a workflow
+    // that can take longer than it can: the default is 14 days
+    it("refuses a workflow that can take longer than a queue waits, and creates no mapping", async () => {
+      const errors = await applyErrors(() => {
+        new Queue("MyQueue").subscribe(workflow());
+      }, pulumi.settle);
+      expect(errors).toContainEqual(
+        'The subscriber of the "MyQueue" queue is a workflow with an execution timeout of "14 days". A queue waits for a workflow to finish, so its "timeout.execution" can be at most "15 minutes". For a longer workflow, subscribe a function that starts it with "workflow.dispatcher()".',
+      );
+      expect(mapping()).toBeUndefined();
+    });
+
+    it("checks a workflow given in an output", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const errors = await applyErrors(() => {
+        new Queue("MyQueue").subscribe(output(workflow("16 minutes")) as any);
+      }, pulumi.settle);
+      expect(errors).toContainEqual(
+        expect.stringContaining('execution timeout of "16 minutes"'),
+      );
+      expect(mapping()).toBeUndefined();
+    });
+
+    // Its timeout is the function's own, which isn't known here
+    it("takes a workflow whose function it was given", async () => {
+      const mine = new Function("Mine", {
+        handler: "src/workflow.handler",
+        durable: true,
+        versioning: true,
+      });
+      new Queue("MyQueue").subscribe(
+        new Workflow("MyWorkflow", { existing: { function: mine } } as any),
+      );
+      await pulumi.settle();
+      expect(mapping()!.inputs.functionName).toBe(
+        "arn:aws:mock:us-east-1:123456789012:MineFunction:3",
+      );
+    });
+
+    describe("warns of too few messages in flight for fair queues", () => {
+      const warnings = () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        return {
+          get messages() {
+            return warn.mock.calls.map((call) => String(call[0]));
+          },
+          restore: () => warn.mockRestore(),
+        };
+      };
+      const capped = (maximumConcurrency: number) => ({
+        transform: {
+          eventSourceMapping: { scalingConfig: { maximumConcurrency } },
+        },
+      });
+
+      it("for a workflow capped by the queue's transform", async () => {
+        const warn = warnings();
+        try {
+          new Queue("MyQueue", capped(5)).subscribe(workflow("15 minutes"), {
+            batch: { size: 1 },
+          });
+          await pulumi.settle();
+          expect(warn.messages).toEqual([
+            'The subscriber of the "MyQueue" queue is a workflow with at most 5 messages in flight (a maximum concurrency of 5 and a batch size of 1). If its messages have a MessageGroupId, SQS fair queues need about 50 in flight to deliver the messages of quieter tenants first.',
+          ]);
+        } finally {
+          warn.restore();
+        }
+      });
+
+      it("not for enough in flight, no cap, or a function", async () => {
+        const warn = warnings();
+        try {
+          // 5 at a time, with the default batch of 10
+          new Queue("MyQueue", capped(5)).subscribe(workflow("15 minutes"));
+          new Queue("Uncapped").subscribe(
+            new Workflow("Other", {
+              handler: "src/workflow.handler",
+              timeout: { execution: "15 minutes" },
+            }),
+            { batch: { size: 1 } },
+          );
+          new Queue("Functions", capped(2)).subscribe(FUNCTION_ARN, {
+            batch: { size: 1 },
+          });
+          await pulumi.settle();
+          expect(warn.messages).toEqual([]);
+        } finally {
+          warn.restore();
+        }
+      });
+    });
   });
 
   // A `$transform` for every queue runs on one from `get` too, and isn't

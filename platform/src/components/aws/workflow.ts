@@ -1,4 +1,4 @@
-import { ComponentResourceOptions, output } from "@pulumi/pulumi";
+import { ComponentResourceOptions, Output, output } from "@pulumi/pulumi";
 import { type ComponentArgs, component, named } from "../parts-component";
 import { plain, usedAsItIs } from "../args";
 import { VisibleError } from "../error";
@@ -264,6 +264,50 @@ export interface WorkflowArgs
  * });
  * ```
  *
+ * #### Process a queue
+ *
+ * A workflow that finishes within 15 minutes can subscribe to a
+ * [`Queue`](/docs/component/aws/queue). Link the queue to it, so it can read and delete
+ * the messages.
+ *
+ * ```ts title="sst.config.ts"
+ * const queue = new sst.aws.Queue("MyQueue", {
+ *   visibilityTimeout: "15 minutes",
+ * });
+ *
+ * const workflow = new sst.aws.Workflow("MyWorkflow", {
+ *   handler: "src/workflow.handler",
+ *   link: [queue],
+ *   timeout: { execution: "15 minutes" },
+ * });
+ *
+ * queue.subscribe(workflow, { batch: { size: 1 } });
+ * ```
+ *
+ * The workflow gets the SQS event. A longer workflow is started by a function that
+ * subscribes to the queue, with [`workflow.dispatcher()`](#dispatcher).
+ *
+ * ```ts title="sst.config.ts"
+ * const workflow = new sst.aws.Workflow("MyWorkflow", {
+ *   handler: "src/workflow.handler",
+ * });
+ *
+ * queue.subscribe(
+ *   { handler: "src/dispatcher.handler", link: [workflow] },
+ *   { batch: { partialResponses: true } },
+ * );
+ * ```
+ *
+ * ```ts title="src/dispatcher.ts"
+ * import { Resource } from "sst";
+ * import { workflow } from "sst/aws/workflow";
+ *
+ * export const handler = workflow.dispatcher<{ jobId: string }>(
+ *   Resource.MyWorkflow,
+ *   { name: (message) => `job-${message.body.jobId}` },
+ * );
+ * ```
+ *
  * #### Switch from SST 4's `sst.aws.Workflow`
  *
  * Keep the name, and `sst migrate` moves it. Its function,
@@ -281,6 +325,59 @@ export interface WorkflowArgs
  *   function, as SST 4's `Workflow` could be to theirs.
  * - `role` isn't one of its args, as it isn't `Function`'s. To give the function a
  *   role you have, write `transform: { function: { existing: { role } } }`.
+ *
+ * ---
+ *
+ * ### Queues and tenants
+ *
+ * There are two ways to start a workflow from a queue.
+ *
+ * - **Subscribe the workflow.** SQS invokes it and waits for the execution to finish,
+ *   so `timeout.execution` can be at most 15 minutes, and the queue's
+ *   `visibilityTimeout` should be at least as long. A message that's delivered again,
+ *   or retried after a failure, starts a new execution. Use a batch size of 1, so
+ *   each message is its own execution and is retried on its own.
+ * - **Subscribe a dispatcher.** `workflow.dispatcher()` starts an execution for each
+ *   message, named after the job, and is done with the message once it has started.
+ *   A message that's delivered again starts no second execution, since its name is
+ *   already used. It reports the messages it couldn't start as `batchItemFailures`,
+ *   so turn on `batch.partialResponses`.
+ *
+ * Messages that keep failing go to the queue's `dlq` after its `retry` count.
+ *
+ * #### Fair queues
+ *
+ * If many tenants share a queue, set each message's `MessageGroupId` to the tenant's ID
+ * when you send it. Take the ID from something you trust, like the signed-in user, and
+ * not from the request body.
+ *
+ * ```ts title="src/enqueue.ts"
+ * await sqs.send(
+ *   new SendMessageCommand({
+ *     QueueUrl: Resource.MyQueue.url,
+ *     MessageBody: JSON.stringify({ jobId }),
+ *     MessageGroupId: tenantId,
+ *   }),
+ * );
+ * ```
+ *
+ * On a standard queue, SQS then
+ * [delivers the messages of quieter tenants first](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fair-queues.html)
+ * when one tenant has a backlog. There's nothing to turn on, and it's not a FIFO queue.
+ * SQS only treats a tenant as noisy once it has many messages in flight, and messages
+ * that a subscriber has already received aren't reordered. So it needs a subscriber that
+ * works on many messages at once: about 50, as maximum concurrency times batch size.
+ * Without a `maximumConcurrency`, Lambda adds concurrency while there's a backlog. SST
+ * warns when the queue's `transform.eventSourceMapping` caps a workflow subscriber below
+ * that.
+ * `dispatcher()` passes the `MessageGroupId` to the workflow as `tenant`. The
+ * `ApproximateNumberOfNoisyGroups` and `ApproximateAgeOfOldestMessageInQuietGroups`
+ * CloudWatch metrics show how it's working.
+ *
+ * This makes delivery fair, not the work. SQS doesn't limit how many of a tenant's
+ * messages are in flight, and once a dispatcher has started an execution, SQS no
+ * longer sees it. So the steps, waits and retries of one tenant's executions can still
+ * take most of your Lambda concurrency, or of an API you call.
  *
  * ---
  *
@@ -324,6 +421,8 @@ export interface WorkflowArgs
  * for more details.
  */
 export class Workflow extends component("sst:aws:Workflow", parts) {
+  private readonly executionTimeout: Output<Duration> | undefined;
+
   constructor(
     name: string,
     args: WorkflowArgs,
@@ -366,6 +465,14 @@ export class Workflow extends component("sst:aws:Workflow", parts) {
         `the "${name}" workflow`,
       );
     const timeouts = output(timeout);
+    const executionTimeout = timeouts.apply(
+      (timeout): Duration => timeout?.execution ?? "14 days",
+    );
+    // A function that's already there has a timeout of its own, which isn't
+    // known here
+    this.executionTimeout = this.existingPart("function")
+      ? undefined
+      : executionTimeout;
     const logging = plain(
       givenLogging,
       `The "logging" of the "${name}" workflow`,
@@ -390,7 +497,7 @@ export class Workflow extends component("sst:aws:Workflow", parts) {
       versioning: true,
       timeout: timeouts.apply((timeout) => timeout?.invocation ?? "5 minutes"),
       durable: {
-        timeout: timeouts.apply((timeout) => timeout?.execution ?? "14 days"),
+        timeout: executionTimeout,
         retention,
       },
     });
@@ -408,6 +515,16 @@ export class Workflow extends component("sst:aws:Workflow", parts) {
    */
   public getFunction() {
     return this.nodes.function;
+  }
+
+  /**
+   * How long an execution can take, `timeout.execution`. Undefined for a
+   * function given in `existing`, which has a timeout of its own.
+   *
+   * @internal
+   */
+  public getExecutionTimeout() {
+    return this.executionTimeout;
   }
 
   /**
