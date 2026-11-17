@@ -499,10 +499,13 @@ export interface AppWatch {
    * project root. Glob patterns are not supported here; use explicit
    * directories.
    *
-   * A directory listed here is watched even when it is hidden or named
-   * `node_modules`, like `packages/.generated` or `../shared/node_modules`,
-   * which are otherwise skipped. Only that directory is watched, not the rest
-   * of the hidden or `node_modules` folder it's in. `ignore` still applies.
+   * A directory written out here by name is watched even when it is hidden or
+   * named `node_modules`, like `packages/.generated` or
+   * `../shared/node_modules`, which are otherwise skipped. Only that directory
+   * is watched, not the rest of the hidden or `node_modules` folder it's in.
+   * `ignore` still applies, and a glob in the legacy array form doesn't get
+   * this. Like every entry here, the directory has to exist when `sst dev`
+   * starts.
    */
   paths?: string[];
   /**

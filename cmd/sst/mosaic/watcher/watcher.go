@@ -28,6 +28,12 @@ type fileChange struct {
 	discovered bool
 }
 
+// hasGlobMeta reports whether a watch.paths entry is a glob, which only the
+// legacy array form expands.
+func hasGlobMeta(path string) bool {
+	return strings.ContainsAny(path, "*?[")
+}
+
 // listedRoots resolves the watch.paths entries written out without a glob.
 // skipDir watches these even when they are hidden or named node_modules. A
 // legacy array glob such as "*" can match node_modules or .git, and those
@@ -35,7 +41,7 @@ type fileChange struct {
 func listedRoots(root string, watch project.Watch) ([]string, error) {
 	var paths []string
 	for _, path := range watch.Paths {
-		if !strings.ContainsAny(path, "*?[") {
+		if !hasGlobMeta(path) {
 			paths = append(paths, path)
 		}
 	}
@@ -79,7 +85,7 @@ func expandLegacyPaths(root string, paths []string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, path := range paths {
 		matches := []string{path}
-		if strings.ContainsAny(path, "*?[") {
+		if hasGlobMeta(path) {
 			resolved, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(path)))
 			if err != nil {
 				return nil, err
