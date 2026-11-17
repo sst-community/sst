@@ -227,13 +227,16 @@ func matchesIgnore(pattern string, path string) bool {
 
 // skipDir is shouldSkipDir for the walk and the event loop. A directory
 // listed by name in watch.paths (see listedRoots) is watched even when it is
-// hidden or named node_modules; watch.ignore still applies.
+// hidden or named node_modules, and so are the directories on the way to it,
+// such as .config for .config/types: the walk has to pass through them.
+// shouldWatchDir still prunes everything else under those, so .config/other
+// isn't watched. watch.ignore still applies.
 func skipDir(root string, listed []string, ignore []string, path string, info os.FileInfo) bool {
 	if !info.IsDir() {
 		return false
 	}
 	for _, r := range listed {
-		if filepath.Clean(r) == filepath.Clean(path) {
+		if isWithinPath(path, r) {
 			return isIgnored(root, ignore, path)
 		}
 	}

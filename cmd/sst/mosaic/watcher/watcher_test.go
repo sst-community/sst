@@ -522,3 +522,56 @@ func TestStartLegacyGlobDoesNotWatchNodeModules(t *testing.T) {
 	cancel()
 	require.NoError(t, <-errCh)
 }
+
+// A watch.paths entry inside the project can sit under a hidden or
+// node_modules folder. The folders on the way to it are walked, but nothing
+// else under them is watched.
+func TestStartWatchesListedPathsUnderSkippedFolders(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{".config/types", ".config/other", "node_modules/pkg", "node_modules/other"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0755))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{
+			Paths: []string{".config/types", "node_modules/pkg"},
+		}})
+	}()
+
+	waitForWatcherReady(t, filepath.Join(root, ".config", "types", "env.d.ts"), events)
+	waitForWatcherReady(t, filepath.Join(root, "node_modules", "pkg", "index.js"), events)
+
+	unlisted := []string{
+		filepath.Join(root, ".config", "other", "x.ts"),
+		filepath.Join(root, "node_modules", "other", "index.js"),
+		filepath.Join(root, ".config", "top.ts"),
+	}
+	for _, path := range unlisted {
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0644))
+	}
+	seen := map[string]bool{}
+	deadline := time.After(750 * time.Millisecond)
+collect:
+	for {
+		select {
+		case evt := <-events:
+			if changed, ok := evt.(*FileChangedEvent); ok {
+				seen[changed.Path] = true
+			}
+		case <-deadline:
+			break collect
+		}
+	}
+	for _, path := range unlisted {
+		assert.False(t, seen[path], "did not expect file change for %s", path)
+	}
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
