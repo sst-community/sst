@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -113,4 +114,28 @@ func TestChangeLimiterPublishesNothingAfterClose(t *testing.T) {
 	time.Sleep(3 * testWindow)
 	l.change(path, false)
 	assert.Equal(t, 1, p.count(), "neither the waiting window nor a new change publishes")
+}
+
+// A long sst dev session changes many files. Those whose window has passed
+// are forgotten, so the limiter doesn't keep one entry for every file ever
+// changed, and a file still waiting for its window to end is kept.
+func TestChangeLimiterForgetsFilesWhoseWindowPassed(t *testing.T) {
+	l, p, path := newTestLimiter(t)
+	defer l.close()
+	dir := filepath.Dir(path)
+	for i := range 100 {
+		l.change(filepath.Join(dir, fmt.Sprintf("old%d.ts", i)), false)
+	}
+	time.Sleep(2 * testWindow)
+
+	l.change(path, false)
+	l.change(path, false) // pending until its window ends
+	l.mu.Lock()
+	kept := len(l.files)
+	l.mu.Unlock()
+	assert.Equal(t, 1, kept, "files whose window passed are forgotten")
+
+	// a forgotten file's next change is still published at once
+	l.change(filepath.Join(dir, "old0.ts"), false)
+	assert.Equal(t, 102, p.count())
 }

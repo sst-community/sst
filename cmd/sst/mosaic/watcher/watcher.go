@@ -32,12 +32,18 @@ type WatchConfig struct {
 // were at the last publish: FSEvents can report one write as a create and
 // then a modify, and that shouldn't rebuild twice. A file the walk
 // discovered is only published once per window.
+//
+// A file whose window has passed with nothing pending is forgotten, as its
+// next change is published at once either way, so files holds only those
+// changed in about the last window, not every file changed in the session.
 type changeLimiter struct {
 	mu      sync.Mutex
 	window  time.Duration
 	files   map[string]fileChange
 	publish func(path string)
 	closed  bool
+	// when files was last swept of the files it can forget
+	swept time.Time
 }
 
 type fileChange struct {
@@ -72,6 +78,14 @@ func (l *changeLimiter) change(path string, discovered bool) {
 	}
 
 	now := time.Now()
+	if now.Sub(l.swept) > l.window {
+		l.swept = now
+		for p, f := range l.files {
+			if !f.pending && now.Sub(f.timestamp) > l.window {
+				delete(l.files, p)
+			}
+		}
+	}
 	last, ok := l.files[path]
 	if !ok || now.Sub(last.timestamp) > l.window {
 		l.files[path] = fileChange{timestamp: now, stamp: stampOf(path)}
