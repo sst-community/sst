@@ -28,6 +28,31 @@ type fileChange struct {
 	discovered bool
 }
 
+// listedRoots resolves the watch.paths entries written out without a glob.
+// skipDir watches these even when they are hidden or named node_modules. A
+// legacy array glob such as "*" can match node_modules or .git, and those
+// stay skipped.
+func listedRoots(root string, watch project.Watch) ([]string, error) {
+	root = filepath.Clean(root)
+	var paths []string
+	for _, path := range watch.Paths {
+		if !strings.ContainsAny(path, "*?[") {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if watch.UsesLegacyArray() {
+		var err error
+		paths, err = expandLegacyPaths(root, paths)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return resolveRoots(root, paths)
+}
+
 func resolveWatch(root string, watch project.Watch) ([]string, []string, error) {
 	root = filepath.Clean(root)
 	paths := watch.Paths
@@ -149,7 +174,8 @@ func shouldSkipDir(root string, ignore []string, path string, info os.FileInfo) 
 	// directory's own name, as internal/fs does. The walk skips such a
 	// directory before entering it, so nothing below one is reached. The
 	// project root itself is always watched, whatever it or the directories
-	// above it are called, and skipDir exempts the roots in watch.paths.
+	// above it are called, and skipDir exempts the paths listed by name in
+	// watch.paths.
 	if filepath.Clean(path) != filepath.Clean(root) {
 		name := info.Name()
 		if strings.HasPrefix(name, ".") || name == "node_modules" {
@@ -200,13 +226,13 @@ func matchesIgnore(pattern string, path string) bool {
 }
 
 // skipDir is shouldSkipDir for the walk and the event loop. A directory
-// listed in watch.paths is watched even when it is hidden or named
-// node_modules, as it was asked for by name; watch.ignore still applies.
-func skipDir(root string, roots []string, ignore []string, path string, info os.FileInfo) bool {
+// listed by name in watch.paths (see listedRoots) is watched even when it is
+// hidden or named node_modules; watch.ignore still applies.
+func skipDir(root string, listed []string, ignore []string, path string, info os.FileInfo) bool {
 	if !info.IsDir() {
 		return false
 	}
-	for _, r := range roots {
+	for _, r := range listed {
 		if filepath.Clean(r) == filepath.Clean(path) {
 			return isIgnored(root, ignore, path)
 		}
@@ -261,6 +287,10 @@ func Start(ctx context.Context, config WatchConfig) error {
 	if err != nil {
 		return err
 	}
+	listed, err := listedRoots(config.Root, config.Watch)
+	if err != nil {
+		return err
+	}
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -296,7 +326,7 @@ func Start(ctx context.Context, config WatchConfig) error {
 			}
 
 			if info.IsDir() {
-				if skipDir(config.Root, roots, ignore, path, info) {
+				if skipDir(config.Root, listed, ignore, path, info) {
 					return filepath.SkipDir
 				}
 				if !shouldWatchDir(config.Root, roots, path) {
@@ -333,7 +363,7 @@ func Start(ctx context.Context, config WatchConfig) error {
 
 	headFile := filepath.Join(config.Root, ".git/HEAD")
 	watcher.Add(headFile)
-	return watchLoop(ctx, watcher.Events, watcher.Errors, log, config.Root, roots, ignore, watchTree, publishChange)
+	return watchLoop(ctx, watcher.Events, watcher.Errors, log, config.Root, roots, listed, ignore, watchTree, publishChange)
 }
 
 // watchLoop runs the fsnotify event loop. It drains both the Events and
@@ -347,6 +377,7 @@ func watchLoop(
 	log *slog.Logger,
 	root string,
 	roots []string,
+	listed []string,
 	ignore []string,
 	watchTree func(path string, publish bool) error,
 	publishChange func(path string, discovered bool),
@@ -367,7 +398,7 @@ func watchLoop(
 					return err
 				}
 				if err == nil && info.IsDir() {
-					if skipDir(root, roots, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
+					if skipDir(root, listed, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
 						log.Info("ignoring created directory", "path", event.Name)
 						continue
 					}

@@ -274,7 +274,7 @@ func TestWatchLoopDrainsErrors(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- watchLoop(
-			ctx, events, errs, slog.Default(), root, []string{root}, nil,
+			ctx, events, errs, slog.Default(), root, []string{root}, nil, nil,
 			func(path string, publish bool) error { return nil },
 			func(path string, discovered bool) { published <- path },
 		)
@@ -304,7 +304,7 @@ func TestWatchLoopStopsWhenErrorsCloses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- watchLoop(
-			ctx, events, errs, slog.Default(), root, []string{root}, nil,
+			ctx, events, errs, slog.Default(), root, []string{root}, nil, nil,
 			func(path string, publish bool) error { return nil },
 			func(path string, discovered bool) {},
 		)
@@ -454,7 +454,7 @@ func TestSkipDirHonorsIgnoreOnListedPaths(t *testing.T) {
 	root := t.TempDir()
 	listed := filepath.Join(root, "packages", ".generated")
 	info := mustInfo(t, listed)
-	roots, _, err := resolveWatch(root, project.Watch{Paths: []string{"packages/.generated"}})
+	roots, err := listedRoots(root, project.Watch{Paths: []string{"packages/.generated"}})
 	require.NoError(t, err)
 	_, ignore, err := resolveWatch(root, project.Watch{Ignore: []string{"packages/.generated"}})
 	require.NoError(t, err)
@@ -462,4 +462,63 @@ func TestSkipDirHonorsIgnoreOnListedPaths(t *testing.T) {
 	assert.False(t, skipDir(root, roots, nil, listed, info), "listed by name")
 	assert.True(t, skipDir(root, roots, ignore, listed, info), "watch.ignore still wins")
 	assert.True(t, skipDir(root, []string{root}, nil, listed, info), "not listed: the built-in rule applies")
+}
+
+// A legacy array glob can match node_modules or hidden folders. Only paths
+// written out by name are exempt from the built-in rules, so those stay
+// skipped, while a legacy entry written out by name is still watched.
+func TestListedRootsLeavesGlobMatchesToTheBuiltInRules(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"node_modules", ".sst", "src", "packages/.generated"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0755))
+	}
+
+	var watch project.Watch
+	require.NoError(t, json.Unmarshal([]byte(`["*", ".*", "packages/.generated"]`), &watch))
+	roots, ignore, err := resolveWatch(root, watch)
+	require.NoError(t, err)
+	listed, err := listedRoots(root, watch)
+	require.NoError(t, err)
+
+	// The globs do match the built-in folders...
+	assert.Contains(t, roots, filepath.Join(root, "node_modules"))
+	assert.Contains(t, roots, filepath.Join(root, ".sst"))
+	// ...but only the entry written out by name is listed.
+	assert.Equal(t, []string{filepath.Join(root, "packages", ".generated")}, listed)
+
+	skip := func(rel string) bool {
+		path := filepath.Join(root, rel)
+		return skipDir(root, listed, ignore, path, mustInfo(t, path))
+	}
+	assert.True(t, skip("node_modules"))
+	assert.True(t, skip(".sst"))
+	assert.False(t, skip("src"))
+	assert.False(t, skip("packages/.generated"))
+}
+
+func TestStartLegacyGlobDoesNotWatchNodeModules(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"node_modules/pkg", "src"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0755))
+	}
+	var watch project.Watch
+	require.NoError(t, json.Unmarshal([]byte(`["*"]`), &watch))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: watch})
+	}()
+	waitForWatcherReady(t, filepath.Join(root, "src", "ready.ts"), events)
+
+	dep := filepath.Join(root, "node_modules", "pkg", "index.js")
+	require.NoError(t, os.WriteFile(dep, []byte("x"), 0644))
+	assert.False(t, waitForFileChangedEvent(events, dep, 750*time.Millisecond), "node_modules matched by a glob is still skipped")
+
+	cancel()
+	require.NoError(t, <-errCh)
 }
