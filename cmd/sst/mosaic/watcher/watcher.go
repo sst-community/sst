@@ -145,15 +145,16 @@ func shouldSkipDir(root string, ignore []string, path string, info os.FileInfo) 
 		return false
 	}
 
-	if strings.HasPrefix(info.Name(), ".") {
-		return true
-	}
-
-	// Match the directory's own name, as for hidden directories. The walk
-	// skips a node_modules directory before entering it, so nothing below one
-	// is reached, and the path the project itself lives at doesn't count.
-	if strings.Contains(info.Name(), "node_modules") {
-		return true
+	// The built-in rules skip hidden and node_modules directories inside the
+	// project, by the directory's own name, as internal/fs does. The walk
+	// skips such a directory before entering it, so nothing below one is
+	// reached. The project root itself is always watched, whatever it or the
+	// directories above it are called.
+	if filepath.Clean(path) != filepath.Clean(root) {
+		name := info.Name()
+		if strings.HasPrefix(name, ".") || name == "node_modules" {
+			return true
+		}
 	}
 
 	return isIgnored(root, ignore, path)

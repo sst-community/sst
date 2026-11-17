@@ -359,41 +359,62 @@ func waitForFileChangedEvent(events <-chan interface{}, path string, timeout tim
 	}
 }
 
-// The node_modules rule applies to directories in the watched tree, not to
-// the path the project itself lives at.
-func TestShouldSkipDirIgnoresNodeModulesAboveTheRoot(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "node_modules-demo", "app")
-	_, ignore, err := resolveWatch(root, project.Watch{})
-	require.NoError(t, err)
+// The built-in rules apply to directories inside the project, by their own
+// name. Neither the project root nor the path it lives at counts.
+func TestShouldSkipDirOnlyAppliesInsideTheProject(t *testing.T) {
+	roots := map[string]string{
+		"node_modules above the root": filepath.Join(t.TempDir(), "node_modules-demo", "app"),
+		"node_modules in the root":    filepath.Join(t.TempDir(), "node_modules-demo"),
+		"hidden root":                 filepath.Join(t.TempDir(), ".dotfiles"),
+		"root named node_modules":     filepath.Join(t.TempDir(), "node_modules"),
+	}
+	for name, root := range roots {
+		t.Run(name, func(t *testing.T) {
+			_, ignore, err := resolveWatch(root, project.Watch{})
+			require.NoError(t, err)
 
-	src := mustInfo(t, filepath.Join(root, "src"))
-	deps := mustInfo(t, filepath.Join(root, "node_modules"))
-	nested := mustInfo(t, filepath.Join(root, "packages", "api", "node_modules"))
-
-	assert.False(t, shouldSkipDir(root, ignore, root, mustInfo(t, root)))
-	assert.False(t, shouldSkipDir(root, ignore, filepath.Join(root, "src"), src))
-	assert.True(t, shouldSkipDir(root, ignore, filepath.Join(root, "node_modules"), deps))
-	assert.True(t, shouldSkipDir(root, ignore, filepath.Join(root, "packages", "api", "node_modules"), nested))
+			skip := func(rel string) bool {
+				path := filepath.Join(root, rel)
+				return shouldSkipDir(root, ignore, path, mustInfo(t, path))
+			}
+			assert.False(t, skip("."), "the root")
+			assert.False(t, skip("src"))
+			// Only a directory named exactly node_modules is skipped.
+			assert.False(t, skip("node_modules.old"))
+			assert.False(t, skip("my_node_modules"))
+			assert.True(t, skip("node_modules"))
+			assert.True(t, skip(filepath.Join("packages", "api", "node_modules")))
+			assert.True(t, skip(".sst"))
+		})
+	}
 }
 
-func TestStartWatchesProjectUnderNodeModulesNamedDir(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "node_modules-demo", "app")
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0755))
+func TestStartWatchesProjectWhateverItsPath(t *testing.T) {
+	roots := map[string]string{
+		"node_modules above the root": filepath.Join(t.TempDir(), "node_modules-demo", "app"),
+		"node_modules in the root":    filepath.Join(t.TempDir(), "node_modules-demo"),
+		"hidden root":                 filepath.Join(t.TempDir(), ".dotfiles"),
+	}
+	for name, root := range roots {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0755))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	events := bus.SubscribeAll()
-	defer bus.Unsubscribe(events)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events := bus.SubscribeAll()
+			defer bus.Unsubscribe(events)
 
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
-	}()
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
+			}()
 
-	// waitForWatcherReady fails the test if no event ever arrives, which is
-	// what happened: the whole project was skipped.
-	waitForWatcherReady(t, filepath.Join(root, "src", "handler.ts"), events)
+			// waitForWatcherReady fails the test if no event ever arrives,
+			// which is what happened: the whole project was skipped.
+			waitForWatcherReady(t, filepath.Join(root, "src", "handler.ts"), events)
 
-	cancel()
-	require.NoError(t, <-errCh)
+			cancel()
+			require.NoError(t, <-errCh)
+		})
+	}
 }
