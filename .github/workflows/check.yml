@@ -81,3 +81,43 @@ jobs:
         run: cd www && bun run build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The dev watcher uses FSEvents on macOS, through purego, and the job above
+  # runs on Linux, which uses inotify. This runs the watcher's tests on Apple
+  # Silicon and on Intel, where purego's calling convention differs, with
+  # FSEvents and again with the kqueue fallback.
+  watcher-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ">=1.23.2"
+          cache: true
+
+      # pkg/project embeds platform/dist, which the watcher's tests don't
+      # read. A placeholder saves building the platform, which needs Docker.
+      - name: Stand in for the platform build
+        run: mkdir -p platform/dist && touch platform/dist/placeholder
+
+      - name: Run watcher tests with FSEvents
+        run: go test -race -vet=all ./cmd/sst/mosaic/watcher/
+
+      # Release builds use CGO_ENABLED=0, where purego loads FSEvents without
+      # cgo's runtime. -race needs cgo, so this run is without it.
+      - name: Run watcher tests with FSEvents, without cgo
+        run: go test -vet=all ./cmd/sst/mosaic/watcher/
+        env:
+          CGO_ENABLED: "0"
+
+      - name: Run watcher tests with kqueue
+        run: go test -race -vet=all ./cmd/sst/mosaic/watcher/
+        env:
+          SST_WATCHER: kqueue
