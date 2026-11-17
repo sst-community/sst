@@ -301,9 +301,12 @@ func (b *fseventsBackend) Close() error {
 // drops events from the directories the per-directory walk never enters:
 // hidden directories and node_modules.
 func (b *fseventsBackend) handle(path string, flags uint32) {
+	// Events under path were dropped. The item can still carry a change of
+	// its own, so it is handled below as well. The tree isn't re-walked:
+	// that would report every file in it as changed, as the inotify backend
+	// doesn't on an overflow either.
 	if flags&(fsEventFlagMustScanSubDirs|fsEventFlagUserDropped|fsEventFlagKernelDropped) != 0 {
 		b.sendError(fmt.Errorf("fsevents dropped events under %s", path))
-		return
 	}
 
 	path, tree, ok := b.mapPath(path)

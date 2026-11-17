@@ -102,8 +102,9 @@ jobs:
           go-version: ">=1.23.2"
           cache: true
 
-      # pkg/project embeds platform/dist, which the watcher's tests don't
-      # read. A placeholder saves building the platform, which needs Docker.
+      # The platform package embeds platform/dist, and the watcher imports it
+      # through pkg/project. Its tests don't read it, so a placeholder saves
+      # building the platform, which needs Docker.
       - name: Stand in for the platform build
         run: mkdir -p platform/dist && touch platform/dist/placeholder
 

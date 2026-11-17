@@ -190,6 +190,19 @@ func TestFSEventsHandleReportsDroppedEvents(t *testing.T) {
 	}
 }
 
+// A dropped-events flag can come on an item with a change of its own, which
+// is still reported.
+func TestFSEventsHandleKeepsChangeOnItemWithDroppedEvents(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "handler.ts")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0644))
+	b := newTestFSEventsBackend([]treeMapping{{real: root, tree: root}}, "")
+
+	b.handle(file, 0x00010000|fsEventFlagItemModified|fsEventFlagMustScanSubDirs)
+	assert.Equal(t, []fsnotify.Event{{Name: file, Op: fsnotify.Write}}, drainEvents(b))
+	assert.Len(t, b.errors, 1)
+}
+
 // After Close, a callback still running on the dispatch queue must not block
 // on a full channel nobody reads any more.
 func TestFSEventsSendAfterCloseDoesNotBlock(t *testing.T) {
