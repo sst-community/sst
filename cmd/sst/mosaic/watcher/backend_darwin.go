@@ -25,11 +25,15 @@ import (
 // If it can't be loaded, the watcher falls back to fsnotify.
 func newBackend(trees []string, headFile string, log *slog.Logger) (backend, error) {
 	if os.Getenv("SST_WATCHER") != "kqueue" {
+		if err := loadFSEvents(); err != nil {
+			log.Warn("fsevents can't be loaded, falling back to kqueue", "err", err)
+			return newFsnotifyBackend()
+		}
 		b, err := newFSEventsBackend(trees, headFile)
 		if err == nil {
 			return b, nil
 		}
-		log.Warn("fsevents unavailable, falling back to kqueue", "err", err)
+		log.Warn("fsevents can't watch the project, falling back to kqueue", "err", err)
 	}
 	return newFsnotifyBackend()
 }
