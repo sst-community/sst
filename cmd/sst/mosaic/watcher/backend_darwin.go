@@ -91,6 +91,11 @@ var fsevents struct {
 
 	dispatchQueueCreate func(label *byte, attr uintptr) uintptr
 	dispatchRelease     func(obj uintptr)
+	dispatchSyncF       func(queue uintptr, ctx uintptr, work uintptr)
+
+	// drain is a no-op that Close runs on a stream's queue with
+	// dispatch_sync_f, to wait out a callback already running there.
+	drain uintptr
 
 	// purego callbacks are never freed, so there is one for the process and
 	// it finds the stream's backend through the context's info value.
@@ -133,9 +138,11 @@ func loadFSEvents() error {
 
 			purego.RegisterLibFunc(&fsevents.dispatchQueueCreate, sys, "dispatch_queue_create")
 			purego.RegisterLibFunc(&fsevents.dispatchRelease, sys, "dispatch_release")
+			purego.RegisterLibFunc(&fsevents.dispatchSyncF, sys, "dispatch_sync_f")
 
 			fsevents.streams = map[uintptr]*fseventsBackend{}
 			fsevents.callback = purego.NewCallback(fseventsCallback)
+			fsevents.drain = purego.NewCallback(func(ctx uintptr) {})
 			return nil
 		}()
 	})
@@ -296,14 +303,20 @@ func (b *fseventsBackend) Add(path string) error         { return nil }
 func (b *fseventsBackend) Events() <-chan fsnotify.Event { return b.events }
 func (b *fseventsBackend) Errors() <-chan error          { return b.errors }
 
+// Close stops the stream and releases it once no callback can be using it.
+// Stopping a stream doesn't wait for a callback already running on its
+// queue, so Close waits for the queue to drain before releasing anything.
+// The queue is serial and Close never runs on it, so that can't deadlock;
+// and a callback waiting to send sees done closed and returns.
 func (b *fseventsBackend) Close() error {
 	b.close.Do(func() {
 		close(b.done)
 		fsevents.streamStop(b.stream)
 		fsevents.streamInvalidate(b.stream)
+		fsevents.dispatchSyncF(b.queue, 0, fsevents.drain)
+		b.unregister()
 		fsevents.streamRelease(b.stream)
 		fsevents.dispatchRelease(b.queue)
-		b.unregister()
 	})
 	return nil
 }

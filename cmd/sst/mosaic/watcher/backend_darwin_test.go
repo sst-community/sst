@@ -3,6 +3,7 @@
 package watcher
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -242,4 +243,52 @@ func TestFSEventsWatchesSeveralTrees(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected an event for %s", path)
+}
+
+// Close must be safe while callbacks are running: it releases the stream and
+// its queue, so a callback still in flight would touch freed memory. This
+// opens and closes streams while files change under them, with a consumer
+// that stops reading so callbacks block in send when Close runs.
+func TestFSEventsCloseWhileCallbacksRun(t *testing.T) {
+	root := t.TempDir()
+	stop := make(chan struct{})
+	writer := make(chan struct{})
+	go func() {
+		defer close(writer)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			os.WriteFile(filepath.Join(root, fmt.Sprintf("f%d.ts", i%50)), []byte{byte(i)}, 0644)
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-writer
+	}()
+
+	for range 30 {
+		b, err := newFSEventsBackend([]string{root}, filepath.Join(root, ".git/HEAD"))
+		require.NoError(t, err)
+		// Read a few events so callbacks are running, then stop reading.
+		for range 3 {
+			select {
+			case <-b.Events():
+			case <-time.After(time.Second):
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		done := make(chan struct{})
+		go func() {
+			b.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close hung while callbacks were running")
+		}
+	}
 }
