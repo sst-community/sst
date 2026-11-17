@@ -420,6 +420,50 @@ func size0(dir, name string) int64 {
 	return info.Size()
 }
 
+// Two IDs that differ only in case don't share a log, on a disk that ignores
+// case as macOS's does by default, and each keeps its log while sst dev runs.
+func TestInvocationLogsIDsThatDifferOnlyInCase(t *testing.T) {
+	logs, dir := testInvocationLogs(t, 1<<20)
+	logs.handle(&FunctionLogEvent{FunctionID: "MyFn", Line: "upper"})
+	logs.handle(&FunctionLogEvent{FunctionID: "myfn", Line: "lower"})
+	logs.handle(&FunctionLogEvent{FunctionID: "MyFn", Line: "upper again"})
+	got := entries(t, dir)
+	if len(got) != 2 || got[0] != "MyFn.log" || !strings.HasPrefix(got[1], "myfn~") {
+		t.Fatalf("entries %v, want MyFn.log and myfn~<hash>.log", got)
+	}
+	if log := readLog(t, filepath.Join(dir, "MyFn.log")); log != at+"- | upper\n"+at+"- | upper again\n" {
+		t.Fatalf("MyFn.log is %q, want only MyFn's lines", log)
+	}
+	if log := readLog(t, filepath.Join(dir, got[1])); log != at+"- | lower\n" {
+		t.Fatalf("%s is %q, want only myfn's line", got[1], log)
+	}
+}
+
+// A log rotated by a tool to .log.2 or further is counted toward the total,
+// and removed before the newer .log.1.
+func TestInvocationLogsCountOtherRotations(t *testing.T) {
+	dir := t.TempDir()
+	tick := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	for i, name := range []string{"Fn.log.3", "Fn.log.2"} {
+		writeFile(t, filepath.Join(dir, name), strings.Repeat("x", 999)+"\n")
+		old := tick.Add(-time.Duration(2-i) * time.Hour)
+		if err := os.Chtimes(filepath.Join(dir, name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(dir, "Fn.log.backup"), "not a log\n")
+	logs := logsIn(t, dir, 1<<20, 2500)
+	if logs.size != 2000 {
+		t.Fatalf("%d bytes counted, want the 2,000 of Fn.log.2 and Fn.log.3", logs.size)
+	}
+	logs.now = func() time.Time { return tick }
+	logs.handle(&FunctionLogEvent{FunctionID: "Fn", Line: strings.Repeat("y", 600)})
+	got := entries(t, dir)
+	if !slices.Equal(got, []string{"Fn.log", "Fn.log.2", "Fn.log.backup"}) {
+		t.Fatalf("entries %v, want the oldest, Fn.log.3, removed", got)
+	}
+}
+
 // #279: the folders of an earlier sst dev, a file for each invocation, are
 // removed, and the logs of this one are left.
 func TestRemoveInvocationFolders(t *testing.T) {
@@ -430,6 +474,11 @@ func TestRemoveInvocationFolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// a folder with anything else in it was put there for something else
+	os.MkdirAll(filepath.Join(dir, "Mine"), 0755)
+	writeFile(t, filepath.Join(dir, "Mine", "1000-r1.log"), "x")
+	writeFile(t, filepath.Join(dir, "Mine", "notes.txt"), "x")
+	os.MkdirAll(filepath.Join(dir, "Empty"), 0755)
 	// a symlink to a folder elsewhere is left, and so is what's in it
 	elsewhere := t.TempDir()
 	writeFile(t, filepath.Join(elsewhere, "keep"), "x")
@@ -437,8 +486,8 @@ func TestRemoveInvocationFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	removeInvocationFolders(dir)
-	if got := entries(t, dir); !slices.Equal(got, []string{"Fn.log", "Fn.log.1", "Linked"}) {
-		t.Fatalf("entries %v, want only Fn.log, Fn.log.1 and Linked", got)
+	if got := entries(t, dir); !slices.Equal(got, []string{"Empty", "Fn.log", "Fn.log.1", "Linked", "Mine"}) {
+		t.Fatalf("entries %v, want Fn and Other removed, and the rest left", got)
 	}
 	if _, err := os.Stat(filepath.Join(elsewhere, "keep")); err != nil {
 		t.Fatalf("what the symlink points to was removed: %v", err)

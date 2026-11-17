@@ -2,6 +2,8 @@ package aws
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -101,10 +103,43 @@ func removeInvocationFolders(dir string) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
+		if !isInvocationFolder(path) {
+			continue
+		}
 		if err := os.RemoveAll(path); err != nil {
 			slog.Error("failed to remove old invocation logs", "path", path, "err", err)
 		}
 	}
+}
+
+// isInvocationFolder says whether a folder holds an earlier sst dev's logs of
+// invocations, <time>-<request>.log, and nothing else, so a folder put there
+// for something else is left alone.
+func isInvocationFolder(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil || len(entries) == 0 {
+		return false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		time, request, ok := strings.Cut(strings.TrimSuffix(name, ".log"), "-")
+		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".log") || !ok || request == "" || strings.Trim(time, "0123456789") != "" || time == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// isRotatedLog says whether a file in the logs folder is a log moved aside:
+// <name>.log.1, as sst dev moves it, or <name>.log.<n>, as by a tool that
+// rotates logs.
+func isRotatedLog(name string) bool {
+	i := strings.LastIndex(name, ".log.")
+	if i < 0 {
+		return false
+	}
+	n := name[i+len(".log."):]
+	return n != "" && strings.Trim(n, "0123456789") == ""
 }
 
 // logInvocations writes the log of each function in dir, until ctx is done.
@@ -150,7 +185,12 @@ type invocationLogs struct {
 	rotated map[string]time.Time
 	// the write each log was last added to by, from writes
 	written map[string]uint64
-	size    int64
+	// the path of each function's log, and the function of each path,
+	// lowercased, as two IDs can differ only in case on a disk that ignores
+	// it, as macOS's and Windows' do by default
+	paths  map[string]string
+	owners map[string]string
+	size   int64
 	// counts writes, to find the log written to least recently
 	writes uint64
 	now    func() time.Time
@@ -172,12 +212,14 @@ func newInvocationLogs(dir string, limit, total int64) *invocationLogs {
 		sizes:   map[string]int64{},
 		rotated: map[string]time.Time{},
 		written: map[string]uint64{},
+		paths:   map[string]string{},
+		owners:  map[string]string{},
 		now:     time.Now,
 	}
 	entries, _ := os.ReadDir(dir)
 	for _, entry := range entries {
 		name := entry.Name()
-		if !entry.Type().IsRegular() || !(strings.HasSuffix(name, ".log") || strings.HasSuffix(name, ".log.1")) {
+		if !entry.Type().IsRegular() || !(strings.HasSuffix(name, ".log") || isRotatedLog(name)) {
 			continue
 		}
 		info, err := entry.Info()
@@ -187,7 +229,7 @@ func newInvocationLogs(dir string, limit, total int64) *invocationLogs {
 		path := filepath.Join(dir, name)
 		l.sizes[path] = info.Size()
 		l.size += info.Size()
-		if strings.HasSuffix(name, ".1") {
+		if isRotatedLog(name) {
 			l.rotated[path] = info.ModTime()
 		}
 	}
@@ -269,7 +311,29 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 // no two IDs share a log over them. Windows' reserved names, such as CON, and
 // names ending in a dot aren't handled; the names sst gives functions aren't
 // those.
+//
+// Two IDs that differ only in case would share a log on a disk that ignores
+// case, so the second of them seen gets a log of its own, named with a hash of
+// its ID.
 func (l *invocationLogs) logPath(functionID string) string {
+	if path, ok := l.paths[functionID]; ok {
+		return path
+	}
+	path := filepath.Join(l.dir, escapeLogName(functionID)+".log")
+	key := strings.ToLower(path)
+	if owner, ok := l.owners[key]; ok && owner != functionID {
+		sum := sha256.Sum256([]byte(functionID))
+		path = filepath.Join(l.dir, escapeLogName(functionID)+"~"+hex.EncodeToString(sum[:4])+".log")
+		slog.Warn("two functions' IDs differ only in case, so one has a log named with a hash", "functionID", functionID, "other", owner, "path", path)
+		key = strings.ToLower(path)
+	}
+	l.owners[key] = functionID
+	l.paths[functionID] = path
+	return path
+}
+
+// escapeLogName escapes the characters a file name can't hold, as %XX.
+func escapeLogName(functionID string) string {
 	var name strings.Builder
 	for i := 0; i < len(functionID); i++ {
 		c := functionID[i]
@@ -279,7 +343,7 @@ func (l *invocationLogs) logPath(functionID string) string {
 			name.WriteByte(c)
 		}
 	}
-	return filepath.Join(l.dir, name.String()+".log")
+	return name.String()
 }
 
 // file returns the log at path, opened to add to if it's not open, and the
