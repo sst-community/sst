@@ -24,6 +24,11 @@ import (
 // It is loaded with purego, which keeps the CLI buildable with CGO_ENABLED=0.
 // If it can't be loaded, the watcher falls back to fsnotify.
 func newBackend(trees []string, headFile string, log *slog.Logger) (backend, error) {
+	switch v := os.Getenv("SST_WATCHER"); v {
+	case "", "fsevents", "kqueue":
+	default:
+		log.Warn("ignoring unknown SST_WATCHER value, use kqueue or fsevents", "value", v)
+	}
 	if os.Getenv("SST_WATCHER") != "kqueue" {
 		if err := loadFSEvents(); err != nil {
 			log.Warn("fsevents can't be loaded, falling back to kqueue", "err", err)
@@ -146,6 +151,9 @@ func fseventsCallback(stream, info, count uintptr, paths, flags, ids unsafe.Poin
 		return
 	}
 
+	// The stream is created without kFSEventStreamCreateFlagUseCFTypes, so
+	// FSEvents passes paths as a C array of C strings (char **), not as a
+	// CFArrayRef of CFStringRefs.
 	pathList := unsafe.Slice((**byte)(paths), count)
 	flagList := unsafe.Slice((*uint32)(flags), count)
 	for i := range pathList {
