@@ -179,6 +179,15 @@ func TestInvocationLogsRotateABigEvent(t *testing.T) {
 	if got := readLog(t, filepath.Join(dir, "Fn.log")); got != at+"r1 responded\n" {
 		t.Fatalf("Fn.log is %q, want only the response", got)
 	}
+
+	// at a log that's nearly full, the big event is moved with what was
+	// there, not on its own over the .log.1 that was just made
+	logs.handle(&FunctionLogEvent{FunctionID: "Fn", RequestID: "r2", Line: "kept"})
+	logs.handle(&FunctionInvokedEvent{FunctionID: "Fn", RequestID: "r3", Input: []byte(strings.Repeat("y", 500))})
+	old := readLog(t, filepath.Join(dir, "Fn.log.1"))
+	if !strings.Contains(old, " r2 | kept\n") || !strings.Contains(old, strings.Repeat("y", 500)) {
+		t.Fatalf("Fn.log.1 is %q, want r2's line and the big event", old)
+	}
 }
 
 // #279: a busy function's history is kept by size, not by how many times it

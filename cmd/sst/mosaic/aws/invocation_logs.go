@@ -235,7 +235,9 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 	}
 	path := l.logPath(functionID)
 	file := l.file(path)
-	if file != nil && l.sizes[path] > 0 && l.sizes[path]+int64(b.Len()) > l.limit {
+	// an event bigger than the limit on its own is added first and moved with
+	// the log after, below, so the .log.1 before it isn't replaced twice
+	if file != nil && l.sizes[path] > 0 && l.sizes[path]+int64(b.Len()) > l.limit && int64(b.Len()) <= l.limit {
 		l.rotate(path)
 		file = l.file(path)
 	}
@@ -259,8 +261,10 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 // logPath is the path of a function's log. Its ID is a name in the app, which
 // can have characters a file name can't: a separator would put the log in a
 // folder, which the next sst dev would take to be an old one and remove, and
-// Windows refuses others. They're escaped as %XX, % included, so two IDs never
-// share a log.
+// Windows refuses others. Those characters are escaped as %XX, % included, so
+// no two IDs share a log over them. Windows' reserved names, such as CON, and
+// names ending in a dot aren't handled; the names sst gives functions aren't
+// those.
 func (l *invocationLogs) logPath(functionID string) string {
 	var name strings.Builder
 	for i := 0; i < len(functionID); i++ {
