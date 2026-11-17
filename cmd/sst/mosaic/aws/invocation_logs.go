@@ -113,8 +113,9 @@ func removeInvocationFolders(dir string) {
 }
 
 // isInvocationFolder says whether a folder holds an earlier sst dev's logs of
-// invocations, <time>-<request>.log, and nothing else, so a folder put there
-// for something else is left alone.
+// invocations, <time>-<request>.log with the time in Unix seconds, and nothing
+// else, so a folder put there for something else, such as one of date-named
+// files, is left alone.
 func isInvocationFolder(path string) bool {
 	entries, err := os.ReadDir(path)
 	if err != nil || len(entries) == 0 {
@@ -123,7 +124,7 @@ func isInvocationFolder(path string) bool {
 	for _, entry := range entries {
 		name := entry.Name()
 		time, request, ok := strings.Cut(strings.TrimSuffix(name, ".log"), "-")
-		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".log") || !ok || request == "" || strings.Trim(time, "0123456789") != "" || time == "" {
+		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".log") || !ok || request == "" || strings.Trim(time, "0123456789") != "" || len(time) < 9 || len(time) > 10 {
 			return false
 		}
 	}
@@ -183,8 +184,12 @@ type invocationLogs struct {
 	// made, and their sum
 	sizes   map[string]int64
 	rotated map[string]time.Time
-	// the write each log was last added to by, from writes
-	written map[string]uint64
+	// the write each log was last added to by, from writes, and when each log
+	// of an earlier sst dev was last written, to remove the oldest first
+	written  map[string]uint64
+	modified map[string]time.Time
+	// the logs found in dir, by their path lowercased
+	existing map[string]string
 	// the path of each function's log, and the function of each path,
 	// lowercased, as two IDs can differ only in case on a disk that ignores
 	// it, as macOS's and Windows' do by default
@@ -213,8 +218,11 @@ func newInvocationLogs(dir string, limit, total int64) *invocationLogs {
 		rotated: map[string]time.Time{},
 		written: map[string]uint64{},
 		paths:   map[string]string{},
-		owners:  map[string]string{},
-		now:     time.Now,
+		// the two below are set from what's in dir
+		modified: map[string]time.Time{},
+		existing: map[string]string{},
+		owners:   map[string]string{},
+		now:      time.Now,
 	}
 	entries, _ := os.ReadDir(dir)
 	for _, entry := range entries {
@@ -231,6 +239,9 @@ func newInvocationLogs(dir string, limit, total int64) *invocationLogs {
 		l.size += info.Size()
 		if isRotatedLog(name) {
 			l.rotated[path] = info.ModTime()
+		} else {
+			l.modified[path] = info.ModTime()
+			l.existing[strings.ToLower(path)] = path
 		}
 	}
 	return l
@@ -300,7 +311,7 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 		l.rotate(path)
 	}
 	if l.size > l.total {
-		l.shrink()
+		l.shrink(path)
 	}
 }
 
@@ -313,15 +324,20 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 // those.
 //
 // Two IDs that differ only in case would share a log on a disk that ignores
-// case, so the second of them seen gets a log of its own, named with a hash of
-// its ID.
+// case, so the second of them seen, in this sst dev or as a log an earlier one
+// left, gets a log of its own, named with a hash of its ID.
 func (l *invocationLogs) logPath(functionID string) string {
 	if path, ok := l.paths[functionID]; ok {
 		return path
 	}
 	path := filepath.Join(l.dir, escapeLogName(functionID)+".log")
 	key := strings.ToLower(path)
-	if owner, ok := l.owners[key]; ok && owner != functionID {
+	owner, taken := l.owners[key]
+	taken = taken && owner != functionID
+	if found, ok := l.existing[key]; ok && found != path {
+		taken, owner = true, filepath.Base(found)
+	}
+	if taken {
 		sum := sha256.Sum256([]byte(functionID))
 		path = filepath.Join(l.dir, escapeLogName(functionID)+"~"+hex.EncodeToString(sum[:4])+".log")
 		slog.Warn("two functions' IDs differ only in case, so one has a log named with a hash", "functionID", functionID, "other", owner, "path", path)
@@ -361,8 +377,9 @@ func (l *invocationLogs) file(path string) *os.File {
 				return log.file
 			}
 			l.closeLog(path)
-			// moved, as by a tool that rotates logs, maybe to <path>.1
-			l.recount(path + ".1")
+			// moved, as by a tool that rotates logs, which may have shifted its
+			// other rotations too
+			l.recountRotations(path)
 		} else {
 			return log.file
 		}
@@ -406,12 +423,34 @@ func (l *invocationLogs) recount(path string) {
 		delete(l.sizes, path)
 		delete(l.rotated, path)
 		delete(l.written, path)
+		delete(l.modified, path)
 		return
 	}
 	l.size += info.Size() - l.sizes[path]
 	l.sizes[path] = info.Size()
-	if _, ok := l.rotated[path]; !ok && strings.HasSuffix(path, ".1") {
+	if _, ok := l.rotated[path]; !ok && isRotatedLog(filepath.Base(path)) {
 		l.rotated[path] = info.ModTime()
+	}
+}
+
+// recountRotations counts the rotations of the log at path, <path>.<n>, from
+// what's on disk, those added and those gone included.
+func (l *invocationLogs) recountRotations(path string) {
+	prefix := filepath.Base(path) + "."
+	found := map[string]bool{}
+	entries, _ := os.ReadDir(l.dir)
+	for _, entry := range entries {
+		if name := entry.Name(); strings.HasPrefix(name, prefix) && isRotatedLog(name) && entry.Type().IsRegular() {
+			found[filepath.Join(l.dir, name)] = true
+		}
+	}
+	for tracked := range l.sizes {
+		if strings.HasPrefix(filepath.Base(tracked), prefix) && isRotatedLog(filepath.Base(tracked)) {
+			found[tracked] = true
+		}
+	}
+	for rotation := range found {
+		l.recount(rotation)
 	}
 }
 
@@ -456,6 +495,7 @@ func (l *invocationLogs) remove(path string) {
 	delete(l.sizes, path)
 	delete(l.rotated, path)
 	delete(l.written, path)
+	delete(l.modified, path)
 }
 
 // rotate moves a log to <path>.1, replacing an older one, so it's started
@@ -475,11 +515,12 @@ func (l *invocationLogs) rotate(path string) {
 	delete(l.sizes, path)
 }
 
-// shrink removes the oldest .log.1 files, and then the logs written least
-// recently, those of an earlier sst dev first, until all of them are under the
-// total again. So what's removed is always the oldest history, never the log
-// just written.
-func (l *invocationLogs) shrink() {
+// shrink removes the oldest rotated logs, and then the logs written least
+// recently, those of an earlier sst dev first and oldest first, until all of
+// them are under the total again. So what's removed is always the oldest
+// history. current, the log just written, is never removed, so with a total
+// smaller than one log, that log is kept on its own, within the limit.
+func (l *invocationLogs) shrink(current string) {
 	old := []string{}
 	for path := range l.rotated {
 		old = append(old, path)
@@ -494,10 +535,10 @@ func (l *invocationLogs) shrink() {
 	for l.size > l.total {
 		oldest := ""
 		for path, size := range l.sizes {
-			if size == 0 {
+			if size == 0 || path == current {
 				continue
 			}
-			if oldest == "" || l.written[path] < l.written[oldest] || (l.written[path] == l.written[oldest] && path < oldest) {
+			if oldest == "" || l.olderThan(path, oldest) {
 				oldest = path
 			}
 		}
@@ -506,6 +547,19 @@ func (l *invocationLogs) shrink() {
 		}
 		l.remove(oldest)
 	}
+}
+
+// olderThan says whether the log at a was last written before the one at b:
+// in this sst dev by the order of writes, and before it by when they were
+// last changed, by name when they tie.
+func (l *invocationLogs) olderThan(a, b string) bool {
+	if l.written[a] != l.written[b] {
+		return l.written[a] < l.written[b]
+	}
+	if c := l.modified[a].Compare(l.modified[b]); c != 0 {
+		return c < 0
+	}
+	return a < b
 }
 
 func (l *invocationLogs) close() {
