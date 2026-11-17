@@ -1,7 +1,9 @@
 // The bridge of a web function that's live in sst dev. Lambda starts it
-// through index.mjs, and sends it the function's HTTP requests on
-// AWS_LAMBDA_HTTP_ENDPOINT. It sends each to sst dev over AppSync, which sends
-// it to the local server, and writes the response sst dev streams back.
+// through the platform's index.mjs (platform/functions/web-bridge), and sends
+// it the function's HTTP requests on AWS_LAMBDA_HTTP_ENDPOINT. It sends each
+// to sst dev over AppSync, which sends it to the local server, and writes the
+// response sst dev streams back. It's engine code, beside cmd/bridge, so
+// either line's platform can build it from here (platform/scripts/build).
 package main
 
 import (
