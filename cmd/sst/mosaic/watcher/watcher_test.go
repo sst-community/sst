@@ -379,9 +379,10 @@ func TestShouldSkipDirOnlyAppliesInsideTheProject(t *testing.T) {
 			}
 			assert.False(t, skip("."), "the root")
 			assert.False(t, skip("src"))
-			// Only a directory named exactly node_modules is skipped.
-			assert.False(t, skip("node_modules.old"))
-			assert.False(t, skip("my_node_modules"))
+			// A copy such as node_modules.old can be as big, so it's skipped
+			// too, as before.
+			assert.True(t, skip("node_modules.old"))
+			assert.True(t, skip("my_node_modules"))
 			assert.True(t, skip("node_modules"))
 			assert.True(t, skip(filepath.Join("packages", "api", "node_modules")))
 			assert.True(t, skip(".sst"))
