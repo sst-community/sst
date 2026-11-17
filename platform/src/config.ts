@@ -511,6 +511,15 @@ export interface AppWatch {
    * The paths are relative to the project root. If omitted, SST watches the
    * project root. Glob patterns are not supported here; use explicit
    * directories.
+   *
+   * Hidden directories and `node_modules` are skipped, but one written out
+   * here by name is watched, like `packages/.generated` or
+   * `../shared/node_modules`. So is one under a skipped directory, like
+   * `.config/types`, though nothing else in `.config` is. Hidden directories
+   * and `node_modules` *under* a listed directory are still skipped. `ignore`
+   * still applies. In the legacy `watch: [...]` array form, a glob that
+   * matches `node_modules` or a hidden directory still skips it. Like every
+   * entry here, the directory has to exist when `sst dev` starts.
    */
   paths?: string[];
   /**

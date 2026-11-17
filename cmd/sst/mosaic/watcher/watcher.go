@@ -112,18 +112,46 @@ func (l *changeLimiter) close() {
 	l.closed = true
 }
 
-func resolveWatch(root string, watch project.Watch) ([]string, []string, error) {
+// hasGlobMeta reports whether a watch.paths entry is a glob, which only the
+// legacy array form expands.
+func hasGlobMeta(path string) bool {
+	return strings.ContainsAny(path, "*?[")
+}
+
+// listedRoots resolves the watch.paths entries written out without a glob.
+// skipDir watches these even when they are hidden or named node_modules. A
+// legacy array glob such as "*" can match node_modules or .git, and those
+// stay skipped.
+func listedRoots(root string, watch project.Watch) ([]string, error) {
+	var paths []string
+	for _, path := range watch.Paths {
+		if !hasGlobMeta(path) {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	return resolvePaths(root, paths, watch.UsesLegacyArray())
+}
+
+// resolvePaths turns watch.paths entries into the directories to walk, for
+// both resolveWatch and listedRoots: it expands the legacy array form, then
+// resolves each entry against root. With no entries it returns root.
+func resolvePaths(root string, paths []string, legacy bool) ([]string, error) {
 	root = filepath.Clean(root)
-	paths := watch.Paths
-	if watch.UsesLegacyArray() {
+	if legacy {
 		var err error
 		paths, err = expandLegacyPaths(root, paths)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
+	return resolveRoots(root, paths)
+}
 
-	roots, err := resolveRoots(root, paths)
+func resolveWatch(root string, watch project.Watch) ([]string, []string, error) {
+	roots, err := resolvePaths(root, watch.Paths, watch.UsesLegacyArray())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -141,7 +169,7 @@ func expandLegacyPaths(root string, paths []string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, path := range paths {
 		matches := []string{path}
-		if strings.ContainsAny(path, "*?[") {
+		if hasGlobMeta(path) {
 			resolved, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(path)))
 			if err != nil {
 				return nil, err
@@ -237,12 +265,17 @@ func shouldSkipDir(root string, ignore []string, path string, info dirEntry) boo
 		return false
 	}
 
-	if strings.HasPrefix(info.Name(), ".") {
-		return true
-	}
-
-	if strings.Contains(path, "node_modules") {
-		return true
+	// The built-in rules skip a directory by its own name: hidden, or with
+	// node_modules in it, which also catches copies such as node_modules.old
+	// that can be as big. The walk skips such a directory before entering it,
+	// so nothing below one is reached. The project root itself is always
+	// watched, whatever it or the directories above it are called, and
+	// skipDir exempts the paths listed by name in watch.paths.
+	if filepath.Clean(path) != filepath.Clean(root) {
+		name := info.Name()
+		if strings.HasPrefix(name, ".") || strings.Contains(name, "node_modules") {
+			return true
+		}
 	}
 
 	return isIgnored(root, ignore, path)
@@ -285,6 +318,24 @@ func matchesIgnore(pattern string, path string) bool {
 	}
 
 	return false
+}
+
+// skipDir is shouldSkipDir for the walk and the event loop. A directory
+// listed by name in watch.paths (see listedRoots) is watched even when it is
+// hidden or named node_modules, and so are the directories on the way to it,
+// such as .config for .config/types: the walk has to pass through them.
+// shouldWatchDir still prunes everything else under those, so .config/other
+// isn't watched. watch.ignore still applies.
+func skipDir(root string, listed []string, ignore []string, path string, info dirEntry) bool {
+	if !info.IsDir() {
+		return false
+	}
+	for _, r := range listed {
+		if isWithinPath(path, r) {
+			return isIgnored(root, ignore, path)
+		}
+	}
+	return shouldSkipDir(root, ignore, path, info)
 }
 
 func isWatchedPath(roots []string, path string) bool {
@@ -334,6 +385,10 @@ func Start(ctx context.Context, config WatchConfig) error {
 	if err != nil {
 		return err
 	}
+	listed, err := listedRoots(config.Root, config.Watch)
+	if err != nil {
+		return err
+	}
 
 	// The project root plus any watched path outside it. A recursive backend
 	// watches these trees whole; a per-directory backend walks them.
@@ -373,7 +428,7 @@ func Start(ctx context.Context, config WatchConfig) error {
 			}
 
 			if d.IsDir() {
-				if shouldSkipDir(config.Root, ignore, path, d) {
+				if skipDir(config.Root, listed, ignore, path, d) {
 					return filepath.SkipDir
 				}
 				if !shouldWatchDir(config.Root, roots, path) {
@@ -408,7 +463,7 @@ func Start(ctx context.Context, config WatchConfig) error {
 		b.Add(headFile)
 	}
 
-	return watchLoop(ctx, b.Events(), b.Errors(), log, config.Root, roots, ignore, watchTree, publishChange)
+	return watchLoop(ctx, b.Events(), b.Errors(), log, config.Root, roots, listed, ignore, watchTree, publishChange)
 }
 
 // watchLoop runs the fsnotify event loop. It drains both the Events and
@@ -422,6 +477,7 @@ func watchLoop(
 	log *slog.Logger,
 	root string,
 	roots []string,
+	listed []string,
 	ignore []string,
 	watchTree func(path string, publish bool) error,
 	publishChange func(path string, discovered bool),
@@ -442,7 +498,7 @@ func watchLoop(
 					return err
 				}
 				if err == nil && info.IsDir() {
-					if shouldSkipDir(root, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
+					if skipDir(root, listed, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
 						log.Info("ignoring created directory", "path", event.Name)
 						continue
 					}

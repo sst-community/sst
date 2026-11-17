@@ -274,7 +274,7 @@ func TestWatchLoopDrainsErrors(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- watchLoop(
-			ctx, events, errs, slog.Default(), root, []string{root}, nil,
+			ctx, events, errs, slog.Default(), root, []string{root}, nil, nil,
 			func(path string, publish bool) error { return nil },
 			func(path string, discovered bool) { published <- path },
 		)
@@ -304,7 +304,7 @@ func TestWatchLoopStopsWhenErrorsCloses(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- watchLoop(
-			ctx, events, errs, slog.Default(), root, []string{root}, nil,
+			ctx, events, errs, slog.Default(), root, []string{root}, nil, nil,
 			func(path string, publish bool) error { return nil },
 			func(path string, discovered bool) {},
 		)
@@ -484,4 +484,277 @@ func collectFileChangedEvents(events <-chan interface{}, window time.Duration) m
 			return seen
 		}
 	}
+}
+
+// The built-in rules apply to directories inside the project, by their own
+// name. Neither the project root nor the path it lives at counts.
+func TestShouldSkipDirOnlyAppliesInsideTheProject(t *testing.T) {
+	roots := map[string]string{
+		"node_modules above the root": filepath.Join(t.TempDir(), "node_modules-demo", "app"),
+		"node_modules in the root":    filepath.Join(t.TempDir(), "node_modules-demo"),
+		"hidden root":                 filepath.Join(t.TempDir(), ".dotfiles"),
+		"root named node_modules":     filepath.Join(t.TempDir(), "node_modules"),
+	}
+	for name, root := range roots {
+		t.Run(name, func(t *testing.T) {
+			_, ignore, err := resolveWatch(root, project.Watch{})
+			require.NoError(t, err)
+
+			skip := func(rel string) bool {
+				path := filepath.Join(root, rel)
+				return shouldSkipDir(root, ignore, path, mustInfo(t, path))
+			}
+			assert.False(t, skip("."), "the root")
+			assert.False(t, skip("src"))
+			// A copy such as node_modules.old can be as big, so it's skipped
+			// too, as before.
+			assert.True(t, skip("node_modules.old"))
+			assert.True(t, skip("my_node_modules"))
+			assert.True(t, skip("node_modules"))
+			assert.True(t, skip(filepath.Join("packages", "api", "node_modules")))
+			assert.True(t, skip(".sst"))
+		})
+	}
+}
+
+func TestStartWatchesProjectWhateverItsPath(t *testing.T) {
+	roots := map[string]string{
+		"node_modules above the root": filepath.Join(t.TempDir(), "node_modules-demo", "app"),
+		"node_modules in the root":    filepath.Join(t.TempDir(), "node_modules-demo"),
+		"hidden root":                 filepath.Join(t.TempDir(), ".dotfiles"),
+		"root named node_modules":     filepath.Join(t.TempDir(), "node_modules"),
+	}
+	for name, root := range roots {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0755))
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events := bus.SubscribeAll()
+			defer bus.Unsubscribe(events)
+
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{}})
+			}()
+
+			// waitForWatcherReady fails the test if no event ever arrives,
+			// which is what happened: the whole project was skipped.
+			waitForWatcherReady(t, filepath.Join(root, "src", "handler.ts"), events)
+
+			cancel()
+			require.NoError(t, <-errCh)
+		})
+	}
+}
+
+// A directory listed in watch.paths is watched even when it is hidden or
+// named node_modules, inside the project or outside it.
+func TestStartWatchesHiddenAndNodeModulesPathsListedByName(t *testing.T) {
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, "app")
+	inside := filepath.Join(root, "packages", ".generated")
+	outside := filepath.Join(workspace, "shared", "node_modules")
+	for _, dir := range []string{inside, outside, filepath.Join(root, ".sst")} {
+		require.NoError(t, os.MkdirAll(dir, 0755))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{
+			Paths: []string{"packages/.generated", "../shared/node_modules"},
+		}})
+	}()
+
+	waitForWatcherReady(t, filepath.Join(inside, "types.ts"), events)
+	waitForWatcherReady(t, filepath.Join(outside, "lib.js"), events)
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+func TestSkipDirHonorsIgnoreOnListedPaths(t *testing.T) {
+	root := t.TempDir()
+	listed := filepath.Join(root, "packages", ".generated")
+	info := mustInfo(t, listed)
+	roots, err := listedRoots(root, project.Watch{Paths: []string{"packages/.generated"}})
+	require.NoError(t, err)
+	_, ignore, err := resolveWatch(root, project.Watch{Ignore: []string{"packages/.generated"}})
+	require.NoError(t, err)
+
+	assert.False(t, skipDir(root, roots, nil, listed, info), "listed by name")
+	assert.True(t, skipDir(root, roots, ignore, listed, info), "watch.ignore still wins")
+	assert.True(t, skipDir(root, nil, nil, listed, info), "nothing listed: the built-in rule applies")
+	// Listing the root exempts the root, not what's under it.
+	assert.True(t, skipDir(root, []string{root}, nil, listed, info), "under a listed root: the built-in rule applies")
+}
+
+// Listing a directory exempts it and the directories on the way to it, not
+// the ones under it: watch.paths ["."] or ["packages/api"] still skips
+// node_modules and hidden directories inside.
+func TestStartListedPathStillSkipsNodeModulesInside(t *testing.T) {
+	for _, paths := range [][]string{{"."}, {"packages/api"}} {
+		t.Run(paths[0], func(t *testing.T) {
+			root := t.TempDir()
+			base := filepath.Join(root, filepath.FromSlash(paths[0]))
+			for _, dir := range []string{"node_modules/pkg", ".cache", "src"} {
+				require.NoError(t, os.MkdirAll(filepath.Join(base, dir), 0755))
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events := bus.SubscribeAll()
+			defer bus.Unsubscribe(events)
+
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{Paths: paths}})
+			}()
+			waitForWatcherReady(t, filepath.Join(base, "src", "ready.ts"), events)
+
+			skipped := []string{
+				filepath.Join(base, "node_modules", "pkg", "index.js"),
+				filepath.Join(base, ".cache", "x"),
+			}
+			for _, path := range skipped {
+				require.NoError(t, os.WriteFile(path, []byte("x"), 0644))
+			}
+			seen := map[string]bool{}
+			deadline := time.After(750 * time.Millisecond)
+		collect:
+			for {
+				select {
+				case evt := <-events:
+					if changed, ok := evt.(*FileChangedEvent); ok {
+						seen[changed.Path] = true
+					}
+				case <-deadline:
+					break collect
+				}
+			}
+			for _, path := range skipped {
+				assert.False(t, seen[path], "did not expect file change for %s", path)
+			}
+
+			cancel()
+			require.NoError(t, <-errCh)
+		})
+	}
+}
+
+// A legacy array glob can match node_modules or hidden folders. Only paths
+// written out by name are exempt from the built-in rules, so those stay
+// skipped, while a legacy entry written out by name is still watched.
+func TestListedRootsLeavesGlobMatchesToTheBuiltInRules(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"node_modules", ".sst", "src", "packages/.generated"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0755))
+	}
+
+	var watch project.Watch
+	require.NoError(t, json.Unmarshal([]byte(`["*", ".*", "packages/.generated"]`), &watch))
+	roots, ignore, err := resolveWatch(root, watch)
+	require.NoError(t, err)
+	listed, err := listedRoots(root, watch)
+	require.NoError(t, err)
+
+	// The globs do match the built-in folders...
+	assert.Contains(t, roots, filepath.Join(root, "node_modules"))
+	assert.Contains(t, roots, filepath.Join(root, ".sst"))
+	// ...but only the entry written out by name is listed.
+	assert.Equal(t, []string{filepath.Join(root, "packages", ".generated")}, listed)
+
+	skip := func(rel string) bool {
+		path := filepath.Join(root, rel)
+		return skipDir(root, listed, ignore, path, mustInfo(t, path))
+	}
+	assert.True(t, skip("node_modules"))
+	assert.True(t, skip(".sst"))
+	assert.False(t, skip("src"))
+	assert.False(t, skip("packages/.generated"))
+}
+
+func TestStartLegacyGlobDoesNotWatchNodeModules(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"node_modules/pkg", "src"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0755))
+	}
+	var watch project.Watch
+	require.NoError(t, json.Unmarshal([]byte(`["*"]`), &watch))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: watch})
+	}()
+	waitForWatcherReady(t, filepath.Join(root, "src", "ready.ts"), events)
+
+	dep := filepath.Join(root, "node_modules", "pkg", "index.js")
+	require.NoError(t, os.WriteFile(dep, []byte("x"), 0644))
+	assert.False(t, waitForFileChangedEvent(events, dep, 750*time.Millisecond), "node_modules matched by a glob is still skipped")
+
+	cancel()
+	require.NoError(t, <-errCh)
+}
+
+// A watch.paths entry inside the project can sit under a hidden or
+// node_modules folder. The folders on the way to it are walked, but nothing
+// else under them is watched.
+func TestStartWatchesListedPathsUnderSkippedFolders(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{".config/types", ".config/other", "node_modules/pkg", "node_modules/other"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0755))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := bus.SubscribeAll()
+	defer bus.Unsubscribe(events)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Start(ctx, WatchConfig{Root: root, Watch: project.Watch{
+			Paths: []string{".config/types", "node_modules/pkg"},
+		}})
+	}()
+
+	waitForWatcherReady(t, filepath.Join(root, ".config", "types", "env.d.ts"), events)
+	waitForWatcherReady(t, filepath.Join(root, "node_modules", "pkg", "index.js"), events)
+
+	unlisted := []string{
+		filepath.Join(root, ".config", "other", "x.ts"),
+		filepath.Join(root, "node_modules", "other", "index.js"),
+		filepath.Join(root, ".config", "top.ts"),
+	}
+	for _, path := range unlisted {
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0644))
+	}
+	seen := map[string]bool{}
+	deadline := time.After(750 * time.Millisecond)
+collect:
+	for {
+		select {
+		case evt := <-events:
+			if changed, ok := evt.(*FileChangedEvent); ok {
+				seen[changed.Path] = true
+			}
+		case <-deadline:
+			break collect
+		}
+	}
+	for _, path := range unlisted {
+		assert.False(t, seen[path], "did not expect file change for %s", path)
+	}
+
+	cancel()
+	require.NoError(t, <-errCh)
 }
