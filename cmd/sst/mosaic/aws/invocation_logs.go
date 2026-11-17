@@ -49,7 +49,10 @@ func invocationLogLimit(value string) (int64, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return defaultInvocationLogLimit, true
-	case "off", "false", "0":
+	case "off", "false":
+		return 0, false
+	}
+	if mb, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil && mb == 0 {
 		return 0, false
 	}
 	return megabytes("SST_DEV_INVOCATION_LOGS", value, defaultInvocationLogLimit), true
@@ -340,13 +343,20 @@ func (l *invocationLogs) recount(path string) {
 }
 
 // isFileAt says whether file is still the one at path.
+// Its size is counted again from what's there, as it may have been emptied in
+// place, as with > Fn.log.
 func (l *invocationLogs) isFileAt(file *os.File, path string) bool {
 	opened, err := file.Stat()
 	if err != nil {
 		return false
 	}
 	current, err := os.Stat(path)
-	return err == nil && os.SameFile(opened, current)
+	if err != nil || !os.SameFile(opened, current) {
+		return false
+	}
+	l.size += opened.Size() - l.sizes[path]
+	l.sizes[path] = opened.Size()
+	return true
 }
 
 func (l *invocationLogs) closeLog(path string) {

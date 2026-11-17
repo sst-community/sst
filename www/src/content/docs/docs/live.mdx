@@ -242,7 +242,7 @@ grep -r 8c4f2a1e .sst/log/lambda/
 2026-11-16T12:00:00.456Z 8c4f2a1e responded {"statusCode":200}
 ```
 
-A function's log is moved to `<Function>.log.1` once it's past 10 MB, so the newest 10 to 20 MB of each are kept. Once all of them are past 1 GB, the oldest `.log.1` files are removed, and if that's not enough, the biggest logs are emptied. To change those sizes, in MB, or turn the logs off, as for a load test, set:
+A function's log is moved to `<Function>.log.1` once it's past 10 MB, so the newest 10 to 20 MB of each are kept. Once all of them are past 1 GB, the oldest `.log.1` files are removed, and if that's not enough, the biggest logs are removed, to start again when their function next prints. To change those sizes, in MB, or turn the logs off, as for a load test, set:
 
 ```bash frame="none"
 SST_DEV_INVOCATION_LOGS=50 SST_DEV_INVOCATION_LOGS_TOTAL=4096 sst dev

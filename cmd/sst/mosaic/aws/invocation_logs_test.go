@@ -364,6 +364,16 @@ func TestInvocationLogsReopenARemovedLog(t *testing.T) {
 		t.Fatalf("Fn.log is %q, want only r3", got)
 	}
 
+	// emptied in place, as with > Fn.log, which keeps the same file
+	if err := os.Truncate(filepath.Join(dir, "Fn.log"), 0); err != nil {
+		t.Fatal(err)
+	}
+	tick = tick.Add(time.Second)
+	invoke(logs, "Fn", "r3b")
+	if got := readLog(t, filepath.Join(dir, "Fn.log")); logs.sizes[filepath.Join(dir, "Fn.log")] != int64(len(got)) {
+		t.Fatalf("Fn.log is %d bytes, but %d are counted", len(got), logs.sizes[filepath.Join(dir, "Fn.log")])
+	}
+
 	// moved to Fn.log.1, as by a tool that rotates logs, which is counted
 	// toward the total from what's on disk
 	if err := os.Rename(filepath.Join(dir, "Fn.log"), filepath.Join(dir, "Fn.log.1")); err != nil {
@@ -440,6 +450,8 @@ func TestInvocationLogLimit(t *testing.T) {
 		{"OFF", 0, false},
 		{"false", 0, false},
 		{"0", 0, false},
+		{"0.0", 0, false},
+		{"00", 0, false},
 		{"50", 50 << 20, true},
 		{" 0.5 ", 512 << 10, true},
 		{"lots", defaultInvocationLogLimit, true},
