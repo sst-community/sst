@@ -73,6 +73,28 @@ vi.mock("../../src/components/rpc/rpc", () => ({
   },
 }));
 
+// The Cdn's deployment waiter is a dynamic resource, which Pulumi can't serialize
+// under vitest. A plain resource stands in for it.
+vi.mock(
+  "../../src/components/aws/providers/distribution-deployment-waiter",
+  async () => {
+    const { CustomResource } = await import("@pulumi/pulumi");
+    return {
+      DistributionDeploymentWaiter: class extends CustomResource {
+        declare readonly isDone: pulumi.Output<boolean>;
+        constructor(name: string, args: object, opts?: object) {
+          super(
+            "sst:test:DistributionDeploymentWaiter",
+            name,
+            { ...args, isDone: undefined },
+            opts,
+          );
+        }
+      },
+    };
+  },
+);
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-function-"));
 const platformRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -145,7 +167,13 @@ pulumi.runtime.setMocks(
           ? { revisionId: `${args.name}-revision` }
           : args.type === "aws:lambdaweb/functionEndpoint:FunctionEndpoint"
             ? { domainName: `${args.name.toLowerCase()}.example.com` }
-            : {}),
+            : args.type === "aws:cloudfront/distribution:Distribution"
+              ? {
+                  domainName: `${args.name.toLowerCase()}.cloudfront.net`,
+                  hostedZoneId: "Z2FDTNDATAQYW2",
+                  etag: "etag",
+                }
+              : {}),
       };
       return { id: `${args.name}_id`, state };
     },
@@ -505,6 +533,12 @@ describe("WebFunction", () => {
     expect(ofType("aws:lambdaweb/resourcePolicy:ResourcePolicy")).toHaveLength(
       0,
     );
+    expect(ofType("aws:cloudfront/distribution:Distribution")).toHaveLength(0);
+    expect(
+      ofType("aws:cloudfront/originAccessControl:OriginAccessControl"),
+    ).toHaveLength(0);
+    expect(fn.nodes.cdn).toBeUndefined();
+    expect(await resolved(fn.endpointUrl!)).toBe(await resolved(fn.url));
     expect(build).toHaveBeenCalledTimes(1);
     expect(build.mock.calls[0][0]).toMatchObject({
       bundle: out,
@@ -1454,6 +1488,216 @@ describe("WebFunction", () => {
     expect(
       resources.filter((r) => r.name === "LocalPrivateOperatorRole"),
     ).toEqual([]);
+  });
+
+  describe("domain", () => {
+    const cert =
+      "arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000000";
+
+    function distribution(name: string) {
+      return named(
+        `${name}CdnDistribution`,
+        "aws:cloudfront/distribution:Distribution",
+      ).inputs;
+    }
+
+    it("serves a custom domain through CloudFront with origin access control", async () => {
+      const fn = new WebFunction("Domain", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        timeout: "2 minutes",
+        domain: { name: "api.example.com", dns: false, cert },
+      });
+      expect(await resolved(fn.url)).toBe("https://api.example.com");
+      await resolved(fn.nodes.resourcePolicy!.policy);
+      expect(await resolved(fn.endpointUrl!)).toBe(
+        "https://domainendpoint.example.com",
+      );
+      expect(fn.nodes.cdn).toBeDefined();
+      // Only the distribution may call the endpoint.
+      expect(endpointInputs("Domain").authType).toBe("IamAuth");
+
+      const [oac] = ofType(
+        "aws:cloudfront/originAccessControl:OriginAccessControl",
+      );
+      expect(oac.inputs).toMatchObject({
+        originAccessControlOriginType: "lambda",
+        signingBehavior: "always-amz-auth",
+        signingProtocol: "sigv4",
+      });
+      const inputs = distribution("Domain");
+      expect(inputs.aliases).toEqual(["api.example.com"]);
+      expect(inputs.viewerCertificate).toMatchObject({
+        acmCertificateArn: cert,
+        sslSupportMethod: "sni-only",
+      });
+      expect(inputs.origins).toHaveLength(1);
+      expect(inputs.origins[0]).toMatchObject({
+        originId: "default",
+        domainName: "domainendpoint.example.com",
+        originAccessControlId: `${oac.name}_id`,
+        customOriginConfig: {
+          originProtocolPolicy: "https-only",
+          originSslProtocols: ["TLSv1.2"],
+          // CloudFront's default limit, below the two-minute function timeout.
+          originReadTimeout: 60,
+        },
+      });
+      const behavior = inputs.defaultCacheBehavior;
+      expect(behavior).toMatchObject({
+        targetOriginId: "default",
+        viewerProtocolPolicy: "redirect-to-https",
+        originRequestPolicyId: "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+      });
+      expect([...behavior.allowedMethods].sort()).toEqual([
+        "DELETE",
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PUT",
+      ]);
+      // Lambda@Edge origin triggers aren't supported with a web function origin.
+      expect(behavior.lambdaFunctionAssociations ?? []).toEqual([]);
+      expect(behavior.functionAssociations).toEqual([
+        {
+          eventType: "viewer-request",
+          functionArn: expect.stringContaining("DomainRequestFunction"),
+        },
+      ]);
+      const [policy] = ofType("aws:cloudfront/cachePolicy:CachePolicy");
+      expect(behavior.cachePolicyId).toBe(`${policy.name}_id`);
+      expect(policy.inputs).toMatchObject({ defaultTtl: 0, minTtl: 0 });
+      expect(
+        policy.inputs.parametersInCacheKeyAndForwardedToOrigin,
+      ).toMatchObject({
+        headersConfig: {
+          headerBehavior: "whitelist",
+          headers: { items: ["authorization", "x-forwarded-host"] },
+        },
+        cookiesConfig: { cookieBehavior: "all" },
+        queryStringsConfig: { queryStringBehavior: "all" },
+      });
+      // A link points at the domain.
+      expect(await resolved(fn.getSSTLink().properties.url)).toBe(
+        "https://api.example.com",
+      );
+    });
+
+    it("grants its distribution permission to invoke the endpoint", async () => {
+      const fn = new WebFunction("Scoped", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        domain: { name: "api.example.com", dns: false, cert },
+      });
+      await resolved(fn.url);
+      const policy = await resolved(fn.nodes.resourcePolicy!.policy);
+      expect(
+        named(
+          "ScopedResourcePolicy",
+          "aws:lambdaweb/resourcePolicy:ResourcePolicy",
+        ).inputs.resourceArn,
+      ).toBe(await resolved(fn.arn!));
+      expect(JSON.parse(policy).Statement).toEqual([
+        {
+          Sid: "AllowCloudFrontInvoke",
+          Effect: "Allow",
+          Principal: { Service: "cloudfront.amazonaws.com" },
+          Action: "lambda:InvokeWebFunctionEndpoint",
+          Resource: await resolved(fn.endpointArn!),
+          Condition: {
+            StringEquals: {
+              "aws:SourceArn": await resolved(
+                fn.nodes.cdn!.nodes.distribution.arn,
+              ),
+            },
+          },
+        },
+      ]);
+    });
+
+    it("accepts an explicit iam authorization and rejects none", async () => {
+      const fn = new WebFunction("ExplicitIam", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        url: { authorization: "iam" },
+        domain: { name: "api.example.com", dns: false, cert },
+      });
+      await resolved(fn.nodes.resourcePolicy!.policy);
+      expect(endpointInputs("ExplicitIam").authType).toBe("IamAuth");
+      expect(
+        () =>
+          new WebFunction("PublicDomain", {
+            entrypoint: "index.mjs",
+            bundle: out,
+            url: { authorization: "none" },
+            domain: { name: "api.example.com", dns: false, cert },
+          }),
+      ).toThrow(
+        'The "PublicDomain" WebFunction can\'t set "url.authorization" to "none" with "domain". Its endpoint uses IAM authorization, so that its CloudFront distribution signs its requests with origin access control.',
+      );
+    });
+
+    it("applies the cdn and resource policy transforms", async () => {
+      const fn = new WebFunction("DomainTransformed", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        domain: { name: "api.example.com", dns: false, cert },
+        transform: {
+          cdn: (args) => {
+            args.comment = "custom";
+          },
+          // As the `transform.resourcePolicy` docs show (with `$resolve`): add a
+          // statement and keep the distribution's.
+          resourcePolicy: (args) => {
+            args.policy = pulumi.all([args.policy]).apply(([policy]) => {
+              const document = JSON.parse(policy);
+              document.Statement.push({
+                Effect: "Allow",
+                Principal: { AWS: "arn:aws:iam::123456789012:root" },
+                Action: "lambda:InvokeWebFunctionEndpoint",
+                Resource: "*",
+              });
+              return JSON.stringify(document);
+            });
+          },
+        },
+      });
+      await resolved(fn.nodes.cdn!.nodes.distribution.arn);
+      await resolved(fn.nodes.resourcePolicy!.policy);
+      expect(distribution("DomainTransformed").comment).toBe("custom");
+      const statements = JSON.parse(
+        named(
+          "DomainTransformedResourcePolicy",
+          "aws:lambdaweb/resourcePolicy:ResourcePolicy",
+        ).inputs.policy,
+      ).Statement;
+      expect(statements.map((s: any) => s.Principal)).toEqual([
+        { Service: "cloudfront.amazonaws.com" },
+        { AWS: "arn:aws:iam::123456789012:root" },
+      ]);
+    });
+
+    it("creates no distribution in sst dev while the server runs locally", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const fn = new WebFunction("LocalDomain", {
+        entrypoint: "src/server.ts",
+        domain: { name: "api.example.com", dns: false, cert },
+        dev: { url: "http://localhost:3000" },
+      });
+      expect(await resolved(fn.url)).toBe("http://localhost:3000");
+      await resolved(fn.nodes.role.arn);
+      expect(fn.nodes.cdn).toBeUndefined();
+      expect(fn.endpointUrl).toBeUndefined();
+      expect(ofType("aws:cloudfront/distribution:Distribution")).toHaveLength(
+        0,
+      );
+      expect(
+        ofType("aws:lambdaweb/resourcePolicy:ResourcePolicy"),
+      ).toHaveLength(0);
+    });
   });
 
   it("rejects a missing copyFiles source", () => {
