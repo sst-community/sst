@@ -394,6 +394,7 @@ func TestStartWatchesProjectWhateverItsPath(t *testing.T) {
 		"node_modules above the root": filepath.Join(t.TempDir(), "node_modules-demo", "app"),
 		"node_modules in the root":    filepath.Join(t.TempDir(), "node_modules-demo"),
 		"hidden root":                 filepath.Join(t.TempDir(), ".dotfiles"),
+		"root named node_modules":     filepath.Join(t.TempDir(), "node_modules"),
 	}
 	for name, root := range roots {
 		t.Run(name, func(t *testing.T) {
