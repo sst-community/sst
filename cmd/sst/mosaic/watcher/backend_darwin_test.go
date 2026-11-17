@@ -32,6 +32,28 @@ func TestNewBackendUsesFSEventsOnDarwin(t *testing.T) {
 	assert.True(t, b.Recursive())
 }
 
+// When FSEvents can't watch the project, the default falls back to kqueue,
+// but SST_WATCHER=fsevents fails instead of falling back quietly.
+func TestNewBackendFallsBackOnlyByDefault(t *testing.T) {
+	// a tree that doesn't exist can't be watched by FSEvents
+	missing := filepath.Join(t.TempDir(), "missing")
+	head := filepath.Join(missing, ".git/HEAD")
+
+	t.Setenv("SST_WATCHER", "")
+	b, err := newBackend([]string{missing}, nil, head, slog.Default())
+	require.NoError(t, err)
+	assert.Equal(t, "fsnotify", b.Name())
+	b.Close()
+
+	t.Setenv("SST_WATCHER", "fsevents")
+	b, err = newBackend([]string{missing}, nil, head, slog.Default())
+	if err == nil {
+		b.Close()
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SST_WATCHER=fsevents")
+}
+
 func newTestFSEventsBackend(trees []treeMapping, headFile string) *fseventsBackend {
 	return &fseventsBackend{
 		trees:    trees,

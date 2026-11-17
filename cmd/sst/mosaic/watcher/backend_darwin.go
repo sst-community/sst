@@ -22,7 +22,10 @@ import (
 // descriptor per file and directory in it. FSEvents watches each tree with a
 // single stream and holds no descriptors per file, so it is the default here.
 // It is loaded with purego, which keeps the CLI buildable with CGO_ENABLED=0.
-// If it can't be loaded, the watcher falls back to fsnotify.
+// If it can't be loaded or can't watch the project, the watcher falls back to
+// fsnotify, unless SST_WATCHER=fsevents asked for it: then it fails, as
+// falling back would bring back the descriptor per file that was asked to be
+// avoided.
 func newBackend(trees []string, listed []string, headFile string, log *slog.Logger) (backend, error) {
 	v := os.Getenv("SST_WATCHER")
 	switch v {
@@ -30,17 +33,24 @@ func newBackend(trees []string, listed []string, headFile string, log *slog.Logg
 	default:
 		log.Warn("ignoring unknown SST_WATCHER value, use kqueue or fsevents", "value", v)
 	}
-	if v != "kqueue" {
-		if err := loadFSEvents(); err != nil {
-			log.Warn("fsevents can't be loaded, falling back to kqueue", "err", err)
-			return newFsnotifyBackend()
-		}
-		b, err := newFSEventsBackend(trees, listed, headFile)
-		if err == nil {
-			return b, nil
-		}
-		log.Warn("fsevents can't watch the project, falling back to kqueue", "err", err)
+	if v == "kqueue" {
+		return newFsnotifyBackend()
 	}
+	if err := loadFSEvents(); err != nil {
+		if v == "fsevents" {
+			return nil, fmt.Errorf("SST_WATCHER=fsevents, but fsevents can't be loaded: %w; unset SST_WATCHER to fall back to kqueue", err)
+		}
+		log.Warn("fsevents can't be loaded, falling back to kqueue", "err", err)
+		return newFsnotifyBackend()
+	}
+	b, err := newFSEventsBackend(trees, listed, headFile)
+	if err == nil {
+		return b, nil
+	}
+	if v == "fsevents" {
+		return nil, fmt.Errorf("SST_WATCHER=fsevents, but fsevents can't watch the project: %w; unset SST_WATCHER to fall back to kqueue", err)
+	}
+	log.Warn("fsevents can't watch the project, falling back to kqueue", "err", err)
 	return newFsnotifyBackend()
 }
 
