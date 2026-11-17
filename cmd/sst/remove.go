@@ -46,10 +46,10 @@ func CmdRemove(c *cli.Cli) error {
 	defer ui.Destroy()
 	defer c.Cancel()
 	err = p.Run(c.Context, &project.StackInput{
-		Command:    "remove",
-		Target:     target,
-		ServerPort: s.Port,
-		Verbose:    c.Bool("verbose"),
+		Command: "remove",
+		Target:  target,
+		Server:  s.URL(),
+		Verbose: c.Bool("verbose"),
 	})
 	if err != nil {
 		return err

@@ -20,26 +20,44 @@ func (p *Project) EnvFor(ctx context.Context, complete *CompleteEvent, name stri
 	if dev.Aws != nil && dev.Aws.Role != "" {
 		log.Info("loading aws credentials", "role", dev.Aws.Role)
 		prov, _ := p.Provider("aws")
-		awsProvider := prov.(*provider.AwsProvider)
-		stsClient := sts.NewFromConfig(awsProvider.Config())
-		sessionName := "sst-dev"
-		result, err := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
-			RoleArn:         &dev.Aws.Role,
-			RoleSessionName: &sessionName,
-			DurationSeconds: awssdk.Int32(3600),
-		})
-		if err == nil {
-			env["AWS_ACCESS_KEY_ID"] = *result.Credentials.AccessKeyId
-			env["AWS_SECRET_ACCESS_KEY"] = *result.Credentials.SecretAccessKey
-			env["AWS_SESSION_TOKEN"] = *result.Credentials.SessionToken
-			env["AWS_REGION"] = awsProvider.Config().Region
-		}
-
+		credentials, err := AssumeDevRole(ctx, prov.(*provider.AwsProvider), dev.Aws.Role)
 		if err != nil {
 			log.Error("failed to load aws credentials", "err", err)
 		}
+		for key, value := range credentials {
+			env[key] = value
+		}
 	}
-	log.Info("dev", "links", dev.Links)
+	AddDevEnv(env, complete, name, p.app.Name, p.app.Stage)
+	return env, nil
+}
+
+// AssumeDevRole takes the role a dev command runs as, and gives its
+// credentials as the AWS variables of the command's environment.
+func AssumeDevRole(ctx context.Context, aws *provider.AwsProvider, role string) (map[string]string, error) {
+	sessionName := "sst-dev"
+	result, err := sts.NewFromConfig(aws.Config()).AssumeRole(ctx, &sts.AssumeRoleInput{
+		RoleArn:         &role,
+		RoleSessionName: &sessionName,
+		DurationSeconds: awssdk.Int32(3600),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"AWS_ACCESS_KEY_ID":     *result.Credentials.AccessKeyId,
+		"AWS_SECRET_ACCESS_KEY": *result.Credentials.SecretAccessKey,
+		"AWS_SESSION_TOKEN":     *result.Credentials.SessionToken,
+		"AWS_REGION":            aws.Config().Region,
+	}, nil
+}
+
+// AddDevEnv adds to a dev command's environment what the deploy gives it: its
+// links, the app, its own environment, and Cloudflare's settings. What it
+// adds wins over what env has.
+func AddDevEnv(env map[string]string, complete *CompleteEvent, name, app, stage string) {
+	dev := complete.Devs[name]
+	slog.Default().With("service", "project.env").With("resource", name).Info("dev", "links", dev.Links)
 	// On Windows, always use a consolidated environment variable because
 	// Windows uppercases all environment variable names, breaking
 	// case-sensitive resource lookups.
@@ -49,8 +67,8 @@ func (p *Project) EnvFor(ctx context.Context, complete *CompleteEvent, name stri
 			allResources[resource] = complete.Links[resource].Properties
 		}
 		allResources["App"] = map[string]string{
-			"name":  p.App().Name,
-			"stage": p.App().Stage,
+			"name":  app,
+			"stage": stage,
 		}
 		jsonData, _ := json.Marshal(allResources)
 		env["SST_RESOURCES_JSON"] = string(jsonData)
@@ -60,7 +78,7 @@ func (p *Project) EnvFor(ctx context.Context, complete *CompleteEvent, name stri
 			jsonValue, _ := json.Marshal(value)
 			env["SST_RESOURCE_"+resource] = string(jsonValue)
 		}
-		env["SST_RESOURCE_App"] = fmt.Sprintf(`{"name": "%s", "stage": "%s" }`, p.App().Name, p.App().Stage)
+		env["SST_RESOURCE_App"] = fmt.Sprintf(`{"name": "%s", "stage": "%s" }`, app, stage)
 	}
 	for key, value := range dev.Environment {
 		env[key] = value
@@ -74,5 +92,4 @@ func (p *Project) EnvFor(ctx context.Context, complete *CompleteEvent, name stri
 			env[key] = val
 		}
 	}
-	return env, nil
 }

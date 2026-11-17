@@ -9,6 +9,7 @@ import { Component, Transform, transform } from "../component";
 import { Link } from "../link";
 import type { Input } from "../input";
 import { FunctionArgs, FunctionArn } from "./function.js";
+import { Workflow } from "./workflow.js";
 import { VisibleError } from "../error";
 import { hashStringToPrettyString, logicalName } from "../naming";
 import { parseQueueArn } from "./helpers/arn";
@@ -505,9 +506,25 @@ export class Queue extends Component implements Link.Linkable {
    * ```js title="sst.config.ts"
    * queue.subscribe("arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
+   *
+   * Or pass in a [`Workflow`](/docs/component/aws/workflow). Link the queue to the
+   * workflow, so it can read and delete the messages.
+   *
+   * ```js title="sst.config.ts"
+   * const workflow = new sst.aws.Workflow("MyWorkflow", {
+   *   handler: "src/workflow.handler",
+   *   link: [queue],
+   *   timeout: { execution: "15 minutes" },
+   * });
+   *
+   * queue.subscribe(workflow, { batch: { size: 1 } });
+   * ```
+   *
+   * The queue waits for each execution to finish, so the workflow's `timeout.execution`
+   * can be at most 15 minutes. [Learn more](/docs/component/aws/workflow#process-a-queue).
    */
   public subscribe(
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: Input<string | Workflow | FunctionArgs | FunctionArn>,
     args?: QueueSubscriberArgs,
     opts?: ComponentResourceOptions,
   ) {
@@ -572,7 +589,7 @@ export class Queue extends Component implements Link.Linkable {
    */
   public static subscribe(
     queueArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: Input<string | Workflow | FunctionArgs | FunctionArn>,
     args?: QueueSubscriberArgs,
     opts?: ComponentResourceOptions,
   ) {
@@ -590,7 +607,7 @@ export class Queue extends Component implements Link.Linkable {
   private static _subscribeFunction(
     name: string,
     queueArn: Input<string>,
-    subscriber: Input<string | FunctionArgs | FunctionArn>,
+    subscriber: Input<string | Workflow | FunctionArgs | FunctionArn>,
     args: QueueSubscriberArgs = {},
     opts?: ComponentResourceOptions,
   ) {

@@ -7,23 +7,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-
-	"github.com/sst/sst/v3/pkg/project"
+	neturl "net/url"
+	"strings"
 )
 
-// Base resource for Vercel providers
+// VercelResource is what SST's Vercel resources share: the context their
+// calls run in, and the token for Vercel's API: VERCEL_API_TOKEN under SST's
+// CLI, or the one a program Pulumi runs on its own gives the provider the sst
+// binary serves (pkg/provider).
 type VercelResource struct {
 	context context.Context
-	project *project.Project
+	token   func() string
 }
 
-// authorize sets the token the CLI has for Vercel's API, VERCEL_API_TOKEN, on
-// a request. It's not in the resource's inputs, which are saved to the state.
+// NewVercelResource is a VercelResource whose calls run in ctx, with the
+// token token gives, which the provider finds (pkg/provider)
+func NewVercelResource(ctx context.Context, token func() string) *VercelResource {
+	return &VercelResource{ctx, token}
+}
+
+// authorize sets the token for Vercel's API on a request. It's not in the
+// resource's inputs, which are saved to the state.
 func (r *VercelResource) authorize(req *http.Request) error {
-	token := os.Getenv("VERCEL_API_TOKEN")
+	token := ""
+	if r.token != nil {
+		token = r.token()
+	}
 	if token == "" {
-		return fmt.Errorf("VERCEL_API_TOKEN is not set: it's the access token for Vercel's API")
+		return fmt.Errorf("There's no access token for Vercel's API: set VERCEL_API_TOKEN, or the stack's vercel:apiToken")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	return nil
@@ -73,10 +84,10 @@ func (r *VercelDnsRecord) Update(input *UpdateInput[VercelDnsRecordInputs, Verce
 }
 
 func (r *VercelDnsRecord) createOrUpdateRecord(input *VercelDnsRecordInputs) (string, error) {
-	// Construct the URL with teamId if available
+	// Construct the URL with the team if there is one
 	url := fmt.Sprintf("https://api.vercel.com/v4/domains/%s/records", input.Domain)
 	if input.TeamId != "" {
-		url = fmt.Sprintf("%s?teamId=%s", url, input.TeamId)
+		url = fmt.Sprintf("%s?%s", url, teamQuery(input.TeamId))
 	}
 	
 	// Use the input type, name, and value for the DNS record. MxPriority is only
@@ -100,7 +111,7 @@ func (r *VercelDnsRecord) createOrUpdateRecord(input *VercelDnsRecordInputs) (st
 		return "", err
 	}
 	
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequestWithContext(r.context, "POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return "", err
 	}
@@ -162,4 +173,14 @@ func (r *VercelDnsRecord) createOrUpdateRecord(input *VercelDnsRecordInputs) (st
 	}
 	
 	return apiResponse.Uid, nil
+}
+
+// teamQuery is the query that names a team: by its ID, which starts with
+// "team_", or by its slug, which Pulumi's Vercel provider takes as its team
+// too
+func teamQuery(team string) string {
+	if strings.HasPrefix(team, "team_") {
+		return "teamId=" + neturl.QueryEscape(team)
+	}
+	return "slug=" + neturl.QueryEscape(team)
 }

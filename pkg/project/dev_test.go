@@ -42,7 +42,7 @@ func TestAppSyncScope(t *testing.T) {
 		if err := json.Unmarshal([]byte(c.config), &app); err != nil {
 			t.Fatal(err)
 		}
-		p := &Project{app: &app}
+		p := sst5(&Project{app: &app})
 		if got := p.AppSyncScope(); got != c.want {
 			t.Fatalf("%s: got %+v, want %+v", c.config, got, c.want)
 		}

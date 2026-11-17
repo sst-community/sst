@@ -25,14 +25,16 @@ type request struct {
 	Value   map[string]any
 }
 
-func plugin(path string) api.Plugin {
+// plugin runs the esbuild plugins in the file at path, relative to where the
+// CLI runs, with the platform's script that runs them
+func plugin(path, script string) api.Plugin {
 	cwd, _ := os.Getwd()
 	path = filepath.Join(cwd, path)
 	return api.Plugin{
 		Name: "nodejs-plugin",
 		Setup: func(build api.PluginBuild) {
 			slog.Info("nodejs plugin", "path", path)
-			cmd := process.Command("node", "--no-warnings", ".sst/platform/functions/nodejs-runtime/plugin.mjs", path)
+			cmd := process.Command("node", "--no-warnings", script, path)
 			var wg errgroup.Group
 			// cmd.Stderr = os.Stderr
 			stdin, err := cmd.StdinPipe()

@@ -29,6 +29,7 @@ import { Size, toMBs } from "../size.js";
 import { Component, Prettify, Transform, transform } from "../component.js";
 import { Link } from "../link.js";
 import { VisibleError } from "../error.js";
+import { type Runtime, commandsOf, isRuntime } from "../runtime.js";
 import type { Input } from "../input.js";
 import { logicalName, physicalName } from "../naming.js";
 import { RETENTION } from "./logging.js";
@@ -372,10 +373,11 @@ export interface FunctionArgs {
    */
   description?: Input<string>;
   /**
-   * The language runtime for the function.
+   * The language runtime for the function: one SST builds in, or a runtime made of
+   * commands, from `sst.runtime`, for one it doesn't.
    *
    * Node.js and Golang are officially supported. While, Python and Rust are
-   * community supported. Support for other runtimes are on the roadmap.
+   * community supported.
    *
    * @default `"nodejs24.x"`
    *
@@ -385,8 +387,24 @@ export interface FunctionArgs {
    *   runtime: "nodejs24.x"
    * }
    * ```
+   *
+   * A runtime made of commands builds the function with its `build` command, runs it
+   * with its `dev` command in `sst dev`, and is deployed with the Lambda runtime it
+   * names. [Custom Runtimes](/docs/custom-runtimes/) has the rest.
+   *
+   * ```js
+   * {
+   *   runtime: sst.runtime({
+   *     lambda: "ruby3.4",
+   *     build: { command: "bundle install" },
+   *     dev: { command: "bundle exec aws_lambda_ric $_HANDLER" },
+   *     watch: ["*.rb", "Gemfile.lock"],
+   *   })
+   * }
+   * ```
    */
   runtime?: Input<
+    | Runtime
     | "nodejs18.x"
     | "nodejs20.x"
     | "nodejs22.x"
@@ -1810,6 +1828,9 @@ export class Function extends Component implements Link.Linkable {
     super(__pulumiType, name, args, opts);
     this.constructorName = name;
     this.durable = Boolean(args.durable);
+    // A runtime and injections given as they are are checked at once; given
+    // through outputs, as they resolve
+    refuseRuntime(asGiven(args.runtime), asGiven(args.injections));
 
     const parent = this;
     const dev = normalizeDev();
@@ -1825,7 +1846,16 @@ export class Function extends Component implements Link.Linkable {
     const region = getRegionOutput({}, opts).region;
     const bootstrapData = region.apply((region) => bootstrap.forRegion(region));
     const injections = normalizeInjections();
-    const runtime = output(args.runtime ?? "nodejs24.x");
+    // A runtime from sst.runtime is built and run by its commands, and
+    // deployed with the Lambda runtime it names
+    const runtimeArg = output(args.runtime ?? "nodejs24.x");
+    const commands = runtimeArg.apply((runtime) =>
+      isRuntime(runtime) ? commandsOf(runtime) : undefined,
+    );
+    const runtime = runtimeArg.apply((runtime) => {
+      refuseRuntime(runtime, undefined);
+      return isRuntime(runtime) ? runtime.lambda : runtime;
+    });
     const timeout = normalizeTimeout();
     const memory = normalizeMemory();
     const storage = output(args.storage).apply((v) => v ?? "512 MB");
@@ -1863,22 +1893,31 @@ export class Function extends Component implements Link.Linkable {
     this.urlResource = urlResource;
     this.eventInvokeConfig = eventInvokeConfig;
 
-    const buildInput = output({
-      functionID: name,
-      handler: args.handler,
-      bundle: args.bundle,
-      logGroup: logGroup.apply((l) => l?.name),
-      encryptionKey: functionEncryptionKey().base64,
-      runtime,
-      links: output(linkData).apply((input) =>
-        Object.fromEntries(input.map((item) => [item.name, item.properties])),
-      ),
-      copyFiles,
-      properties: output({ nodejs, python: args.python }).apply((val) => ({
-        ...(val.nodejs || val.python),
-        architecture,
-      })),
-      dev,
+    const buildInput = all([
+      output({
+        functionID: name,
+        handler: args.handler,
+        bundle: args.bundle,
+        logGroup: logGroup.apply((l) => l?.name),
+        encryptionKey: functionEncryptionKey().base64,
+        runtime,
+        links: output(linkData).apply((input) =>
+          Object.fromEntries(input.map((item) => [item.name, item.properties])),
+        ),
+        copyFiles,
+        properties: output({ nodejs, python: args.python }).apply((val) => ({
+          ...(val.nodejs || val.python),
+          architecture,
+        })),
+        dev,
+      }),
+      runtimeArg,
+      commands,
+      injections,
+    ]).apply(([input, runtime, commands, injections]) => {
+      if (!commands) return input;
+      refuseRuntime(runtime, injections);
+      return { ...input, commands };
     });
 
     buildInput.apply(async (input) => {
@@ -1895,7 +1934,7 @@ export class Function extends Component implements Link.Linkable {
             links,
             args.handler,
             args.bundle,
-            args.runtime,
+            runtime,
             nodejs,
             copyFiles,
           ]).apply(
@@ -1920,6 +1959,34 @@ export class Function extends Component implements Link.Linkable {
       },
       _hint: args._skipHint ? undefined : urlEndpoint,
     });
+
+    // A value given as it is, not through an output or a promise
+    function asGiven(value: unknown) {
+      return Output.isInstance(value) || value instanceof Promise
+        ? undefined
+        : value;
+    }
+
+    // A runtime is a runtime's name or one from sst.runtime, and a runtime
+    // from sst.runtime builds a function that takes no injections
+    function refuseRuntime(runtime: unknown, injections: unknown) {
+      if (
+        runtime !== undefined &&
+        typeof runtime !== "string" &&
+        !isRuntime(runtime)
+      )
+        throw new VisibleError(
+          `The "runtime" of the "${name}" function is a runtime's name, like "nodejs24.x", or a runtime from sst.runtime.`,
+        );
+      if (
+        isRuntime(runtime) &&
+        Array.isArray(injections) &&
+        injections.length > 0
+      )
+        throw new VisibleError(
+          `The "${name}" function has "injections", which are for a Node.js function SST builds, not one built by a runtime from sst.runtime.`,
+        );
+    }
 
     function normalizeDev() {
       return all([args.dev, args.live]).apply(

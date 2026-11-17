@@ -9,8 +9,6 @@ import (
 	"github.com/sst/sst/v3/pkg/id"
 )
 
-var historyKinds = []string{"snapshot", "eventlog", "update", "summary"}
-
 func staleUpdateIDs(keys []string, retention int) []string {
 	updateIDs := make([]string, 0, len(keys))
 	seen := map[string]struct{}{}

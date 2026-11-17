@@ -103,3 +103,24 @@ func TestGzipDecodeInvalidGzip(t *testing.T) {
 		t.Fatal("expected invalid gzip payload to return an error")
 	}
 }
+
+// The SDKs send a body again when they retry a write, so it has to rewind.
+func TestGzipEncodeCanRewind(t *testing.T) {
+	t.Parallel()
+	encoded, err := gzipEncode(bytes.NewReader([]byte(`{"a":1}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := io.ReadAll(encoded)
+	seeker, ok := encoded.(io.Seeker)
+	if !ok {
+		t.Fatalf("gzipEncode returned a %T, which can't rewind", encoded)
+	}
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := io.ReadAll(encoded)
+	if !bytes.Equal(first, second) || len(first) == 0 {
+		t.Fatalf("read %d bytes, then %d after rewinding", len(first), len(second))
+	}
+}

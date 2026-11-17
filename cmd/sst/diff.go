@@ -172,7 +172,7 @@ var CmdDiff = &cli.Command{
 		defer u.Destroy()
 		err = p.Run(c.Context, &project.StackInput{
 			Command:    "diff",
-			ServerPort: s.Port,
+			Server:     s.URL(),
 			Dev:        c.Bool("dev"),
 			Target:     target,
 			Exclude:    exclude,
