@@ -498,6 +498,11 @@ export interface AppWatch {
    * The paths are relative to the project root. If omitted, SST watches the
    * project root. Glob patterns are not supported here; use explicit
    * directories.
+   *
+   * A directory listed here is watched even when it is hidden or named
+   * `node_modules`, like `packages/.generated` or `../shared/node_modules`,
+   * which are otherwise skipped. Only that directory is watched, not the rest
+   * of the hidden or `node_modules` folder it's in. `ignore` still applies.
    */
   paths?: string[];
   /**

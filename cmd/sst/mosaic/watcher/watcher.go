@@ -33,7 +33,6 @@ type fileChange struct {
 // legacy array glob such as "*" can match node_modules or .git, and those
 // stay skipped.
 func listedRoots(root string, watch project.Watch) ([]string, error) {
-	root = filepath.Clean(root)
 	var paths []string
 	for _, path := range watch.Paths {
 		if !strings.ContainsAny(path, "*?[") {
@@ -43,7 +42,15 @@ func listedRoots(root string, watch project.Watch) ([]string, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	if watch.UsesLegacyArray() {
+	return resolvePaths(root, paths, watch.UsesLegacyArray())
+}
+
+// resolvePaths turns watch.paths entries into the directories to walk, for
+// both resolveWatch and listedRoots: it expands the legacy array form, then
+// resolves each entry against root. With no entries it returns root.
+func resolvePaths(root string, paths []string, legacy bool) ([]string, error) {
+	root = filepath.Clean(root)
+	if legacy {
 		var err error
 		paths, err = expandLegacyPaths(root, paths)
 		if err != nil {
@@ -54,17 +61,7 @@ func listedRoots(root string, watch project.Watch) ([]string, error) {
 }
 
 func resolveWatch(root string, watch project.Watch) ([]string, []string, error) {
-	root = filepath.Clean(root)
-	paths := watch.Paths
-	if watch.UsesLegacyArray() {
-		var err error
-		paths, err = expandLegacyPaths(root, paths)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	roots, err := resolveRoots(root, paths)
+	roots, err := resolvePaths(root, watch.Paths, watch.UsesLegacyArray())
 	if err != nil {
 		return nil, nil, err
 	}
