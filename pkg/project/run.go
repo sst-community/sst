@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aws/smithy-go"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/events"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 	"github.com/sst/sst/v3/internal/util"
@@ -28,6 +27,7 @@ import (
 	"github.com/sst/sst/v3/pkg/js"
 	"github.com/sst/sst/v3/pkg/process"
 	"github.com/sst/sst/v3/pkg/project/provider"
+	"github.com/sst/sst/v3/pkg/target"
 	"github.com/sst/sst/v3/pkg/telemetry"
 	"github.com/sst/sst/v3/pkg/types"
 	"golang.org/x/exp/slices"
@@ -35,6 +35,27 @@ import (
 )
 
 func (p *Project) Run(ctx context.Context, input *StackInput) error {
+	err := p.run(ctx, input)
+	// A program that turned out to have checks stopped before anything
+	// changed, as a check's finding has to stop a deploy before then. It's run
+	// again with a preview first.
+	if errors.Is(err, errChecksNeedPreview) {
+		again := *input
+		again.previewFirst = true
+		return p.run(ctx, &again)
+	}
+	return err
+}
+
+// errChecksNeedPreview is a deploy that ran with no preview, whose program
+// has checks
+var errChecksNeedPreview = errors.New("the program has checks, and the deploy ran with no preview")
+
+// checksNeedPreview is what the program says when it stops for it, from
+// platform/src/components/check.ts
+const checksNeedPreview = "has checks, so its deploys run a preview first"
+
+func (p *Project) run(ctx context.Context, input *StackInput) error {
 	log := slog.Default().With("service", "project.run")
 	log.Info("running stack command", "cmd", input.Command)
 
@@ -42,19 +63,26 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		return ErrProtectedStage
 	}
 
-	bus.Publish(&StackCommandEvent{
-		App:     p.app.Name,
-		Stage:   p.app.Stage,
-		Config:  p.PathConfig(),
-		Command: input.Command,
-		Version: p.Version(),
-	})
+	// A run again with a preview first goes on from the first, which was shown
+	// as the command's start (Run)
+	if !input.previewFirst {
+		bus.Publish(&StackCommandEvent{
+			App:     p.app.Name,
+			Stage:   p.app.Stage,
+			Config:  p.PathConfig(),
+			Command: input.Command,
+			Version: p.Version(),
+		})
+	}
 
 	update := &provider.Update{
 		ID: id.Descending(),
 	}
 	var err error
-	if input.Command != "diff" {
+	if input.Locked != nil {
+		update = input.Locked
+		log = log.With("updateID", update.ID)
+	} else if input.Command != "diff" {
 		update, err = p.Lock(input.Command)
 		if err != nil {
 			if err == provider.ErrLockExists {
@@ -73,9 +101,17 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	defer workdir.Cleanup()
 
 	var passphrase string
-	if input.Command == "deploy" || input.Command == "diff" || input.Dev {
+	switch {
+	case input.Command == "diff":
+		// A diff writes nothing to the home. A stage with no passphrase has no
+		// state or secrets to decrypt, so one made for this run will do.
+		passphrase, err = provider.GetPassphrase(p.home, p.app.Name, p.app.Stage)
+		if err == nil && passphrase == "" {
+			passphrase, err = provider.NewPassphrase()
+		}
+	case input.Command == "deploy" || input.Dev:
 		passphrase, err = provider.GetOrCreatePassphrase(p.home, p.app.Name, p.app.Stage)
-	} else {
+	default:
 		passphrase, err = provider.GetPassphrase(p.home, p.app.Name, p.app.Stage)
 	}
 	if err != nil {
@@ -83,11 +119,17 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	}
 
 	outfile := filepath.Join(p.PathPlatformDir(), fmt.Sprintf("sst.config.%v.mjs", time.Now().UnixMilli()))
-	os.WriteFile(
-		filepath.Join(workdir.path, "Pulumi.yaml"),
-		[]byte("name: "+p.app.Name+"\nruntime: nodejs\nmain: "+outfile+"\n"),
-		0644,
-	)
+	// Pulumi runs this binary as the provider of SST's own resources. The
+	// folder has to be there before Pulumi reads the Pulumi.yaml naming it.
+	// It's in this run's work folder, so another CLI running on the app at the
+	// same time can't swap it for itself.
+	plugins := filepath.Join(workdir.path, "plugins", "sst")
+	if err := linkSstPlugin(plugins); err != nil {
+		return fmt.Errorf("linking the sst provider: %w", err)
+	}
+	if err := writePulumiYaml(filepath.Join(workdir.path, "Pulumi.yaml"), p.app.Name, outfile, plugins); err != nil {
+		return err
+	}
 	pulumiStdout, err := os.Create(p.PathLog("pulumi"))
 	if err != nil {
 		return err
@@ -103,6 +145,18 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		if errors.Is(err, provider.ErrStateNotFound) {
 			if input.Command != "deploy" && input.Command != "diff" {
 				return ErrStageNotFound
+			}
+			// A stage that was deployed has its state in the home. If the home
+			// doesn't, it's reading the wrong place, and a deploy would create
+			// every resource again.
+			if !flag.SST_ALLOW_MISSING_STATE {
+				deployed, err := provider.HasDeployHistory(p.home, p.app.Name, p.app.Stage)
+				if err != nil {
+					return err
+				}
+				if deployed {
+					return provider.ErrStateMissing
+				}
 			}
 			cmd := process.Command(global.PulumiPath(), "stack", "init", "organization/"+p.app.Name+"/"+p.app.Stage)
 			cmd.Stdout = pulumiStdout
@@ -124,7 +178,11 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		}
 	}
 
-	completed, err := getCompletedEvent(ctx, passphrase, workdir)
+	if err := p.speaks().Begin(p, workdir, update, input); err != nil {
+		return err
+	}
+
+	completed, err := getCompletedEvent(ctx, passphrase, workdir, p.speaks())
 	if err != nil {
 		bus.Publish(&BuildFailedEvent{
 			Error: err.Error(),
@@ -137,44 +195,38 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	bus.Publish(completed)
 	log.Info("got previous deployment")
 
-	cli := map[string]interface{}{
-		"command": input.Command,
-		"dev":     input.Dev,
-		"paths": map[string]string{
-			"home":     global.ConfigDir(),
-			"root":     p.PathRoot(),
-			"work":     p.PathWorkingDir(),
-			"platform": p.PathPlatformDir(),
-		},
-		"state": map[string]interface{}{
-			"version": completed.Versions,
-		},
-	}
-	cliBytes, err := json.Marshal(cli)
-	if err != nil {
+	state := stageState(completed)
+	// Until the run ends, the stage is as its state has it
+	p.stageAfter = provider.StageAfter{Moved: state.Moved}
+	if err := p.speaks().Refuse(p, input, state); err != nil {
+		// Locking the stage put this run in its history
+		if input.Locked == nil {
+			p.DropUpdate(update)
+		}
 		return err
 	}
-	appBytes, err := json.Marshal(p.app)
+	// What a remove that doesn't finish puts back, as the state has it
+	var marker *apitype.ResourceV3
+	if input.Command == "remove" && state.Moved {
+		if checkpoint, err := workdir.Export(); err == nil && checkpoint.Latest != nil {
+			marker = markerOf(checkpoint.Latest.Resources)
+		}
+	}
+
+	define, err := p.speaks().Define(p, input, state)
 	if err != nil {
 		return err
 	}
 
-	providerShim := []string{}
-	for _, entry := range p.lock {
-		providerShim = append(providerShim, fmt.Sprintf("import * as %s from \"%s\";", entry.Alias, entry.Package))
-	}
-	providerShim = append(providerShim, fmt.Sprintf("import * as sst from \"%s\";", path.Join(filepath.ToSlash(p.PathPlatformDir()), "src/components")))
+	globals, platform := p.programGlobals()
 
 	buildResult, err := js.Build(js.EvalOptions{
-		Dir:     p.PathRoot(),
-		Outfile: outfile,
-		Define: map[string]string{
-			"$app": string(appBytes),
-			"$cli": string(cliBytes),
-			"$dev": fmt.Sprintf("%v", input.Dev),
-		},
-		Inject:  []string{filepath.ToSlash(filepath.Join(p.PathWorkingDir(), "platform/src/shim/run.js"))},
-		Globals: strings.Join(providerShim, "\n"),
+		Dir:      p.PathRoot(),
+		Outfile:  outfile,
+		Define:   define,
+		Inject:   []string{filepath.ToSlash(filepath.Join(p.PathWorkingDir(), "platform/src/shim/run.js"))},
+		Globals:  globals,
+		Platform: platform,
 		Code: fmt.Sprintf(`
       import { run } from "%v";
 			import mod from '%s';
@@ -223,12 +275,17 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	})
 	log.Info("tracked files")
 
+	if err := checkPackages(meta, p.version, p.lock, p.platformModules()); err != nil {
+		return util.NewReadableError(nil, err.Error())
+	}
+
 	secrets := map[string]string{}
 	fallback := map[string]string{}
 
 	wg := errgroup.Group{}
 
 	wg.Go(func() error {
+		var err error
 		secrets, err = provider.GetSecrets(p.home, p.app.Name, p.app.Stage)
 		if err != nil {
 			return ErrPassphraseInvalid
@@ -237,6 +294,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	})
 
 	wg.Go(func() error {
+		var err error
 		fallback, err = provider.GetSecrets(p.home, p.app.Name, "")
 		if err != nil {
 			return ErrPassphraseInvalid
@@ -248,38 +306,14 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 		return err
 	}
 
-	env := os.Environ()
-	for key, value := range p.Env() {
-		env = append(env, fmt.Sprintf("%v=%v", key, value))
-	}
-	for key, value := range fallback {
-		env = append(env, fmt.Sprintf("SST_SECRET_%v=%v", key, value))
-	}
-	for key, value := range secrets {
-		env = append(env, fmt.Sprintf("SST_SECRET_%v=%v", key, value))
-	}
-	env = append(env,
-		"PULUMI_CONFIG_PASSPHRASE="+passphrase,
-		"PULUMI_SKIP_UPDATE_CHECK=true",
-		"PULUMI_BACKEND_URL=file://"+filepath.ToSlash(workdir.Backend()),
-		"PULUMI_DEBUG_COMMANDS=true",
-		"PULUMI_IGNORE_AMBIENT_PLUGINS=true",
-		// "PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION=true",
-		"NODE_OPTIONS="+func() string {
-			nodeOptions := "--enable-source-maps --no-deprecation --no-warnings"
-			if existing := os.Getenv("NODE_OPTIONS"); existing != "" {
-				nodeOptions = existing + " " + nodeOptions
-			}
-			return nodeOptions
-		}(),
-		"PULUMI_HOME="+global.ConfigDir(),
-	)
-	if input.ServerPort != 0 {
-		env = append(env, "SST_SERVER=http://127.0.0.1:"+fmt.Sprint(input.ServerPort))
-	}
+	env := p.programEnv(os.Environ(), passphrase, workdir.Backend(), secrets, fallback, input.Server)
 	pulumiPath := global.PulumiPath()
 	if flag.SST_PULUMI_PATH != "" {
 		pulumiPath = flag.SST_PULUMI_PATH
+	}
+	// On a target's stage, Pulumi's engine can't download a plugin as it runs
+	if !target.IsCloud(p.Target()) {
+		p.installPlugins(ctx, pulumiPath)
 	}
 
 	eventlogPath := workdir.EventLogPath()
@@ -303,41 +337,27 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	}
 
 	if input.Command == "deploy" || input.Command == "diff" || input.Command == "refresh" {
-		for provider, opts := range p.app.Providers {
-			for key, value := range opts.(map[string]interface{}) {
-				// Skip SST-only fields that Pulumi doesn't understand
-				if key == "package" {
-					continue
-				}
-				switch v := value.(type) {
-				case map[string]interface{}:
-					bytes, err := json.Marshal(v)
-					if err != nil {
-						return err
-					}
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
-				case []interface{}:
-					bytes, err := json.Marshal(v)
-					if err != nil {
-						return err
-					}
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, string(bytes)))
-				case string:
-					args = append(args, "--config", fmt.Sprintf("%v:%v=%v", provider, key, v))
-				}
-			}
+		config, err := providerConfigArgs(p.app.Providers)
+		if err != nil {
+			return err
 		}
+		args = append(args, config...)
 	}
 
+	// Whether a deploy runs Pulumi's preview first
+	withPreview := false
 	switch input.Command {
 	case "diff":
 		args = append([]string{"preview"}, args...)
 	case "refresh":
 		args = append([]string{"refresh", "--yes", "--run-program"}, args...)
 	case "deploy":
-		if input.PolicyPath != "" {
-			// Preview first, so a mandatory policy stops the deploy before
-			// anything is changed
+		// A move, too: its state is saved and marked before it runs, and
+		// it isn't run again from the marked one
+		if input.PolicyPath != "" || input.previewFirst || input.Move || previewFirst(workdir) {
+			withPreview = true
+			// Preview first, so a mandatory policy or a check stops the
+			// deploy before anything is changed
 			args = append([]string{"up", "--yes"}, args...)
 		} else {
 			args = append([]string{"up", "--yes", "-f"}, args...)
@@ -387,6 +407,10 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	cmd := process.Command(pulumiPath, args...)
 	process.Detach(cmd)
 	cmd.Env = env
+	if withPreview {
+		// The program's checks know the deploy has a preview first
+		cmd.Env = append(cmd.Env, "SST_PREVIEW_FIRST=1")
+	}
 	cmd.Stdout = pulumiStdout
 	cmd.Stderr = pulumiStderr
 	cmd.Dir = workdir.Backend()
@@ -405,7 +429,12 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	// opens the same file again with O_TRUNC (startEventLogger in its
 	// backend/display), which this relies on: check a deploy with --policy
 	// when Pulumi is updated.
-	previewing := input.Command == "deploy" && input.PolicyPath != ""
+	previewing := input.Command == "deploy" && withPreview
+	// A deploy with no preview whose program turns out to have checks stops
+	// before anything changes, to run again with a preview first (Run). From
+	// where it says so, nothing of the run is shown, and none of it is kept.
+	mayStopForPreview := input.Command == "deploy" && !withPreview
+	stoppedForPreview := false
 	// the preview's log up to its first planned step, which the update's
 	// log doesn't have
 	var previewStart []byte
@@ -484,6 +513,9 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 	}()
 
 	reader := bufio.NewReader(eventlog)
+	// The start of a line Pulumi hasn't finished writing. The rest of it comes
+	// with a later read.
+	var pending []byte
 	// Reads the update's event log from its start. What was taken from it as
 	// the preview's is dropped: a preview that passed leaves no errors.
 	readUpdate := func() error {
@@ -492,6 +524,7 @@ func (p *Project) Run(ctx context.Context, input *StackInput) error {
 			return err
 		}
 		reader.Reset(eventlog)
+		pending = nil
 		read = 0
 		previewing = false
 		previewDiagnostics = nil
@@ -512,6 +545,7 @@ loop:
 		}
 		if err != nil {
 			if err == io.EOF {
+				pending = append(pending, bytes...)
 				if previewing && len(previewStart) > 0 && eventLogRestarted(eventlog, read, previewStart) {
 					if err := readUpdate(); err != nil {
 						return err
@@ -533,11 +567,22 @@ loop:
 			}
 			continue
 		}
+		if len(pending) > 0 {
+			bytes = append(pending, bytes...)
+			pending = nil
+		}
 
 		var event events.EngineEvent
 		err = json.Unmarshal(bytes, &event)
 		if err != nil {
 			log.Error("failed to unmarshal event", "err", err)
+			continue
+		}
+
+		if mayStopForPreview && event.DiagnosticEvent != nil && strings.Contains(event.DiagnosticEvent.Message, checksNeedPreview) {
+			stoppedForPreview = true
+		}
+		if stoppedForPreview {
 			continue
 		}
 
@@ -591,6 +636,11 @@ loop:
 		}
 
 		if event.DiagnosticEvent != nil && event.DiagnosticEvent.Severity == "error" {
+			// A check's finding stops a resource's registration, and comes
+			// wrapped in Pulumi's message about it
+			if finding := checkFinding(event.DiagnosticEvent.Message); finding != "" {
+				event.DiagnosticEvent.Message = finding
+			}
 			if strings.HasPrefix(event.DiagnosticEvent.Message, "update failed") || (input.Command == "deploy" && (strings.TrimSpace(event.DiagnosticEvent.Message) == "preview failed" || strings.TrimSpace(event.DiagnosticEvent.Message) == "preview canceled")) || strings.HasPrefix(event.DiagnosticEvent.Message, "update cancelled") || strings.Contains(event.DiagnosticEvent.Message, "failed to register new resource") {
 				continue
 			}
@@ -614,11 +664,14 @@ loop:
 					Message: strings.TrimSpace(event.DiagnosticEvent.Message),
 					URN:     event.DiagnosticEvent.URN,
 				})
-				log.Info("telemetry tracking error")
-				telemetry.Track("cli.resource.error", map[string]interface{}{
-					"error": event.DiagnosticEvent.Message,
-					"urn":   event.DiagnosticEvent.URN,
-				})
+				// A check's finding is the app's, and can quote its values
+				if checkFinding(event.DiagnosticEvent.Message) == "" {
+					log.Info("telemetry tracking error")
+					telemetry.Track("cli.resource.error", map[string]interface{}{
+						"error": event.DiagnosticEvent.Message,
+						"urn":   event.DiagnosticEvent.URN,
+					})
+				}
 			}
 		}
 
@@ -659,6 +712,17 @@ loop:
 		if event.SummaryEvent != nil {
 			finished = true
 		}
+	}
+
+	if stoppedForPreview {
+		log.Info("the program has checks; running again with a preview first")
+		partialCancel()
+		<-partialDone
+		// Locking the stage put this run in its history
+		if err := provider.RemoveUpdate(p.home, p.app.Name, p.app.Stage, update.ID); err != nil {
+			log.Warn("removing the stopped run from the history", "err", err)
+		}
+		return errChecksNeedPreview
 	}
 
 	// The update didn't run, so what the preview logged is shown
@@ -713,7 +777,7 @@ loop:
 	}
 
 	log.Info("parsing state")
-	complete, err := getCompletedEvent(context.Background(), passphrase, workdir)
+	complete, err := getCompletedEvent(context.Background(), passphrase, workdir, p.speaks())
 	if err != nil {
 		return err
 	}
@@ -735,6 +799,21 @@ loop:
 		partialCancel()
 		log.Info("waiting for partial to exit")
 		<-partialDone
+
+		// A remove that didn't finish keeps the marker of a stage on SST 5's
+		// components. Its state is saved either way.
+		if input.Command == "remove" && marker != nil {
+			if err := p.keepMarker(workdir, marker); err != nil {
+				log.Error("keeping the marker of a stage on SST 5's components", "err", err)
+			}
+		}
+		// What the run left the stage as, for the lock SST 4 reads: a stage
+		// with the marker keeps a tombstone there, and one with nothing left
+		// doesn't
+		p.stageAfter = provider.StageAfter{
+			Moved:   complete.Moved || (marker != nil && holdsResources(complete.Resources)),
+			Removed: input.Command == "remove" && len(complete.Resources) == 0,
+		}
 
 		err = workdir.Push(update.ID)
 		if err != nil {
@@ -768,7 +847,8 @@ loop:
 	}
 
 	if input.Command == "remove" && len(complete.Resources) == 0 {
-		p.removeAppSync()
+		defer p.stopIdleTarget()
+		p.removeTransport()
 		if p.app.State != nil && p.app.State.Purge {
 			if err := provider.Purge(p.home, p.app.Name, p.app.Stage); err != nil {
 				return err
@@ -783,6 +863,13 @@ loop:
 	log.Info("done running stack command", "resources", len(complete.Resources))
 
 	if cmd.ProcessState.ExitCode() > 0 {
+		if input.Command == "deploy" && !withPreview {
+			for _, e := range errors {
+				if strings.Contains(e.Message, checksNeedPreview) {
+					return errChecksNeedPreview
+				}
+			}
+		}
 		if hasPolicyViolations {
 			return ErrPolicyViolation
 		}
@@ -814,36 +901,23 @@ func eventLogRestarted(file *os.File, read int64, previewStart []byte) bool {
 	return !bytes.Equal(start, previewStart)
 }
 
-// how long sst remove gives AppSync to list the Event APIs and remove the
-// stage's, so one that doesn't answer can't hold the remove up
-var removeAppSyncTimeout = 10 * time.Second
+// how long sst remove gives the transport to remove what it made for the
+// stage, like AppSync listing the Event APIs and removing the stage's, so one
+// that doesn't answer can't hold the remove up
+var removeTransportTimeout = 10 * time.Second
 
-// removeAppSync removes the stage's own Event API, which "dev.appsync" set to
-// "stage" has sst dev create. It's looked for whatever "dev.appsync" is now, as
-// it may have been "stage" when sst dev ran. The remove doesn't fail without
-// it: a stage that never ran sst dev doesn't have one, and its credentials may
-// not reach AppSync.
-func (p *Project) removeAppSync() {
-	unknown, ok := p.Provider("aws")
+// removeTransport removes what the stage's transport made outside the state
+// for sst dev, like the stage's own Event API, which "dev.appsync" set to
+// "stage" has sst dev create. The remove doesn't fail without it.
+func (p *Project) removeTransport() {
+	t, ok := p.Transport()
 	if !ok {
 		return
 	}
-	aws, ok := unknown.(*provider.AwsProvider)
-	if !ok {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), removeAppSyncTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), removeTransportTimeout)
 	defer cancel()
-	err := aws.RemoveAppSync(ctx, p.app.Name, p.app.Stage)
-	var apiErr smithy.APIError
-	switch {
-	case err == nil:
-	case errors.As(err, &apiErr) && apiErr.ErrorCode() == "AccessDeniedException":
-		// credentials for the shared Event API needn't reach AppSync's control
-		// plane, and a stage that never had one of its own has nothing to remove
-		slog.Info("can't look for the stage's appsync event api", "err", err)
-	default:
-		slog.Warn("failed to remove the stage's appsync event api", "err", err)
+	if err := t.Remove(ctx); err != nil {
+		slog.Warn("failed to remove what the transport made for the stage", "err", err)
 	}
 }
 

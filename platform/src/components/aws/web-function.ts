@@ -13,6 +13,7 @@ import {
   secret,
 } from "@pulumi/pulumi";
 import {
+  cloudfront,
   cloudwatch,
   getCallerIdentityOutput,
   getPartitionOutput,
@@ -23,6 +24,7 @@ import {
   s3,
 } from "@pulumi/aws";
 import { Component, Transform, transform } from "../component.js";
+import { Cdn, CdnArgs } from "./cdn.js";
 import { DurationMinutes, toSeconds } from "../duration.js";
 import { VisibleError } from "../error.js";
 import { DevCommand } from "../experimental/dev-command.js";
@@ -171,7 +173,7 @@ export interface WebFunctionArgs {
   }>;
   /**
    * Configure authorization for the HTTPS endpoint.
-   * @default `{ authorization: "none" }`
+   * @default `{ authorization: "none" }`, or `{ authorization: "iam" }` with `domain`.
    * @example
    * ```js
    * { url: { authorization: "iam" } }
@@ -182,7 +184,10 @@ export interface WebFunctionArgs {
      * `none` lets your application handle authorization. `iam` requires SigV4-signed
      * requests and `lambda:InvokeWebFunctionEndpoint` permission. IAM requests must
      * include `X-Amz-Content-SHA256`, including the empty-payload hash for bodyless requests.
-     * @default `"none"`
+     *
+     * With `domain`, the endpoint uses `iam`, so the CloudFront distribution signs its
+     * requests with origin access control. `"none"` can't be set together with `domain`.
+     * @default `"none"`, or `"iam"` with `domain`.
      * @example
      * ```js
      * { url: { authorization: "iam" } }
@@ -190,6 +195,72 @@ export interface WebFunctionArgs {
      */
     authorization?: Input<"none" | "iam">;
   }>;
+  /**
+   * Serve your server from a custom domain, through a CloudFront distribution in front of
+   * the endpoint. Lambda web function endpoints don't support custom domains themselves.
+   *
+   * Automatically manages domains hosted on AWS Route 53, Cloudflare, and Vercel. For other
+   * providers, pass in a `cert` that validates domain ownership and add the DNS records.
+   * The certificate must be in `us-east-1`, as CloudFront requires.
+   *
+   * The distribution calls the endpoint with origin access control. The endpoint uses
+   * `iam` authorization, and SST adds a resource policy to the function that grants this
+   * distribution permission to invoke it. Other callers can still reach the endpoint's own
+   * domain directly, with SigV4-signed requests and `lambda:InvokeWebFunctionEndpoint`
+   * permission. Through the domain, clients don't sign requests or send
+   * `X-Amz-Content-SHA256`, and your application's own `Authorization` header reaches your
+   * server.
+   *
+   * SST owns the function's resource policy. To allow other callers, add statements to it
+   * with `transform.resourcePolicy` rather than creating another `ResourcePolicy`, which
+   * would replace this one.
+   *
+   * The distribution doesn't cache responses unless your server sends `Cache-Control`.
+   * The cache key includes the `Authorization` header, cookies and the query string. Your
+   * server receives the viewer's host in `X-Forwarded-Host`. CloudFront waits up to 60
+   * seconds for a response by default, even if `timeout` is longer. To wait longer,
+   * request a quota increase and set the origin's `originReadTimeout` with
+   * `transform.cdn`.
+   *
+   * Requests can fail with `403` for a few minutes after the first deploy, until the
+   * distribution has deployed. In `sst dev`, while your server runs locally, no
+   * distribution is created and `url` is the local URL.
+   *
+   * @example
+   *
+   * By default this assumes the domain is hosted on Route 53.
+   *
+   * ```js
+   * {
+   *   domain: "api.example.com"
+   * }
+   * ```
+   *
+   * For domains hosted on Cloudflare.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "api.example.com",
+   *     dns: sst.cloudflare.dns()
+   *   }
+   * }
+   * ```
+   *
+   * For a domain whose DNS you manage yourself, pass in a validated certificate from
+   * `us-east-1` and point a record at the distribution.
+   *
+   * ```js
+   * {
+   *   domain: {
+   *     name: "api.example.com",
+   *     dns: false,
+   *     cert: "arn:aws:acm:us-east-1:112233445566:certificate/3a958790-8878-4cdc-a396-06d95064cf63"
+   *   }
+   * }
+   * ```
+   */
+  domain?: CdnArgs["domain"];
   /**
    * Configure the central and HomeRegion-local CloudWatch log groups.
    * @default `{ retention: "1 month", applicationLogLevel: "INFO", systemLogLevel: "INFO" }`
@@ -409,14 +480,49 @@ export interface WebFunctionArgs {
      * ```
      */
     operatorRole?: Transform<iam.RoleArgs>;
+    /**
+     * Transform the CloudFront distribution, created when `domain` is set.
+     * @default No transform.
+     * @example
+     * ```js
+     * { transform: { cdn: (args) => { args.wait = false; } } }
+     * ```
+     */
+    cdn?: Transform<CdnArgs>;
+    /**
+     * Transform the function's resource policy, created when `domain` is set. To allow
+     * other callers, add statements to it and keep the distribution's.
+     * @default No transform.
+     * @example
+     * ```js
+     * {
+     *   transform: {
+     *     resourcePolicy: (args) => {
+     *       args.policy = $resolve([args.policy]).apply(([policy]) => {
+     *         const document = JSON.parse(policy);
+     *         document.Statement.push({
+     *           Effect: "Allow",
+     *           Principal: { AWS: "arn:aws:iam::123456789012:root" },
+     *           Action: "lambda:InvokeWebFunctionEndpoint",
+     *           Resource: "*"
+     *         });
+     *         return JSON.stringify(document);
+     *       });
+     *     }
+     *   }
+     * }
+     * ```
+     */
+    resourcePolicy?: Transform<lambdaweb.ResourcePolicyArgs>;
   };
 }
 
 /**
  * The `WebFunction` component deploys an HTTP server to AWS Lambda web functions. It
  * uses Node.js 24 on Arm64 and a HomeRegion HTTPS endpoint. With `vpc`, its outbound
- * traffic goes through a VPC. MultiRegion endpoints, custom runtimes, domains, and
- * event-source subscriptions are not supported by this component.
+ * traffic goes through a VPC. With `domain`, it's served from a custom domain through
+ * CloudFront. MultiRegion endpoints, custom runtimes, and event-source subscriptions are
+ * not supported by this component.
  *
  * Unlike `Function`, your entrypoint starts an HTTP listener; Lambda does not call an
  * exported handler. Each environment can serve concurrent requests and remain active
@@ -434,6 +540,9 @@ export interface WebFunctionArgs {
  * With `vpc`, it also needs permission to create, update and delete Lambda network
  * connectors, `lambda:PassNetworkConnector` to give a revision its connector, and
  * `iam:PassRole` on the operator role.
+ * With `domain`, it also needs permission to manage CloudFront distributions, origin
+ * access controls, cache policies and CloudFront Functions, the function's resource
+ * policy, an ACM certificate in `us-east-1`, and the DNS records.
  * These permissions belong to the deployment role, not the application execution role.
  * The function and code bucket names are retained across ordinary deployments.
  * SST manages both the central CloudWatch group and its HomeRegion `.local` group with
@@ -477,6 +586,9 @@ export class WebFunction extends Component implements Link.Linkable {
   private readonly devUrl?: Output<string>;
   private readonly networkConnector?: lambda.CoreNetworkConnector;
   private readonly operatorRole?: iam.Role;
+  private readonly cdn?: Cdn;
+  private readonly originAccessControl?: cloudfront.OriginAccessControl;
+  private readonly resourcePolicy?: lambdaweb.ResourcePolicy;
 
   constructor(
     name: string,
@@ -498,6 +610,8 @@ export class WebFunction extends Component implements Link.Linkable {
         128,
       );
     if (isPlainRecord(args.environment)) validateEnvironment(args.environment);
+    if (args.domain && isPlainRecord(args.url))
+      validateDomainAuthorization(args.url.authorization);
     if (isPlainRecord(args.scaling)) {
       if (typeof args.scaling.maxEnvironments === "number")
         integer(
@@ -576,6 +690,7 @@ export class WebFunction extends Component implements Link.Linkable {
         throw new VisibleError(
           `The "${name}" WebFunction's "url.authorization" must be "none" or "iam".`,
         );
+      if (args.domain) validateDomainAuthorization(url?.authorization);
       if (logging?.retention !== undefined && !(logging.retention in RETENTION))
         throw new VisibleError(
           `The "${name}" WebFunction's "logging.retention" is invalid.`,
@@ -586,7 +701,9 @@ export class WebFunction extends Component implements Link.Linkable {
         maxEnvironments,
         rateLimit,
         authType:
-          url?.authorization === "iam" ? "IamAuth" : "ApplicationManaged",
+          url?.authorization === "iam" || args.domain
+            ? "IamAuth"
+            : "ApplicationManaged",
         logging: logging ?? {},
       };
     });
@@ -1143,8 +1260,153 @@ export class WebFunction extends Component implements Link.Linkable {
       ),
     );
     this.endpoint = endpoint;
+    const domain = createDomain();
+    this.cdn = domain?.cdn;
+    this.originAccessControl = domain?.originAccessControl;
+    this.resourcePolicy = domain?.resourcePolicy;
 
     this.registerOutputs({ _hint: this.url });
+
+    function createDomain() {
+      if (!args.domain) return;
+
+      const originAccessControl = new cloudfront.OriginAccessControl(
+        `${name}OriginAccessControl`,
+        {
+          // Component supplies the app/stage-prefixed name.
+          name: "",
+          originAccessControlOriginType: "lambda",
+          // The only signing behavior a web function origin accepts. CloudFront
+          // signs with an unsigned payload and passes on the viewer's `Authorization`.
+          signingBehavior: "always-amz-auth",
+          signingProtocol: "sigv4",
+        },
+        { parent: self },
+      );
+      const cachePolicy = new cloudfront.CachePolicy(
+        `${name}CachePolicy`,
+        {
+          comment: "SST web function cache policy",
+          // Nothing is cached unless the server sends `Cache-Control`.
+          defaultTtl: 0,
+          maxTtl: 31536000,
+          minTtl: 0,
+          parametersInCacheKeyAndForwardedToOrigin: {
+            // CloudFront forwards `Authorization` on GET and HEAD only when it's in
+            // the cache policy. Keying on it, the cookies and the query string also
+            // keeps a cached response from reaching another user.
+            headersConfig: {
+              headerBehavior: "whitelist",
+              headers: { items: ["authorization", "x-forwarded-host"] },
+            },
+            cookiesConfig: { cookieBehavior: "all" },
+            queryStringsConfig: { queryStringBehavior: "all" },
+            enableAcceptEncodingBrotli: true,
+            enableAcceptEncodingGzip: true,
+          },
+        },
+        { parent: self },
+      );
+      const requestFunction = new cloudfront.Function(
+        `${name}RequestFunction`,
+        {
+          runtime: "cloudfront-js-2.0",
+          // The endpoint needs its own domain as `Host`, so pass the viewer's on.
+          code: [
+            `function handler(event) {`,
+            `  var request = event.request;`,
+            `  request.headers["x-forwarded-host"] = { value: request.headers.host.value };`,
+            `  return request;`,
+            `}`,
+          ].join("\n"),
+        },
+        { parent: self },
+      );
+      const cdn = new Cdn(
+        ...transform(
+          args.transform?.cdn,
+          `${name}Cdn`,
+          {
+            comment: `${name} web function`,
+            domain: args.domain,
+            origins: [
+              {
+                originId: "default",
+                domainName: endpoint.domainName,
+                originAccessControlId: originAccessControl.id,
+                customOriginConfig: {
+                  httpPort: 80,
+                  httpsPort: 443,
+                  originProtocolPolicy: "https-only",
+                  originSslProtocols: ["TLSv1.2"],
+                  // CloudFront's default limit; longer needs a quota increase.
+                  originReadTimeout: settings.seconds.apply((seconds) =>
+                    Math.min(seconds, 60),
+                  ),
+                },
+              },
+            ],
+            defaultCacheBehavior: {
+              targetOriginId: "default",
+              viewerProtocolPolicy: "redirect-to-https",
+              allowedMethods: [
+                "DELETE",
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PATCH",
+                "POST",
+                "PUT",
+              ],
+              cachedMethods: ["GET", "HEAD"],
+              compress: true,
+              cachePolicyId: cachePolicy.id,
+              // CloudFront's managed AllViewerExceptHostHeader policy. The endpoint
+              // returns 404 for any `Host` other than its own domain.
+              originRequestPolicyId: "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+              // Lambda@Edge origin triggers aren't supported with a web function
+              // origin, so only a CloudFront Function runs here.
+              functionAssociations: [
+                {
+                  eventType: "viewer-request",
+                  functionArn: requestFunction.arn,
+                },
+              ],
+            },
+          },
+          { parent: self },
+        ),
+      );
+      const resourcePolicy = new lambdaweb.ResourcePolicy(
+        ...transform(
+          args.transform?.resourcePolicy,
+          `${name}ResourcePolicy`,
+          {
+            resourceArn: fn.arn,
+            policy: all([endpoint.arn, cdn.nodes.distribution.arn]).apply(
+              ([endpointArn, distributionArn]) =>
+                JSON.stringify({
+                  Version: "2012-10-17",
+                  Statement: [
+                    {
+                      Sid: "AllowCloudFrontInvoke",
+                      Effect: "Allow",
+                      Principal: { Service: "cloudfront.amazonaws.com" },
+                      Action: "lambda:InvokeWebFunctionEndpoint",
+                      Resource: endpointArn,
+                      Condition: {
+                        StringEquals: { "aws:SourceArn": distributionArn },
+                      },
+                    },
+                  ],
+                }),
+            ),
+          },
+          { parent: self },
+        ),
+      );
+      return { cdn, originAccessControl, resourcePolicy };
+    }
 
     function normalizeVpc() {
       if (!args.vpc) return;
@@ -1248,6 +1510,12 @@ export class WebFunction extends Component implements Link.Linkable {
       return { connector, operatorRole };
     }
 
+    function validateDomainAuthorization(authorization: unknown) {
+      if (authorization === "none")
+        throw new VisibleError(
+          `The "${name}" WebFunction can't set "url.authorization" to "none" with "domain". Its endpoint uses IAM authorization, so that its CloudFront distribution signs its requests with origin access control.`,
+        );
+    }
     function integer(
       property: string,
       value: number,
@@ -1366,9 +1634,24 @@ export class WebFunction extends Component implements Link.Linkable {
     }
   }
 
-  /** The full HTTPS URL (including `https://`), or the local URL in `sst dev`. */
+  /**
+   * The full HTTPS URL (including `https://`). With `domain`, this is the custom domain's
+   * URL. In `sst dev`, if no web function is deployed, it's the local URL.
+   */
   public get url(): Output<string> {
-    return this.devUrl ?? interpolate`https://${this.endpoint!.domainName}`;
+    return (
+      this.devUrl ??
+      (this.cdn
+        ? this.cdn.domainUrl.apply((url) => url!)
+        : interpolate`https://${this.endpoint!.domainName}`)
+    );
+  }
+  /**
+   * The URL of the endpoint's own domain. With `domain`, requests to it need to be
+   * signed. Not available in local `sst dev`.
+   */
+  public get endpointUrl() {
+    return this.endpoint && interpolate`https://${this.endpoint.domainName}`;
   }
   /** The web function ARN. Not available in local `sst dev`. */
   public get arn() {
@@ -1405,6 +1688,21 @@ export class WebFunction extends Component implements Link.Linkable {
        * Only created with the network connector.
        */
       operatorRole: this.operatorRole,
+      /**
+       * The CloudFront distribution in front of the endpoint. Only created when
+       * `domain` is set.
+       */
+      cdn: this.cdn,
+      /**
+       * The origin access control the distribution signs requests with. Only created
+       * when `domain` is set.
+       */
+      originAccessControl: this.originAccessControl,
+      /**
+       * The function's resource policy, which grants the distribution permission to
+       * invoke the endpoint. Only created when `domain` is set.
+       */
+      resourcePolicy: this.resourcePolicy,
     };
   }
   /** @internal */

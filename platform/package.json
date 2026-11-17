@@ -2,6 +2,15 @@
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@sst/platform",
   "type": "module",
+  "sst": {
+    "contract": 0,
+    "types": {
+      "global": [
+        "global.d.ts"
+      ],
+      "config": "config"
+    }
+  },
   "prettier": {},
   "scripts": {
     "test": "vitest run --pool=forks",

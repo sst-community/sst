@@ -46,6 +46,32 @@ func (r *OriginAccessControl) Read(input *DeleteInput[OriginAccessControlOutputs
 	}
 	return nil
 }
+// Adopt reads the origin access control with an id, for a move that adopts
+// the one SST 4 created: a create would make a second one. Its name is the
+// one input, which a site ignores once it's created. One that's gone gives
+// nothing.
+func (r *OriginAccessControl) Adopt(id string) (*OriginAccessControlInputs, *OriginAccessControlOutputs, error) {
+	cfg, err := r.config()
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := cloudfront.NewFromConfig(cfg).GetOriginAccessControl(r.context, &cloudfront.GetOriginAccessControlInput{
+		Id: aws.String(id),
+	})
+	if err != nil {
+		var missing *types.NoSuchOriginAccessControl
+		if errors.As(err, &missing) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	name := ""
+	if resp.OriginAccessControl != nil && resp.OriginAccessControl.OriginAccessControlConfig != nil {
+		name = aws.ToString(resp.OriginAccessControl.OriginAccessControlConfig.Name)
+	}
+	return &OriginAccessControlInputs{Name: name}, &OriginAccessControlOutputs{}, nil
+}
+
 func (r *OriginAccessControl) Create(input *OriginAccessControlInputs, output *CreateResult[OriginAccessControlOutputs]) error {
 	cfg, err := r.config()
 	if err != nil {

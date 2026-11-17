@@ -63,6 +63,21 @@ go run ../../cmd/sst deploy --stage test
 
 `url.authorization: "none"` creates a public endpoint. Use `"iam"` when callers must authenticate with SigV4-signed HTTP requests including the `X-Amz-Content-SHA256` header (the payload hash); AWS returns `403` without that header. An unsigned `curl` request will not pass IAM authorization.
 
+## Custom domain
+
+A web function endpoint can't have a custom domain itself. With `domain`, SST puts a CloudFront distribution in front of it:
+
+```ts
+const api = new sst.aws.WebFunction("Api", {
+  entrypoint: "src/server.ts",
+  domain: "api.example.com",
+});
+```
+
+The domain is assumed to be in Route 53. For Cloudflare, pass `{ name, dns: sst.cloudflare.dns() }`. For other DNS providers, pass `{ name, dns: false, cert }` with a validated `us-east-1` certificate and point a record at the distribution.
+
+The endpoint then uses `iam` authorization, and the distribution signs its requests with origin access control. A resource policy grants the distribution permission to invoke the endpoint; other callers can still reach the endpoint directly with SigV4-signed requests and `lambda:InvokeWebFunctionEndpoint` permission. Clients of the domain don't sign requests or send `X-Amz-Content-SHA256`, and your application's own `Authorization` header reaches the server. `api.url` is the domain's URL, and `api.endpointUrl` is the endpoint's own URL, which needs signed requests. Requests can get `403` for a few minutes after the first deploy, until the distribution has deployed.
+
 Code or service-configuration changes create a new immutable revision. The endpoint keeps its identity and moves its explicit revision weight to the new revision; the resource dependency graph is configured to update the endpoint before removing the old revision. Actual replacement ordering still requires AWS validation. The component adds no HTTP health gate or application-level rollback. An AWS revision reaching `Active` does not verify that the application is listening correctly. Check the deployed HTTP endpoint before directing traffic to it.
 
 Validate creation, revision replacement, streaming, IAM requests, and removal against AWS before adopting the component. Also test setting `rateLimit` to `0` and then removing the limit: the native provider includes reset handling, but this component's AWS behavior has not been verified.

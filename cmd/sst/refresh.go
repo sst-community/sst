@@ -51,12 +51,12 @@ func CmdRefresh(c *cli.Cli) error {
 	defer ui.Destroy()
 	defer c.Cancel()
 	err = p.Run(c.Context, &project.StackInput{
-		Command:    "refresh",
-		Target:     target,
-		Exclude:    exclude,
-		ServerPort: s.Port,
-		Dev:        c.Bool("dev"),
-		Verbose:    c.Bool("verbose"),
+		Command: "refresh",
+		Target:  target,
+		Exclude: exclude,
+		Server:  s.URL(),
+		Dev:     c.Bool("dev"),
+		Verbose: c.Bool("verbose"),
 	})
 	if err != nil {
 		return err

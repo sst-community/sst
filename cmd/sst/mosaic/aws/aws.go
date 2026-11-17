@@ -2,10 +2,10 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
-	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/appsync"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws/bridge"
 	"github.com/sst/sst/v3/pkg/project"
 	"github.com/sst/sst/v3/pkg/project/provider"
@@ -17,7 +17,7 @@ var ErrAppsyncNotReady = fmt.Errorf("appsync not ready")
 
 func Start(
 	ctx context.Context,
-	p *project.Project,
+	p project.Program,
 	s *server.Server,
 	args map[string]interface{},
 ) error {
@@ -26,21 +26,18 @@ func Start(
 	config := prov.Config()
 	go warnLowConcurrency(ctx, config.Region, accountSettings(config))
 	slog.Info("getting endpoint")
-	prefix := fmt.Sprintf("/sst/%s/%s", p.App().Name, p.App().Stage)
+	prefix := fmt.Sprintf("/sst/%s/%s", p.Name(), p.Stage())
 
-	api, err := prov.ResolveAppSync(ctx, p.AppSyncScope())
-	if err != nil {
-		return err
+	transport, ok := p.Transport()
+	if !ok {
+		return p.NoTransport()
 	}
-	rest, realtime := api.Http, api.Realtime
-	slog.Info("found appsync", "rest", rest, "realtime", realtime, "shared", api.Shared)
-
-	conn, err := appsync.DialWhenReady(ctx, config, rest, realtime)
+	conn, err := transport.Connect(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if !appsync.Transient(err) {
+		if !errors.Is(err, bridge.ErrNotReady) {
 			return err
 		}
 		slog.Error("appsync not ready", "err", err)
@@ -52,11 +49,12 @@ func Start(
 	tasksChan := make(chan bridge.Message, 1000)
 
 	in := input{
-		config:  config,
-		server:  s,
-		client:  client,
-		project: p,
-		prefix:  prefix,
+		config:      config,
+		server:      s,
+		client:      client,
+		project:     p,
+		prefix:      prefix,
+		startAtOnce: startAtOnce,
 	}
 
 	in.msg = functionsChan

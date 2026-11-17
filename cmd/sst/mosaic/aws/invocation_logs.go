@@ -32,7 +32,7 @@ const (
 // fileLogger writes what each function gets, prints and returns to a log of
 // its own, under the project's log folder, unless SST_DEV_INVOCATION_LOGS
 // turns that off.
-func fileLogger(p *project.Project) {
+func fileLogger(p project.Program) {
 	dir := invocationLogsDir(p)
 	go removeInvocationFolders(dir)
 	limit, ok := invocationLogLimit(flag.SST_DEV_INVOCATION_LOGS)
@@ -82,7 +82,7 @@ func megabytes(name, value string, fallback int64) int64 {
 }
 
 // invocationLogsDir is the folder of the invocation logs: .sst/log/lambda.
-func invocationLogsDir(p *project.Project) string {
+func invocationLogsDir(p project.Program) string {
 	return filepath.Join(p.PathLog(""), "lambda")
 }
 
@@ -137,7 +137,7 @@ func logInvocations(ctx context.Context, dir string, limit, total int64) {
 // Once a log is past limit, it's moved to <function>.log.1, replacing an
 // older one, and started again. Once all the logs, those of an earlier sst
 // dev included, are past total, the oldest .log.1 files are removed, and then
-// the biggest logs, until they're under it again. Only the most recently
+// the logs written least recently, until they're under it again. Only the most recently
 // written logs are kept open.
 type invocationLogs struct {
 	dir   string
@@ -148,6 +148,8 @@ type invocationLogs struct {
 	// made, and their sum
 	sizes   map[string]int64
 	rotated map[string]time.Time
+	// the write each log was last added to by, from writes
+	written map[string]uint64
 	size    int64
 	// counts writes, to find the log written to least recently
 	writes uint64
@@ -169,6 +171,7 @@ func newInvocationLogs(dir string, limit, total int64) *invocationLogs {
 		open:    map[string]*openLog{},
 		sizes:   map[string]int64{},
 		rotated: map[string]time.Time{},
+		written: map[string]uint64{},
 		now:     time.Now,
 	}
 	entries, _ := os.ReadDir(dir)
@@ -246,6 +249,7 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 	}
 	n, err := file.WriteString(b.String())
 	l.grow(path, int64(n))
+	l.written[path] = l.writes
 	if err != nil {
 		slog.Error("failed to write invocation log", "path", path, "err", err)
 	}
@@ -337,6 +341,7 @@ func (l *invocationLogs) recount(path string) {
 		l.size -= l.sizes[path]
 		delete(l.sizes, path)
 		delete(l.rotated, path)
+		delete(l.written, path)
 		return
 	}
 	l.size += info.Size() - l.sizes[path]
@@ -386,6 +391,7 @@ func (l *invocationLogs) remove(path string) {
 	l.size -= l.sizes[path]
 	delete(l.sizes, path)
 	delete(l.rotated, path)
+	delete(l.written, path)
 }
 
 // rotate moves a log to <path>.1, replacing an older one, so it's started
@@ -405,8 +411,10 @@ func (l *invocationLogs) rotate(path string) {
 	delete(l.sizes, path)
 }
 
-// shrink removes the oldest .log.1 files, and then empties the biggest logs,
-// until all of them are under the total again.
+// shrink removes the oldest .log.1 files, and then the logs written least
+// recently, those of an earlier sst dev first, until all of them are under the
+// total again. So what's removed is always the oldest history, never the log
+// just written.
 func (l *invocationLogs) shrink() {
 	old := []string{}
 	for path := range l.rotated {
@@ -420,16 +428,19 @@ func (l *invocationLogs) shrink() {
 		l.remove(path)
 	}
 	for l.size > l.total {
-		biggest := ""
+		oldest := ""
 		for path, size := range l.sizes {
-			if biggest == "" || size > l.sizes[biggest] {
-				biggest = path
+			if size == 0 {
+				continue
+			}
+			if oldest == "" || l.written[path] < l.written[oldest] || (l.written[path] == l.written[oldest] && path < oldest) {
+				oldest = path
 			}
 		}
-		if biggest == "" || l.sizes[biggest] == 0 {
+		if oldest == "" {
 			return
 		}
-		l.remove(biggest)
+		l.remove(oldest)
 	}
 }
 

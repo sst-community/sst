@@ -1,0 +1,308 @@
+{
+  "version": 3,
+  "deployment": {
+    "manifest": { "time": "2026-11-12T00:00:00Z", "magic": "", "version": "v3.270.0" },
+    "secrets_providers": { "type": "passphrase", "state": { "salt": "v1:test" } },
+    "resources": [
+      {
+        "urn": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "custom": false,
+        "type": "pulumi:pulumi:Stack"
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Bucket::Files",
+        "custom": false,
+        "type": "sst:aws:Bucket",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "stackTrace": [
+          { "sourcePosition": "project:///file:/home/me/shop/node_modules/sst/platform/src/components/component.ts#40,5" },
+          { "sourcePosition": "project:///infra/storage.ts#3,14" }
+        ]
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "custom": false,
+        "type": "sst:aws:Function",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "outputs": { "_sst": { "contract": 1, "function": { "dev": false, "handler": "functions/api.handler" } } },
+        "stackTrace": [{ "sourcePosition": "project:///index.ts#6,13" }]
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:x:DevCommand::Worker",
+        "custom": false,
+        "type": "sst:x:DevCommand",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "outputs": { "_sst": { "contract": 1, "dev": { "command": "node worker.mjs", "links": ["Files"] } } }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::pulumi:providers:sst::sst",
+        "custom": true,
+        "id": "0aaa",
+        "type": "pulumi:providers:sst",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "inputs": { "awsRegion": "us-west-2", "version": "5.0.0" }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0",
+        "custom": true,
+        "id": "0bbb",
+        "type": "pulumi:providers:aws",
+        "inputs": { "region": "us-west-2", "version": "7.54.0" }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::pulumi:providers:aws::east",
+        "custom": true,
+        "id": "0ccc",
+        "type": "pulumi:providers:aws",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "inputs": { "region": "us-east-1", "version": "7.54.0" }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::pulumi:providers:random::default_4_21_2",
+        "custom": true,
+        "id": "0ddd",
+        "type": "pulumi:providers:random",
+        "inputs": { "version": "4.21.2" }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::random:index/randomBytes:RandomBytes::LambdaEncryptionKey",
+        "custom": true,
+        "id": "key",
+        "type": "random:index/randomBytes:RandomBytes",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:random::default_4_21_2::0ddd",
+        "inputs": { "length": 32 },
+        "outputs": {
+          "base64": { "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270", "plaintext": "\"c2VjcmV0LWtleQ==\"" },
+          "length": 32
+        }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket",
+        "custom": true,
+        "id": "shop-dev-filesbucket-abcdefgh",
+        "type": "aws:s3/bucket:Bucket",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Bucket::Files",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "inputs": {
+          "__defaults": [],
+          "bucket": "shop-dev-filesbucket-abcdefgh",
+          "forceDestroy": true,
+          "region": "us-west-2",
+          "tagsAll": { "sst:app": "shop" }
+        },
+        "outputs": {
+          "arn": "arn:aws:s3:::shop-dev-filesbucket-abcdefgh",
+          "bucket": "shop-dev-filesbucket-abcdefgh",
+          "id": "shop-dev-filesbucket-abcdefgh",
+          "region": "us-west-2"
+        },
+        "ignoreChanges": ["bucket"]
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock::FilesPublicAccessBlock",
+        "custom": true,
+        "id": "shop-dev-filesbucket-abcdefgh",
+        "type": "aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Bucket::Files",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "dependencies": ["urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"],
+        "propertyDependencies": { "bucket": ["urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"] },
+        "deletedWith": "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket",
+        "inputs": { "__defaults": [], "blockPublicAcls": true, "bucket": "shop-dev-filesbucket-abcdefgh" }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucketPolicy:BucketPolicy::FilesPolicy",
+        "custom": true,
+        "id": "shop-dev-filesbucket-abcdefgh",
+        "type": "aws:s3/bucketPolicy:BucketPolicy",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Bucket::Files",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "dependencies": [
+          "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucketPublicAccessBlock:BucketPublicAccessBlock::FilesPublicAccessBlock",
+          "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"
+        ],
+        "propertyDependencies": {
+          "bucket": ["urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"],
+          "policy": ["urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"]
+        },
+        "inputs": {
+          "__defaults": [],
+          "bucket": "shop-dev-filesbucket-abcdefgh",
+          "policy": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [\n    {\n      \"Effect\": \"Deny\",\n      \"Action\": \"s3:*\",\n      \"Resource\": [\n        \"arn:aws:s3:::shop-dev-filesbucket-abcdefgh/*\",\n        \"arn:aws:s3:::shop-dev-filesbucket-abcdefgh\"\n      ]\n    }\n  ]\n}",
+          "region": "us-west-2"
+        }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:sst:LinkRef::FilesLinkRef",
+        "custom": false,
+        "type": "sst:sst:LinkRef",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "outputs": { "target": "Files", "properties": { "type": "sst.aws.Bucket", "name": "shop-dev-filesbucket-abcdefgh" } }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Bucket$sst:aws:BucketFiles::FilesUpload",
+        "custom": true,
+        "id": "files",
+        "type": "sst:aws:BucketFiles",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Bucket::Files",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:sst::sst::0aaa",
+        "dependencies": ["urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"],
+        "inputs": { "bucketName": "shop-dev-filesbucket-abcdefgh" }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function$aws:cloudwatch/logGroup:LogGroup::ApiLogGroup",
+        "custom": true,
+        "id": "/aws/lambda/shop-dev-ApiFunction-abcdefgh",
+        "type": "aws:cloudwatch/logGroup:LogGroup",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::east::0ccc",
+        "inputs": { "__defaults": ["skipDestroy"], "name": "/aws/lambda/shop-dev-ApiFunction-abcdefgh", "retentionInDays": 30, "skipDestroy": false, "region": "us-east-1" },
+        "outputs": {
+          "arn": "arn:aws:logs:us-east-1:123456789012:log-group:/aws/lambda/shop-dev-ApiFunction-abcdefgh",
+          "id": "/aws/lambda/shop-dev-ApiFunction-abcdefgh",
+          "name": "/aws/lambda/shop-dev-ApiFunction-abcdefgh"
+        },
+        "customTimeouts": { "create": 600, "update": 0, "delete": 90.5 }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2::ApiCode",
+        "custom": true,
+        "id": "sst-asset-abc/assets/Api-code-1234.zip",
+        "type": "aws:s3/bucketObjectv2:BucketObjectv2",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "inputs": {
+          "bucket": "sst-asset-abc",
+          "key": { "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270", "plaintext": "\"assets/Api-code-1234.zip\"" },
+          "source": { "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270", "plaintext": "{\"4dabf18193072939515e22adb298388d\":\"0def7320c3a5731c473e5ecbe6d01bc7\",\"path\":\".sst/artifacts/Api/code.zip\"}" }
+        },
+        "outputs": { "bucket": "sst-asset-abc" }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function$aws:iam/role:Role::ApiRole",
+        "custom": true,
+        "id": "shop-dev-ApiRole-abcdefgh",
+        "type": "aws:iam/role:Role",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "dependencies": [
+          "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket",
+          "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucketPolicy:BucketPolicy::FilesPolicy"
+        ],
+        "propertyDependencies": {
+          "inlinePolicies": [
+            "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucketPolicy:BucketPolicy::FilesPolicy",
+            "urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"
+          ]
+        },
+        "inputs": {
+          "__defaults": ["maxSessionDuration", "path"],
+          "assumeRolePolicy": "{\"Version\":\"2012-10-17\"}",
+          "inlinePolicies": [
+            {
+              "__defaults": [],
+              "name": "inline",
+              "policy": "{\"Statement\":[{\"Action\":\"s3:*\",\"Resource\":[\"arn:aws:s3:::shop-dev-filesbucket-abcdefgh/*\",\"arn:aws:s3:::shop-dev-filesbucket-abcdefgh\"]}]}"
+            }
+          ],
+          "maxSessionDuration": 3600,
+          "name": "shop-dev-ApiRole-abcdefgh",
+          "path": "/",
+          "tagsAll": {}
+        },
+        "outputs": {
+          "arn": "arn:aws:iam::123456789012:role/shop-dev-ApiRole-abcdefgh",
+          "id": "shop-dev-ApiRole-abcdefgh",
+          "name": "shop-dev-ApiRole-abcdefgh"
+        },
+        "ignoreChanges": ["name"]
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function$aws:lambda/function:Function::ApiFunction",
+        "custom": true,
+        "id": "shop-dev-ApiFunction-abcdefgh",
+        "type": "aws:lambda/function:Function",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "dependencies": [
+          "urn:pulumi:dev::shop::random:index/randomBytes:RandomBytes::LambdaEncryptionKey",
+          "urn:pulumi:dev::shop::sst:aws:Function$aws:cloudwatch/logGroup:LogGroup::ApiLogGroup",
+          "urn:pulumi:dev::shop::sst:aws:Function$aws:iam/role:Role::ApiRole",
+          "urn:pulumi:dev::shop::sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2::ApiCode"
+        ],
+        "propertyDependencies": {
+          "environment": ["urn:pulumi:dev::shop::random:index/randomBytes:RandomBytes::LambdaEncryptionKey"],
+          "loggingConfig": ["urn:pulumi:dev::shop::sst:aws:Function$aws:cloudwatch/logGroup:LogGroup::ApiLogGroup"],
+          "role": ["urn:pulumi:dev::shop::sst:aws:Function$aws:iam/role:Role::ApiRole"],
+          "s3Bucket": ["urn:pulumi:dev::shop::sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2::ApiCode"],
+          "s3Key": ["urn:pulumi:dev::shop::sst:aws:Function$aws:s3/bucketObjectv2:BucketObjectv2::ApiCode"]
+        },
+        "inputs": {
+          "__defaults": ["reservedConcurrentExecutions"],
+          "environment": {
+            "__defaults": [],
+            "variables": {
+              "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270",
+              "plaintext": "{\"SST_KEY\":\"c2VjcmV0LWtleQ==\",\"SST_KEY_FILE\":\"resource.enc\",\"SST_RESOURCE_App\":\"{\\\"name\\\":\\\"shop\\\",\\\"stage\\\":\\\"dev\\\"}\"}"
+            }
+          },
+          "handler": "bundle.handler",
+          "loggingConfig": { "__defaults": [], "logFormat": "Text", "logGroup": "/aws/lambda/shop-dev-ApiFunction-abcdefgh" },
+          "memorySize": 1024,
+          "name": "shop-dev-ApiFunction-abcdefgh",
+          "reservedConcurrentExecutions": -1,
+          "role": "arn:aws:iam::123456789012:role/shop-dev-ApiRole-abcdefgh",
+          "runtime": "nodejs24.x",
+          "s3Bucket": "sst-asset-abc",
+          "s3Key": { "4dabf18193072939515e22adb298388d": "1b47061264138c4ac30d75fd1eb44270", "plaintext": "\"assets/Api-code-1234.zip\"" },
+          "timeout": 20,
+          "description": null
+        },
+        "outputs": {
+          "arn": "arn:aws:lambda:us-west-2:123456789012:function:shop-dev-ApiFunction-abcdefgh",
+          "id": "shop-dev-ApiFunction-abcdefgh",
+          "name": "shop-dev-ApiFunction-abcdefgh"
+        },
+        "ignoreChanges": ["name"],
+        "retainOnDelete": false
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function$sst:aws:FunctionEnvironmentUpdate::ApiEnvironmentUpdate",
+        "custom": true,
+        "id": "env",
+        "type": "sst:aws:FunctionEnvironmentUpdate",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:sst::sst::0aaa",
+        "dependencies": ["urn:pulumi:dev::shop::sst:aws:Function$aws:lambda/function:Function::ApiFunction"],
+        "inputs": {
+          "environment": { "LATE": "https://example.com" },
+          "functionName": "shop-dev-ApiFunction-abcdefgh",
+          "region": "us-west-2"
+        }
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::sst:aws:Function$aws:lambda/permission:Permission::ApiUrlInvoke",
+        "custom": true,
+        "id": "perm",
+        "type": "aws:lambda/permission:Permission",
+        "parent": "urn:pulumi:dev::shop::sst:aws:Function::Api",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "dependencies": ["urn:pulumi:dev::shop::sst:aws:Function$aws:lambda/function:Function::ApiFunction"],
+        "propertyDependencies": { "function": ["urn:pulumi:dev::shop::sst:aws:Function$aws:lambda/function:Function::ApiFunction"] },
+        "inputs": { "action": "lambda:InvokeFunction", "function": "shop-dev-ApiFunction-abcdefgh", "principal": "*" },
+        "protect": true
+      },
+      {
+        "urn": "urn:pulumi:dev::shop::aws:s3/bucketObjectv2:BucketObjectv2::Readme",
+        "custom": true,
+        "id": "shop-dev-filesbucket-abcdefgh/README",
+        "type": "aws:s3/bucketObjectv2:BucketObjectv2",
+        "parent": "urn:pulumi:dev::shop::pulumi:pulumi:Stack::shop-dev",
+        "provider": "urn:pulumi:dev::shop::pulumi:providers:aws::default_7_54_0::0bbb",
+        "dependencies": ["urn:pulumi:dev::shop::sst:aws:Bucket$aws:s3/bucket:Bucket::FilesBucket"],
+        "inputs": { "bucket": "shop-dev-filesbucket-abcdefgh", "content": "hi", "key": "README" }
+      }
+    ]
+  }
+}

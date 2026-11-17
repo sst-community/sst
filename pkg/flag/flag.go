@@ -15,15 +15,14 @@ var SST_BUN_PATH = os.Getenv("SST_BUN_PATH")
 // SST_BUILD_CONCURRENCY is deprecated, use SST_FUNCTION_BUILD_CONCURRENCY instead
 var SST_BUILD_CONCURRENCY = os.Getenv("SST_BUILD_CONCURRENCY")
 var SST_BUILD_CONCURRENCY_FUNCTION = os.Getenv("SST_BUILD_CONCURRENCY_FUNCTION")
-var SST_BUILD_CONCURRENCY_SITE = os.Getenv("SST_BUILD_CONCURRENCY_SITE")
 
 // SST_BUILD_CONTEXT_CACHE is the max number of esbuild build contexts kept
 // alive in dev mode for fast incremental rebuilds. 0 disables the cache.
 var SST_BUILD_CONTEXT_CACHE = os.Getenv("SST_BUILD_CONTEXT_CACHE")
 
 // SST_PPROF exposes Go pprof handlers under /debug/pprof/ on the local SST server
-// that `sst dev`, `deploy`, `diff`, `remove` and `refresh` start, for requests from
-// localhost only
+// that `sst dev`, `deploy`, `diff`, `remove` and `refresh` start. The server's URL,
+// with its token, is in .sst/<stage>.server while it runs.
 var SST_PPROF = isTrue("SST_PPROF")
 var SST_SKIP_DEPENDENCY_CHECK = isTrue("SST_SKIP_DEPENDENCY_CHECK")
 var SST_TELEMETRY_DISABLED = isTrue("SST_TELEMETRY_DISABLED") || isTrue("DO_NOT_TRACK")
@@ -32,6 +31,15 @@ var SST_VERBOSE = isTrue("SST_VERBOSE")
 var SST_EXPERIMENTAL = isTrue("SST_EXPERIMENTAL") || isTrue("SST_EXPERIMENTAL_RUN")
 var SST_RUN_ID = os.Getenv("SST_RUN_ID")
 var SST_SKIP_APPSYNC = isTrue("SST_SKIP_APPSYNC")
+
+// SST_ALLOW_MISSING_STATE lets a deploy go ahead on a stage whose history
+// says it was deployed but whose state the home can't find. Without it, the
+// deploy is refused, since it would create every resource again.
+var SST_ALLOW_MISSING_STATE = isTrue("SST_ALLOW_MISSING_STATE")
+
+// SST_SKIP_UPDATE_CHECK stops the CLI looking for a newer SST once a day. CI
+// never looks.
+var SST_SKIP_UPDATE_CHECK = isTrue("SST_SKIP_UPDATE_CHECK")
 
 // SST_DEV_CLOUDWATCH_LOGS has sst dev send what functions and tasks print
 // locally to the stubs deployed in their place, which print it in their log

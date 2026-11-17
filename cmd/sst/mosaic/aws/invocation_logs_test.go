@@ -317,9 +317,16 @@ func TestInvocationLogsTotalWithManyFunctions(t *testing.T) {
 	if onDisk != logs.size {
 		t.Fatalf("logs take %d bytes on disk, but %d are counted", onDisk, logs.size)
 	}
-	// the function written last still has its newest invocation
-	if got := readLog(t, filepath.Join(dir, "Fn299.log")); !strings.Contains(got, " r19 responded") {
-		t.Fatalf("Fn299.log is %q, want its newest invocation", got)
+	// what's removed is the oldest: the functions written last keep their
+	// newest invocation, and the first ones are gone
+	for fn := 290; fn < 300; fn++ {
+		name := fmt.Sprintf("Fn%d.log", fn)
+		if got := readLog(t, filepath.Join(dir, name)); !strings.Contains(got, " r19 responded") {
+			t.Fatalf("%s is %q, want its newest invocation", name, got)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Fn0.log")); !os.IsNotExist(err) {
+		t.Fatalf("Fn0.log, written longest ago, is still there (%v)", err)
 	}
 }
 
