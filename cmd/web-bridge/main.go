@@ -94,8 +94,12 @@ func newWorkerID() string {
 	return hex.EncodeToString(data)
 }
 
-// takeTimeoutOf is how long the bridge waits for sst dev to take a request,
-// unless SST_FUNCTION_TIMEOUT sets it in milliseconds, as for a function.
+// takeTimeoutOf is how long the bridge waits for sst dev to take a request:
+// web.DefaultTakeTimeout, 5 seconds. SST_FUNCTION_TIMEOUT, in milliseconds,
+// overrides it only if it was set in the environment of the deploy, which
+// passes it on to the bridge, as it does to a function's bridge
+// (cmd/bridge's pingTimeoutOf). It's never the function's timeout, which
+// limits a request only once sst dev has taken it.
 func takeTimeoutOf(value string) time.Duration {
 	ms, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || ms <= 0 {

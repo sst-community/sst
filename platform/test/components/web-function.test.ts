@@ -1730,6 +1730,65 @@ describe("WebFunction", () => {
       );
     });
 
+    // With dev.live, the domain is served as in a deploy, so unsigned callers
+    // reach the local server through CloudFront, not the IAM-only endpoint.
+    it("serves the domain through CloudFront in sst dev with dev.live", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const fn = new WebFunction("LiveDomain", {
+        entrypoint: "src/server.ts",
+        domain: { name: "api.example.com", dns: false, cert },
+        dev: { live: true, url: "http://localhost:3000" },
+      });
+      expect(await resolved(fn.url)).toBe("https://api.example.com");
+      expect(await resolved(fn.getSSTLink().properties.url)).toBe(
+        "https://api.example.com",
+      );
+      expect(await resolved(fn.endpointUrl!)).toBe(
+        "https://livedomainendpoint.example.com",
+      );
+      expect(endpointInputs("LiveDomain").authType).toBe("IamAuth");
+      expect(fn.nodes.cdn).toBeDefined();
+      // the policy names the distribution, so it's registered by then
+      await resolved(fn.nodes.resourcePolicy!.policy);
+      const inputs = distribution("LiveDomain");
+      expect(inputs.aliases).toEqual(["api.example.com"]);
+      expect(inputs.origins[0].domainName).toBe(
+        "livedomainendpoint.example.com",
+      );
+      expect(
+        named(
+          "LiveDomainResourcePolicy",
+          "aws:lambdaweb/resourcePolicy:ResourcePolicy",
+        ),
+      ).toBeDefined();
+      // and the endpoint behind it runs the bridge to the local server
+      const outputs = componentOutputs.mock.calls.map(([value]) => value);
+      const live = outputs.find((value) => "_webFunction" in value);
+      expect(await resolved(live!._webFunction.url)).toBe(
+        "http://localhost:3000",
+      );
+      expect(build).not.toHaveBeenCalled();
+    });
+
+    // Without dev.live, nothing is deployed in sst dev, the domain included,
+    // and url is the local server's.
+    it("creates no distribution in sst dev without dev.live", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const fn = new WebFunction("LocalDomain", {
+        entrypoint: "src/server.ts",
+        domain: { name: "api.example.com", dns: false, cert },
+        dev: { url: "http://localhost:3000" },
+      });
+      expect(await resolved(fn.url)).toBe("http://localhost:3000");
+      expect(fn.nodes.cdn).toBeUndefined();
+      expect(fn.endpointUrl).toBeUndefined();
+      expect(
+        ofType("aws:cloudfront/distribution:Distribution"),
+      ).toEqual([]);
+    });
+
     it("grants its distribution permission to invoke the endpoint", async () => {
       const fn = new WebFunction("Scoped", {
         entrypoint: "index.mjs",

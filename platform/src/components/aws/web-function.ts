@@ -224,7 +224,9 @@ export interface WebFunctionArgs {
    *
    * Requests can fail with `403` for a few minutes after the first deploy, until the
    * distribution has deployed. In `sst dev`, while your server runs locally, no
-   * distribution is created and `url` is the local URL.
+   * distribution is created and `url` is the local URL. With `dev.live`, the
+   * distribution is created as in a deploy, and `url` is the domain's, which sends
+   * its requests through the endpoint to your local server.
    *
    * @example
    *
@@ -311,7 +313,8 @@ export interface WebFunctionArgs {
    * This creates a Lambda network connector, which each revision is created with.
    * Creating one takes a few minutes. Adding, changing or removing `vpc` makes a new
    * revision. In `sst dev`, unless `dev` is `false`, your server runs locally and no
-   * connector is created, so it reaches the VPC only through `sst tunnel`.
+   * connector is created, so it reaches the VPC only through `sst tunnel`. That's so
+   * with `dev.live` too, as the bridge deployed in place of your code doesn't need one.
    *
    * @example
    * Create a `Vpc` component, with a NAT if your server needs the internet.
@@ -359,8 +362,9 @@ export interface WebFunctionArgs {
    * Set `live: true` to also deploy the web function, with a bridge that sends its
    * requests to your local server, so you can test the real integration.
    *
-   * Set `false` to deploy the real web function in `sst dev`. The local execution role
-   * trusts your AWS account only when local development is enabled.
+   * Set `false` to deploy the web function with your code in `sst dev`, as in a deploy,
+   * with no local server. The local execution role trusts your AWS account only when
+   * local development is enabled.
    * @default Runs locally in `sst dev`.
    * @example
    * ```js
@@ -1727,7 +1731,8 @@ export class WebFunction extends Component implements Link.Linkable {
 
   /**
    * The full HTTPS URL (including `https://`). With `domain`, this is the custom domain's
-   * URL. In `sst dev`, if no web function is deployed, it's the local URL.
+   * URL. In `sst dev`, it's the local URL, unless a web function is deployed there with
+   * `dev.live` or `dev: false`; then it's the endpoint's, or the domain's with `domain`.
    */
   public get url(): Output<string> {
     return (
@@ -1739,24 +1744,36 @@ export class WebFunction extends Component implements Link.Linkable {
   }
   /**
    * The URL of the endpoint's own domain. With `domain`, requests to it need to be
-   * signed. Not available in local `sst dev`.
+   * signed. Not available in `sst dev`, unless `dev.live` is set or `dev` is `false`.
    */
   public get endpointUrl() {
     return this.endpoint && interpolate`https://${this.endpoint.domainName}`;
   }
-  /** The web function ARN. Not available in local `sst dev`. */
+  /**
+   * The web function ARN. Not available in `sst dev`, unless `dev.live` is set or `dev`
+   * is `false`.
+   */
   public get arn() {
     return this.function?.arn;
   }
-  /** The endpoint ARN. Not available in local `sst dev`. */
+  /**
+   * The endpoint ARN. Not available in `sst dev`, unless `dev.live` is set or `dev` is
+   * `false`.
+   */
   public get endpointArn() {
     return this.endpoint?.arn;
   }
-  /** The immutable revision ARN. Not available in local `sst dev`. */
+  /**
+   * The immutable revision ARN. Not available in `sst dev`, unless `dev.live` is set or
+   * `dev` is `false`. With `dev.live`, it's the bridge's revision.
+   */
   public get revisionArn() {
     return this.revision?.arn;
   }
-  /** The underlying resources. Deployment resources are absent in local `sst dev`. */
+  /**
+   * The underlying resources. Deployment resources are absent in `sst dev`, unless
+   * `dev.live` is set or `dev` is `false`.
+   */
   public get nodes() {
     return {
       function: this.function,
