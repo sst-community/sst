@@ -2,11 +2,13 @@ package watcher
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"os"
 	pathpkg "path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -23,23 +25,151 @@ type WatchConfig struct {
 	Watch project.Watch
 }
 
-type fileChange struct {
-	timestamp  time.Time
-	discovered bool
+// changeLimiter publishes at most one change per file in each window. The
+// first change is published at once. Changes during the window are folded
+// into one more publish when it ends, so a quick second save isn't lost. That
+// one is skipped when the file's size and modification time are what they
+// were at the last publish: FSEvents can report one write as a create and
+// then a modify, and that shouldn't rebuild twice. This relies on the
+// modification time changing with each save, as it does with the nanosecond
+// times of APFS and ext4. Where times are coarser, like some network mounts,
+// a second save of the same size within the window isn't published; before
+// the limiter folded changes in, any second save within the window was
+// dropped. A file the walk discovered is only published once per window.
+//
+// A file whose window has passed with nothing pending is forgotten, as its
+// next change is published at once either way, so files holds only those
+// changed in about the last window, not every file changed in the session.
+type changeLimiter struct {
+	mu      sync.Mutex
+	window  time.Duration
+	files   map[string]fileChange
+	publish func(path string)
+	closed  bool
+	// when files was last swept of the files it can forget
+	swept time.Time
 }
 
-func resolveWatch(root string, watch project.Watch) ([]string, []string, error) {
+type fileChange struct {
+	timestamp time.Time
+	stamp     fileStamp
+	pending   bool
+}
+
+type fileStamp struct {
+	exists bool
+	size   int64
+	mod    int64
+}
+
+func newChangeLimiter(window time.Duration, publish func(path string)) *changeLimiter {
+	return &changeLimiter{window: window, files: map[string]fileChange{}, publish: publish}
+}
+
+func stampOf(path string) fileStamp {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}
+	}
+	return fileStamp{exists: true, size: info.Size(), mod: info.ModTime().UnixNano()}
+}
+
+func (l *changeLimiter) change(path string, discovered bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(l.swept) > l.window {
+		l.swept = now
+		for p, f := range l.files {
+			if !f.pending && now.Sub(f.timestamp) > l.window {
+				delete(l.files, p)
+			}
+		}
+	}
+	last, ok := l.files[path]
+	if !ok || now.Sub(last.timestamp) > l.window {
+		l.files[path] = fileChange{timestamp: now, stamp: stampOf(path)}
+		l.publish(path)
+		return
+	}
+	if discovered || last.pending {
+		return
+	}
+	last.pending = true
+	l.files[path] = last
+	time.AfterFunc(last.timestamp.Add(l.window).Sub(now), func() { l.flush(path) })
+}
+
+func (l *changeLimiter) flush(path string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	last, ok := l.files[path]
+	if l.closed || !ok || !last.pending {
+		return
+	}
+
+	last.pending = false
+	stamp := stampOf(path)
+	if stamp == last.stamp {
+		l.files[path] = last
+		return
+	}
+	l.files[path] = fileChange{timestamp: time.Now(), stamp: stamp}
+	l.publish(path)
+}
+
+// close stops publishing, including from a window still waiting to end, so a
+// watcher that has stopped publishes nothing more.
+func (l *changeLimiter) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.closed = true
+}
+
+// hasGlobMeta reports whether a watch.paths entry is a glob, which only the
+// legacy array form expands.
+func hasGlobMeta(path string) bool {
+	return strings.ContainsAny(path, "*?[")
+}
+
+// listedRoots resolves the watch.paths entries written out without a glob.
+// skipDir watches these even when they are hidden or named node_modules. A
+// legacy array glob such as "*" can match node_modules or .git, and those
+// stay skipped.
+func listedRoots(root string, watch project.Watch) ([]string, error) {
+	var paths []string
+	for _, path := range watch.Paths {
+		if !hasGlobMeta(path) {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	return resolvePaths(root, paths, watch.UsesLegacyArray())
+}
+
+// resolvePaths turns watch.paths entries into the directories to walk, for
+// both resolveWatch and listedRoots: it expands the legacy array form, then
+// resolves each entry against root. With no entries it returns root.
+func resolvePaths(root string, paths []string, legacy bool) ([]string, error) {
 	root = filepath.Clean(root)
-	paths := watch.Paths
-	if watch.UsesLegacyArray() {
+	if legacy {
 		var err error
 		paths, err = expandLegacyPaths(root, paths)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
+	return resolveRoots(root, paths)
+}
 
-	roots, err := resolveRoots(root, paths)
+func resolveWatch(root string, watch project.Watch) ([]string, []string, error) {
+	roots, err := resolvePaths(root, watch.Paths, watch.UsesLegacyArray())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,7 +187,7 @@ func expandLegacyPaths(root string, paths []string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, path := range paths {
 		matches := []string{path}
-		if strings.ContainsAny(path, "*?[") {
+		if hasGlobMeta(path) {
 			resolved, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(path)))
 			if err != nil {
 				return nil, err
@@ -140,20 +270,36 @@ func resolveRoots(root string, paths []string) ([]string, error) {
 	return roots, nil
 }
 
-func shouldSkipDir(root string, ignore []string, path string, info os.FileInfo) bool {
-	if !info.IsDir() {
+// dirEntry is the part of os.FileInfo and fs.DirEntry that shouldSkipDir needs.
+type dirEntry interface {
+	Name() string
+	IsDir() bool
+}
+
+// skippedByName holds the built-in rules, for the walk (skipDir) and for the
+// recursive backend (inSkippedDir) alike. They skip a directory by its own
+// name: hidden, or with node_modules in it, which also catches copies such as
+// node_modules.old that can be as big. A directory listed by name in
+// watch.paths (see listedRoots) is exempt, and so are the directories on the
+// way to it, such as .config for .config/types, as the walk has to pass
+// through them. Directories under a listed one aren't exempt, so a listed
+// packages/api still skips its node_modules.
+func skippedByName(path string, listed []string) bool {
+	name := filepath.Base(path)
+	if !strings.HasPrefix(name, ".") && !strings.Contains(name, "node_modules") {
 		return false
 	}
-
-	if strings.HasPrefix(info.Name(), ".") {
-		return true
+	for _, r := range listed {
+		if isWithinPath(path, r) {
+			return false
+		}
 	}
+	return true
+}
 
-	if strings.Contains(path, "node_modules") {
-		return true
-	}
-
-	return isIgnored(root, ignore, path)
+// shouldSkipDir is skipDir with nothing listed in watch.paths.
+func shouldSkipDir(root string, ignore []string, path string, info dirEntry) bool {
+	return skipDir(root, nil, ignore, path, info)
 }
 
 func isIgnored(root string, ignore []string, path string) bool {
@@ -193,6 +339,23 @@ func matchesIgnore(pattern string, path string) bool {
 	}
 
 	return false
+}
+
+// skipDir reports whether the walk and the event loop skip a directory: by
+// the built-in rules (skippedByName), or by watch.ignore, which applies to
+// listed paths too. The walk skips a directory before entering it, so nothing
+// below one is reached. The project root itself is always watched, whatever
+// it or the directories above it are called. On the way to a listed path,
+// shouldWatchDir still prunes everything else, so .config/other isn't watched
+// for a listed .config/types.
+func skipDir(root string, listed []string, ignore []string, path string, info dirEntry) bool {
+	if !info.IsDir() {
+		return false
+	}
+	if filepath.Clean(path) != filepath.Clean(root) && skippedByName(path, listed) {
+		return true
+	}
+	return isIgnored(root, ignore, path)
 }
 
 func isWatchedPath(roots []string, path string) bool {
@@ -242,33 +405,41 @@ func Start(ctx context.Context, config WatchConfig) error {
 	if err != nil {
 		return err
 	}
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
-	defer watcher.Close()
-
-	err = watcher.AddWith(config.Root)
+	listed, err := listedRoots(config.Root, config.Watch)
 	if err != nil {
 		return err
 	}
 
-	limiter := map[string]fileChange{}
-
-	publishChange := func(path string, discovered bool) {
-		last, ok := limiter[path]
-		if ok && time.Since(last.timestamp) <= 500*time.Millisecond {
-			if discovered || !last.discovered {
-				return
-			}
+	// The project root plus any watched path outside it. A recursive backend
+	// watches these trees whole; a per-directory backend walks them.
+	trees := []string{filepath.Clean(config.Root)}
+	for _, match := range roots {
+		if !isWithinPath(config.Root, match) {
+			trees = append(trees, match)
 		}
-
-		limiter[path] = fileChange{timestamp: time.Now(), discovered: discovered}
-		bus.Publish(&FileChangedEvent{Path: path})
 	}
 
+	headFile := filepath.Join(config.Root, ".git/HEAD")
+	b, err := newBackend(trees, roots, listed, headFile, log)
+	if err != nil {
+		return err
+	}
+	defer b.Close()
+	log.Info("watching", "backend", b.Name(), "recursive", b.Recursive())
+
+	limiter := newChangeLimiter(500*time.Millisecond, func(path string) {
+		bus.Publish(&FileChangedEvent{Path: path})
+	})
+	defer limiter.close()
+	publishChange := limiter.change
+
+	// watchTree walks a directory tree. It adds each directory to a
+	// per-directory backend, and when publish is set it reports the files it
+	// finds, which covers a directory that is created or moved in with files
+	// already inside it. WalkDir reads entry types from the directory listing,
+	// so it doesn't stat every file.
 	watchTree := func(path string, publish bool) error {
-		return filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+		return filepath.WalkDir(path, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				if os.IsNotExist(err) {
 					return nil
@@ -276,16 +447,19 @@ func Start(ctx context.Context, config WatchConfig) error {
 				return err
 			}
 
-			if info.IsDir() {
-				if shouldSkipDir(config.Root, ignore, path, info) {
+			if d.IsDir() {
+				if skipDir(config.Root, listed, ignore, path, d) {
 					return filepath.SkipDir
 				}
 				if !shouldWatchDir(config.Root, roots, path) {
 					return filepath.SkipDir
 				}
+				if b.Recursive() {
+					return nil
+				}
 
 				log.Info("watching", "path", path)
-				return watcher.Add(path)
+				return b.Add(path)
 			}
 
 			if publish && isWatchedPath(roots, path) && !isIgnored(config.Root, ignore, path) {
@@ -297,24 +471,19 @@ func Start(ctx context.Context, config WatchConfig) error {
 		})
 	}
 
-	err = watchTree(config.Root, false)
-	if err != nil {
-		return err
-	}
-
-	for _, match := range roots {
-		if isWithinPath(config.Root, match) {
-			continue
-		}
-		err = watchTree(match, false)
-		if err != nil {
+	if !b.Recursive() {
+		if err := b.Add(config.Root); err != nil {
 			return err
 		}
+		for _, tree := range trees {
+			if err := watchTree(tree, false); err != nil {
+				return err
+			}
+		}
+		b.Add(headFile)
 	}
 
-	headFile := filepath.Join(config.Root, ".git/HEAD")
-	watcher.Add(headFile)
-	return watchLoop(ctx, watcher.Events, watcher.Errors, log, config.Root, roots, ignore, watchTree, publishChange)
+	return watchLoop(ctx, b.Events(), b.Errors(), log, config.Root, roots, listed, ignore, watchTree, publishChange)
 }
 
 // watchLoop runs the fsnotify event loop. It drains both the Events and
@@ -328,6 +497,7 @@ func watchLoop(
 	log *slog.Logger,
 	root string,
 	roots []string,
+	listed []string,
 	ignore []string,
 	watchTree func(path string, publish bool) error,
 	publishChange func(path string, discovered bool),
@@ -348,7 +518,7 @@ func watchLoop(
 					return err
 				}
 				if err == nil && info.IsDir() {
-					if shouldSkipDir(root, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
+					if skipDir(root, listed, ignore, event.Name, info) || !shouldWatchDir(root, roots, event.Name) {
 						log.Info("ignoring created directory", "path", event.Name)
 						continue
 					}
@@ -403,4 +573,19 @@ func isWithinPath(root string, path string) bool {
 
 	rel = normalizePath(rel)
 	return rel == "." || (!strings.HasPrefix(rel, "../") && rel != "..")
+}
+
+// inSkippedDir reports whether path is inside a directory the per-directory
+// walk never enters, for the recursive backend, which watches whole trees.
+// It applies skippedByName to each directory between tree and path, as the
+// walk does from the root down; tree itself is always watched. watch.ignore
+// is left to the loop.
+func inSkippedDir(tree string, listed []string, path string) bool {
+	tree = filepath.Clean(tree)
+	for dir := filepath.Dir(filepath.Clean(path)); dir != tree && isWithinPath(tree, dir); dir = filepath.Dir(dir) {
+		if skippedByName(dir, listed) {
+			return true
+		}
+	}
+	return false
 }

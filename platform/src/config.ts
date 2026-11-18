@@ -318,6 +318,20 @@ export interface App {
    *
    * You can configure it with `paths` and `ignore`.
    *
+   * On macOS, SST watches with FSEvents, which holds no file descriptor per
+   * file, however big the project is. On Linux it uses inotify, which takes
+   * one watch for each directory, counted against the
+   * `fs.inotify.max_user_watches` limit. On Windows it also takes one watch
+   * for each directory. `paths` and `ignore` keep that count down in a large
+   * repo.
+   *
+   * :::tip
+   * If FSEvents can't be used, SST falls back to kqueue, which holds a file
+   * descriptor for every file and directory it watches. Set
+   * `SST_WATCHER=kqueue` to choose kqueue yourself, or `SST_WATCHER=fsevents`
+   * to have `sst dev` stop with the error instead of falling back.
+   * :::
+   *
    * :::caution
    * Passing an array directly is supported for backward compatibility
    * and will be deprecated in the next major version.
@@ -335,7 +349,7 @@ export interface App {
    *
    * @example
    *
-   * Watch all dictories except `*.egg-info`.
+   * Watch all directories except `*.egg-info`.
    * ```ts
    * {
    *   watch: {
@@ -542,6 +556,18 @@ export interface AppWatch {
    * The paths are relative to the project root. If omitted, SST watches the
    * project root. Glob patterns are not supported here; use explicit
    * directories.
+   *
+   * Hidden directories and `node_modules` are skipped, but one written out
+   * here by name is watched, like `packages/.generated` or
+   * `../shared/node_modules`. So is one under a skipped directory, like
+   * `.config/types`, though nothing else in `.config` is. Hidden directories
+   * and `node_modules` *under* a listed directory are still skipped. `ignore`
+   * still applies. In the legacy `watch: [...]` array form, a glob that
+   * matches `node_modules` or a hidden directory still skips it. Like every
+   * entry here, the directory has to exist when `sst dev` starts.
+   *
+   * Symbolic links aren't followed, so list the directory a link points to,
+   * not the link.
    */
   paths?: string[];
   /**
