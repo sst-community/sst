@@ -115,20 +115,37 @@ func removeInvocationFolders(dir string) {
 // isInvocationFolder says whether a folder holds an earlier sst dev's logs of
 // invocations, <time>-<request>.log with the time in Unix seconds, and nothing
 // else, so a folder put there for something else, such as one of date-named
-// files, is left alone.
+// files, is left alone. The files an OS adds to a folder that's been opened,
+// as Finder's .DS_Store, don't count.
 func isInvocationFolder(path string) bool {
 	entries, err := os.ReadDir(path)
-	if err != nil || len(entries) == 0 {
+	if err != nil {
 		return false
 	}
+	logs := 0
 	for _, entry := range entries {
 		name := entry.Name()
-		time, request, ok := strings.Cut(strings.TrimSuffix(name, ".log"), "-")
-		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".log") || !ok || request == "" || strings.Trim(time, "0123456789") != "" || len(time) < 9 || len(time) > 10 {
+		if isFolderClutter(name) && !entry.IsDir() {
+			continue
+		}
+		secs, request, ok := strings.Cut(strings.TrimSuffix(name, ".log"), "-")
+		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".log") || !ok || request == "" || strings.Trim(secs, "0123456789") != "" || len(secs) < 9 || len(secs) > 10 {
 			return false
 		}
+		logs++
 	}
-	return true
+	return logs > 0
+}
+
+// isFolderClutter says whether a file is one an OS adds to a folder that's
+// been opened: Finder's .DS_Store, the ._ files macOS writes on other volumes,
+// and Windows Explorer's Thumbs.db and desktop.ini.
+func isFolderClutter(name string) bool {
+	switch name {
+	case ".DS_Store", "Thumbs.db", "desktop.ini":
+		return true
+	}
+	return strings.HasPrefix(name, "._")
 }
 
 // isRotatedLog says whether a file in the logs folder is a log moved aside:
@@ -280,6 +297,8 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 		requestID = "-"
 	}
 	prefix := l.now().UTC().Format("2006-01-02T15:04:05.000Z") + " " + requestID + " " + kind
+	// an empty line, as from console.log(""), is kept as a bare prefix, so the
+	// log shows where it was
 	var b strings.Builder
 	for _, line := range strings.Split(strings.TrimRight(text, "\r\n"), "\n") {
 		b.WriteString(prefix)
@@ -302,7 +321,9 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 	}
 	n, err := file.WriteString(b.String())
 	l.grow(path, int64(n))
-	l.written[path] = l.writes
+	if n > 0 {
+		l.written[path] = l.writes
+	}
 	if err != nil {
 		slog.Error("failed to write invocation log", "path", path, "err", err)
 	}
@@ -318,10 +339,10 @@ func (l *invocationLogs) write(functionID, requestID, kind, text string) {
 // logPath is the path of a function's log. Its ID is a name in the app, which
 // can have characters a file name can't: a separator would put the log in a
 // folder, which the next sst dev would take to be an old one and remove, and
-// Windows refuses others. Those characters are escaped as %XX, % included, so
-// no two IDs share a log over them. Windows' reserved names, such as CON, and
-// names ending in a dot aren't handled; the names sst gives functions aren't
-// those.
+// Windows refuses others, or drops them from the end of a name, as spaces and
+// dots. Those characters are escaped as %XX, % included, so no two IDs share a
+// log over them. Windows' reserved names, such as CON, aren't handled; the
+// names sst gives functions aren't those.
 //
 // Two IDs that differ only in case would share a log on a disk that ignores
 // case, so the second of them seen, in this sst dev or as a log an earlier one
@@ -348,12 +369,14 @@ func (l *invocationLogs) logPath(functionID string) string {
 	return path
 }
 
-// escapeLogName escapes the characters a file name can't hold, as %XX.
+// escapeLogName escapes the characters a file name can't hold, as %XX, and the
+// spaces and dots it ends with, which Windows drops.
 func escapeLogName(functionID string) string {
+	end := len(strings.TrimRight(functionID, " ."))
 	var name strings.Builder
 	for i := 0; i < len(functionID); i++ {
 		c := functionID[i]
-		if c < 0x20 || strings.IndexByte(`%/\:*?"<>|`, c) >= 0 {
+		if c < 0x20 || i >= end || strings.IndexByte(`%/\:*?"<>|`, c) >= 0 {
 			fmt.Fprintf(&name, "%%%02X", c)
 		} else {
 			name.WriteByte(c)

@@ -150,6 +150,24 @@ func TestInvocationLogsKeepFunctionsApart(t *testing.T) {
 	}
 }
 
+// Windows drops the spaces and dots a file name ends with, so an ID ending in
+// them is escaped there, and doesn't share a log with the ID without them.
+func TestEscapeLogNameTrailingSpaceOrDot(t *testing.T) {
+	for id, want := range map[string]string{
+		"Fn":     "Fn",
+		"Fn ":    "Fn%20",
+		"Fn.":    "Fn%2E",
+		"Fn. .":  "Fn%2E%20%2E",
+		"a.b c":  "a.b c",
+		" Fn":    " Fn",
+		"Fn./x.": "Fn.%2Fx%2E",
+	} {
+		if got := escapeLogName(id); got != want {
+			t.Errorf("escapeLogName(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 // A separator in a function's ID doesn't put its log in a folder, which the
 // next sst dev would remove as an old one, and IDs that differ only there
 // don't share a log.
@@ -371,7 +389,7 @@ func TestInvocationLogsReopenARemovedLog(t *testing.T) {
 	}
 
 	// moved, as by a tool that rotates logs
-	if err := os.Rename(filepath.Join(dir, "Fn.log"), filepath.Join(dir, "moved")); err != nil {
+	if err := os.Rename(filepath.Join(dir, "Fn.log"), filepath.Join(t.TempDir(), "moved")); err != nil {
 		t.Fatal(err)
 	}
 	tick = tick.Add(time.Second)
@@ -399,10 +417,7 @@ func TestInvocationLogsReopenARemovedLog(t *testing.T) {
 	invoke(logs, "Fn", "r4")
 	var onDisk int64
 	for _, name := range entries(t, dir) {
-		// moved above, and not a log
-		if name != "moved" {
-			onDisk += size(t, filepath.Join(dir, name))
-		}
+		onDisk += size(t, filepath.Join(dir, name))
 	}
 	if logs.size != onDisk {
 		t.Fatalf("logs take %d bytes on disk, but %d are counted", onDisk, logs.size)
@@ -548,7 +563,9 @@ func TestInvocationLogsTotalKeepsTheLogJustWritten(t *testing.T) {
 // removed, and the logs of this one are left.
 func TestRemoveInvocationFolders(t *testing.T) {
 	dir := t.TempDir()
-	for _, path := range []string{"Fn/1794900000-r1.log", "Fn/1794900001-r2.log", "Other/1794900000-r3.log", "Fn.log", "Fn.log.1"} {
+	// the files Finder, Explorer and macOS's other volumes add to a folder
+	// that's been opened don't keep it
+	for _, path := range []string{"Fn/1794900000-r1.log", "Fn/1794900001-r2.log", "Fn/.DS_Store", "Fn/._1794900000-r1.log", "Other/1794900000-r3.log", "Other/Thumbs.db", "Other/desktop.ini", "Fn.log", "Fn.log.1"} {
 		os.MkdirAll(filepath.Dir(filepath.Join(dir, path)), 0755)
 		if err := os.WriteFile(filepath.Join(dir, path), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
