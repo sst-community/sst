@@ -230,7 +230,8 @@ the component reads its args.
 - **Telling the CLI.** What the CLI needs from a component it reads from what the
   component reported, through the program contract: a function it builds (`function`),
   a command `sst dev` runs (`dev`), a task `sst dev` runs locally (`task`), a bastion
-  for `sst tunnel` (`tunnel`), and a URL to show after a deploy (`hint`). Call
+  for `sst tunnel` (`tunnel`), a URL to show after a deploy (`hint`), and a web
+  function whose requests `sst dev` sends to a local server (`webFunction`). Call
   `this.report({ ... })` in the constructor, before `registerOutputs()`; a report after
   it is an error. Pulumi registers a component's outputs a moment after its
   constructor, so a report from a method can come too late once the config awaits. A

@@ -238,10 +238,15 @@ export function mockPulumi(input?: MockInput) {
   // In `sst dev` a stub is deployed in place of a function's code. The CLI
   // ships it; here it's a file.
   const platform = path.join(work, "platform");
-  for (const stub of ["bridge", "nodejs-bridge"]) {
+  for (const stub of ["bridge", "nodejs-bridge", "web-bridge"]) {
     fs.mkdirSync(path.join(platform, "dist", stub), { recursive: true });
     fs.writeFileSync(path.join(platform, "dist", stub, "bootstrap"), stub);
   }
+  // A web function's bridge, with `dev.live`, is started by a Node.js file
+  fs.writeFileSync(
+    path.join(platform, "dist", "web-bridge", "index.mjs"),
+    "// starts the bridge\n",
+  );
   // What a component reads from the platform's own files, like the Lambda
   // handler a site wraps its server build in: those of the platform this
   // file is in, when it has them. A junction, which Windows makes without

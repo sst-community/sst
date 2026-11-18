@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { output } from "@pulumi/pulumi";
 import { mockPulumi, redirectChanged, sidedClass } from "../../helpers/graph";
 import { rejectionsOf } from "../../helpers/rejections";
+import { applyErrors } from "../../helpers/apply-errors";
 
 // The app's folder, with a server's source and a prebuilt bundle
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-function-v5-"));
@@ -31,6 +32,10 @@ const CERT =
 // `resource.enc`, in the bundle when it's given one. What's in the file
 // follows the links, so a link given wrong changes the code's zip.
 const builds = path.join(root, ".builds");
+// What the stub's settings are when a test sets them, as a stage on an
+// emulator has, and the web functions the CLI was asked to build
+let stub: object | undefined;
+const built: string[] = [];
 const pulumi = mockPulumi({
   root,
   // The key the links are encrypted with, a role's creation time, which the
@@ -46,7 +51,9 @@ const pulumi = mockPulumi({
               latestVersionArn: `arn:aws:lambda:us-east-1:123456789012:network-connector:${args.name}:1`,
             }
           : args.type === ENDPOINT
-            ? { domainName: `${args.name.toLowerCase()}.lambda-web.example.com` }
+            ? {
+                domainName: `${args.name.toLowerCase()}.lambda-web.example.com`,
+              }
             : args.type === DISTRIBUTION
               ? {
                   domainName: `${args.name.toLowerCase()}.cloudfront.net`,
@@ -58,8 +65,10 @@ const pulumi = mockPulumi({
       ? { names: ["us-east-1a", "us-east-1b"] }
       : undefined,
   cli: (method, args) => {
+    if (method === "Dev.Stub") return stub;
     if (method !== "Runtime.Build" || args.runtime !== "nodejs24.x")
       return undefined;
+    built.push(args.functionID);
     if (args.bundle) {
       const file = path.join(args.bundle, ".sst", args.functionID);
       fs.mkdirSync(file, { recursive: true });
@@ -122,6 +131,8 @@ describe("WebFunction", () => {
     pulumi.reset();
     // @ts-ignore
     global.$dev = false;
+    stub = undefined;
+    built.length = 0;
   });
 
   const resource = (name: string) =>
@@ -425,6 +436,61 @@ describe("WebFunction", () => {
           check: () => {
             expect(resource("WebEndpoint")).toBeDefined();
             expect(pulumi.reportOf("Web")).not.toHaveProperty("dev");
+          },
+        },
+        // #275: with `dev.live`, deployed in `sst dev` with the bridge in
+        // place of the code, and no network connector
+        "in sst dev, live, in a VPC": {
+          create: (WebFunction, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new WebFunction(
+              "Web",
+              {
+                entrypoint: "src/server.ts",
+                vpc: {
+                  privateSubnets: ["subnet-1"],
+                  securityGroups: ["sg-1"],
+                },
+                dev: {
+                  command: "tsx watch src/server.ts",
+                  url: "http://localhost:3000",
+                  live: true,
+                },
+              },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::WebDev"],
+          changed: [["Web", ["outputs"]]],
+          check: () => {
+            expect(resource("WebEndpoint")).toBeDefined();
+            expect(ofType(CONNECTOR)).toEqual([]);
+            expect(pulumi.reportOf("Web")).toMatchObject({
+              dev: { title: "Web" },
+              webFunction: { url: "http://localhost:3000" },
+            });
+          },
+        },
+        "in sst dev, live, on a domain": {
+          create: (WebFunction, opts) => {
+            // @ts-ignore
+            global.$dev = true;
+            new WebFunction(
+              "Web",
+              {
+                entrypoint: "src/server.ts",
+                domain: { name: "api.example.com", dns: false, cert: CERT },
+                dev: { live: true },
+              },
+              opts,
+            );
+          },
+          unclaimed: ["sst:sst:DevCommand::WebDev"],
+          changed: [["Web", ["outputs"]]],
+          check: () => {
+            expect(resource("WebCdnDistribution")).toBeDefined();
+            expect(resource("WebResourcePolicy")).toBeDefined();
           },
         },
       },
@@ -1044,6 +1110,169 @@ describe("WebFunction", () => {
         directory: ".",
         autostart: false,
         command: "node --watch 'dist/server.mjs'",
+      });
+    });
+
+    describe("with dev.live", () => {
+      const ENDPOINT_URL = "https://webendpoint.lambda-web.example.com";
+      const zipOf = (code: string) =>
+        // File names are stored uncompressed in a zip's headers
+        fs.readFileSync(resource(code).inputs.source.path).toString("latin1");
+      const variablesOf = (revision: string) =>
+        resource(revision).inputs.serviceConfig.environmentVariables.value;
+
+      it("deploys the web function with a bridge to the server, which runs locally", async () => {
+        const { Bucket } = await import("../../../src/components/aws/bucket");
+        const web = new WebFunction("Web", {
+          entrypoint: "src/server.ts",
+          link: [new Bucket("MyBucket")],
+          environment: { GREETING: "hi" },
+          url: { authorization: "iam" },
+          vpc: { privateSubnets: ["subnet-1"], securityGroups: ["sg-1"] },
+          dev: { live: true, url: "http://127.0.0.1:3000/app" },
+        });
+        await pulumi.settle();
+
+        // Deployed as in a deploy, with the endpoint's URL
+        expect(await pulumi.resolve(web.url)).toBe(ENDPOINT_URL);
+        expect(await pulumi.resolve(web.endpointUrl!)).toBe(ENDPOINT_URL);
+        for (const arn of [web.arn, web.endpointArn, web.revisionArn])
+          expect(arn).toBeDefined();
+        expect(resource("WebEndpoint").inputs.authType).toBe("IamAuth");
+        expect(resource("WebLocalLogGroup")).toBeDefined();
+        expect(Object.keys(web.link().properties).sort()).toEqual([
+          "arn",
+          "endpointArn",
+          "url",
+        ]);
+        // The bridge in place of the server, which isn't built
+        expect(built).toEqual([]);
+        const zip = zipOf("WebCode");
+        expect(zip).toContain("bootstrap");
+        expect(zip).toContain("index.mjs");
+        expect(zip).not.toContain("server.mjs");
+        expect(variablesOf("WebRevision")).toEqual({
+          SST_APP: "app",
+          SST_STAGE: "test",
+          SST_FUNCTION_ID: "Web",
+          SST_REGION: process.env.SST_AWS_REGION || "us-east-1",
+          SST_APPSYNC_HTTP: "appsync.example.com",
+          SST_APPSYNC_REALTIME: "appsync-realtime.example.com",
+          AWS_LAMBDA_NODEJS_ENTRYPOINT: "index.mjs",
+        });
+        // The bridge doesn't need the VPC
+        expect(ofType(CONNECTOR)).toEqual([]);
+        expect(
+          resource("WebRevision").inputs.serviceConfig
+            .egressNetworkConnectorArn,
+        ).toBeUndefined();
+        // It reaches `sst dev` over AppSync, and the CLI still assumes the
+        // role to run the server
+        expect(policyOf("WebRole").statements).toContainEqual(
+          expect.objectContaining({
+            actions: ["appsync:*"],
+            resources: ["*"],
+          }),
+        );
+        expect(trustOf("WebRole").statements).toHaveLength(2);
+
+        // The server's pane, as without `live`, and where `sst dev` sends
+        // the bridge's requests
+        const report = pulumi.reportOf("Web")!;
+        expect(report.hint).toBe(ENDPOINT_URL);
+        expect(report.webFunction).toEqual({
+          url: "http://127.0.0.1:3000/app",
+        });
+        expect(report.dev).toMatchObject({
+          title: "Web",
+          command: "node --watch 'src/server.ts'",
+          links: ["MyBucket"],
+          aws: { role: expect.stringContaining("WebRole") },
+        });
+        expect(report.dev.environment).toMatchObject({
+          GREETING: "hi",
+          AWS_LAMBDA_HTTP_ENDPOINT: "127.0.0.1:3000",
+        });
+      });
+
+      it("keeps the bridge's code, and so its revision, as the server changes", async () => {
+        for (const [name, greeting] of [
+          ["One", "one"],
+          ["Two", "two"],
+        ])
+          new WebFunction(name, {
+            entrypoint: "src/server.ts",
+            environment: { GREETING: greeting },
+            dev: { live: true },
+          });
+        await pulumi.settle();
+        expect(resource("OneCode").inputs.key).toBe(
+          resource("TwoCode").inputs.key,
+        );
+        // The server's environment is the local server's, not the bridge's
+        const { SST_FUNCTION_ID: one, ...rest } = variablesOf("OneRevision");
+        const { SST_FUNCTION_ID: two, ...other } = variablesOf("TwoRevision");
+        expect([one, two]).toEqual(["One", "Two"]);
+        expect(rest).toEqual(other);
+        expect(rest).not.toHaveProperty("GREETING");
+      });
+
+      it("serves the domain through CloudFront, to the bridge", async () => {
+        const web = new WebFunction("Web", {
+          entrypoint: "src/server.ts",
+          domain: { name: "api.example.com", dns: false, cert: CERT },
+          dev: { live: true, url: "http://localhost:3000" },
+        });
+        await pulumi.settle();
+        expect(await pulumi.resolve(web.url)).toBe("https://api.example.com");
+        expect(await pulumi.resolve(web.link().properties.url)).toBe(
+          "https://api.example.com",
+        );
+        expect(resource("WebEndpoint").inputs.authType).toBe("IamAuth");
+        expect(ofType(DISTRIBUTION)).toHaveLength(1);
+        expect(resource("WebResourcePolicy")).toBeDefined();
+        // CloudFront sets `X-Forwarded-Host`, so the bridge keeps it
+        expect(variablesOf("WebRevision").SST_WEB_FUNCTION_DOMAIN).toBe("true");
+        expect(pulumi.reportOf("Web")!.webFunction).toEqual({
+          url: "http://localhost:3000",
+        });
+      });
+
+      it("refuses a stage whose functions reach sst dev over HTTP", async () => {
+        stub = {
+          environment: {
+            SST_HTTP_TRANSPORT: "http://host.docker.internal:4000",
+            SST_HTTP_TRANSPORT_TOKEN: "token",
+          },
+          permissions: [],
+        };
+        const errors = await applyErrors(
+          () =>
+            new WebFunction("Web", {
+              entrypoint: "src/server.ts",
+              dev: { live: true },
+            }),
+          pulumi.settle,
+        );
+        expect(errors).toContainEqual(
+          expect.stringMatching(
+            /"dev.live" of the "Web" web function only works on a stage in AWS/,
+          ),
+        );
+      });
+
+      it("is only for sst dev: a deploy runs the server", async () => {
+        // @ts-ignore
+        global.$dev = false;
+        new WebFunction("Web", {
+          entrypoint: "src/server.ts",
+          dev: { live: true },
+        });
+        await pulumi.settle();
+        expect(built).toEqual(["Web"]);
+        expect(zipOf("WebCode")).toContain("server.mjs");
+        expect(pulumi.reportOf("Web")).not.toHaveProperty("webFunction");
+        expect(JSON.stringify(policyOf("WebRole"))).not.toContain("appsync");
       });
     });
   });

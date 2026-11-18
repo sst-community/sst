@@ -4275,6 +4275,7 @@ interface Report {
     task?: Input_2<TaskReport>;
     // (undocumented)
     tunnel?: Input_2<TunnelReport>;
+    webFunction?: Input_2<WebFunctionReport>;
 }
 
 // @public (undocumented)
@@ -5462,6 +5463,7 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts_50> {
         command?: Input<string>;
         directory?: Input<string>;
         url?: Input<string>;
+        live?: boolean;
         autostart?: Input<boolean>;
     };
     domain?: string | Prettify<CdnDomainArgs>;
@@ -5488,6 +5490,11 @@ export interface WebFunctionArgs extends ComponentArgs<typeof parts_50> {
         securityGroups: Input<Input<string>[]>;
         privateSubnets: Input<Input<string>[]>;
     }>;
+}
+
+// @public
+interface WebFunctionReport {
+    url: Input_2<string>;
 }
 
 // @public (undocumented)

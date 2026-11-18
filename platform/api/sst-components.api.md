@@ -644,6 +644,7 @@ export interface Report {
     task?: Input<TaskReport>;
     // (undocumented)
     tunnel?: Input<TunnelReport>;
+    webFunction?: Input<WebFunctionReport>;
 }
 
 // @public @deprecated (undocumented)
@@ -834,6 +835,11 @@ interface VersionMetadataBinding {
 // @public (undocumented)
 export class VisibleError extends Error {
     constructor(...message: string[]);
+}
+
+// @public
+interface WebFunctionReport {
+    url: Input<string>;
 }
 
 // @public (undocumented)

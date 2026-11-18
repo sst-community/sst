@@ -1,7 +1,7 @@
 import { type Input, type Inputs, all, output } from "@pulumi/pulumi";
 import { Link } from "./link";
 import { rpc } from "./rpc/rpc";
-import { lazy } from "../util/lazy";
+import { perRun } from "../util/lazy";
 
 export { type Context, context, underCore } from "./context";
 
@@ -66,6 +66,15 @@ export interface TunnelReport {
   subnets: Input<Input<string>[]>;
 }
 
+/**
+ * A web function deployed in `sst dev` with a bridge in place of its code,
+ * whose requests `sst dev` sends to the local server.
+ */
+export interface WebFunctionReport {
+  /** The local server's URL. */
+  url: Input<string>;
+}
+
 /** What a component reports to the core. Each item is optional. */
 export interface Report {
   function?: Input<FunctionReport>;
@@ -74,10 +83,19 @@ export interface Report {
   tunnel?: Input<TunnelReport>;
   /** A URL the CLI shows when a deploy is done, like the API's. */
   hint?: Input<string | undefined>;
+  /** A web function `sst dev` sends the requests of to the local server. */
+  webFunction?: Input<WebFunctionReport>;
 }
 
 /** The items a report can have. */
-export const reportItems = ["function", "dev", "task", "tunnel", "hint"];
+export const reportItems = [
+  "function",
+  "dev",
+  "task",
+  "tunnel",
+  "hint",
+  "webFunction",
+];
 
 /** The record the core reads, as a component's `_sst` output. */
 export function record(report: Report): Inputs {
@@ -122,8 +140,8 @@ export interface StubSettings {
 }
 
 /**
- * Asks the core for the stub's settings, once for the program.
+ * Asks the core for the stub's settings, once for each run of the program.
  *
  * @internal
  */
-export const devStub = lazy(() => rpc.call<StubSettings>("Dev.Stub", {}));
+export const devStub = perRun(() => rpc.call<StubSettings>("Dev.Stub", {}));

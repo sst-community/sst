@@ -241,7 +241,7 @@ describe("The program contract", () => {
       }
     }
     expect(() => new Site("Web")).toThrow(
-      'The "Web" component (acme.index.Site) reported "functions", which SST doesn\'t read. It reads "function", "dev", "task", "tunnel", "hint".',
+      'The "Web" component (acme.index.Site) reported "functions", which SST doesn\'t read. It reads "function", "dev", "task", "tunnel", "hint", "webFunction".',
     );
   });
 

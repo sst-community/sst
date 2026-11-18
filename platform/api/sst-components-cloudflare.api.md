@@ -934,6 +934,7 @@ interface Report {
     task?: Input_2<TaskReport>;
     // (undocumented)
     tunnel?: Input_2<TunnelReport>;
+    webFunction?: Input_2<WebFunctionReport>;
 }
 
 // @public (undocumented)
@@ -1081,6 +1082,11 @@ interface VersionMetadataBinding {
     properties: Record<string, never>;
     // (undocumented)
     type: "versionMetadataBindings";
+}
+
+// @public
+interface WebFunctionReport {
+    url: Input_2<string>;
 }
 
 // @public (undocumented)
