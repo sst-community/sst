@@ -118,7 +118,7 @@ const deployFiles = [
   "functions/react-server",
   "functions/remix-server",
 ];
-const devFiles = ["dist/bridge", "dist/nodejs-bridge"];
+const devFiles = ["dist/bridge", "dist/nodejs-bridge", "dist/web-bridge"];
 
 async function copyDeployFiles() {
   // Every folder a component or a build names under the platform's folder
