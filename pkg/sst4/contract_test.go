@@ -44,6 +44,7 @@ func TestReadReport(t *testing.T) {
 		"_tunnel": {"ip": "10.0.0.1", "username": "ec2-user", "privateKey": "key", "subnets": ["10.0.0.0/16"]},
 		"_hint": "https://shop-dev-webbucket-drrmzcfu.example.com",
 		"_live": {"functionID": "Web"},
+		"_webFunction": {"url": "http://localhost:3000"},
 		"url": "https://example.com"
 	}`), &outputs)
 	want := &project.Report{
@@ -56,9 +57,10 @@ func TestReadReport(t *testing.T) {
 			Links:       []string{"Docs"},
 			Aws:         &project.DevAws{},
 		},
-		Task:   &project.Task{Command: ptr("node seed.js"), Directory: "scripts"},
-		Tunnel: &project.Tunnel{IP: "10.0.0.1", Username: "ec2-user", PrivateKey: "key", Subnets: []string{"10.0.0.0/16"}},
-		Hint:   "https://shop-dev-webbucket-drrmzcfu.example.com",
+		Task:        &project.Task{Command: ptr("node seed.js"), Directory: "scripts"},
+		Tunnel:      &project.Tunnel{IP: "10.0.0.1", Username: "ec2-user", PrivateKey: "key", Subnets: []string{"10.0.0.0/16"}},
+		Hint:        "https://shop-dev-webbucket-drrmzcfu.example.com",
+		WebFunction: &project.WebFunction{URL: "http://localhost:3000"},
 	}
 	if report := readReport(outputs); !reflect.DeepEqual(report, want) {
 		t.Fatalf("read %+v", report)
@@ -77,6 +79,7 @@ func TestReadReportNothing(t *testing.T) {
 		{},
 		{"url": "https://example.com"},
 		{"_hint": 5, "_dev": "npm run dev"},
+		{"_webFunction": "http://localhost:3000"},
 		{"_metadata": map[string]interface{}{"url": "https://example.com"}},
 		{"_sst": record},
 	} {

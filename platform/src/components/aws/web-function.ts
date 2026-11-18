@@ -32,7 +32,7 @@ import { Input } from "../input.js";
 import { Link } from "../link.js";
 import { physicalName } from "../naming.js";
 import { rpc } from "../rpc/rpc.js";
-import { FunctionArgs } from "./function.js";
+import { Function, FunctionArgs } from "./function.js";
 import { functionEncryptionKey } from "./function-encryption-key.js";
 import { RETENTION } from "./logging.js";
 import { Permission, permission } from "./permission.js";
@@ -224,7 +224,9 @@ export interface WebFunctionArgs {
    *
    * Requests can fail with `403` for a few minutes after the first deploy, until the
    * distribution has deployed. In `sst dev`, while your server runs locally, no
-   * distribution is created and `url` is the local URL.
+   * distribution is created and `url` is the local URL. With `dev.live`, the
+   * distribution is created as in a deploy, and `url` is the domain's, which sends
+   * its requests through the endpoint to your local server.
    *
    * @example
    *
@@ -311,7 +313,8 @@ export interface WebFunctionArgs {
    * This creates a Lambda network connector, which each revision is created with.
    * Creating one takes a few minutes. Adding, changing or removing `vpc` makes a new
    * revision. In `sst dev`, unless `dev` is `false`, your server runs locally and no
-   * connector is created, so it reaches the VPC only through `sst tunnel`.
+   * connector is created, so it reaches the VPC only through `sst tunnel`. That's so
+   * with `dev.live` too, as the bridge deployed in place of your code doesn't need one.
    *
    * @example
    * Create a `Vpc` component, with a NAT if your server needs the internet.
@@ -352,12 +355,16 @@ export interface WebFunctionArgs {
         privateSubnets: Input<Input<string>[]>;
       }>;
   /**
-   * Run your server locally in `sst dev`, without deploying a web function. The command
-   * receives links, environment variables, AWS credentials for the execution role, and
-   * `AWS_LAMBDA_HTTP_ENDPOINT` derived from `url`.
+   * Run your server locally in `sst dev`. By default no web function is deployed. The
+   * command receives links, environment variables, AWS credentials for the execution
+   * role, and `AWS_LAMBDA_HTTP_ENDPOINT` derived from `url`.
    *
-   * Set `false` to deploy the real web function in `sst dev`. The local execution role
-   * trusts your AWS account only when local development is enabled.
+   * Set `live: true` to also deploy the web function, with a bridge that sends its
+   * requests to your local server, so you can test the real integration.
+   *
+   * Set `false` to deploy the web function with your code in `sst dev`, as in a deploy,
+   * with no local server. The local execution role trusts your AWS account only when
+   * local development is enabled.
    * @default Runs locally in `sst dev`.
    * @example
    * ```js
@@ -387,9 +394,10 @@ export interface WebFunctionArgs {
          */
         directory?: Input<string>;
         /**
-         * The local server URL returned by this component. Its path and query are
-         * preserved in the returned URL. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the
-         * hostname and port, since an HTTP listener cannot bind to a URL path.
+         * The URL of your local server. Without `live`, it's also the URL this component
+         * returns, with its path and query preserved. With `live`, the component returns
+         * the endpoint's URL instead, or the domain's with `domain`. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the hostname
+         * and port, since an HTTP listener cannot bind to a URL path.
          * @default `"http://localhost:8080"`
          * @example
          * ```js
@@ -397,6 +405,43 @@ export interface WebFunctionArgs {
          * ```
          */
         url?: Input<string>;
+        /**
+         * Deploy the web function in `sst dev` too, with a bridge in place of your code,
+         * so its real HTTPS endpoint sends each request to your local server at `url`
+         * and streams the response back. It only applies in `sst dev`; a deploy always
+         * runs your code. Use it to test the real integration: IAM
+         * authorization, callers in AWS, webhooks, and anything else that needs the
+         * endpoint. `url` and the links to this component are then the endpoint's.
+         *
+         * Your server still runs locally, with the same links, environment and role.
+         * The deployed web function, revision, endpoint, code bucket and log groups are
+         * the same as in a deploy, and are billed as such. The bridge is the same on
+         * every deploy, so it doesn't make a new revision while you work.
+         *
+         * Requests go to the scheme, host and port of `url`, with the path and query
+         * of the request; a path in `url` isn't used. Without `sst dev` running, the
+         * endpoint answers with a `503` after 5 seconds. Once `sst dev` has a request,
+         * the function's `timeout` limits it, as in a deploy. If `sst dev` stops
+         * answering it, as when it exits, the request gets a `504` after 20 seconds.
+         *
+         * The endpoint takes the same `url.authorization` as in a deploy. With the
+         * default, `none`, anyone with its URL can send requests to your local server,
+         * which runs with the execution role's permissions, as your deployed code would.
+         * That role is the one `sst dev` always makes, which your AWS account can assume
+         * so your local server can use it, as a `Function`'s can in `sst dev`; `live`
+         * adds only the AppSync access the bridge needs. Set `url.authorization` to
+         * `"iam"` to accept only signed requests.
+         *
+         * With `vpc`, no network
+         * connector is created: the bridge doesn't need one, and your local server reaches
+         * the VPC through `sst tunnel`.
+         * @default `false`
+         * @example
+         * ```js
+         * { dev: { live: true, url: "http://localhost:3000" } }
+         * ```
+         */
+        live?: boolean;
         /**
          * Whether to start the command automatically in the multiplexer.
          * @default `true`
@@ -640,6 +685,9 @@ export class WebFunction extends Component implements Link.Linkable {
 
     const self = this;
     const dev = $dev && args.dev !== false;
+    // Live, the web function is deployed with a bridge to the local server.
+    const live = dev && isPlainRecord(args.dev) && args.dev.live === true;
+    const deployed = !dev || live;
     const region = getRegionOutput({}, opts).region;
     const links = Link.getProperties(args.link);
     const environment = all([
@@ -721,7 +769,7 @@ export class WebFunction extends Component implements Link.Linkable {
       ),
     );
     this.logGroup = logGroup;
-    const localLogGroup = dev
+    const localLogGroup = !deployed
       ? undefined
       : new cloudwatch.LogGroup(
           `${name}LocalLogGroup`,
@@ -733,7 +781,7 @@ export class WebFunction extends Component implements Link.Linkable {
         );
     this.localLogGroup = localLogGroup;
 
-    const codeBucket = dev
+    const codeBucket = !deployed
       ? undefined
       : new s3.Bucket(
           `${name}CodeBucket`,
@@ -803,12 +851,22 @@ export class WebFunction extends Component implements Link.Linkable {
               policy: all([
                 args.permissions ?? [],
                 Link.getInclude<Permission>("aws.permission", args.link),
+                live ? Function.appsync() : undefined,
               ]).apply(
-                ([permissions, links]) =>
+                ([permissions, links, appsync]) =>
                   iam.getPolicyDocumentOutput({
                     statements: [
                       ...permissions,
                       ...links,
+                      // the bridge talks to sst dev over AppSync
+                      ...(appsync
+                        ? [
+                            {
+                              actions: ["appsync:*"],
+                              resources: Function.appsyncResources(appsync),
+                            },
+                          ]
+                        : []),
                       {
                         actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
                         resources: [
@@ -838,9 +896,11 @@ export class WebFunction extends Component implements Link.Linkable {
     );
     this.role = role;
 
+    // The local server's URL in sst dev. Live, `url` is the endpoint's instead.
+    let localUrl: Output<string> | undefined;
     if (dev) {
       const config = args.dev || {};
-      this.devUrl = output(config.url ?? "http://localhost:8080").apply(
+      localUrl = output(config.url ?? "http://localhost:8080").apply(
         (value) => {
           const url = new URL(value);
           if (
@@ -854,6 +914,7 @@ export class WebFunction extends Component implements Link.Linkable {
           return value;
         },
       );
+      if (!live) this.devUrl = localUrl;
       new DevCommand(
         `${name}Dev`,
         {
@@ -887,7 +948,7 @@ export class WebFunction extends Component implements Link.Linkable {
             environment,
             Link.propertiesToEnv(links),
             region,
-            this.devUrl,
+            localUrl,
           ]).apply(([environment, linkedEnvironment, region, value]) => {
             const url = new URL(value);
             return {
@@ -903,234 +964,15 @@ export class WebFunction extends Component implements Link.Linkable {
         },
         { parent: self },
       );
-      this.registerOutputs({ _hint: this.url });
-      return;
+      if (!live) {
+        this.registerOutputs({ _hint: this.url });
+        return;
+      }
     }
 
-    const encryptionKey = functionEncryptionKey().base64;
-    const build = all([
-      args.entrypoint,
-      args.bundle,
-      args.nodejs,
-      args.copyFiles ?? [],
-      encryptionKey,
-      links,
-    ]).apply(
-      async ([
-        entrypoint,
-        customBundle,
-        nodejs,
-        copyFiles,
-        encryptionKey,
-        links,
-      ]) => {
-        validateEntrypoint(entrypoint);
-        const files = copyFiles.map((item) =>
-          validateCopyFile(item.from, item.to),
-        );
-        let bundle: string | undefined;
-        let handler: string;
-        if (customBundle !== undefined) {
-          bundle = path.resolve($cli.paths.root, customBundle);
-          const entry = path.resolve(bundle, entrypoint);
-          if (
-            !isWithin(bundle, entry) ||
-            !fs.existsSync(entry) ||
-            !fs.statSync(entry).isFile()
-          )
-            throw new VisibleError(
-              `The "${name}" WebFunction's entrypoint must be a file inside its bundle.`,
-            );
-          if (!/[.](mjs|cjs|js)$/.test(entrypoint))
-            throw new VisibleError(
-              `The "${name}" WebFunction's bundled entrypoint must be a JavaScript file.`,
-            );
-          handler = path.relative(bundle, entry).split(path.sep).join("/");
-        } else {
-          const entry = path.resolve($cli.paths.root, entrypoint);
-          validateSource(entry);
-          handler =
-            entry.slice(0, entry.length - path.extname(entry).length) + ".main";
-        }
-        const install = Array.isArray(nodejs?.install)
-          ? Object.fromEntries(nodejs.install.map((value) => [value, "*"]))
-          : nodejs?.install;
-        const result = await rpc.call<{
-          out: string;
-          handler: string;
-          errors: string[];
-          sourcemaps: string[];
-        }>("Runtime.Build", {
-          functionID: name,
-          handler,
-          bundle,
-          runtime: "nodejs24.x",
-          encryptionKey,
-          links,
-          copyFiles: files,
-          dev: false,
-          properties: {
-            ...nodejs,
-            install,
-            minify: nodejs?.minify ?? true,
-            format: nodejs?.format ?? "esm",
-            architecture: "arm64",
-          },
-        });
-        if (result.errors.length)
-          throw new VisibleError(result.errors.join("\n"));
-        return {
-          directory: result.out,
-          entrypoint: bundle
-            ? handler
-            : result.handler.slice(0, -path.extname(result.handler).length) +
-              (nodejs?.format === "cjs" ? ".cjs" : ".mjs"),
-          resourceFile: bundle ? `.sst/${name}/resource.enc` : "resource.enc",
-          sourcemaps: nodejs?.sourcemap ? [] : result.sourcemaps,
-          copyFiles: files,
-        };
-      },
-    );
-    const cloudEnvironment = all([environment, encryptionKey, build]).apply(
-      ([environment, key, build]) => ({
-        ...environment,
-        SST_KEY: key,
-        SST_KEY_FILE: build.resourceFile,
-        AWS_LAMBDA_NODEJS_ENTRYPOINT: build.entrypoint,
-      }),
-    );
-    const zip = all([build, cloudEnvironment]).apply(
-      async ([
-        { directory, entrypoint, resourceFile, sourcemaps, copyFiles },
-        variables,
-      ]) => {
-        let environmentSize = 0;
-        for (const [key, value] of Object.entries(variables)) {
-          if (typeof value !== "string" || value.length === 0)
-            throw new VisibleError(
-              `The "${name}" WebFunction's environment variable "${key}" must be a non-empty string.`,
-            );
-          environmentSize +=
-            Buffer.byteLength(key, "utf8") + Buffer.byteLength(value, "utf8");
-        }
-        if (environmentSize > 32 * 1024)
-          throw new VisibleError(
-            `The "${name}" WebFunction's environment variables exceed 32 KiB, including SST's managed values.`,
-          );
-        if (!fs.existsSync(path.join(directory, entrypoint)))
-          throw new VisibleError(
-            `The "${name}" WebFunction's build did not produce "${entrypoint}".`,
-          );
-        const zipPath = path.join(
-          $cli.paths.work,
-          "artifacts",
-          `${name}-web-function`,
-          "code.zip",
-        );
-        await fs.promises.mkdir(path.dirname(zipPath), { recursive: true });
-        const files = new Map<string, string>();
-        const bundled = await glob("**", {
-          cwd: directory,
-          dot: true,
-          follow: false,
-          ignore: [
-            ".git/**",
-            "**/sst-env.d.ts",
-            ...sourcemaps.map((file) =>
-              path.relative(directory, file).split(path.sep).join("/"),
-            ),
-          ],
-        });
-        for (const file of bundled) {
-          const source = path.join(directory, file);
-          if (
-            file !== resourceFile &&
-            (file === "resource.enc" || file.startsWith(".sst/"))
-          )
-            continue;
-          if (!(await fs.promises.lstat(source)).isDirectory())
-            files.set(file, source);
-        }
-        // Deployment-mode Runtime.Build does not copy files. Overlay both built and
-        // prebuilt packages here; later entries override earlier ones, as in Function.
-        for (const copy of copyFiles) {
-          const entries = copy.isDir
-            ? await glob("**", { cwd: copy.from, dot: true, follow: false })
-            : [""];
-          for (const relative of entries) {
-            const source = path.join(copy.from, relative);
-            if ((await fs.promises.lstat(source)).isDirectory()) continue;
-            const destination = path
-              .join(copy.to, relative)
-              .split(path.sep)
-              .join("/");
-            if (
-              destination === "resource.enc" ||
-              destination === "sst-env.d.ts" ||
-              destination.endsWith("/sst-env.d.ts") ||
-              destination.startsWith(".git/") ||
-              destination.startsWith(".sst/")
-            )
-              continue;
-            files.set(destination, source);
-          }
-        }
-        const resourcePath = path.join(directory, resourceFile);
-        if (!fs.existsSync(resourcePath) || !fs.statSync(resourcePath).isFile())
-          throw new VisibleError(
-            `The "${name}" WebFunction's build did not produce its encrypted resource file.`,
-          );
-        files.set(resourceFile, resourcePath);
-        for (const [destination, source] of files) {
-          if (!(await fs.promises.lstat(source)).isSymbolicLink()) continue;
-          const target = await fs.promises.readlink(source);
-          const resolved = path.posix.normalize(
-            path.posix.join(path.posix.dirname(destination), target),
-          );
-          if (
-            path.isAbsolute(target) ||
-            resolved === ".." ||
-            resolved.startsWith("../") ||
-            (!files.has(resolved) &&
-              ![...files.keys()].some((entry) =>
-                entry.startsWith(`${resolved}/`),
-              ))
-          )
-            throw new VisibleError(
-              `The "${name}" WebFunction's symlink "${destination}" must point to an existing relative target inside the deployment package.`,
-            );
-        }
-        if (!files.has(entrypoint))
-          throw new VisibleError(
-            `The "${name}" WebFunction's entrypoint is excluded from its deployment package.`,
-          );
-        await new Promise<void>((resolve, reject) => {
-          const stream = fs.createWriteStream(zipPath);
-          const archive = archiver("zip", { statConcurrency: 1 });
-          archive.on("warning", reject);
-          archive.on("error", reject);
-          stream.on("error", reject);
-          stream.once("close", resolve);
-          archive.pipe(stream);
-          for (const [file, source] of [...files].sort(([a], [b]) =>
-            a.localeCompare(b),
-          ))
-            archive.file(source, {
-              name: file,
-              date: new Date(0),
-            });
-          archive.finalize().catch(reject);
-        });
-        return {
-          path: zipPath,
-          hash: crypto
-            .createHash("sha256")
-            .update(await fs.promises.readFile(zipPath))
-            .digest("hex"),
-          entrypoint,
-        };
-      },
-    );
+    const { zip, cloudEnvironment } = live
+      ? createBridgeCode()
+      : createServerCode();
     const codeObject = new s3.BucketObjectv2(
       `${name}Code`,
       {
@@ -1190,7 +1032,9 @@ export class WebFunction extends Component implements Link.Linkable {
       { parent: self, dependsOn: [publicAccessBlock!] },
     );
     this.codeBucketPolicy = codeBucketPolicy;
-    const network = createNetworkConnector();
+    // The bridge doesn't need the VPC, and the local server reaches it through
+    // `sst tunnel`.
+    const network = live ? undefined : createNetworkConnector();
     this.networkConnector = network?.connector;
     this.operatorRole = network?.operatorRole;
     const revision = new lambdaweb.FunctionRevision(
@@ -1265,7 +1109,269 @@ export class WebFunction extends Component implements Link.Linkable {
     this.originAccessControl = domain?.originAccessControl;
     this.resourcePolicy = domain?.resourcePolicy;
 
-    this.registerOutputs({ _hint: this.url });
+    this.registerOutputs({
+      _hint: this.url,
+      // sst dev sends the bridge's requests to the local server
+      ...(live ? { _webFunction: { url: localUrl } } : {}),
+    });
+
+    // The server's code, built, and the environment it runs with.
+    function createServerCode() {
+      const encryptionKey = functionEncryptionKey().base64;
+      const build = all([
+        args.entrypoint,
+        args.bundle,
+        args.nodejs,
+        args.copyFiles ?? [],
+        encryptionKey,
+        links,
+      ]).apply(
+        async ([
+          entrypoint,
+          customBundle,
+          nodejs,
+          copyFiles,
+          encryptionKey,
+          links,
+        ]) => {
+          validateEntrypoint(entrypoint);
+          const files = copyFiles.map((item) =>
+            validateCopyFile(item.from, item.to),
+          );
+          let bundle: string | undefined;
+          let handler: string;
+          if (customBundle !== undefined) {
+            bundle = path.resolve($cli.paths.root, customBundle);
+            const entry = path.resolve(bundle, entrypoint);
+            if (
+              !isWithin(bundle, entry) ||
+              !fs.existsSync(entry) ||
+              !fs.statSync(entry).isFile()
+            )
+              throw new VisibleError(
+                `The "${name}" WebFunction's entrypoint must be a file inside its bundle.`,
+              );
+            if (!/[.](mjs|cjs|js)$/.test(entrypoint))
+              throw new VisibleError(
+                `The "${name}" WebFunction's bundled entrypoint must be a JavaScript file.`,
+              );
+            handler = path.relative(bundle, entry).split(path.sep).join("/");
+          } else {
+            const entry = path.resolve($cli.paths.root, entrypoint);
+            validateSource(entry);
+            handler =
+              entry.slice(0, entry.length - path.extname(entry).length) +
+              ".main";
+          }
+          const install = Array.isArray(nodejs?.install)
+            ? Object.fromEntries(nodejs.install.map((value) => [value, "*"]))
+            : nodejs?.install;
+          const result = await rpc.call<{
+            out: string;
+            handler: string;
+            errors: string[];
+            sourcemaps: string[];
+          }>("Runtime.Build", {
+            functionID: name,
+            handler,
+            bundle,
+            runtime: "nodejs24.x",
+            encryptionKey,
+            links,
+            copyFiles: files,
+            dev: false,
+            properties: {
+              ...nodejs,
+              install,
+              minify: nodejs?.minify ?? true,
+              format: nodejs?.format ?? "esm",
+              architecture: "arm64",
+            },
+          });
+          if (result.errors.length)
+            throw new VisibleError(result.errors.join("\n"));
+          return {
+            directory: result.out,
+            entrypoint: bundle
+              ? handler
+              : result.handler.slice(0, -path.extname(result.handler).length) +
+                (nodejs?.format === "cjs" ? ".cjs" : ".mjs"),
+            resourceFile: bundle ? `.sst/${name}/resource.enc` : "resource.enc",
+            sourcemaps: nodejs?.sourcemap ? [] : result.sourcemaps,
+            copyFiles: files,
+          };
+        },
+      );
+      const cloudEnvironment = all([environment, encryptionKey, build]).apply(
+        ([environment, key, build]) => ({
+          ...environment,
+          SST_KEY: key,
+          SST_KEY_FILE: build.resourceFile,
+          AWS_LAMBDA_NODEJS_ENTRYPOINT: build.entrypoint,
+        }),
+      );
+      const zip = all([build, cloudEnvironment]).apply(
+        async ([
+          { directory, entrypoint, resourceFile, sourcemaps, copyFiles },
+          variables,
+        ]) => {
+          let environmentSize = 0;
+          for (const [key, value] of Object.entries(variables)) {
+            if (typeof value !== "string" || value.length === 0)
+              throw new VisibleError(
+                `The "${name}" WebFunction's environment variable "${key}" must be a non-empty string.`,
+              );
+            environmentSize +=
+              Buffer.byteLength(key, "utf8") + Buffer.byteLength(value, "utf8");
+          }
+          if (environmentSize > 32 * 1024)
+            throw new VisibleError(
+              `The "${name}" WebFunction's environment variables exceed 32 KiB, including SST's managed values.`,
+            );
+          if (!fs.existsSync(path.join(directory, entrypoint)))
+            throw new VisibleError(
+              `The "${name}" WebFunction's build did not produce "${entrypoint}".`,
+            );
+          const zipPath = path.join(
+            $cli.paths.work,
+            "artifacts",
+            `${name}-web-function`,
+            "code.zip",
+          );
+          await fs.promises.mkdir(path.dirname(zipPath), { recursive: true });
+          const files = new Map<string, string>();
+          const bundled = await glob("**", {
+            cwd: directory,
+            dot: true,
+            follow: false,
+            ignore: [
+              ".git/**",
+              "**/sst-env.d.ts",
+              ...sourcemaps.map((file) =>
+                path.relative(directory, file).split(path.sep).join("/"),
+              ),
+            ],
+          });
+          for (const file of bundled) {
+            const source = path.join(directory, file);
+            if (
+              file !== resourceFile &&
+              (file === "resource.enc" || file.startsWith(".sst/"))
+            )
+              continue;
+            if (!(await fs.promises.lstat(source)).isDirectory())
+              files.set(file, source);
+          }
+          // Deployment-mode Runtime.Build does not copy files. Overlay both built and
+          // prebuilt packages here; later entries override earlier ones, as in Function.
+          for (const copy of copyFiles) {
+            const entries = copy.isDir
+              ? await glob("**", { cwd: copy.from, dot: true, follow: false })
+              : [""];
+            for (const relative of entries) {
+              const source = path.join(copy.from, relative);
+              if ((await fs.promises.lstat(source)).isDirectory()) continue;
+              const destination = path
+                .join(copy.to, relative)
+                .split(path.sep)
+                .join("/");
+              if (
+                destination === "resource.enc" ||
+                destination === "sst-env.d.ts" ||
+                destination.endsWith("/sst-env.d.ts") ||
+                destination.startsWith(".git/") ||
+                destination.startsWith(".sst/")
+              )
+                continue;
+              files.set(destination, source);
+            }
+          }
+          const resourcePath = path.join(directory, resourceFile);
+          if (
+            !fs.existsSync(resourcePath) ||
+            !fs.statSync(resourcePath).isFile()
+          )
+            throw new VisibleError(
+              `The "${name}" WebFunction's build did not produce its encrypted resource file.`,
+            );
+          files.set(resourceFile, resourcePath);
+          for (const [destination, source] of files) {
+            if (!(await fs.promises.lstat(source)).isSymbolicLink()) continue;
+            const target = await fs.promises.readlink(source);
+            const resolved = path.posix.normalize(
+              path.posix.join(path.posix.dirname(destination), target),
+            );
+            if (
+              path.isAbsolute(target) ||
+              resolved === ".." ||
+              resolved.startsWith("../") ||
+              (!files.has(resolved) &&
+                ![...files.keys()].some((entry) =>
+                  entry.startsWith(`${resolved}/`),
+                ))
+            )
+              throw new VisibleError(
+                `The "${name}" WebFunction's symlink "${destination}" must point to an existing relative target inside the deployment package.`,
+              );
+          }
+          if (!files.has(entrypoint))
+            throw new VisibleError(
+              `The "${name}" WebFunction's entrypoint is excluded from its deployment package.`,
+            );
+          await new Promise<void>((resolve, reject) => {
+            const stream = fs.createWriteStream(zipPath);
+            const archive = archiver("zip", { statConcurrency: 1 });
+            archive.on("warning", reject);
+            archive.on("error", reject);
+            stream.on("error", reject);
+            stream.once("close", resolve);
+            archive.pipe(stream);
+            for (const [file, source] of [...files].sort(([a], [b]) =>
+              a.localeCompare(b),
+            ))
+              archive.file(source, {
+                name: file,
+                date: new Date(0),
+              });
+            archive.finalize().catch(reject);
+          });
+          return {
+            path: zipPath,
+            hash: crypto
+              .createHash("sha256")
+              .update(await fs.promises.readFile(zipPath))
+              .digest("hex"),
+            entrypoint,
+          };
+        },
+      );
+      return { zip, cloudEnvironment };
+    }
+
+    // The bridge that sends the requests to sst dev, and the environment it finds
+    // sst dev with. Neither changes from one deploy to the next, so the revision
+    // doesn't either.
+    function createBridgeCode() {
+      const cloudEnvironment = all([region, Function.appsync()]).apply(
+        ([region, appsync]) => ({
+          SST_APP: $app.name,
+          SST_STAGE: $app.stage,
+          SST_FUNCTION_ID: name,
+          // sst dev's AppSync is in its own region, as for a function
+          SST_REGION: process.env.SST_AWS_REGION || region,
+          SST_APPSYNC_HTTP: appsync.http,
+          SST_APPSYNC_REALTIME: appsync.realtime,
+          AWS_LAMBDA_NODEJS_ENTRYPOINT: "index.mjs",
+          ...(process.env.SST_FUNCTION_TIMEOUT
+            ? { SST_FUNCTION_TIMEOUT: process.env.SST_FUNCTION_TIMEOUT }
+            : {}),
+          // CloudFront sets X-Forwarded-Host, so the bridge keeps it; without a
+          // domain, it drops a caller's
+          ...(args.domain ? { SST_WEB_FUNCTION_DOMAIN: "true" } : {}),
+        }),
+      );
+      return { zip: output(bridgeZip()), cloudEnvironment };
+    }
 
     function createDomain() {
       if (!args.domain) return;
@@ -1636,7 +1742,8 @@ export class WebFunction extends Component implements Link.Linkable {
 
   /**
    * The full HTTPS URL (including `https://`). With `domain`, this is the custom domain's
-   * URL. In `sst dev`, if no web function is deployed, it's the local URL.
+   * URL. In `sst dev`, it's the local URL, unless a web function is deployed there with
+   * `dev.live` or `dev: false`; then it's the endpoint's, or the domain's with `domain`.
    */
   public get url(): Output<string> {
     return (
@@ -1648,24 +1755,36 @@ export class WebFunction extends Component implements Link.Linkable {
   }
   /**
    * The URL of the endpoint's own domain. With `domain`, requests to it need to be
-   * signed. Not available in local `sst dev`.
+   * signed. Not available in `sst dev`, unless `dev.live` is set or `dev` is `false`.
    */
   public get endpointUrl() {
     return this.endpoint && interpolate`https://${this.endpoint.domainName}`;
   }
-  /** The web function ARN. Not available in local `sst dev`. */
+  /**
+   * The web function ARN. Not available in `sst dev`, unless `dev.live` is set or `dev`
+   * is `false`.
+   */
   public get arn() {
     return this.function?.arn;
   }
-  /** The endpoint ARN. Not available in local `sst dev`. */
+  /**
+   * The endpoint ARN. Not available in `sst dev`, unless `dev.live` is set or `dev` is
+   * `false`.
+   */
   public get endpointArn() {
     return this.endpoint?.arn;
   }
-  /** The immutable revision ARN. Not available in local `sst dev`. */
+  /**
+   * The immutable revision ARN. Not available in `sst dev`, unless `dev.live` is set or
+   * `dev` is `false`. With `dev.live`, it's the bridge's revision.
+   */
   public get revisionArn() {
     return this.revision?.arn;
   }
-  /** The underlying resources. Deployment resources are absent in local `sst dev`. */
+  /**
+   * The underlying resources. Deployment resources are absent in `sst dev`, unless
+   * `dev.live` is set or `dev` is `false`.
+   */
   public get nodes() {
     return {
       function: this.function,
@@ -1729,6 +1848,55 @@ export class WebFunction extends Component implements Link.Linkable {
         : {}),
     };
   }
+}
+
+let bridgeZipPromise: Promise<{ path: string; hash: string }> | undefined;
+
+/**
+ * The package of the bridge a web function runs live in `sst dev`, made once for
+ * every web function. It's the same from one deploy to the next, so its key, and the
+ * revision, don't change.
+ * @internal
+ */
+export function bridgeZip() {
+  bridgeZipPromise ??= (async () => {
+    const directory = path.join($cli.paths.platform, "dist", "web-bridge");
+    const zipPath = path.join(
+      $cli.paths.work,
+      "artifacts",
+      "web-bridge",
+      "code.zip",
+    );
+    await fs.promises.mkdir(path.dirname(zipPath), { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      const stream = fs.createWriteStream(zipPath);
+      const archive = archiver("zip", { statConcurrency: 1 });
+      archive.on("warning", reject);
+      archive.on("error", reject);
+      stream.on("error", reject);
+      stream.once("close", resolve);
+      archive.pipe(stream);
+      // the bridge is run by index.mjs, so it keeps its mode
+      for (const [file, mode] of [
+        ["bootstrap", 0o755],
+        ["index.mjs", 0o644],
+      ] as const)
+        archive.file(path.join(directory, file), {
+          name: file,
+          date: new Date(0),
+          mode,
+        });
+      archive.finalize().catch(reject);
+    });
+    return {
+      path: zipPath,
+      hash: crypto
+        .createHash("sha256")
+        .update(await fs.promises.readFile(zipPath))
+        .digest("hex"),
+    };
+  })();
+  return bridgeZipPromise;
 }
 
 function isWithin(directory: string, file: string) {

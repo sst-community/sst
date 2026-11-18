@@ -94,14 +94,22 @@ type Task struct {
 	Directory string  `json:"directory"`
 }
 
+// WebFunction is a web function that's live in sst dev: its bridge in AWS
+// sends the requests it gets to the local server at URL.
+type WebFunction struct {
+	Name string `json:"-"`
+	URL  string `json:"url"`
+}
+
 type CompleteEvent struct {
-	UpdateID  string
-	Links     common.Links
-	Devs      Devs
-	Functions map[string]FunctionReport
-	Tasks     map[string]Task
-	Outputs   map[string]interface{}
-	Hints     map[string]string
+	UpdateID     string
+	Links        common.Links
+	Devs         Devs
+	Functions    map[string]FunctionReport
+	Tasks        map[string]Task
+	WebFunctions map[string]WebFunction
+	Outputs      map[string]interface{}
+	Hints        map[string]string
 	// Moved is whether the state has the marker of a stage on SST 5's
 	// components (MovedMarker), and MovedComponents the version of each
 	// component it says the stage has in a 5.0 form, by type, and of those

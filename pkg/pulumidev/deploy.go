@@ -387,16 +387,17 @@ func completedFromExport(data []byte, dev *devFile, reveal func(name string) (in
 		return nil, err
 	}
 	complete := &project.CompleteEvent{
-		Links:       common.Links{},
-		ImportDiffs: map[string][]project.ImportDiff{},
-		Devs:        project.Devs{},
-		Functions:   map[string]project.FunctionReport{},
-		Tunnels:     map[string]project.Tunnel{},
-		Hints:       map[string]string{},
-		Outputs:     map[string]interface{}{},
-		Tasks:       map[string]project.Task{},
-		Errors:      []project.Error{},
-		Resources:   []apitype.ResourceV3{},
+		Links:        common.Links{},
+		ImportDiffs:  map[string][]project.ImportDiff{},
+		Devs:         project.Devs{},
+		Functions:    map[string]project.FunctionReport{},
+		Tunnels:      map[string]project.Tunnel{},
+		Hints:        map[string]string{},
+		Outputs:      map[string]interface{}{},
+		Tasks:        map[string]project.Task{},
+		WebFunctions: map[string]project.WebFunction{},
+		Errors:       []project.Error{},
+		Resources:    []apitype.ResourceV3{},
 	}
 	// the outputs as the state has them, with their secrets encrypted
 	outputs := map[string]interface{}{}

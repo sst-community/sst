@@ -26,6 +26,13 @@ const build = vi.hoisted(() => vi.fn());
 vi.mock("../../src/components/rpc/rpc", () => ({
   rpc: {
     call: async (method: string, input: unknown) => {
+      if (method === "Provider.Aws.Appsync")
+        return {
+          http: "appsync.example.com",
+          realtime: "appsync-realtime.example.com",
+          arn: "arn:aws:appsync:us-east-1:111111111111:apis/dev",
+          shared: false,
+        };
       if (method !== "Runtime.Build")
         throw new Error(`Unexpected RPC: ${method}`);
       build(input);
@@ -104,6 +111,13 @@ const repositoryRoot = path.dirname(platformRoot);
 const out = path.join(root, "bundle");
 fs.mkdirSync(out);
 fixture.out = out;
+// the live bridge, as the platform build makes it
+fs.mkdirSync(path.join(root, "dist", "web-bridge"), { recursive: true });
+fs.writeFileSync(path.join(root, "dist", "web-bridge", "bootstrap"), "bridge");
+fs.writeFileSync(
+  path.join(root, "dist", "web-bridge", "index.mjs"),
+  "// starts the bridge\n",
+);
 
 // @ts-ignore
 global.$app = { name: "app", stage: "test", home: "aws" };
@@ -1259,6 +1273,137 @@ describe("WebFunction", () => {
     expect(await resolved(hint!._hint)).toBe("http://localhost:3000");
   });
 
+  it("deploys a bridge to the local server in sst dev with dev.live", async () => {
+    // @ts-ignore
+    global.$dev = true;
+    const fn = new WebFunction("Live", {
+      entrypoint: "src/server.ts",
+      environment: { MESSAGE: "local" },
+      url: { authorization: "iam" },
+      vpc: { privateSubnets: ["subnet-1"], securityGroups: ["sg-1"] },
+      link: [
+        {
+          urn: pulumi.output(
+            "urn:pulumi:stack::project::sst:sst:Linkable::LiveValue",
+          ),
+          getSSTLink: () => ({ properties: { value: "live-value" } }),
+        },
+      ],
+      dev: { live: true, url: "http://localhost:3000" },
+    });
+    // the endpoint's URL, not the local server's
+    expect(await resolved(fn.url)).toBe("https://liveendpoint.example.com");
+    expect(fn.nodes.endpoint).toBeDefined();
+    expect(fn.nodes.localLogGroup).toBeDefined();
+    expect(endpointInputs("Live").authType).toBe("IamAuth");
+    // the server isn't built, as it runs locally
+    expect(build).not.toHaveBeenCalled();
+    const zipped = await archive("Live");
+    expect(zipped.names.sort()).toEqual(["bootstrap", "index.mjs"]);
+    expect(zipped.modes.get("bootstrap")! & 0o777).toBe(0o755);
+    const variables = environment("Live");
+    expect(variables).toEqual({
+      SST_APP: "app",
+      SST_STAGE: "test",
+      SST_FUNCTION_ID: "Live",
+      SST_REGION: process.env.SST_AWS_REGION || "us-east-1",
+      SST_APPSYNC_HTTP: "appsync.example.com",
+      SST_APPSYNC_REALTIME: "appsync-realtime.example.com",
+      AWS_LAMBDA_NODEJS_ENTRYPOINT: "index.mjs",
+    });
+    // the bridge doesn't need the VPC
+    expect(
+      ofType("aws:lambda/coreNetworkConnector:CoreNetworkConnector"),
+    ).toEqual([]);
+    expect(
+      revisionInputs("Live").serviceConfig.egressNetworkConnectorArn,
+    ).toBeUndefined();
+    // it reaches sst dev over the stage's AppSync, and the local server is
+    // still trusted to use the role
+    const role = named("LiveRole", "aws:iam/role:Role").inputs;
+    const statements = JSON.parse(
+      await resolved(role.inlinePolicies[0].policy),
+    ).Statement;
+    expect(statements).toContainEqual(
+      expect.objectContaining({
+        Action: ["appsync:*"],
+        Resource: [
+          "arn:aws:appsync:us-east-1:111111111111:apis/dev",
+          "arn:aws:appsync:us-east-1:111111111111:apis/dev/*",
+        ],
+      }),
+    );
+    expect(
+      JSON.parse(role.assumeRolePolicy).Statement.flatMap(
+        (statement: any) => statement.Principal.AWS ?? [],
+      ),
+    ).toEqual(["111111111111"]);
+    const outputs = componentOutputs.mock.calls.map(([value]) => value);
+    // sst dev sends the bridge's requests to the local server
+    const live = outputs.find((value) => "_webFunction" in value);
+    expect(await resolved(live!._webFunction.url)).toBe(
+      "http://localhost:3000",
+    );
+    // which runs as it does without live, with the links and the endpoint
+    const command = outputs.find((value) => "_dev" in value);
+    const commandEnvironment = await resolved(command!._dev.environment);
+    expect(commandEnvironment.AWS_LAMBDA_HTTP_ENDPOINT).toBe("localhost:3000");
+    expect(commandEnvironment.MESSAGE).toBe("local");
+    expect(JSON.parse(commandEnvironment.SST_RESOURCE_LiveValue)).toMatchObject(
+      { value: "live-value" },
+    );
+  });
+
+  it("keeps the live bridge's revision the same as the server changes", async () => {
+    // @ts-ignore
+    global.$dev = true;
+    for (const [name, message] of [
+      ["LiveOne", "one"],
+      ["LiveTwo", "two"],
+    ])
+      await resolved(
+        new WebFunction(name, {
+          entrypoint: "src/server.ts",
+          environment: { MESSAGE: message },
+          dev: { live: true },
+        }).url,
+      );
+    const [one, two] = [await archive("LiveOne"), await archive("LiveTwo")];
+    // the same package, at the same key
+    expect(one.hash).toBe(two.hash);
+    expect(await resolved(one.code.inputs.key)).toBe(
+      await resolved(two.code.inputs.key),
+    );
+    // and the server's environment isn't the bridge's
+    const { SST_FUNCTION_ID: _, ...rest } = environment("LiveOne");
+    const { SST_FUNCTION_ID: __, ...other } = environment("LiveTwo");
+    expect(rest).toEqual(other);
+    expect(rest).not.toHaveProperty("MESSAGE");
+  });
+
+  it("deploys nothing in sst dev without dev.live", async () => {
+    // @ts-ignore
+    global.$dev = true;
+    const fn = new WebFunction("NotLive", {
+      entrypoint: "src/server.ts",
+      dev: { live: false, url: "http://localhost:3000" },
+    });
+    expect(await resolved(fn.url)).toBe("http://localhost:3000");
+    await resolved(fn.nodes.role.arn);
+    expect(fn.nodes.endpoint).toBeUndefined();
+    expect(fn.nodes.codeBucket).toBeUndefined();
+    expect(ofType("aws:lambdaweb/function:Function")).toHaveLength(0);
+    expect(
+      componentOutputs.mock.calls.some(
+        ([value]) => value && "_webFunction" in value,
+      ),
+    ).toBe(false);
+    const role = named("NotLiveRole", "aws:iam/role:Role").inputs;
+    expect(await resolved(role.inlinePolicies[0].policy)).not.toContain(
+      "appsync",
+    );
+  });
+
   it("deploys in sst dev when dev is explicitly disabled", async () => {
     // @ts-ignore
     global.$dev = true;
@@ -1583,6 +1728,67 @@ describe("WebFunction", () => {
       expect(await resolved(fn.getSSTLink().properties.url)).toBe(
         "https://api.example.com",
       );
+    });
+
+    // With dev.live, the domain is served as in a deploy, so unsigned callers
+    // reach the local server through CloudFront, not the IAM-only endpoint.
+    it("serves the domain through CloudFront in sst dev with dev.live", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const fn = new WebFunction("LiveDomain", {
+        entrypoint: "src/server.ts",
+        domain: { name: "api.example.com", dns: false, cert },
+        dev: { live: true, url: "http://localhost:3000" },
+      });
+      expect(await resolved(fn.url)).toBe("https://api.example.com");
+      expect(await resolved(fn.getSSTLink().properties.url)).toBe(
+        "https://api.example.com",
+      );
+      expect(await resolved(fn.endpointUrl!)).toBe(
+        "https://livedomainendpoint.example.com",
+      );
+      expect(endpointInputs("LiveDomain").authType).toBe("IamAuth");
+      expect(fn.nodes.cdn).toBeDefined();
+      // the policy names the distribution, so it's registered by then
+      await resolved(fn.nodes.resourcePolicy!.policy);
+      const inputs = distribution("LiveDomain");
+      expect(inputs.aliases).toEqual(["api.example.com"]);
+      expect(inputs.origins[0].domainName).toBe(
+        "livedomainendpoint.example.com",
+      );
+      expect(
+        named(
+          "LiveDomainResourcePolicy",
+          "aws:lambdaweb/resourcePolicy:ResourcePolicy",
+        ),
+      ).toBeDefined();
+      // and the endpoint behind it runs the bridge to the local server
+      const outputs = componentOutputs.mock.calls.map(([value]) => value);
+      const live = outputs.find((value) => "_webFunction" in value);
+      expect(await resolved(live!._webFunction.url)).toBe(
+        "http://localhost:3000",
+      );
+      // CloudFront sets X-Forwarded-Host, so the bridge keeps it
+      expect(environment("LiveDomain").SST_WEB_FUNCTION_DOMAIN).toBe("true");
+      expect(build).not.toHaveBeenCalled();
+    });
+
+    // Without dev.live, nothing is deployed in sst dev, the domain included,
+    // and url is the local server's.
+    it("creates no distribution in sst dev without dev.live", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const fn = new WebFunction("LocalDomain", {
+        entrypoint: "src/server.ts",
+        domain: { name: "api.example.com", dns: false, cert },
+        dev: { url: "http://localhost:3000" },
+      });
+      expect(await resolved(fn.url)).toBe("http://localhost:3000");
+      expect(fn.nodes.cdn).toBeUndefined();
+      expect(fn.endpointUrl).toBeUndefined();
+      expect(
+        ofType("aws:cloudfront/distribution:Distribution"),
+      ).toEqual([]);
     });
 
     it("grants its distribution permission to invoke the endpoint", async () => {
