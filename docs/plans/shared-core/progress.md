@@ -2,6 +2,14 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-18: #283 and #280 in `main`, and `main` merged into `v5`
+
+- **#283 merged into `main`** (`4b58f09bf`): `sst dev` writes one size-rotated log per function in `.sst/log/lambda/`, in place of a file per invocation, sized by `SST_DEV_INVOCATION_LOGS` and `SST_DEV_INVOCATION_LOGS_TOTAL`, and removes the old per-invocation folders when it starts.
+- **#280 merged into `main`** (`d109908d0`), with #282 in it: on macOS the dev watcher uses FSEvents, loaded with purego so a `CGO_ENABLED=0` build has it, and kqueue with `SST_WATCHER=kqueue`. The skip rules go by a directory's own name, and `watch.paths` entries are watched even when hidden or named `node_modules`. `check.yml` runs the watcher's tests on macOS, Apple Silicon and Intel.
+- **`main` merged into `v5`** (`649a2e5f3`) with no conflicts. Both are engine changes, with `config.ts`'s `watch` docs and the Logs section of `live.mdx`, which hold for SST 5 as they are: the route's log name the docs give, `MyApiRoute<hash>Handler.log`, is SST 5's too, as its API keeps SST 4's names. Nothing to port.
+- **Checked**: `v5`'s Go suite (50 packages), the watcher with kqueue, without cgo and under `-race`, the dev package under `-race`, `tsc`, the API reports, the platform suite (124 files, 4,360 tests) and the generated pages.
+- **#275** (`dev.live` for SST 4's `WebFunction`) is still open. When it lands, `dev.live` needs porting to SST 5's `WebFunction`, which reports through `_sst` (`Report.WebFunction` comes with the engine), and SST 4's frozen `WebFunction` gets #275.
+
 ## 2026-11-17: #276 merged, and ported to SST 5's `WebFunction`
 
 - **#276 merged into `main`** (`e7010b589`): SST 4's `WebFunction` takes `domain`, served through a CloudFront distribution in front of the endpoint. `main` merged into `v5` (`259fa03c2`) keeps `v5`'s `WebFunction` and `component.ts`, and leaves out SST 4's test and the example's README, which `v5` doesn't have.
