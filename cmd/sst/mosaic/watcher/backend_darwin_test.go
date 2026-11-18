@@ -25,7 +25,7 @@ func TestNewBackendUsesFSEventsOnDarwin(t *testing.T) {
 		t.Skip("kqueue forced")
 	}
 	root := t.TempDir()
-	b, err := newBackend([]string{root}, nil, filepath.Join(root, ".git/HEAD"), slog.Default())
+	b, err := newBackend([]string{root}, []string{root}, nil, filepath.Join(root, ".git/HEAD"), slog.Default())
 	require.NoError(t, err)
 	defer b.Close()
 	assert.Equal(t, "fsevents", b.Name())
@@ -40,13 +40,13 @@ func TestNewBackendFallsBackOnlyByDefault(t *testing.T) {
 	head := filepath.Join(missing, ".git/HEAD")
 
 	t.Setenv("SST_WATCHER", "")
-	b, err := newBackend([]string{missing}, nil, head, slog.Default())
+	b, err := newBackend([]string{missing}, []string{missing}, nil, head, slog.Default())
 	require.NoError(t, err)
 	assert.Equal(t, "fsnotify", b.Name())
 	b.Close()
 
 	t.Setenv("SST_WATCHER", "fsevents")
-	b, err = newBackend([]string{missing}, nil, head, slog.Default())
+	b, err = newBackend([]string{missing}, []string{missing}, nil, head, slog.Default())
 	if err == nil {
 		b.Close()
 	}
@@ -54,8 +54,10 @@ func TestNewBackendFallsBackOnlyByDefault(t *testing.T) {
 	assert.Contains(t, err.Error(), "SST_WATCHER=fsevents")
 }
 
+// newTestFSEventsBackend watches the first tree whole, as with no
+// watch.paths.
 func newTestFSEventsBackend(trees []treeMapping, headFile string) *fseventsBackend {
-	return &fseventsBackend{
+	b := &fseventsBackend{
 		trees:    trees,
 		headFile: headFile,
 		events:   make(chan fsnotify.Event, 16),
@@ -63,6 +65,11 @@ func newTestFSEventsBackend(trees []treeMapping, headFile string) *fseventsBacke
 		done:     make(chan struct{}),
 		created:  map[string]uint64{},
 	}
+	if len(trees) > 0 {
+		b.root = trees[0].tree
+		b.roots = []string{trees[0].tree}
+	}
+	return b
 }
 
 func drainEvents(b *fseventsBackend) []fsnotify.Event {
@@ -156,6 +163,46 @@ func TestFSEventsHandle(t *testing.T) {
 			assert.Equal(t, c.want, drainEvents(b))
 		})
 	}
+}
+
+// FSEvents watches the project whole, so it drops what the per-directory
+// backend never watches: files outside watch.paths, and directories neither
+// in them nor on the way to them.
+func TestFSEventsHandleDropsUnwatchedPaths(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string) string {
+		path := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0644))
+		return path
+	}
+	listed := write(".config/types/a.ts")
+	other := write(".config/other/x.ts")
+	src := write("src/handler.ts")
+	head := write(".git/HEAD")
+	const isFile = 0x00010000
+	moved := uint32(fsEventFlagItemIsDir | fsEventFlagItemRenamed)
+
+	b := newTestFSEventsBackend([]treeMapping{{real: root, tree: root}}, head)
+	b.roots = []string{filepath.Join(root, ".config/types")}
+	b.listed = b.roots
+
+	b.handle(listed, isFile|fsEventFlagItemModified)
+	b.handle(head, isFile|fsEventFlagItemModified)
+	b.handle(filepath.Join(root, ".config"), moved)
+	b.handle(filepath.Join(root, ".config/types"), moved)
+	assert.Equal(t, []fsnotify.Event{
+		{Name: listed, Op: fsnotify.Write},
+		{Name: head, Op: fsnotify.Write},
+		{Name: filepath.Join(root, ".config"), Op: fsnotify.Create},
+		{Name: filepath.Join(root, ".config/types"), Op: fsnotify.Create},
+	}, drainEvents(b))
+
+	b.handle(other, isFile|fsEventFlagItemModified)
+	b.handle(src, isFile|fsEventFlagItemModified)
+	b.handle(filepath.Join(root, ".config/other"), moved)
+	b.handle(filepath.Join(root, "src"), moved)
+	assert.Empty(t, drainEvents(b))
 }
 
 func TestFSEventsHandleReportsMovedInDirOnce(t *testing.T) {
@@ -253,7 +300,7 @@ func TestFSEventsSendAfterCloseDoesNotBlock(t *testing.T) {
 
 func TestFSEventsWatchesSeveralTrees(t *testing.T) {
 	a, ext := t.TempDir(), t.TempDir()
-	b, err := newFSEventsBackend([]string{a, ext}, nil, filepath.Join(a, ".git/HEAD"))
+	b, err := newFSEventsBackend([]string{a, ext}, []string{a, ext}, nil, filepath.Join(a, ".git/HEAD"))
 	require.NoError(t, err)
 	defer b.Close()
 
@@ -299,7 +346,7 @@ func TestFSEventsCloseWhileCallbacksRun(t *testing.T) {
 	}()
 
 	for range 30 {
-		b, err := newFSEventsBackend([]string{root}, nil, filepath.Join(root, ".git/HEAD"))
+		b, err := newFSEventsBackend([]string{root}, []string{root}, nil, filepath.Join(root, ".git/HEAD"))
 		require.NoError(t, err)
 		// Read a few events so callbacks are running, then stop reading.
 		for range 3 {

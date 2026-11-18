@@ -26,7 +26,7 @@ import (
 // fsnotify, unless SST_WATCHER=fsevents asked for it: then it fails, as
 // falling back would bring back the descriptor per file that was asked to be
 // avoided.
-func newBackend(trees []string, listed []string, headFile string, log *slog.Logger) (backend, error) {
+func newBackend(trees []string, roots []string, listed []string, headFile string, log *slog.Logger) (backend, error) {
 	v := os.Getenv("SST_WATCHER")
 	switch v {
 	case "", "fsevents", "kqueue":
@@ -43,7 +43,7 @@ func newBackend(trees []string, listed []string, headFile string, log *slog.Logg
 		log.Warn("fsevents can't be loaded, falling back to kqueue", "err", err)
 		return newFsnotifyBackend()
 	}
-	b, err := newFSEventsBackend(trees, listed, headFile)
+	b, err := newFSEventsBackend(trees, roots, listed, headFile)
 	if err == nil {
 		return b, nil
 	}
@@ -206,6 +206,10 @@ type fseventsBackend struct {
 	// the watch.paths entries listed by name, which the built-in rules
 	// exempt (see skippedByName)
 	listed []string
+	// The project root and the resolved watch.paths, which bound what is
+	// reported, as they bound what the per-directory backend watches.
+	root  string
+	roots []string
 
 	events chan fsnotify.Event
 	errors chan error
@@ -220,7 +224,9 @@ type fseventsBackend struct {
 	created map[string]uint64
 }
 
-func newFSEventsBackend(trees []string, listed []string, headFile string) (*fseventsBackend, error) {
+// newFSEventsBackend watches trees, the first of which is the project root.
+// roots are the resolved watch.paths.
+func newFSEventsBackend(trees []string, roots []string, listed []string, headFile string) (*fseventsBackend, error) {
 	if err := loadFSEvents(); err != nil {
 		return nil, err
 	}
@@ -228,6 +234,8 @@ func newFSEventsBackend(trees []string, listed []string, headFile string) (*fsev
 	b := &fseventsBackend{
 		headFile: filepath.Clean(headFile),
 		listed:   listed,
+		root:     filepath.Clean(trees[0]),
+		roots:    roots,
 		events:   make(chan fsnotify.Event, 1024),
 		errors:   make(chan error, 16),
 		done:     make(chan struct{}),
@@ -338,8 +346,9 @@ func (b *fseventsBackend) Close() error {
 
 // handle turns one FSEvents item into the Create and Write events the
 // fsnotify loop understands. FSEvents watches the whole tree, so it also
-// drops events from the directories the per-directory walk never enters:
-// hidden directories and node_modules, unless watch.paths lists them.
+// drops events from what the per-directory walk never watches: hidden
+// directories and node_modules, unless watch.paths lists them, and anything
+// outside watch.paths except the directories on the way to them.
 func (b *fseventsBackend) handle(path string, flags uint32) {
 	// Events under path were dropped. The item can still carry a change of
 	// its own, so it is handled below as well. The tree isn't re-walked:
@@ -361,6 +370,9 @@ func (b *fseventsBackend) handle(path string, flags uint32) {
 	exists := err == nil
 
 	if flags&fsEventFlagItemIsDir != 0 {
+		if !shouldWatchDir(b.root, b.roots, path) {
+			return
+		}
 		if !exists {
 			delete(b.created, path)
 			return
@@ -381,7 +393,7 @@ func (b *fseventsBackend) handle(path string, flags uint32) {
 		return
 	}
 
-	if !exists {
+	if !exists || (path != b.headFile && !isWatchedPath(b.roots, path)) {
 		return
 	}
 	if flags&(fsEventFlagItemCreated|fsEventFlagItemRenamed|fsEventFlagItemModified|fsEventFlagItemRemoved) == 0 {

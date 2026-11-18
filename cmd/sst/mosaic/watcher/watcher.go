@@ -30,8 +30,12 @@ type WatchConfig struct {
 // into one more publish when it ends, so a quick second save isn't lost. That
 // one is skipped when the file's size and modification time are what they
 // were at the last publish: FSEvents can report one write as a create and
-// then a modify, and that shouldn't rebuild twice. A file the walk
-// discovered is only published once per window.
+// then a modify, and that shouldn't rebuild twice. This relies on the
+// modification time changing with each save, as it does with the nanosecond
+// times of APFS and ext4. Where times are coarser, like some network mounts,
+// a second save of the same size within the window isn't published; before
+// the limiter folded changes in, any second save within the window was
+// dropped. A file the walk discovered is only published once per window.
 //
 // A file whose window has passed with nothing pending is forgotten, as its
 // next change is published at once either way, so files holds only those
@@ -416,7 +420,7 @@ func Start(ctx context.Context, config WatchConfig) error {
 	}
 
 	headFile := filepath.Join(config.Root, ".git/HEAD")
-	b, err := newBackend(trees, listed, headFile, log)
+	b, err := newBackend(trees, roots, listed, headFile, log)
 	if err != nil {
 		return err
 	}
