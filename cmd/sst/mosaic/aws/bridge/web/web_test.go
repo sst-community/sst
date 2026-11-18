@@ -65,7 +65,7 @@ type setup struct {
 
 // start runs a bridge over a fake AppSync, and sst dev's forwarder, unless
 // noDev, which sends requests for the "Api" web function to local.
-func start(t *testing.T, local http.Handler, noDev bool, live bool, drop func(string, bridge.Packet) bool) setup {
+func start(t *testing.T, local http.Handler, noDev bool, live bool, drop func(string, bridge.Packet) bool, configure ...func(*Bridge)) setup {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -111,6 +111,9 @@ func start(t *testing.T, local http.Handler, noDev bool, live bool, drop func(st
 		// longer than the copies of a response sent whole take, as sst dev stops
 		// pinging once it sends the response
 		LostAfter: wholeCopies*wholeCopyEvery + time.Second,
+	}
+	for _, c := range configure {
+		c(b)
 	}
 	go b.Run(ctx)
 	b.Probe(ctx)
@@ -158,6 +161,28 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if cookies := resp.Header.Values("Set-Cookie"); len(cookies) != 2 {
 		t.Errorf("Set-Cookie = %v, want both", cookies)
+	}
+}
+
+// A caller can't set the host the local server sees, unless the request came
+// through the web function's domain, whose CloudFront distribution sets it.
+func TestForwardedHost(t *testing.T) {
+	for _, behindDomain := range []bool{false, true} {
+		s := start(t, echo(), false, true, nil, func(b *Bridge) { b.BehindDomain = behindDomain })
+		req, _ := http.NewRequest("GET", s.url+"/", nil)
+		req.Header.Set("X-Forwarded-Host", "spoofed.example.com")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		want := strings.TrimPrefix(s.url, "http://")
+		if behindDomain {
+			want = "spoofed.example.com"
+		}
+		if got := resp.Header.Get("X-Forwarded-Host-Seen"); got != want {
+			t.Errorf("behind a domain %v: X-Forwarded-Host = %q, want %q", behindDomain, got, want)
+		}
 	}
 }
 

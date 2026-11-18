@@ -1768,6 +1768,8 @@ describe("WebFunction", () => {
       expect(await resolved(live!._webFunction.url)).toBe(
         "http://localhost:3000",
       );
+      // CloudFront sets X-Forwarded-Host, so the bridge keeps it
+      expect(environment("LiveDomain").SST_WEB_FUNCTION_DOMAIN).toBe("true");
       expect(build).not.toHaveBeenCalled();
     });
 

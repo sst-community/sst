@@ -62,6 +62,9 @@ func run() error {
 		FunctionID:  os.Getenv("SST_FUNCTION_ID"),
 		TakeTimeout: takeTimeoutOf(os.Getenv("SST_FUNCTION_TIMEOUT")),
 		Reconnect:   func(ctx context.Context) { conn.Reconnect(ctx) },
+		// set when the web function has a domain, whose CloudFront distribution
+		// sets X-Forwarded-Host
+		BehindDomain: os.Getenv("SST_WEB_FUNCTION_DOMAIN") == "true",
 	}
 	go b.Run(ctx)
 	// Lambda sends requests once the server listens, so the subscription is

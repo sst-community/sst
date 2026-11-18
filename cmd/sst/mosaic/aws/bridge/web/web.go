@@ -106,6 +106,11 @@ type Bridge struct {
 	// the subscription first, with Reconnect to reconnect it, if set.
 	Idle      time.Duration
 	Reconnect func(ctx context.Context)
+	// BehindDomain is set when the web function has a domain, whose CloudFront
+	// distribution sets X-Forwarded-Host to the viewer's host. Otherwise a
+	// caller's X-Forwarded-Host is dropped, and sst dev sets it from Host, so a
+	// caller can't choose the host the local server sees.
+	BehindDomain bool
 
 	mu      sync.Mutex
 	waiting map[string]*request
@@ -317,6 +322,9 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	header := r.Header.Clone()
+	if !b.BehindDomain {
+		header.Del("X-Forwarded-Host")
+	}
 	if len(body) > 0 || r.ContentLength >= 0 {
 		header.Set("Content-Length", strconv.Itoa(len(body)))
 	}

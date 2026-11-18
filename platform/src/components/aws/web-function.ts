@@ -396,7 +396,7 @@ export interface WebFunctionArgs {
         /**
          * The URL of your local server. Without `live`, it's also the URL this component
          * returns, with its path and query preserved. With `live`, the component returns
-         * the endpoint's URL instead. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the hostname
+         * the endpoint's URL instead, or the domain's with `domain`. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the hostname
          * and port, since an HTTP listener cannot bind to a URL path.
          * @default `"http://localhost:8080"`
          * @example
@@ -1365,6 +1365,9 @@ export class WebFunction extends Component implements Link.Linkable {
           ...(process.env.SST_FUNCTION_TIMEOUT
             ? { SST_FUNCTION_TIMEOUT: process.env.SST_FUNCTION_TIMEOUT }
             : {}),
+          // CloudFront sets X-Forwarded-Host, so the bridge keeps it; without a
+          // domain, it drops a caller's
+          ...(args.domain ? { SST_WEB_FUNCTION_DOMAIN: "true" } : {}),
         }),
       );
       return { zip: output(bridgeZip()), cloudEnvironment };
