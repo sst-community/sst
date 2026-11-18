@@ -229,7 +229,27 @@ Now open a new terminal in VS Code, run `sst dev`, set a breakpoint in a functio
 
 ## Logs
 
-What your functions print shows in the **Functions** tab of `sst dev`. It's also written to `.sst/log/lambda/`, a file for each invocation.
+What your functions print shows in the **Functions** tab of `sst dev`. It's also written to `.sst/log/lambda/`, a file for each function, named after it: `MyFunction.log` for `new sst.aws.Function("MyFunction")`, and `MyApiRoute<hash>Handler.log` for a route of `MyApi`. Each line starts with its time and request ID, so you can follow a function or find a request across all of them.
+
+```bash frame="none"
+tail -f .sst/log/lambda/MyFunction.log
+grep -r 8c4f2a1e .sst/log/lambda/
+```
+
+```txt frame="none"
+2026-11-16T12:00:00.123Z 8c4f2a1e invoked {"path":"/items"}
+2026-11-16T12:00:00.200Z 8c4f2a1e | loading items
+2026-11-16T12:00:00.456Z 8c4f2a1e responded {"statusCode":200}
+```
+
+A function's log is moved to `<Function>.log.1` once it's past 10 MB, so the newest 10 to 20 MB of each are kept. Once all of them are past 1 GB, the oldest `.log.1` files are removed, and if that's not enough, the logs written least recently are removed, to start again when their function next prints. To change those sizes, in MB, or turn the logs off, as for a load test, set:
+
+```bash frame="none"
+SST_DEV_INVOCATION_LOGS=50 SST_DEV_INVOCATION_LOGS_TOTAL=4096 sst dev
+SST_DEV_INVOCATION_LOGS=off sst dev
+```
+
+Earlier versions wrote a file for each invocation, in a folder for each function. Those folders are removed when `sst dev` starts.
 
 In CloudWatch, a function's log group only gets the lines of the stub that runs in its place. To print what your functions print there too, set `SST_DEV_CLOUDWATCH_LOGS` when you run `sst dev`. It's off by default.
 

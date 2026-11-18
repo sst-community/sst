@@ -46,6 +46,15 @@ var SST_SKIP_UPDATE_CHECK = isTrue("SST_SKIP_UPDATE_CHECK")
 // groups.
 var SST_DEV_CLOUDWATCH_LOGS = isTrue("SST_DEV_CLOUDWATCH_LOGS")
 
+// SST_DEV_INVOCATION_LOGS sets how big each function's log in
+// .sst/log/lambda gets, in MB, before it's rotated, or turns the logs off
+// with off, false or 0.
+var SST_DEV_INVOCATION_LOGS = os.Getenv("SST_DEV_INVOCATION_LOGS")
+
+// SST_DEV_INVOCATION_LOGS_TOTAL sets how much all the logs in .sst/log/lambda
+// take together, in MB, before the oldest are removed.
+var SST_DEV_INVOCATION_LOGS_TOTAL = os.Getenv("SST_DEV_INVOCATION_LOGS_TOTAL")
+
 // SST_DEV_HTTP_PUBLISH has sst dev publish its replies to functions' bridges
 // over HTTPS only, not over its AppSync WebSocket.
 var SST_DEV_HTTP_PUBLISH = isTrue("SST_DEV_HTTP_PUBLISH")
