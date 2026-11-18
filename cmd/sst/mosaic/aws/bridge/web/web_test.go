@@ -1,14 +1,17 @@
 package web
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -182,6 +185,57 @@ func TestForwardedHost(t *testing.T) {
 		}
 		if got := resp.Header.Get("X-Forwarded-Host-Seen"); got != want {
 			t.Errorf("behind a domain %v: X-Forwarded-Host = %q, want %q", behindDomain, got, want)
+		}
+	}
+}
+
+// A request target in absolute form with no slash, which Go's server keeps as
+// an opaque URL, doesn't reach another server: the bridge answers it with a
+// 400.
+func TestOpaqueRequestTarget(t *testing.T) {
+	var hits atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	defer other.Close()
+	s := start(t, echo(), false, true, nil)
+	conn, err := net.Dial("tcp", strings.TrimPrefix(s.url, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "DELETE http:@%s/secret HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n", strings.TrimPrefix(other.URL, "http://"))
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if hits.Load() != 0 || resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("the other server got %d requests, and the caller got %d, want none and a 400", hits.Load(), resp.StatusCode)
+	}
+}
+
+// sst dev sends a request only to the local server, whatever its target.
+func TestLocalURL(t *testing.T) {
+	base, _ := url.Parse("http://127.0.0.1:3000/ignored")
+	for uri, want := range map[string]string{
+		"/":                "http://127.0.0.1:3000/",
+		"/items?x=1&y=%2F": "http://127.0.0.1:3000/items?x=1&y=%2F",
+		"//other.example/": "http://127.0.0.1:3000//other.example/",
+		"/@other.example/": "http://127.0.0.1:3000/@other.example/",
+	} {
+		got, err := localURL(base, uri)
+		if err != nil || got != want {
+			t.Errorf("localURL(%q) = %q, %v, want %q", uri, got, err, want)
+		}
+		if parsed, err := url.Parse(got); err != nil || parsed.Host != "127.0.0.1:3000" || parsed.User != nil {
+			t.Errorf("localURL(%q) = %q, which goes to %v", uri, got, parsed)
+		}
+	}
+	for _, uri := range []string{"", "*", "@127.0.0.1:6379/", "http://other.example/", "other.example/"} {
+		if got, err := localURL(base, uri); err == nil {
+			t.Errorf("localURL(%q) = %q, want an error", uri, got)
 		}
 	}
 }
@@ -464,7 +518,9 @@ func startWithTarget(t *testing.T, target string) string {
 		}
 	}()
 	client := bridge.NewClient(ctx, appsync, "worker1", prefix+"/worker1")
-	b := &Bridge{Client: client, Prefix: prefix, WorkerID: "worker1", FunctionID: "Api", TakeTimeout: time.Second}
+	// long enough for a big body to be whole on a slow runner, as sst dev takes
+	// a request only then
+	b := &Bridge{Client: client, Prefix: prefix, WorkerID: "worker1", FunctionID: "Api", TakeTimeout: 10 * time.Second}
 	go b.Run(ctx)
 	b.Probe(ctx)
 	front := httptest.NewServer(b)

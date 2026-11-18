@@ -89,6 +89,17 @@ func withoutHop(header http.Header) http.Header {
 	return header
 }
 
+// localURL is the address on the local server for a request's target, which
+// has to be a path, as the bridge sends it. Another form, such as
+// @other-host/, would make the local server's host a username and name
+// another host.
+func localURL(base *url.URL, uri string) (string, error) {
+	if !strings.HasPrefix(uri, "/") {
+		return "", fmt.Errorf("the request target %q isn't a path", uri)
+	}
+	return base.Scheme + "://" + base.Host + uri, nil
+}
+
 // Bridge is the http.Handler of a web function that's live in sst dev.
 type Bridge struct {
 	Client     Messenger
@@ -312,6 +323,14 @@ func (b *Bridge) active() {
 // back. A request sst dev doesn't take within TakeTimeout gets a 503.
 func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b.init()
+	// Only a path goes on to sst dev. Go's server keeps a request target in
+	// another form, such as http:@other-host/, as an opaque URL, and sst dev
+	// puts the target after the local server's host.
+	uri := r.URL.RequestURI()
+	if !strings.HasPrefix(uri, "/") {
+		http.Error(w, "sst dev: the request target has to be a path", http.StatusBadRequest)
+		return
+	}
 	ctx := r.Context()
 	b.reprobe(ctx)
 	// A web function's request is half-duplex: its body is read whole before
@@ -332,7 +351,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := bridge.WriteHead(&payload, bridge.HttpRequestHead{
 		FunctionID: b.FunctionID,
 		Method:     r.Method,
-		URI:        r.URL.RequestURI(),
+		URI:        uri,
 		Host:       r.Host,
 		Header:     header,
 	}); err != nil {
@@ -658,7 +677,12 @@ func (f *Forwarder) Handle(ctx context.Context, msg bridge.Message) {
 		fail(http.StatusBadGateway, "sst dev: bad dev.url: "+err.Error())
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, head.Method, base.Scheme+"://"+base.Host+head.URI, bytes.NewReader(body))
+	address, err := localURL(base, head.URI)
+	if err != nil {
+		fail(http.StatusBadRequest, "sst dev: "+err.Error())
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, head.Method, address, bytes.NewReader(body))
 	if err != nil {
 		fail(http.StatusBadGateway, "sst dev: bad request: "+err.Error())
 		return
