@@ -213,6 +213,8 @@ var reportOutputs = map[string]string{
 	"_task":     "task",
 	"_tunnel":   "tunnel",
 	"_hint":     "hint",
+	// a WebFunction live in sst dev
+	"_webFunction": "webFunction",
 }
 
 // readReport reads what one of SST 4's components reported, from its output

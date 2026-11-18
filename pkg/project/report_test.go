@@ -106,6 +106,8 @@ func TestCompleteAdd(t *testing.T) {
 		Tasks:     map[string]Task{},
 		Tunnels:   map[string]Tunnel{},
 		Hints:     map[string]string{},
+		// what a live WebFunction reports
+		WebFunctions: map[string]WebFunction{},
 	}
 	urn := resource.URN("urn:pulumi:dev::shop::acme:index:Site::Web")
 	complete.add(urn, wantReport)
@@ -130,6 +132,19 @@ func TestCompleteAdd(t *testing.T) {
 	complete.add(other, &Report{Tunnel: &Tunnel{IP: "10.0.0.2", Username: "ec2-user"}})
 	if _, ok := complete.Tunnels["Other"]; ok {
 		t.Fatal("a tunnel without its key was added")
+	}
+
+	// a web function live in sst dev, by its name, and one without the URL
+	// of its local server isn't live
+	api := resource.URN("urn:pulumi:dev::shop::sst:aws:WebFunction::Api")
+	complete.add(api, &Report{Hint: "https://abc.lambda-web.ca-central-1.on.aws", WebFunction: &WebFunction{URL: "http://localhost:3000"}})
+	if fn := complete.WebFunctions["Api"]; fn.Name != "Api" || fn.URL != "http://localhost:3000" {
+		t.Fatalf("web functions %v", complete.WebFunctions)
+	}
+	idle := resource.URN("urn:pulumi:dev::shop::sst:aws:WebFunction::Idle")
+	complete.add(idle, &Report{WebFunction: &WebFunction{}})
+	if _, ok := complete.WebFunctions["Idle"]; ok {
+		t.Fatal("a web function without a local URL was added")
 	}
 }
 

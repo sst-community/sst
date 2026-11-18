@@ -21,7 +21,7 @@ var allowed = map[string][]string{
 		"ErrStackRunFailed", "FunctionReport", "ImportDiff", "InvalidAppRegex",
 		"InvalidStageRegex", "LinkRefType", "NewRuntimes", "Program", "PublishEngineEvent",
 		"ResolvePolicyPack", "StackCommandEvent", "StackInput", "Task", "Tunnel",
-		"Watch",
+		"Watch", "WebFunction",
 	},
 	"provider": {"AppSyncScope", "AwsProvider", "AwsRole", "NewAwsProvider", "Provider"},
 }

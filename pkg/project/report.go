@@ -12,8 +12,8 @@ const ContractVersion = 1
 
 // Report is what a component told the core through the program contract: its
 // record, the _sst output. SST 4's components named each item as an output
-// of its own (_metadata, _dev, _task, _tunnel, _hint), which only SST 4's
-// contract reads (pkg/sst4).
+// of its own (_metadata, _dev, _task, _tunnel, _hint, _webFunction), which
+// only SST 4's contract reads (pkg/sst4).
 type Report struct {
 	Contract int             `json:"contract"`
 	Function *FunctionReport `json:"function,omitempty"`
@@ -21,6 +21,9 @@ type Report struct {
 	Task     *Task           `json:"task,omitempty"`
 	Tunnel   *Tunnel         `json:"tunnel,omitempty"`
 	Hint     string          `json:"hint,omitempty"`
+	// WebFunction is a web function that's live in sst dev, with the URL of
+	// its local server
+	WebFunction *WebFunction `json:"webFunction,omitempty"`
 }
 
 // FunctionReport is a function the core builds, and in sst dev runs locally.

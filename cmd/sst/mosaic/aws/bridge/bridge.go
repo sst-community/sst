@@ -63,6 +63,13 @@ const (
 	// missing, with a ResendBody. The sender's Client answers it, and one from
 	// before it ignores it.
 	MessageResend
+
+	// MessageHttpRequest carries an HTTP request a web function's bridge got,
+	// for the CLI to send to the local server, and MessageHttpResponse the
+	// local server's response, streamed back. See HttpRequestHead. A CLI from
+	// before them ignores the request, and the bridge answers it with a 503.
+	MessageHttpRequest
+	MessageHttpResponse
 )
 
 type Message struct {

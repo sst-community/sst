@@ -35,17 +35,18 @@ func (p *Project) GetCompleted(ctx context.Context) (*CompleteEvent, error) {
 // then on: nothing writes it after.
 func getCompletedEvent(ctx context.Context, passphrase string, workdir *PulumiWorkdir, contract Contract) (*CompleteEvent, error) {
 	complete := &CompleteEvent{
-		Links:       common.Links{},
-		ImportDiffs: map[string][]ImportDiff{},
-		Devs:        Devs{},
-		Functions:   map[string]FunctionReport{},
-		Tunnels:     map[string]Tunnel{},
-		Hints:       map[string]string{},
-		Outputs:     map[string]interface{}{},
-		Tasks:       map[string]Task{},
-		Errors:      []Error{},
-		Finished:    false,
-		Resources:   []apitype.ResourceV3{},
+		Links:        common.Links{},
+		ImportDiffs:  map[string][]ImportDiff{},
+		Devs:         Devs{},
+		Functions:    map[string]FunctionReport{},
+		Tunnels:      map[string]Tunnel{},
+		Hints:        map[string]string{},
+		Outputs:      map[string]interface{}{},
+		Tasks:        map[string]Task{},
+		WebFunctions: map[string]WebFunction{},
+		Errors:       []Error{},
+		Finished:     false,
+		Resources:    []apitype.ResourceV3{},
 	}
 	checkpoint, err := workdir.Export()
 	if err != nil {
@@ -172,6 +173,10 @@ func (complete *CompleteEvent) add(urn resource.URN, report *Report) {
 	}
 	if report.Hint != "" {
 		complete.Hints[string(urn)] = report.Hint
+	}
+	// a web function is only live with the URL of its local server
+	if fn := report.WebFunction; fn != nil && fn.URL != "" {
+		complete.WebFunctions[name] = WebFunction{Name: name, URL: fn.URL}
 	}
 }
 

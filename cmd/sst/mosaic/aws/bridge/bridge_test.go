@@ -94,6 +94,10 @@ func TestMessageTypesKeepTheirNumbers(t *testing.T) {
 	if MessageProbe != 9 || MessageLogs != 10 || MessageResend != 11 {
 		t.Fatalf("MessageProbe is %d, MessageLogs %d and MessageResend %d, want 9, 10 and 11", MessageProbe, MessageLogs, MessageResend)
 	}
+	// a web function's, which a CLI from before them doesn't know
+	if MessageHttpRequest != 12 || MessageHttpResponse != 13 {
+		t.Fatalf("MessageHttpRequest is %d and MessageHttpResponse %d, want 12 and 13", MessageHttpRequest, MessageHttpResponse)
+	}
 }
 
 // A reply says its logs follow on every packet, and a packet from a CLI from
