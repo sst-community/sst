@@ -4,10 +4,11 @@
 // server and streams the response back.
 //
 // A request is a MessageHttpRequest with an ID of its own, so an environment
-// can have many in flight. sst dev pings it as soon as it has it, and again
-// while the local server works on it. Until the first ping, the bridge sends the
-// request again with the same ID, as AppSync can take an event and not deliver
-// it: a copy only fills in packets sst dev is missing. A request nobody takes is
+// can have many in flight. sst dev pings it once it has the whole request, and
+// again while the local server works on it. Until the first ping, the bridge
+// sends the request again with the same ID, as AppSync can take an event and not
+// deliver it: a copy only fills in packets sst dev is missing, so a request a
+// later packet was lost from is completed by the next copy. A request nobody takes is
 // answered with a 503, so a caller isn't left waiting when sst dev isn't
 // running. The response is streamed, so the bridge asks for a packet it's
 // missing, and the Forwarder's Client sends it again.
@@ -541,26 +542,30 @@ func (f *Forwarder) Handle(ctx context.Context, msg bridge.Message) {
 			log.Warn("failed to ping", "err", err)
 		}
 	}
-	ping()
 	answered := make(chan struct{})
 	every := f.PingEvery
 	if every <= 0 {
 		every = DefaultPingEvery
 	}
-	go func() {
-		pings := time.NewTicker(every)
-		defer pings.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-answered:
-				return
-			case <-pings.C:
-				ping()
+	// take pings the request, so the bridge stops sending it again, and keeps
+	// pinging it until the response starts
+	take := func() {
+		ping()
+		go func() {
+			pings := time.NewTicker(every)
+			defer pings.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-answered:
+					return
+				case <-pings.C:
+					ping()
+				}
 			}
-		}
-	}()
+		}()
+	}
 	// answer sends the response. One whose length is known, that fits in a
 	// packet with its head, as most do, is sent whole, over the WebSocket, as it
 	// reaches the bridge sooner, and sent again a few times, as AppSync can lose
@@ -621,22 +626,33 @@ func (f *Forwarder) Handle(ctx context.Context, msg bridge.Message) {
 		go io.Copy(io.Discard, msg.Body)
 		return
 	}
+	// The request is taken only once its body is whole. Until then the bridge
+	// sends it again, and a copy fills in a packet AppSync lost, as only the
+	// bridges ask for what's missing. The bridge read the body whole before it
+	// sent it, so this holds no more than it does.
+	body, err := io.ReadAll(rest)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		// dropped before it was whole; the bridge's next copy starts it again
+		log.Warn("request ended before it was whole", "err", err)
+		return
+	}
+	take()
 	target, ok := f.Target(head.FunctionID)
 	if !ok {
 		fail(http.StatusServiceUnavailable, fmt.Sprintf("sst dev: the %q web function isn't live in this sst dev.", head.FunctionID))
-		go io.Copy(io.Discard, rest)
 		return
 	}
 	base, err := url.Parse(target)
 	if err != nil {
 		fail(http.StatusBadGateway, "sst dev: bad dev.url: "+err.Error())
-		go io.Copy(io.Discard, rest)
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, head.Method, base.Scheme+"://"+base.Host+head.URI, rest)
+	req, err := http.NewRequestWithContext(ctx, head.Method, base.Scheme+"://"+base.Host+head.URI, bytes.NewReader(body))
 	if err != nil {
 		fail(http.StatusBadGateway, "sst dev: bad request: "+err.Error())
-		go io.Copy(io.Discard, rest)
 		return
 	}
 	req.Header = withoutHop(head.Header)
@@ -657,8 +673,6 @@ func (f *Forwarder) Handle(ctx context.Context, msg bridge.Message) {
 	resp, err := f.HTTP.Do(req)
 	if err != nil {
 		fail(http.StatusBadGateway, fmt.Sprintf("sst dev couldn't reach the local server of %q at %s: %s", head.FunctionID, target, err))
-		// what the transport didn't send of the body
-		go io.Copy(io.Discard, rest)
 		return
 	}
 	defer resp.Body.Close()

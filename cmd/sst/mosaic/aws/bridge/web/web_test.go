@@ -567,6 +567,27 @@ func TestLostResponsePacket(t *testing.T) {
 	}
 }
 
+// A later packet of a request that AppSync loses after sst dev took it.
+func TestLostRequestPacket(t *testing.T) {
+	var dropped atomic.Bool
+	drop := func(channel string, packet bridge.Packet) bool {
+		return packet.Type == bridge.MessageHttpRequest && packet.Index == 1 && dropped.CompareAndSwap(false, true)
+	}
+	s := start(t, echo(), false, true, drop)
+	payload := make([]byte, 2*bridge.BUFFER_SIZE)
+	rand.Read(payload)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(s.url+"/", "application/octet-stream", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("dropped %v: %v", dropped.Load(), err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !dropped.Load() || !bytes.Equal(body, payload) {
+		t.Fatalf("dropped %v, got %d bytes, want %d", dropped.Load(), len(body), len(payload))
+	}
+}
+
 // A timer that fires as the response, a take or a ping arrives mustn't answer
 // with a 503 or 504: late reports what it raced, and puts a ping back.
 func TestLateTimerRaces(t *testing.T) {
