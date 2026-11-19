@@ -17,6 +17,9 @@ takeover(Function, {
     // The 4.x `Function` creates the alias outside of the function, with no
     // parent
     urlAlias: (_, { name }) => ({ name: `${name}Durable`, parent: false }),
+    // The managed policy of a group in `linkPermissions.managed` (#218) was
+    // named after the group between "Link" and "Policy"
+    linkPolicy: (_, { name, id }) => ({ name: `${name}Link${id}Policy` }),
   },
   // Its route's entry in a router's key-value store, its route in the
   // router's list and what it added to its environment were SST's own

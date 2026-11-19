@@ -54,6 +54,12 @@ import { devStub, context } from "../contract";
 import { type Runtime, commandsOf, isRuntime } from "../runtime";
 import { privateNetworkOf } from "./helpers/vpc";
 import { inlinePolicies } from "./helpers/iam";
+import {
+  linkGroupNames,
+  linkGroups,
+  linkPolicyAttachments,
+  linkPolicyDocument,
+} from "./helpers/link-policies";
 import { isEfs } from "./helpers/efs";
 import { type RouteArgs, routeOf } from "./helpers/router";
 import { RETENTION } from "./logging";
@@ -83,6 +89,11 @@ const parts = {
    * read this, and the deploy fails if it doesn't exist.
    */
   role: iam.Role,
+  /**
+   * The managed policy of each group in `linkPermissions.managed`, by the group's
+   * name.
+   */
+  linkPolicy: many(iam.Policy),
   /**
    * The CloudWatch Log Group the function's logs are stored in. It isn't created when
    * `logging` is `false`.
@@ -1072,6 +1083,65 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
    */
   link?: Input<any[]>;
   /**
+   * Grant what some of the resources in `link` need through IAM managed policies,
+   * rather than the role's inline policy.
+   *
+   * A role's inline policies share IAM's limit of 10,240 characters, and a function
+   * that links many resources can go over it. Each named group becomes a managed
+   * policy, attached to the role next to `policies`. The rest of what's linked,
+   * `permissions` and what `sst dev` adds stay inline. A function still reads every
+   * resource in `link` through the [SDK](/docs/reference/sdk/).
+   *
+   * Name each group with letters and numbers, and put in it the resources as they are
+   * in `link`. A resource can be in one group. Each policy is the function's own. A
+   * function given a role in `existing` can't take `linkPermissions`, since it uses
+   * that role as it is.
+   *
+   * A managed policy takes 6,144 characters. A group whose ARNs are only known once
+   * the deploy runs is checked then. Split a large group into smaller ones. A role
+   * takes 20 managed policies, `policies` and the ones SST adds included, unless the
+   * account's quota is raised, to 25 at most.
+   *
+   * To switch without a moment where the function can't reach what it links, take
+   * two deploys:
+   *
+   * - **To switch on:** add `linkPermissions` with `retainInline: true` and deploy, so
+   *   the policies are attached while the inline grants stay. Then remove
+   *   `retainInline` and deploy.
+   * - **To switch off:** set `retainInline: true` and deploy, then remove
+   *   `linkPermissions` and deploy.
+   * - **To move resources between groups:** deploy the change with
+   *   `retainInline: true`, then remove it and deploy.
+   *
+   * When every linked grant is in a group, the inline policy keeps a copy of one of
+   * them. A role given no inline policy keeps the one it had, which would go on
+   * granting what's no longer linked. The deploy's role needs to create, update and
+   * delete IAM managed policies.
+   *
+   * @example
+   * ```js
+   * {
+   *   link: [uploads, files, queue],
+   *   linkPermissions: {
+   *     managed: { Storage: [uploads, files], Jobs: [queue] }
+   *   }
+   * }
+   * ```
+   */
+  linkPermissions?: {
+    /**
+     * The groups, by name, of resources from `link`. The names are plain values, since
+     * each makes a policy.
+     */
+    managed: Record<string, Input<any[]>>;
+    /**
+     * Keep every linked grant inline too, while switching to or from managed policies,
+     * or moving resources between groups.
+     * @default `false`
+     */
+    retainInline?: boolean;
+  };
+  /**
    * Enable streaming for the function.
    *
    * Streaming is supported with both Function URLs and API Gateway REST API (V1). It is
@@ -1872,6 +1942,7 @@ export class Function extends component("sst:aws:Function", parts) {
           id.startsWith("arn:") ? parseRoleArn(id).roleName : id,
         ),
       );
+    const linked = linkPolicies();
     let role: iam.Role | undefined;
     if (givenRoleArn !== undefined)
       this.partHandle("role").defer(() => (role ??= lookUpRole(givenRoleArn)));
@@ -2314,11 +2385,75 @@ export class Function extends component("sst:aws:Function", parts) {
       });
     }
 
-    function roleArgs(): iam.RoleArgs {
-      const linkPermissions = Link.getInclude<Permission>(
-        "aws.permission",
-        args.link,
+    // `linkPermissions`: a managed policy for each group, and what stays inline
+    function linkPolicies() {
+      const config = plain(args.linkPermissions, option("linkPermissions"));
+      if (config === undefined) return undefined;
+      const owner = `the "${name}" function`;
+      if (existingRole !== undefined || givenRoleArn !== undefined)
+        throw new VisibleError(
+          `The "${name}" function is given a role, which it uses as it is, and "linkPermissions", which change its role. Attach the policies to the role itself.`,
+        );
+      const groups = linkGroupNames(
+        plain(config.managed, option("linkPermissions.managed")),
+        owner,
       );
+      const selected = all([output(args.link ?? []), output(config.managed)]).apply(
+        ([links, managed]) =>
+          linkGroups(links, managed as Record<string, any[]>, owner),
+      );
+      // Each group's policy has a name of its own, which isn't changed once
+      // it's created, as SST 4's isn't
+      const arns = groups.map((group) => {
+        const document = selected.apply(({ permissions }) =>
+          iam.getPolicyDocumentOutput(
+            {
+              statements: permissions[group].map((item) => ({
+                effect: output(item.effect ?? "allow").apply(
+                  (effect) => effect.charAt(0).toUpperCase() + effect.slice(1),
+                ),
+                actions: item.actions,
+                resources: item.resources,
+                conditions: item.conditions,
+              })),
+            },
+            { parent: self },
+          ),
+        );
+        return self.part(
+          "linkPolicy",
+          group,
+          {
+            name: physicalName(128, `${name}Link${group}Policy`),
+            policy: document.json.apply((json) =>
+              linkPolicyDocument(group, json, owner),
+            ),
+          },
+          { ignoreChanges: ["name"] },
+        ).arn;
+      });
+      return {
+        owner,
+        arns,
+        inline: config.retainInline
+          ? Link.getInclude<Permission>("aws.permission", args.link)
+          : selected.apply(({ ungrouped }) =>
+              Link.getInclude<Permission>("aws.permission", ungrouped),
+            ),
+        // The first grant of the first group, kept inline when nothing else
+        // is: IAM keeps an inline policy a deploy gives nothing in place of,
+        // and it would keep granting what's unlinked. It grants nothing the
+        // group's policy doesn't.
+        copy: selected.apply(({ permissions }) =>
+          permissions[groups[0]].slice(0, 1),
+        ),
+      };
+    }
+
+    function roleArgs(): iam.RoleArgs {
+      const linkPermissions =
+        linked?.inline ??
+        Link.getInclude<Permission>("aws.permission", args.link);
       // In `sst dev` the stub reaches the CLI through the stage's transport,
       // and uses the asset bucket
       const devPermissions = dev
@@ -2373,16 +2508,35 @@ export class Function extends component("sst:aws:Function", parts) {
         inlinePolicies: inlinePolicies([
           args.permissions,
           linkPermissions,
+          linked
+            ? all([
+                output(args.permissions ?? []),
+                linkPermissions,
+                devPermissions,
+                linked.copy,
+              ]).apply(([permissions, links, dev, copy]) =>
+                permissions.length || links.length || dev.length ? [] : copy,
+              )
+            : [],
           devPermissions,
         ], self),
-        managedPolicyArns: output(args.policies ?? []).apply((policies) => [
-          ...policies,
-          ...(logging ? [managed("AWSLambdaBasicExecutionRole")] : []),
-          ...(vpc ? [managed("AWSLambdaVPCAccessExecutionRole")] : []),
-          ...(durable
-            ? [managed("AWSLambdaBasicDurableExecutionRolePolicy")]
-            : []),
-        ]),
+        // The role is given the group policies' ARNs, so it's deleted, which
+        // detaches them, before they are
+        managedPolicyArns: output(args.policies ?? [])
+          .apply((policies) =>
+            all([
+              ...(linked?.arns ?? []),
+              ...policies,
+              ...(logging ? [managed("AWSLambdaBasicExecutionRole")] : []),
+              ...(vpc ? [managed("AWSLambdaVPCAccessExecutionRole")] : []),
+              ...(durable
+                ? [managed("AWSLambdaBasicDurableExecutionRolePolicy")]
+                : []),
+            ]),
+          )
+          .apply((arns) =>
+            linked ? linkPolicyAttachments(arns, linked.owner) : arns,
+          ),
       };
     }
 

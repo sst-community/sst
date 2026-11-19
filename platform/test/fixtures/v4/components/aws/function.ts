@@ -1,3 +1,7 @@
+import {
+  createManagedLinkPermissions,
+  managedPolicyAttachments,
+} from "./helpers/managed-link-permissions";
 import fs from "fs";
 import path from "path";
 import { toPosix } from "../../../../../src/components/path.js";
@@ -728,6 +732,58 @@ export interface FunctionArgs {
    * ```
    */
   link?: Input<any[]>;
+  /**
+   * Move the grants of selected linked resources into named customer-managed IAM
+   * policies, keeping the `Resource` bindings of every resource in `link`.
+   *
+   * A role's inline policies share IAM's 10,240-character limit. A function that
+   * links many resources can go over it. Each named group here becomes one managed
+   * policy, attached through the role alongside `policies`. Other linked grants,
+   * `permissions` and dev permissions stay inline. By default, all linked grants
+   * stay inline.
+   *
+   * Use stable names made of letters and numbers, and the same resource objects as in
+   * `link`. A resource can be in only one group. Policies aren't shared between
+   * functions. An externally supplied `role` isn't supported.
+   *
+   * Each group is limited to IAM's 6,144 characters per managed policy. If a group's
+   * ARNs aren't known until deploy, it's checked at deploy, after the resources it
+   * links have been created. Split a large group into smaller named groups. The
+   * role's attached policies, including `policies` and the ones SST adds, are limited
+   * to IAM's quota per role: 20 by default, adjustable up to 25.
+   *
+   * To switch without a gap in permissions, use two deploys.
+   *
+   * - **To opt in:** add the option with `retainInline: true` and deploy, so the
+   *   managed policies are attached while the inline grants stay. Then remove
+   *   `retainInline` and deploy.
+   * - **To opt out:** set `retainInline: true` and deploy, then remove the option
+   *   and deploy.
+   * - **To move resources between groups:** do the same, with `retainInline: true`
+   *   during the deploy that changes the groups.
+   *
+   * The deploy role needs permission to create, update and delete IAM managed policies.
+   *
+   * @example
+   * ```js
+   * {
+   *   link: [uploads, files, queue],
+   *   linkPermissions: {
+   *     managed: { Storage: [uploads, files], Jobs: [queue] }
+   *   }
+   * }
+   * ```
+   */
+  linkPermissions?: {
+    /** Named managed-policy groups of resources from `link`. */
+    managed: Record<string, Input<any[]>>;
+    /**
+     * Keep every linked grant inline as well, while switching to or from managed
+     * policies or regrouping.
+     * @default `false`
+     */
+    retainInline?: boolean;
+  };
   /**
    * Enable streaming for the function.
    *
@@ -1838,6 +1894,11 @@ export class Function extends Component implements Link.Linkable {
         `The "runtime" of the "${name}" function isn't a runtime's name. A runtime from sst.runtime is for sst.aws.v5.Function; a $transform that sets one runs on sst.aws.Function too, as they share a type.`,
       );
 
+    if (args.linkPermissions && args.role)
+      throw new VisibleError(
+        '"linkPermissions" cannot manage grants on an externally supplied "role". Manage that role and its policies directly.',
+      );
+
     const parent = this;
     const dev = normalizeDev();
     const isContainer = all([args.python, dev]).apply(
@@ -1869,7 +1930,12 @@ export class Function extends Component implements Link.Linkable {
     const nodejs = normalizeNodeJs();
 
     const linkData = buildLinkData();
-    const linkPermissions = buildLinkPermissions();
+    const managedLinks = args.linkPermissions
+      ? createManagedLinkPermissions(name, args.link, args.linkPermissions, {
+          parent,
+        })
+      : undefined;
+    const linkPermissions = managedLinks?.inline ?? buildLinkPermissions();
     const { bundle, handler: handler0, sourcemaps } = buildHandler();
     const { handler, wrapper } = buildHandlerWrapper();
     const role = createRole();
@@ -2372,38 +2438,43 @@ export class Function extends Component implements Link.Linkable {
         linkPermissions,
         dev,
         dev.apply((dev) => (dev ? Function.appsync() : undefined)),
-      ]).apply(([argsPermissions, linkPermissions, dev, appsync]) =>
-        iam.getPolicyDocumentOutput({
-          statements: [
-            ...argsPermissions,
-            ...linkPermissions,
-            ...(dev
-              ? [
-                  {
-                    effect: "allow",
-                    actions: ["appsync:*"],
-                    resources: Function.appsyncResources(appsync!),
-                  },
-                  {
-                    effect: "allow",
-                    actions: ["s3:*"],
-                    resources: [
-                      interpolate`arn:${partition}:s3:::${bootstrapData.asset}`,
-                      interpolate`arn:${partition}:s3:::${bootstrapData.asset}/*`,
-                    ],
-                  },
-                ]
-              : []),
-          ].map((item) => ({
-            effect: (() => {
-              const effect = item.effect ?? "allow";
-              return effect.charAt(0).toUpperCase() + effect.slice(1);
-            })(),
-            actions: item.actions,
-            resources: item.resources,
-            conditions: "conditions" in item ? item.conditions : undefined,
-          })),
-        }),
+        managedLinks?.fallback ?? [],
+      ]).apply(
+        ([argsPermissions, linkPermissions, dev, appsync, fallback]) =>
+          iam.getPolicyDocumentOutput({
+            statements: [
+              ...argsPermissions,
+              ...linkPermissions,
+              ...(!argsPermissions.length && !linkPermissions.length && !dev
+                ? fallback
+                : []),
+              ...(dev
+                ? [
+                    {
+                      effect: "allow",
+                      actions: ["appsync:*"],
+                      resources: Function.appsyncResources(appsync!),
+                    },
+                    {
+                      effect: "allow",
+                      actions: ["s3:*"],
+                      resources: [
+                        interpolate`arn:${partition}:s3:::${bootstrapData.asset}`,
+                        interpolate`arn:${partition}:s3:::${bootstrapData.asset}/*`,
+                      ],
+                    },
+                  ]
+                : []),
+            ].map((item) => ({
+              effect: (() => {
+                const effect = item.effect ?? "allow";
+                return effect.charAt(0).toUpperCase() + effect.slice(1);
+              })(),
+              actions: item.actions,
+              resources: item.resources,
+              conditions: "conditions" in item ? item.conditions : undefined,
+            })),
+          }),
       );
 
       // Created eagerly, as before. `role` is consumed inside an `apply` in
@@ -2446,11 +2517,21 @@ export class Function extends Component implements Link.Linkable {
             }).json,
             // if there are no statements, do not add an inline policy.
             // adding an inline policy with no statements will cause an error.
+            // This holds with managed link permissions too. Don't pass an empty
+            // `{}` block to remove the inline policy: the Pulumi bridge gives it the
+            // default name `inline`, and a later update then deletes the real one.
             inlinePolicies: policy.apply(({ statements }) =>
-              statements ? [{ name: "inline", policy: policy.json }] : [],
+              statements?.length ? [{ name: "inline", policy: policy.json }] : [],
             ),
-            managedPolicyArns: all([logging, policies]).apply(
-              ([logging, policies]) => [
+            // The role takes the managed link policies as inputs, so Pulumi deletes
+            // the role, which detaches them, before it deletes the policies.
+            managedPolicyArns: all([
+              logging,
+              policies,
+              managedLinks?.policies.map((p) => p.arn) ?? [],
+            ]).apply(([logging, policies, linked]) => {
+              const arns = [
+                ...linked,
                 ...policies,
                 ...(logging
                   ? [
@@ -2467,8 +2548,11 @@ export class Function extends Component implements Link.Linkable {
                       interpolate`arn:${partition}:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy`,
                     ]
                   : []),
-              ],
-            ),
+              ];
+              return all(arns).apply((arns) =>
+                managedLinks ? managedPolicyAttachments(name, arns) : arns,
+              );
+            }),
           },
           { parent },
         ),

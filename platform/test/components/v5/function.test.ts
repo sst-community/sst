@@ -195,6 +195,45 @@ describe("Function", () => {
       }),
     };
 
+    // Linked resources with grants, put in `linkPermissions.managed` by group
+    const grouped = (groups = ["Jobs", "Storage"], retainInline?: boolean) => {
+      const uploads = new Linkable("Uploads", {
+        properties: { name: "uploads" },
+        include: [
+          permission({
+            actions: ["s3:GetObject"],
+            resources: ["arn:aws:s3:::uploads/*"],
+          }),
+        ],
+      });
+      const jobs = new Linkable("Jobs", {
+        properties: { url: "https://sqs/jobs" },
+        include: [
+          permission({
+            actions: ["sqs:SendMessage"],
+            resources: ["arn:aws:sqs:us-east-1:123456789012:jobs"],
+          }),
+        ],
+      });
+      const settings = new Linkable("Settings", { properties: { size: 10 } });
+      const members: Record<string, any[]> = {
+        Jobs: [jobs],
+        Storage: [uploads],
+      };
+      return {
+        uploads,
+        jobs,
+        args: {
+          handler,
+          link: [uploads, jobs, settings],
+          linkPermissions: {
+            managed: Object.fromEntries(groups.map((g) => [g, members[g]])),
+            ...(retainInline ? { retainInline } : {}),
+          },
+        },
+      };
+    };
+
     const fn =
       (args: () => OriginalFunctionArgs & FunctionArgs, name = "MyFunction") =>
       (Function: FunctionClass, opts?: ComponentResourceOptions) =>
@@ -242,6 +281,49 @@ describe("Function", () => {
             );
             const fn = pulumi.resources.find((r) => r.type === LAMBDA)!;
             expect(fn.inputs.environment.variables.LINKED).toBe("yes");
+          },
+        },
+        // #218: grants of linked resources in managed policies, by group
+        "every linked grant in a managed policy": {
+          create: fn(() => grouped().args),
+          check: () => {
+            expect(
+              pulumi.resources
+                .filter((r) => r.type === "aws:iam/policy:Policy")
+                .map((r) => r.inputs.policy),
+            ).toEqual([
+              expect.stringContaining("sqs:SendMessage"),
+              expect.stringContaining("s3:GetObject"),
+            ]);
+            // The first group's grant is kept inline too
+            const role = pulumi.resources.find((r) => r.type === ROLE)!;
+            expect(role.inputs.inlinePolicies[0].policy).toContain(
+              "sqs:SendMessage",
+            );
+            expect(role.inputs.inlinePolicies[0].policy).not.toContain(
+              "s3:GetObject",
+            );
+          },
+        },
+        "some linked grants in a managed policy, the rest inline": {
+          create: fn(() => grouped(["Storage"]).args),
+          check: () => {
+            const role = pulumi.resources.find((r) => r.type === ROLE)!;
+            expect(role.inputs.inlinePolicies[0].policy).toContain(
+              "sqs:SendMessage",
+            );
+            expect(role.inputs.inlinePolicies[0].policy).not.toContain(
+              "s3:GetObject",
+            );
+          },
+        },
+        "linked grants in managed policies, kept inline too": {
+          create: fn(() => grouped(undefined, true).args),
+          check: () => {
+            const role = pulumi.resources.find((r) => r.type === ROLE)!;
+            expect(role.inputs.inlinePolicies[0].policy).toContain(
+              "s3:GetObject",
+            );
           },
         },
         "source maps": {
@@ -549,6 +631,231 @@ describe("Function", () => {
 
   // The V5 components create their functions as the V5 Function, with
   // `functionPart()`.
+  describe("linkPermissions", () => {
+    const handler = "src/index.handler";
+    const grant = (actions: string[], resources: string[]) =>
+      permission({ actions, resources });
+    const linkables = () => ({
+      uploads: new Linkable("Uploads", {
+        properties: {},
+        include: [grant(["s3:GetObject"], ["arn:aws:s3:::uploads/*"])],
+      }),
+      reports: new Linkable("Reports", {
+        properties: {},
+        include: [grant(["s3:PutObject"], ["arn:aws:s3:::reports/*"])],
+      }),
+      jobs: new Linkable("Jobs", {
+        properties: {},
+        include: [grant(["sqs:SendMessage"], ["arn:aws:sqs:::jobs"])],
+      }),
+      settings: new Linkable("Settings", { properties: { size: 10 } }),
+    });
+    const role = () => pulumi.resources.find((r) => r.type === ROLE)!;
+    const inline = () => role().inputs.inlinePolicies[0]?.policy as string;
+
+    it("attaches a managed policy for each group, which the role is removed before", async () => {
+      const { uploads, reports, jobs, settings } = linkables();
+      const fn = new Function("MyFunction", {
+        handler,
+        link: [uploads, reports, jobs, settings],
+        policies: ["arn:aws:iam::aws:policy/ReadOnlyAccess"],
+        linkPermissions: {
+          managed: { Storage: [uploads, reports], Jobs: [jobs] },
+        },
+      });
+      await pulumi.settle();
+
+      expect(Object.keys(fn.nodes.linkPolicy)).toEqual(["Jobs", "Storage"]);
+      const policies = pulumi.resources.filter(
+        (r) => r.type === "aws:iam/policy:Policy",
+      );
+      expect(policies.map((r) => r.name)).toEqual([
+        "MyFunctionLinkPolicyJobs",
+        "MyFunctionLinkPolicyStorage",
+      ]);
+      const storage = policies[1];
+      expect(storage.inputs.name).toMatch(/MyFunctionLinkStoragePolicy/);
+      expect(storage.options.ignoreChanges).toEqual(["name"]);
+      expect(storage.inputs.policy).toContain("s3:GetObject");
+      expect(storage.inputs.policy).toContain("s3:PutObject");
+      expect(storage.inputs.policy).not.toContain("sqs:SendMessage");
+
+      // The group policies first, then `policies`, then SST's
+      const arns = await pulumi.resolve([
+        fn.nodes.linkPolicy.Jobs.arn,
+        fn.nodes.linkPolicy.Storage.arn,
+      ]);
+      expect(role().inputs.managedPolicyArns).toEqual([
+        ...arns,
+        "arn:aws:iam::aws:policy/ReadOnlyAccess",
+        expect.stringMatching(/AWSLambdaBasicExecutionRole$/),
+      ]);
+      for (const policy of policies)
+        expect(pulumi.dependsOn("MyFunctionRole", policy.name)).toBe(true);
+    });
+
+    it("keeps what's in no group inline", async () => {
+      const { uploads, reports, jobs, settings } = linkables();
+      new Function("MyFunction", {
+        handler,
+        link: [uploads, reports, jobs, settings],
+        permissions: [{ actions: ["sqs:GetQueueAttributes"], resources: ["*"] }],
+        linkPermissions: { managed: { Storage: [uploads] } },
+      });
+      await pulumi.settle();
+
+      expect(inline()).toContain("sqs:GetQueueAttributes");
+      expect(inline()).toContain("s3:PutObject");
+      expect(inline()).toContain("sqs:SendMessage");
+      expect(inline()).not.toContain("s3:GetObject");
+    });
+
+    it("keeps one grouped grant inline when nothing else is", async () => {
+      const { uploads, jobs } = linkables();
+      new Function("MyFunction", {
+        handler,
+        link: [uploads, jobs],
+        linkPermissions: { managed: { Storage: [uploads], Jobs: [jobs] } },
+      });
+      await pulumi.settle();
+
+      // The first group's first grant
+      expect(role().inputs.inlinePolicies).toHaveLength(1);
+      expect(inline()).toContain("sqs:SendMessage");
+      expect(inline()).not.toContain("s3:GetObject");
+    });
+
+    it("keeps every linked grant inline too, with retainInline", async () => {
+      const { uploads, jobs } = linkables();
+      new Function("MyFunction", {
+        handler,
+        link: [uploads, jobs],
+        linkPermissions: {
+          managed: { Storage: [uploads], Jobs: [jobs] },
+          retainInline: true,
+        },
+      });
+      await pulumi.settle();
+
+      expect(inline()).toContain("sqs:SendMessage");
+      expect(inline()).toContain("s3:GetObject");
+      expect(
+        pulumi.resources.filter((r) => r.type === "aws:iam/policy:Policy"),
+      ).toHaveLength(2);
+    });
+
+    it("takes a group's resources as an output", async () => {
+      const { uploads, jobs } = linkables();
+      new Function("MyFunction", {
+        handler,
+        link: [uploads, jobs],
+        linkPermissions: { managed: { Storage: output([uploads]) } },
+      });
+      await pulumi.settle();
+
+      const policy = pulumi.resources.find(
+        (r) => r.type === "aws:iam/policy:Policy",
+      )!;
+      expect(policy.inputs.policy).toContain("s3:GetObject");
+      expect(inline()).toContain("sqs:SendMessage");
+    });
+
+    it("refuses groups it can't make", async () => {
+      const { uploads, jobs, settings } = linkables();
+      const make = (name: string, args: object) =>
+        new Function(name, { handler, link: [uploads, jobs, settings], ...args });
+      expect(() =>
+        make("Named", { linkPermissions: { managed: { "my-group": [uploads] } } }),
+      ).toThrow(
+        /The "my-group" group in the "linkPermissions.managed" of the "Named" function needs a name that starts with a letter/,
+      );
+      expect(() => make("Empty", { linkPermissions: { managed: {} } })).toThrow(
+        /The "linkPermissions.managed" of the "Empty" function has no groups/,
+      );
+      expect(() =>
+        make("Later", { linkPermissions: output({ managed: { A: [uploads] } }) }),
+      ).toThrow(/The "linkPermissions" of the "Later" function has to be a plain value/);
+      expect(() =>
+        make("Given", {
+          existing: { role: ROLE_ARN },
+          linkPermissions: { managed: { Storage: [uploads] } },
+        }),
+      ).toThrow(
+        /The "Given" function is given a role, which it uses as it is, and "linkPermissions"/,
+      );
+      expect(() =>
+        make("GivenOld", {
+          role: ROLE_ARN,
+          linkPermissions: { managed: { Storage: [uploads] } },
+        }),
+      ).toThrow(/The "GivenOld" function is given a role/);
+
+      const other = new Linkable("Other", {
+        properties: {},
+        include: [grant(["s3:*"], ["*"])],
+      });
+      const errors = await applyErrors(() => {
+        make("Outside", { linkPermissions: { managed: { A: [other] } } });
+        make("Twice", { linkPermissions: { managed: { A: [uploads], B: [uploads] } } });
+        make("Nothing", { linkPermissions: { managed: { A: [settings] } } });
+      }, pulumi.settle);
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The "A" group in the "linkPermissions.managed" of the "Outside" function has something that isn't in its "link"`,
+        ),
+      );
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `A resource is in more than one group in the "linkPermissions.managed" of the "Twice" function, the last in "B"`,
+        ),
+      );
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The "A" group in the "linkPermissions.managed" of the "Nothing" function grants nothing`,
+        ),
+      );
+    });
+
+    it("refuses a group larger than a managed policy, and too many policies", async () => {
+      const big = new Linkable("Big", {
+        properties: {},
+        include: [
+          grant(
+            ["s3:GetObject"],
+            Array.from({ length: 200 }, (_, i) => `arn:aws:s3:::reports/${i}/${"x".repeat(30)}`),
+          ),
+        ],
+      });
+      const { uploads } = linkables();
+      const errors = await applyErrors(() => {
+        new Function("Large", {
+          handler,
+          link: [big],
+          linkPermissions: { managed: { Big: [big] } },
+        });
+        new Function("Many", {
+          handler,
+          link: [uploads],
+          policies: Array.from(
+            { length: 24 },
+            (_, i) => `arn:aws:iam::123456789012:policy/p${i}`,
+          ),
+          linkPermissions: { managed: { Storage: [uploads] } },
+        });
+      }, pulumi.settle);
+      expect(errors).toContainEqual(
+        expect.stringMatching(
+          /The "Big" group in the "linkPermissions.managed" of the "Large" function grants \d+ characters, and IAM takes 6,144/,
+        ),
+      );
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `The role of the "Many" function would have 26 managed policies, and IAM takes 25 at most`,
+        ),
+      );
+    });
+  });
+
   describe("as a part of another component", () => {
     const handler = "src/subscriber.handler";
     let OriginalQueue: typeof import("../../fixtures/v4/components/aws/queue").Queue;

@@ -109,7 +109,8 @@ import { ParameterGroup } from '@pulumi/aws/rds/parameterGroup.js';
 import { ParameterGroup as ParameterGroup_2 } from '@pulumi/aws/elasticache/parameterGroup.js';
 import { Permission as Permission_2 } from '@pulumi/aws/lambda/permission.js';
 import { Plan } from '@pulumi/aws/backup/plan.js';
-import { Policy } from '@pulumi/aws/appautoscaling/policy.js';
+import { Policy } from '@pulumi/aws/iam/policy.js';
+import { Policy as Policy_2 } from '@pulumi/aws/appautoscaling/policy.js';
 import { PrivateDnsNamespace } from '@pulumi/aws/servicediscovery/privateDnsNamespace.js';
 import { PrivateKey } from '@pulumi/tls/privateKey.js';
 import { ProviderResource } from '@pulumi/pulumi';
@@ -2108,6 +2109,7 @@ export { Function_2 as Function }
 // @public (undocumented)
 const Function_base: ComponentClass<    {
 role: Role;
+linkPolicy: ManyPart<Policy>;
 logGroup: OptionalPart<LogGroup>;
 code: OptionalPart<BucketObjectv2>;
 sourcemap: ManyPart<BucketObjectv2>;
@@ -2148,6 +2150,10 @@ export interface FunctionArgs extends ComponentArgs<typeof parts> {
     injections?: string[];
     layers?: Input<Input<string>[]>;
     link?: Input<any[]>;
+    linkPermissions?: {
+        managed: Record<string, Input<any[]>>;
+        retainInline?: boolean;
+    };
     logging?: false | FunctionLoggingArgs;
     memory?: Input<Size>;
     name?: Input<string>;
@@ -3009,6 +3015,7 @@ type Parts = Record<string, UnnamedPart | NamedPart>;
 // @public (undocumented)
 const parts: {
     role: Role;
+    linkPolicy: ManyPart<Policy>;
     logGroup: OptionalPart<LogGroup>;
     code: OptionalPart<BucketObjectv2>;
     sourcemap: ManyPart<BucketObjectv2>;
@@ -3545,9 +3552,9 @@ const parts_44: () => {
     cloudmapService: DeferredPart<Service_2>;
     service: Service_3;
     autoScalingTarget: OptionalPart<Target>;
-    autoScalingCpuPolicy: OptionalPart<Policy>;
-    autoScalingMemoryPolicy: OptionalPart<Policy>;
-    autoScalingRequestCountPolicy: OptionalPart<Policy>;
+    autoScalingCpuPolicy: OptionalPart<Policy_2>;
+    autoScalingMemoryPolicy: OptionalPart<Policy_2>;
+    autoScalingRequestCountPolicy: OptionalPart<Policy_2>;
     devCommand: ManyPart<typeof DevCommand>;
     executionRole: OptionalPart<Role>;
     taskRole: OptionalPart<Role>;
@@ -4524,9 +4531,9 @@ listenerRule: ManyPart<ListenerRule>;
 cloudmapService: DeferredPart<Service_2>;
 service: Service_3;
 autoScalingTarget: OptionalPart<Target>;
-autoScalingCpuPolicy: OptionalPart<Policy>;
-autoScalingMemoryPolicy: OptionalPart<Policy>;
-autoScalingRequestCountPolicy: OptionalPart<Policy>;
+autoScalingCpuPolicy: OptionalPart<Policy_2>;
+autoScalingMemoryPolicy: OptionalPart<Policy_2>;
+autoScalingRequestCountPolicy: OptionalPart<Policy_2>;
 devCommand: ManyPart<typeof DevCommand>;
 executionRole: OptionalPart<Role>;
 taskRole: OptionalPart<Role>;

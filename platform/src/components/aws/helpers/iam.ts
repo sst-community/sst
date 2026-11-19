@@ -40,8 +40,9 @@ export function inlinePolicies(
       { parent },
     ),
   );
+  // An empty list, as much as none, is nothing to grant
   return policy.apply(({ statements }) =>
-    statements ? [{ name: "inline", policy: policy.json }] : [],
+    statements?.length ? [{ name: "inline", policy: policy.json }] : [],
   );
 }
 
