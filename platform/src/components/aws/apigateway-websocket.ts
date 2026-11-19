@@ -1,3 +1,4 @@
+import { ApiGatewayLambdaHandler } from "./helpers/apigateway-lambda-handler";
 import {
   ComponentResourceOptions,
   Output,
@@ -14,7 +15,7 @@ import {
 } from "../component";
 import { Link } from "../link";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
+import { Function, FunctionArgs, FunctionArn } from "./function.js";
 import { hashStringToPrettyString, physicalName, logicalName } from "../naming";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
 import { RETENTION } from "./logging";
@@ -661,6 +662,36 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
   }
 
   /**
+   * Add a shared handler for a Lambda function. Routes that use it share one invoke
+   * permission, instead of each adding a statement to the function's resource policy,
+   * which is limited to 20 KB.
+   *
+   * Pass a `Function` to invoke it as `route(..., fn)` does, at its version when it's
+   * published or durable. Or pass the ARN of a function, alias or version.
+   *
+   * To switch routes over, pass them the handler and deploy. To switch back, pass them
+   * the function again, remove the `addHandler` call and deploy.
+   *
+   * @param name A stable name, unique in this API, that starts with a letter and contains only letters and numbers.
+   * @param handler The `Function`, or the Lambda ARN, to invoke.
+   * @example
+   * ```js
+   * const backend = api.addHandler("Backend", fn);
+   * api.route("$connect", backend);
+   * api.route("sendMessage", backend);
+   * ```
+   */
+  public addHandler(name: string, handler: Function | Input<string>) {
+    return new ApiGatewayLambdaHandler(
+      this,
+      this.constructorName,
+      this.api.executionArn,
+      name,
+      handler,
+    );
+  }
+
+  /**
    * Add a route to the API Gateway WebSocket API.
    *
    * There are three predefined routes:
@@ -679,7 +710,7 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    * :::
    *
    * @param route The path for the route.
-   * @param handler The function that'll be invoked.
+   * @param handler The function, Lambda ARN, or shared handler returned by `addHandler()` that'll be invoked.
    * @param args Configure the route.
    *
    * @example
@@ -722,7 +753,9 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
    */
   public route(
     route: string,
-    handler: Input<string | FunctionArgs | FunctionArn>,
+    handler:
+      | Input<string | FunctionArgs | FunctionArn>
+      | ApiGatewayLambdaHandler,
     args: ApiGatewayWebSocketRouteArgs = {},
   ) {
     const prefix = this.constructorName;
@@ -750,7 +783,14 @@ export class ApiGatewayWebSocket extends Component implements Link.Linkable {
           executionArn: this.api.executionArn,
         },
         route,
-        handler,
+        handler:
+          handler instanceof ApiGatewayLambdaHandler
+            ? handler.forApi(this)
+            : handler,
+        sharedPermission:
+          handler instanceof ApiGatewayLambdaHandler
+            ? handler.permission
+            : undefined,
         handlerTransform: this.constructorArgs.transform?.route?.handler,
         ...transformed[1],
       },

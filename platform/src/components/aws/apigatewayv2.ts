@@ -1,3 +1,4 @@
+import { ApiGatewayLambdaHandler } from "./helpers/apigateway-lambda-handler";
 import { ComponentResourceOptions, Output, all, output } from "@pulumi/pulumi";
 import {
   Component,
@@ -8,7 +9,7 @@ import {
 } from "../component";
 import { Link } from "../link";
 import type { Input } from "../input";
-import { FunctionArgs, FunctionArn } from "./function.js";
+import { Function, FunctionArgs, FunctionArn } from "./function.js";
 import { hashStringToPrettyString, physicalName, logicalName } from "../naming";
 import { VisibleError } from "../error";
 import { DnsValidatedCertificate } from "./dns-validated-certificate";
@@ -1031,6 +1032,36 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
   }
 
   /**
+   * Add a shared handler for a Lambda function. Routes that use it share one invoke
+   * permission, instead of each adding a statement to the function's resource policy,
+   * which is limited to 20 KB.
+   *
+   * Pass a `Function` to invoke it as `route(..., fn)` does, at its version when it's
+   * published or durable. Or pass the ARN of a function, alias or version.
+   *
+   * To switch routes over, pass them the handler and deploy. To switch back, pass them
+   * the function again, remove the `addHandler` call and deploy.
+   *
+   * @param name A stable name, unique in this API, that starts with a letter and contains only letters and numbers.
+   * @param handler The `Function`, or the Lambda ARN, to invoke.
+   * @example
+   * ```js
+   * const backend = api.addHandler("Backend", fn);
+   * api.route("GET /items", backend);
+   * api.route("POST /items", backend);
+   * ```
+   */
+  public addHandler(name: string, handler: Function | Input<string>) {
+    return new ApiGatewayLambdaHandler(
+      this,
+      this.constructorName,
+      this.api.executionArn,
+      name,
+      handler,
+    );
+  }
+
+  /**
    * Add a route to the API Gateway HTTP API. The route is a combination of
    * - An HTTP method and a path, `{METHOD} /{path}`.
    * - Or a `$default` route.
@@ -1066,7 +1097,7 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
    * :::
    *
    * @param rawRoute The path for the route.
-   * @param handler The function that'll be invoked.
+   * @param handler The function, Lambda ARN, or shared handler returned by `addHandler()` that'll be invoked.
    * @param args Configure the route.
    *
    * @example
@@ -1131,7 +1162,9 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
    */
   public route(
     rawRoute: string,
-    handler: Input<string | FunctionArgs | FunctionArn>,
+    handler:
+      | Input<string | FunctionArgs | FunctionArn>
+      | ApiGatewayLambdaHandler,
     args: ApiGatewayV2RouteArgs = {},
   ) {
     const route = this.parseRoute(rawRoute);
@@ -1150,7 +1183,14 @@ export class ApiGatewayV2 extends Component implements Link.Linkable {
           executionArn: this.api.executionArn,
         },
         route,
-        handler,
+        handler:
+          handler instanceof ApiGatewayLambdaHandler
+            ? handler.forApi(this)
+            : handler,
+        sharedPermission:
+          handler instanceof ApiGatewayLambdaHandler
+            ? handler.permission
+            : undefined,
         handlerLink: this.constructorArgs.link,
         handlerTransform: this.constructorArgs.transform?.route?.handler,
         ...transformed[1],

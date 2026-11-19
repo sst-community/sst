@@ -24,6 +24,8 @@ export interface Args extends ApiGatewayV1BaseRouteArgs {
    * @internal
    */
   handlerTransform?: Transform<FunctionArgs>;
+  /** @internal */
+  sharedPermission?: lambda.Permission;
 }
 
 /**
@@ -58,7 +60,7 @@ export class ApiGatewayV1LambdaRoute extends Component {
 
     const method = createMethod(name, args, self);
     const fn = createFunction();
-    const permission = createPermission();
+    const permission = args.sharedPermission ?? createPermission();
     const integration = createIntegration();
 
     this.fn = fn;
