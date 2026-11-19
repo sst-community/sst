@@ -90,6 +90,7 @@ import { Invocation } from '@pulumi/aws/lambda/invocation.js';
 import { InvokeOutputOptions } from '@pulumi/pulumi';
 import { KeyPair } from '@pulumi/aws/ec2/keyPair.js';
 import { KeyValueStore } from '@pulumi/aws/cloudfront/keyValueStore.js';
+import { lambda } from '@pulumi/aws';
 import { lb } from '@pulumi/aws';
 import { Listener } from '@pulumi/aws/lb/listener.js';
 import { ListenerRule } from '@pulumi/aws/lb/listenerRule.js';
@@ -314,12 +315,13 @@ interface ApiGatewayDomainArgs extends DomainArgs {
 export class ApiGatewayHttp extends ApiGatewayHttp_base {
     constructor(name: string, args?: ApiGatewayHttpArgs, opts?: ComponentResourceOptions);
     addAuthorizer(args: ApiGatewayHttpAuthorizerArgs): Authorizer;
+    addHandler(name: string, handler: FunctionInput): ApiGatewayLambdaHandler;
     link(): {
         properties: {
             url: Output<string>;
         };
     };
-    route(rawRoute: string, handler: FunctionInput, args?: ApiGatewayHttpRouteArgs): this;
+    route(rawRoute: string, handler: FunctionInput | ApiGatewayLambdaHandler, args?: ApiGatewayHttpRouteArgs): this;
     routePrivate(rawRoute: string, arn: Input<string>, args?: ApiGatewayHttpRouteArgs): this;
     routeUrl(rawRoute: string, url: Input<string>, args?: ApiGatewayHttpRouteArgs): this;
     get url(): Output<string>;
@@ -336,6 +338,8 @@ domainName: OptionalPart<DomainName>;
 domainMapping: OptionalPart<ApiMapping>;
 handler: ManyPart<DeferredPart<typeof Function_2>>;
 permission: ManyPart<Permission_2>;
+sharedHandler: ManyPart<DeferredPart<typeof Function_2>>;
+sharedPermission: ManyPart<Permission_2>;
 integration: ManyPart<Integration>;
 route: ManyPart<Route>;
 authorizer: ManyPart<Authorizer>;
@@ -395,9 +399,27 @@ export interface ApiGatewayHttpRouteArgs {
 }
 
 // @public
+class ApiGatewayLambdaHandler {
+    // @internal
+    constructor(api: object, name: string,
+    fn: FunctionPart,
+    permission: lambda.Permission,
+    streaming?: Output<boolean>);
+    // @internal (undocumented)
+    readonly fn: FunctionPart;
+    // @internal
+    forRoute(api: object, route: string): this;
+    // @internal (undocumented)
+    readonly permission: lambda.Permission;
+    // @internal (undocumented)
+    readonly streaming: Output<boolean>;
+}
+
+// @public
 export class ApiGatewayRest extends ApiGatewayRest_base {
     constructor(name: string, args?: ApiGatewayRestArgs, opts?: ComponentResourceOptions);
     addAuthorizer(args: ApiGatewayRestAuthorizerArgs): Authorizer_2;
+    addHandler(name: string, handler: FunctionInput): ApiGatewayLambdaHandler;
     addUsagePlan(name: string, args: ApiGatewayRestUsagePlanArgs): ApiGatewayRestUsagePlan;
     deploy(): this;
     // (undocumented)
@@ -410,7 +432,7 @@ export class ApiGatewayRest extends ApiGatewayRest_base {
     protected registerOutputs(outputs?: Inputs | Promise<Inputs> | Output<Inputs>): void;
     // @internal
     resourceIdOf(path: string): Output<string> | undefined;
-    route(route: string, handler: FunctionInput, args?: ApiGatewayRestRouteArgs): this;
+    route(route: string, handler: FunctionInput | ApiGatewayLambdaHandler, args?: ApiGatewayRestRouteArgs): this;
     routeIntegration(route: string, integration: ApiGatewayRestIntegrationArgs, args?: ApiGatewayRestRouteArgs): this;
     // @internal
     routeOf(id: string): Route_2 | undefined;
@@ -423,6 +445,8 @@ api: RestApi;
 resource: ManyPart<Resource_2>;
 handler: ManyPart<DeferredPart<typeof Function_2>>;
 permission: ManyPart<Permission_2>;
+sharedHandler: ManyPart<DeferredPart<typeof Function_2>>;
+sharedPermission: ManyPart<Permission_2>;
 method: ManyPart<Method>;
 integration: ManyPart<Integration_2>;
 authorizer: ManyPart<Authorizer_2>;
@@ -543,6 +567,7 @@ export const ApiGatewayV2: Sst4Name;
 export class ApiGatewayWebSocket extends ApiGatewayWebSocket_base {
     constructor(name: string, args?: ApiGatewayWebSocketArgs, opts?: ComponentResourceOptions);
     addAuthorizer(args: ApiGatewayWebSocketAuthorizerArgs): Authorizer;
+    addHandler(name: string, handler: FunctionInput): ApiGatewayLambdaHandler;
     // (undocumented)
     link(): {
         properties: {
@@ -562,7 +587,7 @@ export class ApiGatewayWebSocket extends ApiGatewayWebSocket_base {
         }[];
     };
     get managementEndpoint(): Output<string>;
-    route(route: string, handler: FunctionInput, args?: ApiGatewayWebSocketRouteArgs): this;
+    route(route: string, handler: FunctionInput | ApiGatewayLambdaHandler, args?: ApiGatewayWebSocketRouteArgs): this;
     // @internal
     routeIsNamed(id: string): boolean;
     get url(): Output<string>;
@@ -578,6 +603,8 @@ domainName: OptionalPart<DomainName>;
 domainMapping: OptionalPart<ApiMapping>;
 handler: ManyPart<DeferredPart<typeof Function_2>>;
 permission: ManyPart<Permission_2>;
+sharedHandler: ManyPart<DeferredPart<typeof Function_2>>;
+sharedPermission: ManyPart<Permission_2>;
 integration: ManyPart<Integration>;
 route: ManyPart<Route>;
 authorizer: ManyPart<Authorizer>;
@@ -3079,6 +3106,8 @@ const parts_14: () => {
     domainMapping: OptionalPart<ApiMapping>;
     handler: ManyPart<DeferredPart<typeof Function_2>>;
     permission: ManyPart<Permission_2>;
+    sharedHandler: ManyPart<DeferredPart<typeof Function_2>>;
+    sharedPermission: ManyPart<Permission_2>;
     integration: ManyPart<Integration>;
     route: ManyPart<Route>;
     authorizer: ManyPart<Authorizer>;
@@ -3092,6 +3121,8 @@ const parts_15: () => {
     resource: ManyPart<Resource_2>;
     handler: ManyPart<DeferredPart<typeof Function_2>>;
     permission: ManyPart<Permission_2>;
+    sharedHandler: ManyPart<DeferredPart<typeof Function_2>>;
+    sharedPermission: ManyPart<Permission_2>;
     method: ManyPart<Method>;
     integration: ManyPart<Integration_2>;
     authorizer: ManyPart<Authorizer_2>;
@@ -3131,6 +3162,8 @@ const parts_18: () => {
     domainMapping: OptionalPart<ApiMapping>;
     handler: ManyPart<DeferredPart<typeof Function_2>>;
     permission: ManyPart<Permission_2>;
+    sharedHandler: ManyPart<DeferredPart<typeof Function_2>>;
+    sharedPermission: ManyPart<Permission_2>;
     integration: ManyPart<Integration>;
     route: ManyPart<Route>;
     authorizer: ManyPart<Authorizer>;

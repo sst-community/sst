@@ -121,6 +121,28 @@ describe("ApiGatewayWebSocket", () => {
               pulumi.resources.filter((r) => r.type === ROUTE),
             ).toHaveLength(5),
         },
+        // #217: the routes share one permission, the API's own
+        "with a shared handler": {
+          create: (Api, opts) => {
+            const api = new Api("MyApi", {}, opts);
+            // One of two classes: the handler is the same one's
+            const backend: any = api.addHandler("Backend", FUNCTION_ARN);
+            api.route("$connect", backend);
+            api.route("$default", backend);
+            api.route("sendMessage", backend);
+          },
+          unclaimed: [
+            routeWrapper("MyApi", "Connect"),
+            routeWrapper("MyApi", "Default"),
+            routeWrapper("MyApi", hashed("sendMessage")),
+          ],
+          check: () =>
+            expect(
+              pulumi.resources
+                .filter((r) => r.type === "aws:lambda/permission:Permission")
+                .map((r) => r.name),
+            ).toEqual(["MyApiSharedPermissionBackend"]),
+        },
         // 4.x took an authorizer's name first. The V5 one takes it in the
         // args, and keeps the authorizer by it
         "with a Lambda authorizer on $connect, and IAM on another API": {
@@ -481,6 +503,50 @@ describe("ApiGatewayWebSocket", () => {
       `arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${FUNCTION_ARN}/invocations`,
     );
     expect(pulumi.dependsOn("MyApiDomainMapping", "MyApiStage")).toBe(true);
+  });
+
+  it("lets the routes given a shared handler share one permission", async () => {
+    const api = new ApiGatewayWebSocket("MyApi");
+    const backend = api.addHandler("Backend", "src/ws.handler");
+    api.route("$connect", backend).route("$default", backend);
+    api.route("sendMessage", FUNCTION_ARN);
+    await pulumi.settle();
+
+    expect(Object.keys(api.nodes.sharedPermission)).toEqual(["Backend"]);
+    expect(Object.keys(api.nodes.permission)).toEqual(["sendMessage"]);
+    expect(Object.keys(api.nodes.handler)).toEqual(["sendMessage"]);
+    expect(
+      pulumi.resources
+        .filter((r) => r.type === "sst:aws:Function")
+        .map((r) => r.name),
+    ).toEqual(["MyApiSharedHandlerBackend"]);
+    // Each is invoked at the function's invoke ARN, once the permission is there
+    for (const route of ["$connect", "$default"]) {
+      expect(
+        await pulumi.resolve(api.nodes.integration[route].integrationUri),
+      ).toBe(
+        "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:mock:us-east-1:123456789012:MyApiSharedHandlerBackendFunction/invocations",
+      );
+    }
+    const integrations = pulumi.resources.filter(
+      (r) => r.type === "aws:apigatewayv2/integration:Integration",
+    );
+    const shared = integrations.filter((r) =>
+      String(r.inputs.integrationUri).includes("MyApiSharedHandlerBackend"),
+    );
+    expect(shared).toHaveLength(2);
+    for (const r of shared)
+      expect(pulumi.dependsOn(r.name, "MyApiSharedPermissionBackend")).toBe(
+        true,
+      );
+    expect(() =>
+      new ApiGatewayWebSocket("Other").route("$default", backend),
+    ).toThrow(
+      /The "\$default" route is given the shared handler "Backend" of another API/,
+    );
+    expect(() => api.addHandler("Backend", FUNCTION_ARN)).toThrow(
+      /"MyApi" already has a shared handler named "Backend"/,
+    );
   });
 
   it("can be linked by a function, which may manage connections", async () => {

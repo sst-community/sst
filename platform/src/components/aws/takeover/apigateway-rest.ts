@@ -60,6 +60,11 @@ takeover(ApiGatewayRest, {
     permission: (api, { name, id }) => route(api, name, id, "Permissions"),
     method: (api, { name, id }) => route(api, name, id, "Method"),
     integration: (api, { name, id }) => route(api, name, id, "Integration"),
+    // A shared handler's permission was the API's own, named after the
+    // handler between "Handler" and "Permission"
+    sharedPermission: (_, { name, id }) => ({
+      name: `${name}Handler${id}Permission`,
+    }),
     authorizer: (_, { name, id }) => authorizer(name, id, "Authorizer"),
     authorizerFunction: (_, { name, id }) => authorizer(name, id, "Handler"),
     authorizerPermission: (_, { name, id }) =>

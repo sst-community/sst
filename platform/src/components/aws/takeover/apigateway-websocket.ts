@@ -37,6 +37,11 @@ takeover(ApiGatewayWebSocket, {
     permission: (api, { name, id }) => route(api, name, id, "Permissions"),
     integration: (api, { name, id }) => route(api, name, id, "Integration"),
     route: (api, { name, id }) => route(api, name, id, "Route"),
+    // A shared handler's permission was the API's own, named after the
+    // handler between "Handler" and "Permission"
+    sharedPermission: (_, { name, id }) => ({
+      name: `${name}Handler${id}Permission`,
+    }),
     authorizer: (_, { name, id }) =>
       childOf(AUTHORIZER, authorizer(name, id), "Authorizer"),
     authorizerFunction: (_, { name, id }) =>

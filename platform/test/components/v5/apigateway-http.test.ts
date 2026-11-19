@@ -9,6 +9,22 @@ const pulumi = mockPulumi({
     /^sst:aws:ApiGatewayV2(LambdaRoute|UrlRoute|PrivateRoute|Authorizer)::MyApi/,
   state: (args) => {
     switch (args.type) {
+      // A function that publishes versions is invoked by its version
+      case "aws:lambda/function:Function": {
+        const arn = `arn:aws:lambda:us-east-1:123456789012:function:${args.name}`;
+        const invoke = (api: string, path: string, target = arn) =>
+          `arn:aws:apigateway:us-east-1:lambda:path/${api}/functions/${target}/${path}`;
+        return {
+          arn,
+          qualifiedArn: `${arn}:3`,
+          invokeArn: invoke("2015-03-31", "invocations"),
+          qualifiedInvokeArn: invoke("2015-03-31", "invocations", `${arn}:3`),
+          responseStreamingInvokeArn: invoke(
+            "2021-11-15",
+            "response-streaming-invocations",
+          ),
+        };
+      }
       case "aws:apigatewayv2/api:Api":
         return {
           apiEndpoint: "https://abc123.execute-api.us-east-1.amazonaws.com",
@@ -46,6 +62,8 @@ describe("ApiGatewayHttp", () => {
   let ApiGatewayHttp: typeof import("../../../src/components/aws/apigateway-http").ApiGatewayHttp;
 
   let Linkable: typeof import("../../../src/components/linkable").Linkable;
+  let OriginalFunction: typeof import("../../fixtures/v4/components/aws/function").Function;
+  let Function: typeof import("../../../src/components/aws/function").Function;
   let OriginalVpc: typeof import("../../fixtures/v4/components/aws/vpc").Vpc;
   let Vpc: typeof import("../../../src/components/aws/vpc").Vpc;
   let cloudflare: typeof import("../../../src/components/cloudflare/dns");
@@ -53,6 +71,10 @@ describe("ApiGatewayHttp", () => {
 
   beforeAll(async () => {
     ({ Linkable } = await import("../../../src/components/linkable"));
+    ({ Function: OriginalFunction } = await import(
+      "../../fixtures/v4/components/aws/function"
+    ));
+    ({ Function } = await import("../../../src/components/aws/function"));
     cloudflare = await import("../../../src/components/cloudflare/dns");
     vercel = await import("../../../src/components/vercel/dns");
     ({ ApiGatewayV2: OriginalApiGatewayV2 } = await import(
@@ -266,6 +288,42 @@ describe("ApiGatewayHttp", () => {
               "src/get.handler",
             ),
           wrappers: 1,
+        },
+        // #217: the routes share one permission, the API's own
+        "a shared handler": {
+          create: (Api, opts) => {
+            const api = new Api("MyApi", {}, opts);
+            // One of two classes: the handler is the same one's
+            const backend: any = api.addHandler("Backend", FUNCTION_ARN);
+            api.route("GET /a", backend);
+            api.route("POST /b", backend, { name: "PostB" });
+            api.route("GET /c", FUNCTION_ARN);
+          },
+          wrappers: 3,
+        },
+        "a shared handler for a function with versions": {
+          original: (opts) => {
+            const fn = new OriginalFunction(
+              "Backend",
+              { handler: "src/api.handler", versioning: true },
+              opts,
+            );
+            const api = new OriginalApiGatewayV2("MyApi", {}, opts);
+            const backend = api.addHandler("Backend", fn);
+            api.route("GET /a", backend);
+            api.route("$default", backend);
+          },
+          v5: (opts) => {
+            const fn = new Function(
+              "Backend",
+              { handler: "src/api.handler", versioning: true },
+              opts,
+            );
+            const api = new ApiGatewayHttp("MyApi", {}, opts);
+            const backend = api.addHandler("Backend", fn);
+            api.route("GET /a", backend).route("$default", backend);
+          },
+          wrappers: 2,
         },
         "a domain name that another API created": {
           original: (opts) =>
@@ -500,6 +558,172 @@ describe("ApiGatewayHttp", () => {
       (r) => r.type === "aws:apigatewayv2/integration:Integration",
     )!;
     expect(integration.inputs.integrationUri).toBe(FUNCTION_ARN);
+  });
+
+  describe("shared handlers", () => {
+    const permissions = () =>
+      pulumi.resources
+        .filter((r) => r.type === "aws:lambda/permission:Permission")
+        .map((r) => r.name);
+    const integration = (route: string) =>
+      pulumi.resources.find(
+        (r) =>
+          r.type === "aws:apigatewayv2/route:Route" &&
+          r.inputs.routeKey === route,
+      )!;
+    const integrationOf = (route: string) => {
+      const target = integration(route).inputs.target as string;
+      return pulumi.resources.find(
+        (r) =>
+          r.type === "aws:apigatewayv2/integration:Integration" &&
+          target === `integrations/${r.id ?? ""}`,
+      );
+    };
+
+    it("lets the routes given it share one permission", async () => {
+      const api = new ApiGatewayHttp("MyApi");
+      const backend = api.addHandler("Backend", FUNCTION_ARN);
+      api
+        .route("GET /a", backend)
+        .route("POST /b", backend)
+        .route("GET /c", FUNCTION_ARN);
+      await pulumi.settle();
+
+      expect(permissions()).toEqual([
+        "MyApiSharedPermissionBackend",
+        expect.stringMatching(/^MyApiPermissionGETc/),
+      ]);
+      const shared = pulumi.resources.find(
+        (r) => r.name === "MyApiSharedPermissionBackend",
+      )!;
+      expect(shared.inputs).toMatchObject({
+        action: "lambda:InvokeFunction",
+        function: FUNCTION_ARN,
+        principal: "apigateway.amazonaws.com",
+        sourceArn: "arn:aws:execute-api:us-east-1:123456789012:abc123/*",
+      });
+      expect(Object.keys(api.nodes.sharedPermission)).toEqual(["Backend"]);
+      expect(Object.keys(api.nodes.permission)).toEqual(["GET /c"]);
+      expect(Object.keys(api.nodes.handler)).toEqual(["GET /c"]);
+      expect(Object.keys(api.nodes.integration)).toEqual([
+        "GET /a",
+        "POST /b",
+        "GET /c",
+      ]);
+      // Each route's integration waits for the permission
+      const integrations = pulumi.resources.filter(
+        (r) => r.type === "aws:apigatewayv2/integration:Integration",
+      );
+      for (const r of integrations.slice(0, 2)) {
+        expect(r.inputs.integrationUri).toBe(FUNCTION_ARN);
+        expect(pulumi.dependsOn(r.name, "MyApiSharedPermissionBackend")).toBe(
+          true,
+        );
+      }
+    });
+
+    it("invokes a function with versions at its version", async () => {
+      const fn = new Function("Backend", {
+        handler: "src/api.handler",
+        versioning: true,
+      });
+      const api = new ApiGatewayHttp("MyApi");
+      api.route("GET /", api.addHandler("Backend", fn));
+      await pulumi.settle();
+
+      expect(await pulumi.resolve(api.nodes.sharedHandler.Backend)).toBe(fn);
+      const integration = pulumi.resources.find(
+        (r) => r.type === "aws:apigatewayv2/integration:Integration",
+      )!;
+      expect(integration.inputs.integrationUri).toBe(
+        "arn:aws:lambda:us-east-1:123456789012:function:BackendFunction:3",
+      );
+      const permission = pulumi.resources.find(
+        (r) => r.name === "MyApiSharedPermissionBackend",
+      )!;
+      expect(permission.inputs.qualifier).toBe("3");
+    });
+
+    it("takes an alias's ARN, and grants the alias", async () => {
+      const api = new ApiGatewayHttp("MyApi");
+      api.route("GET /", api.addHandler("Live", `${FUNCTION_ARN}:live`));
+      await pulumi.settle();
+
+      const permission = pulumi.resources.find(
+        (r) => r.name === "MyApiSharedPermissionLive",
+      )!;
+      expect(permission.inputs.function).toBe(FUNCTION_ARN);
+      expect(permission.inputs.qualifier).toBe("live");
+    });
+
+    it("creates the function from a handler, with the API's link", async () => {
+      const { Queue } = await import("../../../src/components/aws/queue");
+      const api = new ApiGatewayHttp("MyApi", { link: [new Queue("Other")] });
+      const backend = api.addHandler("Backend", "src/api.handler");
+      api.route("GET /a", backend).route("GET /b", backend);
+      await pulumi.settle();
+
+      const functions = pulumi.resources.filter(
+        (r) => r.type === "sst:aws:Function",
+      );
+      expect(functions.map((r) => r.name)).toEqual(["MyApiSharedHandlerBackend"]);
+      const handler = await pulumi.resolve(api.nodes.sharedHandler.Backend);
+      expect(handler).toBeInstanceOf(Function);
+      const lambda = pulumi.resources.find(
+        (r) => r.type === "aws:lambda/function:Function",
+      )!;
+      expect(lambda.inputs.description).toBe("MyApi handler Backend");
+      expect(
+        pulumi.dependsOn("MyApiSharedHandlerBackendRole", "OtherQueue"),
+      ).toBe(true);
+    });
+
+    it("checks the handler's name and function", async () => {
+      const api = new ApiGatewayHttp("MyApi");
+      expect(() => api.addHandler("my-handler", FUNCTION_ARN)).toThrow(
+        /The shared handler "my-handler" of the "MyApi" API needs a name that starts with a letter and has only letters and numbers/,
+      );
+      const backend = api.addHandler("Backend", FUNCTION_ARN);
+      expect(() => api.addHandler("Backend", FUNCTION_ARN)).toThrow(
+        /"MyApi" already has a shared handler named "Backend"/,
+      );
+      expect(() =>
+        api.addHandler(
+          "Every",
+          "arn:aws:lambda:us-east-1:123456789012:function:*",
+        ),
+      ).toThrow(
+        /The shared handler "Every" of the "MyApi" API is given "arn:aws:lambda:us-east-1:123456789012:function:\*", which isn't the ARN of one Lambda function, alias or version/,
+      );
+      expect(() =>
+        new ApiGatewayHttp("Other").route("GET /", backend),
+      ).toThrow(
+        /The "GET \/" route is given the shared handler "Backend" of another API/,
+      );
+      expect(() =>
+        api.route("GET /", backend, { transform: {} } as any),
+      ).toThrow(/its "integration" and "route" apply to every route/);
+      await pulumi.settle();
+    });
+
+    it("checks an ARN given as an output when it's known", async () => {
+      const { output } = await import("@pulumi/pulumi");
+      const errors = await applyErrors(() => {
+        const api = new ApiGatewayHttp("MyApi");
+        api.route(
+          "GET /",
+          api.addHandler(
+            "Every",
+            output("arn:aws:lambda:us-east-1:*:function:my-fn"),
+          ),
+        );
+      }, pulumi.settle);
+      expect(errors).toContainEqual(
+        expect.stringContaining(
+          `isn't the ARN of one Lambda function, alias or version`,
+        ),
+      );
+    });
   });
 
   it("says where a default auth for every route goes", () => {

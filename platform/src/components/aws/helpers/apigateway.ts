@@ -1,8 +1,9 @@
-import { apigatewayv2, cloudwatch } from "@pulumi/aws";
+import { apigatewayv2, cloudwatch, type lambda } from "@pulumi/aws";
 import {
   type ComponentResourceOptions,
   type CustomResourceOptions,
   interpolate,
+  Output,
   output,
 } from "@pulumi/pulumi";
 import type { Input } from "../../input";
@@ -14,7 +15,12 @@ import type { PartsBuilder } from "../../parts-component";
 import { RETENTION } from "../logging";
 import type { DnsValidatedCertificate } from "../dns-validated-certificate";
 import { type DomainArgs, domainOf } from "./domain";
-import type { FunctionPart } from "./function-part";
+import {
+  type FunctionDefinition,
+  type FunctionInput,
+  type FunctionPart,
+  plainFunction,
+} from "./function-part";
 import { invokePermissionArgs } from "./function-permission";
 
 /**
@@ -397,4 +403,78 @@ export function authorizerPermissionArgs(
     "apigateway.amazonaws.com",
     interpolate`${executionArn}/authorizers/${authorizerId}`,
   );
+}
+
+/**
+ * A function that the routes of one API share, from the API's `addHandler`.
+ * The routes given it invoke the function through one permission, rather
+ * than one each.
+ */
+export class ApiGatewayLambdaHandler {
+  /** @internal */
+  constructor(
+    private readonly api: object,
+    private readonly name: string,
+    /** @internal */
+    readonly fn: FunctionPart,
+    /** @internal */
+    readonly permission: lambda.Permission,
+    /** @internal */
+    readonly streaming: Output<boolean> = output(false),
+  ) {}
+
+  /**
+   * The handler, for a route of the API that added it.
+   *
+   * @internal
+   * @param api The API the route is added to.
+   * @param route The route, for the error.
+   */
+  forRoute(api: object, route: string) {
+    if (api !== this.api)
+      throw new VisibleError(
+        `The "${route}" route is given the shared handler "${this.name}" of another API. Add a shared handler to each API whose routes use it.`,
+      );
+    return this;
+  }
+}
+
+// A Lambda function, alias or version. The permission a shared handler gets
+// is the API's for every route, so the ARN can't name more than one function.
+const LAMBDA_ARN =
+  /^arn:[^:]+:lambda:[^:]+:\d{12}:function:[A-Za-z0-9_-]+(?::[A-Za-z0-9$_-]+)?$/;
+
+/**
+ * The function of a shared handler, checked: its name, and an ARN that names
+ * one function, alias or version. Pass what it returns to `functionPart()`.
+ *
+ * @param name The shared handler's name.
+ * @param handler What `addHandler` was given.
+ * @param owner The API, as `the "MyApi" API`.
+ */
+export function sharedHandler(
+  name: string,
+  handler: FunctionInput,
+  owner: string,
+): FunctionDefinition {
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name))
+    throw new VisibleError(
+      `The shared handler "${name}" of ${owner} needs a name that starts with a letter and has only letters and numbers.`,
+    );
+  const what = `The shared handler "${name}" of ${owner}`;
+  const check = <T>(value: T): T => {
+    if (
+      typeof value === "string" &&
+      value.startsWith("arn:") &&
+      !LAMBDA_ARN.test(value)
+    )
+      throw new VisibleError(
+        `${what} is given "${value}", which isn't the ARN of one Lambda function, alias or version.`,
+      );
+    return value;
+  };
+  const definition = plainFunction(handler, what);
+  return Output.isInstance(definition)
+    ? definition.apply(check)
+    : check(definition);
 }

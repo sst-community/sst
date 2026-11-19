@@ -22,12 +22,14 @@ import { Function } from "./function";
 import {
   type ApiGatewayAccessLogArgs,
   type ApiGatewayDomainArgs,
+  ApiGatewayLambdaHandler,
   accessLogGroup,
   authorizerPermissionArgs,
   createRegionalDomain,
   notAnOldRouteTransform,
   notAnOldTransform,
   routePermissionArgs,
+  sharedHandler,
 } from "./helpers/apigateway";
 import {
   type FunctionInput,
@@ -67,9 +69,20 @@ const parts = () => ({
    */
   handler: many(deferred(Function)),
   /**
-   * The permission for API Gateway to invoke each route's function.
+   * The permission for API Gateway to invoke each route's function. A route
+   * given a shared handler has none of its own.
    */
   permission: many(lambda.Permission),
+  /**
+   * The function behind each shared handler added with `addHandler`, by its
+   * name.
+   */
+  sharedHandler: many(deferred(Function)),
+  /**
+   * The permission for API Gateway to invoke each shared handler, by its
+   * name. The routes given the handler share it.
+   */
+  sharedPermission: many(lambda.Permission),
   /**
    * Each route's integration with its function.
    */
@@ -312,6 +325,9 @@ export interface ApiGatewayWebSocketRouteArgs {
  *   SST 4's `ApiGatewayWebSocket` kept each in a component of its own. A route is kept by
  *   its name, or the route itself, like `sendMessage`; `route` and `addAuthorizer` return
  *   the API and the authorizer, not those components.
+ * - What `addHandler` returns is only for its routes. Its permission is in the API's
+ *   `nodes`, as `nodes.sharedPermission.Backend` for a handler named `Backend`, where
+ *   SST 4's had it in `permission`, next to an `arn`. The permission is kept.
  * - `addAuthorizer` takes one object, with the authorizer's name in it, as
  *   [`sst.aws.ApiGatewayHttp`](/docs/component/aws/apigateway-http)'s does. The
  *   authorizer is kept by that name. The call with the name first is refused with what to
@@ -464,6 +480,55 @@ export class ApiGatewayWebSocket extends component(
   }
 
   /**
+   * Add a handler that routes share. Each route that invokes a function adds a
+   * statement to the function's resource policy, which is limited to 20 KB, so
+   * many routes on one function can fill it. The routes given a shared handler
+   * invoke its function through one permission instead.
+   *
+   * It takes what `route` does: a handler or a function's args, which create a
+   * function, a function you already have, or its ARN. A function with
+   * versions is invoked at its version, as a route given it is.
+   *
+   * To move routes over, pass them the handler and deploy. To move them back,
+   * pass them the function again, remove the `addHandler` call and deploy.
+   * A route that was given `fn.arn` for a function with versions also moves
+   * from `$LATEST` to the version: API Gateway can take up to a minute to send
+   * requests to the new target, and answers some with errors in the
+   * meantime.
+   *
+   * @param name A name for the handler, unique in this API, that starts with a
+   * letter and has only letters and numbers.
+   * @param handler The function the routes invoke.
+   *
+   * @example
+   * ```js title="sst.config.ts"
+   * const backend = api.addHandler("Backend", fn);
+   * api.route("$connect", backend);
+   * api.route("$default", backend);
+   * ```
+   */
+  public addHandler(name: string, handler: FunctionInput) {
+    const definition = sharedHandler(
+      name,
+      handler,
+      `the "${this.componentName}" API`,
+    );
+    this.assertNew("shared handler", "sharedHandler", name, {}, [
+      "sharedHandler",
+      "sharedPermission",
+    ]);
+    const fn = functionPart(this, "sharedHandler", name, definition, {
+      description: `${this.componentName} handler ${name}`,
+    });
+    const permission = this.part(
+      "sharedPermission",
+      name,
+      routePermissionArgs(fn, this.nodes.api.executionArn),
+    );
+    return new ApiGatewayLambdaHandler(this, name, fn, permission);
+  }
+
+  /**
    * Add a route to the API Gateway WebSocket API.
    *
    * There are three predefined routes:
@@ -482,7 +547,8 @@ export class ApiGatewayWebSocket extends component(
    * :::
    *
    * @param route The path for the route.
-   * @param handler The function that'll be invoked.
+   * @param handler The function that'll be invoked, or a shared handler from
+   * `addHandler`.
    * @param args Configure the route.
    *
    * @example
@@ -522,41 +588,60 @@ export class ApiGatewayWebSocket extends component(
    * ```js title="sst.config.ts"
    * api.route("sendMessage", "arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
+   *
+   * Or a shared handler, which the routes given it invoke through one permission.
+   *
+   * ```js title="sst.config.ts"
+   * const backend = api.addHandler("Backend", fn);
+   * api.route("sendMessage", backend);
+   * ```
    */
   public route(
     route: string,
-    handler: FunctionInput,
+    handler: FunctionInput | ApiGatewayLambdaHandler,
     args: ApiGatewayWebSocketRouteArgs = {},
   ) {
     const name = this.componentName;
     const id = args.name ?? route;
-    this.assertNew("route", "route", id, args, [
-      "handler",
-      "permission",
-      "integration",
+    const shared =
+      handler instanceof ApiGatewayLambdaHandler
+        ? handler.forRoute(this, route)
+        : undefined;
+    this.assertNew(
       "route",
-    ]);
+      "route",
+      id,
+      args,
+      shared
+        ? ["integration", "route"]
+        : ["handler", "permission", "integration", "route"],
+    );
     if (args.name !== undefined) this.namedRoutes.add(id);
     const auth = args.auth;
     if (route === "$connect" && plainJwtOnly(auth))
       throw jwtAuthError(route, name);
 
     const { api } = this.nodes;
-    const fn = functionPart(
-      this,
-      "handler",
-      id,
-      plainFunction(
-        handler,
-        `The handler of the "${route}" route of the "${name}" API`,
-      ),
-      { description: `${name} route ${route}` },
-    );
-    const permission = this.part(
-      "permission",
-      id,
-      routePermissionArgs(fn, api.executionArn),
-    );
+    const { fn, permission } =
+      shared ??
+      (() => {
+        const fn = functionPart(
+          this,
+          "handler",
+          id,
+          plainFunction(
+            handler as FunctionInput,
+            `The handler of the "${route}" route of the "${name}" API`,
+          ),
+          { description: `${name} route ${route}` },
+        );
+        const permission = this.part(
+          "permission",
+          id,
+          routePermissionArgs(fn, api.executionArn),
+        );
+        return { fn, permission };
+      })();
     const integration = this.part(
       "integration",
       id,

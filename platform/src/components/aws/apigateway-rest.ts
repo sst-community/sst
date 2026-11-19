@@ -29,14 +29,17 @@ import {
   type ApiDomain,
   type ApiGatewayAccessLogArgs,
   type ApiGatewayDomainArgs,
+  ApiGatewayLambdaHandler,
   accessLogGroup,
   apiDomainOf,
   authorizerPermissionArgs,
   notAnOldTransform,
   parseRoute,
   routePermissionArgs,
+  sharedHandler,
 } from "./helpers/apigateway";
 import {
+  type FunctionDefinition,
   type FunctionInput,
   functionPart,
   plainFunction,
@@ -60,9 +63,20 @@ const parts = () => ({
    */
   handler: many(deferred(Function)),
   /**
-   * The permission for API Gateway to invoke each route's function.
+   * The permission for API Gateway to invoke each route's function. A route
+   * given a shared handler has none of its own.
    */
   permission: many(lambda.Permission),
+  /**
+   * The function behind each shared handler added with `addHandler`, by its
+   * name.
+   */
+  sharedHandler: many(deferred(Function)),
+  /**
+   * The permission for API Gateway to invoke each shared handler, by its
+   * name. The routes given the handler share it.
+   */
+  sharedPermission: many(lambda.Permission),
   /**
    * Each route's method.
    */
@@ -637,6 +651,9 @@ export interface ApiGatewayRestIntegrationArgs {
  *   kept each in a component of its own. A route is kept by its name, or the route itself,
  *   like `GET /notes`. `route` and `routeIntegration` return the API, and `addAuthorizer`
  *   returns the authorizer, with its `id`, not those components.
+ * - What `addHandler` returns is only for its routes. Its permission is in the API's
+ *   `nodes`, as `nodes.sharedPermission.Backend` for a handler named `Backend`, where
+ *   SST 4's had it in `permission`, next to an `arn`. The permission is kept.
  * - A route's and an authorizer's own `transform`, and `transform.route.handler`, become the
  *   API's `transform` for `handler`, `method`, `integration` and `authorizer`, which apply
  *   to every route or authorizer and are given its name in a function.
@@ -772,6 +789,59 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
   }
 
   /**
+   * Add a handler that routes share. Each route that invokes a function adds a
+   * statement to the function's resource policy, which is limited to 20 KB, so
+   * many routes on one function can fill it. The routes given a shared handler
+   * invoke its function through one permission instead.
+   *
+   * It takes what `route` does: a handler or a function's args, which create a
+   * function, a function you already have, or its ARN. A function with
+   * versions is invoked at its version, as a route given it is. The routes
+   * stream when the function's args set `streaming`.
+   *
+   * To move routes over, pass them the handler and deploy. To move them back,
+   * pass them the function again, remove the `addHandler` call and deploy.
+   * A route that was given `fn.arn` for a function with versions also moves
+   * from `$LATEST` to the version: API Gateway can take up to a minute to send
+   * requests to the new target, and answers some with errors in the
+   * meantime.
+   *
+   * @param name A name for the handler, unique in this API, that starts with a
+   * letter and has only letters and numbers.
+   * @param handler The function the routes invoke.
+   *
+   * @example
+   * ```js title="sst.config.ts"
+   * const backend = api.addHandler("Backend", fn);
+   * api.route("GET /notes", backend);
+   * api.route("POST /notes", backend);
+   * api.deploy();
+   * ```
+   */
+  public addHandler(name: string, handler: FunctionInput) {
+    const definition = sharedHandler(
+      name,
+      handler,
+      `the "${this.componentName}" API`,
+    );
+    this.assertNew("shared handler", "sharedHandler", name, {}, [
+      "sharedHandler",
+      "sharedPermission",
+    ]);
+    const streaming = streamingOf(definition);
+    const fn = functionPart(this, "sharedHandler", name, definition, {
+      description: `${this.componentName} handler ${name}`,
+      streaming,
+    });
+    const permission = this.part(
+      "sharedPermission",
+      name,
+      routePermissionArgs(fn, this.nodes.api.executionArn),
+    );
+    return new ApiGatewayLambdaHandler(this, name, fn, permission, streaming);
+  }
+
+  /**
    * Add a route to the API Gateway REST API. The route is a combination of an HTTP method and a path, `{METHOD} /{path}`.
    *
    * :::caution
@@ -798,7 +868,8 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
    * :::
    *
    * @param route The path for the route.
-   * @param handler The function that'll be invoked.
+   * @param handler The function that'll be invoked, or a shared handler from
+   * `addHandler`.
    * @param args Configure the route.
    *
    * @example
@@ -864,39 +935,50 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
    * ```js title="sst.config.ts"
    * api.route("GET /", "arn:aws:lambda:us-east-1:123456789012:function:my-function");
    * ```
+   *
+   * Or a shared handler, which the routes given it invoke through one permission.
+   *
+   * ```js title="sst.config.ts"
+   * const backend = api.addHandler("Backend", fn);
+   * api.route("GET /notes", backend);
+   * ```
    */
   public route(
     route: string,
-    handler: FunctionInput,
+    handler: FunctionInput | ApiGatewayLambdaHandler,
     args: ApiGatewayRestRouteArgs = {},
   ) {
     const name = this.componentName;
+    const shared =
+      handler instanceof ApiGatewayLambdaHandler
+        ? handler.forRoute(this, route)
+        : undefined;
     const { id, method, path, resourceId } = this.addRoute(
       route,
       args,
       "lambda",
+      shared !== undefined,
     );
     const { api } = this.nodes;
-    const definition = plainFunction(
-      handler,
-      `The handler of the "${route}" route of the "${name}" API`,
-    );
-    // The route streams when its function does
-    const streaming: Output<boolean> = output(definition as any).apply(
-      (fn: unknown) =>
-        fn && typeof fn === "object" && "streaming" in fn
-          ? (fn.streaming as boolean | undefined) ?? false
-          : false,
-    );
-    const fn = functionPart(this, "handler", id, definition, {
-      description: `${name} route ${method} ${path}`,
-      streaming,
-    });
-    const permission = this.part(
-      "permission",
-      id,
-      routePermissionArgs(fn, api.executionArn),
-    );
+    const { fn, permission, streaming } =
+      shared ??
+      (() => {
+        const definition = plainFunction(
+          handler as FunctionInput,
+          `The handler of the "${route}" route of the "${name}" API`,
+        );
+        const streaming = streamingOf(definition);
+        const fn = functionPart(this, "handler", id, definition, {
+          description: `${name} route ${method} ${path}`,
+          streaming,
+        });
+        const permission = this.part(
+          "permission",
+          id,
+          routePermissionArgs(fn, api.executionArn),
+        );
+        return { fn, permission, streaming };
+      })();
     const httpMethod = this.createMethod(id, method, resourceId, args);
     this.part(
       "integration",
@@ -985,6 +1067,7 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
     route: string,
     args: ApiGatewayRestRouteArgs,
     kind: Route["kind"],
+    shared = false,
   ) {
     const name = this.componentName;
     const { method, path } = parseRoute(route, `the "${name}" API`);
@@ -994,7 +1077,7 @@ export class ApiGatewayRest extends component("sst:aws:ApiGatewayV1", parts) {
       "method",
       id,
       args,
-      kind === "lambda"
+      kind === "lambda" && !shared
         ? ["handler", "permission", "method", "integration"]
         : ["method", "integration"],
     );
@@ -1539,3 +1622,12 @@ const ACCESS_LOG_FORMAT = JSON.stringify({
   userAgent: `"$context.identity.userAgent"`,
   principalId: `"$context.authorizer.principalId"`,
 });
+
+// A route streams when its function's args say so
+function streamingOf(definition: FunctionDefinition): Output<boolean> {
+  return output(definition as any).apply((fn: unknown) =>
+    fn && typeof fn === "object" && "streaming" in fn
+      ? ((fn.streaming as boolean | undefined) ?? false)
+      : false,
+  );
+}

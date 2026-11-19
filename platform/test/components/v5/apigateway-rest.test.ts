@@ -143,6 +143,27 @@ describe("ApiGatewayRest", () => {
             ).toHaveLength(5);
           },
         },
+        // #217: the routes share one permission, the API's own
+        "with a shared handler": {
+          create: (Api, opts) => {
+            const api = new Api("MyApi", {}, opts);
+            // One of two classes: the handler is the same one's
+            const backend: any = api.addHandler("Backend", FUNCTION_ARN);
+            api.route("GET /notes", backend);
+            api.route("POST /notes", backend, { name: "Create" });
+            api.deploy();
+          },
+          unclaimed: [
+            lambdaRoute("MyApi", hashed("GET", "/notes")),
+            lambdaRoute("MyApi", "Create"),
+          ],
+          check: () =>
+            expect(
+              pulumi.resources
+                .filter((r) => r.type === "aws:lambda/permission:Permission")
+                .map((r) => r.name),
+            ).toEqual(["MyApiSharedPermissionBackend"]),
+        },
         "with a route whose function is linked to a bucket": {
           create: async (Api, opts) => {
             const { Bucket } = await import(
@@ -524,6 +545,57 @@ describe("ApiGatewayRest", () => {
         api.nodes.integration["GET /buffered"].responseTransferMode,
       ]),
     ).toEqual(["STREAM", "BUFFERED"]);
+  });
+
+  it("lets the routes given a shared handler share one permission, and stream when it does", async () => {
+    const api = new ApiGatewayRest("MyApi");
+    const stream = api.addHandler("Stream", {
+      handler: "src/stream.handler",
+      streaming: true,
+    });
+    const backend = api.addHandler("Backend", FUNCTION_ARN);
+    api.route("GET /a", stream).route("GET /b", stream);
+    api.route("GET /c", backend);
+    api.route("GET /d", FUNCTION_ARN);
+    expect(() =>
+      new ApiGatewayRest("Other").route("GET /", backend),
+    ).toThrow(
+      /The "GET \/" route is given the shared handler "Backend" of another API/,
+    );
+    api.deploy();
+    await pulumi.settle();
+
+    expect(Object.keys(api.nodes.sharedPermission)).toEqual([
+      "Stream",
+      "Backend",
+    ]);
+    expect(Object.keys(api.nodes.permission)).toEqual(["GET /d"]);
+    expect(Object.keys(api.nodes.handler)).toEqual(["GET /d"]);
+    expect(
+      await pulumi.resolve([
+        api.nodes.integration["GET /a"].responseTransferMode,
+        api.nodes.integration["GET /b"].responseTransferMode,
+        api.nodes.integration["GET /c"].responseTransferMode,
+        api.nodes.integration["GET /c"].uri,
+      ]),
+    ).toEqual([
+      "STREAM",
+      "STREAM",
+      "BUFFERED",
+      `arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${FUNCTION_ARN}/invocations`,
+    ]);
+    const integrations = pulumi.resources.filter(
+      (r) => r.type === "aws:apigateway/integration:Integration",
+    );
+    const permissionOf = (route: string) =>
+      route === "GET /c" ? "MyApiSharedPermissionBackend" : "MyApiSharedPermissionStream";
+    for (const route of ["GET /a", "GET /b", "GET /c"]) {
+      const integration = await pulumi.resolve(
+        api.nodes.integration[route].urn,
+      );
+      const r = integrations.find((r) => integration.endsWith(`::${r.name}`))!;
+      expect(pulumi.dependsOn(r.name, permissionOf(route))).toBe(true);
+    }
   });
 
   it("reports its URL when deploy() is called after the config waits for something", async () => {
