@@ -10,6 +10,7 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/mosaic/cloudflare"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/dev"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/socket"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui/common"
 	"github.com/sst/sst/v3/internal/util"
@@ -91,6 +92,7 @@ func CmdUI(c *cli.Cli) error {
 			project.CompleteEvent{},
 			typescript.WarningEvent{},
 			aws.ConcurrencyWarningEvent{},
+			socket.WarningEvent{},
 			project.PolicyAdvisoryEvent{},
 		)
 	}

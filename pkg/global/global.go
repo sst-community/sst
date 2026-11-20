@@ -36,3 +36,9 @@ func ConfigDir() string {
 func BinPath() string {
 	return filepath.Join(configDir, "bin")
 }
+
+// CertPath is where `sst cert` keeps the certificate that sst dev serves the
+// SST Console's local connection over TLS with.
+func CertPath() string {
+	return filepath.Join(configDir, "cert")
+}

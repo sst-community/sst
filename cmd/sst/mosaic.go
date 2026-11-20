@@ -22,6 +22,7 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/mosaic/dev"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/monoplexer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/multiplexer"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/socket"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/watcher"
 	"github.com/sst/sst/v3/internal/util"
@@ -242,6 +243,13 @@ func CmdMosaic(c *cli.Cli) error {
 	wg.Go(func() error {
 		defer c.Cancel()
 		return server.Start(c.Context, p)
+	})
+
+	// the SST Console's local connection, on a listener of its own, for an
+	// SST app: the Console doesn't show a plain Pulumi program's stacks
+	serveConsole := !flag.SST_NO_CONSOLE && c.DevCommand()[0] == "dev"
+	wg.Go(func() error {
+		return socket.Start(c.Context, p, serveConsole)
 	})
 
 	currentExecutable, _ := os.Executable()
