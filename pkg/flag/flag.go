@@ -32,6 +32,12 @@ var SST_EXPERIMENTAL = isTrue("SST_EXPERIMENTAL") || isTrue("SST_EXPERIMENTAL_RU
 var SST_RUN_ID = os.Getenv("SST_RUN_ID")
 var SST_SKIP_APPSYNC = isTrue("SST_SKIP_APPSYNC")
 
+// SST_NO_CONSOLE stops `sst dev` serving the SST Console's local connection,
+// the socket on localhost:13557 (and 14557 with `sst cert`'s certificate)
+// that console.sst.dev shows the function calls of `sst dev` through.
+// `sst pulumi dev` never serves it.
+var SST_NO_CONSOLE = isTrue("SST_NO_CONSOLE")
+
 // SST_ALLOW_MISSING_STATE lets a deploy go ahead on a stage whose history
 // says it was deployed but whose state the home can't find. Without it, the
 // deploy is refused, since it would create every resource again.

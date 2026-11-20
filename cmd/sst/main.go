@@ -1086,6 +1086,7 @@ var root = &cli.Command{
 			Run: CmdRefresh,
 		},
 		CmdState,
+		CmdCert,
 		CmdTunnel,
 		CmdDiagnostic,
 	},

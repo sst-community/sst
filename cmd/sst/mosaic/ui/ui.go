@@ -20,6 +20,7 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/cloudflare"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/socket"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui/common"
 	"github.com/sst/sst/v3/pkg/flag"
 	"github.com/sst/sst/v3/pkg/global"
@@ -280,6 +281,9 @@ func (u *UI) Event(unknown interface{}) {
 		u.printEvent(TEXT_WARNING, "Warning", evt.Message)
 
 	case *aws.ConcurrencyWarningEvent:
+		u.printEvent(TEXT_WARNING, "Warning", evt.Message)
+
+	case *socket.WarningEvent:
 		u.printEvent(TEXT_WARNING, "Warning", evt.Message)
 
 	case *project.StackCommandEvent:
