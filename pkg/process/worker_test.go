@@ -4,7 +4,9 @@ package process
 
 import (
 	"bufio"
+	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -104,8 +106,11 @@ func TestWorkerThatExitsTakesWhatItStarted(t *testing.T) {
 // Something a worker started outside its group can hold its output open after
 // it exits. Its output still ends, so it isn't taken for running.
 func TestWorkerOutputEndsWhenSomethingElseHoldsIt(t *testing.T) {
-	// it waits for the process to leave its group, which takes a moment
-	w := startTestWorker(t, `perl -MPOSIX -e '$| = 1; setsid(); print "$$\n"; sleep 30' & sleep 0.5`)
+	// The worker exits once the process has left its group and said so, not
+	// after a set time: on a busy machine perl can take longer to start than
+	// any sleep, and the worker's exit then takes perl with its group.
+	ready := filepath.Join(t.TempDir(), "ready")
+	w := startTestWorker(t, fmt.Sprintf(`perl -MPOSIX -e '$| = 1; setsid(); print "$$\n"; open(my $f, ">", $ARGV[0]); close($f); sleep 30' %q & for i in $(seq 1 400); do [ -e %q ] && break; sleep 0.05; done`, ready, ready))
 	logs := bufio.NewReader(w.Logs())
 	line, err := logs.ReadString('\n')
 	if err != nil {
