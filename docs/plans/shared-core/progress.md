@@ -2,6 +2,14 @@
 
 The log, newest first. The plan is [plan.md](plan.md).
 
+## 2026-11-20: The Console's local connection and `sst cert` back, on both lines
+
+- **Why:** the engine (#272) brought SST 4 the RPC's design, which took out the socket the SST Console connects to, and `sst cert`, so console.sst.dev couldn't show `sst dev`'s calls on `main` either. The maintainer asked for a secure fix that needs no change to the Console.
+- **On `main`** (`75fc62006`), merged into `v5` (`811f6f432`): the socket on a listener of its own, on loopback, for the Console's page only, and `sst cert` back, with its root's key deleted ([how](../v5-rewrite/reference.md#the-consoles-local-connection)). It's on by default, and `SST_NO_CONSOLE=1` turns it off.
+- **Also on `main`** (`f7a6f5a88`, which is `v5`'s `07e07e6a9`): the HTTP transport's `Reconnect` ends a stream by its context. Go 1.27's `net/http` reads on, for up to 50 ms, from a body closed early, so the stream being ended could still deliver an event; when CI's Go moved to 1.27.4, the transport suite's reconnect case failed every run.
+- **Checked:** two independent reviews (7 findings, then 5), all fixed but what a program on the machine can read, which the maintainer accepted; a test for each check, each failing when its check is taken out; the Go suite on Go 1.26.6 and 1.27.4; the docs build. In the lab, an app with one function under `sst dev`, with a CLI built from the branch: the real Console showed "Tailing logs from local `sst dev`" and each call. 28 probes from outside were refused: other origins, DNS rebinding, other paths, HTTP/2, the machine's network address, and the RPC without its token. With `SST_NO_CONSOLE=1` the port stayed closed. Removed and cleaned up.
+- **Release notes** (4.26.0): high level, as the maintainer asked. The local server listens only on `localhost` and takes only the Console's page; anyone who ran `sst cert` before runs it again.
+
 ## 2026-11-19: #217 and #218 merged, and ported to SST 5's APIs and `Function`
 
 - **#217 merged into `main`** (`92f12042c`): SST 4's `ApiGatewayV2`, `ApiGatewayV1` and `ApiGatewayWebSocket` take `addHandler(name, fn)`, a function or an ARN, and the routes given it invoke the function through one permission, the API's own (`<Api>Handler<Name>Permission`), at the function's version. **#218 merged** (`844fa1734`): SST 4's `Function` takes `linkPermissions.managed`, groups of resources from `link` whose grants become managed policies attached to the role (`<Fn>Link<Group>Policy`), with `retainInline` for switching in two deploys; when every linked grant is in a group, one is kept inline, since a role given no inline policy keeps the one it had. `main` merged into `v5` (`18818a55a`) keeps `v5`'s components and SST 4's frozen ones as they are, leaves out SST 4's tests and the two example apps, and takes the docs generator's case for the handler `addHandler` returns.

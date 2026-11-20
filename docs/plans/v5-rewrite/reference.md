@@ -83,32 +83,26 @@ Read from [v5-progress.md](../v5-progress.md), [v5-port-notes.md](../v5-port-not
 - **What `sst dev` deploys differently:** the stub's code in place of the function's, shared by every function in a region and kept on delete; the stub's environment; permission to reach AppSync; a trust policy that lets the CLI take the role; and the `_live` output.
 - **Tests:** the `bridge` package has fake connections that lose, shuffle, delay and fail packets (`lossyAppSync`, `shuffled`, `slowConn`, `failingConn`), and `cmd/sst/mosaic/aws/harness_test.go` runs the real dispatch loop against a fake AppSync and a fake stub. Each fake replaces the transport rather than testing one, and the stub's own loop isn't run by any test.
 
-## The Console's local connection, removed
+<a id="the-consoles-local-connection-removed"></a>
 
-5.0's `sst dev` takes no connection from the SST Console, and `sst cert` is gone ([decided](plan.md#decisions) 2026-10-31). This is what it did, and what bringing it back takes.
+## The Console's local connection
 
-**What it did.** The code is in `58ab248f3` (`cmd/sst/mosaic/socket/socket.go`, `cmd/sst/cert.go`, `pkg/global/mkcert.go`), and the commit after it removed it.
+`sst dev` takes the SST Console's connection again, and `sst cert` is back, on both lines, since 2026-11-20 ([decided](plan.md#decisions); `main`'s `75fc62006`). They were taken out on 2026-10-31, when every route of the RPC's server went under a token, on a port the system picks, which the Console's page can't know.
 
-- `sst dev` served a websocket at `/socket` on its local server. The Console, which SST runs at console.sst.dev, connected to it from the browser, on the ports 4.x's `sst dev` takes first: 13557, and 14557 over TLS.
-- When the Console connected, `sst dev` sent `cli.dev`, with the app and the stage, and then every invocation it had kept. After that it sent each invocation as it happened (`invocation`): its input, output, errors, logs and report. The Console sent `log.cleared` to drop the ones it had shown.
-- `sst cert` used [mkcert](https://github.com/FiloSottile/mkcert) to install a root certificate the machine trusts, and made a certificate for `localhost` and `127.0.0.1` with it. When that certificate existed, `sst dev` served the same routes over TLS on the port 1,000 up. Safari and Brave need that to let the Console's page connect.
-- In Gitpod, the Gitpod Local Companion app tunnelled the port to the browser.
+**What the Console does**, from the page it ships (checked 2026-11-20): it tries `ws://localhost:13557/socket`, `wss://localhost:13557/socket` and `wss://localhost:14557/socket` in turn, every 3 seconds, with no token. Once connected, it's sent `cli.dev` (the app and the stage) and the calls kept, then each call as it changes (`invocation`: its input, output, errors, logs and report). It sends only `log.cleared`. It shows the calls as local logs, and uses the connection to tell a personal stage apart.
 
-**What the Console used it for**, from its docs (the docs page's sections went with the code):
+**How it's served** (`cmd/sst/mosaic/socket`):
 
-- **Local logs:** the invocations of `sst dev`'s functions, live.
-- **Telling a personal stage apart:** a workspace over the free tier can still open its personal stages "if you have `sst dev` running locally. Otherwise the Console won't be able to detect that it's a personal stage." Without the connection, that likely ends for 5.0 apps.
+- On a listener of its own, apart from the RPC's server, which keeps its token and its port: 127.0.0.1 and ::1 at 13557, and at 14557 over TLS when `sst cert`'s certificate is there. It takes both ports or neither, so two `sst dev`s never look like one to the Console.
+- It serves `/socket` alone, to the Console's page alone: the origin `https://console.sst.dev` exactly, and a host that names this machine. Another site's page is refused, and so is one that points its own name at this machine.
+- Each Console has a writer and a queue of its own, and one that falls behind is let go, so it can't hold up `sst dev`. It takes at most 16 connections, pinged every 30 seconds. Changes to a call go out together, at most every 100 ms. What the Console sends is read only for `log.cleared`, up to 4 KB.
+- It keeps #238's most recent calls: up to 1,000, and about 64 MB, log lines counted.
+- It's on by default for `sst dev`, and `SST_NO_CONSOLE=1` turns it off. `sst pulumi dev` doesn't serve it, as the Console doesn't show a plain Pulumi program's stacks.
+- What it can't keep out is a program on the machine, which can send any origin, and so read the calls kept, and clear them. The Console docs say so.
 
-**Why it went.** Every route of 5.0's server is under a token, on a port the system picks ([safety rules](plan.md#safety-rules)). A page from another site can't know either one, so the Console can't connect. The TLS proxy was dropped, so `sst cert` was left installing a trusted root certificate for nothing.
+**`sst cert`** installs a root certificate with [mkcert](https://github.com/FiloSottile/mkcert), checked against pinned SHA-256 hashes, makes a certificate for `localhost`, `127.0.0.1` and `::1` with it, and deletes the root's private key whatever fails, so the root can't sign anything else. Run again, it takes out the root it made before; `--remove` only takes it out. `sst dev` warns in its UI about a root that kept its key, and about a certificate that expires within 30 days, and serves no TLS with an expired one.
 
-**Bringing it back** takes more than a revert, so as not to undo the safety rule:
-
-- Revert the commit that removed it, which brings back the code, `sst cert` and the docs page's sections.
-- The Console has to get the token from the developer. One way: `sst dev` prints, or opens, a Console link with the port and the token in the URL's fragment, which the browser doesn't send to the Console's server. The Console then connects to `ws://127.0.0.1:<port>/<token>/socket`. That needs a change to the Console, which SST runs, not the fork.
-- The socket takes only the Console's origin.
-- For Safari and Brave, the TLS listener is on `127.0.0.1` only, under the same token.
-- `sst dev` keeps no invocations while no Console is connected. The old code kept them until the Console cleared them.
-- Take `main`'s bound on what it keeps, from sst-community/sst#238 (2026-11-08): only the most recent calls, error details counted, `cmd/sst/mosaic/socket/store.go` with its tests. The merge of `main` into `v5` on 2026-11-09 left it out, as the package isn't here.
+**Chrome** asks the developer once whether console.sst.dev may reach apps on the device (its local network access permission), and the connection waits until they allow it.
 
 ## SST's provider resources
 
