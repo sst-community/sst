@@ -116,7 +116,8 @@ type Connection struct {
 	endpoint, token string
 	client          *http.Client
 	mu              sync.Mutex
-	streams         map[*http.Response]struct{}
+	// each open stream, with what ends it
+	streams map[*http.Response]context.CancelFunc
 }
 
 func Dial(endpoint, token string) (*Connection, error) {
@@ -128,7 +129,7 @@ func Dial(endpoint, token string) (*Connection, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.ResponseHeaderTimeout = 10 * time.Second
-	return &Connection{endpoint: strings.TrimRight(endpoint, "/"), token: token, client: &http.Client{Transport: transport}, streams: map[*http.Response]struct{}{}}, nil
+	return &Connection{endpoint: strings.TrimRight(endpoint, "/"), token: token, client: &http.Client{Transport: transport}, streams: map[*http.Response]context.CancelFunc{}}, nil
 }
 
 func (c *Connection) request(ctx context.Context, method, path, channel string, body io.Reader) (*http.Response, error) {
@@ -180,7 +181,7 @@ func (c *Connection) PublishBatch(ctx context.Context, channel string, events []
 }
 
 func (c *Connection) Subscribe(ctx context.Context, channel string) (chan string, error) {
-	resp, err := c.request(ctx, "GET", "/subscribe", channel, nil)
+	resp, cancel, err := c.stream(ctx, channel)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +190,7 @@ func (c *Connection) Subscribe(ctx context.Context, channel string) (chan string
 		// Keep the channel open on shutdown, matching AppSync's subscription API.
 		for {
 			c.mu.Lock()
-			c.streams[resp] = struct{}{}
+			c.streams[resp] = cancel
 			c.mu.Unlock()
 			decoder := json.NewDecoder(resp.Body)
 			for {
@@ -200,17 +201,11 @@ func (c *Connection) Subscribe(ctx context.Context, channel string) (chan string
 				select {
 				case out <- string(event):
 				case <-ctx.Done():
-					resp.Body.Close()
-					c.mu.Lock()
-					delete(c.streams, resp)
-					c.mu.Unlock()
+					c.end(resp, cancel)
 					return
 				}
 			}
-			resp.Body.Close()
-			c.mu.Lock()
-			delete(c.streams, resp)
-			c.mu.Unlock()
+			c.end(resp, cancel)
 			retryDelay := 100 * time.Millisecond
 			for {
 				select {
@@ -218,7 +213,7 @@ func (c *Connection) Subscribe(ctx context.Context, channel string) (chan string
 					return
 				case <-time.After(retryDelay):
 				}
-				resp, err = c.request(ctx, "GET", "/subscribe", channel, nil)
+				resp, cancel, err = c.stream(ctx, channel)
 				if err == nil {
 					break
 				}
@@ -232,10 +227,34 @@ func (c *Connection) Subscribe(ctx context.Context, channel string) (chan string
 	return out, nil
 }
 
+// stream opens a subscription's stream, with a context of its own to end it.
+func (c *Connection) stream(ctx context.Context, channel string) (*http.Response, context.CancelFunc, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	resp, err := c.request(ctx, "GET", "/subscribe", channel, nil)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return resp, cancel, nil
+}
+
+func (c *Connection) end(resp *http.Response, cancel context.CancelFunc) {
+	cancel()
+	resp.Body.Close()
+	c.mu.Lock()
+	delete(c.streams, resp)
+	c.mu.Unlock()
+}
+
+// Reconnect ends each stream, and its subscription opens a new one. It ends a
+// stream by its context, which closes the connection at once. Closing the body
+// isn't enough: since Go 1.27, net/http reads on for a moment to reuse the
+// connection, so an event can still arrive on the stream being ended, and one
+// published after it, before the new stream is open, is lost.
 func (c *Connection) Reconnect(ctx context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for stream := range c.streams {
-		stream.Body.Close()
+	for _, cancel := range c.streams {
+		cancel()
 	}
 }
