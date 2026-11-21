@@ -30,7 +30,7 @@ export interface WorkflowArgs
   /**
    * The language runtime for the workflow.
    *
-   * AWS Lambda durable functions currently support `"nodejs22.x"`, `"nodejs24.x"`, and
+   * AWS Lambda durable functions currently support `"nodejs22.x"`, `"nodejs24.x"`, `"nodejs26.x"`, and
    * `"python3.13"`.
    *
    * @default `"nodejs24.x"`
