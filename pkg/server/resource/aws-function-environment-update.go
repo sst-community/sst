@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -90,13 +91,9 @@ func addEnvironment(ctx context.Context, client functionConfigs, name string, en
 		}
 		variables := map[string]string{}
 		if config.Environment != nil {
-			for k, v := range config.Environment.Variables {
-				variables[k] = v
-			}
+			maps.Copy(variables, config.Environment.Variables)
 		}
-		for k, v := range environment {
-			variables[k] = v
-		}
+		maps.Copy(variables, environment)
 		_, err = client.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
 			FunctionName: aws.String(name),
 			Environment:  &types.Environment{Variables: variables},

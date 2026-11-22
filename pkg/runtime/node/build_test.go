@@ -3,6 +3,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -294,6 +295,65 @@ func TestNpmInstallArgs(t *testing.T) {
 				if strings.HasPrefix(arg, "--platform") || strings.HasPrefix(arg, "--arch") {
 					t.Fatalf("npmInstallArgs() contains %q, which npm 12 rejects", arg)
 				}
+			}
+		})
+	}
+}
+
+func TestParseBunCatalogSource(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     string
+		found    bool
+		catalog  map[string]string
+		catalogs map[string]map[string]string
+	}{
+		{
+			name:     "workspace catalogs replace same-named ones whole and add new ones",
+			data:     `{"catalogs":{"a":{"x":"1"},"b":{"y":"1","w":"1"}},"workspaces":{"catalogs":{"b":{"y":"2"},"c":{"z":"1"}}}}`,
+			found:    true,
+			catalogs: map[string]map[string]string{"a": {"x": "1"}, "b": {"y": "2"}, "c": {"z": "1"}},
+		},
+		{
+			name:     "workspace catalogs alone",
+			data:     `{"workspaces":{"catalogs":{"c":{"z":"1"}}}}`,
+			found:    true,
+			catalogs: map[string]map[string]string{"c": {"z": "1"}},
+		},
+		{
+			name:     "empty workspace catalogs keep the top-level ones",
+			data:     `{"catalogs":{"a":{"x":"1"}},"workspaces":{"catalog":{"p":"1"},"catalogs":{}}}`,
+			found:    true,
+			catalog:  map[string]string{"p": "1"},
+			catalogs: map[string]map[string]string{"a": {"x": "1"}},
+		},
+		{
+			name:     "empty workspace catalogs and no top-level ones",
+			data:     `{"workspaces":{"catalog":{"p":"1"},"catalogs":{}}}`,
+			found:    true,
+			catalog:  map[string]string{"p": "1"},
+			catalogs: map[string]map[string]string{},
+		},
+		{
+			name:  "no catalogs",
+			data:  `{"workspaces":["packages/*"]}`,
+			found: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source, found, err := parseBunCatalogSource([]byte(tt.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found != tt.found {
+				t.Fatalf("found = %v, want %v", found, tt.found)
+			}
+			if !reflect.DeepEqual(source.Catalog, tt.catalog) {
+				t.Errorf("catalog = %#v, want %#v", source.Catalog, tt.catalog)
+			}
+			if !reflect.DeepEqual(source.Catalogs, tt.catalogs) {
+				t.Errorf("catalogs = %#v, want %#v", source.Catalogs, tt.catalogs)
 			}
 		})
 	}
