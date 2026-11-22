@@ -31,6 +31,9 @@ export class Choice extends State {
    *
    * The condition needs to be a JSONata expression that evaluates to a boolean.
    *
+   * If `next` is a chain, like `a.next(b)`, the branch starts at the chain's first
+   * state, `a`.
+   *
    * @example
    *
    * ```ts
@@ -50,18 +53,23 @@ export class Choice extends State {
     if (!isJSONata(condition))
       throw new Error("Condition must start with '{%' and end with '%}'.");
 
-    this.addChoiceBranch(next);
-    this.choices.push({ condition, next });
+    const head = next.getHead();
+    this.addChoiceBranch(head);
+    this.choices.push({ condition, next: head });
     return this;
   }
 
   /**
    * Add a default next state to the `Choice` state. If no other condition matches,
    * continue execution with the given state.
+   *
+   * If `next` is a chain, like `a.next(b)`, the branch starts at the chain's first
+   * state, `a`.
    */
   public otherwise(next: State) {
-    this.addChoiceBranch(next);
-    this.defaultNext = next;
+    const head = next.getHead();
+    this.addChoiceBranch(head);
+    this.defaultNext = head;
     return this;
   }
 

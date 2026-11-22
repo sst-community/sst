@@ -247,3 +247,57 @@ describe("StepFunctions definitions that already work stay the same", () => {
     );
   });
 });
+
+describe("Choice branch written as a chain", () => {
+  it("when() starts the branch at the chain's first state", async () => {
+    const a = new Pass({ name: "StepA" });
+    const b = new Pass({ name: "StepB" });
+    const decide = new Choice({ name: "Decide" })
+      .when("{% true %}", a.next(b))
+      .otherwise(new Pass({ name: "Fallback" }));
+    const out = await definition(decide);
+    expect(out.out.States.Decide.Choices[0].Next).toBe("StepA");
+    expect(out.out.States.StepA.Next).toBe("StepB");
+    expect(out.states).toEqual(["Decide", "Fallback", "StepA", "StepB"]);
+  });
+
+  it("otherwise() starts the branch at the chain's first state", async () => {
+    const a = new Pass({ name: "StepA" });
+    const b = new Pass({ name: "StepB" });
+    const decide = new Choice({ name: "Decide" })
+      .when("{% true %}", new Pass({ name: "Match" }))
+      .otherwise(a.next(b));
+    const out = await definition(decide);
+    expect(out.out.States.Decide.Default).toBe("StepA");
+    expect(out.out.States.StepA.Next).toBe("StepB");
+    expect(out.states).toEqual(["Decide", "Match", "StepA", "StepB"]);
+  });
+
+  it("a state in the middle of a chain also starts the branch at the chain's first state", async () => {
+    // Before this change, the cached path went straight to Respond.
+    const fetch = new Pass({ name: "Fetch" });
+    const respond = new Pass({ name: "Respond" });
+    fetch.next(respond);
+    const cached = new Choice({ name: "Cached" })
+      .when("{% $states.input.cached %}", respond)
+      .otherwise(fetch);
+    const out = await definition(cached);
+    expect(out.out.States.Cached.Choices[0].Next).toBe("Fetch");
+    expect(out.out.States.Cached.Default).toBe("Fetch");
+  });
+
+  it("keeps the states before the Choice when the definition is the chain's last state", async () => {
+    const start = new Pass({ name: "Start" });
+    const a = new Pass({ name: "StepA" });
+    const b = new Pass({ name: "StepB" });
+    start.next(
+      new Choice({ name: "Decide" })
+        .when("{% true %}", a.next(b))
+        .otherwise(new Fail({ name: "No" })),
+    );
+    const out = await definition(b);
+    expect(out.startAt).toBe("Start");
+    expect(out.out.States.Decide.Choices[0].Next).toBe("StepA");
+    expect(out.states).toEqual(["Decide", "No", "Start", "StepA", "StepB"]);
+  });
+});
