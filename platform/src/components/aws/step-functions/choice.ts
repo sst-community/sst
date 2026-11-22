@@ -50,6 +50,7 @@ export class Choice extends State {
     if (!isJSONata(condition))
       throw new Error("Condition must start with '{%' and end with '%}'.");
 
+    this.addChoiceBranch(next);
     this.choices.push({ condition, next });
     return this;
   }
@@ -59,6 +60,7 @@ export class Choice extends State {
    * continue execution with the given state.
    */
   public otherwise(next: State) {
+    this.addChoiceBranch(next);
     this.defaultNext = next;
     return this;
   }
