@@ -76,7 +76,9 @@ func (r *DistributionInvalidation) handle(input *DistributionInvalidationInputs)
 		fileEnd := int(math.Min(float64((i+1)*FILE_LIMIT), float64(fileCount)))
 		wildcardStart := int(math.Min(float64(i*WILDCARD_LIMIT), float64(wildcardCount)))
 		wildcardEnd := int(math.Min(float64((i+1)*WILDCARD_LIMIT), float64(wildcardCount)))
-		stepPaths := append(pathsFile[fileStart:fileEnd], pathsWildcard[wildcardStart:wildcardEnd]...)
+		// Cap the slice at fileEnd so append copies instead of writing the
+		// wildcards over the files of the next chunk.
+		stepPaths := append(pathsFile[fileStart:fileEnd:fileEnd], pathsWildcard[wildcardStart:wildcardEnd]...)
 
 		result, err := client.CreateInvalidation(r.context, &cloudfront.CreateInvalidationInput{
 			DistributionId: aws.String(input.DistributionId),
