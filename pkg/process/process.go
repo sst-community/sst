@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -165,8 +166,8 @@ func untrackCommand(cmd *exec.Cmd) {
 func untrack(pid int) {
 	lock.Lock()
 	defer lock.Unlock()
-	for i := len(cmds) - 1; i >= 0; i-- {
-		if cmds[i].Process != nil && cmds[i].Process.Pid == pid {
+	for i, cmd := range slices.Backward(cmds) {
+		if cmd.Process != nil && cmd.Process.Pid == pid {
 			cmds[i] = cmds[len(cmds)-1]
 			cmds = cmds[:len(cmds)-1]
 			return
