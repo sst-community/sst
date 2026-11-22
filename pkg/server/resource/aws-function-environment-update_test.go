@@ -20,6 +20,8 @@ type fakeFunction struct {
 	variables map[string]string
 	looks     int
 	updates   []map[string]string
+	// noEnvironment gives the function no Environment at all
+	noEnvironment bool
 }
 
 func (f *fakeFunction) GetFunctionConfiguration(_ context.Context, _ *lambda.GetFunctionConfigurationInput, _ ...func(*lambda.Options)) (*lambda.GetFunctionConfigurationOutput, error) {
@@ -28,6 +30,9 @@ func (f *fakeFunction) GetFunctionConfiguration(_ context.Context, _ *lambda.Get
 		State:            types.StateActive,
 		LastUpdateStatus: types.LastUpdateStatusSuccessful,
 		Environment:      &types.EnvironmentResponse{Variables: f.variables},
+	}
+	if f.noEnvironment {
+		out.Environment = nil
 	}
 	if f.busy > 0 {
 		f.busy--
@@ -70,6 +75,38 @@ func TestAddEnvironment(t *testing.T) {
 		fn := &fakeFunction{conflicts: 1, variables: map[string]string{"SST_KEY": "k"}}
 		require.NoError(t, addEnvironment(context.Background(), fn, "app-dev-echo", map[string]string{"SELF_URL": "https://echo"}))
 		assert.Equal(t, []map[string]string{{"SST_KEY": "rotated", "SELF_URL": "https://echo"}}, fn.updates)
+	})
+
+	t.Run("its variables win over the function's, and the rest are kept", func(t *testing.T) {
+		fn := &fakeFunction{variables: map[string]string{"SST_KEY": "k", "SELF_URL": "old"}}
+		require.NoError(t, addEnvironment(context.Background(), fn, "app-dev-echo", map[string]string{"SELF_URL": "https://echo"}))
+		assert.Equal(t, []map[string]string{{"SST_KEY": "k", "SELF_URL": "https://echo"}}, fn.updates)
+	})
+
+	t.Run("a function with no variables", func(t *testing.T) {
+		fn := &fakeFunction{}
+		require.NoError(t, addEnvironment(context.Background(), fn, "app-dev-echo", map[string]string{"SELF_URL": "https://echo"}))
+		assert.Equal(t, []map[string]string{{"SELF_URL": "https://echo"}}, fn.updates)
+	})
+
+	t.Run("a function with no environment", func(t *testing.T) {
+		fn := &fakeFunction{noEnvironment: true}
+		require.NoError(t, addEnvironment(context.Background(), fn, "app-dev-echo", map[string]string{"SELF_URL": "https://echo"}))
+		assert.Equal(t, []map[string]string{{"SELF_URL": "https://echo"}}, fn.updates)
+	})
+
+	t.Run("nothing to add sends what the function has", func(t *testing.T) {
+		fn := &fakeFunction{variables: map[string]string{"SST_KEY": "k"}}
+		require.NoError(t, addEnvironment(context.Background(), fn, "app-dev-echo", nil))
+		assert.Equal(t, []map[string]string{{"SST_KEY": "k"}}, fn.updates)
+	})
+
+	t.Run("nothing on either side sends an empty map, not nil", func(t *testing.T) {
+		fn := &fakeFunction{noEnvironment: true}
+		require.NoError(t, addEnvironment(context.Background(), fn, "app-dev-echo", nil))
+		require.Len(t, fn.updates, 1)
+		assert.NotNil(t, fn.updates[0])
+		assert.Empty(t, fn.updates[0])
 	})
 
 	t.Run("gives up on a function that stays busy", func(t *testing.T) {

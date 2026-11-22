@@ -2,6 +2,7 @@ package process
 
 import (
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -110,4 +111,71 @@ func signalProcess(pid int) error {
 
 func init() {
 	killWait = 1 * time.Second
+}
+
+func fakeCmd(pid int) *exec.Cmd {
+	return &exec.Cmd{Process: &os.Process{Pid: pid}}
+}
+
+func trackedNow() []*exec.Cmd {
+	lock.Lock()
+	defer lock.Unlock()
+	return append([]*exec.Cmd{}, cmds...)
+}
+
+func setTracked(list ...*exec.Cmd) {
+	lock.Lock()
+	defer lock.Unlock()
+	cmds = list
+}
+
+func sameCmds(t *testing.T, got, want []*exec.Cmd) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %d tracked commands, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tracked command %d is not the one expected", i)
+		}
+	}
+}
+
+// untrack searches from the end and moves the last command into the gap
+func TestUntrackSwapsLastIntoGap(t *testing.T) {
+	a, b, c, d := fakeCmd(1), fakeCmd(2), fakeCmd(3), fakeCmd(4)
+	setTracked(a, b, c, d)
+	defer reset()
+
+	untrack(2)
+	sameCmds(t, trackedNow(), []*exec.Cmd{a, d, c})
+
+	untrack(4)
+	sameCmds(t, trackedNow(), []*exec.Cmd{a, c})
+}
+
+// When two commands share a pid, the one tracked last is removed, and only it
+func TestUntrackRemovesLastMatchOnly(t *testing.T) {
+	first, other, last := fakeCmd(7), fakeCmd(8), fakeCmd(7)
+	setTracked(first, other, last)
+	defer reset()
+
+	untrack(7)
+	sameCmds(t, trackedNow(), []*exec.Cmd{first, other})
+}
+
+func TestUntrackSkipsUnstartedAndUnknown(t *testing.T) {
+	unstarted, started := &exec.Cmd{}, fakeCmd(5)
+	setTracked(unstarted, started)
+	defer reset()
+
+	untrack(99)
+	sameCmds(t, trackedNow(), []*exec.Cmd{unstarted, started})
+
+	untrack(5)
+	sameCmds(t, trackedNow(), []*exec.Cmd{unstarted})
+
+	setTracked()
+	untrack(5)
+	sameCmds(t, trackedNow(), []*exec.Cmd{})
 }

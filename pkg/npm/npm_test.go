@@ -267,3 +267,51 @@ func TestLoadRegistryNpmRegistryEnvVar(t *testing.T) {
 		t.Errorf("env auth token = %q, want env-tok", reg.auth.token)
 	}
 }
+
+// The project .npmrc wins over the home one for the same registry, and the
+// home one's other registries are kept.
+func TestLoadRegistryMergesHomeAndProjectAuths(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, "app")
+	os.Mkdir(project, 0755)
+	// os.UserHomeDir reads USERPROFILE on Windows
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	os.WriteFile(filepath.Join(home, ".npmrc"), []byte("//reg.example.com/:_authToken=home-tok\n//other.example.com/:_authToken=other-tok\n"), 0644)
+	os.WriteFile(filepath.Join(project, ".npmrc"), []byte("//reg.example.com/:_authToken=project-tok\n"), 0644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(project)
+	defer os.Chdir(origDir)
+
+	t.Setenv("NPM_REGISTRY", "https://reg.example.com")
+	if got := LoadRegistry().auth.token; got != "project-tok" {
+		t.Errorf("reg.example.com token = %q, want project-tok", got)
+	}
+	t.Setenv("NPM_REGISTRY", "https://other.example.com")
+	if got := LoadRegistry().auth.token; got != "other-tok" {
+		t.Errorf("other.example.com token = %q, want other-tok", got)
+	}
+}
+
+// A project .npmrc with no auth lines keeps the home one's auths.
+func TestLoadRegistryProjectNpmrcWithoutAuths(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(home, "app")
+	os.Mkdir(project, 0755)
+	// os.UserHomeDir reads USERPROFILE on Windows
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("NPM_REGISTRY", "")
+	os.WriteFile(filepath.Join(home, ".npmrc"), []byte("registry=https://reg.example.com\n//reg.example.com/:_authToken=home-tok\n"), 0644)
+	os.WriteFile(filepath.Join(project, ".npmrc"), []byte("# nothing\n"), 0644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(project)
+	defer os.Chdir(origDir)
+
+	reg := LoadRegistry()
+	if reg.url != "https://reg.example.com" || reg.auth.token != "home-tok" {
+		t.Errorf("got url %q token %q, want https://reg.example.com home-tok", reg.url, reg.auth.token)
+	}
+}

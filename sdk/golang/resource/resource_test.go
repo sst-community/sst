@@ -103,3 +103,40 @@ func TestGet_ReturnsNotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestKeys_EmptySSTResourcesJSONLeavesResources(t *testing.T) {
+	resetResources()
+	resources["Existing"] = "kept"
+	os.Setenv("SST_RESOURCES_JSON", `{}`)
+	defer os.Unsetenv("SST_RESOURCES_JSON")
+
+	loadFromEnv()
+
+	if len(resources) != 1 || resources["Existing"] != "kept" {
+		t.Fatalf("expected resources unchanged, got %v", resources)
+	}
+}
+
+// resources is nil when the decrypted file is the JSON null. An empty
+// SST_RESOURCES_JSON then leaves it alone; a non-empty one panics, as it did
+// before maps.Copy.
+func TestKeys_SSTResourcesJSONIntoNilResources(t *testing.T) {
+	defer resetResources()
+	defer os.Unsetenv("SST_RESOURCES_JSON")
+
+	resources = nil
+	os.Setenv("SST_RESOURCES_JSON", `{}`)
+	loadFromEnv()
+	if resources != nil {
+		t.Fatalf("expected resources to stay nil, got %v", resources)
+	}
+
+	resources = nil
+	os.Setenv("SST_RESOURCES_JSON", `{"MyBucket":{"name":"my-bucket"}}`)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected a panic on a nil resources map")
+		}
+	}()
+	loadFromEnv()
+}
