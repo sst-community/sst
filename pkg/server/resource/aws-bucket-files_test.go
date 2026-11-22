@@ -169,3 +169,62 @@ func TestUploadFilesWorkers(t *testing.T) {
 		t.Fatalf("%d uploads at a time, want 10", most)
 	}
 }
+
+// upload skips a file whose hash, cache-control and content type are the same
+// as in the last deploy, and puts it again when any of them changed. The old
+// and new values are separate strings, as they are after the state is decoded.
+func TestUploadSkipsUnchangedFiles(t *testing.T) {
+	var mu sync.Mutex
+	puts := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		puts[r.URL.Path] = r.Header.Get("Cache-Control")
+		mu.Unlock()
+	}))
+	t.Cleanup(server.Close)
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "f")
+	if err := os.WriteFile(src, []byte("body"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	file := func(key, hash string, cacheControl *string) BucketFile {
+		return BucketFile{Source: src, Key: key, ContentType: "text/html", Hash: aws.String(hash), CacheControl: cacheControl}
+	}
+	old := []BucketFile{
+		file("cached.html", "a", aws.String("max-age=0,no-cache")),
+		file("plain.css", "a", nil),
+		file("recached.js", "a", aws.String("max-age=0")),
+		file("edited.js", "a", aws.String("max-age=0")),
+	}
+	news := []BucketFile{
+		file("cached.html", "a", aws.String("max-age=0,no-cache")),
+		file("plain.css", "a", nil),
+		file("recached.js", "a", aws.String("max-age=31536000,immutable")),
+		file("edited.js", "b", aws.String("max-age=0")),
+	}
+
+	client := s3.NewFromConfig(aws.Config{
+		Region:       "us-east-1",
+		Credentials:  aws.AnonymousCredentials{},
+		BaseEndpoint: aws.String(server.URL),
+	}, func(o *s3.Options) { o.UsePathStyle = true })
+	r := &BucketFiles{NewAwsResource(context.Background(), nil)}
+	if err := r.upload(client, "bucket", news, old); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"/bucket/recached.js": "max-age=31536000,immutable",
+		"/bucket/edited.js":   "max-age=0",
+	}
+	if len(puts) != len(want) {
+		t.Fatalf("uploaded %v, want only %v", puts, want)
+	}
+	for key, cacheControl := range want {
+		if got, ok := puts[key]; !ok || got != cacheControl {
+			t.Fatalf("%s uploaded with cache-control %q (uploaded: %v), want %q", key, got, ok, cacheControl)
+		}
+	}
+}
