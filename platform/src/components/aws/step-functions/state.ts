@@ -210,6 +210,7 @@ export interface StateArgs {
 export abstract class State {
   protected _parentGraphState?: State; // only used for Parallel, Map
   protected _childGraphStates: State[] = []; // only used for Parallel, Map
+  protected _choiceState?: State; // the Choice that points at this state
   protected _prevState?: State;
   protected _nextState?: State;
   protected _retries?: RetryArgs[];
@@ -239,9 +240,16 @@ export abstract class State {
     return state;
   }
 
+  protected addChoiceBranch(state: State) {
+    state._choiceState = this;
+  }
+
   /**
    * Point every state in `ends` to the given `state`, and link `state` back to this
-   * state so the chain that continues from it still reaches the root.
+   * state as its previous state, as `next` does. The chain continues from this
+   * state, so both `getRoot()` and `getHead()` walk up to it. `addChoiceBranch` is
+   * not enough here: `getHead()` doesn't follow it, so a `Parallel` branch or a
+   * `Map` processor would start at `state` instead of this state.
    */
   protected addNextToEnds<T extends State>(ends: State[], state: T): T {
     ends.forEach((end) => (end._nextState = state));
@@ -284,7 +292,10 @@ export abstract class State {
    */
   public getRoot(): State {
     return (
-      this._prevState?.getRoot() ?? this._parentGraphState?.getRoot() ?? this
+      this._prevState?.getRoot() ??
+      this._parentGraphState?.getRoot() ??
+      this._choiceState?.getRoot() ??
+      this
     );
   }
 

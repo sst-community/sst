@@ -19,6 +19,7 @@ let Choice: typeof import("../../src/components/aws/step-functions/choice").Choi
 let Pass: typeof import("../../src/components/aws/step-functions/pass").Pass;
 let Succeed: typeof import("../../src/components/aws/step-functions/succeed").Succeed;
 let Fail: typeof import("../../src/components/aws/step-functions/fail").Fail;
+let Parallel: typeof import("../../src/components/aws/step-functions/parallel").Parallel;
 
 beforeAll(async () => {
   Choice = (await import("../../src/components/aws/step-functions/choice"))
@@ -27,6 +28,8 @@ beforeAll(async () => {
   Succeed = (await import("../../src/components/aws/step-functions/succeed"))
     .Succeed;
   Fail = (await import("../../src/components/aws/step-functions/fail")).Fail;
+  Parallel = (await import("../../src/components/aws/step-functions/parallel"))
+    .Parallel;
 });
 
 // What the StepFunctions component does with `definition`.
@@ -144,5 +147,23 @@ describe("Choice afterwards", () => {
     expect(() => decision.afterwards().next(new Pass({ name: "Join" }))).toThrow(
       'The "Decide" state has no branch that can continue to "Join".',
     );
+  });
+
+  it("starts a Parallel branch at the Choice when given the state after it", async () => {
+    const decision = new Choice({ name: "Decide" })
+      .when("{% true %}", new Pass({ name: "A" }))
+      .otherwise(new Pass({ name: "B" }));
+    const parallel = new Parallel({ name: "Both" }).branch(
+      decision.afterwards().next(new Pass({ name: "Join" })),
+    );
+    const definition = new Pass({ name: "Start" }).next(parallel);
+
+    const { StartAt, States } = await build(definition);
+    expect(StartAt).toBe("Start");
+    const branch = States.Both.Branches[0];
+    expect(branch.StartAt).toBe("Decide");
+    expect(Object.keys(branch.States).sort()).toEqual(["A", "B", "Decide", "Join"]);
+    expect(branch.States.A.Next).toBe("Join");
+    expect(branch.States.B.Next).toBe("Join");
   });
 });
