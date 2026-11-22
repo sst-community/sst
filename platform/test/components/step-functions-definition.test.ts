@@ -185,6 +185,22 @@ describe("StepFunctions definition that is a state after a Choice", () => {
 });
 
 describe("StepFunctions definitions that already work stay the same", () => {
+  it("keeps every state of a branch written as a chain", async () => {
+    const start = new Pass({ name: "Start" });
+    const a = new Pass({ name: "StepA" });
+    const b = new Pass({ name: "StepB" });
+    const end = new Succeed({ name: "End" });
+    start.next(
+      new Choice({ name: "Decide" })
+        .when("{% true %}", a.next(b))
+        .otherwise(new Fail({ name: "No" })),
+    );
+    b.next(end);
+    const out = await definition(end);
+    expect(out.states).toContain("StepA");
+    expect(out.states).toContain("StepB");
+  });
+
   it("first state", async () => {
     const s = flow();
     const out = await definition(s.start);

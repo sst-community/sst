@@ -210,7 +210,7 @@ export interface StateArgs {
 export abstract class State {
   protected _parentGraphState?: State; // only used for Parallel, Map
   protected _childGraphStates: State[] = []; // only used for Parallel, Map
-  protected _choiceState?: State; // the Choice that points at this branch
+  protected _choiceState?: State; // the Choice that points at this state
   protected _prevState?: State;
   protected _nextState?: State;
   protected _retries?: RetryArgs[];
@@ -241,7 +241,7 @@ export abstract class State {
   }
 
   protected addChoiceBranch(state: State) {
-    state.getHead()._choiceState = this;
+    state._choiceState = this;
   }
 
   protected addRetry(args?: RetryArgs) {
