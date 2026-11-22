@@ -31,8 +31,8 @@ export class Choice extends State {
    *
    * The condition needs to be a JSONata expression that evaluates to a boolean.
    *
-   * If `next` is a chain, like `a.next(b)`, the branch starts at the chain's first
-   * state, `a`.
+   * If `next` is part of a chain, like `a.next(b)`, the branch starts at the first
+   * state of that chain, `a`. This is also the case if you pass in `b`.
    *
    * @example
    *
@@ -63,8 +63,8 @@ export class Choice extends State {
    * Add a default next state to the `Choice` state. If no other condition matches,
    * continue execution with the given state.
    *
-   * If `next` is a chain, like `a.next(b)`, the branch starts at the chain's first
-   * state, `a`.
+   * If `next` is part of a chain, like `a.next(b)`, the branch starts at the first
+   * state of that chain, `a`. This is also the case if you pass in `b`.
    */
   public otherwise(next: State) {
     const head = next.getHead();
