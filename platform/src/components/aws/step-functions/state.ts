@@ -244,6 +244,19 @@ export abstract class State {
     state._choiceState = this;
   }
 
+  /**
+   * Point every state in `ends` to the given `state`, and link `state` back to this
+   * state as its previous state, as `next` does. The chain continues from this
+   * state, so both `getRoot()` and `getHead()` walk up to it. `addChoiceBranch` is
+   * not enough here: `getHead()` doesn't follow it, so a `Parallel` branch or a
+   * `Map` processor would start at `state` instead of this state.
+   */
+  protected addNextToEnds<T extends State>(ends: State[], state: T): T {
+    ends.forEach((end) => (end._nextState = state));
+    state._prevState = this;
+    return state;
+  }
+
   protected addRetry(args?: RetryArgs) {
     this._retries = this._retries || [];
     this._retries.push({
@@ -291,6 +304,18 @@ export abstract class State {
    */
   public getHead(): State {
     return this._prevState?.getHead() ?? this;
+  }
+
+  /**
+   * The last states of the chain that starts here, that can take a next state.
+   * `Succeed` and `Fail` states have none. A state reached twice is counted once.
+   * @internal
+   */
+  public getEnds(seen: Set<State> = new Set()): State[] {
+    if (seen.has(this)) return [];
+    seen.add(this);
+    if (this._nextState) return this._nextState.getEnds(seen);
+    return "next" in this ? [this] : [];
   }
 
   /**

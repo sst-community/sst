@@ -66,6 +66,56 @@ export class Choice extends State {
   }
 
   /**
+   * Continue every branch of the `Choice` state to the same state, once the branch
+   * is done. Call it after `when` and `otherwise`.
+   *
+   * A branch continues from its last state. So if a branch `a` already has a
+   * next state, as in `a.next(b)`, it's `b` that continues to the given state.
+   * Branches that end in a `Succeed` or `Fail` state stay as they are. If a branch
+   * is another `Choice` state, its own branches continue to the given state. A
+   * `Choice` state without `otherwise` still fails when no condition matches.
+   *
+   * It returns an object with a `next` method that takes that state. `next`
+   * returns the given state, so you can keep adding states with `next`.
+   *
+   * @example
+   *
+   * ```ts
+   * sst.aws.StepFunctions.choice({
+   *   // ...
+   * })
+   * .when("{% $states.input.status === 'unpaid' %}", makePayment)
+   * .otherwise(skipPayment)
+   * .afterwards()
+   * .next(sendReceipt);
+   * ```
+   */
+  public afterwards() {
+    return {
+      next: <T extends State>(state: T): T => {
+        const ends = this.getEnds();
+        if (!ends.length)
+          throw new Error(
+            `The "${this.name}" state has no branch that can continue to "${state.name}". Each branch ends in a Succeed or Fail state, or there are no branches yet.`,
+          );
+        return this.addNextToEnds(ends, state);
+      },
+    };
+  }
+
+  /**
+   * @internal
+   */
+  public getEnds(seen: Set<State> = new Set()): State[] {
+    if (seen.has(this)) return [];
+    seen.add(this);
+    return [
+      ...this.choices.flatMap((c) => c.next.getEnds(seen)),
+      ...(this.defaultNext?.getEnds(seen) ?? []),
+    ];
+  }
+
+  /**
    * @internal
    */
   public assertStateNameUnique(states: Map<string, State> = new Map()) {
