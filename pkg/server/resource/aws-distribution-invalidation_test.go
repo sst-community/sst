@@ -66,6 +66,10 @@ func TestDistributionInvalidationBatches(t *testing.T) {
 		{"3001 files", 3001, 0, false, [][2]int{{3000, 0}, {1, 0}}, 2},
 		{"16 wildcards", 0, 16, false, [][2]int{{0, 15}, {0, 1}}, 2},
 		{"31 wildcards and 4 files", 4, 31, false, [][2]int{{4, 15}, {0, 15}, {0, 1}}, 3},
+		// more than 3000 files with wildcards: each batch keeps its own files
+		{"3000 files and a wildcard", 3000, 1, false, [][2]int{{3000, 1}}, 0},
+		{"3001 files and a wildcard", 3001, 1, false, [][2]int{{3000, 1}, {1, 0}}, 2},
+		{"6001 files and 2 wildcards", 6001, 2, false, [][2]int{{3000, 2}, {3000, 0}, {1, 0}}, 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
