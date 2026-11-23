@@ -43,6 +43,20 @@ export class Choice extends State {
    * );
    * ```
    *
+   * To run a chain of states in this branch, pass the first state of the chain.
+   * `a.next(b)` returns `b`, so passing it starts the branch at `b` and `a`
+   * doesn't run.
+   *
+   * ```ts
+   * const a = sst.aws.StepFunctions.pass({ name: "A" });
+   * a.next(sst.aws.StepFunctions.pass({ name: "B" }));
+   *
+   * sst.aws.StepFunctions.choice({
+   *   // ...
+   * })
+   * .when("{% $states.input.status === 'unpaid' %}", a);
+   * ```
+   *
    * @param condition The JSONata condition to evaluate.
    * @param next The state to transition to.
    */
@@ -58,6 +72,8 @@ export class Choice extends State {
   /**
    * Add a default next state to the `Choice` state. If no other condition matches,
    * continue execution with the given state.
+   *
+   * As with `when`, to run a chain of states, pass the first state of the chain.
    */
   public otherwise(next: State) {
     this.addChoiceBranch(next);
