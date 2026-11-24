@@ -15,6 +15,7 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sst/sst/v3/pkg/bus"
 )
@@ -77,7 +78,9 @@ func TestParse(t *testing.T) {
 		{"invocations", "", []string{"logs", "invocations"}, ""},
 		{"LOGS", "", []string{"logs"}, ""},
 		{"logs,nope", "", nil, `there's no console module "nope": the modules are logs, invocations, deploy`},
-		{",", "", nil, ""},
+		// a value that names no module is a mistake, not off
+		{",", "", nil, `"," lists no console modules: the modules are logs, invocations, deploy, or give off for none`},
+		{"", " , ", nil, `"," lists no console modules: the modules are logs, invocations, deploy, or give off for none`},
 	}
 	for _, tc := range cases {
 		got, err := Parse(tc.flag, tc.env, available())
@@ -93,6 +96,21 @@ func TestParse(t *testing.T) {
 		}
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") || (got == nil) != (tc.want == nil) {
 			t.Errorf("Parse(%q, %q) = %#v, want %#v", tc.flag, tc.env, got, tc.want)
+		}
+	}
+}
+
+// Clip keeps a cut text, with what says it was cut, within max bytes, and
+// valid UTF-8.
+func TestClip(t *testing.T) {
+	if got := Clip("short", 10); got != "short" {
+		t.Fatalf("Clip cut %q", got)
+	}
+	long := strings.Repeat("é", 100)
+	for _, max := range []int{0, 5, len(clipped), len(clipped) + 1, 50, 199} {
+		got := Clip(long, max)
+		if !strings.HasSuffix(got, clipped) || !utf8.ValidString(got) || (max >= len(clipped) && len(got) > max) {
+			t.Errorf("Clip(%d) = %q, %d bytes", max, got, len(got))
 		}
 	}
 }

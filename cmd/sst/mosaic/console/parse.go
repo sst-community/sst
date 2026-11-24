@@ -73,7 +73,7 @@ func Parse(flag string, env string, available []Module) ([]string, error) {
 		}
 	}
 	if len(names) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("%q lists no console modules: the modules are %s, or give off for none", value, strings.Join(known, ", "))
 	}
 	return slices.Clip(names), nil
 }
@@ -89,7 +89,7 @@ func Misplaced(flag string, args []string, available []Module) error {
 	if err != nil || names == nil || args[0] == All || strings.EqualFold(args[0], "true") || args[0] == "1" {
 		return nil
 	}
-	return fmt.Errorf("%q after --console is taken for the command to run: give --console its modules with =, as in --console=%s", args[0], args[0])
+	return fmt.Errorf("%q after --console is taken for a command to run, which connects to an sst dev that's already running and starts no console: give --console its modules with =, as in --console=%s", args[0], args[0])
 }
 
 // WithCommand is an error when --console was given with a command to run, as

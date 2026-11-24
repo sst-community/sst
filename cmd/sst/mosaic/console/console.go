@@ -302,17 +302,23 @@ func (c *Console) FunctionName(id string) string {
 	return id
 }
 
+// clipped is what Clip ends a text it cut with.
+const clipped = "… [truncated]"
+
 // Clip cuts text to at most max bytes, where a character starts, and says
-// it was cut.
+// it was cut, within max.
 func Clip(text string, max int) string {
 	if len(text) <= max {
 		return text
 	}
-	cut := max
+	cut := max - len(clipped)
+	if cut < 0 {
+		cut = 0
+	}
 	for cut > 0 && !utf8.RuneStart(text[cut]) {
 		cut--
 	}
-	return text[:cut] + "… [truncated]"
+	return text[:cut] + clipped
 }
 
 // Enabled is whether a module is on.

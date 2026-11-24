@@ -180,7 +180,7 @@ func TestBounded(t *testing.T) {
 	if len(big.Lines) != maxLines || big.Dropped != 5 {
 		t.Fatalf("kept %d lines, dropped %d", len(big.Lines), big.Dropped)
 	}
-	if n := len(big.Lines[0].Text); n > maxLineSize+20 {
+	if n := len(big.Lines[0].Text); n > maxLineSize {
 		t.Fatalf("a line of %d bytes was kept whole", n)
 	}
 }
