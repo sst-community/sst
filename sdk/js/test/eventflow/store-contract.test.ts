@@ -141,6 +141,44 @@ for (const [name, make] of stores) {
       expect(Object.keys((await state(store, l)).tenants)).toHaveLength(0);
     });
 
+    it("hands a lease straight to the next step in line", async () => {
+      const store = make();
+      const l = limit(1);
+      await store.acquire([l], "holder", "a", 60_000);
+      await store.acquire([l], "next", "b", 60_000);
+      await store.enqueue(waiter("next", "b", 1, [l]));
+      const woken: string[] = [];
+      await store.handoff([l], "holder", "a", collect(woken));
+      expect(woken).toEqual(["next"]);
+      const after = await state(store, l);
+      expect(after.active).toBe(1);
+      expect(after.queued).toBe(0);
+      expect(Object.keys(after.tenants)).toEqual(["b"]);
+    });
+
+    it("hands on a shared lease to a step that needs its own tenant's too, and gives back the rest", async () => {
+      const store = make();
+      const shared = limit(1);
+      const [ta, tb] = [limit(1), limit(1)];
+      await store.acquire([ta, shared], "a1", "a", 60_000);
+      await store.acquire([tb, shared], "b1", "b", 60_000);
+      await store.enqueue(waiter("b1", "b", 1, [tb, shared]));
+      const woken: string[] = [];
+      await store.handoff([ta, shared], "a1", "a", collect(woken));
+      expect(woken).toEqual(["b1"]);
+      expect((await state(store, ta)).active).toBe(0);
+      expect((await state(store, tb)).active).toBe(1);
+      expect((await state(store, shared)).active).toBe(1);
+    });
+
+    it("gives back a lease with no step in line", async () => {
+      const store = make();
+      const l = limit(1);
+      await store.acquire([l], "only", "a", 60_000);
+      await store.handoff([l], "only", "a", collect([]));
+      expect((await state(store, l)).active).toBe(0);
+    });
+
     it("won't renew a lease that expired, and gives it to the next step", async () => {
       const store = make();
       const l = limit(1);
@@ -218,8 +256,12 @@ for (const [name, make] of stores) {
         most = Math.max(most, active);
         await new Promise((r) => setTimeout(r, 5 + Math.random() * 20));
         active--;
-        await store.release([l], leaseId, tenant);
-        await store.dispatch(l, wake);
+        // Half give back and hand on in two writes, half hand straight on in one.
+        if (Number(id.split(".")[1]) % 2) await store.handoff([l], leaseId, tenant, wake);
+        else {
+          await store.release([l], leaseId, tenant);
+          await store.dispatch(l, wake);
+        }
       };
       for (let round = 0; round < 3; round++)
         await Promise.all(Array.from({ length: 40 }, (_, i) => step(`s${round}.${i}`, `t${i % 4}`)));

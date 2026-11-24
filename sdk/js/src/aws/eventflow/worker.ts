@@ -269,8 +269,8 @@ function makeStep(state: RunState) {
   // mustn't fail the step, which would run its code again: the leases expire.
   const giveBack = async (leaseId: string) => {
     try {
-      await engine.store.release(limits, leaseId, tenant);
-      for (const limit of limits) await engine.store.dispatch(limit, wake);
+      // Straight to the next step in line, where there's one.
+      await engine.store.handoff(limits, leaseId, tenant, wake);
     } catch (error) {
       log("warn", "Failed to give back a lease. It expires on its own.", { run: state.runId, error: errorInfo(error).message });
     }

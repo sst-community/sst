@@ -189,6 +189,11 @@ export class MemoryStore implements Store {
     }
   }
 
+  async handoff(limits: Limit[], leaseId: string, tenant: string, wake: (w: LeaseWaiter) => Promise<boolean>) {
+    await this.release(limits, leaseId, tenant);
+    for (const l of uniqueLimits(limits)) await this.dispatch(l, wake);
+  }
+
   private canGrant(w: LeaseWaiter) {
     return uniqueLimits(w.limits).every((other) => {
       const item = this.item(other);
