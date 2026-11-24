@@ -110,6 +110,7 @@ input[type="search"]:focus, select:focus { border-color: var(--accent); }
 .dot.ok { background: var(--ok); }
 .dot.warn { background: var(--warn); }
 .dot.off { background: var(--err); }
+.dot.error { background: var(--err); }
 
 main { flex: 1; min-height: 0; }
 .panel { height: 100%; overflow: auto; }

@@ -42,8 +42,10 @@ func CmdMosaic(c *cli.Cli) error {
 	cwd, _ := os.Getwd()
 	var wg errgroup.Group
 
-	if err := console.Misplaced(c.String("console"), c.Arguments(), consolemodules.All); err != nil {
-		return util.NewReadableError(nil, err.Error())
+	if !c.Dashed() {
+		if err := console.Misplaced(c.String("console"), c.Arguments(), consolemodules.All); err != nil {
+			return util.NewReadableError(nil, err.Error())
+		}
 	}
 	if err := console.WithCommand(c.String("console"), c.Arguments(), consolemodules.All); err != nil {
 		return util.NewReadableError(nil, err.Error())

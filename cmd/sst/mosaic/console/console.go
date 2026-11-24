@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"reflect"
 	"slices"
@@ -105,12 +106,14 @@ type Console struct {
 	stopped chan struct{}
 
 	// below here, only the dispatcher reads and writes
-	sub       <-chan any
-	seq       uint64
-	now       time.Time
-	clients   map[*client]struct{}
-	pages     uint64
-	resyncs   uint64
+	sub     <-chan any
+	seq     uint64
+	now     time.Time
+	clients map[*client]struct{}
+	pages   uint64
+	resyncs uint64
+	// unsent is how many of each module's messages couldn't be marshalled
+	unsent    map[string]uint64
 	functions map[string]string
 	started   time.Time
 }
@@ -141,6 +144,7 @@ func New(ctx context.Context, cfg Config) (*Console, error) {
 		calls:     make(chan func()),
 		stopped:   make(chan struct{}),
 		clients:   map[*client]struct{}{},
+		unsent:    map[string]uint64{},
 		functions: map[string]string{},
 		started:   time.Now(),
 	}
@@ -219,7 +223,13 @@ func (c *Console) Do(ctx context.Context, fn func()) error {
 	case <-done:
 		return nil
 	case <-c.stopped:
-		return fmt.Errorf("console stopped")
+		// fn may have finished as the console stopped
+		select {
+		case <-done:
+			return nil
+		default:
+			return fmt.Errorf("console stopped")
+		}
 	}
 }
 
@@ -251,6 +261,7 @@ func (c *Console) Emit(module, typ string, data any) {
 			payload, err = json.Marshal(Message{Seq: c.seq, Time: c.now.UnixMilli(), Module: module, Type: typ, Data: data})
 			if err != nil {
 				slog.Error("console: marshalling a message", "module", module, "type", typ, "err", err)
+				c.unsent[module]++
 				return
 			}
 		}
@@ -367,6 +378,9 @@ type status struct {
 	Clients         int    `json:"clients"`
 	Resyncs         uint64 `json:"resyncs"`
 	Uptime          int64  `json:"uptime"`
+	// Unsent is how many of each module's messages couldn't be marshalled,
+	// so the page can say a module is failing
+	Unsent map[string]uint64 `json:"unsent,omitempty"`
 }
 
 func (c *Console) status() status {
@@ -376,6 +390,7 @@ func (c *Console) status() status {
 		Clients:         len(c.clients),
 		Resyncs:         c.resyncs,
 		Uptime:          int64(time.Since(c.started).Seconds()),
+		Unsent:          maps.Clone(c.unsent),
 	}
 }
 
@@ -441,6 +456,7 @@ func (c *Console) connect(modules []string) (*client, [][]byte) {
 		b, err := json.Marshal(m)
 		if err != nil {
 			slog.Error("console: marshalling a snapshot", "module", m.Module, "type", m.Type, "err", err)
+			c.unsent[m.Module]++
 			continue
 		}
 		out = append(out, b)

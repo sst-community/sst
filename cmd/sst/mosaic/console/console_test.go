@@ -462,6 +462,26 @@ func TestDoWaitsForWhatTheDispatcherHas(t *testing.T) {
 	<-ran
 }
 
+// A message that can't be marshalled is counted in status, so the page can
+// say its module is failing, rather than it never arriving without a word.
+func TestUnsentIsCounted(t *testing.T) {
+	c, err := New(context.Background(), Config{Available: available(), Modules: []string{"logs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.close()
+	c.Snapshot("logs", func() []Message { return []Message{c.Message("logs", "bad", func() {})} })
+	cl, _ := c.connect([]string{"logs"})
+	c.Emit("logs", "bad", make(chan int))
+	c.Emit("logs", "good", 1)
+	if got := c.status().Unsent["logs"]; got != 2 {
+		t.Fatalf("unsent %d, want 2", got)
+	}
+	if len(cl.ch) != 1 {
+		t.Fatalf("%d messages sent, want the good one", len(cl.ch))
+	}
+}
+
 // Without a page open, nothing is marshalled.
 func TestEmitWithoutPagesMarshalsNothing(t *testing.T) {
 	c, err := New(context.Background(), Config{Available: available(), Modules: []string{"logs"}})

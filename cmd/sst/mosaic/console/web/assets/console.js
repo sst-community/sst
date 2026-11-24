@@ -221,7 +221,11 @@ const SST = (() => {
         break;
       case "status":
         state.status = d;
-        if (d.busDropped > 0) {
+        const unsent = Object.keys(d.unsent || {});
+        if (unsent.length > 0) {
+          setStatus("error", `Live · ${unsent.join(", ")} failing`,
+            `Some of these modules' messages couldn't be sent: ${unsent.map((m) => `${m} ${fmt.number(d.unsent[m])}`).join(", ")}. sst dev's log has why.`);
+        } else if (d.busDropped > 0) {
           setStatus("warn", `Live · ${fmt.number(d.busDropped)} dropped`,
             "The console fell behind sst dev's events and lost these. sst dev itself didn't slow down.");
         } else {
