@@ -226,6 +226,11 @@ func TestGate(t *testing.T) {
 		{name: "another site", target: "/events", host: "127.0.0.1:4321", cookie: cookie, header: map[string]string{"Sec-Fetch-Site": "cross-site"}, want: 403},
 		{name: "a site on this machine", target: "/events", host: "127.0.0.1:4321", cookie: cookie, header: map[string]string{"Sec-Fetch-Site": "same-site"}, want: 403},
 		{name: "its own page", target: "/events", host: "127.0.0.1:4321", cookie: cookie, header: map[string]string{"Sec-Fetch-Site": "same-origin"}, want: 200},
+		// a browser that doesn't send Sec-Fetch-Site still sends Origin
+		{name: "another port, no fetch metadata", target: "/events", host: "127.0.0.1:4321", cookie: cookie, header: map[string]string{"Origin": "http://127.0.0.1:3000"}, want: 403},
+		{name: "a sandboxed page", target: "/events", host: "127.0.0.1:4321", cookie: cookie, header: map[string]string{"Origin": "null"}, want: 403},
+		{name: "its own origin", target: "/events", host: "127.0.0.1:4321", cookie: cookie, header: map[string]string{"Origin": "http://127.0.0.1:4321"}, want: 200},
+		{name: "its own origin, by name", target: "/events", host: "localhost:4321", cookie: cookie, header: map[string]string{"Origin": "http://localhost:4321"}, want: 200},
 		{name: "a POST", method: "POST", target: "/", host: "127.0.0.1:4321", cookie: cookie, want: 405},
 		{name: "a token from another run", target: "/?token=old", host: "127.0.0.1:4321", want: 403},
 		{name: "the link", target: "/?token=secret", host: "127.0.0.1:4321", header: map[string]string{"Sec-Fetch-Site": "none"}, want: 303},
@@ -474,6 +479,13 @@ func TestUnsentIsCounted(t *testing.T) {
 	cl, _ := c.connect([]string{"logs"})
 	c.Emit("logs", "bad", make(chan int))
 	c.Emit("logs", "good", 1)
+	if got := c.status().Clients; got != 1 {
+		t.Fatalf("%d pages open, want 1", got)
+	}
+	cl.closed = true
+	if got := c.status().Clients; got != 0 {
+		t.Fatalf("a page cut off is counted as open: %d", got)
+	}
 	if got := c.status().Unsent["logs"]; got != 2 {
 		t.Fatalf("unsent %d, want 2", got)
 	}
@@ -560,6 +572,12 @@ func TestMisplaced(t *testing.T) {
 		if err := Misplaced(tc.flag, tc.args, available()); (err != nil) != tc.bad {
 			t.Errorf("Misplaced(%q, %q) = %v", tc.flag, tc.args, err)
 		}
+	}
+}
+
+func TestNotDev(t *testing.T) {
+	if NotDev("") != nil || NotDev("off") != nil || NotDev("all") == nil || NotDev("logs") == nil {
+		t.Fatal("NotDev takes no --console for another dev loop, and only that")
 	}
 }
 

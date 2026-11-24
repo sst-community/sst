@@ -50,8 +50,8 @@ const heartbeat = 15 * time.Second
 //     that only this port's console takes, and every request needs it.
 //   - A request for another host, as from a page that points its own name at
 //     this machine (DNS rebinding), is refused, and so is one another site
-//     makes (Sec-Fetch-Site). The cookie is SameSite=Strict, so another site
-//     can't send it either.
+//     makes (Sec-Fetch-Site, or Origin where a browser doesn't send that).
+//     The cookie is SameSite=Strict, so another site can't send it either.
 //   - It only serves GET: nothing on the page changes sst dev, beyond which
 //     tab it shows, so a module samples only while its tab is open.
 //
@@ -159,6 +159,12 @@ func (g *gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
 	default:
+		http.Error(w, "The console doesn't take requests from other sites.", http.StatusForbidden)
+		return
+	}
+	// for a browser that doesn't send Sec-Fetch-Site: a page on another port
+	// of this host is the same site, so the cookie alone doesn't keep it out
+	if origin := r.Header.Get("Origin"); origin != "" && !g.host(strings.TrimPrefix(origin, "http://")) {
 		http.Error(w, "The console doesn't take requests from other sites.", http.StatusForbidden)
 		return
 	}

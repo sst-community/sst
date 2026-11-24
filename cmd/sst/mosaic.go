@@ -42,6 +42,12 @@ func CmdMosaic(c *cli.Cli) error {
 	cwd, _ := os.Getwd()
 	var wg errgroup.Group
 
+	isDev := c.DevCommand()[0] == "dev"
+	if !isDev {
+		if err := console.NotDev(c.String("console")); err != nil {
+			return util.NewReadableError(nil, err.Error())
+		}
+	}
 	if !c.Dashed() {
 		if err := console.Misplaced(c.String("console"), c.Arguments(), consolemodules.All); err != nil {
 			return util.NewReadableError(nil, err.Error())
@@ -258,7 +264,7 @@ func CmdMosaic(c *cli.Cli) error {
 
 	// the SST Console's local connection, on a listener of its own, for an
 	// SST app: the Console doesn't show a plain Pulumi program's stacks
-	serveConsole := !flag.SST_NO_CONSOLE && c.DevCommand()[0] == "dev"
+	serveConsole := !flag.SST_NO_CONSOLE && isDev
 	wg.Go(func() error {
 		return socket.Start(c.Context, p, serveConsole)
 	})
@@ -280,7 +286,11 @@ func CmdMosaic(c *cli.Cli) error {
 
 	// the local web console, on a listener of its own, before the deployer
 	// starts, so it sees the first deploy. Nothing of it starts when it's off.
-	web, err := console.Configured(c.Context, c.String("console"), os.Getenv("SST_CONSOLE"), console.Config{
+	consoleEnv := ""
+	if isDev {
+		consoleEnv = os.Getenv("SST_CONSOLE")
+	}
+	web, err := console.Configured(c.Context, c.String("console"), consoleEnv, console.Config{
 		Available: consolemodules.All,
 		App:       p.Name(),
 		Stage:     p.Stage(),

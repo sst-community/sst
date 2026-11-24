@@ -387,11 +387,23 @@ func (c *Console) status() status {
 	return status{
 		BusDropped:      bus.DroppedFrom(c.sub),
 		BusDroppedTotal: bus.Dropped(),
-		Clients:         len(c.clients),
+		Clients:         c.open(),
 		Resyncs:         c.resyncs,
 		Uptime:          int64(time.Since(c.started).Seconds()),
 		Unsent:          maps.Clone(c.unsent),
 	}
+}
+
+// open is how many pages have a stream: not one that was cut off for falling
+// behind, which its handler drops soon after.
+func (c *Console) open() int {
+	n := 0
+	for cl := range c.clients {
+		if !cl.closed {
+			n++
+		}
+	}
+	return n
 }
 
 // Run reads the bus and runs the modules until ctx ends.

@@ -106,3 +106,15 @@ func WithCommand(flag string, args []string, available []Module) error {
 	}
 	return fmt.Errorf("--console starts with sst dev, not with a command that connects to one: give it to the sst dev that's running, as in sst dev --console")
 }
+
+// NotDev is an error when --console was given to a dev loop other than sst
+// dev's, as sst pulumi dev: flags are one set for every command, so it parses
+// there, but the console is sst dev's. SST_CONSOLE is left alone, as it may be
+// set for sst dev.
+func NotDev(flag string) error {
+	switch strings.ToLower(strings.TrimSpace(flag)) {
+	case "", "off", "false", "0":
+		return nil
+	}
+	return fmt.Errorf("--console is a flag of sst dev, not of this command")
+}
