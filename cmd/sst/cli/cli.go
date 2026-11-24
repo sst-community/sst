@@ -178,8 +178,13 @@ func (c *Command) init(parsed map[string]interface{}) {
 	for _, f := range c.Flags {
 		if parsed[f.Name] != nil {
 			// flags are one set for every command, so a name is one flag
-			if existing := flag.Lookup(f.Name); existing != nil && existing.NoOptDefVal != f.Bare && f.Type == "string" {
-				panic(fmt.Sprintf("--%s is defined twice, with different Bare values", f.Name))
+			if existing := flag.Lookup(f.Name); existing != nil {
+				if existing.Value.Type() != f.Type {
+					panic(fmt.Sprintf("--%s is defined twice, as a %s and a %s", f.Name, existing.Value.Type(), f.Type))
+				}
+				if f.Type == "string" && existing.NoOptDefVal != f.Bare {
+					panic(fmt.Sprintf("--%s is defined twice, with different Bare values", f.Name))
+				}
 			}
 			continue
 		}

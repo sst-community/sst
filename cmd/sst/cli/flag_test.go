@@ -44,3 +44,25 @@ func TestBareConflicts(t *testing.T) {
 	}()
 	root.init(map[string]interface{}{})
 }
+
+// Two definitions of one flag name with different types are refused, in
+// either order, rather than one being parsed as the other.
+func TestTypeConflicts(t *testing.T) {
+	for _, types := range [][2]string{{"bool", "string"}, {"string", "bool"}} {
+		root := &Command{Name: "x", Children: []*Command{
+			{Name: "a", Flags: []Flag{{Name: "type-conflict-test", Type: types[0]}}},
+			{Name: "b", Flags: []Flag{{Name: "type-conflict-test", Type: types[1]}}},
+		}}
+		func() {
+			saved := flag.CommandLine
+			flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+			defer func() {
+				flag.CommandLine = saved
+				if recover() == nil {
+					t.Errorf("init took a %s and a %s of one name", types[0], types[1])
+				}
+			}()
+			root.init(map[string]interface{}{})
+		}()
+	}
+}

@@ -305,7 +305,7 @@ func (c *Console) show(id uint64, module string) bool {
 }
 
 // FunctionName is a function's handler, as the last deploy reported it, or its
-// ID.
+// ID. It runs on the dispatcher: off it, call it in Do.
 func (c *Console) FunctionName(id string) string {
 	if name, ok := c.functions[id]; ok && name != "" {
 		return name
