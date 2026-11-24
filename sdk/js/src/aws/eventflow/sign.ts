@@ -27,8 +27,26 @@ export async function loadKey(aws?: AwsOptions) {
   }
   const name = process.env[ENV_KEY_PARAM];
   if (!name) return;
-  const result = await ssm<{ Parameter?: { Value?: string } }>("GetParameter", { Name: name, WithDecryption: true }, aws);
-  loaded = result.Parameter?.Value;
+  // Many containers starting at once can be throttled by SSM: try again, with backoff.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const result = await ssm<{ Parameter?: { Value?: string } }>("GetParameter", { Name: name, WithDecryption: true }, aws);
+      loaded = result.Parameter?.Value;
+      return;
+    } catch (error) {
+      if (attempt >= 5) throw error;
+      await new Promise((r) => setTimeout(r, Math.random() * 100 * 2 ** attempt + 50));
+    }
+  }
+}
+
+/**
+ * A run's root, which its idempotency keys and the IDs of the events it sends come
+ * from. It's keyed with the signing key, so someone who knows an event's ID can't
+ * work out those IDs, and send events with them first.
+ */
+export function deriveRoot(runId: string) {
+  return createHmac("sha256", secret()).update(`root\n${runId}`).digest("base64url").slice(0, 26);
 }
 
 function secret() {

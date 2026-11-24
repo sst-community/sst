@@ -112,6 +112,35 @@ for (const [name, make] of stores) {
       expect((await state(store, l)).active).toBe(1);
     });
 
+    it("doesn't take back a lease that the step found and renewed while its wake failed", async () => {
+      // Its old callback timed out as it was granted: it asks again, finds the lease,
+      // and starts. The wake of the old callback fails after that.
+      const store = make();
+      const l = limit(1);
+      await store.acquire([l], "holder", "a", 60_000);
+      await store.acquire([l], "W", "a", 60_000);
+      await store.enqueue(waiter("W", "a", 1, [l]));
+      await store.release([l], "holder", "a");
+      await store.dispatch(l, async () => {
+        expect(await store.acquire([l], "W", "a", 60_000)).toBe("granted");
+        expect(await store.renew([l], "W", 60_000)).toBe(true);
+        return false;
+      });
+      expect(await store.acquire([l], "X", "b", 60_000)).toBe("full");
+    });
+
+    it("keeps a long tenant's counts under a short key", async () => {
+      const store = make();
+      const l = limit(2);
+      const tenant = "t".repeat(128);
+      await store.acquire([l], "long", tenant, 60_000);
+      const keys = Object.keys((await state(store, l)).tenants);
+      expect(keys).toHaveLength(1);
+      expect(keys[0].length).toBeLessThan(30);
+      await store.release([l], "long", tenant);
+      expect(Object.keys((await state(store, l)).tenants)).toHaveLength(0);
+    });
+
     it("won't renew a lease that expired, and gives it to the next step", async () => {
       const store = make();
       const l = limit(1);
@@ -154,6 +183,51 @@ for (const [name, make] of stores) {
       }
       expect(Object.keys((await state(store, l)).tenants)).toHaveLength(0);
     });
+
+    it("never goes over the limit, and ends with nothing held, under contention", async () => {
+      // 40 steps at once, 3 times each, on one limit of 5: take a lease, or join the
+      // line and be woken, work, give it back and hand it on.
+      const store = make();
+      const l = limit(5);
+      let active = 0;
+      let most = 0;
+      const wakes = new Map<string, () => void>();
+      const wake = async (w: LeaseWaiter) => {
+        const resolve = wakes.get(w.callbackId);
+        if (!resolve) return false;
+        wakes.delete(w.callbackId);
+        resolve();
+        return true;
+      };
+      const step = async (id: string, tenant: string) => {
+        const leaseId = `${id}`;
+        if ((await store.acquire([l], leaseId, tenant, 60_000)) !== "granted") {
+          const woken = new Promise<void>((resolve) => wakes.set(`cb-${leaseId}`, resolve));
+          const result = await store.enqueue(waiter(leaseId, tenant, Date.now(), [l]));
+          let mine = result === "held";
+          if (!mine)
+            await store.dispatch(l, async (w) => {
+              if (w.callbackId !== `cb-${leaseId}`) return wake(w);
+              mine = true;
+              wakes.delete(w.callbackId);
+              return true;
+            });
+          if (!mine) await woken;
+        }
+        active++;
+        most = Math.max(most, active);
+        await new Promise((r) => setTimeout(r, 5 + Math.random() * 20));
+        active--;
+        await store.release([l], leaseId, tenant);
+        await store.dispatch(l, wake);
+      };
+      for (let round = 0; round < 3; round++)
+        await Promise.all(Array.from({ length: 40 }, (_, i) => step(`s${round}.${i}`, `t${i % 4}`)));
+      expect(most).toBeLessThanOrEqual(5);
+      const end = await state(store, l);
+      expect(end.active).toBe(0);
+      expect(end.queued).toBe(0);
+    }, 180_000);
 
     if (name === "dynamodb")
       it("heals a count of steps in line that has no steps behind it", async () => {

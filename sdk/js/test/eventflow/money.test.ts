@@ -220,10 +220,123 @@ describe("atMostOnce", () => {
   it("is found in a run's history, whatever the run's error says", () => {
     const events = [
       { EventType: "StepStarted", Id: "1", Name: "wire", SubType: ONCE },
-      { EventType: "StepSucceeded", Id: "1", Name: "wire", SubType: ONCE },
+      { EventType: "StepSucceeded", Id: "1", Name: "wire", SubType: ONCE, StepSucceededDetails: { Result: { Payload: "1" } } },
       { EventType: "StepStarted", Id: "2", Name: "wire:1", SubType: ONCE },
       { EventType: "StepStarted", Id: "3", Name: "email" },
     ];
-    expect(onceSteps(events)).toEqual({ started: ["wire", "wire:1"], unfinished: ["wire:1"] });
+    // A replay reuses nothing; a retry reuses "wire", which succeeded.
+    expect(onceSteps(events).risky).toEqual(["wire", "wire:1"]);
+    expect(onceSteps(events, { wire: 1 }).risky).toEqual(["wire:1"]);
+  });
+});
+
+describe("rerunning a run with an atMostOnce step", () => {
+  const payload = (fn: string, runId: string) => ({
+    "sst:eventflow": 1,
+    fn,
+    runId,
+    root: runId,
+    event: { id: "e", name: "go", data: {}, ts: 0 },
+  });
+  const ok = (value: unknown) => ({ Result: { Payload: JSON.stringify(value) } });
+  const flow = () =>
+    new Cluster((flow) => {
+      const wire = flow.createFunction({ id: "wire" }, async () => "sent");
+      return [wire, flow.createFunction({ id: "order" }, async () => "done")];
+    });
+
+  it("is refused when the step is in a run it invoked, which a retry starts again", async () => {
+    const cluster = flow();
+    cluster.history.set("order-1", {
+      status: "FAILED",
+      payload: payload("order", "order-1"),
+      events: [
+        { EventType: "ContextStarted", Id: "1", Name: "pay", SubType: "EventFlowInvoke" },
+        { EventType: "StepStarted", Id: "2", ParentId: "1", Name: "start" },
+        { EventType: "StepSucceeded", Id: "2", ParentId: "1", Name: "start", StepSucceededDetails: ok({ runId: "wire-1" }) },
+        { EventType: "ContextSucceeded", Id: "1", Name: "pay", SubType: "EventFlowInvoke", ContextSucceededDetails: ok({ ok: false, error: { name: "StepError", message: "bank timed out" } }) },
+      ],
+    });
+    cluster.history.set("wire-1", {
+      status: "FAILED",
+      payload: { ...payload("wire", "wire-1"), parent: "cb" },
+      events: [
+        { EventType: "StepStarted", Id: "1", Name: "send-wire", SubType: ONCE },
+        { EventType: "StepFailed", Id: "1", Name: "send-wire", SubType: ONCE },
+      ],
+    });
+    await expect(cluster.flow.runs.retry("order-1")).rejects.toThrow('"pay → send-wire"');
+    expect((await cluster.flow.runs.retry("order-1", { force: true })).id).toBeDefined();
+  });
+
+  it("isn't refused when the run it invoked succeeded, and a retry reuses its result", async () => {
+    const cluster = flow();
+    cluster.history.set("order-2", {
+      status: "FAILED",
+      payload: payload("order", "order-2"),
+      events: [
+        { EventType: "ContextStarted", Id: "1", Name: "pay", SubType: "EventFlowInvoke" },
+        { EventType: "StepSucceeded", Id: "2", ParentId: "1", Name: "start", StepSucceededDetails: ok({ runId: "wire-2" }) },
+        { EventType: "ContextSucceeded", Id: "1", Name: "pay", SubType: "EventFlowInvoke", ContextSucceededDetails: ok({ ok: true, result: "sent" }) },
+        { EventType: "StepFailed", Id: "3", Name: "ship" },
+      ],
+    });
+    cluster.history.set("wire-2", {
+      status: "SUCCEEDED",
+      payload: { ...payload("wire", "wire-2"), parent: "cb" },
+      events: [
+        { EventType: "StepStarted", Id: "1", Name: "send-wire", SubType: ONCE },
+        { EventType: "StepSucceeded", Id: "1", Name: "send-wire", SubType: ONCE, StepSucceededDetails: ok(1) },
+      ],
+    });
+    expect((await cluster.flow.runs.retry("order-2")).reused).toContain("pay");
+    // A replay starts the invoked run again, so it's refused.
+    await expect(cluster.flow.runs.replay("order-2")).rejects.toThrow('"pay → send-wire"');
+  });
+
+  it("is refused when the step is in onFailure, whose results a retry doesn't reuse", async () => {
+    const cluster = flow();
+    cluster.history.set("order-3", {
+      status: "FAILED",
+      payload: payload("order", "order-3"),
+      events: [
+        { EventType: "StepFailed", Id: "1", Name: "ship" },
+        { EventType: "ContextStarted", Id: "2", Name: "onFailure" },
+        { EventType: "StepStarted", Id: "3", ParentId: "2", Name: "refund", SubType: ONCE },
+        { EventType: "StepSucceeded", Id: "3", ParentId: "2", Name: "refund", SubType: ONCE, StepSucceededDetails: ok(null) },
+      ],
+    });
+    await expect(cluster.flow.runs.retry("order-3")).rejects.toThrow('"refund"');
+  });
+
+  it("is refused when the step threw under a concurrency limit, which history has as succeeded", async () => {
+    const cluster = flow();
+    cluster.history.set("order-4", {
+      status: "FAILED",
+      payload: payload("order", "order-4"),
+      events: [
+        { EventType: "ContextStarted", Id: "1", Name: "transfer", SubType: "EventFlowStep" },
+        { EventType: "StepStarted", Id: "2", ParentId: "1", Name: "run", SubType: ONCE },
+        { EventType: "StepSucceeded", Id: "2", ParentId: "1", Name: "run", SubType: ONCE, StepSucceededDetails: ok({ ok: false, error: { name: "Error", message: "bank timeout" } }) },
+        { EventType: "ContextSucceeded", Id: "1", Name: "transfer", SubType: "EventFlowStep", ContextSucceededDetails: ok({ ok: false, error: { name: "Error", message: "bank timeout" } }) },
+      ],
+    });
+    await expect(cluster.flow.runs.retry("order-4")).rejects.toThrow('"run"');
+  });
+
+  it("is allowed when the step succeeded under a concurrency limit, and a retry reuses it", async () => {
+    const cluster = flow();
+    cluster.history.set("order-5", {
+      status: "FAILED",
+      payload: payload("order", "order-5"),
+      events: [
+        { EventType: "ContextStarted", Id: "1", Name: "transfer", SubType: "EventFlowStep" },
+        { EventType: "StepStarted", Id: "2", ParentId: "1", Name: "run", SubType: ONCE },
+        { EventType: "StepSucceeded", Id: "2", ParentId: "1", Name: "run", SubType: ONCE, StepSucceededDetails: ok({ ok: true, value: 1 }) },
+        { EventType: "ContextSucceeded", Id: "1", Name: "transfer", SubType: "EventFlowStep", ContextSucceededDetails: ok({ ok: true, value: 1 }) },
+        { EventType: "StepFailed", Id: "3", Name: "email" },
+      ],
+    });
+    expect((await cluster.flow.runs.retry("order-5")).reused).toEqual(["transfer"]);
   });
 });

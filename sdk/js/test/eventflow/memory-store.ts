@@ -140,7 +140,7 @@ export class MemoryStore implements Store {
       const lease = this.item(l).leases[leaseId];
       if (!lease || lease.expires <= now) return false;
     }
-    for (const l of uniqueLimits(limits)) this.item(l).leases[leaseId].expires = now + leaseMs;
+    for (const l of uniqueLimits(limits)) this.item(l).leases[leaseId] = { ...this.item(l).leases[leaseId], expires: now + leaseMs };
     return true;
   }
 
@@ -175,14 +175,17 @@ export class MemoryStore implements Store {
         .sort((a, b) => (l.tenants[tenantKey(a.tenant)] ?? 0) - (l.tenants[tenantKey(b.tenant)] ?? 0) || a.at - b.at || a.seq - b.seq);
       const next = candidates.find((c) => this.canGrant(c));
       if (!next) return woken;
+      const given = new Map<LimitItem, { expires: number; tenant: string }>();
       for (const other of uniqueLimits(next.limits)) {
         const item = this.item(other);
         const line = item.lines.get(next.tenant)!;
         line.splice(line.findIndex((w) => w.leaseId === next.leaseId && w.at === next.at), 1);
         this.give(item, next.leaseId, next.tenant, GRANT_MS);
+        given.set(item, item.leases[next.leaseId]);
       }
       if (await wake(next).catch(() => false)) woken++;
-      else await this.release(next.limits, next.leaseId, next.tenant);
+      // Only the leases this gave: a step that renewed them holds them as its own.
+      else for (const [item, lease] of given) if (item.leases[next.leaseId] === lease) this.drop(item, next.leaseId, next.tenant);
     }
   }
 

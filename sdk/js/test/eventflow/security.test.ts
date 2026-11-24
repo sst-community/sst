@@ -159,7 +159,7 @@ describe("flow control", () => {
     const held = cluster.queue.map((m) => JSON.parse(m.body));
     expect(held.every((m) => m.kind === "start" && m.sig)).toBe(true);
     // A held run keeps its run ID and root, so it's the same run when it comes back.
-    expect(held.every((m) => m.runId && m.root === m.runId && m.exp > m.at)).toBe(true);
+    expect(held.every((m) => m.runId && m.root && m.root !== m.runId && m.exp > m.at)).toBe(true);
     const ats = held.map((m) => m.at).sort();
     // About 10 seconds apart, one slot each.
     for (let i = 1; i < ats.length; i++) expect(ats[i] - ats[i - 1]).toBeGreaterThanOrEqual(9_000);

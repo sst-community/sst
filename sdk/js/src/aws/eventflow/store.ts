@@ -1,6 +1,6 @@
 import type { AwsOptions } from "../client.js";
-import { AwsError, dynamo, isConditionFailure } from "./aws.js";
-import { key as keyOf } from "./ids.js";
+import { AwsError, dynamo, isConditionFailure, isTransient } from "./aws.js";
+import { hash, key as keyOf } from "./ids.js";
 import type { WireEvent } from "./types.js";
 
 // The engine's state, in one DynamoDB table with a `pk` and `sk`, and `expires` as
@@ -118,9 +118,13 @@ const N = (value: number) => ({ N: String(value) });
 const pad = (n: number) => String(Math.max(0, Math.floor(n))).padStart(15, "0");
 const DAY = 86_400_000;
 
-/** A map key for a tenant. A map key can't be empty, and "" is "no tenant". */
+/**
+ * A map key for a tenant. A map key can't be empty, and "" is "no tenant". A long one
+ * is hashed, so a limit's maps stay small.
+ */
 export function tenantKey(tenant: string) {
-  return tenant === "" ? "\u0000" : tenant;
+  if (tenant === "") return "\u0000";
+  return tenant.length <= 24 ? tenant : `#${hash(tenant, 16)}`;
 }
 
 function waiterSort(waiter: Pick<Waiter, "createdAt" | "callbackId">) {
@@ -133,11 +137,7 @@ function waiterSort(waiter: Pick<Waiter, "createdAt" | "callbackId">) {
 export function isRetryable(error: unknown) {
   return (
     error instanceof AwsError &&
-    (error.status >= 500 ||
-      error.type === "ProvisionedThroughputExceededException" ||
-      error.type === "ThrottlingException" ||
-      error.type === "RequestLimitExceeded" ||
-      error.type === "TransactionConflictException")
+    (error.status >= 500 || isTransient(error))
   );
 }
 
@@ -343,10 +343,14 @@ export class DynamoStore implements Store {
       try {
         await this.db("UpdateItem", {
           Key: { pk: S(limit.item), sk: S("-") },
-          UpdateExpression: "SET leases.#l = :lease",
+          UpdateExpression: "SET leases.#l = :lease, expires = :exp",
           ConditionExpression: "leases.#l = :old",
           ExpressionAttributeNames: { "#l": leaseId },
-          ExpressionAttributeValues: { ":lease": S(`${now + leaseMs}|${lease.tenant}`), ":old": S(raw) },
+          ExpressionAttributeValues: {
+            ":lease": S(`${now + leaseMs}|${lease.tenant}`),
+            ":old": S(raw),
+            ":exp": { N: seconds(now + DAY) },
+          },
         });
       } catch (error) {
         if (isConditionFailure(error)) return false;
@@ -356,8 +360,8 @@ export class DynamoStore implements Store {
     return true;
   }
 
-  async release(limits: Limit[], leaseId: string, tenant: string) {
-    await Promise.all(uniqueLimits(limits).map((l) => this.releaseOne(l.item, leaseId, tenant)));
+  async release(limits: Limit[], leaseId: string, tenant: string, only?: string) {
+    await Promise.all(uniqueLimits(limits).map((l) => this.releaseOne(l.item, leaseId, tenant, only)));
   }
 
   private async releaseOne(item: string, leaseId: string, tenant: string, only?: string) {
@@ -383,7 +387,7 @@ export class DynamoStore implements Store {
   private async dropZero(item: string, map: "tenants" | "waiting", tenant: string) {
     await this.db("UpdateItem", {
       Key: { pk: S(item), sk: S("-") },
-      UpdateExpression: `REMOVE ${map}.#t`,
+      UpdateExpression: map === "waiting" ? "REMOVE waiting.#t, waitingAt.#t" : `REMOVE ${map}.#t`,
       ConditionExpression: `${map}.#t <= :zero`,
       ExpressionAttributeNames: { "#t": tenantKey(tenant) },
       ExpressionAttributeValues: { ":zero": N(0) },
@@ -419,46 +423,69 @@ export class DynamoStore implements Store {
       limits: S(JSON.stringify(limits)),
       expires: { N: seconds(waiter.expiresAt + DAY) },
     };
-    try {
-      // The entries and the counts go in together, so a release in between can't
-      // take a count below what's in line.
-      await this.transact(
-        limits.flatMap((limit) => [
-          {
-            Put: {
-              Item: { ...this.entryKey(limit, waiter), ...entry },
-              ConditionExpression: "attribute_not_exists(pk)",
-            },
-          },
-          {
-            Update: {
-              Key: { pk: S(limit.item), sk: S("-") },
-              UpdateExpression: "ADD queued :one, waiting.#t :one",
-              ExpressionAttributeNames: { "#t": tenantKey(waiter.tenant) },
-              ExpressionAttributeValues: { ":one": N(1) },
-            },
-          },
-        ]),
-      );
-      return "queued" as const;
-    } catch (error) {
-      if (!isConditionFailure(error)) throw error;
-    }
-    // Asking again: the step keeps its place, with its new callback. If its entries
-    // are gone, it was given its leases in between.
-    for (const limit of limits) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await this.db("UpdateItem", {
-          Key: this.entryKey(limit, waiter),
-          UpdateExpression: "SET callback = :cb, expires = :exp",
-          ConditionExpression: "attribute_exists(pk)",
-          ExpressionAttributeValues: { ":cb": entry.callback, ":exp": entry.expires },
-        });
+        // The entries and the counts go in together, so a release in between can't
+        // take a count below what's in line.
+        await this.transact(
+          limits.flatMap((limit) => [
+            {
+              Put: {
+                Item: { ...this.entryKey(limit, waiter), ...entry },
+                ConditionExpression: "attribute_not_exists(pk)",
+              },
+            },
+            {
+              Update: {
+                Key: { pk: S(limit.item), sk: S("-") },
+                // The limit lives while steps are in line, however long that is.
+                UpdateExpression: "SET expires = :exp, waitingAt.#t = :now ADD queued :one, waiting.#t :one",
+                ExpressionAttributeNames: { "#t": tenantKey(waiter.tenant) },
+                ExpressionAttributeValues: { ":one": N(1), ":exp": { N: seconds(Date.now() + DAY) }, ":now": N(Date.now()) },
+              },
+            },
+          ]),
+        );
+        return "queued" as const;
       } catch (error) {
         if (!isConditionFailure(error)) throw error;
-        const again = await Promise.all(limits.map((l) => this.readLimit(l.item)));
-        if (again.every((item) => item?.leases[waiter.leaseId])) return "held" as const;
       }
+      // Asking again: the step keeps its place, with its new callback.
+      let gone = false;
+      for (const limit of limits) {
+        try {
+          await this.db("UpdateItem", {
+            Key: this.entryKey(limit, waiter),
+            UpdateExpression: "SET callback = :cb, expires = :exp",
+            ConditionExpression: "attribute_exists(pk)",
+            ExpressionAttributeValues: { ":cb": entry.callback, ":exp": entry.expires },
+          });
+        } catch (error) {
+          if (!isConditionFailure(error)) throw error;
+          gone = true;
+        }
+      }
+      if (!gone) {
+        // The tenant still has a step in line, so its count isn't taken for a stale one.
+        await this.db("UpdateItem", {
+          Key: { pk: S(limits[0].item), sk: S("-") },
+          UpdateExpression: "SET waitingAt.#t = :now",
+          ExpressionAttributeNames: { "#t": tenantKey(waiter.tenant) },
+          ExpressionAttributeValues: { ":now": N(Date.now()) },
+        }).catch(() => {});
+        for (const limit of limits.slice(1))
+          await this.db("UpdateItem", {
+            Key: { pk: S(limit.item), sk: S("-") },
+            UpdateExpression: "SET waitingAt.#t = :now",
+            ExpressionAttributeNames: { "#t": tenantKey(waiter.tenant) },
+            ExpressionAttributeValues: { ":now": N(Date.now()) },
+          }).catch(() => {});
+        return "queued" as const;
+      }
+      // Its entries are gone: it was given its leases in between, or given them and
+      // they were given back, as its old callback had timed out. Then it joins again.
+      const again = await Promise.all(limits.map((l) => this.readLimit(l.item)));
+      if (again.every((item) => item?.leases[waiter.leaseId])) return "held" as const;
     }
     return "queued" as const;
   }
@@ -494,23 +521,28 @@ export class DynamoStore implements Store {
       let reset = false;
       for (const t of tenants.slice(0, 20)) {
         if (candidates.length && (item.tenants[t] ?? 0) > fewest) break;
-        const tenant = t === "\u0000" ? "" : t;
         const page = await this.db("Query", {
           KeyConditionExpression: "pk = :pk",
-          ExpressionAttributeValues: { ":pk": S(queueKey(limit.item, tenant)) },
+          ExpressionAttributeValues: { ":pk": S(lineKey(limit.item, t)) },
           ConsistentRead: true,
           Limit: 1,
         });
         const e = page.Items?.[0];
         if (!e) {
-          await this.db("UpdateItem", {
-            Key: { pk: S(limit.item), sk: S("-") },
-            UpdateExpression: "REMOVE waiting.#t",
-            ConditionExpression: "waiting.#t = :n",
-            ExpressionAttributeNames: { "#t": t },
-            ExpressionAttributeValues: { ":n": N(item.waiting[t]) },
-          }).catch(() => {});
-          reset = true;
+          // A read isn't isolated from a transaction that's going on: the count of a
+          // step joining the line can be seen before its entry. So a count is only
+          // taken for a stale one, as when entries expired, if the tenant hasn't
+          // joined or asked again in longer than a step waits before it asks again.
+          if (now - (item.waitingAt[t] ?? 0) > STALE_LINE_MS) {
+            await this.db("UpdateItem", {
+              Key: { pk: S(limit.item), sk: S("-") },
+              UpdateExpression: "REMOVE waiting.#t, waitingAt.#t ADD queued :minus",
+              ConditionExpression: "waiting.#t = :n",
+              ExpressionAttributeNames: { "#t": t },
+              ExpressionAttributeValues: { ":n": N(item.waiting[t]), ":minus": N(-item.waiting[t]) },
+            }).catch(() => {});
+            reset = true;
+          }
           continue;
         }
         candidates.push({
@@ -527,8 +559,10 @@ export class DynamoStore implements Store {
       candidates.sort((a, b) => (item.tenants[tenantKey(a.tenant)] ?? 0) - (item.tenants[tenantKey(b.tenant)] ?? 0) || a.at - b.at);
 
       let granted: (typeof candidates)[number] | undefined;
+      let value: string | undefined;
       for (const c of candidates) {
-        if (await this.grant(c)) {
+        value = await this.grant(c);
+        if (value) {
           granted = c;
           break;
         }
@@ -540,15 +574,18 @@ export class DynamoStore implements Store {
       if (!granted) return woken;
       if (await wake(granted).catch(() => false)) woken++;
       // The step is gone, as when its run stopped, or it asked again with a new
-      // callback. Give its leases back, and try the next one.
-      else await this.release(granted.limits, granted.leaseId, granted.tenant);
+      // callback. Give back the leases this gave it, and try the next one: only those,
+      // since a step that asked again may have found them and renewed them as its own.
+      else await this.release(granted.limits, granted.leaseId, granted.tenant, value);
     }
     return woken;
   }
 
   // Take a step out of every line it's in, and give it every lease it needs, together.
+  // It returns the leases' value, to give back only those, or nothing.
   private async grant(w: LeaseWaiter) {
     const now = Date.now();
+    const value = `${now + GRANT_MS}|${w.tenant}`;
     try {
       await this.transact(
         uniqueLimits(w.limits).flatMap((l) => [
@@ -565,11 +602,12 @@ export class DynamoStore implements Store {
             Update: {
               Key: { pk: S(l.item), sk: S("-") },
               UpdateExpression:
-                "SET leases.#l = :lease ADD active :one, tenants.#t :one, queued :minus, waiting.#t :minus",
+                "SET leases.#l = :lease, expires = :exp ADD active :one, tenants.#t :one, queued :minus, waiting.#t :minus",
               ConditionExpression: "attribute_exists(pk) AND attribute_not_exists(leases.#l) AND active < :cap",
               ExpressionAttributeNames: { "#l": w.leaseId, "#t": tenantKey(w.tenant) },
               ExpressionAttributeValues: {
-                ":lease": S(`${now + GRANT_MS}|${w.tenant}`),
+                ":lease": S(value),
+                ":exp": { N: seconds(now + DAY) },
                 ":one": N(1),
                 ":minus": N(-1),
                 ":cap": N(l.limit),
@@ -579,11 +617,11 @@ export class DynamoStore implements Store {
         ]),
       );
     } catch (error) {
-      if (isConditionFailure(error) || isRetryable(error)) return false;
+      if (isConditionFailure(error) || isRetryable(error)) return undefined;
       throw error;
     }
     for (const l of uniqueLimits(w.limits)) await this.dropZero(l.item, "waiting", w.tenant);
-    return true;
+    return value;
   }
 
   private async transact(items: Record<string, any>[]) {
@@ -619,6 +657,7 @@ export class DynamoStore implements Store {
       raw,
       tenants: counts(result.Item.tenants?.M),
       waiting: counts(result.Item.waiting?.M),
+      waitingAt: counts(result.Item.waitingAt?.M),
       queued: Number(result.Item.queued?.N ?? 0),
     };
   }
@@ -634,6 +673,7 @@ export class DynamoStore implements Store {
           leases: { M: {} },
           tenants: { M: {} },
           waiting: { M: {} },
+          waitingAt: { M: {} },
           label: S(limit.label ?? limit.item),
           cap: N(limit.limit),
           expires: { N: seconds(Date.now() + DAY) },
@@ -773,15 +813,28 @@ interface LimitState {
   raw: Record<string, string>;
   tenants: Record<string, number>;
   waiting: Record<string, number>;
+  /** When each tenant last joined the line, or asked again. */
+  waitingAt: Record<string, number>;
   queued: number;
 }
+
+/**
+ * How long a tenant counted in line, with no step in its line, goes without joining
+ * or asking again before its count is taken for a stale one: longer than a step waits
+ * before it asks again.
+ */
+const STALE_LINE_MS = 20 * 60_000;
 
 /** How long a lease given to a step in line lasts, while its run resumes. */
 export const GRANT_MS = 5 * 60_000;
 
 /** The line of a limit, for one tenant. */
 export function queueKey(item: string, tenant: string) {
-  return keyOf("Q", item, tenant);
+  return lineKey(item, tenantKey(tenant));
+}
+
+function lineKey(item: string, mapKey: string) {
+  return keyOf("Q", item, mapKey);
 }
 
 export function uniqueLimits(limits: Limit[]) {

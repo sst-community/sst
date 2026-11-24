@@ -265,6 +265,29 @@ describe("steps under a concurrency limit", () => {
     expect(result.getError().errorMessage).toBe("bad input");
   });
 
+  it("takes a new lease when renewing one fails, and runs the step once", async () => {
+    let calls = 0;
+    const cluster = new Cluster((flow) => [
+      flow.createFunction({ id: "renew-fails", retries: 4, concurrency: 1, triggers: { event: "go" } }, async ({ step }) =>
+        step.run("charge", () => ++calls),
+      ),
+    ]);
+    const renew = cluster.store.renew.bind(cluster.store);
+    let failed = false;
+    cluster.store.renew = async (...args) => {
+      if (!failed) {
+        failed = true;
+        throw new Error("dynamodb UpdateItem failed: 500 InternalServerError");
+      }
+      return renew(...args);
+    };
+    await cluster.flow.send({ name: "go" });
+    const [result] = await runAll(cluster, 1);
+    expect(result.getStatus()).toBe(ExecutionStatus.SUCCEEDED);
+    expect(calls).toBe(1);
+    for (const k of cluster.store.limits.keys()) expect(cluster.store.active(k)).toBe(0);
+  });
+
   it("doesn't run a step again when giving back its lease fails", async () => {
     let calls = 0;
     const cluster = new Cluster((flow) => [

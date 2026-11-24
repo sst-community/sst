@@ -119,8 +119,12 @@ export interface EventFlowArgs
   schedule?: Input<boolean>;
   /**
    * Let the functions use `flow.runs` and `flow.admin`, to list, retry and cancel
-   * runs from inside a run. Off by default: a function that's compromised, or a bug,
-   * could otherwise cancel or rerun every run in the EventFlow.
+   * runs from inside a run. Off by default, so a bug in a function can't cancel or
+   * rerun every run through them.
+   *
+   * It isn't a wall against code in the functions that's out to do harm: they run in
+   * the worker, which has the signing key, the table, and stopping and resuming runs,
+   * as the engine needs. Only deploy code there that you trust.
    *
    * Anything else that should, like an API of your own, links `flow.admin` instead.
    *

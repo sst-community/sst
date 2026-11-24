@@ -4,7 +4,7 @@ import { matchesTrigger, type Definition } from "./definition.js";
 import { checkEvent, DEDUP_MS, type Engine } from "./engine.js";
 import { getPath } from "./expression.js";
 import { hash, key, runId as makeRunId } from "./ids.js";
-import { sign, verify } from "./sign.js";
+import { deriveRoot, sign, verify } from "./sign.js";
 import type { Admission } from "./store.js";
 import type { Message, RunPayload, WireEvent } from "./types.js";
 import { eventMatches, MESSAGE_TTL_MS, RECENT_MS, recentKey, STOP, waitKey, type InvokeOutcome, type Registered } from "./worker.js";
@@ -77,10 +77,7 @@ function parse(record: SQSRecord): Message {
   }
   if (message.kind === "start" || message.kind === "invoke") {
     if (!verify(message)) throw new Rejected(`The ${message.kind} message isn't signed by this EventFlow.`);
-    // A signed message is good for a while, so one that's copied can't be sent again
-    // later.
-    if (typeof message.exp !== "number" || message.exp < Date.now())
-      throw new Rejected(`The ${message.kind} message expired.`);
+    if (typeof message.exp !== "number") throw new Rejected(`The ${message.kind} message has no expiry.`);
     return message as Message;
   }
   throw new Rejected(`Unknown message kind "${String(message.kind).slice(0, 20)}".`);
@@ -89,6 +86,15 @@ function parse(record: SQSRecord): Message {
 async function routeRecord(record: SQSRecord, registry: Map<string, Registered>, engine: Engine) {
   const message = parse(record);
   if (message.kind === "start" || message.kind === "invoke") {
+    // A signed message is good for longer than the dead-letter queue keeps it, so
+    // one that's copied can't be sent again much later. The run that invoked it is
+    // told, so it doesn't wait.
+    if (message.exp < Date.now()) {
+      warn("Dropped a message that expired", { kind: message.kind, fn: message.fn });
+      if (message.parent)
+        await notifyParent(engine, message.parent, { name: "InvokeError", message: `The run of "${message.fn}" expired before it started.` });
+      return;
+    }
     const entry = registry.get(message.fn);
     if (!entry) {
       warn("Skipped a run of a function that's gone", { fn: message.fn });
@@ -224,7 +230,7 @@ export async function startRun(
           at: admission.at,
           // The run keeps its ID and root when it comes back, so it's the same run.
           runId: id,
-          root: opts.root ?? id,
+          root: opts.root ?? deriveRoot(id),
           exp: admission.at + MESSAGE_TTL_MS,
           ...(opts.parent ? { parent: opts.parent } : {}),
         }),
@@ -239,7 +245,7 @@ export async function startRun(
     "sst:eventflow": 1,
     fn: def.id,
     runId: id,
-    root: opts.root ?? id,
+    root: opts.root ?? deriveRoot(id),
     event,
     ...(opts.parent ? { parent: opts.parent } : {}),
   };

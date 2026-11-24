@@ -213,22 +213,76 @@ export async function cancelRun(engine: Engine, runId: string) {
  * results instead of running again: the retry picks up at the step that failed.
  */
 /**
- * The at-most-once steps of a run, from its history: the ones that started, and the
- * ones of those that didn't finish. Their side effects may have happened, so running
- * them again is only done on purpose.
+ * The at-most-once steps of a run, from its history, and the runs it invoked. An
+ * at-most-once step that started may have done its side effect, and has no key to
+ * stop a second one. It's safe to rerun the run only if the rerun reuses the saved
+ * result of the top-level step it's in: `memo`, for a retry. For a replay, which
+ * reuses nothing, every one that started is risky. That covers one in onFailure, and
+ * one under a concurrency limit, whose results aren't reused.
+ *
+ * An invoked run is started again, from the start, unless its result is reused, so
+ * its at-most-once steps are risky too: `children` are the ones to look at.
  */
-export function onceSteps(events: any[]) {
-  const started = new Map<string, string>();
-  const finished = new Set<string>();
+export function onceSteps(events: any[], memo?: Record<string, unknown>) {
+  const parents = new Map<string, string | undefined>();
+  const names = new Map<string, string>();
   for (const e of events) {
-    if (e.SubType !== ONCE || !e.Id) continue;
-    if (e.EventType === "StepStarted") started.set(e.Id, e.Name ?? e.Id);
-    if (e.EventType === "StepSucceeded") finished.add(e.Id);
+    if (!e.Id) continue;
+    if (!parents.has(e.Id)) parents.set(e.Id, e.ParentId || undefined);
+    if (e.Name && !names.has(e.Id)) names.set(e.Id, e.Name);
+  }
+  const reused = (id: string) => {
+    let top = id;
+    for (let depth = 0; depth < 100; depth++) {
+      const parent = parents.get(top);
+      if (!parent) break;
+      top = parent;
+    }
+    const name = names.get(top);
+    return memo !== undefined && name !== undefined && Object.prototype.hasOwnProperty.call(memo, name);
+  };
+  const started = new Map<string, string>();
+  const invokes = new Map<string, { name: string; sent: boolean; runId?: string }>();
+  for (const e of events) {
+    if (e.SubType === ONCE && e.EventType === "StepStarted" && e.Id) started.set(e.Id, e.Name ?? e.Id);
+    if (e.SubType === "EventFlowInvoke" && e.EventType === "ContextStarted" && e.Id) invokes.set(e.Id, { name: e.Name ?? e.Id, sent: false });
+  }
+  for (const e of events) {
+    const invoke = e.Name === "start" && e.ParentId ? invokes.get(e.ParentId) : undefined;
+    if (!invoke) continue;
+    invoke.sent = true;
+    if (e.EventType === "StepSucceeded") {
+      const result = parse(e.StepSucceededDetails?.Result?.Payload) as { runId?: string } | undefined;
+      if (typeof result?.runId === "string") invoke.runId = result.runId;
+    }
   }
   return {
     started: [...started.values()],
-    unfinished: [...started.entries()].filter(([id]) => !finished.has(id)).map(([, name]) => name),
+    risky: [...started.entries()].filter(([id]) => !reused(id)).map(([, name]) => name),
+    children: [...invokes.entries()].filter(([id, v]) => v.sent && !reused(id)).map(([, v]) => ({ name: v.name, runId: v.runId })),
   };
+}
+
+/** The at-most-once steps a rerun would run again, in the run and the runs it invoked. */
+async function riskySteps(engine: Engine, events: any[], memo: Record<string, unknown> | undefined, depth = 0): Promise<string[]> {
+  const found = onceSteps(events, memo);
+  const out = [...found.risky];
+  for (const child of found.children) {
+    if (!child.runId) {
+      out.push(`${child.name}, a run it invoked that can't be checked`);
+      continue;
+    }
+    if (depth >= 5) {
+      out.push(`${child.name}, a run invoked too deep to check`);
+      continue;
+    }
+    const run = await find(engine, child.runId);
+    if (!run) continue;
+    // The invoked run is started again from the start: it reuses nothing.
+    const steps = await riskySteps(engine, await history(engine, run.arn), undefined, depth + 1);
+    out.push(...steps.map((s) => `${child.name} → ${s}`));
+  }
+  return out;
 }
 
 export async function rerun(
@@ -246,27 +300,27 @@ export async function rerun(
   if (!payload?.fn) throw new Error(`The run "${runId}" isn't an EventFlow run.`);
   if (payload.parent) throw new Error(`The run "${runId}" was invoked by another run. Retry or replay that run instead.`);
 
-  // An at-most-once step that started may have done its side effect, like a payment,
-  // and has no key to stop a second one. A retry runs it again if it didn't finish;
-  // a replay runs it again in any case. Either is only done on purpose.
-  const once = onceSteps(events);
-  const risky = reuse ? once.unfinished : once.started;
-  if (!options.force && risky.length)
-    throw new InterruptedRunError(
-      `The run "${runId}" has an atMostOnce step, ${risky.map((s) => `"${s}"`).join(", ")}, that ${
-        reuse ? "started and didn't finish" : "would run again"
-      }. Its side effect may have happened. Check it, then rerun with force.`,
-    );
-
   const memo = reuse ? { ...(payload.memo ?? {}), ...memoFrom(events) } : undefined;
   if (memo && Buffer.byteLength(JSON.stringify(memo)) > MAX_MEMO_BYTES)
     throw new Error(`The saved results of "${runId}" are over ${MAX_MEMO_BYTES} bytes. Replay it instead, to run every step again.`);
+
+  // A rerun that would run an at-most-once step again, here or in a run it invoked,
+  // is only done on purpose.
+  if (!options.force) {
+    const risky = await riskySteps(engine, events, memo);
+    if (risky.length)
+      throw new InterruptedRunError(
+        `A ${reuse ? "retry" : "replay"} of "${runId}" would run again atMostOnce steps that started: ${risky
+          .map((s) => `"${s}"`)
+          .join(", ")}. Their side effects may have happened. Check them, then rerun with force.`,
+      );
+  }
   let id = replayId(runId);
 
   // A run is rerun once: a second retry, as from a double click or a bulk retry that
   // runs again, gets the first one's run. Ask again on purpose to rerun it again.
   if (!options.again) {
-    const owner = await engine.store.successor(keyOf("RR", runId), id, RETENTION_MS);
+    const owner = await engine.store.successor(keyOf("RR", reuse ? "retry" : "replay", runId), id, RETENTION_MS);
     if (owner !== id) {
       if (await find(engine, owner)) return { id: owner, replayOf: runId, reused: [], existing: true };
       // The first rerun was claimed and didn't start: start it, by its name.

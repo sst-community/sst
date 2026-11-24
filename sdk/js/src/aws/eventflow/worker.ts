@@ -80,13 +80,22 @@ function isInterruption(error: unknown) {
  */
 const DEFAULT_INVOKE_TIMEOUT_MS = 20 * 86_400_000;
 
-/** How long a signed message in the queue is good for. */
-export const MESSAGE_TTL_MS = 6 * 3_600_000;
+/**
+ * How long a signed message in the queue is good for: longer than the dead-letter
+ * queue keeps it, so one moved back after a fix still runs.
+ */
+export const MESSAGE_TTL_MS = 15 * 86_400_000;
 
 /** The longest durable wait AWS allows: 366 days. */
 export const MAX_WAIT_S = 31_622_400;
-/** How long a step waits for a lease before it asks again, in case a wake was lost. */
-const LEASE_WAIT_S = 180;
+/**
+ * How long a step waits for a lease before it asks again, in case a wake was lost: 3
+ * minutes, longer the more it asks, up to 15. Each time is 3 operations in the run's
+ * history, so a step that waits a day in line adds about 300, not 1,500.
+ */
+export function leaseWaitSeconds(round: number) {
+  return Math.min(900, 180 * 2 ** Math.floor(round / 2));
+}
 /** A waiter whose callback is this, followed by a run's ARN, stops the run. */
 export const STOP = "stop:";
 /** How long a received event is kept for a wait that registers just after it. */
@@ -284,7 +293,7 @@ function makeStep(state: RunState) {
       });
       if (got) return;
       const [woken, callbackId] = await child.createCallback<{ leaseId: string }>(`queued:${t}`, {
-        timeout: { seconds: LEASE_WAIT_S },
+        timeout: { seconds: leaseWaitSeconds(round) },
         serdes: json as any,
       });
       // Join the line, then hand out what's free: the leases may have freed up in
@@ -298,7 +307,7 @@ function makeStep(state: RunState) {
           callbackId,
           runId: state.runId,
           at,
-          expiresAt: Date.now() + LEASE_WAIT_S * 1000,
+          expiresAt: Date.now() + leaseWaitSeconds(round) * 1000,
         });
         if (result === "held") return { mine: true, at };
         let mine = false;
@@ -374,7 +383,13 @@ function makeStep(state: RunState) {
                 async () => {
                   // After a crash, the run step runs again, maybe after its leases
                   // expired. Check they're still held before the work starts.
-                  if (!(await engine.store.renew(limits, leaseId, leaseMs()))) return { lost: true as const };
+                  // One that can't be checked, as when DynamoDB keeps failing, counts as
+                  // lost: the step takes a new one, and its code hasn't run.
+                  const held = await engine.store.renew(limits, leaseId, leaseMs()).catch((error) => {
+                    log("warn", "Failed to renew a lease. Taking a new one.", { run: state.runId, error: errorInfo(error).message });
+                    return false;
+                  });
+                  if (!held) return { lost: true as const };
                   try {
                     return { ok: true as const, value: jsonify(await inStep(id, () => fn(...args))) };
                   } catch (error) {
@@ -529,6 +544,7 @@ function makeStep(state: RunState) {
               ts: Date.now(),
               ...(state.event.tenant ? { tenant: state.event.tenant } : {}),
             };
+            const childRunId = makeRunId(target, identity);
             await engine.sendMessages([
               {
                 message: sign({
@@ -536,13 +552,15 @@ function makeStep(state: RunState) {
                   fn: target,
                   event,
                   parent: callbackId,
-                  runId: makeRunId(target, identity),
+                  runId: childRunId,
                   root,
                   exp: Date.now() + MESSAGE_TTL_MS,
                 }),
                 group: event.tenant,
               },
             ]);
+            // In the history, so a rerun of this run can find the child, and check it.
+            return { runId: childRunId };
           });
           try {
             return await result;

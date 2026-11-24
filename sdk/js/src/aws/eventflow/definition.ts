@@ -229,6 +229,9 @@ function normalizeTriggers(input: FunctionOptions["triggers"], where: string): T
   return triggers;
 }
 
+/** The largest concurrency limit. */
+export const MAX_CONCURRENCY = 1000;
+
 function normalizeConcurrency(input: FunctionOptions["concurrency"], where: string): Limit[] {
   if (input === undefined) return [];
   const list = typeof input === "number" ? [{ limit: input }] : Array.isArray(input) ? input : [input];
@@ -236,8 +239,11 @@ function normalizeConcurrency(input: FunctionOptions["concurrency"], where: stri
   return list
     .filter((c) => c.limit !== 0)
     .map((c) => {
-      if (!Number.isInteger(c.limit) || c.limit < 1)
-        throw new TypeError(`The ${where} has a concurrency limit of ${c.limit}. Use a whole number of at least 1.`);
+      // Every lease of a limit is in one table item, which DynamoDB caps at 400 KB.
+      if (!Number.isInteger(c.limit) || c.limit < 1 || c.limit > MAX_CONCURRENCY)
+        throw new TypeError(
+          `The ${where} has a concurrency limit of ${c.limit}. Use a whole number from 1 to ${MAX_CONCURRENCY}.`,
+        );
       const scope = c.scope ?? "fn";
       if (!["fn", "env", "account"].includes(scope))
         throw new TypeError(`The ${where} has a concurrency scope "${scope}". Use "fn", "env" or "account".`);
