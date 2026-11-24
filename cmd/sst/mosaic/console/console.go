@@ -317,7 +317,7 @@ func (c *Console) FunctionName(id string) string {
 const clipped = "… [truncated]"
 
 // Clip cuts text to at most max bytes, where a character starts, and says
-// it was cut, within max.
+// it was cut, within max. A max with no room for that is the saying alone.
 func Clip(text string, max int) string {
 	if len(text) <= max {
 		return text

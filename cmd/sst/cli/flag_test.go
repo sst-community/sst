@@ -1,6 +1,10 @@
 package cli
 
-import "testing"
+import (
+	"testing"
+
+	flag "github.com/spf13/pflag"
+)
 
 func TestAfterDash(t *testing.T) {
 	for _, tc := range []struct {
@@ -29,7 +33,11 @@ func TestBareConflicts(t *testing.T) {
 		{Name: "a", Flags: []Flag{{Name: "bare-conflict-test", Type: "string", Bare: "all"}}},
 		{Name: "b", Flags: []Flag{{Name: "bare-conflict-test", Type: "string"}}},
 	}}
+	// a set of its own, so the test's flag isn't left in sst's
+	saved := flag.CommandLine
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
 	defer func() {
+		flag.CommandLine = saved
 		if recover() == nil {
 			t.Fatal("init took two Bare values for one flag")
 		}
