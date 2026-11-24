@@ -400,3 +400,17 @@ func TestCancelAll(t *testing.T) {
 		t.Fatalf("failed = %d, out:\n%s", failed, out.String())
 	}
 }
+
+func TestInterruptedRun(t *testing.T) {
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	step := &Step{ID: "charge", Type: "step", Status: "failed", Error: &AdminError{Name: "StepInterrupted", Message: "The step \"charge\" stopped part way"}}
+	run := &Run{RunSummary: RunSummary{ID: "r", Status: "FAILED", StartedAt: now}, Steps: []Step{*step}, FailedStep: step}
+	if !Interrupted(run) {
+		t.Fatal("an interrupted step should be seen")
+	}
+	var out bytes.Buffer
+	RenderRun(&out, run, now)
+	if !strings.Contains(out.String(), "--force") || strings.Contains(out.String(), "Deployed a fix?") {
+		t.Fatalf("the hint should say to check first:\n%s", out.String())
+	}
+}

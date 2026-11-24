@@ -359,13 +359,16 @@ export class Runs {
    *
    * It's a new run, with a new ID. Its `replayOf` is the run it retries.
    *
+   * A run whose `atMostOnce` step stopped part way isn't retried, since that step may
+   * have done its side effect, like a payment. Check it, then pass `force: true`.
+   *
    * @example
    * ```ts
    * const { id, reused } = await flow.runs.retry(runId);
    * ```
    */
-  async retry(runId: string): Promise<{ id: string; replayOf: string; reused: string[] }> {
-    return this.engine().admin("runs.retry", { runId });
+  async retry(runId: string, options: { force?: boolean } = {}): Promise<{ id: string; replayOf: string; reused: string[] }> {
+    return this.engine().admin("runs.retry", { runId, force: options.force === true });
   }
 
   /**
@@ -373,8 +376,8 @@ export class Runs {
    * deployed version. Every step runs again, including the ones that succeeded. Make
    * steps with side effects idempotent, for example with the event's ID.
    */
-  async replay(runId: string): Promise<{ id: string; replayOf: string }> {
-    return this.engine().admin("runs.replay", { runId });
+  async replay(runId: string, options: { force?: boolean } = {}): Promise<{ id: string; replayOf: string }> {
+    return this.engine().admin("runs.replay", { runId, force: options.force === true });
   }
 
   /**
@@ -399,6 +402,8 @@ export class Runs {
 export interface RetryAllInput extends ListInput {
   /** "retry" reuses the steps that succeeded; "replay" runs every step again. Defaults to "retry". */
   mode?: "retry" | "replay";
+  /** Also rerun the runs whose `atMostOnce` step stopped part way. Check them first. */
+  force?: boolean;
 }
 
 /**
@@ -583,11 +588,33 @@ export interface Context<TEvent = FlowEvent> {
   runId: string;
   /** The most times a step is tried: the function's `retries`, plus one. */
   maxAttempts: number;
+  /**
+   * A key for a step's side effect, to pass to a payment provider or any API that
+   * takes an idempotency key. It's the same in every attempt of the step, and in every
+   * retry and replay of the run, and different for every other step and run. So a
+   * step that runs again, after a crash or a retry, doesn't charge twice.
+   *
+   * @example
+   * ```ts
+   * await step.run("charge", () =>
+   *   stripe.paymentIntents.create(
+   *     { amount, currency: "usd", customer },
+   *     { idempotencyKey: idempotencyKey("charge") },
+   *   ),
+   * );
+   * ```
+   */
+  idempotencyKey: (stepId: string) => string;
   /** A logger that doesn't repeat itself when the function replays. */
   logger: Logger;
 }
 
-type StepId = string | { id: string; name?: string };
+/**
+ * A step's ID, or its options. `atMostOnce` is EventFlow's: AWS saves that the step
+ * started before it runs, so a step the worker stops part way fails instead of running
+ * again, and it isn't retried. Use it for a call that has no idempotency key.
+ */
+type StepId = string | { id: string; name?: string; atMostOnce?: boolean };
 
 /** @internal */
 export interface Logger {

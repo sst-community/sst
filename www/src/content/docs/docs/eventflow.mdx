@@ -204,7 +204,7 @@ A step that throws is retried, up to the function's `retries`, which is **4** by
 
 An error thrown outside a step fails the run. It isn't retried, unlike Inngest, where the function is.
 
-A step is **at least once**. If the worker crashes after the step's code ran, but before its result was saved, it runs again. Make side effects idempotent, for example with `event.id` as an idempotency key.
+A step is **at least once**. If the worker crashes after the step's code ran, but before its result was saved, it runs again. Make side effects idempotent with `idempotencyKey`, or run the step `atMostOnce`: see [moving money](#moving-money).
 
 ### IDs
 
@@ -229,6 +229,65 @@ const [user, plan] = await Promise.all([
   step.run("plan", () => getPlan(id)),
 ]);
 ```
+
+---
+
+## Moving money
+
+Payments, transfers and refunds have to happen once. A durable step is **at least once**: if the worker stops after the step's code ran, but before its result was saved, the step runs again. EventFlow gives you two ways to make that safe.
+
+### Pass an idempotency key
+
+Every function gets `idempotencyKey(stepId)`. Pass it to the payment provider, as most take one, like Stripe's `idempotencyKey`. It's the same in every attempt of the step, and in every [retry and replay](#retry-after-a-fix) of the run, and different for every other step and run. So a step that runs again makes the same request, and the provider does it once.
+
+```ts
+flow.createFunction(
+  { id: "charge-order", triggers: { event: "order/placed" } },
+  async ({ event, step, idempotencyKey }) => {
+    const charge = await step.run("charge", () =>
+      stripe.paymentIntents.create(
+        { amount: event.data.amount, currency: "usd", customer: event.data.customer, confirm: true },
+        { idempotencyKey: idempotencyKey("charge") },
+      ),
+    );
+    await step.run("record", () => ledger.insert({ orderId: event.data.orderId, chargeId: charge.id }));
+  },
+);
+```
+
+Write to your own database the same way: an insert with the key as its primary key, or a conditional write, so a second try is a no-op.
+
+### Or run the step at most once
+
+For a call with no idempotency key, like some bank APIs, mark the step `atMostOnce`:
+
+```ts
+await step.run({ id: "wire", atMostOnce: true }, () => bank.sendWire(details));
+```
+
+AWS saves that the step started before its code runs. If the worker stops part way, the step isn't run again: the run fails with `StepInterrupted`, since the wire may or may not have been sent. It isn't retried when it throws, either. `sst eventflow run` says to check it, and a retry of the run is refused until you pass `--force`, after you've reconciled with the bank.
+
+### What was tested
+
+On AWS, with a step that charges and then crashes the Lambda before its result is saved:
+
+| Step | Provider calls | Charges | Run |
+|---|---|---|---|
+| With `idempotencyKey` | 2 | **1** | Succeeded: the step ran again, and the provider kept the first charge |
+| With `idempotencyKey`, and a concurrency limit | 2 | **1** | Succeeded |
+| `atMostOnce` | 1 | **1** | Failed with `StepInterrupted`, to reconcile |
+| `atMostOnce`, and a concurrency limit | 1 | **1** | Failed with `StepInterrupted` |
+| `atMostOnce`, then `retry --force` | 2 | **1** | Succeeded: the key is the same in the retry |
+
+![sst eventflow run, a step that stopped part way](../../../assets/docs/eventflow/cli-run-interrupted.png)
+
+### Rules for money
+
+- Every side effect goes in a step, with `idempotencyKey`, or `atMostOnce`. Never outside a step: that code runs again on every replay of the run.
+- Give events from your system an `id`, like the order's ID, so sending one twice starts one run.
+- Use `idempotency: "event.data.orderId"` on the function as well, to start one run per order in 24 hours, whatever the event IDs.
+- `cancelOn` and `flow.runs.cancel()` stop a run where it is. The steps that ran aren't undone. Refund in `onFailure`, or in a step after a `waitForEvent`, not by cancelling.
+- A replay runs every step again, with the same idempotency keys. A provider that keeps keys for a limited time, like 24 hours, may charge again after that: retry, which reuses the saved results, rather than replay.
 
 ---
 
@@ -379,6 +438,18 @@ const { id, reused } = await flow.runs.retry(runId);
 - **The steps that succeeded aren't run again.** Their saved results, from the failed run's history, are returned in their place, by step ID: `reused` lists them. The step that failed, and everything after it, runs on the new code. So a charge that went through isn't made again.
 - So it works, keep the IDs of the steps that succeeded. A step whose ID changed in the fix runs again.
 - A step result over 800 KB in all, or one AWS truncated in the history, can't be reused. The retry says so; replay instead.
+
+Here a run failed at its fourth step, after the payment went through:
+
+![sst eventflow run, a run that failed at book-carrier](../../../assets/docs/eventflow/cli-run-failed.png)
+
+After the fix is deployed, the failed runs are retried:
+
+![sst eventflow retry --failed](../../../assets/docs/eventflow/cli-retry-failed.png)
+
+Only `book-carrier` ran again, on version 2. The payment's result is the one version 1 saved: it wasn't charged twice.
+
+![sst eventflow run, the retry, with the steps it reused](../../../assets/docs/eventflow/cli-run-retried.png)
 
 To run every step again, **replay** it:
 

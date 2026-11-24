@@ -319,7 +319,9 @@ func RenderRun(w io.Writer, r *Run, now time.Time, allSteps ...bool) {
 			rows = append(rows, []string{label("Run error"), ui.TEXT_DANGER.Render(r.Error.Error())})
 		}
 		table(w, rows)
-		if failed(r.Status) {
+		if failed(r.Status) && Interrupted(r) {
+			fmt.Fprintln(w, "  "+ui.TEXT_WARNING_BOLD.Render("A step stopped part way and may have done its side effect, like a payment.")+" Check it first. Then rerun with sst eventflow retry "+r.ID+" --force.")
+		} else if failed(r.Status) {
 			dim(w, "Deployed a fix? Run sst eventflow retry "+r.ID+" to run it again on the latest deploy, reusing the steps that succeeded.")
 		}
 	}
@@ -593,4 +595,22 @@ func RenderCancelAll(w io.Writer, results []CancelResult) int {
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Cancelled %d of %d runs\n", stopped, len(results))
 	return failed
+}
+
+// Interrupted is whether a run failed because an atMostOnce step stopped part
+// way. Its side effect may have happened, so it isn't rerun without --force
+func Interrupted(r *Run) bool {
+	for _, e := range []*AdminError{r.Error, stepError(r.FailedStep)} {
+		if e != nil && (e.Name == "StepInterrupted" || strings.Contains(e.Message, "stopped part way") || strings.Contains(e.Message, "interruption")) {
+			return true
+		}
+	}
+	return false
+}
+
+func stepError(s *Step) *AdminError {
+	if s == nil {
+		return nil
+	}
+	return s.Error
 }

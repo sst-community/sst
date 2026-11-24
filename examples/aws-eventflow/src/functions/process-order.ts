@@ -10,14 +10,15 @@ export const processOrder = flow.createFunction(
     // Each step is tried at most 6 times: once, and 5 retries.
     retries: 5,
   },
-  async ({ event, step, logger }) => {
+  async ({ event, step, logger, idempotencyKey }) => {
     // A step's result is saved. When the run resumes after a sleep or a wait, the
     // step isn't run again: it returns what it returned the first time.
     const payment = await step.run("charge-card", async () => {
       try {
-        // The payment API charges once per key, so a retry doesn't charge twice. The
-        // event ID is the same in every attempt, retry and replay.
-        return await charge({ amount: event.data.amount, idempotencyKey: `charge-${event.id}` });
+        // The payment API charges once per key, so a step that runs again, after a
+        // crash or a retry, doesn't charge twice. The key is the same in every
+        // attempt, and in every retry and replay of the run.
+        return await charge({ amount: event.data.amount, idempotencyKey: idempotencyKey("charge-card") });
       } catch (error) {
         // A declined card won't get better on its own: stop retrying.
         if (error instanceof CardDeclined) throw new NonRetriableError(error.message);

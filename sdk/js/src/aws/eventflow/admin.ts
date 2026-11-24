@@ -265,11 +265,11 @@ async function run(op: string, args: Record<string, any>, registry: Map<string, 
     case "runs.cancelAll":
       return cancelAll(engine, list());
     case "runs.replay":
-      return rerun(engine, runId(), false);
+      return rerun(engine, runId(), false, args.force === true);
     case "runs.retry":
-      return rerun(engine, runId(), true);
+      return rerun(engine, runId(), true, args.force === true);
     case "runs.retryAll":
-      return rerunAll(engine, { ...list(), reuse: args.mode !== "replay" });
+      return rerunAll(engine, { ...list(), reuse: args.mode !== "replay", force: args.force === true });
     case "send": {
       const events = (Array.isArray(args.events) ? args.events : [args.events]).map((e: SendPayload) => toWireEvent(e));
       await engine.sendEvents(events);

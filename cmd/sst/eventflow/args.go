@@ -28,6 +28,7 @@ type ListArgs struct {
 	From     string `json:"from,omitempty"`
 	Limit    int    `json:"limit,omitempty"`
 	Mode     string `json:"mode,omitempty"`
+	Force    bool   `json:"force,omitempty"`
 }
 
 // MaxRetryAll is the most runs runs.retryAll takes

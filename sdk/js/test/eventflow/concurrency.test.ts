@@ -337,3 +337,45 @@ describe("asking again", () => {
     expect(woken).toEqual(["cb-new"]);
   });
 });
+
+describe("two limits", () => {
+  it("finishes every run, a tenant's limit and the shared one both held, with the leases kept while waiting", async () => {
+    let active = 0;
+    let most = 0;
+    const cluster = new Cluster((flow) => [
+      flow.createFunction(
+        { id: "two", triggers: { event: "job" }, concurrency: [{ limit: 1, key: "event.tenant" }, { limit: 1 }] },
+        async ({ step }) => {
+          for (const name of ["download", "save", "finish"])
+            await step.run(name, async () => {
+              active++;
+              most = Math.max(most, active);
+              await new Promise((r) => setTimeout(r, 5));
+              active--;
+            });
+        },
+      ),
+    ]);
+    await cluster.flow.send(
+      ["a", "a", "a", "b", "b", "b"].map((tenant, i) => ({ name: "job", data: { i }, tenant })),
+    );
+    await cluster.drain();
+    const runs = await waitFor(() => (cluster.runs.size === 6 ? [...cluster.runs.values()] : undefined));
+    const results = await Promise.all(runs.map((r) => r.result));
+    expect(results.every((r) => r.getStatus() === ExecutionStatus.SUCCEEDED)).toBe(true);
+    expect(most).toBe(1);
+    for (const k of cluster.store.limits.keys()) expect(cluster.store.active(k)).toBe(0);
+  });
+
+  it("keeps a held lease alive past its own expiry while waiting for the next", async () => {
+    const store = new MemoryStore();
+    let now = 1_000_000;
+    store.now = () => now;
+    const tenant = { item: "C#t", limit: 1 };
+    expect(await store.acquire(tenant, "l1", "a", 30_000)).toBe(true);
+    // Waiting in line for the shared limit, the worker extends the tenant lease.
+    expect(await store.renew(tenant, "l1", 17 * 60_000)).toBe(true);
+    now += 10 * 60_000;
+    expect(await store.renew(tenant, "l1", 30_000)).toBe(true);
+  });
+});

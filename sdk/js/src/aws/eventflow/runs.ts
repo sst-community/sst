@@ -2,7 +2,7 @@ import { awsFetch } from "../client.js";
 import type { Engine } from "./engine.js";
 import { replayId } from "./ids.js";
 import type { RunPayload, WireEvent } from "./types.js";
-import type { InvokeOutcome } from "./worker.js";
+import { INTERRUPTED, type InvokeOutcome } from "./worker.js";
 
 // Runs, by their run ID, as the router's admin API serves them. A run is a durable
 // execution of the worker, and its ID is the execution's name, so it can be found
@@ -208,12 +208,24 @@ export async function cancelRun(engine: Engine, runId: string) {
  * deployed version. With `reuse`, the steps that succeeded return their saved
  * results instead of running again: the retry picks up at the step that failed.
  */
-export async function rerun(engine: Engine, runId: string, reuse: boolean): Promise<{ id: string; replayOf: string; reused: string[] }> {
+export async function rerun(
+  engine: Engine,
+  runId: string,
+  reuse: boolean,
+  force = false,
+): Promise<{ id: string; replayOf: string; reused: string[] }> {
   const found = await find(engine, runId);
   if (!found) throw new Error(`There's no run "${runId}".`);
-  if (reuse && (found.status === "RUNNING" || found.status === "PAUSED" || found.status === "PAUSING"))
-    throw new Error(`The run "${runId}" is still running. Cancel it first, or replay it.`);
+  if (found.status === "RUNNING" || found.status === "PAUSED" || found.status === "PAUSING")
+    throw new Error(`The run "${runId}" is still running. Cancel it first.`);
   const [info, events] = await Promise.all([detail(engine, found.arn), reuse ? history(engine, found.arn) : Promise.resolve([])]);
+  // An at-most-once step that stopped part way may have done its side effect, like a
+  // payment. Running it again could do it twice, so that's only done on purpose.
+  const error = `${info.Error?.ErrorType ?? ""} ${info.Error?.ErrorMessage ?? ""}`;
+  if (!force && (error.includes(INTERRUPTED) || /interruption/i.test(error)))
+    throw new InterruptedRunError(
+      `A step of "${runId}" stopped part way, and may have done its side effect. Check it, then rerun with force.`,
+    );
   const payload = parse(info.InputPayload) as RunPayload | undefined;
   if (!payload?.fn) throw new Error(`The run "${runId}" isn't an EventFlow run.`);
   if (payload.parent) throw new Error(`The run "${runId}" was invoked by another run. Retry or replay that run instead.`);
@@ -226,15 +238,22 @@ export async function rerun(engine: Engine, runId: string, reuse: boolean): Prom
   return { id, replayOf: runId, reused: memo ? Object.keys(memo) : [] };
 }
 
+export class InterruptedRunError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InterruptedRunError";
+  }
+}
+
 export async function rerunAll(
   engine: Engine,
-  input: ListInput & { reuse: boolean },
+  input: ListInput & { reuse: boolean; force?: boolean },
 ): Promise<{ id: string; result?: { id: string }; error?: string }[]> {
   const runs = await listRuns(engine, { ...input, status: input.status ?? "FAILED", limit: Math.min(input.limit ?? 50, 100) });
   const out: { id: string; result?: { id: string }; error?: string }[] = [];
   for (const run of runs) {
     try {
-      const result = await rerun(engine, run.id, input.reuse);
+      const result = await rerun(engine, run.id, input.reuse, input.force);
       out.push({ id: run.id, result: { id: result.id } });
     } catch (error) {
       out.push({ id: run.id, error: (error as Error).message });

@@ -484,6 +484,8 @@ func eventflowRerunCommand(mode string) *cli.Command {
 		"```",
 		"",
 		"It prints what happened to each run. With `--status`, it picks the runs with that status instead, like `TIMED_OUT`.",
+		"",
+		"A run whose `atMostOnce` step stopped part way may already have done that step's side effect, like a payment. It isn't rerun unless you pass `--force`, after you've checked it.",
 	)
 	return &cli.Command{
 		Name: mode,
@@ -509,6 +511,14 @@ func eventflowRerunCommand(mode string) *cli.Command {
 					Long:  verb + " the failed runs that the other flags pick, instead of one run.",
 				},
 			},
+			{
+				Name: "force",
+				Type: "bool",
+				Description: cli.Description{
+					Short: "Also rerun runs whose step stopped part way",
+					Long:  "A run whose `atMostOnce` step stopped part way may have done that step's side effect, like a payment, so it isn't rerun unless you pass `--force`. Check it first.",
+				},
+			},
 		}, eventflowListFlags...),
 		Run: func(c *cli.Cli) error {
 			runID := c.Positional(0)
@@ -520,7 +530,11 @@ func eventflowRerunCommand(mode string) *cli.Command {
 				if flags != (eventflow.ListFlags{}) {
 					return util.NewReadableError(nil, "--function, --status, --since and --limit pick the runs with --failed")
 				}
-				return eventflowCall(c, op, eventflow.RunArgs(runID), func(raw json.RawMessage) error {
+				runArgs := eventflow.RunArgs(runID)
+				if c.Bool("force") {
+					runArgs["force"] = true
+				}
+				return eventflowCall(c, op, runArgs, func(raw json.RawMessage) error {
 					var result eventflow.Rerun
 					if err := json.Unmarshal(raw, &result); err != nil {
 						return err
@@ -536,6 +550,7 @@ func eventflowRerunCommand(mode string) *cli.Command {
 			if err != nil {
 				return err
 			}
+			args.Force = c.Bool("force")
 			return eventflowCall(c, "runs.retryAll", args, func(raw json.RawMessage) error {
 				var results []eventflow.RerunResult
 				if err := json.Unmarshal(raw, &results); err != nil {
