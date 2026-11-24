@@ -336,8 +336,8 @@ export class Runs {
 
   /**
    * Stop the runs that match: by default, every run that's running or paused, up to
-   * 500 at a time. Stop an EventFlow's runs before you remove it: AWS doesn't delete
-   * its worker while runs are in flight.
+   * 500 at a time. Stop an EventFlow's runs before you remove it: `sst remove` stops
+   * them one at a time.
    *
    * @example
    * ```ts

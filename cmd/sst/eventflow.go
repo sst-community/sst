@@ -267,7 +267,7 @@ var CmdEventFlow = &cli.Command{
 					"",
 					"A run that another run invoked fails that run's invoke, so it doesn't wait for it.",
 					"",
-					"Pass `--all` instead of a run ID to cancel every run that's running or paused, up to 500 at a time, or the ones the flags pick. Do this before you remove an EventFlow: AWS doesn't delete its worker while runs are in flight.",
+					"Pass `--all` instead of a run ID to cancel every run that's running or paused, up to 500 at a time, or the ones the flags pick. Do this before you remove an EventFlow with many runs in flight: `sst remove` stops them one at a time.",
 					"",
 					"```bash frame=\"none\"",
 					"sst eventflow cancel --all --function send-welcome",

@@ -245,8 +245,8 @@ export async function rerunAll(
 
 /**
  * Stop the runs that match: by default, the ones running. Up to 500 at a time, 10 at
- * once. Before an EventFlow is removed, its runs have to be stopped: AWS doesn't
- * delete a durable function while its executions run.
+ * once. Before an EventFlow with many runs in flight is removed, this is faster than
+ * `sst remove`, which stops them one at a time.
  */
 export async function cancelAll(engine: Engine, input: ListInput = {}) {
   const runs: RunSummary[] = [];

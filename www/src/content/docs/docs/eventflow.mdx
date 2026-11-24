@@ -517,7 +517,7 @@ The worker is a published version. A run keeps the version it started on, throug
 - **Removing a function** stops new runs. Runs in flight finish on their version.
 - **Replaying a run** uses the new version. If its steps changed, the replay follows the new steps.
 - **The router** isn't versioned. A held throttle run of a function that's been removed is skipped and logged.
-- **Removing an EventFlow** with runs in flight: stop them first, with `sst eventflow cancel --all`. AWS doesn't finish deleting the worker while its runs are running, so `sst remove` waits.
+- **Removing an EventFlow** with runs in flight: `sst remove` stops each of them before it deletes the worker, one at a time, which takes a while with thousands. Stop them first, 10 at a time, with `sst eventflow cancel --all`.
 
 ---
 
