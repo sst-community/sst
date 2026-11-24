@@ -171,6 +171,20 @@ for (const [name, make] of stores) {
       expect((await state(store, shared)).active).toBe(1);
     });
 
+    it("hands a shared lease to the fairest tenant, not the next step of its own", async () => {
+      const store = make();
+      const shared = limit(1);
+      const [ta, tb] = [limit(2), limit(2)];
+      await store.acquire([ta, shared], "a1", "a", 60_000);
+      await store.acquire([ta, shared], "a2", "a", 60_000);
+      await store.enqueue(waiter("a2", "a", 1, [ta, shared]));
+      await store.acquire([tb, shared], "b1", "b", 60_000);
+      await store.enqueue(waiter("b1", "b", 2, [tb, shared]));
+      const woken: string[] = [];
+      await store.handoff([ta, shared], "a1", "a", collect(woken));
+      expect(woken).toEqual(["b1"]);
+    });
+
     it("gives back a lease with no step in line", async () => {
       const store = make();
       const l = limit(1);

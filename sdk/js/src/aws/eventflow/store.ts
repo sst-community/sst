@@ -313,7 +313,10 @@ export class DynamoStore implements Store {
     // most asks of one with a line, or with no room, would fail.
     const seen = await Promise.all(unique.map((l) => this.readLimit(l.item)));
     if (seen.every(Boolean)) {
-      if (seen.every((item) => item!.leases[leaseId])) return "granted" as const;
+      // Already ours, as given to it while it asked again: it claims it, so a wake of
+      // its old callback that fails doesn't give it back.
+      if (seen.every((item) => item!.leases[leaseId]) && (await this.renew(unique, leaseId, leaseMs, true)))
+        return "granted" as const;
       const now = Date.now();
       const blocked = seen.some((item, i) => item!.queued > 0 || Object.keys(item!.leases).length >= unique[i].limit);
       const expired = seen.some((item) => Object.values(item!.leases).some((lease) => lease.expires <= now));
@@ -358,7 +361,8 @@ export class DynamoStore implements Store {
       }
       // Already ours: a lease step that's retried, or a transaction that went
       // through though its response was lost.
-      if (items.every((item) => item!.leases[leaseId])) return "granted" as const;
+      if (items.every((item) => item!.leases[leaseId]) && (await this.renew(unique, leaseId, leaseMs, true)))
+        return "granted" as const;
       // Give back leases that expired, as when a run crashed, then try again.
       const reaped = await this.reap(unique, items as LimitState[], now);
       if (!reaped) return "full" as const;
@@ -366,14 +370,21 @@ export class DynamoStore implements Store {
     return "full" as const;
   }
 
-  async renew(limits: Limit[], leaseId: string, leaseMs: number) {
+  async renew(limits: Limit[], leaseId: string, leaseMs: number, claim = false) {
     const now = Date.now();
-    for (const limit of uniqueLimits(limits)) {
-      const item = await this.readLimit(limit.item);
-      const raw = item?.raw[leaseId];
+    const unique = uniqueLimits(limits);
+    const items = await Promise.all(unique.map((l) => this.readLimit(l.item)));
+    for (const item of items) {
       const lease = item?.leases[leaseId];
       // An expired lease may be given back at any moment: it isn't renewed.
-      if (!raw || !lease || lease.expires <= now) return false;
+      if (!item?.raw[leaseId] || !lease || lease.expires <= now) return false;
+    }
+    // A lease that lasts past this invocation needs no write: a busy limit's writes
+    // conflict. A step that claims a lease it found writes it, so it's its own.
+    if (!claim && items.every((item) => item!.leases[leaseId].expires >= now + leaseMs)) return true;
+    for (const [i, limit] of unique.entries()) {
+      const raw = items[i]!.raw[leaseId];
+      const lease = items[i]!.leases[leaseId];
       try {
         await this.db("UpdateItem", {
           Key: { pk: S(limit.item), sk: S("-") },
@@ -452,7 +463,8 @@ export class DynamoStore implements Store {
   async enqueue(waiter: LeaseWaiter) {
     const limits = uniqueLimits(waiter.limits);
     const items = await Promise.all(limits.map((l) => this.readLimit(l.item)));
-    if (items.every((item) => item?.leases[waiter.leaseId])) return "held" as const;
+    if (items.every((item) => item?.leases[waiter.leaseId]) && (await this.renew(limits, waiter.leaseId, GRANT_MS, true)))
+      return "held" as const;
     await Promise.all(limits.filter((_, i) => !items[i]).map((l) => this.createLimit(l)));
     const entry = {
       lease: S(waiter.leaseId),
@@ -532,7 +544,8 @@ export class DynamoStore implements Store {
       // Its entries are gone: it was given its leases in between, or given them and
       // they were given back, as its old callback had timed out. Then it joins again.
       const again = await Promise.all(limits.map((l) => this.readLimit(l.item)));
-      if (again.every((item) => item?.leases[waiter.leaseId])) return "held" as const;
+      if (again.every((item) => item?.leases[waiter.leaseId]) && (await this.renew(limits, waiter.leaseId, GRANT_MS, true)))
+        return "held" as const;
     }
     return "queued" as const;
   }
@@ -641,8 +654,14 @@ export class DynamoStore implements Store {
 
   async handoff(limits: Limit[], leaseId: string, tenant: string, wake: (w: LeaseWaiter) => Promise<boolean>) {
     const unique = uniqueLimits(limits);
-    for (const limit of unique) {
-      const item = await this.readLimit(limit.item);
+    // The limit with the most tenants in line first: that's where it's decided whose
+    // turn is fair. A tenant's own limit has only its own steps in line.
+    const items = await Promise.all(unique.map((l) => this.readLimit(l.item)));
+    const tenantsInLine = (i: number) => Object.values(items[i]?.waiting ?? {}).filter((n) => n > 0).length;
+    const order = unique.map((_, i) => i).sort((a, b) => tenantsInLine(b) - tenantsInLine(a) || unique[b].limit - unique[a].limit);
+    for (const i of order) {
+      const limit = unique[i];
+      const item = items[i];
       if (!item?.leases[leaseId]) continue;
       const { candidates } = await this.candidates(limit, item, Date.now());
       for (const next of candidates.slice(0, 3)) {
@@ -664,7 +683,7 @@ export class DynamoStore implements Store {
       break;
     }
     await this.release(unique, leaseId, tenant);
-    for (const l of unique) await this.dispatch(l, wake);
+    for (const i of order) await this.dispatch(unique[i], wake);
   }
 
   // Take a step out of every line it's in, and give it every lease it needs, together.
@@ -976,8 +995,11 @@ interface LimitState {
  */
 const STALE_LINE_MS = 20 * 60_000;
 
-/** How long a lease given to a step in line lasts, while its run resumes. */
-export const GRANT_MS = 5 * 60_000;
+/**
+ * How long a lease given to a step in line lasts: as long as the longest invocation,
+ * so the step it wakes doesn't have to write to renew it.
+ */
+export const GRANT_MS = 15 * 60_000 + 10_000;
 
 /** The line of a limit, for one tenant. */
 export function queueKey(item: string, tenant: string) {

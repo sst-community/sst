@@ -279,9 +279,10 @@ function makeStep(state: RunState) {
   // Take a lease on every limit at once, or wait in line until a release can give the
   // step all of them. A step never holds one lease while it waits for another, so two
   // steps can't wait for each other.
-  const takeLeases = async (child: durable.DurableContext, leaseId: string, tag: string) => {
-    // When the step first joined the line, so asking again keeps its place.
-    let joined: number | undefined;
+  // `place.joined` is when the step first joined the line, so asking again, or after
+  // a lease was lost, keeps its place. It comes from a step's result, so a replay has
+  // the same.
+  const takeLeases = async (child: durable.DurableContext, leaseId: string, tag: string, place: { joined?: number }) => {
     for (let round = 0; ; round++) {
       const t = `${tag}.${round}`;
       const got = await child.step(`lease:${t}`, async () => {
@@ -299,7 +300,7 @@ function makeStep(state: RunState) {
       // Join the line, then hand out what's free: the leases may have freed up in
       // between. If they're the step's, it goes on without waiting.
       const queued = await child.step(`enqueue:${t}`, async () => {
-        const at = joined ?? Date.now();
+        const at = place.joined ?? Date.now();
         const result = await engine.store.enqueue({
           leaseId,
           limits,
@@ -319,7 +320,7 @@ function makeStep(state: RunState) {
           });
         return { mine, at };
       });
-      joined = queued.at;
+      place.joined = queued.at;
       if (queued.mine) return;
       try {
         await woken;
@@ -373,11 +374,13 @@ function makeStep(state: RunState) {
         id,
         async (child) => {
           for (let attempt = 1; ; attempt++) {
+            // A lost lease keeps the step's place in line; a retry joins it again.
+            const place: { joined?: number } = {};
             for (let lost = 0; ; lost++) {
               // The lease's ID comes from the run, the step and the attempt, so a lease
               // step that's retried asks for the same lease.
               const leaseId = `${hash(`${state.runId}\n${id}`, 12)}.${attempt}.${lost}`;
-              await takeLeases(child, leaseId, `${attempt}.${lost}`);
+              await takeLeases(child, leaseId, `${attempt}.${lost}`, place);
               const outcome = await child.step(
                 attempt === 1 && lost === 0 ? "run" : `run:${attempt}.${lost}`,
                 async () => {

@@ -124,7 +124,7 @@ export class MemoryStore implements Store {
   async acquire(limits: Limit[], leaseId: string, tenant: string, leaseMs: number) {
     const items = uniqueLimits(limits).map((l) => ({ limit: l, item: this.item(l) }));
     items.forEach(({ item }) => this.reap(item));
-    const held = items.every(({ item }) => item.leases[leaseId]);
+    const held = items.every(({ item }) => item.leases[leaseId]) && (await this.renew(limits, leaseId, leaseMs, true));
     const room = items.every(
       ({ limit, item }) => Object.keys(item.leases).length < limit.limit && [...item.lines.values()].every((q) => !q.length),
     );
@@ -134,12 +134,13 @@ export class MemoryStore implements Store {
     return ok ? ("granted" as const) : ("full" as const);
   }
 
-  async renew(limits: Limit[], leaseId: string, leaseMs: number) {
+  async renew(limits: Limit[], leaseId: string, leaseMs: number, claim = false) {
     const now = this.now();
     for (const l of uniqueLimits(limits)) {
       const lease = this.item(l).leases[leaseId];
       if (!lease || lease.expires <= now) return false;
     }
+    if (!claim && uniqueLimits(limits).every((l) => this.item(l).leases[leaseId].expires >= now + leaseMs)) return true;
     for (const l of uniqueLimits(limits)) this.item(l).leases[leaseId] = { ...this.item(l).leases[leaseId], expires: now + leaseMs };
     return true;
   }
@@ -150,7 +151,8 @@ export class MemoryStore implements Store {
 
   async enqueue(waiter: LeaseWaiter) {
     const limits = uniqueLimits(waiter.limits);
-    if (limits.every((l) => this.item(l).leases[waiter.leaseId])) return "held" as const;
+    if (limits.every((l) => this.item(l).leases[waiter.leaseId]) && (await this.renew(limits, waiter.leaseId, GRANT_MS, true)))
+      return "held" as const;
     for (const l of limits) {
       const lines = this.item(l).lines;
       const line = lines.get(waiter.tenant) ?? [];
@@ -162,7 +164,7 @@ export class MemoryStore implements Store {
     return "queued" as const;
   }
 
-  async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>) {
+  async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>, just?: string) {
     const l = this.item(limit);
     let woken = 0;
     for (;;) {
@@ -172,7 +174,14 @@ export class MemoryStore implements Store {
       const candidates = [...l.lines.values()]
         .filter((line) => line.length)
         .map((line) => line[0])
-        .sort((a, b) => (l.tenants[tenantKey(a.tenant)] ?? 0) - (l.tenants[tenantKey(b.tenant)] ?? 0) || a.at - b.at || a.seq - b.seq);
+        // A tenant that just gave one back counts it, as DynamoStore picks the next step
+        // before the lease is given back.
+        .sort(
+          (a, b) =>
+            (l.tenants[tenantKey(a.tenant)] ?? 0) + (a.tenant === just ? 1 : 0) - (l.tenants[tenantKey(b.tenant)] ?? 0) - (b.tenant === just ? 1 : 0) ||
+            a.at - b.at ||
+            a.seq - b.seq,
+        );
       const next = candidates.find((c) => this.canGrant(c));
       if (!next) return woken;
       const given = new Map<LimitItem, { expires: number; tenant: string }>();
@@ -191,7 +200,9 @@ export class MemoryStore implements Store {
 
   async handoff(limits: Limit[], leaseId: string, tenant: string, wake: (w: LeaseWaiter) => Promise<boolean>) {
     await this.release(limits, leaseId, tenant);
-    for (const l of uniqueLimits(limits)) await this.dispatch(l, wake);
+    // The limit with the most tenants in line first, as DynamoStore does.
+    const inLine = (l: Limit) => [...this.item(l).lines.values()].filter((line) => line.length).length;
+    for (const l of uniqueLimits(limits).sort((a, b) => inLine(b) - inLine(a) || b.limit - a.limit)) await this.dispatch(l, wake, tenant);
   }
 
   private canGrant(w: LeaseWaiter) {
