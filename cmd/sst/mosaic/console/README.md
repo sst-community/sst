@@ -59,7 +59,7 @@ func (Module) Start(ctx context.Context, c *console.Console) error {
 }
 ```
 
-Everything a module registers runs on the dispatcher. Its routes (`c.Handle("GET /api/queues/{name}", ...)`) run on their own goroutines and read its state with `c.Do`. A module that samples does it only while `c.Watched(name)`, which is while a page has its tab in view, and off the dispatcher, handing the result back with `c.Do`. A module that needs another implements `console.Requirer`.
+Everything a module registers runs on the dispatcher. Its routes (`c.Handle("GET /api/queues/{name}", ...)`) run on their own goroutines and read its state with `c.Do`. A module that samples checks `c.Watched(name)` in its `Every`, which is true while a page has its tab in view, then samples on a goroutine of its own and hands the result back with `c.Do`. The `Console`'s methods, `Watched` and `Emit` among them, run on the dispatcher: off it, call them in `c.Do`. A module that needs another implements `console.Requirer`.
 
 Its `web/<name>.js` registers it with the page:
 
@@ -86,7 +86,7 @@ Test a module with `console.NewHarness`, which runs it without the bus or a list
 {"seq": 42, "time": 1732400000123, "module": "logs", "type": "line", "data": {"key": "c264e645-…", "t": 1732400000120, "text": "GET /cart/2"}}
 ```
 
-`seq` orders them, and `time` is when the console handled the event, in Unix milliseconds. `?modules=logs,stats` picks some of the modules that are on. A stream starts with `core` `hello` (`{app, stage, version, functions, modules, page}`, where `page` is the stream's ID for `/shown`), then `core` `status`, then each module's snapshot, then `core` `ready`, and then everything after it. `core` sends `app` when the app or its functions change, and `status` (`{busDropped, busDroppedTotal, clients, resyncs, uptime}`) every second.
+`seq` orders them: the messages of a snapshot all have the `seq` of the last message before it, and come in the order to apply them. `time` is when the console handled the event, in Unix milliseconds. `?modules=logs,stats` picks some of the modules that are on. A stream starts with `core` `hello` (`{app, stage, version, functions, modules, page}`, where `page` is the stream's ID for `/shown`), then `core` `status`, then each module's snapshot, then `core` `ready`, and then everything after it. `core` sends `app` when the app or its functions change, and `status` (`{busDropped, busDroppedTotal, clients, resyncs, uptime}`) every second.
 
 | Module | Type | Data |
 |---|---|---|

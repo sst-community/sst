@@ -23,7 +23,7 @@ func Start(ctx context.Context, p project.Program, server *server.Server, policy
 	log.Info("starting")
 	defer log.Info("done")
 	watchedFiles := make(map[string]bool)
-	events := bus.Subscribe(ctx, &watcher.FileChangedEvent{}, &DeployRequestedEvent{}, &project.BuildSuccessEvent{})
+	events := bus.Subscribe(&watcher.FileChangedEvent{}, &DeployRequestedEvent{}, &project.BuildSuccessEvent{})
 	lastBuildHash := ""
 	for {
 		log.Info("waiting for trigger")

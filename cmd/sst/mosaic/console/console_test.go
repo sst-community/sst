@@ -524,3 +524,21 @@ func TestMisplaced(t *testing.T) {
 		}
 	}
 }
+
+func TestWithCommand(t *testing.T) {
+	for _, tc := range []struct {
+		flag string
+		args []string
+		bad  bool
+	}{
+		{"all", []string{"next", "dev"}, true},
+		{"logs", []string{"next", "dev"}, true},
+		{"logs", nil, false},
+		{"", []string{"next", "dev"}, false},
+		{"off", []string{"next", "dev"}, false},
+	} {
+		if err := WithCommand(tc.flag, tc.args, available()); (err != nil) != tc.bad {
+			t.Errorf("WithCommand(%q, %q) = %v", tc.flag, tc.args, err)
+		}
+	}
+}

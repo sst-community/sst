@@ -179,7 +179,8 @@ func (c *Console) close() {
 }
 
 // On has fn handle every bus event of sample's type, as published: a pointer,
-// like &aws.FunctionLogEvent{}.
+// like &aws.FunctionLogEvent{}. fn runs on the dispatcher, as do Snapshot's
+// and Every's, so they can use the module's state and the Console's methods.
 func (c *Console) On(sample any, fn func(evt any)) {
 	t := reflect.TypeOf(sample)
 	c.handlers[t] = append(c.handlers[t], fn)
@@ -227,14 +228,17 @@ func (c *Console) Now() time.Time {
 	return c.now
 }
 
-// Message makes a message of the module, for a snapshot.
+// Message makes a message of the module, for a snapshot. A snapshot's
+// messages all have the seq of the last message before it, and come in the
+// order to apply them. It runs on the dispatcher.
 func (c *Console) Message(module, typ string, data any) Message {
 	return Message{Seq: c.seq, Time: c.now.UnixMilli(), Module: module, Type: typ, Data: data}
 }
 
 // Emit sends a message of the module to the pages that show it. It's only
 // marshalled when one does, so a console without a page open does no more
-// than keep its modules' stores.
+// than keep its modules' stores. It runs on the dispatcher: off it, as in a
+// goroutine that samples, call it in Do.
 func (c *Console) Emit(module, typ string, data any) {
 	c.seq++
 	var payload []byte
@@ -263,7 +267,8 @@ func (c *Console) Emit(module, typ string, data any) {
 }
 
 // Watched is whether a page that's open shows the module's tab, so a module
-// that samples, like the host's CPU, only does it then.
+// that samples, like the host's CPU, only does it then. It runs on the
+// dispatcher, as in Every: off it, call it in Do.
 func (c *Console) Watched(module string) bool {
 	for cl := range c.clients {
 		if cl.shown[module] && !cl.closed {

@@ -45,6 +45,9 @@ func CmdMosaic(c *cli.Cli) error {
 	if err := console.Misplaced(c.String("console"), c.Arguments(), consolemodules.All); err != nil {
 		return util.NewReadableError(nil, err.Error())
 	}
+	if err := console.WithCommand(c.String("console"), c.Arguments(), consolemodules.All); err != nil {
+		return util.NewReadableError(nil, err.Error())
+	}
 
 	child := os.Getenv("SST_CHILD")
 	// spawning child process

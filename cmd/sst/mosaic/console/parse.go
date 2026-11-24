@@ -89,5 +89,20 @@ func Misplaced(flag string, args []string, available []Module) error {
 	if err != nil || names == nil || args[0] == All || strings.EqualFold(args[0], "true") || args[0] == "1" {
 		return nil
 	}
-	return fmt.Errorf("give --console its modules with =, as in --console=%s: with a space, %q is taken for the command to run", args[0], args[0])
+	return fmt.Errorf("%q after --console is taken for the command to run: give --console its modules with =, as in --console=%s", args[0], args[0])
+}
+
+// WithCommand is an error when --console was given with a command to run, as
+// in `sst dev --console next dev`: that connects to an sst dev that's already
+// running, and its console is that sst dev's to start. SST_CONSOLE isn't
+// checked, as the commands sst dev starts have it from sst dev.
+func WithCommand(flag string, args []string, available []Module) error {
+	if len(args) == 0 {
+		return nil
+	}
+	names, err := Parse(flag, "", available)
+	if err != nil || names == nil {
+		return nil
+	}
+	return fmt.Errorf("--console starts with sst dev, not with a command that connects to one: give it to the sst dev that's running, as in sst dev --console")
 }
