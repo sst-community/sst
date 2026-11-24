@@ -1,0 +1,132 @@
+.logs { display: flex; flex-direction: column; overflow: hidden; }
+.logs .split { flex: 1; min-height: 0; display: flex; }
+.logs .fns {
+  width: 260px;
+  flex: none;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  padding: 6px 0;
+}
+.logs .fn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.logs .fn:hover { background: var(--sunken); }
+.logs .fn.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
+.logs .fn.idle .label { color: var(--faint); }
+.logs .fn .kind { width: 12px; color: var(--faint); text-align: center; }
+.logs .fn .label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.logs .fn .count { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
+.logs .fn .errs {
+  color: var(--err);
+  background: var(--err-bg);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.logs .main { flex: 1; min-width: 0; position: relative; display: flex; }
+.logs .list { flex: 1; overflow: auto; padding: 8px 16px 40px; overflow-anchor: none; }
+.logs .jump { position: absolute; right: 24px; bottom: 16px; box-shadow: 0 2px 8px rgb(0 0 0 / 0.15); }
+.logs .jump[hidden] { display: none; }
+
+.logs .inv, .logs .build {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 0 8px;
+  overflow: hidden;
+  contain: content;
+}
+.logs .inv.st-error { border-color: color-mix(in srgb, var(--err) 35%, var(--line)); }
+.logs .inv.st-running { border-color: color-mix(in srgb, var(--info) 35%, var(--line)); }
+.logs .head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  white-space: nowrap;
+  min-width: 0;
+}
+.logs .head .when { color: var(--dim); }
+.logs .head .kind { color: var(--faint); width: 12px; text-align: center; }
+.logs .head .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.logs .head .title { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.logs .head .dur { color: var(--dim); }
+.logs .head .grow { flex: 1; }
+.logs .head .worker { color: var(--faint); }
+.logs .head .req { color: var(--dim); font-size: 11px; }
+.logs .head button { padding: 0 8px; font-size: 12px; }
+.logs .body:empty { display: none; }
+.logs .body {
+  border-top: 1px solid var(--line);
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.logs .line {
+  display: flex;
+  gap: 10px;
+  padding: 1px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.logs .line:hover { background: var(--sunken); }
+.logs .line.hit { background: var(--sel); }
+.logs .line .off { color: var(--faint); flex: none; width: 64px; text-align: right; }
+.logs .line .lvl { flex: none; font-size: 10px; font-weight: 700; line-height: 18px; color: var(--dim); }
+.logs .line .msg { flex: 1; min-width: 0; }
+.logs .line.lv-warn .lvl { color: var(--warn); }
+.logs .line.lv-warn .msg { color: var(--warn); }
+.logs .line.lv-error .lvl, .logs .line.lv-fatal .lvl { color: var(--err); }
+.logs .line.lv-error .msg, .logs .line.lv-fatal .msg { color: var(--err); }
+.logs .line.lv-debug .msg, .logs .line.lv-trace .msg { color: var(--dim); }
+.logs .line.json { cursor: pointer; flex-wrap: wrap; }
+.logs .line .jmsg { margin-right: 8px; }
+.logs .line .kv {
+  display: inline-flex;
+  margin: 0 6px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+.logs .line .kv .k { padding: 0 4px; color: var(--dim); background: var(--sunken); }
+.logs .line .kv .v { padding: 0 4px; color: var(--text); }
+.logs .line .pretty {
+  flex-basis: 100%;
+  margin: 4px 0 4px 74px;
+  padding: 8px 10px;
+  background: var(--sunken);
+  border-radius: 6px;
+  cursor: text;
+  color: var(--text);
+}
+.logs .more, .logs .dropped { margin: 4px 10px 4px 84px; font-size: 12px; }
+.logs .dropped { color: var(--dim); font-family: var(--sans); }
+.logs .err {
+  border-top: 1px solid var(--line);
+  background: var(--err-bg);
+  color: var(--err);
+  padding: 6px 10px 8px;
+}
+.logs .err .emsg { white-space: pre-wrap; word-break: break-word; }
+.logs .err .trace { color: color-mix(in srgb, var(--err) 75%, var(--text)); padding-left: 8px; white-space: pre-wrap; }
+.logs .build .berr {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--err-bg);
+  color: var(--err);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.logs .detail { border-top: 1px solid var(--line); background: var(--sunken); }
+@media (max-width: 800px) { .logs .fns { display: none; } }

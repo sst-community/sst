@@ -1,0 +1,10 @@
+.host .hwrap { padding: 4px 20px 40px; }
+.host h3 { font-size: 13px; font-weight: 600; margin: 18px 0 10px; }
+.host .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.host .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow: hidden; }
+.host .tile .tlabel { color: var(--dim); font-size: 12px; }
+.host .tile .tvalue { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin: 2px 0 0; }
+.host .tile .spark { width: 100%; margin-top: 8px; }
+.host .bus table { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; border-collapse: separate; border-spacing: 0; }
+.host .bus td.sub { max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+.host .bus td.bad { color: var(--err); font-weight: 600; }

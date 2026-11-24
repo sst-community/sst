@@ -166,6 +166,9 @@ func (c *Command) init(parsed map[string]interface{}) {
 		}
 		if f.Type == "string" {
 			parsed[f.Name] = flag.String(f.Name, "", "")
+			if f.Bare != "" {
+				flag.Lookup(f.Name).NoOptDefVal = f.Bare
+			}
 		}
 
 		if f.Type == "bool" {
@@ -211,6 +214,9 @@ type Flag struct {
 	Name        string      `json:"name"`
 	Type        string      `json:"type"`
 	Description Description `json:"description"`
+	// Bare is a string flag's value when it's given without one, as --console
+	// for --console=all. A value then has to be given with =.
+	Bare string `json:"-"`
 }
 
 type CommandPath []Command

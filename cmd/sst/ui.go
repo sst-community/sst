@@ -8,6 +8,7 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/cli"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/cloudflare"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/console"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/dev"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/socket"
@@ -94,6 +95,7 @@ func CmdUI(c *cli.Cli) error {
 			aws.ConcurrencyWarningEvent{},
 			socket.WarningEvent{},
 			project.PolicyAdvisoryEvent{},
+			console.StartedEvent{},
 		)
 	}
 	evts, err := dev.Stream(c.Context, url, types...)

@@ -1,0 +1,33 @@
+.deploy { display: flex; flex-direction: column; overflow: hidden; }
+.deploy .split { flex: 1; min-height: 0; display: flex; }
+.deploy .deps { width: 240px; flex: none; overflow: auto; border-right: 1px solid var(--line); background: var(--panel); }
+.deploy .dep { padding: 8px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.deploy .dep:hover { background: var(--sunken); }
+.deploy .dep.sel { background: var(--sel); box-shadow: inset 2px 0 var(--accent); }
+.deploy .dep .row { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.deploy .grow { flex: 1; }
+.deploy .dmain { flex: 1; overflow: auto; padding: 16px 20px 40px; }
+.deploy .dhead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.deploy h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.deploy h3 { margin: 0; padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--line); }
+.deploy .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
+.deploy .card table.grid th, .deploy .card table.grid td { padding: 5px 14px; }
+.deploy .card table.grid tr:last-child td { border-bottom: 0; }
+.deploy .rname { font-weight: 500; }
+.deploy table.kvs { border-collapse: collapse; width: 100%; }
+.deploy table.kvs td { padding: 5px 14px; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-all; }
+.deploy table.kvs tr:last-child td { border-bottom: 0; }
+.deploy table.kvs td:first-child { width: 200px; white-space: nowrap; }
+.deploy .derrs { margin-bottom: 14px; }
+.deploy .derr { background: var(--err-bg); border: 1px solid color-mix(in srgb, var(--err) 35%, var(--line)); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; color: var(--err); }
+.deploy .derr .dname { font-weight: 600; margin-bottom: 4px; }
+.deploy .derr pre { margin: 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.deploy .derr pre.help { margin-top: 8px; color: var(--text); }
+.deploy .msgs { font-family: var(--mono); font-size: 12px; padding: 6px 0; max-height: 360px; overflow: auto; }
+.deploy .dmsg { display: flex; gap: 10px; padding: 1px 14px; white-space: pre-wrap; word-break: break-word; }
+.deploy .dmsg .text { flex: 1; }
+.deploy .dmsg.lv-error .text { color: var(--err); }
+.deploy .dmsg.lv-warning .text { color: var(--warn); }
+.deploy .banner { flex: none; }
+.deploy .banner[hidden] { display: none; }
+.deploy .warning { background: var(--warn-bg); color: var(--warn); padding: 8px 16px; border-bottom: 1px solid var(--line); white-space: pre-wrap; }

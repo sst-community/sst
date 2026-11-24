@@ -92,6 +92,12 @@ func StartWorker(cmd *exec.Cmd) (*Worker, error) {
 	return w, nil
 }
 
+// PID is the worker's process ID. It leads the worker's process group, so
+// what it started is in the group too, unless it left it.
+func (w *Worker) PID() int {
+	return w.cmd.Process.Pid
+}
+
 // Logs gives what the worker prints, its output and its errors together. It
 // ends once the worker has exited and what it printed is read.
 func (w *Worker) Logs() io.ReadCloser {

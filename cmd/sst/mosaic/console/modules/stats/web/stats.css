@@ -1,0 +1,5 @@
+.stats .wrap { padding: 0 0 40px; }
+.stats td.fname a { font-weight: 500; color: var(--text); }
+.stats td.fname a:hover { color: var(--accent); }
+.stats td.bad { color: var(--err); font-weight: 600; }
+.stats .toolbar .note { white-space: normal; }

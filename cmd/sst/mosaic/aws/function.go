@@ -64,6 +64,15 @@ type FunctionLogEvent struct {
 	Line       string
 }
 
+// A worker's process started, as PID, with its function's latest build.
+// It's published only for a worker that runs as a process here
+// (runtime.ProcessWorker).
+type FunctionWorkerStartedEvent struct {
+	FunctionID string
+	WorkerID   string
+	PID        int
+}
+
 // The environment of a worker that stopped is forgotten, so the UI can forget
 // what it keeps for the worker too
 type FunctionWorkerForgottenEvent struct {
@@ -660,6 +669,9 @@ func function(ctx context.Context, input input) {
 		stateMu.Lock()
 		info.Worker = worker
 		stateMu.Unlock()
+		if pw, ok := worker.(runtime.ProcessWorker); ok {
+			bus.Publish(&FunctionWorkerStartedEvent{FunctionID: info.FunctionID, WorkerID: workerID, PID: pw.PID()})
+		}
 		go func() {
 			logs := worker.Logs()
 			onLine := func(line string) {

@@ -16,6 +16,7 @@ import (
 	"github.com/briandowns/spinner"
 	"github.com/fatih/color"
 	"github.com/sst/sst/v3/cmd/sst/cli"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/console"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/errors"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui"
 	"github.com/sst/sst/v3/internal/util"
@@ -514,6 +515,23 @@ var root = &cli.Command{
 						Long:  "Run policy pack validation against the preview changes.",
 					},
 				},
+				{
+					Name: "console",
+					Type: "string",
+					Bare: console.All,
+					Description: cli.Description{
+						Short: "Start a local web console, with all its modules or the ones listed",
+						Long: strings.Join([]string{
+							"Start a local web console for this `sst dev`: another view of what it does, next to the terminal, in any `--mode`. It prints a link to open it.",
+							"",
+							"With no value it has every module. Or list the ones you want, with `=`: `--console=logs,deploy`. The modules are `logs` (what functions, tasks and workers print, by invocation), `invocations` (their inputs and outputs, which turns on `logs`), `deploy`, `stats` (each function's invocations, errors and local durations), `workers` (the CPU and memory of each local worker) and `host` (the machine's and `sst dev`'s own).",
+							"",
+							"`SST_CONSOLE` does the same, as in `SST_CONSOLE=logs,stats`, and the flag takes its place when both are set. Without either, nothing starts.",
+							"",
+							"It listens on `127.0.0.1` only, and lets in only the browser that opened its link, as what it shows can have secrets in it. This isn't the SST Console at console.sst.dev, which `SST_NO_CONSOLE` is about.",
+						}, "\n"),
+					},
+				},
 			},
 			Args: []cli.Argument{
 				{
@@ -540,6 +558,18 @@ var root = &cli.Command{
 					Content: "sst dev -- next dev --turbo",
 					Description: cli.Description{
 						Short: "Use -- to pass flags to the command",
+					},
+				},
+				{
+					Content: "sst dev --console",
+					Description: cli.Description{
+						Short: "Also start a local web console, with every module",
+					},
+				},
+				{
+					Content: "sst dev --console=logs,deploy",
+					Description: cli.Description{
+						Short: "Start the local web console with only these modules",
 					},
 				},
 			},

@@ -198,7 +198,18 @@ type fakeRuntime struct {
 	// initErrorOnStop has a worker that's stopped as it asks for an invocation
 	// report it as an init error, as Ruby's runtime interface client does
 	initErrorOnStop bool
+	// pid, when set, has its workers say it's their process's ID, as a
+	// runtime.ProcessWorker does
+	pid int
 }
+
+// pidWorker is a fakeWorker that has a process ID.
+type pidWorker struct {
+	*fakeWorker
+	pid int
+}
+
+func (w pidWorker) PID() int { return w.pid }
 
 func (r *fakeRuntime) Match(runtime string) bool { return runtime == "fake" }
 
@@ -244,6 +255,9 @@ func (r *fakeRuntime) Run(ctx context.Context, input *runtime.RunInput) (runtime
 			time.Sleep(100 * time.Millisecond)
 		case <-time.After(2 * time.Second):
 		}
+	}
+	if r.pid != 0 {
+		return pidWorker{w, r.pid}, nil
 	}
 	return w, nil
 }
@@ -701,4 +715,33 @@ func newServer(t *testing.T, ctx context.Context) *server.Server {
 func workerPath(srv *server.Server, workerID, route string) string {
 	address := srv.WorkerAddress(workerID)
 	return address[strings.Index(address, "/"):] + route
+}
+
+// A worker that runs as a process says which, for the console's workers
+// module, and one that doesn't says nothing.
+func TestWorkerStartedSaysItsPID(t *testing.T) {
+	for _, pid := range []int{4242, 0} {
+		started := bus.Subscribe(&FunctionWorkerStartedEvent{})
+		h := newHarness(t, &fakeRuntime{handle: echo, pid: pid})
+		h.addFunction("Fn")
+		b := h.bridge("Fn")
+		if _, err := b.invoke("x"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case evt := <-started:
+			e := evt.(*FunctionWorkerStartedEvent)
+			if pid == 0 {
+				t.Fatalf("a worker without a process said %+v", e)
+			}
+			if e.PID != pid || e.FunctionID != "Fn" || e.WorkerID != b.workerID {
+				t.Fatalf("got %+v", e)
+			}
+		case <-time.After(200 * time.Millisecond):
+			if pid != 0 {
+				t.Fatal("no FunctionWorkerStartedEvent")
+			}
+		}
+		bus.Unsubscribe(started)
+	}
 }

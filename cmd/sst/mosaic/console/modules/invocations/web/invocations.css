@@ -1,0 +1,26 @@
+.logs .detail .pl { border-bottom: 1px solid var(--line); }
+.logs .detail .pl:last-child { border-bottom: 0; }
+.logs .detail .pl.none, .logs .detail summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+}
+.logs .detail summary { cursor: pointer; list-style: none; }
+.logs .detail summary::-webkit-details-marker { display: none; }
+.logs .detail summary::before { content: "▸"; color: var(--faint); width: 10px; }
+.logs .detail details[open] summary::before { content: "▾"; }
+.logs .detail .pl-label { font-weight: 600; font-size: 12px; }
+.logs .detail .grow { flex: 1; }
+.logs .detail button { padding: 0 8px; font-size: 12px; }
+.logs .detail .pl-text {
+  margin: 0;
+  padding: 8px 12px 10px 30px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.logs .detail .pl-wait { padding: 6px 10px; }

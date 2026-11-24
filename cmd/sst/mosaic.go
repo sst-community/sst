@@ -18,6 +18,8 @@ import (
 	"github.com/sst/sst/v3/cmd/sst/cli"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/cloudflare"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/console"
+	consolemodules "github.com/sst/sst/v3/cmd/sst/mosaic/console/modules"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/dev"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/monoplexer"
@@ -39,6 +41,10 @@ import (
 func CmdMosaic(c *cli.Cli) error {
 	cwd, _ := os.Getwd()
 	var wg errgroup.Group
+
+	if err := console.Misplaced(c.String("console"), c.Arguments(), consolemodules.All); err != nil {
+		return util.NewReadableError(nil, err.Error())
+	}
 
 	child := os.Getenv("SST_CHILD")
 	// spawning child process
@@ -266,6 +272,24 @@ func CmdMosaic(c *cli.Cli) error {
 	}
 
 	evts := bus.Subscribe(&project.CompleteEvent{})
+
+	// the local web console, on a listener of its own, before the deployer
+	// starts, so it sees the first deploy. Nothing of it starts when it's off.
+	web, err := console.Configured(c.Context, c.String("console"), os.Getenv("SST_CONSOLE"), console.Config{
+		Available: consolemodules.All,
+		App:       p.Name(),
+		Stage:     p.Stage(),
+		Version:   version,
+	})
+	if err != nil {
+		return util.NewReadableError(nil, err.Error())
+	}
+	if web != nil {
+		wg.Go(func() error {
+			web.Serve(c.Context)
+			return nil
+		})
+	}
 
 	wg.Go(func() error {
 		defer c.Cancel()

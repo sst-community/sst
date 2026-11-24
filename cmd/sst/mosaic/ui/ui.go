@@ -19,6 +19,7 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/common/resource"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/aws"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/cloudflare"
+	"github.com/sst/sst/v3/cmd/sst/mosaic/console"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/socket"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/ui/common"
@@ -61,8 +62,10 @@ type UI struct {
 	hasBlank   bool
 	hasHeader  bool
 	hasUpdate  bool
-	options    *Options
-	log        *os.File
+	// the local web console's link, once it listens
+	console string
+	options *Options
+	log     *os.File
 }
 
 type Options struct {
@@ -285,6 +288,13 @@ func (u *UI) Event(unknown interface{}) {
 
 	case *socket.WarningEvent:
 		u.printEvent(TEXT_WARNING, "Warning", evt.Message)
+
+	case *console.StartedEvent:
+		u.console = evt.URL
+		// the header has it, once it's printed
+		if u.hasHeader {
+			u.printEvent(TEXT_INFO, "Console", evt.URL)
+		}
 
 	case *project.StackCommandEvent:
 		u.reset()
@@ -810,6 +820,12 @@ func (u *UI) header(version, app, stage string) {
 		TEXT_NORMAL_BOLD.Render(fmt.Sprintf("   %-12s", "Stage:")),
 		TEXT_GRAY.Render(stage),
 	)
+	if u.console != "" {
+		u.println(
+			TEXT_NORMAL_BOLD.Render(fmt.Sprintf("   %-12s", "Console:")),
+			TEXT_GRAY.Render(u.console),
+		)
+	}
 
 	u.blank()
 	u.hasHeader = true

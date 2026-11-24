@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sst/sst/v3/cmd/sst/mosaic/console"
 	"github.com/sst/sst/v3/cmd/sst/mosaic/deployer"
 	"github.com/sst/sst/v3/internal/util"
 	"github.com/sst/sst/v3/pkg/bus"
@@ -37,13 +38,16 @@ type Dev struct {
 
 	mu       sync.Mutex
 	complete *project.CompleteEvent
+	// console is the local web console's link, once it listens, which a UI
+	// that connects after it's published still prints
+	console *console.StartedEvent
 }
 
 // Register registers sst dev's routes on the server. It's called before the
 // server serves, so the first request finds them: the UI asks for the events
 // as soon as the server is ready. Run keeps what they answer with.
 func Register(p project.Program, server *server.Server) *Dev {
-	d := &Dev{program: p, completes: bus.Subscribe(&project.CompleteEvent{})}
+	d := &Dev{program: p, completes: bus.Subscribe(&project.CompleteEvent{}, &console.StartedEvent{})}
 	d.routes(server)
 	return d
 }
@@ -60,7 +64,12 @@ func (d *Dev) Run(ctx context.Context) error {
 			return nil
 		case evt := <-d.completes:
 			d.mu.Lock()
-			d.complete = evt.(*project.CompleteEvent)
+			switch evt := evt.(type) {
+			case *project.CompleteEvent:
+				d.complete = evt
+			case *console.StartedEvent:
+				d.console = evt
+			}
 			d.mu.Unlock()
 		}
 	}
@@ -71,6 +80,13 @@ func (d *Dev) last() *project.CompleteEvent {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.complete
+}
+
+// consoleLink is the local web console's link, once it listens
+func (d *Dev) consoleLink() *console.StartedEvent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.console
 }
 
 func (d *Dev) routes(server *server.Server) {
@@ -86,6 +102,11 @@ func (d *Dev) routes(server *server.Server) {
 		ctx := r.Context()
 		events := bus.SubscribeAll()
 		defer bus.Unsubscribe(events)
+		if started := d.consoleLink(); started != nil {
+			go func() {
+				events <- started
+			}()
+		}
 		if complete := d.last(); complete != nil {
 			go func() {
 				events <- complete
