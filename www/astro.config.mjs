@@ -52,6 +52,7 @@ const sidebar = [
     items: [
       "docs/live",
       "docs/state",
+      "docs/eventflow",
       "docs/linking",
       "docs/console",
       "docs/providers",
@@ -69,6 +70,7 @@ const sidebar = [
       { label: "IAM Credentials", slug: "docs/iam-credentials" },
       { label: "Migrate From v2", slug: "docs/migrate-from-v2" },
       { label: "Migrate From v3", slug: "docs/migrate-from-v3" },
+      { label: "Migrate From Inngest", slug: "docs/migrate-from-inngest" },
       { label: "Custom Domains", slug: "docs/custom-domains" },
       { label: "Custom Runtimes", slug: "docs/custom-runtimes" },
       { label: "Import Resources", slug: "docs/import-resources" },
@@ -116,6 +118,7 @@ const sidebar = [
           "docs/component/aws/microvm",
           "docs/component/aws/dynamo",
           "docs/component/aws/workflow",
+          "docs/component/aws/eventflow",
           "docs/component/aws/realtime",
           "docs/component/aws/sns-topic",
           "docs/component/aws/function",

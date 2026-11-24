@@ -54,6 +54,11 @@ func New(ctx context.Context, cancel context.CancelFunc, root *Command, version 
 			}
 		}
 		if cmd == nil {
+			// a command with subcommands that takes args of its own, like
+			// sst eventflow [name], is given what isn't a subcommand
+			if len(last.Args) > 0 {
+				positionals = flag.Args()[i:]
+			}
 			break
 		}
 		cmds = append(cmds, *cmd)

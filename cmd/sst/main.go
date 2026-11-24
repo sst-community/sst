@@ -1088,6 +1088,7 @@ var root = &cli.Command{
 		CmdState,
 		CmdCert,
 		CmdTunnel,
+		CmdEventFlow,
 		CmdDiagnostic,
 	},
 }

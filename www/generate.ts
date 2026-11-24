@@ -882,6 +882,7 @@ async function generateComponentDoc(
           ...(["microvm", "realtime", "task", "workflow"].includes(sdk?.name!)
             ? renderAbout(useModuleComment(sdk!))
             : []),
+          ...(sdk?.name === "aws/eventflow" ? renderEventFlowSdk(sdk) : []),
           ...(sdk
             ? renderFunctions(
                 sdk,
@@ -2227,6 +2228,26 @@ function isModuleComponent(module: TypeDoc.DeclarationReflection) {
     !sourceFile.endsWith("/cloudflare/binding.ts")
   );
 }
+// The EventFlow SDK is a client class, like Inngest's: render the class, its
+// methods as `flow.<method>`, and the runs API as `flow.runs.<method>`.
+function renderEventFlowSdk(module: TypeDoc.DeclarationReflection) {
+  const classes = module.getChildrenByKind(TypeDoc.ReflectionKind.Class);
+  const client = classes.find((c) => c.name === "EventFlow");
+  const runs = classes.find((c) => c.name === "Runs");
+  const admin = classes.find((c) => c.name === "Admin");
+  const methods = (c?: TypeDoc.DeclarationReflection) =>
+    (c?.getChildrenByKind(TypeDoc.ReflectionKind.Method) ?? []).filter(
+      (m) =>
+        !m.flags.isPrivate &&
+        !m.signatures?.[0].comment?.modifierTags.has("@internal")
+    );
+  return [
+    ...(client?.comment ? renderAbout(client.comment) : []),
+    ...renderFunctions(module, methods(client), { prefix: "flow" }),
+    ...renderFunctions(module, methods(runs), { prefix: "flow.runs" }),
+    ...renderFunctions(module, methods(admin), { prefix: "flow.admin" }),
+  ];
+}
 function useModuleComment(module: TypeDoc.DeclarationReflection) {
   const comment = module.comment;
   if (!comment) throw new Error("Class comment not found");
@@ -2527,6 +2548,7 @@ async function buildComponents() {
       "../platform/src/components/aws/dynamo-lambda-subscriber.ts",
       "../platform/src/components/aws/efs.ts",
       "../platform/src/components/aws/email.ts",
+      "../platform/src/components/aws/eventflow.ts",
       "../platform/src/components/aws/function.ts",
       "../platform/src/components/aws/web-function.ts",
       "../platform/src/components/aws/mysql.ts",
@@ -2653,6 +2675,7 @@ async function buildSdk() {
       "../sdk/js/src/aws/realtime.ts",
       "../sdk/js/src/aws/task.ts",
       "../sdk/js/src/aws/workflow.ts",
+      "../sdk/js/src/aws/eventflow.ts",
       "../sdk/js/src/vector/index.ts",
     ],
     tsconfig: "../sdk/js/tsconfig.json",

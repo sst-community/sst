@@ -1,0 +1,14 @@
+{
+  "name": "aws-eventflow-use-cases",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "go run ../../cmd/sst dev",
+    "deploy": "go run ../../cmd/sst deploy",
+    "remove": "go run ../../cmd/sst remove"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.155",
+    "sst": "file:../../sdk/js"
+  }
+}

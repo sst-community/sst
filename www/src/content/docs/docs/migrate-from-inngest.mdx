@@ -1,0 +1,276 @@
+---
+title: Migrate from Inngest
+description: Move Inngest functions to EventFlow, in your AWS account.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+[EventFlow](/docs/eventflow) has an API shaped like Inngest's TypeScript SDK, so most functions move by changing the client and a few options. It isn't a drop-in replacement, though. The engine is AWS Lambda durable functions, and some behaviour differs. This guide lists what maps, what's different, what isn't supported, and how to cut over without running anything twice.
+
+The examples follow **`inngest` v4.27.0**, the latest when this was written. If you're on v3, first read Inngest's [v3 to v4 guide](https://www.inngest.com/docs/reference/typescript/v4/migrations/v3-to-v4): triggers moved into the options, and `EventSchemas` became `eventType()`. EventFlow follows v4.
+
+:::caution
+A run in Inngest can't be moved to EventFlow, or back. Their checkpoints are different, so runs in flight finish where they started. The [cutover](#cut-over) below is built around that.
+:::
+
+---
+
+## Side by side
+
+<Tabs>
+  <TabItem label="Inngest">
+```ts title="src/inngest.ts"
+import { Inngest, eventType, NonRetriableError } from "inngest";
+import { serve } from "inngest/lambda";
+import { z } from "zod";
+
+export const inngest = new Inngest({ id: "shop" });
+
+export const orderPlaced = eventType("order/placed", {
+  schema: z.object({ orderId: z.string(), tenantId: z.string() }),
+});
+
+const processOrder = inngest.createFunction(
+  {
+    id: "process-order",
+    triggers: { event: orderPlaced },
+    retries: 5,
+    concurrency: [{ limit: 5, key: "event.data.tenantId" }, { limit: 50 }],
+  },
+  async ({ event, step }) => {
+    const charge = await step.run("charge", () => charge(event.data));
+    const approval = await step.waitForEvent("approval", {
+      event: "order/approved",
+      timeout: "1h",
+      match: "data.orderId",
+    });
+    if (!approval) throw new NonRetriableError("Not approved");
+    await step.sleep("cool-off", "10m");
+    return charge;
+  },
+);
+
+export const handler = serve({ client: inngest, functions: [processOrder] });
+```
+  </TabItem>
+  <TabItem label="EventFlow">
+```ts title="src/flow.ts"
+import { EventFlow, eventType, NonRetriableError, serve } from "sst/aws/eventflow";
+import { z } from "zod";
+
+export const inngest = new EventFlow({ id: "shop" });
+
+export const orderPlaced = eventType("order/placed", {
+  schema: z.object({ orderId: z.string(), tenantId: z.string() }),
+});
+
+const processOrder = inngest.createFunction(
+  {
+    id: "process-order",
+    triggers: { event: orderPlaced },
+    retries: 5,
+    concurrency: [{ limit: 5, key: "event.data.tenantId" }, { limit: 50 }],
+  },
+  async ({ event, step }) => {
+    const charge = await step.run("charge", () => charge(event.data));
+    const approval = await step.waitForEvent("approval", {
+      event: "order/approved",
+      timeout: "1h",
+      match: "data.orderId",
+    });
+    if (!approval) throw new NonRetriableError("Not approved");
+    await step.sleep("cool-off", "10m");
+    return charge;
+  },
+);
+
+export const handler = serve({ client: inngest, functions: [processOrder] });
+```
+  </TabItem>
+  <TabItem label="sst.config.ts">
+```ts
+// Before: a function URL that Inngest calls.
+// new sst.aws.Function("Inngest", {
+//   handler: "src/inngest.handler",
+//   url: true,
+//   environment: { INNGEST_SIGNING_KEY: ..., INNGEST_EVENT_KEY: ... },
+// });
+
+// After: the engine, in your account. No keys, no URL.
+const flow = new sst.aws.EventFlow("Flow", {
+  handler: "src/flow.handler",
+});
+
+new sst.aws.Function("Api", {
+  handler: "src/api.handler",
+  link: [flow],
+});
+```
+  </TabItem>
+</Tabs>
+
+The function bodies are the same. What changed: the import, `new Inngest` to `new EventFlow`, `serve` comes from `sst/aws/eventflow`, and the infrastructure is an `EventFlow` instead of an endpoint that Inngest calls. Send the events with a `tenant`, so fair queues and fair shares know who they belong to:
+
+```ts
+await inngest.send(orderPlaced.create({ orderId, tenantId }, { tenant: tenantId }));
+```
+
+The [AWS EventFlow tenants example](/docs/examples/#aws-eventflow-tenants) has an Inngest app and its EventFlow port side by side, in `inngest/` and `src/`.
+
+---
+
+## How the concepts map
+
+### Function definition and registration
+
+| | Inngest | EventFlow |
+|---|---|---|
+| Handler and triggers | `createFunction({ id, triggers }, handler)` | The same |
+| Where it runs | Your endpoint, called by Inngest | The EventFlow's worker, one durable Lambda function for all of them |
+| Registration | `serve()`, then a sync from Inngest | `serve()`, then `sst deploy`. There's no sync |
+| Infrastructure options | In Inngest's cloud | On the [`EventFlow`](/docs/component/aws/eventflow) component: memory, timeouts, links, VPC. Functions that need other ones go in a second EventFlow |
+| Keys | Event and signing keys | None. Calls are signed with IAM. Linking grants sending only; `flow.admin` grants the admin API |
+
+### Event sending
+
+| | Inngest | EventFlow |
+|---|---|---|
+| Envelope | `name`, `data`, `id`, `ts` | The same, plus `tenant`. `user` throws, as it was removed in v4 |
+| Types | `eventType()`, `staticSchema()` | The same, with any [Standard Schema](https://standardschema.dev) |
+| IDs | Optional | Optional. A [ULID](https://github.com/ulid/spec) is made when missing |
+| Duplicate IDs | Stored, and trigger nothing, for 24 hours | Trigger nothing, for 24 hours, per tenant. They aren't stored |
+| Fan-out | Every function with a matching trigger | The same. Wildcard triggers throw |
+| Size | 256 KB, or 3 MB on paid plans | 256 KB |
+| Returns | `{ ids }` | `{ ids }` |
+
+### Named steps and retries
+
+| | Inngest | EventFlow |
+|---|---|---|
+| Checkpoint | Each `step.run` | Each `step.run`, as a durable step |
+| Replay | From the top, steps memoized | The same |
+| Retries | `retries`, per step, 4 by default | The same, per step, 4 by default, 0 to 20 |
+| Backoff | Exponential with jitter | Exponential from 2 s, doubling, 50% jitter, at most 10 minutes |
+| Errors outside a step | The function is retried | The run fails, and `onFailure` runs |
+| `NonRetriableError`, `RetryAfterError` | Yes | Yes, the same signatures |
+| Repeated step IDs | Suffixed `:1`, `:2` | The same |
+| `attempt` | In the context | Throws when read. `maxAttempts` is there |
+| Side effects | At least once | At least once. Use `event.id` for idempotency keys |
+
+### Sleep and wait-for-event
+
+| | Inngest | EventFlow |
+|---|---|---|
+| `sleep`, `sleepUntil` | Up to a year, or the plan's run length | Up to the run's `timeout.execution`, 366 days at most |
+| `waitForEvent` returns | The event, or `null` on timeout | The same |
+| Correlation | `match`, or a CEL `if` | `match`, or an `if` with paths, literals, comparisons and `&&` |
+| Events sent before the wait | Not matched | Not matched |
+| An event as the wait registers | — | Matched. [How](/docs/eventflow#waiting-for-events) |
+| Tenants | — | Only events of the run's tenant match |
+| Resume | One event | One event. Many waits can match it |
+
+### Tenant concurrency
+
+| | Inngest | EventFlow |
+|---|---|---|
+| Counted | Steps running | Steps running |
+| Scope | `fn`, `env`, `account`, with a key | The same. `env` and `account` mean the EventFlow |
+| Limits per function | 2 | 2 |
+| Sleeps, waits, invokes | Release the slot | Release the lease |
+| Retries | — | Each attempt takes a new lease |
+| Fairness | Best-effort FIFO; keyed queues need Enterprise | Steps wait in line; a freed lease goes to the tenant with the fewest leases, then the oldest. Best effort |
+| After a crash | — | The lease expires after the invocation timeout |
+
+### Throttling and rate limiting
+
+| | Inngest | EventFlow |
+|---|---|---|
+| `throttle` | Run starts, queued | Run starts, held in the queue and started when due |
+| `burst` | Runs in a burst | The same, 1 by default |
+| `rateLimit` | Run starts, skipped | The same |
+| `idempotency` | One run per key, 24 hours | The same |
+| `debounce`, `batchEvents`, `priority`, `singleton` | Yes | Throw. Not supported yet |
+
+### Run recovery
+
+| | Inngest | EventFlow |
+|---|---|---|
+| Find a run | Dashboard, or API | `flow.runs.get(runId)`. The ID comes from the function and event IDs |
+| Failed step | Dashboard | `run.failedStep`, and `run.steps` |
+| Retry a failed run after a fix | Replay, from the dashboard, where finished steps are reused | `flow.runs.retry(runId)`, or `sst eventflow retry`: a new run on the latest deploy, where the steps that succeeded return their saved results |
+| Run every step again | — | `flow.runs.replay(runId)`, or `sst eventflow replay` |
+| Bulk | Bulk replay | `flow.runs.retryAll({ function, status, from, to })`, or `sst eventflow retry --failed` |
+| Events that couldn't be handled | — | The dead-letter queue, for 14 days: `sst eventflow dead-letters --redrive` |
+| Version | Replays use the latest code | Replays use the latest deployed version. Runs in flight keep theirs |
+| Cancel | `cancelOn`, or the dashboard | `cancelOn`, or `flow.runs.cancel(runId)` |
+| Dashboard | Inngest's | The `sst eventflow` CLI. Its JSON admin API, `flow.admin`, is there to build a page on |
+
+---
+
+## Compatibility
+
+Every option of `createFunction()` in v4.27.0, and the step tools.
+
+| | Status | Instead |
+|---|---|---|
+| `id`, `name`, `description` | Supported | |
+| `triggers`: event, `if`, cron with `TZ=` | Supported | |
+| cron `jitter` | Throws | Stagger the minute |
+| wildcard event names | Throws | List each event |
+| `retries` | Supported | |
+| `concurrency` | Supported | |
+| `throttle`, `rateLimit`, `idempotency` | Supported | |
+| `onFailure` | Supported | |
+| `checkpointing`, `optimizeParallelism` | Accepted, no effect | Steps are always checkpointed |
+| `debounce` | Throws | A `step.sleep` then a check of the latest state |
+| `batchEvents` | Throws | Send one event with many items |
+| `priority` | Throws | A second function, with its own limits |
+| `cancelOn` | Supported: `event`, `match`, `if`, `timeout` | |
+| `timeouts` | Throws | `timeout.execution` on the component |
+| `singleton` | Throws | `concurrency: { limit: 1, key }` queues instead of skipping |
+| `middleware` | Throws | Wrap the handler |
+| `step.run`, `sleep`, `sleepUntil`, `waitForEvent`, `invoke`, `sendEvent` | Supported | |
+| `group.parallel` | Runs the function | `Promise.all` of steps |
+| `step.fetch`, `step.ai`, `step.waitForSignal`, `step.sendSignal`, `step.realtime` | Throws | A `step.run` with the call |
+| `step.invoke` by function ID | Throws | Pass the function, as v4 does |
+| `ctx.attempt`, `ctx.defer`, `ctx.sessions` | Throw when read | |
+| `ctx.maxAttempts` | Supported | |
+| `Inngest({ eventKey, signingKey, signingKeyFallback, isDev, env, appVersion, baseUrl, checkpointing, optimizeParallelism })` | Accepted, no effect | |
+| `Inngest({ middleware, schemas, logger, fetch, endpointAdapter, sessionPropagation, aiMetadata })` | Throws | `eventType()` for schemas; the context's `logger` |
+
+---
+
+## Cut over
+
+Move one event name at a time. The rule that keeps it safe: **each event goes to one system**, so nothing runs twice, and runs in flight finish where they started.
+
+1. **Deploy both.** Add the EventFlow next to your Inngest app, with the ported functions. Nothing sends to it yet.
+
+2. **Keep the IDs.** Send each event with the same `id` you'd give Inngest, and make side effects idempotent on `event.id`, like a payment's idempotency key. Then if an event ever reaches both systems, the side effect happens once. The run IDs in EventFlow come from the event IDs, so logs and support tickets can use the same job ID.
+
+3. **Route new events.** Where you send an event, choose the system with a flag per event name:
+
+   ```ts
+   const target = (await flags.get(`eventflow:${name}`)) ? flow : inngest;
+   await target.send({ name, id, data, tenant });
+   ```
+
+   Turn on one event name. New runs start in EventFlow. Runs in Inngest drain.
+
+4. **Keep sending the waits.** An Inngest run that's waiting for an event needs that event in Inngest until it finishes. For an event that only resumes waits, and triggers no function, send it to both while Inngest drains: a wait resumes once in each, and only one has a run waiting. For an event that both triggers a function and resumes waits, port the waiting function first.
+
+5. **Move crons.** Remove the cron trigger from the Inngest function and deploy, then deploy it in EventFlow. A run that both start in the same minute is made safe by idempotent side effects.
+
+6. **Drain.** When Inngest has no runs left for the event, remove its function there.
+
+**Roll back** by turning the flag off. New events go to Inngest again. Runs in EventFlow finish, or stop them with `flow.runs.cancel()`. Their checkpoints can't be moved to Inngest either.
+
+---
+
+## What's different underneath
+
+- **A CLI, not a dashboard.** Look at the queue, leases, waits and runs with `sst eventflow`, and retry or replay from it. Build a page on `flow.admin` if you want one.
+- **Tenants are explicit.** Send each event with a `tenant`, from your own authentication. Inngest has no tenant field: its keys are expressions on the data. Key flow control on `event.tenant`.
+- **Costs are in your AWS bill.** See [Cost](/docs/eventflow#cost).
+- **Limits are AWS's.** One invocation is at most 15 minutes, a run at most 366 days, and 30,000 operations. See [Limits](/docs/eventflow#limits).
+- **Development** uses `sst dev`, not Inngest's dev server. Your router and worker run locally against the queue and table in AWS. See [Development](/docs/eventflow#development).
