@@ -18,7 +18,7 @@ export const processOrder = flow.createFunction(
         // The payment API charges once per key, so a step that runs again, after a
         // crash or a retry, doesn't charge twice. The key is the same in every
         // attempt, and in every retry and replay of the run.
-        return await charge({ amount: event.data.amount, idempotencyKey: idempotencyKey("charge-card") });
+        return await charge({ amount: event.data.amount, idempotencyKey: idempotencyKey() });
       } catch (error) {
         // A declined card won't get better on its own: stop retrying.
         if (error instanceof CardDeclined) throw new NonRetriableError(error.message);

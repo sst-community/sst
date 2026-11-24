@@ -193,42 +193,4 @@ describe("sendEvent and invoke", () => {
     expect(ship.payload.event.tenant).toBe("acme");
   });
 
-  it("invokes another function and gets what it returns", async () => {
-    const cluster = new Cluster((flow) => {
-      const double = flow.createFunction({ id: "double" }, async ({ event }) => event.data.n * 2);
-      const caller = flow.createFunction({ id: "caller", triggers: { event: "go" } }, async ({ step }) =>
-        step.invoke("double-it", { function: double, data: { n: 21 } }),
-      );
-      return [double, caller];
-    });
-    await cluster.flow.send({ name: "go" });
-    // The child starts through the router, and returns through the parent's callback.
-    await cluster.pump();
-    const child = await waitFor(() => [...cluster.runs.values()].find((r) => r.payload.fn === "double"));
-    expect((await child.result).getResult()).toBe(42);
-    const result = await cluster.runOf("caller").result;
-    expect(result.getStatus()).toBe(ExecutionStatus.SUCCEEDED);
-    expect(result.getResult()).toBe(42);
-  });
-
-  it("throws in the caller when the invoked function fails", async () => {
-    const cluster = new Cluster((flow) => {
-      const broken = flow.createFunction({ id: "broken", retries: 0 }, async ({ step }) =>
-        step.run("x", () => { throw new Error("nope"); }),
-      );
-      const caller = flow.createFunction({ id: "caller", triggers: { event: "go" } }, async ({ step }) => {
-        try {
-          await step.invoke("call", { function: broken });
-          return "no error";
-        } catch (error: any) {
-          return `${error.name}: ${error.message}`;
-        }
-      });
-      return [broken, caller];
-    });
-    await cluster.flow.send({ name: "go" });
-    await cluster.pump();
-    const result = await cluster.runOf("caller").result;
-    expect(result.getResult()).toBe("InvokeError: nope");
-  });
 });

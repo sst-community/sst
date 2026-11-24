@@ -1,0 +1,178 @@
+import { describe, expect, it } from "bun:test";
+import { DynamoStore, tenantKey, type LeaseWaiter, type Limit, type Store } from "../../src/aws/eventflow/store.ts";
+import { MemoryStore } from "./memory-store.ts";
+
+// The lease rules, held to by both stores: the one in memory that the other tests
+// use, and the one on DynamoDB that runs in AWS. The DynamoDB one runs against a real
+// table when EVENTFLOW_TEST_TABLE names one, with a `pk` and `sk` string key:
+//
+//   EVENTFLOW_TEST_TABLE=my-table AWS_REGION=ca-central-1 bun test test/eventflow/store-contract.test.ts
+
+const table = process.env.EVENTFLOW_TEST_TABLE;
+const stores: [string, () => Store][] = [["memory", () => new MemoryStore()]];
+if (table) stores.push(["dynamodb", () => new DynamoStore(table)]);
+
+let n = 0;
+const run = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+const limit = (cap: number): Limit => ({ item: `C#contract-${run}-${n++}`, limit: cap });
+
+const waiter = (leaseId: string, tenant: string, at: number, limits: Limit[]): LeaseWaiter => ({
+  leaseId,
+  tenant,
+  limits,
+  callbackId: `cb-${leaseId}`,
+  runId: `run-${leaseId}`,
+  at,
+  expiresAt: Date.now() + 300_000,
+});
+
+async function state(store: Store, l: Limit) {
+  if (store instanceof MemoryStore) {
+    const item = store.limits.get(l.item);
+    return { active: store.active(l.item), queued: store.queued(l.item), tenants: { ...(item?.tenants ?? {}) } };
+  }
+  const item = await (store as any).readLimit(l.item);
+  const now = Date.now();
+  return {
+    active: Object.values<any>(item?.leases ?? {}).filter((v) => v.expires > now).length,
+    queued: item?.queued ?? 0,
+    tenants: { ...(item?.tenants ?? {}) },
+  };
+}
+
+const collect = (into: string[]) => async (w: LeaseWaiter) => (into.push(w.leaseId), true);
+
+for (const [name, make] of stores) {
+  describe(`${name} store`, () => {
+    it("takes every limit at once, or none", async () => {
+      const store = make();
+      const [t, s] = [limit(2), limit(1)];
+      expect(await store.acquire([t, s], "l1", "a", 60_000)).toBe("granted");
+      expect(await store.acquire([t, s], "l2", "a", 60_000)).toBe("full");
+      expect((await state(store, t)).active).toBe(1);
+      expect(await store.acquire([t, s], "l1", "a", 60_000)).toBe("granted");
+    });
+
+    it("grants a limit to exactly as many steps as it allows, when they ask at once", async () => {
+      const store = make();
+      const l = limit(5);
+      const results = await Promise.all(Array.from({ length: 25 }, (_, i) => store.acquire([l], `p${i}`, `t${i % 3}`, 60_000)));
+      expect(results.filter((r) => r === "granted")).toHaveLength(5);
+      expect((await state(store, l)).active).toBe(5);
+    });
+
+    it("can't deadlock two steps that need two limits in opposite orders", async () => {
+      const store = make();
+      const [A, B] = [limit(1), limit(1)];
+      expect(await store.acquire([A, B], "ab", "x", 60_000)).toBe("granted");
+      expect(await store.acquire([B, A], "ba", "x", 60_000)).toBe("full");
+      await store.enqueue(waiter("ba", "x", 1, [B, A]));
+      await store.release([A, B], "ab", "x");
+      const woken: string[] = [];
+      for (const l of [A, B]) await store.dispatch(l, collect(woken));
+      expect(woken).toEqual(["ba"]);
+      expect((await state(store, A)).active + (await state(store, B)).active).toBe(2);
+    });
+
+    it("doesn't let a newcomer jump the line", async () => {
+      const store = make();
+      const l = limit(1);
+      await store.acquire([l], "held", "a", 60_000);
+      await store.enqueue(waiter("next", "a", 1, [l]));
+      await store.release([l], "held", "a");
+      expect(await store.acquire([l], "newcomer", "b", 60_000)).toBe("full");
+      const woken: string[] = [];
+      await store.dispatch(l, collect(woken));
+      expect(woken).toEqual(["next"]);
+    });
+
+    it("wakes the tenant with the fewest leases first, behind a long line of another", async () => {
+      const store = make();
+      const l = limit(2);
+      await store.acquire([l], "a-held", "a", 60_000);
+      await store.acquire([l], "a-still", "a", 60_000);
+      for (let i = 0; i < 40; i++) await store.enqueue(waiter(`a${i}`, "a", i, [l]));
+      await store.enqueue(waiter("b0", "b", 1000, [l]));
+      await store.release([l], "a-held", "a");
+      const woken: string[] = [];
+      await store.dispatch(l, collect(woken));
+      expect(woken).toEqual(["b0"]);
+    });
+
+    it("gives the leases of a step that's gone to the next one", async () => {
+      const store = make();
+      const l = limit(1);
+      await store.acquire([l], "held", "a", 60_000);
+      await store.enqueue(waiter("gone", "a", 1, [l]));
+      await store.enqueue(waiter("next", "b", 2, [l]));
+      await store.release([l], "held", "a");
+      const woken: string[] = [];
+      await store.dispatch(l, async (w) => (w.leaseId === "gone" ? false : (woken.push(w.leaseId), true)));
+      expect(woken).toEqual(["next"]);
+      expect((await state(store, l)).active).toBe(1);
+    });
+
+    it("won't renew a lease that expired, and gives it to the next step", async () => {
+      const store = make();
+      const l = limit(1);
+      expect(await store.acquire([l], "crashed", "a", 1000)).toBe("granted");
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(await store.renew([l], "crashed", 60_000)).toBe(false);
+      expect(await store.acquire([l], "next", "a", 60_000)).toBe("granted");
+    });
+
+    it("renews a lease that's held, so it isn't taken back", async () => {
+      const store = make();
+      const l = limit(1);
+      expect(await store.acquire([l], "slow", "a", 1500)).toBe("granted");
+      await new Promise((r) => setTimeout(r, 700));
+      expect(await store.renew([l], "slow", 60_000)).toBe(true);
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(await store.acquire([l], "other", "a", 60_000)).toBe("full");
+    });
+
+    it("counts a step that asks again once, and keeps its place", async () => {
+      const store = make();
+      const l = limit(1);
+      await store.acquire([l], "held", "a", 60_000);
+      await store.enqueue({ ...waiter("first", "b", 1, [l]), callbackId: "old" });
+      await store.enqueue(waiter("second", "c", 2, [l]));
+      await store.enqueue({ ...waiter("first", "b", 1, [l]), callbackId: "new" });
+      expect((await state(store, l)).queued).toBe(2);
+      await store.release([l], "held", "a");
+      const callbacks: string[] = [];
+      await store.dispatch(l, async (w) => (callbacks.push(w.callbackId), true));
+      expect(callbacks).toEqual(["new"]);
+    });
+
+    it("keeps no tenant with no leases", async () => {
+      const store = make();
+      const l = limit(100);
+      for (let i = 0; i < 10; i++) {
+        await store.acquire([l], `l${i}`, `tenant-${i}`, 60_000);
+        await store.release([l], `l${i}`, `tenant-${i}`);
+      }
+      expect(Object.keys((await state(store, l)).tenants)).toHaveLength(0);
+    });
+
+    if (name === "dynamodb")
+      it("heals a count of steps in line that has no steps behind it", async () => {
+        // As when entries expired, or an older version left its count.
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.acquire([l], "held", "a", 60_000);
+        await store.release([l], "held", "a");
+        const ghosts = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [tenantKey(`ghost-${i}`), { N: "3" }]));
+        await (store as any).db("UpdateItem", {
+          Key: { pk: { S: l.item }, sk: { S: "-" } },
+          UpdateExpression: "SET queued = :q, waiting = :w",
+          ExpressionAttributeValues: { ":q": { N: "75" }, ":w": { M: ghosts } },
+        });
+        expect(await store.acquire([l], "blocked", "real", 60_000)).toBe("full");
+        await store.enqueue(waiter("real", "real", Date.now(), [l]));
+        const woken: string[] = [];
+        await store.dispatch(l, collect(woken));
+        expect(woken).toEqual(["real"]);
+      }, 60_000);
+  });
+}

@@ -155,7 +155,7 @@ The [AWS EventFlow tenants example](/docs/examples/#aws-eventflow-tenants) has a
 | `NonRetriableError`, `RetryAfterError` | Yes | Yes, the same signatures |
 | Repeated step IDs | Suffixed `:1`, `:2` | The same |
 | `attempt` | In the context | Throws when read. `maxAttempts` is there |
-| Side effects | At least once | At least once. `idempotencyKey(stepId)` gives a key that holds through retries, replays and retries after a fix. `step.run({ id, atMostOnce: true })` for calls without one |
+| Side effects | At least once | At least once. `idempotencyKey()`, called in a step, gives its key, which holds through retries, replays and retries after a fix. `step.run({ id, atMostOnce: true })` for calls without one |
 
 ### Sleep and wait-for-event
 

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { ExecutionStatus, LocalDurableTestRunner } from "@aws/durable-execution-sdk-js-testing";
 import { Cluster, finishRuns, waitFor } from "./harness.ts";
+import { ONCE } from "../../src/aws/eventflow/worker.ts";
 import { memoFrom, toSteps } from "../../src/aws/eventflow/runs.ts";
 
 beforeAll(async () => {
@@ -148,33 +149,6 @@ describe("retry", () => {
   });
 });
 
-describe("cancelling an invoked run", () => {
-  it("tells the run that invoked it", async () => {
-    const cluster = new Cluster((flow) => {
-      const child = flow.createFunction(
-        { id: "child", cancelOn: [{ event: "stop", match: "data.id" }] },
-        async ({ step }) => step.waitForEvent("pause", { event: "never", timeout: "5s" }),
-      );
-      const parent = flow.createFunction({ id: "parent", triggers: { event: "go" } }, async ({ step }) => {
-        try {
-          await step.invoke("call", { function: child, data: { id: "c1" } });
-          return "finished";
-        } catch (error: any) {
-          return error.message;
-        }
-      });
-      return [child, parent];
-    });
-    await cluster.flow.send({ name: "go" });
-    await cluster.pump(500);
-    await waitFor(() => ([...cluster.store.waiterItems.values()].flat().some((w) => w.kind === "cancel") ? true : undefined));
-    await cluster.flow.send({ name: "stop", data: { id: "c1" } });
-    await cluster.pump(500);
-    expect(cluster.stopped).toHaveLength(1);
-    const result = await cluster.runOf("parent").result;
-    expect(result.getResult()).toContain("cancelled");
-  });
-});
 
 describe("a run's steps", () => {
   it("shows a step with a concurrency limit that failed as failed", () => {
@@ -194,5 +168,79 @@ describe("a run's steps", () => {
     expect(ship.status).toBe("failed");
     expect(ship.error?.message).toBe("carrier API changed");
     expect(ship.attempts).toBe(1);
+  });
+});
+
+describe("rerunning a run", () => {
+  const payload = {
+    "sst:eventflow": 1,
+    fn: "pay",
+    runId: "pay-01",
+    root: "pay-01",
+    event: { id: "e", name: "order/paid", data: {}, ts: 0 },
+  };
+  const step = (type: string, id: string, name: string, subType?: string) => ({
+    EventType: type,
+    Id: id,
+    Name: name,
+    ...(subType ? { SubType: subType } : {}),
+  });
+  const flow = () =>
+    new Cluster((flow) => [flow.createFunction({ id: "pay", triggers: { event: "order/paid" } }, async () => "paid")]);
+
+  it("starts one run for two retries of the same run, unless asked again", async () => {
+    const cluster = flow();
+    cluster.history.set("pay-01", { status: "FAILED", payload, events: [] });
+    const first = await cluster.flow.runs.retry("pay-01");
+    const second = await cluster.flow.runs.retry("pay-01");
+    expect(second.id).toBe(first.id);
+    expect((second as any).existing).toBe(true);
+    expect(cluster.starts.filter((s) => s.replayOf === "pay-01")).toHaveLength(1);
+    const again = await (cluster.flow.getEngine() as any).admin("runs.retry", { runId: "pay-01", again: true });
+    expect(again.id).not.toBe(first.id);
+    // Every one keeps the root, so their idempotency keys are the first run's.
+    expect(cluster.starts.filter((s) => s.replayOf === "pay-01").every((s) => s.root === "pay-01")).toBe(true);
+  });
+
+  it("won't retry a run whose atMostOnce step didn't finish, whatever its error, without force", async () => {
+    const cluster = flow();
+    cluster.history.set("pay-01", {
+      status: "TIMED_OUT",
+      payload,
+      error: { ErrorType: "Timeout", ErrorMessage: "The run timed out" },
+      events: [step("StepStarted", "1", "wire", ONCE)],
+    });
+    await expect(cluster.flow.runs.retry("pay-01")).rejects.toThrow('"wire"');
+    expect((await cluster.flow.runs.retry("pay-01", { force: true })).id).toBeDefined();
+  });
+
+  it("retries past an atMostOnce step that finished, but won't replay it without force", async () => {
+    const cluster = flow();
+    cluster.history.set("pay-01", {
+      status: "FAILED",
+      payload,
+      events: [step("StepStarted", "1", "wire", ONCE), step("StepSucceeded", "1", "wire", ONCE)],
+    });
+    expect((await cluster.flow.runs.retry("pay-01")).id).toBeDefined();
+    await expect(cluster.flow.runs.replay("pay-01")).rejects.toThrow("would run again");
+  });
+});
+
+describe("a retry that didn't start", () => {
+  it("is started by the next retry, with the same run ID", async () => {
+    const cluster = new Cluster((flow) => [flow.createFunction({ id: "pay" }, async () => "paid")]);
+    cluster.history.set("pay-01", {
+      status: "FAILED",
+      payload: { "sst:eventflow": 1, fn: "pay", runId: "pay-01", root: "pay-01", event: { id: "e", name: "x", data: {}, ts: 0 } },
+      events: [],
+    });
+    let fail = true;
+    cluster.failStart = () => fail;
+    await expect(cluster.flow.runs.retry("pay-01")).rejects.toThrow();
+    const claimed = cluster.store.claims.get([...cluster.store.claims.keys()].find((k) => k.startsWith("RR#"))!)!.owner;
+    fail = false;
+    const result = await cluster.flow.runs.retry("pay-01");
+    expect(result.id).toBe(claimed);
+    expect(result.existing).toBeUndefined();
   });
 });

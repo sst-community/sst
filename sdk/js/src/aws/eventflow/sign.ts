@@ -1,4 +1,6 @@
 import { createHmac, timingSafeEqual } from "crypto";
+import type { AwsOptions } from "../client.js";
+import { ssm } from "./aws.js";
 
 // The router and the worker sign what they start, with a key only they have. The
 // worker runs nothing that isn't signed, and the router holds or starts nothing from
@@ -7,10 +9,31 @@ import { createHmac, timingSafeEqual } from "crypto";
 // callback.
 
 export const ENV_KEY = "SST_EVENTFLOW_KEY";
+/** The SSM parameter that holds the key, as a SecureString. */
+export const ENV_KEY_PARAM = "SST_EVENTFLOW_KEY_PARAM";
+
+let loaded: string | undefined;
+
+/**
+ * Load the key, once per container. It's in an SSM SecureString, not in the
+ * function's environment, which anyone who can read the function's configuration
+ * sees. A test, or `sst dev`, can set it in the environment instead.
+ */
+export async function loadKey(aws?: AwsOptions) {
+  if (loaded) return;
+  if (process.env[ENV_KEY]) {
+    loaded = process.env[ENV_KEY];
+    return;
+  }
+  const name = process.env[ENV_KEY_PARAM];
+  if (!name) return;
+  const result = await ssm<{ Parameter?: { Value?: string } }>("GetParameter", { Name: name, WithDecryption: true }, aws);
+  loaded = result.Parameter?.Value;
+}
 
 function secret() {
-  const value = process.env[ENV_KEY];
-  if (!value) throw new Error(`${ENV_KEY} isn't set. Is this running in an EventFlow's router or worker?`);
+  const value = loaded ?? process.env[ENV_KEY];
+  if (!value) throw new Error("The EventFlow's signing key isn't loaded. Is this running in its router or worker?");
   return value;
 }
 

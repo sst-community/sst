@@ -17,7 +17,7 @@ export class AwsError extends Error {
 }
 
 async function call<T>(
-  service: "sqs" | "dynamodb",
+  service: "sqs" | "dynamodb" | "ssm",
   target: string,
   action: string,
   body: unknown,
@@ -29,7 +29,7 @@ async function call<T>(
     {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-amz-json-1.0",
+        "Content-Type": service === "ssm" ? "application/x-amz-json-1.1" : "application/x-amz-json-1.0",
         "X-Amz-Target": `${target}.${action}`,
       },
       body: JSON.stringify(body),
@@ -52,6 +52,10 @@ async function call<T>(
 
 export function sqs<T = any>(action: string, body: unknown, aws?: AwsOptions) {
   return call<T>("sqs", "AmazonSQS", action, body, aws);
+}
+
+export function ssm<T = any>(action: string, body: unknown, aws?: AwsOptions) {
+  return call<T>("ssm", "AmazonSSM", action, body, aws);
 }
 
 export function dynamo<T = any>(action: string, body: unknown, aws?: AwsOptions) {

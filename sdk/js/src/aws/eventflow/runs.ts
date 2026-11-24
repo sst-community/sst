@@ -2,7 +2,11 @@ import { awsFetch } from "../client.js";
 import type { Engine } from "./engine.js";
 import { replayId } from "./ids.js";
 import type { RunPayload, WireEvent } from "./types.js";
-import { INTERRUPTED, type InvokeOutcome } from "./worker.js";
+import { key as keyOf } from "./ids.js";
+import { ONCE, type InvokeOutcome } from "./worker.js";
+
+/** How long a run's retry is remembered: as long as AWS keeps the run. */
+const RETENTION_MS = 90 * 86_400_000;
 
 // Runs, by their run ID, as the router's admin API serves them. A run is a durable
 // execution of the worker, and its ID is the execution's name, so it can be found
@@ -208,33 +212,69 @@ export async function cancelRun(engine: Engine, runId: string) {
  * deployed version. With `reuse`, the steps that succeeded return their saved
  * results instead of running again: the retry picks up at the step that failed.
  */
+/**
+ * The at-most-once steps of a run, from its history: the ones that started, and the
+ * ones of those that didn't finish. Their side effects may have happened, so running
+ * them again is only done on purpose.
+ */
+export function onceSteps(events: any[]) {
+  const started = new Map<string, string>();
+  const finished = new Set<string>();
+  for (const e of events) {
+    if (e.SubType !== ONCE || !e.Id) continue;
+    if (e.EventType === "StepStarted") started.set(e.Id, e.Name ?? e.Id);
+    if (e.EventType === "StepSucceeded") finished.add(e.Id);
+  }
+  return {
+    started: [...started.values()],
+    unfinished: [...started.entries()].filter(([id]) => !finished.has(id)).map(([, name]) => name),
+  };
+}
+
 export async function rerun(
   engine: Engine,
   runId: string,
   reuse: boolean,
-  force = false,
-): Promise<{ id: string; replayOf: string; reused: string[] }> {
+  options: { force?: boolean; again?: boolean } = {},
+): Promise<{ id: string; replayOf: string; reused: string[]; existing?: boolean }> {
   const found = await find(engine, runId);
   if (!found) throw new Error(`There's no run "${runId}".`);
   if (found.status === "RUNNING" || found.status === "PAUSED" || found.status === "PAUSING")
     throw new Error(`The run "${runId}" is still running. Cancel it first.`);
-  const [info, events] = await Promise.all([detail(engine, found.arn), reuse ? history(engine, found.arn) : Promise.resolve([])]);
-  // An at-most-once step that stopped part way may have done its side effect, like a
-  // payment. Running it again could do it twice, so that's only done on purpose.
-  const error = `${info.Error?.ErrorType ?? ""} ${info.Error?.ErrorMessage ?? ""}`;
-  if (!force && (error.includes(INTERRUPTED) || /interruption/i.test(error)))
-    throw new InterruptedRunError(
-      `A step of "${runId}" stopped part way, and may have done its side effect. Check it, then rerun with force.`,
-    );
+  const [info, events] = await Promise.all([detail(engine, found.arn), history(engine, found.arn)]);
   const payload = parse(info.InputPayload) as RunPayload | undefined;
   if (!payload?.fn) throw new Error(`The run "${runId}" isn't an EventFlow run.`);
   if (payload.parent) throw new Error(`The run "${runId}" was invoked by another run. Retry or replay that run instead.`);
+
+  // An at-most-once step that started may have done its side effect, like a payment,
+  // and has no key to stop a second one. A retry runs it again if it didn't finish;
+  // a replay runs it again in any case. Either is only done on purpose.
+  const once = onceSteps(events);
+  const risky = reuse ? once.unfinished : once.started;
+  if (!options.force && risky.length)
+    throw new InterruptedRunError(
+      `The run "${runId}" has an atMostOnce step, ${risky.map((s) => `"${s}"`).join(", ")}, that ${
+        reuse ? "started and didn't finish" : "would run again"
+      }. Its side effect may have happened. Check it, then rerun with force.`,
+    );
+
   const memo = reuse ? { ...(payload.memo ?? {}), ...memoFrom(events) } : undefined;
   if (memo && Buffer.byteLength(JSON.stringify(memo)) > MAX_MEMO_BYTES)
     throw new Error(`The saved results of "${runId}" are over ${MAX_MEMO_BYTES} bytes. Replay it instead, to run every step again.`);
-  const id = replayId(runId);
+  let id = replayId(runId);
+
+  // A run is rerun once: a second retry, as from a double click or a bulk retry that
+  // runs again, gets the first one's run. Ask again on purpose to rerun it again.
+  if (!options.again) {
+    const owner = await engine.store.successor(keyOf("RR", runId), id, RETENTION_MS);
+    if (owner !== id) {
+      if (await find(engine, owner)) return { id: owner, replayOf: runId, reused: [], existing: true };
+      // The first rerun was claimed and didn't start: start it, by its name.
+      id = owner;
+    }
+  }
   const { sig: _sig, ...rest } = payload;
-  await engine.startRun({ ...rest, runId: id, replayOf: runId, memo });
+  await engine.startRun({ ...rest, runId: id, root: payload.root ?? runId, replayOf: runId, memo });
   return { id, replayOf: runId, reused: memo ? Object.keys(memo) : [] };
 }
 
@@ -248,13 +288,15 @@ export class InterruptedRunError extends Error {
 export async function rerunAll(
   engine: Engine,
   input: ListInput & { reuse: boolean; force?: boolean },
-): Promise<{ id: string; result?: { id: string }; error?: string }[]> {
+): Promise<{ id: string; result?: { id: string; existing?: boolean }; error?: string }[]> {
+  if (input.status === "SUCCEEDED" && input.reuse)
+    throw new Error("A retry reuses what succeeded, so there's nothing to retry in a run that succeeded. Replay it instead.");
   const runs = await listRuns(engine, { ...input, status: input.status ?? "FAILED", limit: Math.min(input.limit ?? 50, 100) });
   const out: { id: string; result?: { id: string }; error?: string }[] = [];
   for (const run of runs) {
     try {
-      const result = await rerun(engine, run.id, input.reuse, input.force);
-      out.push({ id: run.id, result: { id: result.id } });
+      const result = await rerun(engine, run.id, input.reuse, { force: input.force });
+      out.push({ id: run.id, result: { id: result.id, ...(result.existing ? { existing: true } : {}) } });
     } catch (error) {
       out.push({ id: run.id, error: (error as Error).message });
     }

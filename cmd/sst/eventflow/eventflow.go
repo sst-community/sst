@@ -355,12 +355,15 @@ type Rerun struct {
 	ID       string   `json:"id"`
 	ReplayOf string   `json:"replayOf"`
 	Reused   []string `json:"reused,omitempty"`
+	// Existing is set when the run was already rerun: ID is that run
+	Existing bool `json:"existing,omitempty"`
 }
 
 type RerunResult struct {
 	ID     string `json:"id"`
 	Result *struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Existing bool   `json:"existing,omitempty"`
 	} `json:"result,omitempty"`
 	Error string `json:"error,omitempty"`
 }

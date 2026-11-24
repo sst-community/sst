@@ -22,10 +22,11 @@ export interface WireEvent {
 export type Message =
   // From a sender.
   | { kind: "event"; event: WireEvent }
-  // From the router: a run that a throttle held, to start at `at`. Signed.
-  | { kind: "start"; fn: string; event: WireEvent; at: number; parent?: string; sig: string }
-  // From the worker: a run another run invokes. Signed.
-  | { kind: "invoke"; fn: string; event: WireEvent; parent: string; runId: string; sig: string };
+  // From the router: a run that a throttle held, to start at `at`. Signed, and good
+  // until `exp`.
+  | { kind: "start"; fn: string; event: WireEvent; at: number; runId: string; root: string; parent?: string; exp: number; sig: string }
+  // From the worker: a run another run invokes. Signed, and good until `exp`.
+  | { kind: "invoke"; fn: string; event: WireEvent; parent: string; runId: string; root: string; exp: number; sig: string };
 
 /** The payload a run starts with. Signed by the router or the worker. */
 export interface RunPayload {
@@ -33,6 +34,11 @@ export interface RunPayload {
   fn: string;
   runId: string;
   event: WireEvent;
+  /**
+   * The run this one started from. A retry or replay keeps it, and an invoked run's
+   * comes from its parent's. Idempotency keys come from it.
+   */
+  root?: string;
   /** For a replay or a retry, the run it replays. */
   replayOf?: string;
   /** For an invoked run, the callback of the run that invoked it. */

@@ -292,6 +292,7 @@ var CmdEventFlow = &cli.Command{
 						Long:  "Cancel every run that's running or paused, or the ones the other flags pick, instead of one run.",
 					},
 				},
+				eventflowYesFlag,
 			}, eventflowListFlags...),
 			Run: func(c *cli.Cli) error {
 				runID := c.Positional(0)
@@ -301,6 +302,9 @@ var CmdEventFlow = &cli.Command{
 					}
 					args, err := eventflowFlags(c).CancelAllArgs(time.Now())
 					if err != nil {
+						return err
+					}
+					if err := eventflowConfirm(c, "Cancel every run that's running or paused, that the flags pick?"); err != nil {
 						return err
 					}
 					return eventflowCall(c, "runs.cancelAll", args, func(raw json.RawMessage) error {
@@ -358,9 +362,13 @@ var CmdEventFlow = &cli.Command{
 						Long:  "Move every dead letter back to the queue, to be routed again.",
 					},
 				},
+				eventflowYesFlag,
 			},
 			Run: func(c *cli.Cli) error {
 				if c.Bool("redrive") {
+					if err := eventflowConfirm(c, "Move every dead letter back to the queue, to be routed again?"); err != nil {
+						return err
+					}
 					return eventflowCall(c, "deadLetters.redrive", nil, func(raw json.RawMessage) error {
 						var result eventflow.Redrive
 						if err := json.Unmarshal(raw, &result); err != nil {
@@ -464,7 +472,9 @@ func eventflowRerunCommand(mode string) *cli.Command {
 		"",
 		"To run every step again, use `sst eventflow replay` instead.",
 	}
+	past := "retried"
 	if mode == "replay" {
+		past = "replayed"
 		op, verb, long = "runs.replay", "Replay", []string{
 			"Replay a run, as a new run on the latest deploy, with the same event. Every step runs again, including the ones that succeeded.",
 			"",
@@ -486,6 +496,10 @@ func eventflowRerunCommand(mode string) *cli.Command {
 		"It prints what happened to each run. With `--status`, it picks the runs with that status instead, like `TIMED_OUT`.",
 		"",
 		"A run whose `atMostOnce` step stopped part way may already have done that step's side effect, like a payment. It isn't rerun unless you pass `--force`, after you've checked it.",
+		"",
+		fmt.Sprintf("A run is %s once. Asking again, as from a script that runs twice, prints the run it was %s as. Pass `--again` to %s it again on purpose.", past, past, strings.ToLower(verb)),
+		"",
+		"With `--failed`, it asks before it starts. Pass `--yes` to skip that, as in CI.",
 	)
 	return &cli.Command{
 		Name: mode,
@@ -519,6 +533,15 @@ func eventflowRerunCommand(mode string) *cli.Command {
 					Long:  "A run whose `atMostOnce` step stopped part way may have done that step's side effect, like a payment, so it isn't rerun unless you pass `--force`. Check it first.",
 				},
 			},
+			{
+				Name: "again",
+				Type: "bool",
+				Description: cli.Description{
+					Short: verb + " a run that was already " + past,
+					Long:  "A run is " + past + " once: asking again prints the run it was " + past + " as, so a double click or a script that runs twice doesn't start a second one. Pass `--again` to " + strings.ToLower(verb) + " it again, on purpose.",
+				},
+			},
+			eventflowYesFlag,
 		}, eventflowListFlags...),
 		Run: func(c *cli.Cli) error {
 			runID := c.Positional(0)
@@ -534,6 +557,9 @@ func eventflowRerunCommand(mode string) *cli.Command {
 				if c.Bool("force") {
 					runArgs["force"] = true
 				}
+				if c.Bool("again") {
+					runArgs["again"] = true
+				}
 				return eventflowCall(c, op, runArgs, func(raw json.RawMessage) error {
 					var result eventflow.Rerun
 					if err := json.Unmarshal(raw, &result); err != nil {
@@ -546,11 +572,21 @@ func eventflowRerunCommand(mode string) *cli.Command {
 			if runID != "" {
 				return util.NewReadableError(nil, "Pass a run ID or --failed, not both")
 			}
+			if c.Bool("again") {
+				return util.NewReadableError(nil, "--again is for one run. With --failed, a run that was already "+past+" isn't "+past+" again")
+			}
 			args, err := flags.RetryAllArgs(mode, time.Now())
 			if err != nil {
 				return err
 			}
 			args.Force = c.Bool("force")
+			question := fmt.Sprintf("%s the runs the flags pick?", verb)
+			if args.Force {
+				question = fmt.Sprintf("%s the runs the flags pick, including ones whose atMostOnce step may have done its side effect?", verb)
+			}
+			if err := eventflowConfirm(c, question); err != nil {
+				return err
+			}
 			return eventflowCall(c, "runs.retryAll", args, func(raw json.RawMessage) error {
 				var results []eventflow.RerunResult
 				if err := json.Unmarshal(raw, &results); err != nil {
@@ -597,6 +633,33 @@ func withEventFlow(c *cli.Cli, name string, fn func(*eventflow.Client, eventflow
 		return util.NewReadableError(nil, "An EventFlow needs the AWS provider, and this app doesn't have it")
 	}
 	return fn(eventflow.NewClient(aws.(*provider.AwsProvider).Config(), target.RouterName), target)
+}
+
+var eventflowYesFlag = cli.Flag{
+	Name: "yes",
+	Type: "bool",
+	Description: cli.Description{
+		Short: "Don't ask first",
+		Long:  "Do it without asking first. Without a terminal to ask in, as in CI, it's needed.",
+	},
+}
+
+// eventflowConfirm asks before an action on many runs or messages, unless
+// --yes. With no terminal to ask in, it needs --yes.
+func eventflowConfirm(c *cli.Cli, question string) error {
+	if c.Bool("yes") {
+		return nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return util.NewReadableError(nil, "This acts on many runs at once. Pass --yes to do it without being asked")
+	}
+	fmt.Print(question + " (y/N): ")
+	var response string
+	fmt.Scanln(&response)
+	if r := strings.ToLower(strings.TrimSpace(response)); r != "y" && r != "yes" {
+		return util.NewReadableError(nil, "Nothing was done")
+	}
+	return nil
 }
 
 // eventflowCall calls op on the EventFlow --name picks, and prints its result

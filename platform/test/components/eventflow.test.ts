@@ -87,7 +87,7 @@ pulumi.runtime.setMocks(
       if (args.token === "aws:index/getRegion:getRegion")
         return { name: "us-east-1", region: "us-east-1" };
       if (args.token === "aws:iam/getPolicyDocument:getPolicyDocument")
-        return { ...args.inputs, json: "{}" };
+        return { ...args.inputs, json: JSON.stringify(args.inputs) };
       return args.inputs;
     },
   },
@@ -158,8 +158,13 @@ describe("EventFlow", () => {
     expect(flow.workerName).toBe(worker.inputs.name);
     expect(flow.workerQualifier).toBe("7");
     expect(flow.runTimeoutSeconds).toBe(14 * 86400);
-    expect(router.inputs.environment.variables.SST_EVENTFLOW_KEY).toBeDefined();
-    expect(worker.inputs.environment.variables.SST_EVENTFLOW_KEY).toBe(router.inputs.environment.variables.SST_EVENTFLOW_KEY);
+    // The signing key is in an SSM SecureString, not in either function's environment.
+    const param = find("aws:ssm/parameter:Parameter", "FlowSigningKeyParam");
+    expect(param.inputs.type).toBe("SecureString");
+    for (const fn of [router, worker]) {
+      expect(fn.inputs.environment.variables.SST_EVENTFLOW_KEY).toBeUndefined();
+      expect(fn.inputs.environment.variables.SST_EVENTFLOW_KEY_PARAM).toBe(param.inputs.name);
+    }
 
     const mapping = find("aws:lambda/eventSourceMapping:EventSourceMapping", "FlowRouterEventSourceMapping");
     expect(mapping.inputs.functionResponseTypes).toEqual(["ReportBatchItemFailures"]);
@@ -202,6 +207,20 @@ describe("EventFlow", () => {
     const admin = await resolve((flow.admin as any).getSSTLink());
     expect(admin.include.flatMap((p: any) => p.actions)).toEqual(["lambda:InvokeFunction"]);
     expect(admin.include[0].resources[0]).toMatch(/:function:app-test-LinkedRouter-/);
+  });
+
+  it("lets the functions use the admin API only when asked", async () => {
+    const { EventFlow } = await import("../../src/components/aws/eventflow");
+    new EventFlow("Closed", { handler: "src/flow.handler" });
+    new EventFlow("Open", { handler: "src/flow.handler", functionAdmin: true });
+    await settle();
+    const policy = (name: string) =>
+      JSON.stringify(registered.filter((r) => r.type === "aws:iam/role:Role" && r.name === name).pop()?.inputs);
+    const invokesRouter = (name: string, flow: string) =>
+      new RegExp(`lambda:InvokeFunction[^\\]]*\\][^\\]]*function:app-test-${flow}Router-`).test(policy(name));
+    expect(policy("ClosedWorkerHandlerRole")).toContain("ssm:GetParameter");
+    expect(invokesRouter("ClosedWorkerHandlerRole", "Closed")).toBe(false);
+    expect(invokesRouter("OpenWorkerHandlerRole", "Open")).toBe(true);
   });
 
   it("refuses a role, and a maxConcurrency AWS won't take", async () => {

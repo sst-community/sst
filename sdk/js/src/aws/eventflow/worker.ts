@@ -1,4 +1,5 @@
 import * as durable from "@aws/durable-execution-sdk-js";
+import { AsyncLocalStorage } from "async_hooks";
 import { createHash } from "crypto";
 import type { Definition } from "./definition.js";
 import { parseDuration, toDurableSeconds, type DurationInput } from "./duration.js";
@@ -73,10 +74,19 @@ function isInterruption(error: unknown) {
   return error instanceof durable.StepInterruptedError || /interruption/i.test(String((error as any)?.message ?? ""));
 }
 
+/**
+ * How long an invoke waits when it has no timeout: the run's timeout, at most 20 days.
+ * Longer timers overflow Node's setTimeout, as the local test runner uses.
+ */
+const DEFAULT_INVOKE_TIMEOUT_MS = 20 * 86_400_000;
+
+/** How long a signed message in the queue is good for. */
+export const MESSAGE_TTL_MS = 6 * 3_600_000;
+
 /** The longest durable wait AWS allows: 366 days. */
 export const MAX_WAIT_S = 31_622_400;
 /** How long a step waits for a lease before it asks again, in case a wake was lost. */
-const LEASE_WAIT_S = 900;
+const LEASE_WAIT_S = 180;
 /** A waiter whose callback is this, followed by a run's ARN, stops the run. */
 export const STOP = "stop:";
 /** How long a received event is kept for a wait that registers just after it. */
@@ -137,21 +147,21 @@ function atMostOnce(input: StepInput) {
   return typeof input === "object" && input?.atMostOnce === true;
 }
 
-/**
- * The run a run started from: a retry or a replay of a run has the same.
- */
-export function rootRunId(runId: string) {
-  return runId.replace(/(_r[0-9A-Z]{10})+$/, "");
-}
+/** The subtype of an at-most-once step, so a retry can see it in the history. */
+export const ONCE = "EventFlowOnce";
+
+/** The key of the step that's running, for `idempotencyKey()`. */
+const stepKeys = new AsyncLocalStorage<{ key: string }>();
 
 /**
- * A key for a step's side effect, like a payment provider's idempotency key. It's the
- * same in every attempt of the step, and in every retry and replay of the run, and
- * different for every other step and run. So a step that runs again, after a crash or
- * a retry, makes the same request, and the provider does it once.
+ * A key for a step's side effect, like a payment provider's idempotency key. It comes
+ * from the run's root, which a retry or replay of the run keeps, the function or
+ * onFailure, and the step's ID with its occurrence, like "charge:2" in a loop. So it's
+ * the same in every attempt, retry and replay of that step, and different for every
+ * other step, occurrence and run.
  */
-export function idempotencyKey(runId: string, stepId: string) {
-  return `ef_${hash(`${rootRunId(runId)}\n${stepId}`, 26)}`;
+export function idempotencyKey(root: string, namespace: string, stepId: string) {
+  return `ef_${hash(JSON.stringify([root, namespace, stepId]), 26)}`;
 }
 
 function unsupported(name: string) {
@@ -164,7 +174,6 @@ const log = (level: "info" | "warn" | "error", message: string, fields: Record<s
   console[level](JSON.stringify({ level, message, ...fields }));
 
 interface RunState {
-  releaseHeld?: () => PromiseLike<unknown> | undefined;
   ctx: durable.DurableContext;
   engine: Engine;
   def: Definition;
@@ -174,16 +183,13 @@ interface RunState {
   memo: Record<string, unknown>;
   counts: Map<string, number>;
   /**
-   * A lease the run kept from its last step with a concurrency limit, for its next one.
-   * The run gives it back when it sleeps, waits, invokes or ends. So a run's steps one
-   * after another don't each wait in line, as Inngest counts a run's steps in one
-   * request as one.
+   * The run this one started from: a retry or a replay of a run has the same root,
+   * and an invoked run's root comes from its parent's root and step. It's signed in
+   * the payload, and idempotency keys and sent event IDs come from it.
    */
-  held?: string | null;
-  /** Leases of steps that ran together with the one kept, given back with it. */
-  extra?: string[];
-  /** How many steps with a concurrency limit are running now. */
-  inflight?: number;
+  root: string;
+  /** "" for the function, "onFailure" for its onFailure, so their keys differ. */
+  namespace: string;
 }
 
 // Inngest gives a step ID used more than once the suffixes ":1", ":2", and so on.
@@ -250,99 +256,77 @@ function makeStep(state: RunState) {
   const leaseMs = () => Math.max(30_000, (ctx.lambdaContext?.getRemainingTimeInMillis?.() ?? 900_000) + 10_000);
   const wake = (w: LeaseWaiter) => engine.callback(w.callbackId, { leaseId: w.leaseId });
 
-  // Give back a lease, and wake the next waiter. An error here mustn't fail the step,
-  // which would run its code again: the lease expires on its own.
+  // Give back a step's leases, and hand them to the steps in line. An error here
+  // mustn't fail the step, which would run its code again: the leases expire.
   const giveBack = async (leaseId: string) => {
-    for (const limit of limits) {
-      try {
-        await engine.store.release(limit, leaseId, tenant);
-        await engine.store.dispatch(limit, leaseMs(), wake);
-      } catch (error) {
-        log("warn", "Failed to give back a lease. It expires on its own.", { run: state.runId, error: errorInfo(error).message });
-      }
+    try {
+      await engine.store.release(limits, leaseId, tenant);
+      for (const limit of limits) await engine.store.dispatch(limit, wake);
+    } catch (error) {
+      log("warn", "Failed to give back a lease. It expires on its own.", { run: state.runId, error: errorInfo(error).message });
     }
   };
 
-  // Give back the lease the run kept, before it stops for a sleep, a wait or an
-  // invoke, or ends. It's a step, so a replay gives it back at the same point.
-  const releaseHeld = (): PromiseLike<unknown> | undefined => {
-    if (!state.held && !state.extra?.length) return undefined;
-    const leases = [state.held, ...(state.extra ?? [])].filter((l): l is string => Boolean(l));
-    state.held = null;
-    state.extra = [];
-    return ctx.step(occurrence(state, "sst:release"), async () => {
-      for (const leaseId of leases) await giveBack(leaseId);
-    });
-  };
-  state.releaseHeld = releaseHeld;
-
-  // Take a lease on each limit, in order, waiting in line for each that's full. A
-  // lease that's held is kept while the step waits for the next one.
-  const takeLeases = async (child: durable.DurableContext, leaseId: string, tagPrefix: string) => {
-    let n = 0;
-    for (const [index, limit] of limits.entries()) {
-      // The leases already taken are kept while the step waits for this one, so they
-      // mustn't expire in the meantime: they last as long as one wait in line.
-      const holdHeld = async () => {
-        for (const held of limits.slice(0, index))
-          await engine.store.renew(held, leaseId, (LEASE_WAIT_S + 120) * 1000).catch(() => false);
-      };
-      // When the step first joined the line, so asking again keeps its place.
-      let joined: number | undefined;
-      for (let round = 0; ; round++) {
-        const tag = `${tagPrefix}.${n++}`;
-        const got = await child.step(`lease:${tag}`, async () =>
-          engine.store.acquire(limit, leaseId, tenant, leaseMs()).catch((error) => {
-            log("warn", "Failed to ask for a lease. Asking again.", { run: state.runId, error: errorInfo(error).message });
-            return false;
-          }),
-        );
-        if (got) break;
-        const [woken, callbackId] = await child.createCallback<{ leaseId: string }>(`queued:${tag}`, {
-          timeout: { seconds: LEASE_WAIT_S },
-          serdes: json as any,
+  // Take a lease on every limit at once, or wait in line until a release can give the
+  // step all of them. A step never holds one lease while it waits for another, so two
+  // steps can't wait for each other.
+  const takeLeases = async (child: durable.DurableContext, leaseId: string, tag: string) => {
+    // When the step first joined the line, so asking again keeps its place.
+    let joined: number | undefined;
+    for (let round = 0; ; round++) {
+      const t = `${tag}.${round}`;
+      const got = await child.step(`lease:${t}`, async () => {
+        const result = await engine.store.acquire(limits, leaseId, tenant, leaseMs()).catch((error) => {
+          log("warn", "Failed to ask for a lease. Joining the line.", { run: state.runId, error: errorInfo(error).message });
+          return "full" as const;
         });
-        // Join the line, then hand out what's free: the lease may have freed up in
-        // between. If it's ours, the step goes on without waiting.
-        const queued = await child.step(`enqueue:${tag}`, async () => {
-          let mine = false;
-          await holdHeld();
-          const at = joined ?? Date.now();
-          await engine.store.enqueue(limit, {
-            leaseId,
-            tenant,
-            callbackId,
-            runId: state.runId,
-            at,
-            expiresAt: Date.now() + LEASE_WAIT_S * 1000,
-          });
-          await engine.store.dispatch(limit, leaseMs(), async (w) => {
+        return result === "granted";
+      });
+      if (got) return;
+      const [woken, callbackId] = await child.createCallback<{ leaseId: string }>(`queued:${t}`, {
+        timeout: { seconds: LEASE_WAIT_S },
+        serdes: json as any,
+      });
+      // Join the line, then hand out what's free: the leases may have freed up in
+      // between. If they're the step's, it goes on without waiting.
+      const queued = await child.step(`enqueue:${t}`, async () => {
+        const at = joined ?? Date.now();
+        const result = await engine.store.enqueue({
+          leaseId,
+          limits,
+          tenant,
+          callbackId,
+          runId: state.runId,
+          at,
+          expiresAt: Date.now() + LEASE_WAIT_S * 1000,
+        });
+        if (result === "held") return { mine: true, at };
+        let mine = false;
+        for (const limit of limits)
+          await engine.store.dispatch(limit, async (w) => {
             if (w.callbackId !== callbackId) return wake(w);
             mine = true;
             return true;
           });
-          return { mine, at };
-        });
-        joined = queued.at;
-        if (queued.mine) break;
-        try {
-          await woken;
-          break;
-        } catch (error) {
-          // Not woken in time: ask again. If the old place in line comes up later, the
-          // wake fails, and its lease is given back.
-          if (error instanceof durable.CallbackTimeoutError) continue;
-          throw error;
-        }
+        return { mine, at };
+      });
+      joined = queued.at;
+      if (queued.mine) return;
+      try {
+        await woken;
+        return;
+      } catch (error) {
+        // Not woken in time: ask again, keeping its place. If the old callback is
+        // woken later, the wake fails, and the leases are handed on.
+        if (error instanceof durable.CallbackTimeoutError) continue;
+        throw error;
       }
     }
   };
 
-  // A sleep, a wait and an invoke give back the kept lease first.
-  const afterRelease = <T>(next: () => PromiseLike<T>): Promise<T> => {
-    const released = releaseHeld();
-    return released ? eager(released).then(() => next()) : eager(next());
-  };
+  // The key of a step's side effect, for idempotencyKey() called in the step.
+  const keyFor = (id: string) => idempotencyKey(state.root, state.namespace, id);
+  const inStep = <T>(id: string, fn: () => T | Promise<T>) => stepKeys.run({ key: keyFor(id) }, fn);
 
   const run = <T>(idInput: StepInput, fn: (...args: any[]) => T | Promise<T>, ...args: any[]): Promise<T> => {
     const id = occurrence(state, stepId(idInput));
@@ -354,15 +338,16 @@ function makeStep(state: RunState) {
     if (!limits.length) {
       if (once)
         return eager(
-          ctx.step(id, async () => jsonify(await fn(...args)), {
+          ctx.step(id, async () => jsonify(await inStep(id, () => fn(...args))), {
             semantics: durable.StepSemantics.AtMostOncePerRetry,
             retryStrategy: () => ({ shouldRetry: false }),
+            subType: ONCE,
           }),
         ).catch((error) => {
           throw isInterruption(error) ? new StepFailedError(id, interrupted(id)) : error;
         }) as Promise<T>;
       return eager(
-        ctx.step(id, async () => jsonify(await fn(...args)), {
+        ctx.step(id, async () => jsonify(await inStep(id, () => fn(...args))), {
           retryStrategy: (error, attempt) => {
             const delay = retryDelay(error, attempt, def.retries, `${state.runId}\n${id}\n${attempt}`);
             return delay === undefined ? { shouldRetry: false } : { shouldRetry: true, delay: toDurableSeconds(delay) };
@@ -371,11 +356,9 @@ function makeStep(state: RunState) {
       ) as Promise<T>;
     }
 
-    // With a concurrency limit, each attempt takes a lease first. A step that waits
-    // for a lease, or for its next attempt, holds none, as with Inngest.
-    const reuse = state.held ?? null;
-    state.held = null;
-    state.inflight = (state.inflight ?? 0) + 1;
+    // With a concurrency limit, each attempt takes its leases first, and gives them
+    // back when it ends. A step that waits for a lease, or for its next attempt, holds
+    // none, as with Inngest.
     return eager(
       ctx.runInChildContext(
         id,
@@ -383,38 +366,27 @@ function makeStep(state: RunState) {
           for (let attempt = 1; ; attempt++) {
             for (let lost = 0; ; lost++) {
               // The lease's ID comes from the run, the step and the attempt, so a lease
-              // step that's retried asks for the same lease. The first attempt can use
-              // the lease the run kept from its last step.
-              const kept = attempt === 1 && lost === 0 ? reuse : null;
-              const leaseId = kept ?? `${hash(`${state.runId}\n${id}`, 12)}.${attempt}.${lost}`;
-              if (!kept) await takeLeases(child, leaseId, `${attempt}.${lost}`);
+              // step that's retried asks for the same lease.
+              const leaseId = `${hash(`${state.runId}\n${id}`, 12)}.${attempt}.${lost}`;
+              await takeLeases(child, leaseId, `${attempt}.${lost}`);
               const outcome = await child.step(
                 attempt === 1 && lost === 0 ? "run" : `run:${attempt}.${lost}`,
                 async () => {
-                  // After a crash, the run step runs again, maybe after its lease
-                  // expired. Check the lease is still held before the work starts.
-                  for (const limit of limits)
-                    if (!(await engine.store.renew(limit, leaseId, leaseMs()))) return { lost: true as const };
+                  // After a crash, the run step runs again, maybe after its leases
+                  // expired. Check they're still held before the work starts.
+                  if (!(await engine.store.renew(limits, leaseId, leaseMs()))) return { lost: true as const };
                   try {
-                    const value = jsonify(await fn(...args));
-                    // The run keeps the lease for its next step, unless another of its
-                    // steps is running, or waiting in line, which could be for this
-                    // lease. What's decided is saved with the result, so a replay
-                    // decides the same.
-                    if ((state.inflight ?? 1) > 1) {
-                      await giveBack(leaseId);
-                      return { ok: true as const, value };
-                    }
-                    return { ok: true as const, value, kept: leaseId };
+                    return { ok: true as const, value: jsonify(await inStep(id, () => fn(...args))) };
                   } catch (error) {
-                    await giveBack(leaseId);
                     const delay = once ? undefined : retryDelay(error, attempt, def.retries, `${state.runId}\n${id}\n${attempt}`);
                     return { ok: false as const, error: errorInfo(error), delay };
+                  } finally {
+                    await giveBack(leaseId);
                   }
                 },
                 {
                   retryStrategy: () => ({ shouldRetry: false }),
-                  ...(once ? { semantics: durable.StepSemantics.AtMostOncePerRetry } : {}),
+                  ...(once ? { semantics: durable.StepSemantics.AtMostOncePerRetry, subType: ONCE } : {}),
                 },
               ).then(
                 (o) => o,
@@ -426,13 +398,12 @@ function makeStep(state: RunState) {
                 }),
               );
               if ("lost" in outcome) {
-                // A lease expired before the step ran. Give back the others, so the
-                // step doesn't hold them while it waits in line again.
+                // A lease expired before the step ran. Give back the rest.
                 await child.step(`release:${attempt}.${lost}`, async () => giveBack(leaseId));
                 if (lost >= 5) return { ok: false as const, error: { name: "LeaseError", message: `The step "${id}" kept losing its lease.` } };
                 continue;
               }
-              if (outcome.ok) return { ok: true as const, value: outcome.value, kept: outcome.kept };
+              if (outcome.ok) return { ok: true as const, value: outcome.value };
               if (outcome.delay === undefined) return { ok: false as const, error: outcome.error };
               await child.wait(`retry:${attempt}`, toDurableSeconds(outcome.delay));
               break;
@@ -442,16 +413,9 @@ function makeStep(state: RunState) {
         { subType: "EventFlowStep" },
       ),
     ).then((outcome) => {
-      state.inflight = (state.inflight ?? 1) - 1;
       // An error thrown in a child context comes out as a ChildContextError, so the
       // outcome comes out of it, and the error is thrown here.
       if (!outcome.ok) throw new StepFailedError(id, outcome.error);
-      // Keep the lease for the next step, unless one is kept already, as with steps
-      // started together. Then give this one back.
-      if (outcome.kept) {
-        if (!state.held) state.held = outcome.kept;
-        else (state.extra ??= []).push(outcome.kept);
-      }
       return outcome.value as T;
     });
   };
@@ -460,7 +424,7 @@ function makeStep(state: RunState) {
     const id = occurrence(state, stepId(idInput));
     if (memo(id).hit) return Promise.resolve();
     const seconds = bounded(parseDuration(duration, `duration of step "${id}"`), `sleep of step "${id}"`);
-    return afterRelease(() => ctx.wait(id, seconds));
+    return eager(ctx.wait(id, seconds));
   };
 
   const sleepUntil = (idInput: string | { id: string }, time: Date | string) => {
@@ -469,7 +433,7 @@ function makeStep(state: RunState) {
     const at = time instanceof Date ? time.getTime() : Date.parse(time);
     if (!Number.isFinite(at)) throw new TypeError(`The time of step "${id}" isn't a date.`);
     const seconds = bounded(at - Date.now(), `sleep of step "${id}"`);
-    return afterRelease(() => ctx.wait(id, seconds));
+    return eager(ctx.wait(id, seconds));
   };
 
   const waitForEvent = (
@@ -489,7 +453,7 @@ function makeStep(state: RunState) {
     const timeout = bounded(timeoutMs, `timeout of step "${id}"`);
     const { field, value, condition } = matcher(id, state.event, options);
 
-    return afterRelease(() =>
+    return eager(
       ctx.runInChildContext(
         id,
         async (child) => {
@@ -541,9 +505,11 @@ function makeStep(state: RunState) {
         : options.timeout instanceof Date
           ? options.timeout.getTime() - Date.now()
           : parseDuration(options.timeout, `timeout of step "${id}"`);
-    const timeout = timeoutMs === undefined ? undefined : bounded(timeoutMs, `timeout of step "${id}"`);
+    // Without a timeout, the run waits as long as it can last, at most 20 days, so a
+    // child that never answers, like one AWS stopped, doesn't keep it waiting forever.
+    const timeout = bounded(timeoutMs ?? Math.min(maxWaitMs, DEFAULT_INVOKE_TIMEOUT_MS), `timeout of step "${id}"`);
 
-    return afterRelease(() =>
+    return eager(
       ctx.runInChildContext(
         id,
         async (child) => {
@@ -551,7 +517,11 @@ function makeStep(state: RunState) {
           // The invoked run goes through the router, like any other, so its flow
           // control applies. The message is signed, so only a run can send one.
           await child.step("start", async () => {
-            const identity = `invoke\n${state.runId}\n${id}`;
+            // The child run is new for each run that invokes it, as a retry of the
+            // parent needs its own. Its root, which its idempotency keys come from,
+            // is the same for every retry and replay of the parent.
+            const identity = `invoke\n${state.runId}\n${state.namespace}\n${id}`;
+            const root = hash(JSON.stringify([state.root, state.namespace, id]), 26);
             const event: WireEvent = {
               id: hash(identity),
               name: "inngest/function.invoked",
@@ -567,6 +537,8 @@ function makeStep(state: RunState) {
                   event,
                   parent: callbackId,
                   runId: makeRunId(target, identity),
+                  root,
+                  exp: Date.now() + MESSAGE_TTL_MS,
                 }),
                 group: event.tenant,
               },
@@ -598,10 +570,15 @@ function makeStep(state: RunState) {
     const list = Array.isArray(payload) ? payload : [payload];
     return eager(
       ctx.step(id, async () => {
-        // IDs come from the run and the step, so a retried step sends the same events,
-        // and the router skips the ones it has seen.
+        // IDs come from the run's root and the step, so a retried step, and a retry
+        // or replay of the run, send the same events, and the router skips the ones
+        // it has seen.
         const events = list.map((p, i) =>
-          toWireEvent({ ...p, id: p.id ?? hash(`${state.runId}\n${id}\n${i}`), tenant: p.tenant ?? state.event.tenant }),
+          toWireEvent({
+            ...p,
+            id: p.id ?? hash(JSON.stringify([state.root, state.namespace, id, i]), 26),
+            tenant: p.tenant ?? state.event.tenant,
+          }),
         );
         await engine.sendEvents(events);
         return { ids: events.map((e) => e.id) };
@@ -761,10 +738,17 @@ export function createWorker(registry: Map<string, Registered>, getEngine: () =>
     if (!payload || payload["sst:eventflow"] !== 1 || !verify(payload))
       throw new NonRetriableError("The EventFlow worker only runs what its router starts.");
     const entry = registry.get(payload.fn);
-    if (!entry)
-      throw new NonRetriableError(`The function "${payload.fn}" isn't served by this version of the worker. Was it removed or renamed?`);
-
     const engine = getEngine();
+    if (!entry) {
+      const message = `The function "${payload.fn}" isn't served by this version of the worker. Was it removed or renamed?`;
+      // The run that invoked it would otherwise wait for it.
+      if (payload.parent)
+        await ctx.step("sst:return", async () => {
+          await engine.callback(payload.parent!, { ok: false, error: { name: "InvokeError", message } } satisfies InvokeOutcome);
+        });
+      throw new NonRetriableError(message);
+    }
+
     const state: RunState = {
       ctx,
       engine,
@@ -773,6 +757,9 @@ export function createWorker(registry: Map<string, Registered>, getEngine: () =>
       runId: runIdFromArn(ctx.executionContext.durableExecutionArn) ?? payload.runId,
       event: payload.event,
       memo: Object.assign(Object.create(null), payload.memo ?? {}),
+      // The root is signed with the payload. A payload from before roots is its own.
+      root: payload.root ?? payload.runId,
+      namespace: "",
       counts: new Map(),
     };
 
@@ -788,8 +775,16 @@ export function createWorker(registry: Map<string, Registered>, getEngine: () =>
       };
       // Each step is tried at most this many times, as with Inngest.
       args.maxAttempts = entry.def.retries + 1;
-      // A key for a step's side effect, the same in every attempt, retry and replay.
-      args.idempotencyKey = (stepId: string) => idempotencyKey(state.runId, stepId);
+      // The key of the step that's running, for its side effect.
+      args.idempotencyKey = (...given: unknown[]) => {
+        if (given.length)
+          throw new TypeError(
+            "Call idempotencyKey() with no arguments, inside step.run: it's the key of that step, the same in every attempt, retry and replay.",
+          );
+        const current = stepKeys.getStore();
+        if (!current) throw new TypeError("Call idempotencyKey() inside step.run: it's the key of that step.");
+        return current.key;
+      };
       // What EventFlow can't give throws when it's read, instead of being undefined.
       const missing: Record<string, string> = {
         attempt: "EventFlow doesn't have `attempt` in the function's context. Each step retries on its own.",
@@ -850,21 +845,15 @@ export function createWorker(registry: Map<string, Registered>, getEngine: () =>
       });
     };
 
-    const releaseAtEnd = async () => {
-      const released = state.releaseHeld?.();
-      if (released) await released;
-    };
-
     let result: unknown;
     try {
       result = await entry.handler(makeArgs(state));
     } catch (error) {
       if (isDurableInternal(error)) throw error;
-      await releaseAtEnd();
       try {
         if (entry.def.onFailure) {
           await ctx.runInChildContext("onFailure", async (child) => {
-            const failure: RunState = { ...state, ctx: child, counts: new Map(), memo: Object.create(null) };
+            const failure: RunState = { ...state, ctx: child, counts: new Map(), memo: Object.create(null), namespace: "onFailure" };
             const ts = await child.step("sst:failed-at", async () => Date.now());
             await entry.def.onFailure!(
               makeArgs(failure, {
@@ -889,7 +878,6 @@ export function createWorker(registry: Map<string, Registered>, getEngine: () =>
       throw error;
     }
     const value = jsonify(result);
-    await releaseAtEnd();
     await stopListening();
     await finish({ ok: true, result: value });
     return value;

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { ExecutionStatus, LocalDurableTestRunner } from "@aws/durable-execution-sdk-js-testing";
 import { Cluster, finishRuns, waitFor } from "./harness.ts";
-import { idempotencyKey, rootRunId } from "../../src/aws/eventflow/worker.ts";
+import { idempotencyKey, ONCE } from "../../src/aws/eventflow/worker.ts";
+import { onceSteps } from "../../src/aws/eventflow/runs.ts";
 
 // Moving money: a step with a side effect must happen once, through retries,
 // crashes, and retries of the run after a fix.
@@ -31,15 +32,98 @@ function provider() {
   };
 }
 
+async function runOne(cluster: Cluster) {
+  await cluster.drain();
+  const run = await waitFor(() => [...cluster.runs.values()][0]);
+  return { run, result: await run.result };
+}
+
 describe("idempotency keys", () => {
-  it("are the same for a run, its retries and replays, and differ per step and run", () => {
-    const run = "order-ABC";
-    expect(idempotencyKey(run, "charge")).toBe(idempotencyKey(`${run}_r0123456789`, "charge"));
-    expect(idempotencyKey(`${run}_r0123456789_rABCDEFGHJK`, "charge")).toBe(idempotencyKey(run, "charge"));
-    expect(rootRunId(`${run}_r0123456789`)).toBe(run);
-    expect(idempotencyKey(run, "charge")).not.toBe(idempotencyKey(run, "refund"));
-    expect(idempotencyKey(run, "charge")).not.toBe(idempotencyKey("order-XYZ", "charge"));
-    expect(idempotencyKey(run, "charge")).toMatch(/^ef_[0-9A-Z]{26}$/);
+  it("come from the run's root, the namespace and the step", () => {
+    const key = idempotencyKey("order-ABC", "", "charge");
+    expect(key).toMatch(/^ef_[0-9A-Z]{26}$/);
+    expect(idempotencyKey("order-ABC", "", "charge")).toBe(key);
+    expect(idempotencyKey("order-ABC", "", "charge:1")).not.toBe(key);
+    expect(idempotencyKey("order-ABC", "onFailure", "charge")).not.toBe(key);
+    expect(idempotencyKey("order-XYZ", "", "charge")).not.toBe(key);
+  });
+
+  it("are the step's own, in every occurrence of a loop", async () => {
+    const keys: string[] = [];
+    const cluster = new Cluster((flow) => [
+      flow.createFunction({ id: "payouts", triggers: { event: "go" } }, async ({ step, idempotencyKey }: any) => {
+        for (const payee of ["a", "b", "c"]) await step.run("pay", () => keys.push(idempotencyKey()));
+        void payee;
+      }),
+    ]);
+    await cluster.flow.send({ name: "go" });
+    await runOne(cluster);
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it("are the same in a retry or replay of a run, whatever the function ID's length", async () => {
+    // A run, and a retry of it: a new run ID, the same root, signed in the payload.
+    const keys: string[] = [];
+    const id = "reconcile-customer-payments-across-all-regions";
+    const cluster = new Cluster((flow) => [
+      flow.createFunction({ id }, async ({ step, idempotencyKey }: any) => step.run("charge", () => keys.push(idempotencyKey()))),
+    ]);
+    const engine = cluster.flow.getEngine();
+    const event = { id: "e", name: "inngest/function.invoked", data: {}, ts: 0 };
+    await engine.startRun({ "sst:eventflow": 1, fn: id, runId: "first", root: "first", event });
+    await engine.startRun({ "sst:eventflow": 1, fn: id, runId: "first_rABCDEFGHJK", root: "first", replayOf: "first", event });
+    await Promise.all([...cluster.runs.values()].map((r) => r.result));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+  });
+
+  it("differ in onFailure from the function's", async () => {
+    const keys: Record<string, string> = {};
+    const cluster = new Cluster((flow) => [
+      flow.createFunction(
+        {
+          id: "with-refund",
+          retries: 0,
+          triggers: { event: "go" },
+          onFailure: async ({ step, idempotencyKey }: any) => step.run("charge", () => (keys.onFailure = idempotencyKey())),
+        },
+        async ({ step, idempotencyKey }: any) => {
+          await step.run("charge", () => (keys.main = idempotencyKey()));
+          await step.run("ship", () => {
+            throw new Error("no carrier");
+          });
+        },
+      ),
+    ]);
+    await cluster.flow.send({ name: "go" });
+    await runOne(cluster);
+    expect(keys.main).toBeDefined();
+    expect(keys.onFailure).toBeDefined();
+    expect(keys.onFailure).not.toBe(keys.main);
+  });
+
+  it("can only be had in a step, and take no arguments", async () => {
+    const errors: string[] = [];
+    const cluster = new Cluster((flow) => [
+      flow.createFunction({ id: "misuse", triggers: { event: "go" } }, async ({ step, idempotencyKey }: any) => {
+        try {
+          idempotencyKey();
+        } catch (error: any) {
+          errors.push(error.message);
+        }
+        await step.run("charge", () => {
+          try {
+            idempotencyKey("charge");
+          } catch (error: any) {
+            errors.push(error.message);
+          }
+        });
+      }),
+    ]);
+    await cluster.flow.send({ name: "go" });
+    await runOne(cluster);
+    expect(errors[0]).toContain("inside step.run");
+    expect(errors[1]).toContain("no arguments");
   });
 
   it("charge once when the step is retried after the provider took the charge", async () => {
@@ -48,69 +132,68 @@ describe("idempotency keys", () => {
     const cluster = new Cluster((flow) => [
       flow.createFunction({ id: "pay", retries: 3, triggers: { event: "order/paid" } }, async ({ step, idempotencyKey }: any) =>
         step.run("charge", () => {
-          const result = pay.charge(idempotencyKey("charge"), 100);
-          // The charge went through, but the response was lost.
+          const result = pay.charge(idempotencyKey(), 100);
           if (++attempts < 3) throw new Error("connection reset");
           return result;
         }),
       ),
     ]);
     await cluster.flow.send({ name: "order/paid" });
-    await cluster.drain();
-    const run = await waitFor(() => [...cluster.runs.values()][0]);
-    expect((await run.result).getStatus()).toBe(ExecutionStatus.SUCCEEDED);
+    const { result } = await runOne(cluster);
+    expect(result.getStatus()).toBe(ExecutionStatus.SUCCEEDED);
     expect(pay.calls).toBe(3);
     expect(pay.charges.size).toBe(1);
   });
 });
 
+describe("sent events", () => {
+  it("have the same IDs in a retry or replay of a run", async () => {
+    const cluster = new Cluster((flow) => [
+      flow.createFunction({ id: "notify" }, async ({ step }) => step.sendEvent("tell", { name: "paid", data: {} })),
+    ]);
+    const engine = cluster.flow.getEngine();
+    const event = { id: "e", name: "inngest/function.invoked", data: {}, ts: 0 };
+    await engine.startRun({ "sst:eventflow": 1, fn: "notify", runId: "first", root: "first", event });
+    await engine.startRun({ "sst:eventflow": 1, fn: "notify", runId: "first_rABCDEFGHJK", root: "first", event });
+    const results = await Promise.all([...cluster.runs.values()].map((r) => r.result));
+    const ids = results.map((r) => r.getResult().ids[0]);
+    expect(ids[0]).toBe(ids[1]);
+  });
+});
+
 describe("a crash in the middle of a step", () => {
-  async function crashDuringCharge(atMostOnce: boolean) {
+  it("runs the step again, and the idempotency key keeps it to one charge", async () => {
     const pay = provider();
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let calls = 0;
     const cluster = new Cluster((flow) => [
-      flow.createFunction({ id: "pay", retries: 3, triggers: { event: "order/paid" } }, async ({ step, idempotencyKey }: any) => {
-        const charge = await step.run({ id: "charge", atMostOnce }, async () => {
+      flow.createFunction({ id: "pay", retries: 3, triggers: { event: "order/paid" } }, async ({ step, idempotencyKey }: any) =>
+        step.run("charge", async () => {
           calls++;
-          pay.charge(idempotencyKey("charge"), 100);
+          pay.charge(idempotencyKey(), 100);
           if (calls === 1) await gate; // the worker stops here, after the charge
           return "charged";
-        });
-        return charge;
-      }),
+        }),
+      ),
     ]);
     await cluster.flow.send({ name: "order/paid" });
     await cluster.drain();
     const run = await waitFor(() => [...cluster.runs.values()][0]);
-    // The charge has gone through, and the step hasn't saved its result.
     await waitFor(() => (calls === 1 ? true : undefined));
-    // The invocation is abandoned part way, as when Lambda crashes or times out.
     // Its next checkpoint, the step's result, is refused, so its work is abandoned.
     const paused = run.runner.pauseExecution();
     release();
     await paused;
     await run.runner.resumeExecution();
-    const result = await Promise.race([run.result, new Promise<null>((r) => setTimeout(() => r(null), 8000))]);
-    if (!result) {
-      const ops = (run.runner as any).getOperations?.() ?? [];
-      throw new Error(`The run didn't end. calls=${calls}, charges=${pay.charges.size}, ops=${JSON.stringify(ops.map?.((o: any) => [o.getName?.(), o.getStatus?.()]) ?? [])}`);
-    }
-    const status = result.getStatus();
-    return { status, calls, charges: pay.charges.size, error: status === ExecutionStatus.FAILED ? result.getError()?.errorMessage : undefined };
-  }
-
-  it("runs the step again, and the idempotency key keeps it to one charge", async () => {
-    const outcome = await crashDuringCharge(false);
-    expect(outcome.status).toBe(ExecutionStatus.SUCCEEDED);
-    expect(outcome.calls).toBe(2);
-    expect(outcome.charges).toBe(1);
+    const result = await run.result;
+    expect(result.getStatus()).toBe(ExecutionStatus.SUCCEEDED);
+    expect(calls).toBe(2);
+    expect(pay.charges.size).toBe(1);
   });
-
   // A crash under atMostOnce can't be simulated here: the local runner keeps the
   // checkpoint it refuses, so the step's result is saved. It's proven on AWS with a
-  // real crash: see the EventFlow PR.
+  // real crash: see the EventFlow guide.
 });
 
 describe("atMostOnce", () => {
@@ -128,10 +211,19 @@ describe("atMostOnce", () => {
         ),
       ]);
       await cluster.flow.send({ name: "go" });
-      await cluster.drain();
-      const run = await waitFor(() => [...cluster.runs.values()][0]);
-      expect((await run.result).getStatus()).toBe(ExecutionStatus.FAILED);
+      const { result } = await runOne(cluster);
+      expect(result.getStatus()).toBe(ExecutionStatus.FAILED);
       expect(calls).toBe(1);
     }
+  });
+
+  it("is found in a run's history, whatever the run's error says", () => {
+    const events = [
+      { EventType: "StepStarted", Id: "1", Name: "wire", SubType: ONCE },
+      { EventType: "StepSucceeded", Id: "1", Name: "wire", SubType: ONCE },
+      { EventType: "StepStarted", Id: "2", Name: "wire:1", SubType: ONCE },
+      { EventType: "StepStarted", Id: "3", Name: "email" },
+    ];
+    expect(onceSteps(events)).toEqual({ started: ["wire", "wire:1"], unfinished: ["wire:1"] });
   });
 });

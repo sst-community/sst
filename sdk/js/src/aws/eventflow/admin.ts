@@ -265,9 +265,9 @@ async function run(op: string, args: Record<string, any>, registry: Map<string, 
     case "runs.cancelAll":
       return cancelAll(engine, list());
     case "runs.replay":
-      return rerun(engine, runId(), false, args.force === true);
+      return rerun(engine, runId(), false, { force: args.force === true, again: args.again === true });
     case "runs.retry":
-      return rerun(engine, runId(), true, args.force === true);
+      return rerun(engine, runId(), true, { force: args.force === true, again: args.again === true });
     case "runs.retryAll":
       return rerunAll(engine, { ...list(), reuse: args.mode !== "replay", force: args.force === true });
     case "send": {

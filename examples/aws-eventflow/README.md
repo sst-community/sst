@@ -29,7 +29,7 @@ This is where the work is. Each `step.run` is saved when it succeeds, so when th
 |------|---------------|
 | `retries: 5` | Each step is tried up to 6 times, with backoff |
 | `step.run("charge-card", …)` | A call to an API that fails half the time (`src/payments.ts`). It's retried until it works |
-| `idempotencyKey("charge-card")` | A step that runs again, after a crash, a retry or a replay, doesn't charge twice |
+| `idempotencyKey()` | A step that runs again, after a crash, a retry or a replay, doesn't charge twice |
 | `NonRetriableError` | A declined card won't get better: stop now |
 | `step.waitForEvent(…, { match: "data.orderId" })` | A large order waits up to an hour for its approval |
 | `step.sleep("cool-off", "10s")` | A pause that costs nothing |
@@ -38,7 +38,7 @@ This is where the work is. Each `step.run` is saved when it succeeds, so when th
 ## 4. More functions
 
 - `src/functions/send-receipt.ts` has no triggers: it's only invoked.
-- `src/functions/hourly-report.ts` has a cron trigger.
+- `src/functions/hourly-report.ts` has a cron trigger. It lists the last hour's runs with `flow.runs`, so the EventFlow sets `functionAdmin: true`.
 
 ## 5. Serving them: `src/flow.ts`
 

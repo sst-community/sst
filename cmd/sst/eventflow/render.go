@@ -337,6 +337,14 @@ func RenderRun(w io.Writer, r *Run, now time.Time, allSteps ...bool) {
 
 // RenderRerun prints what a retry or a replay of a run started
 func RenderRerun(w io.Writer, mode string, r Rerun) {
+	if r.Existing {
+		past := "retried"
+		if mode == "replay" {
+			past = "replayed"
+		}
+		dim(w, fmt.Sprintf("%s was already %s as %s, so nothing new was started. Pass --again to %s it again.", r.ReplayOf, past, r.ID, mode))
+		return
+	}
 	if mode == "replay" {
 		success(w, fmt.Sprintf("Replaying %s as %s. Every step runs again.", r.ReplayOf, r.ID))
 		return
@@ -375,6 +383,10 @@ func RenderRerunAll(w io.Writer, mode string, results []RerunResult) int {
 				msg = "no new run"
 			}
 			rows = append(rows, []string{ui.TEXT_DANGER_BOLD.Render(ui.IconX), r.ID, ui.TEXT_DANGER.Render(msg)})
+			continue
+		}
+		if r.Result.Existing {
+			rows = append(rows, []string{ui.TEXT_DIM.Render("–"), r.ID, ui.TEXT_DIM.Render("already → " + r.Result.ID)})
 			continue
 		}
 		rows = append(rows, []string{ui.TEXT_SUCCESS_BOLD.Render(ui.IconCheck), r.ID, ui.TEXT_DIM.Render("→ ") + r.Result.ID})

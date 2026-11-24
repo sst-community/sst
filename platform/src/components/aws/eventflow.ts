@@ -5,7 +5,7 @@ import {
   Output,
   output,
 } from "@pulumi/pulumi";
-import { getCallerIdentityOutput, getPartitionOutput, getRegionOutput, lambda } from "@pulumi/aws";
+import { getCallerIdentityOutput, getPartitionOutput, getRegionOutput, lambda, ssm } from "@pulumi/aws";
 import { Component, Transform, transform } from "../component.js";
 import type { Input } from "../input.js";
 import { Duration, DurationDays, DurationMinutes, toSeconds } from "../duration.js";
@@ -117,6 +117,16 @@ export interface EventFlowArgs
    * @default `true`
    */
   schedule?: Input<boolean>;
+  /**
+   * Let the functions use `flow.runs` and `flow.admin`, to list, retry and cancel
+   * runs from inside a run. Off by default: a function that's compromised, or a bug,
+   * could otherwise cancel or rerun every run in the EventFlow.
+   *
+   * Anything else that should, like an API of your own, links `flow.admin` instead.
+   *
+   * @default `false`
+   */
+  functionAdmin?: Input<boolean>;
   /**
    * [Transform](/docs/components#transform) how this component creates its underlying
    * resources.
@@ -317,6 +327,7 @@ export class EventFlow extends Component {
       router: routerInput,
       retries,
       schedule,
+      functionAdmin,
       transform: transforms,
       ...workflowArgs
     } = args;
@@ -335,7 +346,19 @@ export class EventFlow extends Component {
 
     // The router and the worker sign the runs they start with this key, and the worker
     // runs nothing that isn't signed. Only they have it.
+    // It's kept in an SSM SecureString, not in their environment, which anyone who can
+    // read a function's configuration can see.
     const key = new RandomPassword(`${name}SigningKey`, { length: 48, special: false }, { parent });
+    const keyParam = new ssm.Parameter(
+      `${name}SigningKeyParam`,
+      {
+        name: interpolate`/sst/eventflow/${stableName("Key")}`,
+        description: "The key the EventFlow's router and worker sign runs with",
+        type: ssm.ParameterType.SecureString,
+        value: key.result,
+      },
+      { parent },
+    );
 
     const deadLetterQueue = new Queue(
       ...transform(
@@ -388,6 +411,7 @@ export class EventFlow extends Component {
     // A callback and a stop are checked against the ARN of the run, which has the
     // worker's version.
     const shared = [
+      permission({ actions: ["ssm:GetParameter"], resources: [keyParam.arn] }),
       permission({ actions: ["sqs:SendMessage"], resources: [queue.arn] }),
       permission({
         actions: ["lambda:SendDurableExecutionCallbackSuccess", "lambda:StopDurableExecution"],
@@ -397,10 +421,10 @@ export class EventFlow extends Component {
 
     const runTimeout = output(args.timeout).apply((t) => toSeconds(t?.execution ?? "14 days"));
     const env = (fields: Record<string, Input<string | number | undefined>>) =>
-      all([output(args.environment ?? {}), output(fields), key.result]).apply(([environment, f, secret]) => ({
+      all([output(args.environment ?? {}), output(fields), keyParam.name]).apply(([environment, f, param]) => ({
         ...environment,
         SST_EVENTFLOW: JSON.stringify(f),
-        SST_EVENTFLOW_KEY: secret,
+        SST_EVENTFLOW_KEY_PARAM: param,
       }));
 
     const worker = new Workflow(
@@ -415,12 +439,12 @@ export class EventFlow extends Component {
           tableName: table.name,
           runTimeoutSeconds: runTimeout,
         }),
-        permissions: all([args.permissions ?? []]).apply(([p]) => [
+        permissions: all([args.permissions ?? [], functionAdmin ?? false]).apply(([p, admin]) => [
           ...p,
           ...shared,
           permission({ actions: tableActions, resources: [table.arn] }),
           // So a function can use flow.runs and flow.admin, through the router.
-          permission({ actions: ["lambda:InvokeFunction"], resources: [routerArn] }),
+          ...(admin ? [permission({ actions: ["lambda:InvokeFunction"], resources: [routerArn] })] : []),
         ]),
         transform: { function: transforms?.worker },
       },

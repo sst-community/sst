@@ -58,6 +58,8 @@ export default $config({
     // schedule. It's made once. The functions are in src/flow.ts.
     const flow = new sst.aws.EventFlow("Flow", {
       handler: "src/flow.handler",
+      // hourly-report lists the runs of the last hour, with flow.runs.
+      functionAdmin: true,
     });
 
     // Linking the EventFlow lets a function send events, and nothing more. To look at

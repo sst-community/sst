@@ -1,6 +1,7 @@
 import {
-  fairest,
+  GRANT_MS,
   tenantKey,
+  uniqueLimits,
   type Admission,
   type LeaseWaiter,
   type Limit,
@@ -10,15 +11,16 @@ import {
 import type { WireEvent } from "../../src/aws/eventflow/types.ts";
 
 interface LimitItem {
+  cap: number;
+  label: string;
   leases: Record<string, { expires: number; tenant: string }>;
   tenants: Record<string, number>;
-  queue: (LeaseWaiter & { seq: number })[];
-  label: string;
-  cap: number;
+  /** Each tenant's line. */
+  lines: Map<string, (LeaseWaiter & { seq: number })[]>;
 }
 
-// The same contract as DynamoStore, in memory, with an injectable clock. The fair
-// pick comes from the same function, so the policy under test is the one that ships.
+// The same contract as DynamoStore, in memory, with an injectable clock: every limit
+// at once or none, a line per tenant, and the fairest tenant first.
 export class MemoryStore implements Store {
   now = () => Date.now();
   events = new Map<string, { delivery: string; routed: boolean; expires: number }>();
@@ -29,7 +31,7 @@ export class MemoryStore implements Store {
   fields = new Map<string, Map<string, number>>();
   waiterItems = new Map<string, Waiter[]>();
   recentItems = new Map<string, { event: WireEvent; receivedAt: number }[]>();
-  /** Every acquire, for assertions: [time, item, tenant, granted]. */
+  /** Every acquire, for assertions: [time, items, tenant, granted]. */
   log: [number, string, string, boolean][] = [];
   private seq = 0;
 
@@ -61,6 +63,11 @@ export class MemoryStore implements Store {
     return true;
   }
 
+  async successor(item: string, owner: string, ttlMs: number) {
+    if (await this.claim(item, owner, ttlMs)) return owner;
+    return this.claims.get(item)!.owner;
+  }
+
   async take(item: string, intervalMs: number, toleranceMs: number) {
     const now = this.now();
     const tat = Math.max(this.buckets.get(item) ?? now, now);
@@ -78,7 +85,8 @@ export class MemoryStore implements Store {
 
   item(limit: Limit) {
     let l = this.limits.get(limit.item);
-    if (!l) this.limits.set(limit.item, (l = { leases: {}, tenants: {}, queue: [], label: limit.label ?? limit.item, cap: limit.limit }));
+    if (!l)
+      this.limits.set(limit.item, (l = { cap: limit.limit, label: limit.label ?? limit.item, leases: {}, tenants: {}, lines: new Map() }));
     return l;
   }
 
@@ -89,10 +97,14 @@ export class MemoryStore implements Store {
     return Object.values(l.leases).filter((v) => v.expires > now && (tenant === undefined || v.tenant === tenant)).length;
   }
 
+  queued(itemKey: string) {
+    const l = this.limits.get(itemKey);
+    return l ? [...l.lines.values()].reduce((n, line) => n + line.length, 0) : 0;
+  }
+
   private reap(l: LimitItem) {
     const now = this.now();
-    for (const [id, v] of Object.entries(l.leases))
-      if (v.expires <= now) this.drop(l, id, v.tenant);
+    for (const [id, v] of Object.entries(l.leases)) if (v.expires <= now) this.drop(l, id, v.tenant);
   }
 
   private drop(l: LimitItem, id: string, tenant: string) {
@@ -103,51 +115,83 @@ export class MemoryStore implements Store {
     if (l.tenants[t] <= 0) delete l.tenants[t];
   }
 
-  private grant(l: LimitItem, id: string, tenant: string, leaseMs: number) {
-    l.leases[id] = { expires: this.now() + leaseMs, tenant };
+  private give(l: LimitItem, id: string, tenant: string, ms: number) {
+    l.leases[id] = { expires: this.now() + ms, tenant };
     const t = tenantKey(tenant);
     l.tenants[t] = (l.tenants[t] ?? 0) + 1;
   }
 
-  async acquire(limit: Limit, leaseId: string, tenant: string, leaseMs: number) {
-    const l = this.item(limit);
-    this.reap(l);
-    const ok = Boolean(l.leases[leaseId]) || (Object.keys(l.leases).length < limit.limit && l.queue.length === 0);
-    if (ok && !l.leases[leaseId]) this.grant(l, leaseId, tenant, leaseMs);
-    this.log.push([this.now(), limit.item, tenant, ok]);
-    return ok;
+  async acquire(limits: Limit[], leaseId: string, tenant: string, leaseMs: number) {
+    const items = uniqueLimits(limits).map((l) => ({ limit: l, item: this.item(l) }));
+    items.forEach(({ item }) => this.reap(item));
+    const held = items.every(({ item }) => item.leases[leaseId]);
+    const room = items.every(
+      ({ limit, item }) => Object.keys(item.leases).length < limit.limit && [...item.lines.values()].every((q) => !q.length),
+    );
+    const ok = held || room;
+    if (ok && !held) items.forEach(({ item }) => this.give(item, leaseId, tenant, leaseMs));
+    this.log.push([this.now(), items.map((i) => i.limit.item).join(","), tenant, ok]);
+    return ok ? ("granted" as const) : ("full" as const);
   }
 
-  async renew(limit: Limit, leaseId: string, leaseMs: number) {
-    const lease = this.item(limit).leases[leaseId];
-    if (!lease || lease.expires <= this.now()) return false;
-    lease.expires = this.now() + leaseMs;
+  async renew(limits: Limit[], leaseId: string, leaseMs: number) {
+    const now = this.now();
+    for (const l of uniqueLimits(limits)) {
+      const lease = this.item(l).leases[leaseId];
+      if (!lease || lease.expires <= now) return false;
+    }
+    for (const l of uniqueLimits(limits)) this.item(l).leases[leaseId].expires = now + leaseMs;
     return true;
   }
 
-  async release(limit: Limit, leaseId: string, tenant: string) {
-    this.drop(this.item(limit), leaseId, tenant);
+  async release(limits: Limit[], leaseId: string, tenant: string) {
+    for (const l of uniqueLimits(limits)) this.drop(this.item(l), leaseId, tenant);
   }
 
-  async enqueue(limit: Limit, waiter: LeaseWaiter) {
-    const queue = this.item(limit).queue;
-    const same = queue.find((w) => w.at === waiter.at && w.leaseId === waiter.leaseId);
-    if (same) same.callbackId = waiter.callbackId;
-    else queue.push({ ...waiter, seq: this.seq++ });
+  async enqueue(waiter: LeaseWaiter) {
+    const limits = uniqueLimits(waiter.limits);
+    if (limits.every((l) => this.item(l).leases[waiter.leaseId])) return "held" as const;
+    for (const l of limits) {
+      const lines = this.item(l).lines;
+      const line = lines.get(waiter.tenant) ?? [];
+      lines.set(waiter.tenant, line);
+      const same = line.find((w) => w.at === waiter.at && w.leaseId === waiter.leaseId);
+      if (same) same.callbackId = waiter.callbackId;
+      else line.push({ ...waiter, limits, seq: this.seq++ });
+    }
+    return "queued" as const;
   }
 
-  async dispatch(limit: Limit, leaseMs: number, wake: (w: LeaseWaiter) => Promise<boolean>) {
+  async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>) {
     const l = this.item(limit);
     let woken = 0;
     for (;;) {
       this.reap(l);
-      if (Object.keys(l.leases).length >= limit.limit || !l.queue.length) return woken;
-      const next = fairest(l.queue, l.tenants)!;
-      l.queue.splice(l.queue.indexOf(next), 1);
-      this.grant(l, next.leaseId, next.tenant, leaseMs);
+      if (Object.keys(l.leases).length >= limit.limit) return woken;
+      // The oldest step of each tenant in line, fewest leases first, then oldest.
+      const candidates = [...l.lines.values()]
+        .filter((line) => line.length)
+        .map((line) => line[0])
+        .sort((a, b) => (l.tenants[tenantKey(a.tenant)] ?? 0) - (l.tenants[tenantKey(b.tenant)] ?? 0) || a.at - b.at || a.seq - b.seq);
+      const next = candidates.find((c) => this.canGrant(c));
+      if (!next) return woken;
+      for (const other of uniqueLimits(next.limits)) {
+        const item = this.item(other);
+        const line = item.lines.get(next.tenant)!;
+        line.splice(line.findIndex((w) => w.leaseId === next.leaseId && w.at === next.at), 1);
+        this.give(item, next.leaseId, next.tenant, GRANT_MS);
+      }
       if (await wake(next).catch(() => false)) woken++;
-      else this.drop(l, next.leaseId, next.tenant);
+      else await this.release(next.limits, next.leaseId, next.tenant);
     }
+  }
+
+  private canGrant(w: LeaseWaiter) {
+    return uniqueLimits(w.limits).every((other) => {
+      const item = this.item(other);
+      this.reap(item);
+      return Object.keys(item.leases).length < other.limit && !item.leases[w.leaseId];
+    });
   }
 
   private fieldKey(name: string, tenant: string | undefined) {
@@ -167,9 +211,7 @@ export class MemoryStore implements Store {
   }
 
   async putWaiter(key: string, waiter: Waiter) {
-    const list = (this.waiterItems.get(key) ?? []).filter(
-      (w) => !(w.createdAt === waiter.createdAt && w.callbackId === waiter.callbackId),
-    );
+    const list = (this.waiterItems.get(key) ?? []).filter((w) => !(w.createdAt === waiter.createdAt && w.callbackId === waiter.callbackId));
     list.push(waiter);
     this.waiterItems.set(key, list);
   }
@@ -201,7 +243,7 @@ export class MemoryStore implements Store {
         pk,
         label: l.label,
         cap: l.cap,
-        queued: l.queue.length,
+        queued: this.queued(pk),
         tenants: { ...l.tenants },
         leases: Object.fromEntries(Object.entries(l.leases).map(([id, v]) => [id, `${v.expires}|${v.tenant}`])),
       }));

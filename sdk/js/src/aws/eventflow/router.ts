@@ -7,7 +7,7 @@ import { hash, key, runId as makeRunId } from "./ids.js";
 import { sign, verify } from "./sign.js";
 import type { Admission } from "./store.js";
 import type { Message, RunPayload, WireEvent } from "./types.js";
-import { eventMatches, RECENT_MS, recentKey, STOP, waitKey, type InvokeOutcome, type Registered } from "./worker.js";
+import { eventMatches, MESSAGE_TTL_MS, RECENT_MS, recentKey, STOP, waitKey, type InvokeOutcome, type Registered } from "./worker.js";
 
 // The router reads the engine's queue. For each event it resolves the waits that
 // match it, and starts a run of each function it triggers. It also gets the tick of
@@ -77,6 +77,10 @@ function parse(record: SQSRecord): Message {
   }
   if (message.kind === "start" || message.kind === "invoke") {
     if (!verify(message)) throw new Rejected(`The ${message.kind} message isn't signed by this EventFlow.`);
+    // A signed message is good for a while, so one that's copied can't be sent again
+    // later.
+    if (typeof message.exp !== "number" || message.exp < Date.now())
+      throw new Rejected(`The ${message.kind} message expired.`);
     return message as Message;
   }
   throw new Rejected(`Unknown message kind "${String(message.kind).slice(0, 20)}".`);
@@ -94,7 +98,8 @@ async function routeRecord(record: SQSRecord, registry: Map<string, Registered>,
     }
     return startRun(entry.def, message.event, engine, {
       parent: message.parent,
-      runId: message.kind === "invoke" ? message.runId : undefined,
+      runId: message.runId,
+      root: message.root,
     });
   }
 
@@ -164,7 +169,7 @@ export async function startRun(
   def: Definition,
   event: WireEvent,
   engine: Engine,
-  opts: { parent?: string; runId?: string; identity?: string } = {},
+  opts: { parent?: string; runId?: string; root?: string; identity?: string } = {},
 ) {
   const scope = { event };
   const tenant = event.tenant ?? null;
@@ -217,6 +222,10 @@ export async function startRun(
           fn: def.id,
           event,
           at: admission.at,
+          // The run keeps its ID and root when it comes back, so it's the same run.
+          runId: id,
+          root: opts.root ?? id,
+          exp: admission.at + MESSAGE_TTL_MS,
           ...(opts.parent ? { parent: opts.parent } : {}),
         }),
         group: event.tenant ?? `t-${hash(def.id, 10)}`,
@@ -230,6 +239,7 @@ export async function startRun(
     "sst:eventflow": 1,
     fn: def.id,
     runId: id,
+    root: opts.root ?? id,
     event,
     ...(opts.parent ? { parent: opts.parent } : {}),
   };

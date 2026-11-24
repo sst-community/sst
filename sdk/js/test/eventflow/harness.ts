@@ -52,6 +52,8 @@ export class Cluster {
   deadLetters: QueuedMessage[] = [];
   /** The ARNs of the runs that were stopped. The local runner can't stop them. */
   stopped: string[] = [];
+  /** Finished runs that the run APIs list, with their history, for retry tests. */
+  history = new Map<string, { status: string; payload: any; events: any[]; error?: any }>();
   /** Make a start fail, to test partial failures. */
   failStart?: (payload: any) => boolean;
   handler: (event: any, context: any) => Promise<any>;
@@ -128,6 +130,25 @@ export class Cluster {
       const record: RunRecord = { runId: name, payload: body, runner, result: runner.run({ payload: body }) };
       this.runs.set(name, record);
       return new Response(null, { status: 202, headers: { "X-Amz-Durable-Execution-Arn": `arn/${name}` } });
+    }
+    const listed = path.match(/^\/2025-12-01\/functions\/[^/]+\/durable-executions\?(.*)$/);
+    if (service === "lambda" && listed) {
+      const name = new URLSearchParams(listed[1]).get("DurableExecutionName");
+      return Response.json({
+        DurableExecutions: [
+          ...this.history.entries(),
+          ...[...this.runs.keys()].filter((id) => !this.history.has(id)).map((id) => [id, { status: "RUNNING" }] as const),
+        ]
+          .filter(([id]) => !name || id === name)
+          .map(([id, h]) => ({ DurableExecutionName: id, DurableExecutionArn: `arn/${id}`, Status: h.status, StartTimestamp: 1 })),
+      });
+    }
+    const executions = path.match(/^\/2025-12-01\/durable-executions\/arn%2F([^/?]+)(\/history)?\?/);
+    if (service === "lambda" && executions) {
+      const h = this.history.get(decodeURIComponent(executions[1]));
+      if (!h) return new Response("ResourceNotFoundException", { status: 404 });
+      if (executions[2]) return Response.json({ Events: h.events });
+      return Response.json({ Status: h.status, InputPayload: JSON.stringify(h.payload), Error: h.error });
     }
     const stop = path.match(/^\/2025-12-01\/durable-executions\/(.+)\/stop$/);
     if (service === "lambda" && stop) {

@@ -414,3 +414,27 @@ func TestInterruptedRun(t *testing.T) {
 		t.Fatalf("the hint should say to check first:\n%s", out.String())
 	}
 }
+
+func TestRerunAlreadyDone(t *testing.T) {
+	var buf bytes.Buffer
+	RenderRerun(&buf, "retry", Rerun{ID: "a_r1", ReplayOf: "a", Existing: true})
+	if out := buf.String(); !strings.Contains(out, "already retried as a_r1") || !strings.Contains(out, "--again") {
+		t.Fatalf("got %q", out)
+	}
+	buf.Reset()
+	results := []RerunResult{{ID: "a"}, {ID: "b"}}
+	results[0].Result = &struct {
+		ID       string `json:"id"`
+		Existing bool   `json:"existing,omitempty"`
+	}{ID: "a_r1", Existing: true}
+	results[1].Result = &struct {
+		ID       string `json:"id"`
+		Existing bool   `json:"existing,omitempty"`
+	}{ID: "b_r1"}
+	if failures := RenderRerunAll(&buf, "retry", results); failures != 0 {
+		t.Fatalf("failures = %d", failures)
+	}
+	if out := buf.String(); !strings.Contains(out, "already → a_r1") {
+		t.Fatalf("got %q", out)
+	}
+}

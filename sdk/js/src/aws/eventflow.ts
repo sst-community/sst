@@ -6,6 +6,7 @@ import { Engine, toWireEvent, type SendPayload } from "./eventflow/engine.js";
 import { handleAdmin } from "./eventflow/admin.js";
 import type { DeadLetter, FunctionInfo, LimitInfo, Overview, WaitInfo } from "./eventflow/admin.js";
 import { runId as makeRunId } from "./eventflow/ids.js";
+import { loadKey } from "./eventflow/sign.js";
 import { routeBatch, tick } from "./eventflow/router.js";
 import type { ListInput, Run, RunSummary } from "./eventflow/runs.js";
 import type { Store } from "./eventflow/store.js";
@@ -269,6 +270,8 @@ export function serve(input: { client: EventFlow; functions: EventFlowFunction<a
   const worker = createWorker(registry, engine);
 
   return async (event: any, context: LambdaContext) => {
+    // The router and the worker sign and check runs with a key they load once.
+    await loadKey(input.client.getEngine().aws);
     if (event?.DurableExecutionArn) return (worker as any)(event, context);
     // The admin API. Only what may invoke the router, like `sst eventflow` or a
     // function linked to `flow.admin`, can call it.
@@ -359,25 +362,36 @@ export class Runs {
    *
    * It's a new run, with a new ID. Its `replayOf` is the run it retries.
    *
-   * A run whose `atMostOnce` step stopped part way isn't retried, since that step may
-   * have done its side effect, like a payment. Check it, then pass `force: true`.
+   * A run whose `atMostOnce` step started and didn't finish isn't retried, since that
+   * step may have done its side effect, like a payment. Check it, then pass
+   * `force: true`.
+   *
+   * A run is retried once. Retrying it again, as from a double click, returns the
+   * first retry, with `existing: true`. Pass `again: true` to retry it again.
+   *
+   * The retry keeps the run's idempotency keys, so a step that charged a card in the
+   * first run sends the provider the same key.
    *
    * @example
    * ```ts
    * const { id, reused } = await flow.runs.retry(runId);
    * ```
    */
-  async retry(runId: string, options: { force?: boolean } = {}): Promise<{ id: string; replayOf: string; reused: string[] }> {
-    return this.engine().admin("runs.retry", { runId, force: options.force === true });
+  async retry(runId: string, options: RerunOptions = {}): Promise<Rerun> {
+    return this.engine().admin("runs.retry", { runId, force: options.force === true, again: options.again === true });
   }
 
   /**
    * Run a function again with the event of an earlier run, as a new run on the latest
    * deployed version. Every step runs again, including the ones that succeeded. Make
-   * steps with side effects idempotent, for example with the event's ID.
+   * steps with side effects idempotent, with `idempotencyKey()`.
+   *
+   * A run with an `atMostOnce` step that started isn't replayed without
+   * `force: true`, since that step would run again. Like a retry, a run is replayed
+   * once unless `again: true`.
    */
-  async replay(runId: string, options: { force?: boolean } = {}): Promise<{ id: string; replayOf: string }> {
-    return this.engine().admin("runs.replay", { runId, force: options.force === true });
+  async replay(runId: string, options: RerunOptions = {}): Promise<Rerun> {
+    return this.engine().admin("runs.replay", { runId, force: options.force === true, again: options.again === true });
   }
 
   /**
@@ -391,11 +405,34 @@ export class Runs {
    */
   async retryAll(input: RetryAllInput = {}) {
     const fn = typeof input.function === "string" ? input.function : input.function?.id;
-    return this.engine().admin<{ id: string; result?: { id: string }; error?: string }[]>("runs.retryAll", {
+    return this.engine().admin<{ id: string; result?: { id: string; existing?: boolean }; error?: string }[]>("runs.retryAll", {
       ...input,
       function: fn,
     });
   }
+}
+
+/** How to retry or replay a run. */
+export interface RerunOptions {
+  /**
+   * Rerun it though an `atMostOnce` step may have done its side effect. Check that
+   * step first.
+   */
+  force?: boolean;
+  /** Rerun it though it was already rerun. */
+  again?: boolean;
+}
+
+/** The run a retry or replay started. */
+export interface Rerun {
+  /** The new run's ID. */
+  id: string;
+  /** The run it reruns. */
+  replayOf: string;
+  /** For a retry, the steps whose saved results it reuses. */
+  reused: string[];
+  /** True when the run was already rerun, and `id` is that run. Nothing new started. */
+  existing?: boolean;
 }
 
 /** What `retryAll()` takes: which runs, and whether to retry or replay them. */
@@ -589,22 +626,24 @@ export interface Context<TEvent = FlowEvent> {
   /** The most times a step is tried: the function's `retries`, plus one. */
   maxAttempts: number;
   /**
-   * A key for a step's side effect, to pass to a payment provider or any API that
-   * takes an idempotency key. It's the same in every attempt of the step, and in every
-   * retry and replay of the run, and different for every other step and run. So a
-   * step that runs again, after a crash or a retry, doesn't charge twice.
+   * The key of the step it's called in, for the step's side effect: pass it to a
+   * payment provider, or any API that takes an idempotency key. It's the same in
+   * every attempt of the step, and in every retry and replay of the run, and
+   * different for every other step, every other occurrence of a step in a loop, and
+   * every other run. So a step that runs again, after a crash or a retry, doesn't
+   * charge twice. Call it inside `step.run()`.
    *
    * @example
    * ```ts
    * await step.run("charge", () =>
    *   stripe.paymentIntents.create(
    *     { amount, currency: "usd", customer },
-   *     { idempotencyKey: idempotencyKey("charge") },
+   *     { idempotencyKey: idempotencyKey() },
    *   ),
    * );
    * ```
    */
-  idempotencyKey: (stepId: string) => string;
+  idempotencyKey: () => string;
   /** A logger that doesn't repeat itself when the function replays. */
   logger: Logger;
 }

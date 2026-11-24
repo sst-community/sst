@@ -61,6 +61,23 @@ describe("only the router starts runs", () => {
     expect(cluster.runs.size).toBe(0);
   });
 
+  it("drops a signed message that expired", async () => {
+    const cluster = new Cluster((flow) => [flow.createFunction({ id: "charge" }, async () => "charged")]);
+    const { sign } = await import("../../src/aws/eventflow/sign.ts");
+    const old = sign({
+      kind: "invoke",
+      fn: "charge",
+      event: { id: "e1", name: "inngest/function.invoked", data: {}, ts: 0 },
+      parent: "cb",
+      runId: "r",
+      root: "r",
+      exp: Date.now() - 1,
+    });
+    cluster.queue.push({ messageId: "m", body: JSON.stringify(old), receiveCount: 0, sentAt: Date.now() });
+    expect((await cluster.deliver(cluster.queue.splice(0))).batchItemFailures).toEqual([]);
+    expect(cluster.runs.size).toBe(0);
+  });
+
   it("drops an event whose tenant isn't its message group", async () => {
     const cluster = new Cluster((flow) => [flow.createFunction({ id: "a", triggers: { event: "go" } }, noop)]);
     cluster.queue.push({
@@ -141,6 +158,8 @@ describe("flow control", () => {
     await cluster.deliver(cluster.queue.splice(0));
     const held = cluster.queue.map((m) => JSON.parse(m.body));
     expect(held.every((m) => m.kind === "start" && m.sig)).toBe(true);
+    // A held run keeps its run ID and root, so it's the same run when it comes back.
+    expect(held.every((m) => m.runId && m.root === m.runId && m.exp > m.at)).toBe(true);
     const ats = held.map((m) => m.at).sort();
     // About 10 seconds apart, one slot each.
     for (let i = 1; i < ats.length; i++) expect(ats[i] - ats[i - 1]).toBeGreaterThanOrEqual(9_000);
