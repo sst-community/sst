@@ -51,6 +51,7 @@ function post(endpoint: string, action: string, body: any) {
       },
     );
     req.on("error", reject);
+    req.setTimeout(10_000, () => req.destroy(new Error(`DynamoDB Local didn't answer ${action}`)));
     req.end(JSON.stringify(body));
   });
 }
@@ -539,16 +540,8 @@ for (const [name, make] of stores) {
           store,
           (action, body) => action === "UpdateItem" && body.Key.pk.S === limits[1].item && "cap" in body === false && String(body.UpdateExpression).includes(":cap"),
           async () => {
-            await (store as any).db("UpdateItem", {
-              Key: { pk: { S: limits[0].item }, sk: { S: "w" } },
-              UpdateExpression: "REMOVE waiting.#t",
-              ExpressionAttributeNames: { "#t": "a" },
-            });
-            await (store as any).db("UpdateItem", {
-              Key: { pk: { S: limits[1].item }, sk: { S: "w" } },
-              UpdateExpression: "REMOVE waiting.#t",
-              ExpressionAttributeNames: { "#t": "a" },
-            });
+            for (const l of limits)
+              await (store as any).db("DeleteItem", { Key: { pk: { S: l.item }, sk: { S: "w#a" } } });
             const plain = make() as DynamoStore;
             // Without this, the first limit is "full" with the step's own lease.
             asked = await plain.acquire(limits.map((l) => ({ ...l, limit: 2 })), "x", "a", 60_000);
@@ -617,6 +610,206 @@ for (const [name, make] of stores) {
         await nothing(store, l);
       });
 
+      // From an adversarial review: each was a way for a step to run over the limit, a
+      // lease to be left held, or a step to be left in line.
+      it("doesn't give away the lease of a step that was woken when the wake's answer was lost", async () => {
+        for (const lost of [async () => false, async () => Promise.reject(new Error("reset"))]) {
+          const store = make() as DynamoStore;
+          const l = limit(1);
+          await store.acquire([l], "H", "a", 60_000);
+          await store.enqueue(waiter("S", "a", 1, [l]));
+          let running = false;
+          await store.handoff([l], "H", "a", async (w) => {
+            if (w.leaseId !== "S" || running) return false;
+            // It resumes, and checks its lease before it runs, as the worker does.
+            running = await (make() as DynamoStore).renew([l], "S", 60_000);
+            return lost();
+          });
+          expect(running).toBe(true);
+          await store.dispatch(l, async () => false);
+          expect(await store.acquire([l], "X", "b", 60_000)).toBe("full");
+          await store.handoff([l], "S", "a", async () => false);
+          await nothing(store, l);
+        }
+      });
+
+      it("gets past the steps of stopped runs, however many", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.acquire([l], "H", "a", 60_000);
+        for (let i = 0; i < 20; i++) await store.enqueue(waiter(`dead${i}`, "a", i, [l]));
+        await store.enqueue(waiter("live", "a", 99, [l]));
+        const woken: string[] = [];
+        await store.handoff([l], "H", "a", async (w) => w.leaseId === "live" && !!woken.push(w.leaseId));
+        expect(woken).toEqual(["live"]);
+      });
+
+      it("leaves no lease idle when handoffs race for the same steps", async () => {
+        const l = limit(3);
+        const [h1, h2, h3] = [make(), make(), make()] as DynamoStore[];
+        const woken: string[] = [];
+        const wake = collect(woken);
+        for (const x of ["x1", "x2", "x3"]) await h1.acquire([l], x, "t", 60_000);
+        for (const i of [1, 2, 3]) await h1.enqueue(waiter(`s${i}`, "t", i, [l]));
+        before(
+          h2,
+          (action, body) => action === "UpdateItem" && String(body.UpdateExpression).startsWith("REMOVE leases.#o"),
+          async () => {
+            before(
+              h2,
+              (action, body) => action === "UpdateItem" && String(body.ConditionExpression).includes("active < :cap") && body.ExpressionAttributeNames["#l"] === "s2",
+              () => h3.handoff([l], "x3", "t", wake),
+            );
+            await h1.handoff([l], "x1", "t", wake);
+          },
+        );
+        await h2.handoff([l], "x2", "t", wake);
+        expect(woken.sort()).toEqual(["s1", "s2", "s3"]);
+        expect((await state(h1, l)).active).toBe(3);
+      });
+
+      it("keeps a step in line that asks again, with a new callback, during a grant", async () => {
+        const store = make() as DynamoStore;
+        const other = make() as DynamoStore;
+        const l = limit(1);
+        await store.acquire([l], "H", "a", 60_000);
+        await store.enqueue({ ...waiter("S", "a", 1, [l]), callbackId: "cb0" });
+        before(
+          store,
+          (action, body) => action === "UpdateItem" && String(body.UpdateExpression).startsWith("REMOVE leases.#o"),
+          async () => {
+            expect(await other.acquire([l], "S", "a", 60_000)).toBe("full");
+            expect(await other.enqueue({ ...waiter("S", "a", 1, [l]), callbackId: "cb1" })).toBe("queued");
+          },
+        );
+        const told: string[] = [];
+        await store.handoff([l], "H", "a", async (w) => w.callbackId === "cb1" && !!told.push(w.callbackId));
+        expect(told).toEqual(["cb1"]);
+      });
+
+      it("sees a step that joins after a count was taken off twice", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.acquire([l], "H", "a", 60_000);
+        await store.enqueue(waiter("w1", "a", 1, [l]));
+        const db = (store as any).db.bind(store);
+        let once = false;
+        // Its answer is lost, and it's sent again.
+        (store as any).db = async (action: string, body: any) => {
+          if (!once && body.ExpressionAttributeValues?.[":n"]?.N === "-1") {
+            once = true;
+            await db(action, body);
+          }
+          return db(action, body);
+        };
+        const woken: string[] = [];
+        await store.handoff([l], "H", "a", collect(woken));
+        await store.enqueue(waiter("w2", "a", 2, [l]));
+        expect(await store.acquire([l], "newcomer", "b", 60_000)).toBe("full");
+        await store.handoff([l], "w1", "a", collect(woken));
+        expect(woken).toEqual(["w1", "w2"]);
+      });
+
+      it("finds the one tenant that can go on, behind many whose own limit is full", async () => {
+        const store = make() as DynamoStore;
+        const shared = limit(1);
+        await store.acquire([shared], "H", "z", 60_000);
+        for (let i = 0; i < 60; i++) {
+          const own = limit(1);
+          await store.acquire([own], `g${i}`, `t${i}`, 60_000);
+          await store.enqueue(waiter(`f${i}`, `t${i}`, i, [shared, own]));
+        }
+        await store.enqueue(waiter("ready", "u", 100, [shared, limit(1)]));
+        const woken: string[] = [];
+        await store.handoff([shared], "H", "z", collect(woken));
+        expect(woken).toEqual(["ready"]);
+      }, 60_000);
+
+      it("leaves no entry in line of a step that asked again and found its leases", async () => {
+        const store = make() as DynamoStore;
+        const limits = [limit(1), limit(1)];
+        await store.enqueue({ ...waiter("S", "a", 1, limits), callbackId: "cb0" });
+        await store.dispatch(limits[0], async () => true);
+        // Its entries are back, as when they went in between a grant's deletes.
+        for (const l of limits) await (store as any).join(l, { ...waiter("S", "a", 1, limits), callbackId: "cb1" });
+        expect(await store.enqueue({ ...waiter("S", "a", 1, limits), callbackId: "cb1" })).toBe("held");
+        const woken: string[] = [];
+        await store.handoff(limits, "S", "a", collect(woken));
+        expect(woken).toEqual([]);
+        await nothing(store, ...limits);
+      });
+
+      it("holds to a limit that was lowered, while steps wait", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(4);
+        for (let i = 0; i < 4; i++) await store.acquire([l], `h${i}`, "a", 60_000);
+        for (let i = 0; i < 8; i++) await store.enqueue(waiter(`s${i}`, "a", i, [l]));
+        const lower = { ...l, limit: 1 };
+        for (let i = 0; i < 3; i++) await store.handoff([lower], `h${i}`, "a", async () => true);
+        expect((await state(store, l)).active).toBe(1);
+        const woken: string[] = [];
+        await store.handoff([lower], "h3", "a", collect(woken));
+        expect(woken).toEqual(["s0"]);
+        expect((await state(store, l)).active).toBe(1);
+      });
+
+      it("wakes a step whose entry's delete got an error after it was made", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.acquire([l], "H", "a", 60_000);
+        await store.enqueue(waiter("S", "a", 1, [l]));
+        const db = (store as any).db.bind(store);
+        let once = false;
+        (store as any).db = async (action: string, body: any, options: any) => {
+          if (once || action !== "DeleteItem" || !body.ConditionExpression?.includes("callback")) return db(action, body, options);
+          once = true;
+          // It isn't sent again: it couldn't tell its own delete from another's.
+          expect(options).toEqual({ retries: 0 });
+          await db(action, body, options);
+          throw new AwsError("dynamodb", action, 500, "InternalServerError", "");
+        };
+        const woken: string[] = [];
+        await store.handoff([l], "H", "a", collect(woken));
+        expect(woken).toEqual(["S"]);
+      });
+
+      it("gives back its leases when a handoff fails", async () => {
+        const store = make() as DynamoStore;
+        const limits = [limit(1), limit(1)];
+        await store.acquire(limits, "H", "a", 60_000);
+        await store.enqueue(waiter("S", "a", 1, limits));
+        const db = (store as any).db.bind(store);
+        let once = false;
+        (store as any).db = async (action: string, body: any) => {
+          if (!once && action === "Query") {
+            once = true;
+            throw new AwsError("dynamodb", action, 400, "ThrottlingException", "");
+          }
+          return db(action, body);
+        };
+        const woken: string[] = [];
+        await expect(store.handoff(limits, "H", "a", collect(woken))).rejects.toThrow("ThrottlingException");
+        expect(woken).toEqual(["S"]);
+        await store.handoff(limits, "S", "a", collect(woken));
+        await nothing(store, ...limits);
+      });
+
+      it("finds a step behind three that were put back in line and are running", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(4);
+        for (let i = 0; i < 4; i++) await store.acquire([l], `h${i}`, "a", 60_000);
+        for (let i = 0; i < 4; i++) await store.enqueue(waiter(`s${i}`, "a", i, [l]));
+        // Woken, but the answers are lost, so they're put back.
+        for (let i = 0; i < 3; i++)
+          await store.handoff([l], `h${i}`, "a", async (w) => {
+            if (w.leaseId === "s3" || !(await (make() as DynamoStore).renew([l], w.leaseId, 60_000))) return false;
+            throw new Error("reset");
+          });
+        const woken: string[] = [];
+        await store.handoff([l], "h3", "a", collect(woken));
+        expect(woken.length).toBeGreaterThan(0);
+      });
+
       it("counts the steps in line for the admin API", async () => {
         const store = make() as DynamoStore;
         const l = { ...limit(1), label: "fn:x" };
@@ -676,12 +869,10 @@ for (const [name, make] of stores) {
         const l = limit(1);
         await store.acquire([l], "held", "a", 60_000);
         await store.release([l], "held", "a");
-        const ghosts = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [tenantKey(`ghost-${i}`), { N: "3" }]));
-        await (store as any).db("UpdateItem", {
-          Key: { pk: { S: l.item }, sk: { S: "w" } },
-          UpdateExpression: "SET queued = :q, waiting = :w",
-          ExpressionAttributeValues: { ":q": { N: "75" }, ":w": { M: ghosts } },
-        });
+        for (let i = 0; i < 25; i++)
+          await (store as any).db("PutItem", {
+            Item: { pk: { S: l.item }, sk: { S: `w#${tenantKey(`ghost-${i}`)}` }, n: { N: "3" }, at: { N: String(Date.now() - 120_000) } },
+          });
         expect(await store.acquire([l], "blocked", "real", 60_000)).toBe("full");
         await store.enqueue(waiter("real", "real", Date.now(), [l]));
         const woken: string[] = [];

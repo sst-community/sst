@@ -280,14 +280,14 @@ export class MemoryStore implements Store {
 
   async scan(prefix: string) {
     if (prefix === "C#")
-      return [...this.limits.entries()].map(([pk, l]) => ({
+      return [...this.limits.entries()].flatMap(([pk, l]) => [{ pk, sk: "w#", n: this.queued(pk) }, {
         pk,
+        sk: "-",
         label: l.label,
         cap: l.cap,
-        waiting: { "": this.queued(pk) },
         tenants: { ...l.tenants },
-        leases: Object.fromEntries(Object.entries(l.leases).map(([id, v]) => [id, `${v.expires}|${v.tenant}`])),
-      }));
+        leases: Object.fromEntries(Object.entries(l.leases).map(([id, v]) => [id, `${v.expires}|o|${v.tenant}`])),
+      }]);
     if (prefix === "W#")
       return [...this.waiterItems.entries()].flatMap(([pk, list]) =>
         list.map((w) => ({

@@ -2,6 +2,7 @@ import { sqs } from "./aws.js";
 import { toWireEvent, type Engine, type SendPayload } from "./engine.js";
 import type { Definition } from "./definition.js";
 import { cancelAll, cancelRun, getRun, listRuns, rerun, rerunAll, type ListInput } from "./runs.js";
+import { parseLease } from "./store.js";
 import type { Registered } from "./worker.js";
 
 // The admin API. The router serves it, to whatever may invoke the router: the
@@ -69,7 +70,7 @@ export interface DeadLetter {
   body?: string;
 }
 
-const MAX_SCAN = 1000;
+const MAX_SCAN = 5000;
 
 function functionInfo(def: Definition): FunctionInfo {
   return {
@@ -117,20 +118,25 @@ async function queueInfo(engine: Engine, url: string | undefined) {
 
 async function limits(engine: Engine): Promise<LimitInfo[]> {
   const found = await engine.store.scan("C#", MAX_SCAN);
-  // A limit is two items, its leases and its line: one entry for both.
+  // A limit is an item with its leases, and one for each tenant in its line.
   const byLimit = new Map<string, Record<string, any>>();
-  for (const i of found) byLimit.set(String(i.pk), { ...byLimit.get(String(i.pk)), ...i });
-  const items = [...byLimit.values()].filter((i) => i.cap !== undefined || i.leases !== undefined);
+  for (const i of found) {
+    const l = byLimit.get(String(i.pk)) ?? { queued: 0 };
+    if (String(i.sk).startsWith("w#")) l.queued += Math.max(0, Number(i.n ?? 0));
+    else Object.assign(l, i);
+    byLimit.set(String(i.pk), l);
+  }
+  const items = [...byLimit.values()].filter((i) => i.leases !== undefined);
   const now = Date.now();
   return items.map((i) => ({
     label: String(i.label ?? i.pk),
     limit: i.cap === undefined ? undefined : Number(i.cap),
-    active: Object.values<any>(i.leases ?? {}).filter((v) => Number(String(v).split("|")[0]) > now).length,
-    queued: Object.values<any>(i.waiting ?? {}).reduce((n, v) => n + Math.max(0, Number(v)), 0),
+    active: Object.values<any>(i.leases).filter((v) => parseLease(String(v)).expires > now).length,
+    queued: i.queued,
     tenants: { ...(i.tenants ?? {}) },
-    leases: Object.entries<any>(i.leases ?? {}).map(([id, v]) => {
-      const [expires, ...tenant] = String(v).split("|");
-      return { id, tenant: tenant.join("|"), expiresAt: new Date(Math.floor(Number(expires))).toISOString() };
+    leases: Object.entries<any>(i.leases).map(([id, v]) => {
+      const { expires, tenant } = parseLease(String(v));
+      return { id, tenant, expiresAt: new Date(expires).toISOString() };
     }),
   }));
 }

@@ -26,6 +26,7 @@ async function call<T>(
   action: string,
   body: unknown,
   aws?: AwsOptions,
+  options?: { retries?: number },
 ): Promise<T> {
   const response = await awsFetch(
     service,
@@ -38,7 +39,7 @@ async function call<T>(
       },
       body: JSON.stringify(body),
     },
-    { aws },
+    { aws, ...options },
   );
   const text = await response.text();
   if (!response.ok) {
@@ -74,10 +75,15 @@ export function ssm<T = any>(action: string, body: unknown, aws?: AwsOptions) {
  * A DynamoDB call. A throttle or a transaction conflict did nothing, so it's tried
  * again, a few times, with backoff.
  */
-export async function dynamo<T = any>(action: string, body: unknown, aws?: AwsOptions): Promise<T> {
+export async function dynamo<T = any>(
+  action: string,
+  body: unknown,
+  aws?: AwsOptions,
+  options?: { retries?: number },
+): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await call<T>("dynamodb", "DynamoDB_20120810", action, body, aws);
+      return await call<T>("dynamodb", "DynamoDB_20120810", action, body, aws, options);
     } catch (error) {
       // A hot item, like a busy concurrency limit, can conflict with transactions for
       // a while, and a burst can throttle one until DynamoDB splits it: about 5 seconds
