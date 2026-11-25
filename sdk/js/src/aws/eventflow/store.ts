@@ -585,28 +585,31 @@ export class DynamoStore implements Store {
     if (n > 0 || left > 0) return;
     await this.dropLine(Key, 0);
     // A step is counted before it's in line, so one in line here isn't counted. Count
-    // it, so it's seen.
-    const page = await this.db("Query", {
-      KeyConditionExpression: "pk = :pk",
-      ExpressionAttributeValues: { ":pk": S(queueKey(item, tenant)) },
-      ConsistentRead: true,
-      Limit: 1,
-    });
-    if (!page.Items?.length) return;
-    await this.db("UpdateItem", {
-      Key,
-      UpdateExpression: "SET #n = :one, #at = :now, expires = :exp",
-      ConditionExpression: "attribute_not_exists(#n) OR #n <= :zero",
-      ExpressionAttributeNames: { "#n": "n", "#at": "at" },
-      ExpressionAttributeValues: {
-        ":one": N(1),
-        ":zero": N(0),
-        ":now": N(Date.now()),
-        ":exp": { N: seconds(Date.now() + DAY) },
-      },
-    }).catch((error) => {
-      if (!isConditionFailure(error)) throw error;
-    });
+    // it, so it's seen. If it left in the meantime, take that back.
+    const inLine = async () => {
+      const page = await this.db("Query", {
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": S(queueKey(item, tenant)) },
+        ConsistentRead: true,
+        Limit: 1,
+      });
+      return !!page.Items?.length;
+    };
+    if (!(await inLine())) return;
+    const at = Date.now();
+    try {
+      await this.db("UpdateItem", {
+        Key,
+        UpdateExpression: "SET #n = :one, #at = :now, expires = :exp",
+        ConditionExpression: "attribute_not_exists(#n) OR #n <= :zero",
+        ExpressionAttributeNames: { "#n": "n", "#at": "at" },
+        ExpressionAttributeValues: { ":one": N(1), ":zero": N(0), ":now": N(at), ":exp": { N: seconds(at + DAY) } },
+      });
+    } catch (error) {
+      if (isConditionFailure(error)) return;
+      throw error;
+    }
+    if (!(await inLine())) await this.dropLine(Key, 1, at);
   }
 
   // Take a tenant out of a limit's line, if its count is still this, and if given, hasn't

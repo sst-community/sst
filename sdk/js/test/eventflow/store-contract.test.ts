@@ -721,6 +721,30 @@ for (const [name, make] of stores) {
         expect(woken).toEqual(["w1", "w2"]);
       });
 
+      it("doesn't count a step that left as its line was found empty", async () => {
+        const store = make() as DynamoStore;
+        const other = make() as DynamoStore;
+        const l = limit(1);
+        await store.acquire([l], "H", "a", 60_000);
+        await store.enqueue(waiter("w1", "a", 1, [l]));
+        const woken: string[] = [];
+        // As w1's count comes off, w2 joins; and it leaves before it's counted again.
+        before(
+          store,
+          (action, body) => action === "Query" && !!body.Limit && body.Limit === 1,
+          () => other.enqueue(waiter("w2", "a", 2, [l])),
+        );
+        before(
+          store,
+          (action, body) => action === "UpdateItem" && !!body.ExpressionAttributeValues[":one"] && !!body.ExpressionAttributeValues[":zero"],
+          () => (other as any).leave(l, waiter("w2", "a", 2, [l])),
+        );
+        await store.handoff([l], "H", "a", collect(woken));
+        expect(woken).toEqual(["w1"]);
+        await store.handoff([l], "w1", "a", collect(woken));
+        await nothing(store, l);
+      });
+
       it("finds the one tenant that can go on, behind many whose own limit is full", async () => {
         const store = make() as DynamoStore;
         const shared = limit(1);
