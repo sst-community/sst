@@ -1436,7 +1436,7 @@ export class Router extends Component implements Link.Linkable {
     opts: ComponentResourceOptions = {},
   ) {
     super(__pulumiType, name, args, opts);
-    const _refVersion = 2;
+    const _refVersion = 3;
     const self = this;
     this.constructorName = name;
     this.constructorOpts = opts;
@@ -2167,7 +2167,15 @@ async function handler(event) {
                 headersConfig: {
                   headerBehavior: "whitelist",
                   headers: {
-                    items: ["x-open-next-cache-key", "x-forwarded-host"],
+                    // authorization: GET/HEAD only forward it when it's in the
+                    // cache policy. Required for IAM / app auth (esp. Lambda
+                    // web function origins). Changes cache keying for all lazy
+                    // routes — bump _refVersion so Router.get stages redeploy.
+                    items: [
+                      "authorization",
+                      "x-open-next-cache-key",
+                      "x-forwarded-host",
+                    ],
                   },
                 },
                 queryStringsConfig: {
@@ -2458,9 +2466,14 @@ async function handler(event) {
    * Add a route to a destination URL.
    *
    * If the Router has [`protection`](#protection) set, set `protection: true` in the
-   * route's `args` to sign requests to a Lambda function URL with Origin Access
-   * Control. It is off by default. CloudFront also needs permission to invoke the
-   * function, as described under `protection`.
+   * route's `args` to sign requests to a Lambda function URL or Lambda web function
+   * endpoint with Origin Access Control. It is off by default. CloudFront also needs
+   * permission to invoke the function, as described under `protection`.
+   *
+   * Web function endpoints require OAC signing behavior `always-amz-auth` and are
+   * incompatible with `protection: "oac-with-edge-signing"` (Lambda@Edge origin
+   * triggers). Use `protection: "oac"` for those origins. Prefer
+   * `WebFunction`'s `router` prop so SST also creates the resource policy.
    *
    * A request that matches none of the Router's routes gets a 404. To catch it
    * instead, add a route for `/`.

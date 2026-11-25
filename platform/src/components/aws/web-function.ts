@@ -23,7 +23,7 @@ import {
   lambdaweb,
   s3,
 } from "@pulumi/aws";
-import { Component, Transform, transform } from "../component.js";
+import { Component, Prettify, Transform, transform } from "../component.js";
 import { Cdn, CdnArgs } from "./cdn.js";
 import { DurationMinutes, toSeconds } from "../duration.js";
 import { VisibleError } from "../error.js";
@@ -36,6 +36,12 @@ import { Function, FunctionArgs } from "./function.js";
 import { functionEncryptionKey } from "./function-encryption-key.js";
 import { RETENTION } from "./logging.js";
 import { Permission, permission } from "./permission.js";
+import { KvKeys } from "./providers/kv-keys.js";
+import { KvRoutesUpdate } from "./providers/kv-routes-update.js";
+import {
+  normalizeRouteArgs,
+  RouterRouteArgs,
+} from "./router.js";
 import { Vpc } from "./vpc.js";
 import { warnOnce } from "../../util/warn.js";
 
@@ -173,7 +179,7 @@ export interface WebFunctionArgs {
   }>;
   /**
    * Configure authorization for the HTTPS endpoint.
-   * @default `{ authorization: "none" }`, or `{ authorization: "iam" }` with `domain`.
+   * @default `{ authorization: "none" }`, or `{ authorization: "iam" }` with `domain` or `router`.
    * @example
    * ```js
    * { url: { authorization: "iam" } }
@@ -185,9 +191,10 @@ export interface WebFunctionArgs {
      * requests and `lambda:InvokeWebFunctionEndpoint` permission. IAM requests must
      * include `X-Amz-Content-SHA256`, including the empty-payload hash for bodyless requests.
      *
-     * With `domain`, the endpoint uses `iam`, so the CloudFront distribution signs its
-     * requests with origin access control. `"none"` can't be set together with `domain`.
-     * @default `"none"`, or `"iam"` with `domain`.
+     * With `domain` or `router`, the endpoint uses `iam`, so CloudFront signs its
+     * requests with origin access control. `"none"` can't be set together with `domain`
+     * or `router`.
+     * @default `"none"`, or `"iam"` with `domain` or `router`.
      * @example
      * ```js
      * { url: { authorization: "iam" } }
@@ -263,6 +270,41 @@ export interface WebFunctionArgs {
    * ```
    */
   domain?: CdnArgs["domain"];
+  /**
+   * Serve this web function through a shared `Router` instead of creating a
+   * standalone CloudFront distribution with `domain`.
+   *
+   * Use this for preview / personal stages that should reuse a permanent-stage
+   * Router (via `Router.get`) so deploys stay fast and hostnames stay stable
+   * under a wildcard like `*.dev.example.com`.
+   *
+   * Cannot be set together with `domain`. The endpoint uses IAM authorization.
+   * Route metadata always enables CloudFront OAC with `always-amz-auth`, so the
+   * shared Router does not need `protection: "oac"` for this path. Do not use
+   * `"oac-with-edge-signing"` — CloudFront rejects Lambda@Edge origin triggers
+   * on web function origins with OAC.
+   *
+   * @example
+   *
+   * ```ts title="sst.config.ts"
+   * const router = new sst.aws.Router("MyRouter", {
+   *   domain: {
+   *     name: "dev.example.com",
+   *     aliases: ["*.dev.example.com"],
+   *   },
+   *   protection: "oac",
+   * });
+   *
+   * new sst.aws.WebFunction("Api", {
+   *   entrypoint: "src/server.ts",
+   *   router: {
+   *     instance: router,
+   *     domain: `${$app.stage}.dev.example.com`,
+   *   },
+   * });
+   * ```
+   */
+  router?: Prettify<RouterRouteArgs>;
   /**
    * Configure the central and HomeRegion-local CloudWatch log groups.
    * @default `{ retention: "1 month", applicationLogLevel: "INFO", systemLogLevel: "INFO" }`
@@ -396,7 +438,8 @@ export interface WebFunctionArgs {
         /**
          * The URL of your local server. Without `live`, it's also the URL this component
          * returns, with its path and query preserved. With `live`, the component returns
-         * the endpoint's URL instead, or the domain's with `domain`. `AWS_LAMBDA_HTTP_ENDPOINT` uses only the hostname
+         * the endpoint's URL instead, or the domain's with `domain` / `router`.
+         * `AWS_LAMBDA_HTTP_ENDPOINT` uses only the hostname
          * and port, since an HTTP listener cannot bind to a URL path.
          * @default `"http://localhost:8080"`
          * @example
@@ -535,8 +578,8 @@ export interface WebFunctionArgs {
      */
     cdn?: Transform<CdnArgs>;
     /**
-     * Transform the function's resource policy, created when `domain` is set. To allow
-     * other callers, add statements to it and keep the distribution's.
+     * Transform the function's resource policy, created when `domain` or `router` is
+     * set. To allow other callers, add statements to it and keep the distribution's.
      * @default No transform.
      * @example
      * ```js
@@ -566,7 +609,7 @@ export interface WebFunctionArgs {
  * The `WebFunction` component deploys an HTTP server to AWS Lambda web functions. It
  * uses Node.js 24 on Arm64 and a HomeRegion HTTPS endpoint. With `vpc`, its outbound
  * traffic goes through a VPC. With `domain`, it's served from a custom domain through
- * CloudFront. MultiRegion endpoints, custom runtimes, and event-source subscriptions are
+ * CloudFront. With `router`, it reuses a shared `Router` distribution instead. MultiRegion endpoints, custom runtimes, and event-source subscriptions are
  * not supported by this component.
  *
  * Unlike `Function`, your entrypoint starts an HTTP listener; Lambda does not call an
@@ -588,6 +631,11 @@ export interface WebFunctionArgs {
  * With `domain`, it also needs permission to manage CloudFront distributions, origin
  * access controls, cache policies and CloudFront Functions, the function's resource
  * policy, an ACM certificate in `us-east-1`, and the DNS records.
+ * With `router`, it also needs permission to update the Router's CloudFront key-value
+ * store (`cloudfront-keyvaluestore` / `KvKeys` and `KvRoutesUpdate`) and to create the
+ * function's resource policy granting the shared distribution
+ * `lambda:InvokeWebFunctionEndpoint`. Routers with `protection:
+ * "oac-with-edge-signing"` are rejected for this path.
  * These permissions belong to the deployment role, not the application execution role.
  * The function and code bucket names are retained across ordinary deployments.
  * SST manages both the central CloudWatch group and its HomeRegion `.local` group with
@@ -634,6 +682,7 @@ export class WebFunction extends Component implements Link.Linkable {
   private readonly cdn?: Cdn;
   private readonly originAccessControl?: cloudfront.OriginAccessControl;
   private readonly resourcePolicy?: lambdaweb.ResourcePolicy;
+  private readonly routerUrl?: Output<string>;
 
   constructor(
     name: string,
@@ -655,7 +704,11 @@ export class WebFunction extends Component implements Link.Linkable {
         128,
       );
     if (isPlainRecord(args.environment)) validateEnvironment(args.environment);
-    if (args.domain && isPlainRecord(args.url))
+    if (args.domain && args.router)
+      throw new VisibleError(
+        `The "${name}" WebFunction can't set both "domain" and "router". Use "router" to share a Router across stages, or "domain" for a dedicated distribution.`,
+      );
+    if ((args.domain || args.router) && isPlainRecord(args.url))
       validateDomainAuthorization(args.url.authorization);
     if (isPlainRecord(args.scaling)) {
       if (typeof args.scaling.maxEnvironments === "number")
@@ -738,7 +791,8 @@ export class WebFunction extends Component implements Link.Linkable {
         throw new VisibleError(
           `The "${name}" WebFunction's "url.authorization" must be "none" or "iam".`,
         );
-      if (args.domain) validateDomainAuthorization(url?.authorization);
+      if (args.domain || args.router)
+        validateDomainAuthorization(url?.authorization);
       if (logging?.retention !== undefined && !(logging.retention in RETENTION))
         throw new VisibleError(
           `The "${name}" WebFunction's "logging.retention" is invalid.`,
@@ -749,7 +803,7 @@ export class WebFunction extends Component implements Link.Linkable {
         maxEnvironments,
         rateLimit,
         authType:
-          url?.authorization === "iam" || args.domain
+          url?.authorization === "iam" || args.domain || args.router
             ? "IamAuth"
             : "ApplicationManaged",
         logging: logging ?? {},
@@ -1105,9 +1159,11 @@ export class WebFunction extends Component implements Link.Linkable {
     );
     this.endpoint = endpoint;
     const domain = createDomain();
+    const router = createRouter();
     this.cdn = domain?.cdn;
     this.originAccessControl = domain?.originAccessControl;
-    this.resourcePolicy = domain?.resourcePolicy;
+    this.resourcePolicy = domain?.resourcePolicy ?? router?.resourcePolicy;
+    this.routerUrl = router?.url;
 
     this.registerOutputs({
       _hint: this.url,
@@ -1367,7 +1423,9 @@ export class WebFunction extends Component implements Link.Linkable {
             : {}),
           // CloudFront sets X-Forwarded-Host, so the bridge keeps it; without a
           // domain, it drops a caller's
-          ...(args.domain ? { SST_WEB_FUNCTION_DOMAIN: "true" } : {}),
+          ...(args.domain || args.router
+            ? { SST_WEB_FUNCTION_DOMAIN: "true" }
+            : {}),
         }),
       );
       return { zip: output(bridgeZip()), cloudEnvironment };
@@ -1514,6 +1572,117 @@ export class WebFunction extends Component implements Link.Linkable {
       return { cdn, originAccessControl, resourcePolicy };
     }
 
+    function createRouter() {
+      if (!args.router) return;
+
+      const route = normalizeRouteArgs(args.router);
+      if (!route) return;
+
+      // Route metadata always sets always-amz-auth OAC via updateRequestOrigin,
+      // so Router protection "none" still signs. Edge-signing is incompatible:
+      // CloudFront rejects Lambda@Edge origin triggers on web function OAC origins.
+      // This check runs in .apply(); invalid modes fail the deploy. KV/resources
+      // may already be registered by then — a fixed redeploy overwrites the entry.
+      route.routerProtection.apply((protection) => {
+        if (protection?.mode === "oac-with-edge-signing") {
+          throw new VisibleError(
+            `The "${name}" WebFunction can't use a Router with protection "oac-with-edge-signing". CloudFront rejects Lambda@Edge origin triggers on web function origins with OAC. Use protection "oac" or omit protection (route metadata still enables always-amz-auth OAC).`,
+          );
+        }
+      });
+
+      const routeNamespace = crypto
+        .createHash("md5")
+        .update(`${$app.name}-${$app.stage}-${name}`)
+        .digest("hex")
+        .substring(0, 4);
+
+      new KvKeys(
+        `${name}RouteKey`,
+        {
+          store: route.routerKvStoreArn,
+          namespace: routeNamespace,
+          entries: all([endpoint.domainName, route]).apply(
+            ([domainName, route]) => {
+              const timeouts = [
+                "connectionTimeout" as const,
+                "readTimeout" as const,
+                "keepAliveTimeout" as const,
+              ].flatMap((k) => {
+                const value = route[k];
+                return value ? [[k, toSeconds(value)]] : [];
+              });
+              return {
+                metadata: JSON.stringify({
+                  host: domainName,
+                  rewrite: route.rewrite,
+                  origin: {
+                    originAccessControlConfig: {
+                      enabled: true,
+                      signingBehavior: "always-amz-auth",
+                      signingProtocol: "sigv4",
+                      originType: "lambda",
+                    },
+                    connectionAttempts: route.connectionAttempts,
+                    ...(timeouts.length
+                      ? { timeouts: Object.fromEntries(timeouts) }
+                      : {}),
+                  },
+                }),
+              };
+            },
+          ),
+          purge: false,
+        },
+        { parent: self },
+      );
+      new KvRoutesUpdate(
+        `${name}RoutesUpdate`,
+        {
+          store: route.routerKvStoreArn,
+          namespace: route.routerKvNamespace,
+          key: "routes",
+          entry: route.apply((route) =>
+            ["url", routeNamespace, route.hostPattern, route.pathPrefix].join(
+              ",",
+            ),
+          ),
+        },
+        { parent: self },
+      );
+
+      const resourcePolicy = new lambdaweb.ResourcePolicy(
+        ...transform(
+          args.transform?.resourcePolicy,
+          `${name}ResourcePolicy`,
+          {
+            resourceArn: fn.arn,
+            policy: all([endpoint.arn, route.routerDistributionArn]).apply(
+              ([endpointArn, distributionArn]) =>
+                JSON.stringify({
+                  Version: "2012-10-17",
+                  Statement: [
+                    {
+                      Sid: "AllowCloudFrontInvoke",
+                      Effect: "Allow",
+                      Principal: { Service: "cloudfront.amazonaws.com" },
+                      Action: "lambda:InvokeWebFunctionEndpoint",
+                      Resource: endpointArn,
+                      Condition: {
+                        StringEquals: { "aws:SourceArn": distributionArn },
+                      },
+                    },
+                  ],
+                }),
+            ),
+          },
+          { parent: self },
+        ),
+      );
+
+      return { url: route.routerUrl, resourcePolicy };
+    }
+
     function normalizeVpc() {
       if (!args.vpc) return;
       if (args.vpc instanceof Vpc) {
@@ -1619,7 +1788,7 @@ export class WebFunction extends Component implements Link.Linkable {
     function validateDomainAuthorization(authorization: unknown) {
       if (authorization === "none")
         throw new VisibleError(
-          `The "${name}" WebFunction can't set "url.authorization" to "none" with "domain". Its endpoint uses IAM authorization, so that its CloudFront distribution signs its requests with origin access control.`,
+          `The "${name}" WebFunction can't set "url.authorization" to "none" with "domain" or "router". Its endpoint uses IAM authorization, so that CloudFront signs its requests with origin access control.`,
         );
     }
     function integer(
@@ -1741,21 +1910,26 @@ export class WebFunction extends Component implements Link.Linkable {
   }
 
   /**
-   * The full HTTPS URL (including `https://`). With `domain`, this is the custom domain's
-   * URL. In `sst dev`, it's the local URL, unless a web function is deployed there with
-   * `dev.live` or `dev: false`; then it's the endpoint's, or the domain's with `domain`.
+   * The full HTTPS URL (including `https://`). With `domain`, this is that custom
+   * domain's URL. With `router`, it's the Router URL for the route (the route's
+   * `domain` if set, otherwise the Router's own URL, plus any path prefix). In
+   * `sst dev`, it's the local URL, unless a web function is deployed there with
+   * `dev.live` or `dev: false`; then it's the endpoint's, or that routed /
+   * domain URL.
    */
   public get url(): Output<string> {
     return (
       this.devUrl ??
+      this.routerUrl ??
       (this.cdn
         ? this.cdn.domainUrl.apply((url) => url!)
         : interpolate`https://${this.endpoint!.domainName}`)
     );
   }
   /**
-   * The URL of the endpoint's own domain. With `domain`, requests to it need to be
-   * signed. Not available in `sst dev`, unless `dev.live` is set or `dev` is `false`.
+   * The URL of the endpoint's own domain. With `domain` or `router`, requests to it need
+   * to be signed. Not available in `sst dev`, unless `dev.live` is set or `dev` is
+   * `false`.
    */
   public get endpointUrl() {
     return this.endpoint && interpolate`https://${this.endpoint.domainName}`;
@@ -1809,17 +1983,18 @@ export class WebFunction extends Component implements Link.Linkable {
       operatorRole: this.operatorRole,
       /**
        * The CloudFront distribution in front of the endpoint. Only created when
-       * `domain` is set.
+       * `domain` is set. Not created when routing through `router`.
        */
       cdn: this.cdn,
       /**
        * The origin access control the distribution signs requests with. Only created
-       * when `domain` is set.
+       * when `domain` is set. Not created when routing through `router` (the Router
+       * configures OAC via `updateRequestOrigin`).
        */
       originAccessControl: this.originAccessControl,
       /**
        * The function's resource policy, which grants the distribution permission to
-       * invoke the endpoint. Only created when `domain` is set.
+       * invoke the endpoint. Created when `domain` or `router` is set.
        */
       resourcePolicy: this.resourcePolicy,
     };
