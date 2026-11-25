@@ -129,7 +129,7 @@ func TestSnapshot(t *testing.T) {
 		seen[op] = args
 		mu.Unlock()
 		results := map[string]string{
-			"overview":  `{"functions":1,"queue":{"waiting":2,"inFlight":1,"delayed":0},"deadLetters":{"count":3},"leases":{"limits":1,"full":0,"active":2},"waits":{"waits":1,"cancelOns":0}}`,
+			"overview":  `{"functions":1,"queue":{"waiting":2,"inFlight":1,"delayed":0},"deadLetters":{"count":3},"leases":{"limits":1,"full":0},"waits":{"waits":1,"cancelOns":0}}`,
 			"functions": `[{"id":"send-welcome","name":"Send welcome","triggers":[{"event":"user.created"}],"retries":3,"concurrency":[],"idempotency":false,"cancelOn":[]}]`,
 			"leases":    `[{"label":"send-welcome","limit":5,"active":2,"queued":1,"tenants":{"acme":2},"leases":[]}]`,
 			"waits":     `[{"kind":"wait","event":"user.verified","field":"data.userId","run":"r","createdAt":"2026-11-24T11:00:00Z","expiresAt":"2026-11-25T11:00:00Z"}]`,

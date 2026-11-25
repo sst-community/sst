@@ -270,7 +270,6 @@ type Overview struct {
 	} `json:"deadLetters"`
 	Leases struct {
 		Limits int `json:"limits"`
-		Active int `json:"active"`
 		Full   int `json:"full"`
 	} `json:"leases"`
 	Waits struct {

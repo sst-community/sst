@@ -66,7 +66,7 @@ describe("the admin API", () => {
     expect(after.waits.waits).toBe(2);
   });
 
-  it("counts a step that holds two leases once, and the limits that are full", async () => {
+  it("counts the limits that are full", async () => {
     const cluster = new Cluster(() => []);
     const [own, shared] = [
       { item: "C#own", limit: 1 },
@@ -74,7 +74,7 @@ describe("the admin API", () => {
     ];
     await cluster.store.acquire([own, shared], "l1", "a", 60_000);
     const overview = await cluster.flow.admin.overview();
-    expect(overview.leases).toEqual({ limits: 2, full: 1, active: 1 });
+    expect(overview.leases).toEqual({ limits: 2, full: 1 });
   });
 
   it("looks at the dead letters, and moves them back", async () => {
