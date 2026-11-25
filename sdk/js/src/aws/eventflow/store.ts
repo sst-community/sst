@@ -95,7 +95,9 @@ export interface Store {
    * Gives free leases on a limit to steps in line: the tenant with the fewest leases,
    * then the oldest step. A step gets every lease it needs at once, or waits. `wake`
    * resumes a step, and returns false if it can't, as when its run stopped; then its
-   * leases are given back. Returns how many it woke.
+   * leases are given back. A wake that throws may not have reached the step: its
+   * leases are given back and it's put back in line, in its place, for a later
+   * dispatch. Returns how many it woke.
    */
   dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>): Promise<number>;
   /**
@@ -462,6 +464,54 @@ export class DynamoStore implements Store {
     return { pk: S(queueKey(limit.item, waiter.tenant)), sk: S(`${pad(waiter.at)}#${waiter.leaseId}`) };
   }
 
+  private entry(waiter: LeaseWaiter) {
+    return {
+      lease: S(waiter.leaseId),
+      tenant: S(waiter.tenant),
+      callback: S(waiter.callbackId),
+      run: S(waiter.runId),
+      at: N(waiter.at),
+      limits: S(JSON.stringify(ordered(waiter.limits))),
+      expires: { N: seconds(waiter.expiresAt + DAY) },
+    };
+  }
+
+  // Put a step that was taken out of line back in, in its place, as when it was given
+  // its leases but couldn't be told. Where it's in line already, as when it asked
+  // again in between, it's left as it is.
+  private async requeue(waiter: LeaseWaiter) {
+    for (const limit of ordered(waiter.limits)) {
+      try {
+        await this.db("PutItem", {
+          Item: { ...this.entryKey(limit, waiter), ...this.entry(waiter) },
+          ConditionExpression: "attribute_not_exists(pk)",
+        });
+      } catch (error) {
+        if (isConditionFailure(error)) continue;
+        throw error;
+      }
+      await this.count(limit.item, waiter.tenant, 1);
+    }
+  }
+
+  // Wake a step that was given its leases. If it can't be woken, give them back: only
+  // those, since a step that asked again may have found them and claimed them. One
+  // that may not have been told goes back in line, and isn't tried again in this
+  // dispatch, so an outage doesn't keep it busy.
+  private async tell(w: LeaseWaiter, value: string, wake: (w: LeaseWaiter) => Promise<boolean>, skip: Set<string>) {
+    let woken: boolean | undefined;
+    try {
+      woken = await wake(w);
+    } catch {}
+    if (woken) return true;
+    if (woken === undefined) {
+      skip.add(w.leaseId);
+      await this.requeue(w).catch(() => {});
+    }
+    await this.release(w.limits, w.leaseId, w.tenant, value);
+    return false;
+  }
+
   // Count a step in a limit's line, or more than one, and say the tenant is waiting.
   private async count(item: string, tenant: string, n: number) {
     await this.db("UpdateItem", {
@@ -481,15 +531,7 @@ export class DynamoStore implements Store {
     if (items.every((item) => item?.leases[waiter.leaseId]) && (await this.renew(limits, waiter.leaseId, GRANT_MS, true)))
       return "held" as const;
     await Promise.all(limits.filter((_, i) => !items[i]).map((l) => this.createLimit(l)));
-    const entry = {
-      lease: S(waiter.leaseId),
-      tenant: S(waiter.tenant),
-      callback: S(waiter.callbackId),
-      run: S(waiter.runId),
-      at: N(waiter.at),
-      limits: S(JSON.stringify(limits)),
-      expires: { N: seconds(waiter.expiresAt + DAY) },
-    };
+    const entry = this.entry(waiter);
     for (let attempt = 0; attempt < 3; attempt++) {
       let gone = false;
       for (const [i, limit] of limits.entries()) {
@@ -532,7 +574,7 @@ export class DynamoStore implements Store {
     return "queued" as const;
   }
 
-  async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>) {
+  async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>, skip = new Set<string>()) {
     let woken = 0;
     for (let round = 0; round < limit.limit + 5; round++) {
       const item = await this.readLimit(limit.item);
@@ -542,7 +584,7 @@ export class DynamoStore implements Store {
       if (Object.keys(item.leases).length >= limit.limit) return woken;
       let granted: LeaseWaiter | undefined;
       let value: string | undefined;
-      for await (const c of this.candidates(limit, item, now)) {
+      for await (const c of this.candidates(limit, item, now, skip)) {
         value = await this.grant(c);
         if (value) {
           granted = c;
@@ -552,11 +594,9 @@ export class DynamoStore implements Store {
       // No step in line can have all it needs now. A release of the limit it's missing
       // gives it to it.
       if (!granted) return woken;
-      if (await wake(granted).catch(() => false)) woken++;
-      // The step is gone, as when its run stopped, or it asked again with a new
-      // callback. Give back the leases this gave it, and try the next one: only those,
-      // since a step that asked again may have found them and claimed them.
-      else await this.release(granted.limits, granted.leaseId, granted.tenant, value);
+      // A step that's gone, as when its run stopped or it asked again with a new
+      // callback, gives its leases back to the next one.
+      if (await this.tell(granted, value!, wake, skip)) woken++;
     }
     return woken;
   }
@@ -565,7 +605,12 @@ export class DynamoStore implements Store {
   // line, the tenant with the fewest leases first. They're found one at a time, so a
   // step that can't have all it needs, as when its own tenant's limit is full,
   // doesn't keep the lease from the next.
-  private async *candidates(limit: Limit, item: LimitState, now: number): AsyncGenerator<LeaseWaiter> {
+  private async *candidates(
+    limit: Limit,
+    item: LimitState,
+    now: number,
+    skip: Set<string>,
+  ): AsyncGenerator<LeaseWaiter> {
     const tenants = Object.entries(item.waiting)
       .filter(([, n]) => n > 0)
       .map(([t]) => t)
@@ -580,8 +625,9 @@ export class DynamoStore implements Store {
         ConsistentRead: true,
         Limit: 3,
       });
-      // A step that holds its lease here is being given it right now.
-      const e = (page.Items ?? []).find((e: any) => !item.leases[String(e.lease.S)]);
+      // A step that holds its lease here is being given it right now. One that couldn't
+      // be told it was given one waits for the next dispatch.
+      const e = (page.Items ?? []).find((e: any) => !item.leases[String(e.lease.S)] && !skip.has(String(e.lease.S)));
       if (!e) {
         // A count goes up after its entry goes in, so one can be seen without its
         // entry for a moment. It's taken for a stale one, as when entries expired,
@@ -607,7 +653,8 @@ export class DynamoStore implements Store {
         callbackId: String(e.callback.S),
         runId: String(e.run.S),
         at: Number(e.at.N),
-        expiresAt: 0,
+        // As it was put in line, so it keeps it if it's put back.
+        expiresAt: Number(e.expires.N) * 1000 - DAY,
         limits: JSON.parse(e.limits.S),
       };
     }
@@ -620,24 +667,24 @@ export class DynamoStore implements Store {
     const items = await Promise.all(unique.map((l) => this.readLimit(l.item)));
     const tenantsInLine = (i: number) => Object.values(items[i]?.waiting ?? {}).filter((n) => n > 0).length;
     const order = unique.map((_, i) => i).sort((a, b) => tenantsInLine(b) - tenantsInLine(a) || unique[b].limit - unique[a].limit);
+    const skip = new Set<string>();
     for (const i of order) {
       const item = items[i];
       if (!item?.leases[leaseId]) continue;
-      for await (const next of this.candidates(unique[i], item, Date.now())) {
+      for await (const next of this.candidates(unique[i], item, Date.now(), skip)) {
         const value = await this.grant(next, { limits: unique, leaseId, tenant });
         if (!value) continue;
-        if (!(await wake(next).catch(() => false))) {
-          await this.release(next.limits, next.leaseId, next.tenant, value);
-          for (const l of uniqueLimits(next.limits)) await this.dispatch(l, wake);
-        }
+        if (!(await this.tell(next, value, wake, skip)))
+          for (const l of uniqueLimits(next.limits)) await this.dispatch(l, wake, skip);
         // A limit the next step doesn't need was given back: hand it on.
-        for (const j of order) if (!next.limits.some((n) => n.item === unique[j].item)) await this.dispatch(unique[j], wake);
+        for (const j of order)
+          if (!next.limits.some((n) => n.item === unique[j].item)) await this.dispatch(unique[j], wake, skip);
         return;
       }
       break;
     }
     await this.release(unique, leaseId, tenant);
-    for (const i of order) await this.dispatch(unique[i], wake);
+    for (const i of order) await this.dispatch(unique[i], wake, skip);
   }
 
   // Give a step in line every lease it needs, one at a time, in order, or none. With

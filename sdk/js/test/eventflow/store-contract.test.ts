@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, setDefaultTimeout } from "bun:test";
 import { DynamoStore, tenantKey, type LeaseWaiter, type Limit, type Store } from "../../src/aws/eventflow/store.ts";
 import { MemoryStore } from "./memory-store.ts";
 
@@ -11,6 +11,8 @@ import { MemoryStore } from "./memory-store.ts";
 const table = process.env.EVENTFLOW_TEST_TABLE;
 const stores: [string, () => Store][] = [["memory", () => new MemoryStore()]];
 if (table) stores.push(["dynamodb", () => new DynamoStore(table)]);
+// Each call to DynamoDB is a round trip, and some of these make dozens.
+if (table) setDefaultTimeout(30_000);
 
 let n = 0;
 const run = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -110,6 +112,51 @@ for (const [name, make] of stores) {
       await store.dispatch(l, async (w) => (w.leaseId === "gone" ? false : (woken.push(w.leaseId), true)));
       expect(woken).toEqual(["next"]);
       expect((await state(store, l)).active).toBe(1);
+    });
+
+    it("keeps a step in line, in its place, when its wake throws", async () => {
+      // A throttle, or a timeout: the step may not have been told. It isn't taken for
+      // gone, which would leave it waiting until it asks again.
+      const store = make();
+      const [t, s] = [limit(2), limit(1)];
+      await store.acquire([t, s], "held", "a", 60_000);
+      await store.enqueue(waiter("first", "a", 1, [t, s]));
+      await store.enqueue(waiter("second", "a", 2, [t, s]));
+      await store.release([t, s], "held", "a");
+      const tried: string[] = [];
+      await store.dispatch(s, async (w) => {
+        tried.push(w.leaseId);
+        throw new Error("429 TooManyRequestsException");
+      });
+      // Each is tried once in a dispatch, and nothing is held after.
+      expect(tried).toEqual(["first", "second"]);
+      expect((await state(store, s)).active).toBe(0);
+      expect((await state(store, t)).active).toBe(0);
+      expect((await state(store, s)).queued).toBe(2);
+      expect((await state(store, t)).queued).toBe(2);
+      // The next dispatch wakes it, ahead of the one behind it.
+      const woken: string[] = [];
+      await store.dispatch(s, collect(woken));
+      expect(woken).toEqual(["first"]);
+      expect((await state(store, s)).queued).toBe(1);
+      expect((await state(store, t)).queued).toBe(1);
+    });
+
+    it("keeps a step in line when the wake of a handoff throws", async () => {
+      const store = make();
+      const l = limit(1);
+      await store.acquire([l], "holder", "a", 60_000);
+      await store.enqueue(waiter("next", "b", 1, [l]));
+      await store.handoff([l], "holder", "a", async () => {
+        throw new Error("503");
+      });
+      expect((await state(store, l)).active).toBe(0);
+      expect((await state(store, l)).queued).toBe(1);
+      // A newcomer still can't jump it.
+      expect(await store.acquire([l], "newcomer", "c", 60_000)).toBe("full");
+      const woken: string[] = [];
+      await store.dispatch(l, collect(woken));
+      expect(woken).toEqual(["next"]);
     });
 
     it("doesn't take back a lease that the step found and renewed while its wake failed", async () => {

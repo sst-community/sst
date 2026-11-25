@@ -123,15 +123,22 @@ export class Engine {
 
   /**
    * Resume a run's callback. Returns false when the callback is closed or unknown,
-   * as when the run stopped, and throws for errors worth retrying.
+   * as when the run stopped. A throttle, a server error or a network error is tried
+   * again a few times, about 1.5 seconds in all, then thrown: the callback may or may
+   * not have been resumed.
    */
   async callback(callbackId: string, payload: unknown) {
-    try {
-      await workflow.succeed(callbackId, { payload }, { aws: this.aws });
-      return true;
-    } catch (error) {
-      if (error instanceof workflow.SucceedError && [400, 404].includes(error.response.status)) return false;
-      throw error;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await workflow.succeed(callbackId, { payload }, { aws: this.aws });
+        return true;
+      } catch (error) {
+        const status = error instanceof workflow.SucceedError ? error.response.status : undefined;
+        if (status === 400 || status === 404) return false;
+        const transient = status === undefined || status === 429 || status >= 500;
+        if (!transient || attempt >= 4) throw error;
+        await new Promise((r) => setTimeout(r, (Math.random() + 1) * 50 * 2 ** attempt));
+      }
     }
   }
 

@@ -54,6 +54,9 @@ export class Cluster {
   stopped: string[] = [];
   /** Finished runs that the run APIs list, with their history, for retry tests. */
   history = new Map<string, { status: string; payload: any; events: any[]; error?: any }>();
+  /** The status to answer a callback's nth try with, like 429, to test throttles. */
+  callbackFails?: (id: string, attempt: number) => number | undefined;
+  callbackAttempts = new Map<string, number>();
   /** Make a start fail, to test partial failures. */
   failStart?: (payload: any) => boolean;
   handler: (event: any, context: any) => Promise<any>;
@@ -158,6 +161,10 @@ export class Cluster {
     const callback = path.match(/^\/2025-12-01\/durable-execution-callbacks\/([^/]+)\/succeed$/);
     if (service === "lambda" && callback) {
       const id = decodeURIComponent(callback[1]);
+      const attempt = (this.callbackAttempts.get(id) ?? 0) + 1;
+      this.callbackAttempts.set(id, attempt);
+      const fail = this.callbackFails?.(id, attempt);
+      if (fail) return new Response('{"__type":"TooManyRequestsException"}', { status: fail });
       const op = await this.findCallback(id);
       if (!op) return new Response('{"__type":"CallbackTimeoutException"}', { status: 400 });
       this.succeeded.push({ id, body });

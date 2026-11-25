@@ -164,7 +164,7 @@ export class MemoryStore implements Store {
     return "queued" as const;
   }
 
-  async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>, just?: string) {
+  async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>, just?: string, skip = new Set<string>()) {
     const l = this.item(limit);
     let woken = 0;
     for (;;) {
@@ -172,8 +172,8 @@ export class MemoryStore implements Store {
       if (Object.keys(l.leases).length >= limit.limit) return woken;
       // The oldest step of each tenant in line, fewest leases first, then oldest.
       const candidates = [...l.lines.values()]
-        .filter((line) => line.length)
-        .map((line) => line[0])
+        .map((line) => line.find((w) => !skip.has(w.leaseId)))
+        .filter((w): w is NonNullable<typeof w> => !!w)
         // A tenant that just gave one back counts it, as DynamoStore picks the next step
         // before the lease is given back.
         .sort(
@@ -192,9 +192,29 @@ export class MemoryStore implements Store {
         this.give(item, next.leaseId, next.tenant, GRANT_MS);
         given.set(item, item.leases[next.leaseId]);
       }
-      if (await wake(next).catch(() => false)) woken++;
+      let told: boolean | undefined;
+      try {
+        told = await wake(next);
+      } catch {}
+      if (told) {
+        woken++;
+        continue;
+      }
+      // One that may not have been told goes back in line, in its place, unless it
+      // asked again in between, and waits for the next dispatch.
+      if (told === undefined) {
+        skip.add(next.leaseId);
+        for (const other of uniqueLimits(next.limits)) {
+          const line = this.item(other).lines.get(next.tenant) ?? [];
+          this.item(other).lines.set(next.tenant, line);
+          if (!line.some((w) => w.leaseId === next.leaseId && w.at === next.at)) {
+            line.push(next);
+            line.sort((a, b) => a.at - b.at || a.seq - b.seq);
+          }
+        }
+      }
       // Only the leases this gave: a step that renewed them holds them as its own.
-      else for (const [item, lease] of given) if (item.leases[next.leaseId] === lease) this.drop(item, next.leaseId, next.tenant);
+      for (const [item, lease] of given) if (item.leases[next.leaseId] === lease) this.drop(item, next.leaseId, next.tenant);
     }
   }
 
@@ -202,7 +222,9 @@ export class MemoryStore implements Store {
     await this.release(limits, leaseId, tenant);
     // The limit with the most tenants in line first, as DynamoStore does.
     const inLine = (l: Limit) => [...this.item(l).lines.values()].filter((line) => line.length).length;
-    for (const l of uniqueLimits(limits).sort((a, b) => inLine(b) - inLine(a) || b.limit - a.limit)) await this.dispatch(l, wake, tenant);
+    const skip = new Set<string>();
+    for (const l of uniqueLimits(limits).sort((a, b) => inLine(b) - inLine(a) || b.limit - a.limit))
+      await this.dispatch(l, wake, tenant, skip);
   }
 
   private canGrant(w: LeaseWaiter) {

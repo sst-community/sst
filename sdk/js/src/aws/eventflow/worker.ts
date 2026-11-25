@@ -263,7 +263,12 @@ function makeStep(state: RunState) {
     Object.prototype.hasOwnProperty.call(state.memo, id) ? { hit: true, value: state.memo[id] } : { hit: false };
 
   const leaseMs = () => Math.max(30_000, (ctx.lambdaContext?.getRemainingTimeInMillis?.() ?? 900_000) + 10_000);
-  const wake = (w: LeaseWaiter) => engine.callback(w.callbackId, { leaseId: w.leaseId });
+  // A wake that throws may not have reached the step: the store keeps it in line.
+  const wake = (w: LeaseWaiter) =>
+    engine.callback(w.callbackId, { leaseId: w.leaseId }).catch((error) => {
+      log("warn", "Failed to wake a step in line. It stays in line.", { run: w.runId, error: errorInfo(error).message });
+      throw error;
+    });
 
   // Give back a step's leases, and hand them to the steps in line. An error here
   // mustn't fail the step, which would run its code again: the leases expire.

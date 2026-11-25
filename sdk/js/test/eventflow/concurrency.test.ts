@@ -327,6 +327,25 @@ describe("steps under a concurrency limit", () => {
     expect(most).toBe(1);
     for (const k of cluster.store.limits.keys()) expect(cluster.store.active(k)).toBe(0);
   });
+
+  it("wakes a step in line through throttles of the callback API", async () => {
+    // Seen on AWS: a wake that was throttled took the step for gone, and it waited
+    // until it asked again, 3 minutes later.
+    const cluster = new Cluster((flow) => [
+      flow.createFunction({ id: "one", triggers: { event: "job" }, concurrency: { limit: 1 } }, async ({ step }) => {
+        await step.run("work", () => new Promise((r) => setTimeout(r, 5)));
+      }),
+    ]);
+    cluster.callbackFails = (_, attempt) => (attempt === 1 ? 429 : attempt === 2 ? 503 : undefined);
+    await cluster.flow.send([1, 2, 3, 4].map((n) => ({ name: "job", data: { n } })));
+    const results = await runAll(cluster, 4);
+    expect(results.every((r) => r.getStatus() === ExecutionStatus.SUCCEEDED)).toBe(true);
+    const throttled = [...cluster.callbackAttempts].filter(([, n]) => n > 2).map(([id]) => id);
+    expect(throttled.length).toBeGreaterThan(0);
+    // Each throttled wake got through on its third try.
+    for (const id of throttled) expect(cluster.succeeded.some((s) => s.id === id)).toBe(true);
+    for (const k of cluster.store.limits.keys()) expect(cluster.store.active(k)).toBe(0);
+  });
 });
 
 // A burst, simulated with the same store: tenant A sends 25 jobs a second for 40
