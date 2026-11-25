@@ -415,12 +415,16 @@ function makeStep(state: RunState) {
                 },
               ).then(
                 (o) => o,
-                // An at-most-once step that the worker stopped part way fails here.
-                (error) => ({
-                  ok: false as const,
-                  error: isInterruption(error) ? interrupted(id) : errorInfo(error),
-                  delay: undefined,
-                }),
+                // An at-most-once step that the worker stopped part way fails here. It
+                // won't run again, so its leases are given back now.
+                async (error) => {
+                  await child.step(`release:${attempt}.${lost}`, async () => giveBack(leaseId));
+                  return {
+                    ok: false as const,
+                    error: isInterruption(error) ? interrupted(id) : errorInfo(error),
+                    delay: undefined,
+                  };
+                },
               );
               if ("lost" in outcome) {
                 // A lease expired before the step ran. Give back the rest.

@@ -42,7 +42,7 @@ var eventflowListFlags = []cli.Flag{
 		Type: "string",
 		Description: cli.Description{
 			Short: "Only the runs started since then, like 1h",
-			Long:  "Only the runs started since then: a duration back from now, like `30m`, `1h`, `2d` or `1w`, or a time, like `2026-11-24T10:00:00Z`.",
+			Long:  "Only the runs started since then: a duration back from now, like `30m`, `1h`, `2d` or `1w`, or a time, like `2026-11-24T10:00:00Z`, `2026-11-24T10:00` or `2026-11-24`, in UTC.",
 		},
 	},
 	{
@@ -143,6 +143,9 @@ var CmdEventFlow = &cli.Command{
 		{Content: "sst eventflow Jobs --once", Description: cli.Description{Short: "Print the EventFlow called Jobs once"}},
 	},
 	Run: func(c *cli.Cli) error {
+		if args := c.Arguments(); len(args) > 1 {
+			return util.NewReadableError(nil, fmt.Sprintf("Unexpected %q. Put a subcommand first, like: sst eventflow %s --name %s", args[1], args[1], args[0]))
+		}
 		name := c.Positional(0)
 		if flagName := c.String("name"); flagName != "" {
 			if name != "" && name != flagName {
