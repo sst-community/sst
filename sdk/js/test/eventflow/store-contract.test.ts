@@ -294,7 +294,7 @@ for (const [name, make] of stores) {
         await store.release([l], "held", "a");
         const ghosts = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [tenantKey(`ghost-${i}`), { N: "3" }]));
         await (store as any).db("UpdateItem", {
-          Key: { pk: { S: l.item }, sk: { S: "-" } },
+          Key: { pk: { S: l.item }, sk: { S: "w" } },
           UpdateExpression: "SET queued = :q, waiting = :w",
           ExpressionAttributeValues: { ":q": { N: "75" }, ":w": { M: ghosts } },
         });

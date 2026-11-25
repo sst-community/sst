@@ -116,7 +116,11 @@ async function queueInfo(engine: Engine, url: string | undefined) {
 }
 
 async function limits(engine: Engine): Promise<LimitInfo[]> {
-  const items = await engine.store.scan("C#", MAX_SCAN);
+  const found = await engine.store.scan("C#", MAX_SCAN);
+  // A limit is two items, its leases and its line: one entry for both.
+  const byLimit = new Map<string, Record<string, any>>();
+  for (const i of found) byLimit.set(String(i.pk), { ...byLimit.get(String(i.pk)), ...i });
+  const items = [...byLimit.values()].filter((i) => i.cap !== undefined || i.leases !== undefined);
   const now = Date.now();
   return items.map((i) => ({
     label: String(i.label ?? i.pk),
