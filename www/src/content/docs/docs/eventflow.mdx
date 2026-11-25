@@ -494,6 +494,8 @@ sst eventflow dead-letters --redrive
 sst eventflow send order/placed --data '{"orderId":"o_1"}' --tenant acme
 ```
 
+![sst eventflow, the live view during a burst](../../../assets/docs/eventflow/cli-live.png)
+
 Add `--json` for the raw result. To build your own page, in your app or a console, link `flow.admin` to a function, and use `flow.admin` and `flow.runs` in it:
 
 ```ts title="sst.config.ts"
@@ -501,7 +503,7 @@ new sst.aws.Function("Ops", { handler: "src/ops.handler", link: [flow, flow.admi
 ```
 
 ```ts title="src/ops.ts"
-const overview = await flow.admin.overview(); // { queue, deadLetters, leases, waits, functions }
+const overview = await flow.admin.overview(); // { queue, deadLetters, leases: { limits, full }, waits, functions }
 const limits = await flow.admin.leases();     // [{ label, limit, active, queued, tenants, leases }]
 const waits = await flow.admin.waits();
 const failed = await flow.runs.list({ status: "FAILED" });
@@ -643,7 +645,7 @@ The table and the functions are billed by use. These are estimates from AWS's pr
 
 What flow control and waits add:
 
-- **Concurrency**, per step: 3 more durable operations (the child context, taking the lease, and the step that checks it), and 3 DynamoDB writes and a read, about **$0.000026**. A step that waits in line adds a callback, the step that joins the line, and the wake, about **$0.000025**, however long it waits.
+- **Concurrency**, per step: 2 more durable operations (the child context, and taking the lease), and a few small DynamoDB reads and writes, about **$0.00002**. A step that waits in line adds 2 more, the callback and the step that joins the line, and its wake, about **$0.000035** with its DynamoDB reads and writes, plus 2 more operations for every 3 to 15 minutes it waits.
 - **Throttle**, per run: a DynamoDB read and write, and an SQS message for a run that's held.
 - **A wait for an event**: 3 durable operations, and 3 DynamoDB writes and a read, about **$0.000027**. Each event of a name that's waited for adds a write and two reads in the router.
 
@@ -653,7 +655,7 @@ Check [Lambda](https://aws.amazon.com/lambda/pricing/), [SQS](https://aws.amazon
 
 ## Performance
 
-Measured on 2026-11-24 in _ca-central-1_, with the [AWS EventFlow tenants example](/docs/examples/#aws-eventflow-tenants): its defaults, 1 GB worker, 512 MB router, batches of 10. The load came from a Lambda function in the same region. Each step that's measured records its start and end in a table, and the example's `Report` function turns them into these numbers. Times are from `send()` returning to the start of the run's first protected step, so they include the queue, the router, starting the run, its first step, and taking a lease.
+Measured on 2026-11-24 and 25 in _ca-central-1_, with the [AWS EventFlow tenants example](/docs/examples/#aws-eventflow-tenants): its defaults, 1 GB worker, 512 MB router, batches of 10. The load came from a Lambda function in the same region. Each step that's measured records its start and end in a table, and the example's `Report` function turns them into these numbers. Times are from `send()` returning to the start of the run's first protected step, so they include the queue, the router, starting the run, its first step, and taking a lease.
 
 ### Latency, unloaded
 
@@ -665,7 +667,7 @@ Measured on 2026-11-24 in _ca-central-1_, with the [AWS EventFlow tenants exampl
 | 2 | 0.36–0.58 s | 0.59 s |
 | 3 | 0.39–0.48 s | 0.58 s |
 
-A wait for an event resumed in **0.4–3.4 s at p50**, from sending the event to the next step starting, during the burst below, where the next step had to take a lease again. In the [walk-through example](/docs/examples/#aws-eventflow), with no backlog, it was about 1.8 s, measured by polling `flow.runs.get`.
+A wait for an event resumed in **0.9 s at p50**, from sending the event to the next step starting, during the bursts below, where the next step had to take a lease again. In the [walk-through example](/docs/examples/#aws-eventflow), with no backlog, it was about 1.8 s, measured by polling `flow.runs.get`.
 
 ### A burst from five tenants, and a small one
 
@@ -673,31 +675,33 @@ Tenants `a`, `c`, `d`, `e` and `f` send 200 imports each at once, 1,000 in all. 
 
 | | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
+| Runs finished, of 1,010 | 1,010 | 1,010 | 1,010 |
 | Most steps at once, all tenants (limit 20) | 20 | 20 | 20 |
 | Most steps at once, per tenant (limit 5) | 5 | 5 | 5 |
-| Big tenants: wait to start, p50 | 56–68 s | 64–83 s | 60–78 s |
-| Big tenants: wait to start, worst | 161 s | 164 s | 164 s |
-| **Tenant `b`: wait to start, p50** | **1.9 s** | **1.5 s** | **3.6 s** |
-| **Tenant `b`: wait to start, worst** | **3.8 s** | **3.6 s** | **7.7 s** |
-| Wait resumed, p50 / worst | 1.3 s / 15.7 s | 3.4 s / 7.6 s | 0.4 s / 3.4 s |
-| Backlog drained | 173 s | 166 s | 166 s |
+| Big tenants: wait to start, p50 | 41–47 s | 39–45 s | 38–44 s |
+| Big tenants: wait to start, worst | 82 s | 75 s | 81 s |
+| **Tenant `b`: wait to start, p50** | **2.5 s** | **2.3 s** | **2.4 s** |
+| **Tenant `b`: wait to start, worst** | **3.7 s** | **3.6 s** | **3.4 s** |
+| Wait resumed, p50 / worst | 0.9 s / 1.2 s | 0.9 s / 1.1 s | 0.9 s / 1.1 s |
+| Backlog drained | 131 s | 129 s | 129 s |
+| Leases, or steps in line, left after | 0 | 0 | 0 |
 
 - **The limits held.** Never more than 5 steps of a tenant, or 20 in all, in any run.
-- **A small tenant isn't stuck behind a big one.** Tenant `b` started within seconds while the others' backlog took close to 3 minutes.
-- **The backlog drains at about 60% of the limit.** 2,000 step-seconds at 20 at once is 100 seconds; it took 166–173. A step that doesn't get a lease asks again after 1, 2, 4, 8, then every 10 seconds, so a freed lease can sit idle until someone asks. That's the cost of not keeping a queue of waiting steps.
-- **Throttle.** `notify-tenant`, at `limit: 60, period: "1m"` per tenant, started 60–61 runs a minute for each tenant: the limit, plus the burst of 1.
+- **A small tenant isn't stuck behind a big one.** Tenant `b` started within 4 seconds while the others' backlog took over 2 minutes.
+- **The backlog drains at about 78% of the limit.** 2,020 step-seconds at 20 at once is 101 seconds; it took 129–131. A lease goes straight to the next step in line, but a woken run takes a moment to resume, and its lease sits idle until it does. Asking again on a timer, as an earlier version did, took 166–173, and with each lease in a DynamoDB transaction, 420 or more.
+- **Throttle.** `notify-tenant`, at `limit: 60, period: "1m"` per tenant, started at most 61 runs in a minute for each tenant: the limit, plus the burst of 1.
+- **A duplicate isn't run.** The 1,010 events of a burst from 8 hours before, sent again by mistake, started no runs.
 
 ### Cost under load
 
-From the durable execution history of runs in the third burst:
+From the durable execution history of 300 runs of the bursts, and the table's consumed capacity:
 
 | Run | Durable operations | Worker invocations |
 |---|---|---|
-| No contention, the same function | 11 | 3 |
+| Big tenants, in the backlog | 15–17 | 3–4 |
 | Tenant `b`, with a wait for an event | 25 | 6 |
-| Big tenants, in the backlog | 19–43, about 32 | 5–17 |
 
-Most of a backlogged run's operations are asking for a lease again. About **$0.33** for the 1,010 runs of a burst, or $0.0003 a run, mostly durable operations at $8 per million. The whole measurement, with all its runs, cost about $1.50.
+About **$0.26** for a burst: the 1,010 runs and their notifications. $0.15 of durable operations at $8 per million, $0.07 of DynamoDB, 75,000 write units and 146,000 read units, and $0.04 of Lambda.
 
 To reproduce it, deploy the tenants example and follow its steps.
 
