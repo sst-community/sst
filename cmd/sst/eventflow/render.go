@@ -38,7 +38,7 @@ func RenderSnapshot(w io.Writer, name string, s Snapshot, now time.Time) {
 	table(w, [][]string{
 		{label("Queue"), fmt.Sprintf("%d waiting · %d in flight · %d delayed", o.Queue.Waiting, o.Queue.InFlight, o.Queue.Delayed)},
 		{label("Dead"), dead},
-		{label("Limits"), fmt.Sprintf("%d active · %d queued · %s", o.Leases.Active, o.Leases.Queued, plural(o.Leases.Limits, "limit"))},
+		{label("Limits"), fmt.Sprintf("%s active · %d of %s full", plural(o.Leases.Active, "step"), o.Leases.Full, plural(o.Leases.Limits, "limit"))},
 		{label("Waits"), fmt.Sprintf("%s · %s", plural(o.Waits.Waits, "wait"), plural(o.Waits.CancelOns, "cancel-on"))},
 	})
 

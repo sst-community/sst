@@ -38,7 +38,8 @@ export interface Overview {
   functions: number;
   queue: QueueInfo;
   deadLetters: { count: number };
-  leases: { limits: number; active: number; queued: number };
+  /** The concurrency limits, how many of them are full, and the steps that hold a lease: one that holds two counts once. */
+  leases: { limits: number; full: number; active: number };
   waits: { waits: number; cancelOns: number };
 }
 
@@ -252,8 +253,8 @@ async function run(op: string, args: Record<string, any>, registry: Map<string, 
         deadLetters: { count: (dead?.waiting ?? 0) + (dead?.inFlight ?? 0) },
         leases: {
           limits: l.length,
-          active: l.reduce((n, x) => n + x.active, 0),
-          queued: l.reduce((n, x) => n + x.queued, 0),
+          full: l.filter((x) => x.limit !== undefined && x.active >= x.limit).length,
+          active: new Set(l.flatMap((x) => x.leases.filter((i) => Date.parse(i.expiresAt) > Date.now()).map((i) => i.id))).size,
         },
         waits: { waits: w.filter((x) => x.kind === "wait").length, cancelOns: w.filter((x) => x.kind === "cancel").length },
       } satisfies Overview;

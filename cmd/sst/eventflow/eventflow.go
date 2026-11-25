@@ -271,7 +271,7 @@ type Overview struct {
 	Leases struct {
 		Limits int `json:"limits"`
 		Active int `json:"active"`
-		Queued int `json:"queued"`
+		Full   int `json:"full"`
 	} `json:"leases"`
 	Waits struct {
 		Waits     int `json:"waits"`
