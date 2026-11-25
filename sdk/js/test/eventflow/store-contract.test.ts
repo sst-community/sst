@@ -633,6 +633,17 @@ for (const [name, make] of stores) {
         }
       });
 
+      it("keeps a lease it was given no longer than its invocation, once its code runs", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.enqueue(waiter("S", "a", 1, [l]));
+        await store.dispatch(l, async () => true);
+        const before = (await (store as any).readLimit(l.item)).leases.S.expires - Date.now();
+        expect(before).toBeGreaterThan(900_000);
+        expect(await store.renew([l], "S", 60_000)).toBe(true);
+        expect((await (store as any).readLimit(l.item)).leases.S.expires - Date.now()).toBeLessThanOrEqual(60_000);
+      });
+
       it("gets past the steps of stopped runs, however many", async () => {
         const store = make() as DynamoStore;
         const l = limit(1);

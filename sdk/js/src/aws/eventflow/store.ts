@@ -433,7 +433,9 @@ export class DynamoStore implements Store {
     try {
       for (const [i, limit] of unique.entries()) {
         const lease = items[i]!.leases[leaseId];
-        const value = leaseValue(Math.max(now + leaseMs, lease.expires), lease.tenant, "own");
+        // One it was given lasts long enough to resume. From here it lasts this invocation.
+        const expires = lease.granted ? now + leaseMs : Math.max(now + leaseMs, lease.expires);
+        const value = leaseValue(expires, lease.tenant, "own");
         renewed.push([limit, lease.tenant, value]);
         if (await this.setLease(limit.item, leaseId, items[i]!.raw[leaseId], value)) continue;
         renewed.pop();
