@@ -126,11 +126,11 @@ async function limits(engine: Engine): Promise<LimitInfo[]> {
     label: String(i.label ?? i.pk),
     limit: i.cap === undefined ? undefined : Number(i.cap),
     active: Object.values<any>(i.leases ?? {}).filter((v) => Number(String(v).split("|")[0]) > now).length,
-    queued: Number(i.queued ?? 0),
+    queued: Object.values<any>(i.waiting ?? {}).reduce((n, v) => n + Math.max(0, Number(v)), 0),
     tenants: { ...(i.tenants ?? {}) },
     leases: Object.entries<any>(i.leases ?? {}).map(([id, v]) => {
       const [expires, ...tenant] = String(v).split("|");
-      return { id, tenant: tenant.join("|"), expiresAt: new Date(Number(expires)).toISOString() };
+      return { id, tenant: tenant.join("|"), expiresAt: new Date(Math.floor(Number(expires))).toISOString() };
     }),
   }));
 }

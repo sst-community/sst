@@ -53,7 +53,7 @@ export class Cluster {
   /** The ARNs of the runs that were stopped. The local runner can't stop them. */
   stopped: string[] = [];
   /** Finished runs that the run APIs list, with their history, for retry tests. */
-  history = new Map<string, { status: string; payload: any; events: any[]; error?: any }>();
+  history = new Map<string, { status: string; payload: any; events: any[]; error?: any; startedAt?: number }>();
   /** The status to answer a callback's nth try with, like 429, to test throttles. */
   callbackFails?: (id: string, attempt: number) => number | undefined;
   callbackAttempts = new Map<string, number>();
@@ -136,15 +136,19 @@ export class Cluster {
     }
     const listed = path.match(/^\/2025-12-01\/functions\/[^/]+\/durable-executions\?(.*)$/);
     if (service === "lambda" && listed) {
-      const name = new URLSearchParams(listed[1]).get("DurableExecutionName");
-      return Response.json({
-        DurableExecutions: [
-          ...this.history.entries(),
-          ...[...this.runs.keys()].filter((id) => !this.history.has(id)).map((id) => [id, { status: "RUNNING" }] as const),
-        ]
-          .filter(([id]) => !name || id === name)
-          .map(([id, h]) => ({ DurableExecutionName: id, DurableExecutionArn: `arn/${id}`, Status: h.status, StartTimestamp: 1 })),
-      });
+      const params = new URLSearchParams(listed[1]);
+      const name = params.get("DurableExecutionName");
+      // As AWS lists them: the latest first, or the oldest first with ReverseOrder.
+      const all = [
+        ...this.history.entries(),
+        ...[...this.runs.keys()].filter((id) => !this.history.has(id)).map((id) => [id, { status: "RUNNING", startedAt: 1 }] as const),
+      ]
+        .filter(([id]) => !name || id === name)
+        .map(([id, h]) => ({ DurableExecutionName: id, DurableExecutionArn: `arn/${id}`, Status: h.status, StartTimestamp: h.startedAt ?? 1 }))
+        .sort((a, b) => (params.get("ReverseOrder") === "true" ? 1 : -1) * (a.StartTimestamp - b.StartTimestamp));
+      const from = Number(params.get("Marker") ?? 0);
+      const to = from + Number(params.get("MaxItems") ?? 50);
+      return Response.json({ DurableExecutions: all.slice(from, to), NextMarker: to < all.length ? String(to) : undefined });
     }
     const executions = path.match(/^\/2025-12-01\/durable-executions\/arn%2F([^/?]+)(\/history)?\?/);
     if (service === "lambda" && executions) {

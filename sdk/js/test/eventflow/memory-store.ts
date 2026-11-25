@@ -284,7 +284,7 @@ export class MemoryStore implements Store {
         pk,
         label: l.label,
         cap: l.cap,
-        queued: this.queued(pk),
+        waiting: { "": this.queued(pk) },
         tenants: { ...l.tenants },
         leases: Object.fromEntries(Object.entries(l.leases).map(([id, v]) => [id, `${v.expires}|${v.tenant}`])),
       }));

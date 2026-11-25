@@ -328,6 +328,36 @@ describe("steps under a concurrency limit", () => {
     for (const k of cluster.store.limits.keys()) expect(cluster.store.active(k)).toBe(0);
   });
 
+  it("joins the line in the same place when joining it fails and is tried again", async () => {
+    // Seen on AWS: a hot item throttled it, and joining again was joining twice.
+    const cluster = new Cluster((flow) => [
+      flow.createFunction({ id: "join", triggers: { event: "job" }, concurrency: { limit: 1 } }, async ({ step }) => {
+        await step.run("work", () => new Promise((r) => setTimeout(r, 5)));
+      }),
+    ]);
+    const enqueue = cluster.store.enqueue.bind(cluster.store);
+    const places = new Map<string, number[]>();
+    cluster.store.enqueue = async (w) => {
+      const tries = [...(places.get(w.leaseId) ?? []), w.at];
+      places.set(w.leaseId, tries);
+      const result = await enqueue(w);
+      if (tries.length === 1) throw new Error("dynamodb UpdateItem failed: 400 ThrottlingException");
+      return result;
+    };
+    await cluster.flow.send([1, 2, 3].map((n) => ({ name: "job", data: { n } })));
+    const results = await runAll(cluster, 3);
+    expect(results.every((r) => r.getStatus() === ExecutionStatus.SUCCEEDED)).toBe(true);
+    expect(places.size).toBeGreaterThan(0);
+    for (const tries of places.values()) {
+      expect(tries.length).toBeGreaterThan(1);
+      expect(new Set(tries).size).toBe(1);
+    }
+    for (const k of cluster.store.limits.keys()) {
+      expect(cluster.store.active(k)).toBe(0);
+      expect(cluster.store.queued(k)).toBe(0);
+    }
+  });
+
   it("wakes a step in line through throttles of the callback API", async () => {
     // Seen on AWS: a wake that was throttled took the step for gone, and it waited
     // until it asked again, 3 minutes later.

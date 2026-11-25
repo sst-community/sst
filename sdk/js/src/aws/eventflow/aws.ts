@@ -12,6 +12,8 @@ export class AwsError extends Error {
     message: string,
     /** For a cancelled transaction, the code of each of its items, like "ConditionalCheckFailed". */
     public readonly reasons: string[] = [],
+    /** The body of the error, as for the item of a condition that wasn't met. */
+    public readonly body?: any,
   ) {
     super(`${service} ${action} failed: ${status} ${type}${message ? `: ${message}` : ""}`);
     this.name = "AwsError";
@@ -43,8 +45,9 @@ async function call<T>(
     let type = "";
     let message = text;
     let reasons: string[] = [];
+    let data: any;
     try {
-      const data = JSON.parse(text);
+      data = JSON.parse(text);
       type = String(data.__type ?? data.code ?? "").split("#").pop() ?? "";
       message = data.message ?? data.Message ?? "";
       if (Array.isArray(data.CancellationReasons)) reasons = data.CancellationReasons.map((r: any) => String(r?.Code ?? "None"));
@@ -54,7 +57,7 @@ async function call<T>(
         if (listed) reasons = listed[1].split(",").map((r) => r.trim());
       }
     } catch {}
-    throw new AwsError(service, action, response.status, type, message, reasons);
+    throw new AwsError(service, action, response.status, type, message, reasons, data);
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -77,8 +80,9 @@ export async function dynamo<T = any>(action: string, body: unknown, aws?: AwsOp
       return await call<T>("dynamodb", "DynamoDB_20120810", action, body, aws);
     } catch (error) {
       // A hot item, like a busy concurrency limit, can conflict with transactions for
-      // a while: about 3 seconds in all, with jitter, before giving up.
-      if (attempt >= 8 || !isTransient(error)) throw error;
+      // a while, and a burst can throttle one until DynamoDB splits it: about 5 seconds
+      // in all, with jitter, before giving up.
+      if (attempt >= 13 || !isTransient(error)) throw error;
       await new Promise((r) => setTimeout(r, Math.random() * Math.min(1000, 20 * 2 ** attempt) + 10));
     }
   }

@@ -1,5 +1,7 @@
+import { Agent, request } from "node:http";
 import { describe, expect, it, setDefaultTimeout } from "bun:test";
 import { DynamoStore, tenantKey, type LeaseWaiter, type Limit, type Store } from "../../src/aws/eventflow/store.ts";
+import { AwsError } from "../../src/aws/eventflow/aws.ts";
 import { MemoryStore } from "./memory-store.ts";
 
 // The lease rules, held to by both stores: the one in memory that the other tests
@@ -7,10 +9,52 @@ import { MemoryStore } from "./memory-store.ts";
 // table when EVENTFLOW_TEST_TABLE names one, with a `pk` and `sk` string key:
 //
 //   EVENTFLOW_TEST_TABLE=my-table AWS_REGION=ca-central-1 bun test test/eventflow/store-contract.test.ts
+//
+// EVENTFLOW_TEST_ENDPOINT sends its calls to DynamoDB Local instead.
 
 const table = process.env.EVENTFLOW_TEST_TABLE;
+const endpoint = process.env.EVENTFLOW_TEST_ENDPOINT;
 const stores: [string, () => Store][] = [["memory", () => new MemoryStore()]];
-if (table) stores.push(["dynamodb", () => new DynamoStore(table)]);
+if (table) stores.push(["dynamodb", () => (endpoint ? local(table, endpoint) : new DynamoStore(table))]);
+
+function local(table: string, endpoint: string) {
+  const store = new DynamoStore(table);
+  (store as any).db = async (action: string, body: any) => {
+    // Some latency, so writes of different steps fall between each other.
+    await new Promise((r) => setTimeout(r, Math.random() * Number(process.env.EVENTFLOW_TEST_LATENCY ?? 8)));
+    const { status, data } = await post(endpoint, action, { TableName: table, ...body });
+    if (status !== 200)
+      throw new AwsError("dynamodb", action, status, String(data.__type).split("#").pop()!, data.message ?? "", [], data);
+    return data;
+  };
+  return store;
+}
+
+const agent = new Agent({ keepAlive: true, maxSockets: 48 });
+function post(endpoint: string, action: string, body: any) {
+  return new Promise<{ status: number; data: any }>((resolve, reject) => {
+    const req = request(
+      endpoint,
+      {
+        method: "POST",
+        agent,
+        headers: {
+          "Content-Type": "application/x-amz-json-1.0",
+          "X-Amz-Target": `DynamoDB_20120810.${action}`,
+          Authorization: "AWS4-HMAC-SHA256 Credential=local/20260101/local/dynamodb/aws4_request, SignedHeaders=host, Signature=0",
+        },
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (c) => (text += c));
+        res.on("end", () => resolve({ status: res.statusCode!, data: JSON.parse(text || "{}") }));
+      },
+    );
+    req.on("error", reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
 // Each call to DynamoDB is a round trip, and some of these make dozens.
 if (table) setDefaultTimeout(30_000);
 
@@ -331,6 +375,299 @@ for (const [name, make] of stores) {
       expect(end.active).toBe(0);
       expect(end.queued).toBe(0);
     }, 180_000);
+
+    it("leaves nothing held, and no step waiting, when steps need a shared limit and their tenant's", async () => {
+      // As in a burst: 6 tenants, each with a limit of 3, and one of 8 for all. Three
+      // steps of each run follow each other, and the first is short.
+      const store = make();
+      const shared = limit(8);
+      const tenants = Array.from({ length: 6 }, (_, i) => ({ name: `t${i}`, own: limit(3) }));
+      const active: Record<string, number> = {};
+      const most: Record<string, number> = {};
+      const wakes = new Map<string, () => void>();
+      let late = 0;
+      const wake = async (w: LeaseWaiter) => {
+        const resolve = wakes.get(w.callbackId);
+        if (!resolve) return false;
+        wakes.delete(w.callbackId);
+        resolve();
+        return true;
+      };
+      const step = async (leaseId: string, tenant: (typeof tenants)[number], ms: number) => {
+        const limits = [tenant.own, shared];
+        let joined: number | undefined;
+        for (let round = 0; ; round++) {
+          if ((await store.acquire(limits, leaseId, tenant.name, 60_000)) === "granted") break;
+          const callbackId = `cb-${leaseId}-${round}`;
+          const woken = new Promise<boolean>((resolve) => {
+            wakes.set(callbackId, () => resolve(true));
+            setTimeout(() => wakes.delete(callbackId) && resolve(false), 15_000);
+          });
+          joined ??= Date.now();
+          const result = await store.enqueue({ ...waiter(leaseId, tenant.name, joined, limits), callbackId });
+          let mine = result === "held";
+          if (!mine)
+            for (const l of limits)
+              await store.dispatch(l, async (w) => {
+                if (w.callbackId !== callbackId) return wake(w);
+                mine = true;
+                return true;
+              });
+          if (mine || (await woken)) break;
+          late++;
+        }
+        for (const l of limits) most[l.item] = Math.max(most[l.item] ?? 0, (active[l.item] = (active[l.item] ?? 0) + 1));
+        await new Promise((r) => setTimeout(r, ms));
+        for (const l of limits) active[l.item]--;
+        await store.handoff(limits, leaseId, tenant.name, wake);
+      };
+      await Promise.all(
+        tenants.flatMap((tenant) =>
+          Array.from({ length: 25 }, async (_, i) => {
+            for (const [n, ms] of [2, 20, 20].entries()) await step(`${tenant.name}-${i}.${n}`, tenant, ms);
+          }),
+        ),
+      );
+      for (const l of [shared, ...tenants.map((t) => t.own)]) {
+        expect(most[l.item]).toBeLessThanOrEqual(l.limit);
+        expect(await state(store, l)).toEqual({ active: 0, queued: 0, tenants: {} });
+        if (store instanceof DynamoStore) {
+          const item = await (store as any).readLimit(l.item);
+          expect(item.waiting).toEqual({});
+        }
+      }
+      expect(late).toBe(0);
+    }, 180_000);
+
+    if (name === "dynamodb") {
+      // Run something between two writes of the store: before the first call that matches.
+      const before = (store: DynamoStore, match: (action: string, body: any) => boolean, act: () => Promise<unknown>) => {
+        const db = (store as any).db.bind(store);
+        let done = false;
+        (store as any).db = async (action: string, body: any) => {
+          if (!done && match(action, body)) {
+            done = true;
+            await act();
+          }
+          return db(action, body);
+        };
+      };
+      const nothing = async (store: DynamoStore, ...limits: Limit[]) => {
+        for (const l of limits) {
+          expect(await state(store, l)).toEqual({ active: 0, queued: 0, tenants: {} });
+          expect((await (store as any).readLimit(l.item)).waiting).toEqual({});
+        }
+      };
+
+      it("gives back the lease of a step that's done when the next took one of its own", async () => {
+        // The next step is given a lease by someone else as it's passed this one, who
+        // gives it back: the pass fails, and then there's room to take one.
+        const store = make() as DynamoStore;
+        const l = limit(2);
+        await store.acquire([l], "done", "a", 60_000);
+        await store.acquire([l], "other", "a", 60_000);
+        const next = waiter("next", "a", Date.now(), [l]);
+        await store.enqueue(next);
+        await store.release([l], "other", "a");
+        const raw = (store as any).db.bind(store);
+        (store as any).db = async (action: string, body: any) => {
+          if (String(body.UpdateExpression).startsWith("REMOVE leases.#o"))
+            throw new AwsError("dynamodb", action, 400, "ConditionalCheckFailedException", "");
+          return raw(action, body);
+        };
+        const woken: string[] = [];
+        await store.handoff([l], "done", "a", collect(woken));
+        expect(woken).toEqual(["next"]);
+        expect((await state(store, l)).active).toBe(1);
+        await store.release([l], "next", "a");
+        await nothing(store, l);
+      });
+
+      it("keeps the counts right for a step that's given its leases between its two lines", async () => {
+        const store = make() as DynamoStore;
+        const limits = [limit(1), limit(1)].sort((a, b) => (a.item < b.item ? -1 : 1));
+        await store.acquire(limits, "held", "a", 60_000);
+        const woken: string[] = [];
+        let puts = 0;
+        // Its entry is in the first line. Before the second, it's given its leases.
+        before(
+          store,
+          (action, body) => action === "PutItem" && !!body.Item.lease && ++puts === 2,
+          () => store.handoff(limits, "held", "a", collect(woken)),
+        );
+        expect(await store.enqueue(waiter("early", "a", Date.now(), limits))).toBe("held");
+        expect(woken).toEqual(["early"]);
+        expect(await state(store, limits[1])).toEqual({ active: 1, queued: 0, tenants: { a: 1 } });
+        // Another joins, and isn't hidden by the count.
+        await store.enqueue(waiter("real", "a", Date.now() + 1, limits));
+        const closed = new Set(["early"]);
+        const wake = async (w: LeaseWaiter) => !closed.has(w.leaseId) && !!woken.push(w.leaseId);
+        await store.handoff(limits, "early", "a", wake);
+        expect(woken).toEqual(["early", "real"]);
+        await store.handoff(limits, "real", "a", wake);
+        await nothing(store, ...limits);
+      });
+
+      it("doesn't give leases to a step that's done since it was seen in line", async () => {
+        // Its callback is open, as when it found its leases itself: a wake would do.
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.enqueue(waiter("x", "a", Date.now(), [l]));
+        before(
+          store,
+          (action, body) => action === "UpdateItem" && String(body.ConditionExpression).includes("active < :cap"),
+          async () => {
+            const other = make() as DynamoStore;
+            await other.dispatch(l, async () => true);
+            await other.handoff([l], "x", "a", async () => true);
+          },
+        );
+        const woken: string[] = [];
+        await store.dispatch(l, collect(woken));
+        expect(woken).toEqual([]);
+        await nothing(store, l);
+      });
+
+      it("keeps the leases of a step that asks again while a grant to it is undone", async () => {
+        const store = make() as DynamoStore;
+        const limits = [limit(1), limit(1)].sort((a, b) => (a.item < b.item ? -1 : 1));
+        await store.enqueue(waiter("x", "a", Date.now(), limits));
+        let asked: string | undefined;
+        // A dispatch has taken the first limit for it. Before the second, the step asks
+        // again: it takes both, and the grant's undo must not take the first away.
+        before(
+          store,
+          (action, body) => action === "UpdateItem" && body.Key.pk.S === limits[1].item && "cap" in body === false && String(body.UpdateExpression).includes(":cap"),
+          async () => {
+            await (store as any).db("UpdateItem", {
+              Key: { pk: { S: limits[0].item }, sk: { S: "w" } },
+              UpdateExpression: "REMOVE waiting.#t",
+              ExpressionAttributeNames: { "#t": "a" },
+            });
+            await (store as any).db("UpdateItem", {
+              Key: { pk: { S: limits[1].item }, sk: { S: "w" } },
+              UpdateExpression: "REMOVE waiting.#t",
+              ExpressionAttributeNames: { "#t": "a" },
+            });
+            const plain = make() as DynamoStore;
+            // Without this, the first limit is "full" with the step's own lease.
+            asked = await plain.acquire(limits.map((l) => ({ ...l, limit: 2 })), "x", "a", 60_000);
+          },
+        );
+        await store.dispatch(limits[0], async () => false);
+        expect(asked).toBe("granted");
+        expect((await state(store, limits[0])).active).toBe(1);
+        expect((await state(store, limits[1])).active).toBe(1);
+        expect(await store.renew(limits, "x", 60_000)).toBe(true);
+      });
+
+      it("gives back what a claim made its own when it loses another", async () => {
+        const store = make() as DynamoStore;
+        const limits = [limit(1), limit(1)].sort((a, b) => (a.item < b.item ? -1 : 1));
+        await store.acquire(limits, "x", "a", 60_000);
+        before(
+          store,
+          (action, body) => action === "UpdateItem" && body.Key.pk.S === limits[1].item && String(body.UpdateExpression).startsWith("SET leases"),
+          () => (make() as DynamoStore).release([limits[1]], "x", "a"),
+        );
+        expect(await store.renew(limits, "x", 60_000, true)).toBe(false);
+        await nothing(store, ...limits);
+      });
+
+      it("counts a step once when joining the line fails part way and is tried again", async () => {
+        const store = make() as DynamoStore;
+        const limits = [limit(1), limit(1)];
+        await store.acquire(limits, "held", "a", 60_000);
+        await store.enqueue(waiter("first", "a", Date.now(), limits));
+        const second = waiter("second", "a", Date.now() + 1, limits);
+        // Throttled at each write of the join, in turn, until it goes through.
+        for (let fail = 1; fail <= 4; fail++) {
+          const flaky = make() as DynamoStore;
+          const db = (flaky as any).db.bind(flaky);
+          let writes = 0;
+          (flaky as any).db = async (action: string, body: any) => {
+            if ((action === "PutItem" || action === "UpdateItem") && ++writes === fail)
+              throw new AwsError("dynamodb", action, 400, "ThrottlingException", "");
+            return db(action, body);
+          };
+          await expect(flaky.enqueue(second)).rejects.toThrow("ThrottlingException");
+        }
+        expect(await store.enqueue(second)).toBe("queued");
+        const woken: string[] = [];
+        for (const id of ["held", "first", "second"]) await store.handoff(limits, id, "a", collect(woken));
+        expect(woken).toEqual(["first", "second"]);
+        // At worst the count is high: no step is hidden, and nobody's left.
+        for (const l of limits) {
+          const item = await (store as any).readLimit(l.item);
+          expect(Object.keys(item.leases)).toEqual([]);
+          expect(Math.min(0, ...Object.values<number>(item.waiting))).toBe(0);
+        }
+      });
+
+      it("finds a step whose count was taken off twice", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.acquire([l], "held", "a", 60_000);
+        await store.enqueue(waiter("w1", "a", Date.now(), [l]));
+        await store.enqueue(waiter("w2", "a", Date.now() + 1, [l]));
+        await (store as any).count(l.item, "a", -1);
+        const woken: string[] = [];
+        for (const id of ["held", "w1", "w2"]) await store.handoff([l], id, "a", collect(woken));
+        expect(woken).toEqual(["w1", "w2"]);
+        await nothing(store, l);
+      });
+
+      it("counts the steps in line for the admin API", async () => {
+        const store = make() as DynamoStore;
+        const l = { ...limit(1), label: "fn:x" };
+        await store.acquire([l], "held", "a", 60_000);
+        await store.enqueue(waiter("q1", "a", Date.now(), [l]));
+        await store.enqueue(waiter("q2", "b", Date.now(), [l]));
+        (store as any).scan = async () =>
+          (await DynamoStore.prototype.scan.call(store, "C#", 100_000)).filter((i) => i.pk === l.item);
+        const { handleAdmin } = await import("../../src/aws/eventflow/admin.ts");
+        const answer: any = await handleAdmin({ op: "leases" }, new Map(), { store } as any);
+        expect(answer.result).toEqual([expect.objectContaining({ label: "fn:x", limit: 1, active: 1, queued: 2 })]);
+      });
+
+      it("doesn't take another dispatch's grant of the same step for its own", async () => {
+        // Two dispatches in the same millisecond.
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        await store.enqueue(waiter("x", "a", Date.now(), [l]));
+        const now = Date.now;
+        const at = now();
+        Date.now = () => at;
+        const woken: string[] = [];
+        try {
+          before(
+            store,
+            (action, body) => action === "UpdateItem" && String(body.ConditionExpression).includes("active < :cap"),
+            () => (make() as DynamoStore).dispatch(l, collect(woken)),
+          );
+          await store.dispatch(l, collect(woken));
+        } finally {
+          Date.now = now;
+        }
+        expect(woken).toEqual(["x"]);
+        expect(await store.renew([l], "x", 60_000)).toBe(true);
+      });
+
+      it("knows its own lease when the answer to taking it was lost", async () => {
+        const store = make() as DynamoStore;
+        const l = limit(1);
+        const raw = (store as any).db.bind(store);
+        // As when a write is made, the answer is a 500, and it's sent again.
+        (store as any).db = async (action: string, body: any) => {
+          if (String(body.ConditionExpression).includes("active < :cap")) await raw(action, body);
+          return raw(action, body);
+        };
+        expect(await store.acquire([l], "x", "a", 60_000)).toBe("granted");
+        expect((await state(store, l)).active).toBe(1);
+        await store.release([l], "x", "a");
+        await nothing(store, l);
+      });
+    }
 
     if (name === "dynamodb")
       it("heals a count of steps in line that has no steps behind it", async () => {

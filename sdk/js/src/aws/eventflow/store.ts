@@ -1,4 +1,5 @@
 import type { AwsOptions } from "../client.js";
+import { randomInt } from "node:crypto";
 import { AwsError, dynamo, isConditionFailure, isTransient } from "./aws.js";
 import { hash, key as keyOf } from "./ids.js";
 import type { WireEvent } from "./types.js";
@@ -160,6 +161,9 @@ export function fairest<T extends { tenant: string; at: number }>(waiters: T[], 
   return best;
 }
 
+/** The value of a lease in the item of a condition that wasn't met. */
+const leaseIn = (error: unknown, leaseId: string) => (error as AwsError).body?.Item?.leases?.M?.[leaseId]?.S;
+
 export class DynamoStore implements Store {
   constructor(
     private readonly table: string,
@@ -313,7 +317,8 @@ export class DynamoStore implements Store {
   // next is full: it never waits holding a lease, so two steps can't each hold what
   // the other waits for.
 
-  // Take one lease, if there's room and it isn't there yet.
+  // Take one lease, if there's room and it isn't there yet. A write that was made, but
+  // whose answer was lost, is tried again and finds its own lease: that's a lease taken.
   private async takeOne(limit: Limit, leaseId: string, tenant: string, value: string) {
     try {
       await this.db("UpdateItem", {
@@ -329,27 +334,58 @@ export class DynamoStore implements Store {
           ":exp": { N: seconds(Date.now() + DAY) },
           ":label": S(limit.label ?? limit.item),
         },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
       });
       return true;
     } catch (error) {
-      if (isConditionFailure(error)) return false;
+      if (isConditionFailure(error)) return leaseIn(error, leaseId) === value;
       throw error;
     }
   }
 
-  // Take every lease, in order, or give back the ones taken.
-  private async takeAll(limits: Limit[], leaseId: string, tenant: string, value: string, held: Set<string>) {
+  // Take every lease, in order, or give back the ones taken. One the step has already,
+  // as from a grant in progress that may yet be undone, is made this step's own, so
+  // undoing the grant doesn't give it back.
+  private async takeAll(limits: Limit[], leaseId: string, tenant: string, value: string, held: Map<string, string>) {
     const taken: Limit[] = [];
-    for (const limit of limits) {
-      if (held.has(limit.item)) continue;
-      if (await this.takeOne(limit, leaseId, tenant, value)) {
-        taken.push(limit);
-        continue;
-      }
+    const undo = async () => {
       for (const t of taken) await this.releaseOne(t.item, leaseId, tenant, value).catch(() => {});
+    };
+    for (const limit of limits) {
+      const old = held.get(limit.item);
+      // Given back by its value if the next is full, or if this one fails, which may
+      // be after it was written.
+      taken.push(limit);
+      try {
+        if (old === undefined ? await this.takeOne(limit, leaseId, tenant, value) : await this.setLease(limit.item, leaseId, old, value))
+          continue;
+      } catch (error) {
+        await undo();
+        throw error;
+      }
+      taken.pop();
+      await undo();
       return false;
     }
     return true;
+  }
+
+  // Replace a lease's value, if it's still the one that was read.
+  private async setLease(item: string, leaseId: string, old: string, value: string) {
+    try {
+      await this.db("UpdateItem", {
+        Key: { pk: S(item), sk: S("-") },
+        UpdateExpression: "SET leases.#l = :lease, expires = :exp",
+        ConditionExpression: "leases.#l = :old",
+        ExpressionAttributeNames: { "#l": leaseId },
+        ExpressionAttributeValues: { ":lease": S(value), ":old": S(old), ":exp": { N: seconds(Date.now() + DAY) } },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+      });
+      return true;
+    } catch (error) {
+      if (isConditionFailure(error)) return leaseIn(error, leaseId) === value;
+      throw error;
+    }
   }
 
   async acquire(limits: Limit[], leaseId: string, tenant: string, leaseMs: number) {
@@ -371,8 +407,8 @@ export class DynamoStore implements Store {
       // A step in line goes first, and a full limit has no room: don't ask.
       if (items.some((item, i) => item!.queued > 0 || Object.keys(item!.leases).length >= unique[i].limit))
         return "full" as const;
-      const held = new Set(unique.filter((_, i) => items[i]!.leases[leaseId]).map((l) => l.item));
-      if (await this.takeAll(unique, leaseId, tenant, `${now + leaseMs}|${tenant}`, held)) return "granted" as const;
+      const held = new Map(unique.flatMap((l, i) => (items[i]!.raw[leaseId] ? [[l.item, items[i]!.raw[leaseId]] as const] : [])));
+      if (await this.takeAll(unique, leaseId, tenant, leaseValue(now + leaseMs, tenant), held)) return "granted" as const;
       // Another step took the room first.
     }
     return "full" as const;
@@ -390,27 +426,28 @@ export class DynamoStore implements Store {
     // A lease that lasts past this invocation needs no write. A step that claims a
     // lease it found writes it, so it's its own.
     if (!claim && items.every((item) => item!.leases[leaseId].expires >= now + leaseMs)) return true;
-    for (const [i, limit] of unique.entries()) {
-      const raw = items[i]!.raw[leaseId];
-      const lease = items[i]!.leases[leaseId];
-      try {
-        await this.db("UpdateItem", {
-          Key: { pk: S(limit.item), sk: S("-") },
-          UpdateExpression: "SET leases.#l = :lease, expires = :exp",
-          ConditionExpression: "leases.#l = :old",
-          ExpressionAttributeNames: { "#l": leaseId },
-          ExpressionAttributeValues: {
-            ":lease": S(`${Math.max(now + leaseMs, lease.expires) + jitter()}|${lease.tenant}`),
-            ":old": S(raw),
-            ":exp": { N: seconds(now + DAY) },
-          },
-        });
-      } catch (error) {
-        if (isConditionFailure(error)) return false;
-        throw error;
+    const renewed: [Limit, string, string][] = [];
+    try {
+      for (const [i, limit] of unique.entries()) {
+        const lease = items[i]!.leases[leaseId];
+        const value = leaseValue(Math.max(now + leaseMs, lease.expires), lease.tenant);
+        if (claim) renewed.push([limit, lease.tenant, value]);
+        if (await this.setLease(limit.item, leaseId, items[i]!.raw[leaseId], value)) continue;
+        renewed.pop();
+        await this.giveBackAll(renewed, leaseId);
+        return false;
       }
+    } catch (error) {
+      await this.giveBackAll(renewed, leaseId);
+      throw error;
     }
     return true;
+  }
+
+  // A claim that lost one of its leases gives back the ones it made its own: whoever
+  // granted them no longer can.
+  private async giveBackAll(leases: [Limit, string, string][], leaseId: string) {
+    for (const [limit, tenant, value] of leases) await this.releaseOne(limit.item, leaseId, tenant, value).catch(() => {});
   }
 
   async release(limits: Limit[], leaseId: string, tenant: string, only?: string) {
@@ -441,8 +478,7 @@ export class DynamoStore implements Store {
     await this.db("UpdateItem", {
       Key: { pk: S(item), sk: S(map === "waiting" ? "w" : "-") },
       UpdateExpression: map === "waiting" ? "REMOVE waiting.#t, waitingAt.#t" : "REMOVE tenants.#t",
-      // A step's count goes up after its entry goes in, and down after it comes out,
-      // so a tenant's can be below zero for a moment: only a zero is taken out.
+      // Only a zero is taken out: a count that's made twice can be below.
       ConditionExpression: map === "waiting" ? "waiting.#t = :zero" : "tenants.#t <= :zero",
       ExpressionAttributeNames: { "#t": tenantKey(tenant) },
       ExpressionAttributeValues: { ":zero": N(0) },
@@ -480,17 +516,24 @@ export class DynamoStore implements Store {
   // its leases but couldn't be told. Where it's in line already, as when it asked
   // again in between, it's left as it is.
   private async requeue(waiter: LeaseWaiter) {
-    for (const limit of ordered(waiter.limits)) {
-      try {
-        await this.db("PutItem", {
-          Item: { ...this.entryKey(limit, waiter), ...this.entry(waiter) },
-          ConditionExpression: "attribute_not_exists(pk)",
-        });
-      } catch (error) {
-        if (isConditionFailure(error)) continue;
-        throw error;
-      }
-      await this.count(limit.item, waiter.tenant, 1);
+    for (const limit of ordered(waiter.limits)) await this.join(limit, waiter);
+  }
+
+  // Put a step in a limit's line, or say it's there already. It's counted before its
+  // entry goes in, so wherever this stops, the count isn't one short: that would hide a
+  // step that waits. One too many is found with no step behind it, and taken out.
+  private async join(limit: Limit, waiter: LeaseWaiter) {
+    await this.count(limit.item, waiter.tenant, 1);
+    try {
+      await this.db("PutItem", {
+        Item: { ...this.entryKey(limit, waiter), ...this.entry(waiter) },
+        ConditionExpression: "attribute_not_exists(pk)",
+      });
+      return true;
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+      await this.count(limit.item, waiter.tenant, -1);
+      return false;
     }
   }
 
@@ -512,16 +555,39 @@ export class DynamoStore implements Store {
     return false;
   }
 
-  // Count a step in a limit's line, or more than one, and say the tenant is waiting.
+  // Count a step in a limit's line, or more than one, and say the tenant is waiting. A
+  // tenant with none left is taken out.
   private async count(item: string, tenant: string, n: number) {
-    await this.db("UpdateItem", {
+    const t = tenantKey(tenant);
+    const result = await this.db("UpdateItem", {
       Key: { pk: S(item), sk: S("w") },
       UpdateExpression: n ? "SET waitingAt.#t = :now, expires = :exp ADD waiting.#t :n" : "SET waitingAt.#t = :now",
-      ExpressionAttributeNames: { "#t": tenantKey(tenant) },
+      ExpressionAttributeNames: { "#t": t },
       ExpressionAttributeValues: {
         ":now": N(Date.now()),
         ...(n ? { ":n": N(n), ":exp": { N: seconds(Date.now() + DAY) } } : {}),
       },
+      ReturnValues: "UPDATED_NEW",
+    });
+    if (!n || Number(result.Attributes?.waiting?.M?.[t]?.N) !== 0) return;
+    await this.dropZero(item, "waiting", tenant);
+    // A step is counted before it's in line, so one in line here isn't counted, as when
+    // a count's answer was lost and it was made twice. Count it, so it's seen.
+    const page = await this.db("Query", {
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": S(lineKey(item, t)) },
+      ConsistentRead: true,
+      Limit: 1,
+    });
+    if (!page.Items?.length) return;
+    await this.db("UpdateItem", {
+      Key: { pk: S(item), sk: S("w") },
+      UpdateExpression: "SET waiting.#t = :one, waitingAt.#t = :now",
+      ConditionExpression: "attribute_not_exists(waiting.#t)",
+      ExpressionAttributeNames: { "#t": t },
+      ExpressionAttributeValues: { ":one": N(1), ":now": N(Date.now()) },
+    }).catch((error) => {
+      if (!isConditionFailure(error)) throw error;
     });
   }
 
@@ -534,20 +600,8 @@ export class DynamoStore implements Store {
     const entry = this.entry(waiter);
     for (let attempt = 0; attempt < 3; attempt++) {
       let gone = false;
-      for (const [i, limit] of limits.entries()) {
-        // The entry goes in first, then its count. A count without an entry would
-        // keep newcomers out until it's found stale; an entry without a count is
-        // counted when the step asks again.
-        try {
-          await this.db("PutItem", {
-            Item: { ...this.entryKey(limit, waiter), ...entry },
-            ConditionExpression: "attribute_not_exists(pk)",
-          });
-          await this.count(limit.item, waiter.tenant, 1);
-          continue;
-        } catch (error) {
-          if (!isConditionFailure(error)) throw error;
-        }
+      for (const limit of limits) {
+        if (await this.join(limit, waiter)) continue;
         // Asking again: the step keeps its place, with its new callback.
         try {
           await this.db("UpdateItem", {
@@ -556,12 +610,23 @@ export class DynamoStore implements Store {
             ConditionExpression: "attribute_exists(pk)",
             ExpressionAttributeValues: { ":cb": entry.callback, ":exp": entry.expires },
           });
-          // Count it if it isn't, as when the step stopped between its entry and its
-          // count; and say the tenant still waits, so its count isn't taken for stale.
-          await this.count(limit.item, waiter.tenant, (items[i]?.waiting[tenantKey(waiter.tenant)] ?? 0) > 0 ? 0 : 1);
         } catch (error) {
           if (!isConditionFailure(error)) throw error;
           gone = true;
+        }
+      }
+      // A step can be given its leases once it's in its first line. A grant takes it out
+      // of its lines in the order it joined them, so if it's still in the first, it's
+      // taken out of the rest too. If it isn't, an entry that came after is left over.
+      if (!gone && limits.length > 1) {
+        const { Item } = await this.db("GetItem", {
+          Key: this.entryKey(limits[0], waiter),
+          ProjectionExpression: "pk",
+          ConsistentRead: true,
+        });
+        if (!Item) {
+          gone = true;
+          for (const l of limits.slice(1)) await this.leave(l, waiter);
         }
       }
       if (!gone) return "queued" as const;
@@ -576,6 +641,7 @@ export class DynamoStore implements Store {
 
   async dispatch(limit: Limit, wake: (w: LeaseWaiter) => Promise<boolean>, skip = new Set<string>()) {
     let woken = 0;
+    let again = false;
     for (let round = 0; round < limit.limit + 5; round++) {
       const item = await this.readLimit(limit.item);
       if (!item) return woken;
@@ -584,15 +650,24 @@ export class DynamoStore implements Store {
       if (Object.keys(item.leases).length >= limit.limit) return woken;
       let granted: LeaseWaiter | undefined;
       let value: string | undefined;
+      let undone = false;
       for await (const c of this.candidates(limit, item, now, skip)) {
-        value = await this.grant(c);
+        if (!(await this.hasRoom(c.limits.filter((l) => l.item !== limit.item)))) continue;
+        const grant = await this.grant(c);
+        undone ||= grant.undone;
+        value = grant.value;
         if (value) {
           granted = c;
           break;
         }
       }
       // No step in line can have all it needs now. A release of the limit it's missing
-      // gives it to it.
+      // gives it to it. A lease that was taken and given back was gone for a moment,
+      // and another step may have found the limit full then: look again, once.
+      if (!granted && undone && !again) {
+        again = true;
+        continue;
+      }
       if (!granted) return woken;
       // A step that's gone, as when its run stopped or it asked again with a new
       // callback, gives its leases back to the next one.
@@ -612,7 +687,8 @@ export class DynamoStore implements Store {
     skip: Set<string>,
   ): AsyncGenerator<LeaseWaiter> {
     const tenants = Object.entries(item.waiting)
-      .filter(([, n]) => n > 0)
+      // Any that's counted, even at zero or below, as when a count was made twice: its
+      // line says if a step waits.
       .map(([t]) => t)
       .sort((a, b) => (item.tenants[a] ?? 0) - (item.tenants[b] ?? 0));
     // At most 20 tenants looked at, not counting the stale ones taken out.
@@ -629,10 +705,9 @@ export class DynamoStore implements Store {
       // be told it was given one waits for the next dispatch.
       const e = (page.Items ?? []).find((e: any) => !item.leases[String(e.lease.S)] && !skip.has(String(e.lease.S)));
       if (!e) {
-        // A count goes up after its entry goes in, so one can be seen without its
-        // entry for a moment. It's taken for a stale one, as when entries expired,
-        // only if the tenant hasn't joined or asked again in longer than a step waits
-        // before it asks again.
+        // A count goes up before its entry goes in, and down after it comes out, so one
+        // can be seen without its entry for a moment. It's taken for a stale one, as
+        // when entries expired, only if it hasn't changed in a while.
         if (!page.Items?.length && now - (item.waitingAt[t] ?? 0) > STALE_LINE_MS) {
           await this.db("UpdateItem", {
             Key: { pk: S(limit.item), sk: S("w") },
@@ -672,13 +747,15 @@ export class DynamoStore implements Store {
       const item = items[i];
       if (!item?.leases[leaseId]) continue;
       for await (const next of this.candidates(unique[i], item, Date.now(), skip)) {
-        const value = await this.grant(next, { limits: unique, leaseId, tenant });
+        const { value, passed } = await this.grant(next, { limits: unique, leaseId, tenant });
         if (!value) continue;
+        // Give back what wasn't passed: a limit the next step doesn't need, or one it
+        // got a lease of its own on.
+        const kept = unique.filter((l) => !passed.some((p) => p.item === l.item));
+        await this.release(kept, leaseId, tenant);
         if (!(await this.tell(next, value, wake, skip)))
           for (const l of uniqueLimits(next.limits)) await this.dispatch(l, wake, skip);
-        // A limit the next step doesn't need was given back: hand it on.
-        for (const j of order)
-          if (!next.limits.some((n) => n.item === unique[j].item)) await this.dispatch(unique[j], wake, skip);
+        for (const l of kept) await this.dispatch(l, wake, skip);
         return;
       }
       break;
@@ -687,67 +764,102 @@ export class DynamoStore implements Store {
     for (const i of order) await this.dispatch(unique[i], wake, skip);
   }
 
+  // Whether each limit has room, or didn't when it was looked at. Looking first saves
+  // taking one lease to give it back, as when a tenant's own limit is full.
+  private async hasRoom(limits: Limit[]) {
+    const rooms = await Promise.all(
+      uniqueLimits(limits).map(async (l) => {
+        const { Item } = await this.db("GetItem", {
+          Key: { pk: S(l.item), sk: S("-") },
+          ProjectionExpression: "active",
+          ConsistentRead: true,
+        });
+        return !!Item && Number(Item.active?.N ?? 0) < l.limit;
+      }),
+    );
+    return rooms.every(Boolean);
+  }
+
   // Give a step in line every lease it needs, one at a time, in order, or none. With
   // `from`, a step that's done gives its lease on a limit they share straight to it,
   // in one write. Then take the step out of its lines. It returns the leases' value,
-  // to give back only those, or nothing.
+  // to give back only those, or none; and which leases were passed. The step that's
+  // done still holds the others.
   private async grant(w: LeaseWaiter, from?: { limits: Limit[]; leaseId: string; tenant: string }) {
-    const value = `${Date.now() + GRANT_MS + jitter()}|${w.tenant}`;
+    const value = leaseValue(Date.now() + GRANT_MS, w.tenant);
     const mine = ordered(w.limits);
     const theirs = from ? uniqueLimits(from.limits) : [];
-    const t = tenantKey(w.tenant);
     const passed: Limit[] = [];
     const taken: Limit[] = [];
     const undo = async () => {
       for (const l of [...passed, ...taken]) await this.releaseOne(l.item, w.leaseId, w.tenant, value).catch(() => {});
-      return undefined;
+      return { value: undefined, passed, undone: passed.length + taken.length > 0 };
     };
     for (const limit of mine) {
-      if (from && theirs.some((l) => l.item === limit.item)) {
-        const ot = tenantKey(from.tenant);
-        const same = ot === t;
-        try {
-          await this.db("UpdateItem", {
-            Key: { pk: S(limit.item), sk: S("-") },
-            UpdateExpression: `REMOVE leases.#o SET leases.#l = :lease, expires = :exp${same ? "" : " ADD tenants.#t :one, tenants.#ot :minus"}`,
-            ConditionExpression: "attribute_exists(leases.#o) AND attribute_not_exists(leases.#l)",
-            ExpressionAttributeNames: { "#o": from.leaseId, "#l": w.leaseId, ...(same ? {} : { "#t": t, "#ot": ot }) },
-            ExpressionAttributeValues: {
-              ":lease": S(value),
-              ":exp": { N: seconds(Date.now() + DAY) },
-              ...(same ? {} : { ":one": N(1), ":minus": N(-1) }),
-            },
-          });
+      // Given back by its value on an error, which may come after it was written.
+      taken.push(limit);
+      try {
+        if (from && theirs.some((l) => l.item === limit.item) && (await this.passOne(limit, from, w, value))) {
+          taken.pop();
           passed.push(limit);
-          if (!same) await this.dropZero(limit.item, "tenants", from.tenant);
           continue;
-        } catch (error) {
-          if (!isConditionFailure(error)) {
-            await undo();
-            throw error;
-          }
-          // The step that's done no longer holds it, or the next one does already:
-          // take it like any other.
         }
+        // The step that's done no longer holds it, or it isn't one it has: take it
+        // like any other.
+        if (await this.takeOne(limit, w.leaseId, w.tenant, value)) continue;
+      } catch (error) {
+        await undo();
+        throw error;
       }
-      if (await this.takeOne(limit, w.leaseId, w.tenant, value).catch(async (error) => (await undo(), Promise.reject(error)))) {
-        taken.push(limit);
-        continue;
-      }
+      taken.pop();
       return undo();
     }
-    // The step that's done gives back what the next one doesn't need.
-    if (from)
-      for (const l of theirs)
-        if (!mine.some((m) => m.item === l.item)) await this.releaseOne(l.item, from.leaseId, from.tenant).catch(() => {});
-    // Out of every line, then off the counts. A step that asked again in between finds
-    // its entries gone and its leases held, and claims them.
-    for (const l of mine) {
-      await this.db("DeleteItem", { Key: this.entryKey(l, w) }).catch(() => {});
-      await this.count(l.item, w.tenant, -1).catch(() => {});
-      await this.dropZero(l.item, "waiting", w.tenant).catch(() => {});
+    // Out of every line. Its entry in the first is taken out by one grant only: one
+    // that finds it gone read it before another grant took it out, and the step may be
+    // done by now. Its callback may still be open, as when it found its leases itself,
+    // so waking it wouldn't tell. A step that asked again in between finds its entries
+    // gone and its leases held, and claims them. An error leaves an entry or a count
+    // that's found stale later.
+    let first = true;
+    for (const [i, l] of mine.entries()) {
+      const was = await this.leave(l, w).catch(() => true);
+      if (i === 0) first = was;
     }
-    return value;
+    return first ? { value, passed, undone: false } : undo();
+  }
+
+  // Take a step out of a line. Only an entry that was there is counted out, so the
+  // count isn't one short, which would hide a step that waits.
+  private async leave(limit: Limit, waiter: Pick<LeaseWaiter, "tenant" | "at" | "leaseId">) {
+    const { Attributes } = await this.db("DeleteItem", { Key: this.entryKey(limit, waiter), ReturnValues: "ALL_OLD" });
+    if (Attributes) await this.count(limit.item, waiter.tenant, -1);
+    return !!Attributes;
+  }
+
+  // Pass a lease from a step that's done to the next, in one write.
+  private async passOne(limit: Limit, from: { leaseId: string; tenant: string }, w: LeaseWaiter, value: string) {
+    const t = tenantKey(w.tenant);
+    const ot = tenantKey(from.tenant);
+    const same = ot === t;
+    try {
+      await this.db("UpdateItem", {
+        Key: { pk: S(limit.item), sk: S("-") },
+        UpdateExpression: `REMOVE leases.#o SET leases.#l = :lease, expires = :exp${same ? "" : " ADD tenants.#t :one, tenants.#ot :minus"}`,
+        ConditionExpression: "attribute_exists(leases.#o) AND attribute_not_exists(leases.#l)",
+        ExpressionAttributeNames: { "#o": from.leaseId, "#l": w.leaseId, ...(same ? {} : { "#t": t, "#ot": ot }) },
+        ExpressionAttributeValues: {
+          ":lease": S(value),
+          ":exp": { N: seconds(Date.now() + DAY) },
+          ...(same ? {} : { ":one": N(1), ":minus": N(-1) }),
+        },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+      });
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+      if (leaseIn(error, w.leaseId) !== value) return false;
+    }
+    if (!same) await this.dropZero(limit.item, "tenants", from.tenant);
+    return true;
   }
 
   private async readLimit(item: string): Promise<LimitState | undefined> {
@@ -759,7 +871,7 @@ export class DynamoStore implements Store {
     const raw: Record<string, string> = Object.create(null);
     for (const [id, value] of Object.entries<any>(leasesItem.Item.leases?.M ?? {})) {
       const [expires, ...rest] = String(value.S).split("|");
-      leases[id] = { expires: Number(expires), tenant: rest.join("|") };
+      leases[id] = { expires: Math.floor(Number(expires)), tenant: rest.join("|") };
       raw[id] = String(value.S);
     }
     const counts = (m: any) => {
@@ -945,11 +1057,10 @@ interface LimitState {
 }
 
 /**
- * How long a tenant counted in line, with no step in its line, goes without joining
- * or asking again before its count is taken for a stale one: longer than a step waits
- * before it asks again.
+ * How long a tenant's count goes without a change, with no step in its line, before it's
+ * taken for a stale one: far longer than it takes to join a line.
  */
-const STALE_LINE_MS = 20 * 60_000;
+const STALE_LINE_MS = 60_000;
 
 /**
  * How long a lease given to a step in line lasts: as long as the longest invocation,
@@ -971,9 +1082,13 @@ function ordered(limits: Limit[]) {
   return uniqueLimits(limits).sort((a, b) => (a.item < b.item ? -1 : a.item > b.item ? 1 : 0));
 }
 
-/** Up to a second, so two leases given in the same millisecond have different values. */
-function jitter() {
-  return Math.floor(Math.random() * 1000);
+/**
+ * A lease's value: when it expires, and its tenant. The fraction of the expiry makes it
+ * unique, so a lease is given back, or taken for one's own, only by whoever wrote it:
+ * two dispatches can give one step its leases in the same millisecond.
+ */
+function leaseValue(expires: number, tenant: string) {
+  return `${Math.floor(expires)}.${randomInt(2 ** 48 - 1)}|${tenant}`;
 }
 
 export function uniqueLimits(limits: Limit[]) {

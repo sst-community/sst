@@ -85,6 +85,13 @@ describe("the admin API", () => {
     expect(cluster.queue).toHaveLength(1);
   });
 
+  it("lists the latest runs, when there are more than a page", async () => {
+    const cluster = new Cluster(() => []);
+    for (let i = 0; i < 1500; i++) cluster.history.set(`pay-${i}`, { status: "FAILED", payload: {}, events: [], startedAt: i + 1 });
+    const runs = await cluster.flow.runs.list({ limit: 3 });
+    expect(runs.map((r) => r.id)).toEqual(["pay-1499", "pay-1498", "pay-1497"]);
+  });
+
   it("refuses an operation it doesn't know", async () => {
     const cluster = new Cluster(() => []);
     await expect(cluster.flow.getEngine().admin("drop-table")).rejects.toThrow("Unknown admin operation");

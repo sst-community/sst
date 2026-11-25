@@ -126,7 +126,8 @@ export async function listRuns(engine: Engine, input: ListInput = {}): Promise<R
   let marker: string | undefined;
   // At most 10 pages, so a filter that matches little can't page forever.
   for (let page = 0; page < 10; page++) {
-    const params = new URLSearchParams({ MaxItems: "1000", ReverseOrder: "true" });
+    // The latest first, as AWS lists them. ReverseOrder is the oldest first.
+    const params = new URLSearchParams({ MaxItems: "1000" });
     if (input.status) params.set("Statuses", input.status);
     if (input.from) params.set("StartedAfter", new Date(input.from).toISOString());
     if (input.to) params.set("StartedBefore", new Date(input.to).toISOString());

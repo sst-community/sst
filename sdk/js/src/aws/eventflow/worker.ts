@@ -295,17 +295,20 @@ function makeStep(state: RunState) {
           log("warn", "Failed to ask for a lease. Joining the line.", { run: state.runId, error: errorInfo(error).message });
           return "full" as const;
         });
-        return result === "granted";
+        // When it asked, for its place in line. It's this step's result, so joining the
+        // line again after an error is joining in the same place, not twice.
+        return { granted: result === "granted", at: Date.now() };
       });
-      if (got) return;
+      if (got.granted) return;
+      place.joined ??= got.at;
       const [woken, callbackId] = await child.createCallback<{ leaseId: string }>(`queued:${t}`, {
         timeout: { seconds: leaseWaitSeconds(round) },
         serdes: json as any,
       });
       // Join the line, then hand out what's free: the leases may have freed up in
       // between. If they're the step's, it goes on without waiting.
-      const queued = await child.step(`enqueue:${t}`, async () => {
-        const at = place.joined ?? Date.now();
+      const mine = await child.step(`enqueue:${t}`, async () => {
+        const at = place.joined!;
         const result = await engine.store.enqueue({
           leaseId,
           limits,
@@ -315,7 +318,7 @@ function makeStep(state: RunState) {
           at,
           expiresAt: Date.now() + leaseWaitSeconds(round) * 1000,
         });
-        if (result === "held") return { mine: true, at };
+        if (result === "held") return true;
         let mine = false;
         for (const limit of limits)
           await engine.store.dispatch(limit, async (w) => {
@@ -323,10 +326,9 @@ function makeStep(state: RunState) {
             mine = true;
             return true;
           });
-        return { mine, at };
+        return mine;
       });
-      place.joined = queued.at;
-      if (queued.mine) return;
+      if (mine) return;
       try {
         await woken;
         return;
