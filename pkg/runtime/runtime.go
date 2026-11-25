@@ -57,6 +57,14 @@ type Worker interface {
 	Logs() io.ReadCloser
 }
 
+// ProcessWorker is a Worker that runs as a process on this machine, as every
+// runtime's does, with PID its process ID: what sst dev's console samples the
+// CPU and memory of.
+type ProcessWorker interface {
+	Worker
+	PID() int
+}
+
 type BuildInput struct {
 	CfgPath string
 	// PlatformDir is where SST's platform files are, which a build reads, like

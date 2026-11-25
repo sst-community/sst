@@ -213,3 +213,11 @@ func TestWorkerThatCantStart(t *testing.T) {
 		t.Errorf("%d commands are tracked after a worker failed to start, want 0", len(cmds))
 	}
 }
+
+func TestWorkerPID(t *testing.T) {
+	w := startTestWorker(t, "sleep 5")
+	defer w.Stop()
+	if w.PID() <= 0 || w.PID() != w.cmd.Process.Pid {
+		t.Fatalf("PID %d, process %d", w.PID(), w.cmd.Process.Pid)
+	}
+}

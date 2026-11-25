@@ -1,0 +1,120 @@
+package console
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
+
+// All is what --console means without a list: every module.
+const All = "all"
+
+// Parse reads which modules are on from --console's value, or SST_CONSOLE's
+// when the flag isn't given. Nothing, off, false or 0 is none, and nil means
+// the console doesn't start. all, true or 1 is every module. Otherwise it's a
+// list of names, with the modules each needs, in the order of available.
+func Parse(flag string, env string, available []Module) ([]string, error) {
+	value := strings.TrimSpace(flag)
+	if value == "" {
+		value = strings.TrimSpace(env)
+	}
+	switch strings.ToLower(value) {
+	case "", "off", "false", "0":
+		return nil, nil
+	case All, "true", "1":
+		names := make([]string, 0, len(available))
+		for _, m := range available {
+			names = append(names, m.Name())
+		}
+		return names, nil
+	}
+	byName := map[string]Module{}
+	known := []string{}
+	for _, m := range available {
+		byName[m.Name()] = m
+		known = append(known, m.Name())
+	}
+	want := map[string]bool{}
+	var add func(name string, from string) error
+	add = func(name string, from string) error {
+		m, ok := byName[name]
+		if !ok {
+			if from != "" {
+				return fmt.Errorf("console module %q needs %q, which isn't there", from, name)
+			}
+			return fmt.Errorf("there's no console module %q: the modules are %s", name, strings.Join(known, ", "))
+		}
+		if want[name] {
+			return nil
+		}
+		want[name] = true
+		if r, ok := m.(Requirer); ok {
+			for _, dep := range r.Requires() {
+				if err := add(dep, name); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, part := range strings.Split(value, ",") {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name == "" {
+			continue
+		}
+		if err := add(name, ""); err != nil {
+			return nil, err
+		}
+	}
+	names := []string{}
+	for _, name := range known {
+		if want[name] {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%q lists no console modules: the modules are %s, or give off for none", value, strings.Join(known, ", "))
+	}
+	return slices.Clip(names), nil
+}
+
+// Misplaced is an error when --console was given bare and followed by a list
+// of modules, as in `sst dev --console logs`: the value has to be given with
+// =, or it's taken for the command to run.
+func Misplaced(flag string, args []string, available []Module) error {
+	if flag != All || len(args) == 0 {
+		return nil
+	}
+	names, err := Parse(args[0], "", available)
+	if err != nil || names == nil || args[0] == All || strings.EqualFold(args[0], "true") || args[0] == "1" {
+		return nil
+	}
+	return fmt.Errorf("%q after --console is taken for a command to run, which connects to an sst dev that's already running and starts no console: give --console its modules with =, as in --console=%s", args[0], args[0])
+}
+
+// WithCommand is an error when --console was given with a command to run, as
+// in `sst dev --console next dev`: that connects to an sst dev that's already
+// running, and its console is that sst dev's to start. SST_CONSOLE isn't
+// checked, as the commands sst dev starts have it from sst dev.
+func WithCommand(flag string, args []string, available []Module) error {
+	if len(args) == 0 {
+		return nil
+	}
+	names, err := Parse(flag, "", available)
+	if err != nil || names == nil {
+		return nil
+	}
+	return fmt.Errorf("--console starts with sst dev, not with a command that connects to one: give it to the sst dev that's running, as in sst dev --console")
+}
+
+// NotDev is an error when --console was given to a dev loop other than sst
+// dev's, as sst pulumi dev: flags are one set for every command, so it parses
+// there, but the console is sst dev's. SST_CONSOLE is left alone, as it may be
+// set for sst dev.
+func NotDev(flag string) error {
+	switch strings.ToLower(strings.TrimSpace(flag)) {
+	case "", "off", "false", "0":
+		return nil
+	}
+	return fmt.Errorf("--console is a flag of sst dev, not of this command")
+}

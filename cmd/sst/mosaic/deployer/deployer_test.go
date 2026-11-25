@@ -1,7 +1,9 @@
 package deployer
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sst/sst/v3/pkg/bus"
@@ -50,4 +52,23 @@ func TestPublishFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Start subscribes to the events it deploys on, and nothing else.
+func TestStartSubscribesToItsEvents(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Start(ctx, nil, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	want := "*watcher.FileChangedEvent,*deployer.DeployRequestedEvent,*project.BuildSuccessEvent"
+	for _, s := range bus.Stats() {
+		if strings.Contains(s.Label, "FileChangedEvent") {
+			if s.Label != want {
+				t.Fatalf("subscribed to %s, want %s", s.Label, want)
+			}
+			return
+		}
+	}
+	t.Fatal("Start didn't subscribe")
 }

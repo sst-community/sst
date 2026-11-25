@@ -22,10 +22,12 @@ type Cli struct {
 	version   string
 	flags     map[string]interface{}
 	arguments []string
-	path      CommandPath
-	Context   context.Context
-	cancel    context.CancelFunc
-	env       []string
+	// dashed is whether the arguments came after --
+	dashed  bool
+	path    CommandPath
+	Context context.Context
+	cancel  context.CancelFunc
+	env     []string
 }
 
 func New(ctx context.Context, cancel context.CancelFunc, root *Command, version string) (*Cli, error) {
@@ -62,6 +64,7 @@ func New(ctx context.Context, cancel context.CancelFunc, root *Command, version 
 		flags:     parsedFlags,
 		version:   version,
 		arguments: positionals,
+		dashed:    afterDash(flag.CommandLine.ArgsLenAtDash(), len(flag.Args()), len(positionals)),
 		path:      cmds,
 		Context:   ctx,
 		cancel:    cancel,
@@ -121,6 +124,18 @@ func (c *Cli) Arguments() []string {
 	return c.arguments
 }
 
+// Dashed is whether the arguments came after --, as in sst dev -- logs, so
+// none of them was meant as a flag's value.
+func (c *Cli) Dashed() bool {
+	return c.dashed
+}
+
+// afterDash is whether the last n of the total arguments came after --, which
+// was after at of them, or -1 when there's none.
+func afterDash(at, total, n int) bool {
+	return n > 0 && at >= 0 && at <= total-n
+}
+
 func (c *Cli) Positional(index int) string {
 	if index >= len(c.arguments) {
 		return ""
@@ -162,10 +177,22 @@ func (c *Command) init(parsed map[string]interface{}) {
 	}
 	for _, f := range c.Flags {
 		if parsed[f.Name] != nil {
+			// flags are one set for every command, so a name is one flag
+			if existing := flag.Lookup(f.Name); existing != nil {
+				if existing.Value.Type() != f.Type {
+					panic(fmt.Sprintf("--%s is defined twice, as a %s and a %s", f.Name, existing.Value.Type(), f.Type))
+				}
+				if f.Type == "string" && existing.NoOptDefVal != f.Bare {
+					panic(fmt.Sprintf("--%s is defined twice, with different Bare values", f.Name))
+				}
+			}
 			continue
 		}
 		if f.Type == "string" {
 			parsed[f.Name] = flag.String(f.Name, "", "")
+			if f.Bare != "" {
+				flag.Lookup(f.Name).NoOptDefVal = f.Bare
+			}
 		}
 
 		if f.Type == "bool" {
@@ -211,6 +238,11 @@ type Flag struct {
 	Name        string      `json:"name"`
 	Type        string      `json:"type"`
 	Description Description `json:"description"`
+	// Bare is a string flag's value when it's given without one, as --console
+	// for --console=all. A value then has to be given with =. Flags are one set
+	// for every command, so a flag of the same name elsewhere needs the same
+	// Bare, or init panics.
+	Bare string `json:"-"`
 }
 
 type CommandPath []Command

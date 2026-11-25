@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{if .App}}{{.App}} · {{.Stage}} · {{end}}sst dev console</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/assets/console.css">
+{{- range .Modules}}{{if .Style}}
+<link rel="stylesheet" href="{{.Style}}">{{end}}{{end}}
+<script defer src="/assets/console.js"></script>
+{{- range .Modules}}{{if .Script}}
+<script defer src="{{.Script}}"></script>{{end}}{{end}}
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><span class="mark">SST</span><span class="where" id="where">{{if .App}}{{.App}} <span class="dim">/</span> {{.Stage}}{{end}}</span></div>
+  <nav class="tabs" id="tabs">
+    {{- range .Modules}}{{if .Title}}
+    <a class="tab" href="#{{.Name}}" data-module="{{.Name}}">{{.Title}}</a>
+    {{- end}}{{end}}
+  </nav>
+  <div class="status" id="status"><span class="dot" id="dot"></span><span id="status-text">Connecting</span></div>
+</header>
+<main id="panels">
+  {{- range .Modules}}{{if .Title}}
+  <section class="panel" id="panel-{{.Name}}" data-module="{{.Name}}" hidden></section>
+  {{- end}}{{end}}
+  <section class="panel empty" id="panel-none" hidden><p>Turn a module on with <code>sst dev --console</code>.</p></section>
+</main>
+</body>
+</html>
