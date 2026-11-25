@@ -223,4 +223,41 @@ describe("Router URL route protection", () => {
 
     expect(getOrigin(host).originAccessControlConfig).toBeUndefined();
   });
+
+  const webHost = "abc123.lambda-web.us-east-1.on.aws";
+  const webGlobalHost = "abc123.lambda-web.global.on.aws";
+
+  it("signs a Lambda web function hostname with always-amz-auth under oac", async () => {
+    const router = createRouter("oac");
+    router.route("/api", `https://${webHost}`, { protection: true });
+    await settle(webHost);
+    expect(getOrigin(webHost).originAccessControlConfig).toEqual({
+      enabled: true,
+      signingBehavior: "always-amz-auth",
+      signingProtocol: "sigv4",
+      originType: "lambda",
+    });
+  });
+
+  it("signs a MultiRegion Lambda web function hostname with always-amz-auth", async () => {
+    const router = createRouter("oac");
+    router.route("/api", `https://${webGlobalHost}`, { protection: true });
+    await settle(webGlobalHost);
+    expect(getOrigin(webGlobalHost).originAccessControlConfig).toEqual({
+      enabled: true,
+      signingBehavior: "always-amz-auth",
+      signingProtocol: "sigv4",
+      originType: "lambda",
+    });
+  });
+
+  it.each([
+    "abc123.lambda-web.us-east-1.on.aws.example.com",
+    "not-a-web.lambda-website.us-east-1.on.aws",
+  ])("does not sign the web-function look-alike hostname %s", async (host) => {
+    const router = createRouter("oac");
+    router.route("/api", `https://${host}`, { protection: true });
+    await settle(host);
+    expect(getOrigin(host).originAccessControlConfig).toBeUndefined();
+  });
 });

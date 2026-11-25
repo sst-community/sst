@@ -102,6 +102,29 @@ vi.mock(
   },
 );
 
+// KvKeys / KvRoutesUpdate use rpc.Provider dynamic resources; stand in as
+// ordinary CustomResources so Pulumi mocks capture them.
+vi.mock("../../src/components/aws/providers/kv-keys", async () => {
+  const { CustomResource } = await import("@pulumi/pulumi");
+  return {
+    KvKeys: class extends CustomResource {
+      constructor(name: string, args: object, opts?: object) {
+        super("sst:aws:KvKeys", name, { ...args }, opts);
+      }
+    },
+  };
+});
+vi.mock("../../src/components/aws/providers/kv-routes-update", async () => {
+  const { CustomResource } = await import("@pulumi/pulumi");
+  return {
+    KvRoutesUpdate: class extends CustomResource {
+      constructor(name: string, args: object, opts?: object) {
+        super("sst:aws:KvRoutesUpdate", name, { ...args }, opts);
+      }
+    },
+  };
+});
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "web-function-"));
 const platformRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -1841,7 +1864,7 @@ describe("WebFunction", () => {
             domain: { name: "api.example.com", dns: false, cert },
           }),
       ).toThrow(
-        'The "PublicDomain" WebFunction can\'t set "url.authorization" to "none" with "domain". Its endpoint uses IAM authorization, so that its CloudFront distribution signs its requests with origin access control.',
+        'The "PublicDomain" WebFunction can\'t set "url.authorization" to "none" with "domain" or "router". Its endpoint uses IAM authorization, so that CloudFront signs its requests with origin access control.',
       );
     });
 
@@ -1904,6 +1927,78 @@ describe("WebFunction", () => {
         ofType("aws:lambdaweb/resourcePolicy:ResourcePolicy"),
       ).toHaveLength(0);
     });
+  });
+
+  describe("router", () => {
+    class StubRouter {
+      url = pulumi.output("https://dev.example.com");
+      nodes = {
+        cdn: {
+          nodes: {
+            distribution: {
+              id: pulumi.output("E123DIST"),
+              arn: pulumi.output(
+                "arn:aws:cloudfront::111111111111:distribution/E123DIST",
+              ),
+            },
+          },
+        },
+      };
+      _hasInlineRoutes = pulumi.output(false);
+      _kvNamespace = pulumi.output("rtr1");
+      _kvStoreArn = pulumi.output(
+        "arn:aws:cloudfront::111111111111:key-value-store/kv",
+      );
+      _protection = pulumi.output({ mode: "oac" as const });
+      _distributionArn = pulumi.output(
+        "arn:aws:cloudfront::111111111111:distribution/E123DIST",
+      );
+      constructor(
+        protection: "none" | "oac" | "oac-with-edge-signing" = "oac",
+        url = "https://dev.example.com",
+      ) {
+        this.url = pulumi.output(url);
+        this._protection = pulumi.output({ mode: protection });
+      }
+    }
+    function stubRouter(
+      protection: "none" | "oac" | "oac-with-edge-signing" = "oac",
+      url = "https://dev.example.com",
+    ) {
+      return new StubRouter(protection, url) as any;
+    }
+
+    it("rejects domain and router together", () => {
+      expect(
+        () =>
+          new WebFunction("Both", {
+            entrypoint: "index.mjs",
+            bundle: out,
+            domain: {
+              name: "api.example.com",
+              dns: false,
+              cert:
+                "arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000000",
+            },
+            router: { instance: stubRouter() },
+          }),
+      ).toThrow(/can't set both "domain" and "router"/);
+    });
+
+    it("rejects none authorization with router", () => {
+      expect(
+        () =>
+          new WebFunction("PublicRouter", {
+            entrypoint: "index.mjs",
+            bundle: out,
+            url: { authorization: "none" },
+            router: { instance: stubRouter() },
+          }),
+      ).toThrow(
+        'The "PublicRouter" WebFunction can\'t set "url.authorization" to "none" with "domain" or "router". Its endpoint uses IAM authorization, so that CloudFront signs its requests with origin access control.',
+      );
+    });
+
   });
 
   it("rejects a missing copyFiles source", () => {

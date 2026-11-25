@@ -10,6 +10,7 @@ import {
 import type { RouterBaseRouteArgs } from "./router-base-route";
 import type { ProtectionConfig, RouterUrlRouteArgs } from "./router";
 import { toSeconds } from "../duration";
+import { VisibleError } from "../error";
 
 export interface Args extends RouterBaseRouteArgs {
   /**
@@ -47,11 +48,31 @@ export class RouterUrlRoute extends Component {
         const u = new URL(url);
         const host = u.host;
         const protocol = u.protocol.slice(0, -1);
+        const isLambdaFunctionUrl =
+          /^[a-z0-9]{32}\.lambda-url\.[a-z0-9-]+\.on\.aws$/.test(u.hostname);
+        // AWS Lambda web function endpoint hostnames (not fixed-length like
+        // Function URLs): HomeRegion/PerRegion end in .lambda-web.<region>.on.aws;
+        // MultiRegion ends in .lambda-web.global.on.aws.
+        // https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-lambda-web.html
+        const isLambdaWebEndpoint =
+          /^[a-z0-9][a-z0-9-]*\.lambda-web\.([a-z0-9-]+)\.on\.aws$/.test(
+            u.hostname,
+          );
         const useOac =
           routeArgs?.protection === true &&
-          /^[a-z0-9]{32}\.lambda-url\.[a-z0-9-]+\.on\.aws$/.test(u.hostname) &&
+          (isLambdaFunctionUrl || isLambdaWebEndpoint) &&
           (protection.mode === "oac" ||
             protection.mode === "oac-with-edge-signing");
+
+        if (
+          useOac &&
+          isLambdaWebEndpoint &&
+          protection.mode === "oac-with-edge-signing"
+        ) {
+          throw new VisibleError(
+            `Cannot route a Lambda web function endpoint through a Router with protection "oac-with-edge-signing". CloudFront rejects Lambda@Edge origin triggers on web function origins with OAC. Use protection "oac" instead.`,
+          );
+        }
 
         const patternData = parsePattern(pattern);
         const namespace = buildKvNamespace(name);
@@ -65,7 +86,11 @@ export class RouterUrlRoute extends Component {
               ? {
                   originAccessControlConfig: {
                     enabled: true,
-                    signingBehavior: "always",
+                    // Web function origins require always-amz-auth; classic
+                    // Function URLs use always.
+                    signingBehavior: isLambdaWebEndpoint
+                      ? "always-amz-auth"
+                      : "always",
                     signingProtocol: "sigv4",
                     originType: "lambda",
                   },
