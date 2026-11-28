@@ -1104,8 +1104,19 @@ describe("WebFunction", () => {
   // inline policies are limited to 10,240 characters.
   describe("linkPermissions", () => {
     let Linkable: typeof import("../../src/components/linkable").Linkable;
+    // the URNs each resource was registered as depending on
+    const dependencies = new Map<string, string[]>();
+    const monitor = pulumi.runtime.getMonitor() as any;
+    const register = monitor.registerResource;
     beforeAll(async () => {
       Linkable = (await import("../../src/components/linkable")).Linkable;
+      monitor.registerResource = (request: any, callback: any) => {
+        dependencies.set(request.getName(), request.getDependenciesList());
+        return register.call(monitor, request, callback);
+      };
+    });
+    afterAll(() => {
+      monitor.registerResource = register;
     });
 
     function linked(name: string, resources = [`arn:aws:s3:::${name}/*`]) {
@@ -1176,6 +1187,28 @@ describe("WebFunction", () => {
         ManagedFiles: { name: "ManagedFiles" },
         ManagedOther: { name: "ManagedOther" },
       });
+    });
+
+    // Pulumi deletes dependents first. The role, which detaches its managed
+    // policies when it's deleted or no longer lists them, must depend on each
+    // one, or `sst remove` fails with DeleteConflict.
+    it("deletes the role before its managed policies", async () => {
+      const files = linked("RemoveFiles");
+      const jobs = linked("RemoveJobs");
+      const fn = new WebFunction("Remove", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        link: [files, jobs],
+        linkPermissions: { managed: { Storage: [files], Jobs: [jobs] } },
+      });
+      await resolved(fn.url);
+      const role = dependencies.get("RemoveRole")!;
+      expect(role).toContainEqual(
+        expect.stringContaining("::RemoveLinkStoragePolicy"),
+      );
+      expect(role).toContainEqual(
+        expect.stringContaining("::RemoveLinkJobsPolicy"),
+      );
     });
 
     it("keeps every grant inline and lists no managed policies without it", async () => {

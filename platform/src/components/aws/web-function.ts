@@ -128,6 +128,7 @@ export interface WebFunctionArgs {
    *
    * The deploy role needs permission to create, update and delete IAM managed policies.
    *
+   * @default All linked grants are inline.
    * @example
    * ```js
    * {
