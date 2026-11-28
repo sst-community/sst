@@ -1100,6 +1100,200 @@ describe("WebFunction", () => {
     ).toBe(false);
   });
 
+  // #309: a web function's linked grants could only go inline, and a role's
+  // inline policies are limited to 10,240 characters.
+  describe("linkPermissions", () => {
+    let Linkable: typeof import("../../src/components/linkable").Linkable;
+    beforeAll(async () => {
+      Linkable = (await import("../../src/components/linkable")).Linkable;
+    });
+
+    function linked(name: string, resources = [`arn:aws:s3:::${name}/*`]) {
+      return new Linkable(name, {
+        properties: { name },
+        include: [
+          { type: "aws.permission", actions: ["s3:GetObject"], resources },
+        ],
+      });
+    }
+    const roleOf = async (name: string) => {
+      const role = named(`${name}Role`, "aws:iam/role:Role").inputs;
+      return {
+        managedPolicyArns: role.managedPolicyArns as string[] | undefined,
+        inline: (await resolved(role.inlinePolicies[0].policy)) as string,
+      };
+    };
+    const statementsOf = (policy: string) => JSON.parse(policy).Statement;
+    const policiesOf = (name: string) =>
+      ofType("aws:iam/policy:Policy").filter((policy) =>
+        policy.name.startsWith(`${name}Link`),
+      );
+
+    it("moves the grants of a managed group into a policy attached through the role", async () => {
+      const files = linked("ManagedFiles");
+      const other = linked("ManagedOther");
+      const fn = new WebFunction("Managed", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        link: [files, other],
+        linkPermissions: { managed: { Storage: [files] } },
+        permissions: [
+          {
+            actions: ["ses:SendEmail"],
+            resources: [
+              "arn:aws:ses:us-east-1:111111111111:identity/example.com",
+            ],
+          },
+        ],
+      });
+      await resolved(fn.url);
+
+      const policies = policiesOf("Managed");
+      expect(policies.map((policy) => policy.name)).toEqual([
+        "ManagedLinkStoragePolicy",
+      ]);
+      expect(statementsOf(policies[0].inputs.policy)).toEqual([
+        {
+          Effect: "Allow",
+          Action: ["s3:GetObject"],
+          Resource: ["arn:aws:s3:::ManagedFiles/*"],
+        },
+      ]);
+
+      const role = await roleOf("Managed");
+      expect(role.managedPolicyArns).toEqual([
+        "arn:aws:test:us-east-1:111111111111:ManagedLinkStoragePolicy",
+      ]);
+      const inline = statementsOf(role.inline);
+      expect(inline.map((item: any) => item.Action)).toEqual([
+        ["ses:SendEmail"],
+        ["s3:GetObject"],
+        ["logs:CreateLogStream", "logs:PutLogEvents"],
+      ]);
+      expect(inline[1].Resource).toEqual(["arn:aws:s3:::ManagedOther/*"]);
+      // a managed group's resources are still linked
+      expect(await linkedResources("Managed")).toMatchObject({
+        ManagedFiles: { name: "ManagedFiles" },
+        ManagedOther: { name: "ManagedOther" },
+      });
+    });
+
+    it("keeps every grant inline and attaches no policies without it", async () => {
+      const files = linked("DefaultFiles");
+      const fn = new WebFunction("Default", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        link: [files],
+      });
+      await resolved(fn.nodes.role.arn);
+      expect(policiesOf("Default")).toEqual([]);
+      const role = await roleOf("Default");
+      // left unset, so a role deployed before linkPermissions doesn't change
+      expect(role.managedPolicyArns).toBeUndefined();
+      expect(
+        statementsOf(role.inline).map((item: any) => item.Resource),
+      ).toContainEqual(["arn:aws:s3:::DefaultFiles/*"]);
+    });
+
+    it("keeps the managed grants inline as well with retainInline", async () => {
+      const files = linked("RetainFiles");
+      const fn = new WebFunction("Retain", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        link: [files],
+        linkPermissions: {
+          managed: { Storage: [files] },
+          retainInline: true,
+        },
+      });
+      await resolved(fn.nodes.role.arn);
+      const role = await roleOf("Retain");
+      expect(role.managedPolicyArns).toEqual([
+        "arn:aws:test:us-east-1:111111111111:RetainLinkStoragePolicy",
+      ]);
+      expect(
+        statementsOf(role.inline).map((item: any) => item.Resource),
+      ).toContainEqual(["arn:aws:s3:::RetainFiles/*"]);
+    });
+
+    it("attaches the managed policies to the role sst dev runs the local server with", async () => {
+      // @ts-ignore
+      global.$dev = true;
+      const files = linked("LocalFiles");
+      const fn = new WebFunction("LocalManaged", {
+        entrypoint: "src/server.ts",
+        link: [files],
+        linkPermissions: { managed: { Storage: [files] } },
+      });
+      await resolved(fn.nodes.role.arn);
+      const role = await roleOf("LocalManaged");
+      expect(role.managedPolicyArns).toEqual([
+        "arn:aws:test:us-east-1:111111111111:LocalManagedLinkStoragePolicy",
+      ]);
+      expect(role.inline).not.toContain("arn:aws:s3:::LocalFiles/*");
+    });
+
+    // The shape of #309: four queues and other links put the inline policy
+    // over IAM's limit, and managed groups bring it under.
+    it("brings an inline policy over IAM's limit under it", async () => {
+      const queues = Array.from(
+        { length: 4 },
+        (_, i) =>
+          new Linkable(`LimitQueue${i}`, {
+            properties: { url: `https://sqs.example.com/${i}` },
+            include: [
+              {
+                type: "aws.permission",
+                actions: [
+                  "sqs:SendMessage",
+                  "sqs:ReceiveMessage",
+                  "sqs:DeleteMessage",
+                  "sqs:GetQueueAttributes",
+                  "sqs:GetQueueUrl",
+                  "sqs:ChangeMessageVisibility",
+                ],
+                resources: Array.from(
+                  { length: 36 },
+                  (_, j) =>
+                    `arn:aws:sqs:ca-central-1:111111111111:app-stage-PlatformJobsQueue${i}Shard${j}`,
+                ),
+              },
+            ],
+          }),
+      );
+      const secrets = Array.from({ length: 6 }, (_, i) =>
+        linked(`LimitSecret${i}`, [
+          `arn:aws:ssm:ca-central-1:111111111111:parameter/sst/app/stage/Secret/LimitSecret${i}/value`,
+        ]),
+      );
+      const link = [...queues, ...secrets];
+      const size = (policy: string) =>
+        JSON.stringify(JSON.parse(policy)).length;
+
+      const over = new WebFunction("OverLimit", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        link,
+      });
+      await resolved(over.nodes.role.arn);
+      expect(size((await roleOf("OverLimit")).inline)).toBeGreaterThan(10240);
+
+      const under = new WebFunction("UnderLimit", {
+        entrypoint: "index.mjs",
+        bundle: out,
+        link,
+        linkPermissions: {
+          managed: Object.fromEntries(
+            queues.map((queue, i) => [`Jobs${i}`, [queue]]),
+          ),
+        },
+      });
+      await resolved(under.nodes.role.arn);
+      expect(size((await roleOf("UnderLimit")).inline)).toBeLessThan(10240);
+      expect(policiesOf("UnderLimit")).toHaveLength(4);
+    });
+  });
+
   it("encrypts large linked values outside environment limits and isolates shared prebuilt bundles", async () => {
     const sensitive = "linked-secret-value-".repeat(3000);
     const linked = (name: string, value: string) => ({
