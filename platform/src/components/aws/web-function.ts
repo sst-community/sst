@@ -872,18 +872,16 @@ export class WebFunction extends Component implements Link.Linkable {
         args.transform?.role,
         `${name}Role`,
         {
-          // Set only with linkPermissions, so a role deployed before it doesn't
-          // change. The role takes the policies as inputs, so Pulumi deletes the
-          // role, which detaches them, before it deletes the policies.
-          ...(managedLinks
-            ? {
-                managedPolicyArns: all(
-                  managedLinks.policies.map((policy) => policy.arn),
-                ).apply((arns) =>
-                  managedPolicyAttachments(name, arns, "WebFunction"),
-                ),
-              }
-            : {}),
+          // Set without linkPermissions too, as Function's is: a role that no
+          // longer lists the policies detaches them before they're deleted.
+          // Left out, the role would keep what's attached, and the delete fails
+          // with DeleteConflict. The role takes the policies as inputs, so
+          // Pulumi deletes the role, which detaches them, before the policies.
+          managedPolicyArns: all(
+            managedLinks?.policies.map((policy) => policy.arn) ?? [],
+          ).apply((arns) =>
+            managedPolicyAttachments(name, arns, "WebFunction"),
+          ),
           assumeRolePolicy: iam.getPolicyDocumentOutput({
             statements: [
               {

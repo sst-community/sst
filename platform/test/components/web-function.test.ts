@@ -1178,7 +1178,7 @@ describe("WebFunction", () => {
       });
     });
 
-    it("keeps every grant inline and attaches no policies without it", async () => {
+    it("keeps every grant inline and lists no managed policies without it", async () => {
       const files = linked("DefaultFiles");
       const fn = new WebFunction("Default", {
         entrypoint: "index.mjs",
@@ -1188,8 +1188,9 @@ describe("WebFunction", () => {
       await resolved(fn.url);
       expect(policiesOf("Default")).toEqual([]);
       const role = await roleOf("Default");
-      // left unset, so a role deployed before linkPermissions doesn't change
-      expect(role.managedPolicyArns).toBeUndefined();
+      // an empty list, not none: removing the option then detaches the policies
+      // before they are deleted, where a role left unset keeps them (#312)
+      expect(role.managedPolicyArns).toEqual([]);
       expect(
         statementsOf(role.inline).map((item: any) => item.Resource),
       ).toContainEqual(["arn:aws:s3:::DefaultFiles/*"]);
