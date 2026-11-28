@@ -57,11 +57,15 @@ export function managedPolicyDocument(name: string, json: string) {
   return document;
 }
 
-export function managedPolicyAttachments(name: string, arns: string[]) {
+export function managedPolicyAttachments(
+  name: string,
+  arns: string[],
+  component = "Function",
+) {
   const unique = [...new Set(arns)];
   if (unique.length > 25)
     throw new VisibleError(
-      `Function "${name}" needs ${unique.length} managed policy attachments, exceeding IAM's maximum of 25 per role. Combine smaller permission groups or reduce attached policies.`,
+      `${component} "${name}" needs ${unique.length} managed policy attachments, exceeding IAM's maximum of 25 per role. Combine smaller permission groups or reduce attached policies.`,
     );
   return unique;
 }

@@ -34,6 +34,10 @@ import { physicalName } from "../naming.js";
 import { rpc } from "../rpc/rpc.js";
 import { Function, FunctionArgs } from "./function.js";
 import { functionEncryptionKey } from "./function-encryption-key.js";
+import {
+  createManagedLinkPermissions,
+  managedPolicyAttachments,
+} from "./helpers/managed-link-permissions.js";
 import { RETENTION } from "./logging.js";
 import { Permission, permission } from "./permission.js";
 import { Vpc } from "./vpc.js";
@@ -92,6 +96,50 @@ export interface WebFunctionArgs {
    * ```
    */
   link?: FunctionArgs["link"];
+  /**
+   * Move the grants of selected linked resources into named customer-managed IAM
+   * policies, keeping the `Resource` bindings of every resource in `link`. This works
+   * as it does in `Function`.
+   *
+   * A role's inline policies share IAM's 10,240-character limit. A web function that
+   * links many resources can go over it. Each named group here becomes one managed
+   * policy, attached to the execution role. Other linked grants, `permissions`, and the
+   * grants SST adds for logs and `sst dev` stay inline. By default, all linked grants
+   * stay inline.
+   *
+   * Use stable names made of letters and numbers, and the same resource objects as in
+   * `link`. A resource can be in only one group. Policies aren't shared between
+   * functions.
+   *
+   * Each group is limited to IAM's 6,144 characters per managed policy. If a group's
+   * ARNs aren't known until deploy, it's checked at deploy, after the resources it
+   * links have been created. Split a large group into smaller named groups. A role can
+   * have 20 managed policies attached by default, adjustable up to 25.
+   *
+   * To switch without a gap in permissions, use two deploys.
+   *
+   * - **To opt in:** add the option with `retainInline: true` and deploy, so the
+   *   managed policies are attached while the inline grants stay. Then remove
+   *   `retainInline` and deploy.
+   * - **To opt out:** set `retainInline: true` and deploy, then remove the option
+   *   and deploy.
+   * - **To move resources between groups:** do the same, with `retainInline: true`
+   *   during the deploy that changes the groups.
+   *
+   * The deploy role needs permission to create, update and delete IAM managed policies.
+   *
+   * @default All linked grants are inline.
+   * @example
+   * ```js
+   * {
+   *   link: [jobs, events, realtime],
+   *   linkPermissions: {
+   *     managed: { Queues: [jobs, events] }
+   *   }
+   * }
+   * ```
+   */
+  linkPermissions?: FunctionArgs["linkPermissions"];
   /**
    * Permissions added to the execution role, in addition to linked resources.
    * @default `[]`
@@ -815,11 +863,26 @@ export class WebFunction extends Component implements Link.Linkable {
         },
         { parent: self },
       );
+    const managedLinks = args.linkPermissions
+      ? createManagedLinkPermissions(name, args.link, args.linkPermissions, {
+          parent: self,
+        })
+      : undefined;
     const role = new iam.Role(
       ...transform(
         args.transform?.role,
         `${name}Role`,
         {
+          // Set without linkPermissions too, as Function's is: a role that no
+          // longer lists the policies detaches them before they're deleted.
+          // Left out, the role would keep what's attached, and the delete fails
+          // with DeleteConflict. The role takes the policies as inputs, so
+          // Pulumi deletes the role, which detaches them, before the policies.
+          managedPolicyArns: all(
+            managedLinks?.policies.map((policy) => policy.arn) ?? [],
+          ).apply((arns) =>
+            managedPolicyAttachments(name, arns, "WebFunction"),
+          ),
           assumeRolePolicy: iam.getPolicyDocumentOutput({
             statements: [
               {
@@ -850,7 +913,11 @@ export class WebFunction extends Component implements Link.Linkable {
               name: "inline",
               policy: all([
                 args.permissions ?? [],
-                Link.getInclude<Permission>("aws.permission", args.link),
+                // Unlike Function, this needs no managedLinks.fallback: the log
+                // grants below keep the policy from ever being empty, so the old
+                // one is always replaced and keeps no unlinked resource's grants.
+                managedLinks?.inline ??
+                  Link.getInclude<Permission>("aws.permission", args.link),
                 live ? Function.appsync() : undefined,
               ]).apply(
                 ([permissions, links, appsync]) =>
