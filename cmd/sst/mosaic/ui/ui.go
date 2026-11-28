@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -167,6 +168,15 @@ func (u *UI) reset() {
 }
 
 func (u *UI) Event(unknown interface{}) {
+	// The UI runs in the process that deploys with `sst deploy` and
+	// `sst dev --mode=basic`. An event it can't print is logged and skipped,
+	// so a bug here can't stop a deploy and leave the stage locked (#310).
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("ui event panicked", "event", fmt.Sprintf("%T", unknown), "err", r, "stack", string(debug.Stack()))
+			u.buffer = []interface{}{}
+		}
+	}()
 	if u.footer != nil {
 		defer u.footer.Send(unknown)
 	}
