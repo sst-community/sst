@@ -879,7 +879,9 @@ export class WebFunction extends Component implements Link.Linkable {
             ? {
                 managedPolicyArns: all(
                   managedLinks.policies.map((policy) => policy.arn),
-                ).apply((arns) => managedPolicyAttachments(name, arns)),
+                ).apply((arns) =>
+                  managedPolicyAttachments(name, arns, "WebFunction"),
+                ),
               }
             : {}),
           assumeRolePolicy: iam.getPolicyDocumentOutput({
@@ -912,6 +914,9 @@ export class WebFunction extends Component implements Link.Linkable {
               name: "inline",
               policy: all([
                 args.permissions ?? [],
+                // Unlike Function, this needs no managedLinks.fallback: the log
+                // grants below keep the policy from ever being empty, so the old
+                // one is always replaced and keeps no unlinked resource's grants.
                 managedLinks?.inline ??
                   Link.getInclude<Permission>("aws.permission", args.link),
                 live ? Function.appsync() : undefined,

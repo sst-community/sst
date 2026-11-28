@@ -1185,7 +1185,7 @@ describe("WebFunction", () => {
         bundle: out,
         link: [files],
       });
-      await resolved(fn.nodes.role.arn);
+      await resolved(fn.url);
       expect(policiesOf("Default")).toEqual([]);
       const role = await roleOf("Default");
       // left unset, so a role deployed before linkPermissions doesn't change
@@ -1206,7 +1206,7 @@ describe("WebFunction", () => {
           retainInline: true,
         },
       });
-      await resolved(fn.nodes.role.arn);
+      await resolved(fn.url);
       const role = await roleOf("Retain");
       expect(role.managedPolicyArns).toEqual([
         "arn:aws:test:us-east-1:111111111111:RetainLinkStoragePolicy",
@@ -1275,7 +1275,7 @@ describe("WebFunction", () => {
         bundle: out,
         link,
       });
-      await resolved(over.nodes.role.arn);
+      await resolved(over.url);
       expect(size((await roleOf("OverLimit")).inline)).toBeGreaterThan(10240);
 
       const under = new WebFunction("UnderLimit", {
@@ -1288,7 +1288,7 @@ describe("WebFunction", () => {
           ),
         },
       });
-      await resolved(under.nodes.role.arn);
+      await resolved(under.url);
       expect(size((await roleOf("UnderLimit")).inline)).toBeLessThan(10240);
       expect(policiesOf("UnderLimit")).toHaveLength(4);
     });

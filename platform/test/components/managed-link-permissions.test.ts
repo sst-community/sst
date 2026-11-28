@@ -73,6 +73,13 @@ describe("managed link policy boundaries", () => {
         "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
       ]),
     ).toThrow(/25/);
+    expect(() =>
+      managedPolicyAttachments(
+        "Api",
+        [...arns, "arn:aws:iam::111111111111:policy/extra"],
+        "WebFunction",
+      ),
+    ).toThrow(/^WebFunction "Api" needs 26/);
   });
   it("matches cloned structural links by URN and only uses grants from the linked definition", () => {
     const original = {
