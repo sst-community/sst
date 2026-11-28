@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -76,17 +78,28 @@ func (m *footer) Start(ctx context.Context) {
 				return
 			}
 			width, _, _ := terminal.GetSize(int(os.Stdout.Fd()))
-			switch evt := val.(type) {
-			case lineMsg:
-				m.clear()
-				fmt.Println(evt)
-			default:
-				m.Update(val)
-			}
-			next := m.View(width)
-			m.Render(width, next)
+			m.handle(val, width)
 		}
 	}
+}
+
+// handle runs in the footer's own goroutine, where a panic would crash the
+// process, so a message it can't handle is logged and skipped (#310).
+func (m *footer) handle(val any, width int) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("ui footer panicked", "message", fmt.Sprintf("%T", val), "err", r, "stack", string(debug.Stack()))
+		}
+	}()
+	switch evt := val.(type) {
+	case lineMsg:
+		m.clear()
+		fmt.Println(evt)
+	default:
+		m.Update(val)
+	}
+	next := m.View(width)
+	m.Render(width, next)
 }
 
 func (m *footer) clear() {
